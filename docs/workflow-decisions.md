@@ -1,29 +1,30 @@
 # Workflow decisions register (Phase Four)
 
-Created 14 October 2026 on branch `kanvis-reaudit` (the same code as `origin/main` dafb730).
+Created 14 October 2026 on branch `kanvis-reaudit` (the same code as `origin/main` dafb730). Brought up to date on 15 October 2026 after Waves S1 to S8 (`main` c990949 plus PR #45, which is in review).
 
-This page lists the product decisions waiting for the founder, one batch at a time. It also lists every decision already made, so nothing is asked twice. Each pending decision says what Recruiting OS does today, what Kanvis (kanvis.me) does, what changes for each person involved, and what we recommend. The engineering evidence (file paths, routes, feature ids) sits in tables and "Evidence" columns so the team can act on any answer.
+This page lists every product decision: what was chosen, who chose it, when, and where it is built, so nothing is asked twice. The decisions still open are in one short table, **Still to decide**, just below the dated sections. Section 2 keeps the batch 1 questions as they were asked on 14 October (what Recruiting OS did then, what Kanvis (kanvis.me) does, what changes for each person, and what we recommended). The engineering evidence (file paths, routes, feature ids) sits in tables and "Evidence" columns so the team can act on any answer.
 
 **Where the facts come from**
 - The verified product audit in `docs/audit/`. Its nine area files (01 to 09) were each checked by a second, skeptical reader. Feature ids such as APPLY-50 come from `docs/audit/feature-inventory.md` and bug numbers from `docs/audit/known-bugs.md`.
-- The Kanvis research of 7 and 14 October 2026 (working notes kept outside the repository).
+- The Kanvis research of 7, 14 and 15 October 2026 (working notes kept outside the repository).
+- The merged pull requests #39 and #42 to #44 (Waves S1 to S7) and PR #45 (Wave S8, in review), and their specifications (kept outside the repository).
 - `docs/FOUNDER-CONTEXT.md`, `docs/01-product-thesis.md`, `docs/spec/22-match-score-and-pool-board.md` and `docs/spec/11-counsel-register.md`.
 
-Every statement about Recruiting OS in batch 1 was checked again against the code on 14 October 2026. Nothing here has been tried on the real AI model or with real candidates. The automated tests run on stand-in providers: 2,148 passed, 6 skipped, 0 failed.
+Every statement about Recruiting OS in batch 1 was checked again against the code on 14 October 2026. Nothing has been tried with real candidates yet. The latest real-model fairness run (15 October, after Wave S7, run 38717936154, about $0.42) passed all 11 résumé-reading and scoring suites it ran. The run after Wave S5 had failed two bias pairs; Wave S7 fixed that. The screening-chat tests have run only on the stand-in AI so far. The automated tests run on stand-in providers: after Wave S8, 2,849 passed, 6 skipped, 0 failed (2,148 passed on 14 October).
 
 ## 14 October 2026: founder delegated
 
-The founder said the documents were too much to review, and asked Claude to decide: keep the app basic, with a Kanvis-like flow for the employer and for candidates, on the current tech stack, with nothing extra added. Claude decided batch 1 on that basis:
+The founder said the documents were too much to review, and asked Claude to decide: keep the app basic, with a Kanvis-like flow for the employer and for candidates, on the current tech stack, with nothing extra added. Claude decided batch 1 on that basis on 14 October (the founder revised D-01 on 15 October):
 
-| Id | Decision | What it means |
-|---|---|---|
-| D-01 | **A** (revised 15 Oct, Wave S7) | No candidate accounts. Candidates keep the private emailed link, one application per role and the status page. Revised by the founder on 15 October: a Kanvis-like record built from the candidate's resume and sent chats, kept per company only (no cross-company profile, no public profile), and the reuse of earlier details at the same company after an emailed link. See the Wave S7 section below. |
-| D-02 | **Not now** | Keep the app basic: no manual add or import of people who did not apply yet. Referrals keep using the job link or the email-in address. Can be asked again later. |
-| D-03 | **A** | Keep the day-5 standard message (Q27 A as built). Every screen that says a decision is private also says, in one short line, that the standard message goes by itself after 5 working days if nobody sends one, with the date when it is known. Done in Wave S1. |
-| D-04 | **C** | Hide earlier applications and their outcomes, and the name, email, phone, street address and web links, from the AI's scoring reading; then re-run the fairness tests with a pair that differs only in an earlier rejection. Built 15 October in Wave S2 (see the change log). Still to do: the evals runner and the new fairness pair, then a re-run of the fairness tests on the real model. |
-| D-05 | **Not now** | Keep the labels only ("read against version N"); nothing re-reads. Can be asked again later. |
+| Id | Decision | What it means | Where it is built |
+|---|---|---|---|
+| D-01 | **A**, revised by the founder on 15 Oct | No candidate accounts. Candidates keep the private emailed link, one application per role and the status page. Revised on 15 October after the founder watched Kanvis's application: a Kanvis-like record built from the candidate's résumé and sent chats, kept per company only (no account across companies, no public profile, no AI twin), and the reuse of earlier details at the same company after an emailed link. Kanvis's accounts, public profiles, twin and candidate tools are not adopted, and C's ITS-wide jobs page is not built. | Wave S7 (PR #44, merged). Earlier chat facts kept on the next application: Wave S8 (PR #45, in review, merging 15 Oct). |
+| D-02 | **Not now** | Keep the app basic: no manual add or import of people who did not apply yet. Referrals keep using the job link or the email-in address. Can be asked again later. | Nothing to build |
+| D-03 | **A** | Keep the day-5 standard message (Q27 A as built). Every screen that says a decision is private also says, in one short line, that the standard message goes by itself after 5 working days if nobody sends one, with the date when it is known. | Wave S1 (PR #39). The day-5 message itself was built earlier (PR #26). |
+| D-04 | **C** | Hide earlier applications and their outcomes, and the name, email, phone, street address, zip code and web links, from the AI's scoring readings; then re-run the fairness tests with a pair that differs only in an earlier rejection. The team still sees everything. Done: the fairness tests and the earlier-rejection pair were added in Wave S3. The real-model run after S1 to S4 passed bias pairs 4/4 and redaction 2/2. After S5 a run found the score could drop when more evidence was shown (two bias pairs failed); S7 fixed it, and the run after S7 passed all 11 résumé-reading and scoring suites. Wave S8 keeps the rule. | Waves S2 and S3 (PR #39) |
+| D-05 | **Not now** | Keep the labels only ("read against version N"); nothing re-reads. Can be asked again later. | Nothing to build |
 
-**Wave S1 (simple screens), built the same day** on branch `kanvis-simple`. No capability was removed; details moved one click away (a tab, a More menu or a "Show more" block):
+**Wave S1 (simple screens), built the same day** on branch `kanvis-simple` (PR #39, merged 15 Oct as 63d371e; Waves S2 to S4 went in the same PR). No capability was removed; details moved one click away (a tab, a More menu or a "Show more" block):
 - The menu reads Home, Jobs, Candidates, Interviews, Settings.
 - Home: a greeting, one line, "Needs you" (up to 5 short rows, each with its "Why"), "Your jobs", the "Who are you hiring?" box and the recent activity folded.
 - Jobs: one row per job; a live job opens on its Candidates. Each job has one header and one tab strip: Candidates, Job, Scoring, Interview plan, Share, Report, Activity, with the rarer actions in its More menu.
@@ -33,7 +34,7 @@ The founder said the documents were too much to review, and asked Claude to deci
 
 ## 15 October 2026: founder delegated (Wave S5, "complete my product")
 
-The founder said "yes complete my product, do what you have to do". Claude decided these on the same basis (basic, Kanvis-like, current stack, nothing extra), and they were built in Wave S5 on branch `complete-product`:
+The founder said "yes complete my product, do what you have to do". Claude decided these on the same basis (basic, Kanvis-like, current stack, nothing extra). The ones marked "as recommended", the licence rule and the accepted behaviour were built in Wave S5 on branch `complete-product` (PR #42, merged 15 Oct as 013837e); the "not now" ones are not built:
 
 | Id | Decision | What it means |
 |---|---|---|
@@ -43,34 +44,66 @@ The founder said "yes complete my product, do what you have to do". Claude decid
 | Licence readings | **New rule** | A licence, certificate, permit or registration must-have is "no" only when the candidate's own words say plainly they do not hold it. Lapsed, expired, pending, in training or unclear is "unknown" (asked about in the screening chat), never "no". The code enforces it after the model answers, for the résumé reading and the screening scorecard, so the same CV always gets the same finding and score. |
 | L-14, L-03, L-16 | **Not now** | No invisible bot check (it would add a third-party service); hiring managers are not limited to their own roles yet (a permission model change for later); no customer second factor of our own (the pilot relies on Google's or Microsoft's two-step sign-in). |
 | Migration 0040 | **Not now** | A session left open in another company can still switch back to a company the person was signed out of while they are a member. This needs a migration; this wave allowed none. |
+| Known bugs 16 and 17 | **Accepted behaviour** (S5 review) | An application typed with an address already on file joins that person's record at once; what a visitor types in the chat stays apart until the address owner confirms by email. An emailed-in application is read by AI only after the email carrying the AI notice has gone. Details in the change log. |
 
 ## 15 October 2026: the Kanvis-style application (Wave S7)
 
-The founder went through Kanvis's application live and asked for the same in Recruiting OS: the resume fills in the form, the company asks its own questions, a chat that keeps asking until it has what it needs, the answers checked before sending, and afterwards the score with where the candidate was strong or short, and the decision when they come back. Built on branch `kanvis-apply`:
+The founder went through Kanvis's application live and asked for the same in Recruiting OS: the resume fills in the form, the company asks its own questions, a chat that keeps asking until it has what it needs, the answers checked before sending, and afterwards the score with where the candidate was strong or short, and the decision when they come back. Built on branch `kanvis-apply` (PR #44, merged 15 Oct as c990949). D-01 revised, S7-1 to S7-4 and F4 are the founder's own answers (15 Oct); the other rows are how Claude built what the founder asked for, on the founder's delegation:
 
 | Id | Decision | What was built |
 |---|---|---|
-| D-01 revised | **Per-company record** | The candidate's record at one company learns from the chats they send (each fact marked with the chat and date it came from), shows it on their application record to change or remove, and erases it with everything else on a deletion request. A candidate applying again to the same company can ask for an emailed link that fills in their earlier details (name, contact, place, work summary), each marked to check; feeding the learned facts themselves into the next application is not built yet. Never across companies, never public, never the assistant's own notes. |
-| S7-1 | **Built** | After Send, the candidate sees their match score (0 to 100) with a bar per requirement named on the job page; everything else the team looks for is one line, "Other things the team looks for". ITS can turn it off per company (on by default) with a reason; customers cannot change it. Counsel items 1 and 21 noted on the page and the switch. |
-| S7-2 | **Built** | "Your answers" on the application record: exactly what was sent (details, the company's form questions, each chat answer, skipped and changed ones marked), the assistant's note set apart, the whole chat one click away. Nothing from an unsent chat. |
-| S7-3 | **Built** | The chat shows a counter ("2 of 4 required · Required questions") and the section name, never the questions in advance. |
-| S7-4 | **Built in Wave S6** | The collapsible staff menu. |
-| Fairness | **Built** | The match score is monotonic (showing some evidence never scores below showing none); each finding is settled by the middle of the three readings and the overall reading and recommendation are worked out in code from the settled findings; the form's answers reach the reading as plain sentences that count as the candidate's own words. The real-model fairness run on this branch is still to do. |
+| D-01 revised | **Per-company record** | The candidate's record at one company learns from the chats they send (each fact marked with the chat and date it came from), shows it on their application record to change or remove, and erases it with everything else on a deletion request. A candidate applying again to the same company can ask for an emailed link that fills in their earlier details (name, contact, place, work summary), each marked to check. Keeping facts from earlier chats on the next application came in Wave S8 (below). Never across companies, never public, never the assistant's own notes. |
+| S7-1 | **Built** | After Send, the candidate sees their match score (0 to 100) with a bar per requirement named on the job page; everything else the team looks for is one line, "Other things the team looks for". ITS can turn it off per company (on by default) with a reason; customers cannot change it. This reverses the earlier "candidates never see a score". Counsel items 1 and 21 are noted on the page and the switch; a lawyer must review items 21 and 26 before real candidates in New York City, Illinois, California or Colorado. |
+| S7-2 (= F2) | **Built** | "Your answers" on the application record: exactly what was sent (details, the company's form questions, each chat answer, skipped and changed ones marked), the assistant's note set apart, the whole chat one click away. Nothing from an unsent chat. |
+| S7-3 (= F1) | **Built** | The chat shows a counter ("2 of 4 required · Required questions") and the section name, never the questions or topics in advance. |
+| S7-4 (= F3) | **Built in Wave S6** | A button folds the staff left menu to icons, remembered per browser (PR #43, merged 15 Oct as 2df1acb). |
+| F4 | **Built in Wave S6** | One dollar figure for the month's AI spend on the ITS console's Costs card is fine (an ITS-only screen). |
+| Fairness | **Built** | The match score is monotonic (showing some evidence never scores below showing none); each finding is settled by the middle of the three readings and the overall reading and recommendation are worked out in code from the settled findings; the form's answers reach the reading as plain sentences that count as the candidate's own words. The real-model fairness run on 15 October (run 38717936154, about $0.42) passed all 11 résumé-reading and scoring suites it ran: bias pairs 4/4, consistency 3/3, credentials 9/9, hallucination 6/6, redaction 2/2, fairness rules 5/5. The run after S5 had failed two bias pairs; these fixes settled it. The screening-chat tests have run only on the stand-in AI so far. |
 | Company questions | **Built** | On the job's Scoring tab, "Questions every applicant answers": up to 8 quick questions on the form (yes or no, choose one, a number) and up to 5 written questions asked in the chat, each with an optional "What a good answer shows" for the team only. A question about a protected characteristic is refused before it is saved. |
 | No automatic rejection | **Unchanged** | Nothing in this wave declines anyone; the score and the write-ups only inform a person. |
+
+## 15 October 2026: the S7 follow-ups (Wave S8)
+
+Claude decided S8-A and S8-B on the founder's delegation; the theme switch is the founder's own request. Built on branch `kanvis-followups` (commits faecec5 and 0b96404); PR #45 is in review, merging 15 October. No migration.
+
+| Id | Decision | What was built |
+|---|---|---|
+| S8-A | **Written questions in every chat** | A chat started from an emailed link, or by text message, now asks the company's written questions after the questions the résumé reading left open. A job with no written questions asks its screening questions, as before. Chats started before the change keep their old questions. The private "What a good answer shows" note is never said (the code removes it). These chats have no Review & send, but the candidate's record learns from them when they end. Texting itself is still switched off. Small fix still to make: the job's Scoring tab still tells owners that emailed and text chats ask the screening questions instead (`apps/web/src/pages/role/applicant-questions.ts:29`). |
+| S8-B | **Earlier facts on the next application** | The form opened from the emailed "Applied here before?" link lists the facts from earlier chats at that company, each ticked; the candidate unticks anything no longer true. Facts are kept only when the email typed matches the one on file, and only if they belong to that person. Without the link, nothing from before is shown or used. The team sees what was kept. The scoring is never told an earlier application existed (D-04 C). Kept facts are erased on a deletion request. |
+| Theme switch | **Founder's request** | A sun/moon button beside Sign out switches the staff app between light and dark, remembered on that browser. Candidate pages keep following the device. |
+
+## Still to decide
+
+Reply with the id and a letter, for example "L-02 A, L-05 A". Nothing below changes until you answer. The details and evidence for each are in section 3.
+
+| Id | Your choice | We suggest |
+|---|---|---|
+| L-02 | Settings shows a seat limit and a trial end that do nothing. **A** remove them, or **B** make them real limits? | **A.** Teammates join free; the trial end becomes a reminder to ITS and the owner, not a lock. |
+| L-04 | HR can move someone to the talent pool but cannot send them the message. **A** let HR send the approved talent-pool message, or **B** keep that with owners? | **A.** Only the approved talent-pool wording, never a decline. |
+| L-05 | When someone moves a candidate to a new stage, ask for a reason: **A** optional (one tap), **B** always, or **C** never, as today? | **A.** Declines keep their required reason. |
+| L-06 | **A** let the team tick several candidates and move them together, or **B** keep one at a time? | **A** for Longlist, Shortlist and On hold, with a preview first. Declines stay in Review and apply. |
+| L-07 | **A** let owners try different score weights and preview the new order without saving, or **B** not? | **A**, preview only. Saving still means editing the job. |
+| L-08 | When a résumé hides instructions to the AI: **A** tell ITS, **B** tell the hiring team, or **C** tell nobody? | **A.** Look again after the first real cases. |
+| L-09 | **A** share a shortlist outside the app (a link or a PDF), or **B** invite the colleague into the app instead? | **B** for now. An expiring link can come after a lawyer has looked at it. |
+| L-11 | Candidates' requests to copy or delete their data: **A** ITS handles them, as today, or **B** each customer handles its own? | **A** for the pilot. Later, customers can see their requests without acting on them. |
+| L-13 | **A** ask candidates optional equal-opportunity questions (only ITS sees the answers, never the team or the AI), or **B** not yet? | **B** until a lawyer has answered and there are enough applicants to study. |
+| L-15 | **A** let a company write a short "house voice" note for the job drafter (text only, no files kept), or **B** not? | **B** for now; **A** later. |
+| L-17 | May one person own several companies? **A** only through ITS, or **B** anyone can open more? | **A.** People invited to several companies already have a switcher (Wave S5). |
+
+Put off ("not now"), and open to asking again: D-02, D-05, L-03 (hiring managers see every job), L-14 (no bot check on the apply form), L-16 (our own second sign-in step) and migration 0040.
 
 ---
 
 ## 1. How to answer
 
-- **Reply with the decision id and one letter**, for example: "D-01 A, D-02 C". If you choose E, add a sentence in your own words.
+- **Reply with the decision id and one letter**, for example: "L-02 A, L-05 A". If none of the letters fits, say what you want in a sentence.
 - You can answer one decision at a time. Unanswered decisions stay pending.
 - **Options A and B never authorise deleting an existing feature.**
-  - A keeps today's workflow.
-  - B adds the Kanvis-inspired workflow.
+  - In batch 1, A kept today's workflow and B added the Kanvis-inspired workflow.
+  - In **Still to decide**, each row says what its own letters mean.
   - Anything that would remove or switch off something that exists today is named in the option itself and needs your explicit yes.
 - **Nothing affected by a pending decision is built or changed until you answer it.**
-- Decisions you have already made are in section 4 and are not asked again. D-03 is not a new question: it asks how two of your recorded answers (B6 and Q27) fit together.
+- Decisions already made are in the dated sections at the top and in section 4, and are not asked again. The questions still open are in **Still to decide** at the top.
 
 **Who is who**
 
@@ -88,12 +121,12 @@ The founder went through Kanvis's application live and asked for the same in Rec
 
 | Label | Meaning |
 |---|---|
-| OBSERVED | Seen on 14 October 2026 |
+| OBSERVED | Seen on 14 or 15 October 2026 |
 | OBSERVED-EARLIER | Seen on 7 October 2026, not re-checked |
 | INFERRED | Read from Kanvis's shipped code, legal pages or marketing text, not seen working |
 | UNKNOWN | Not known |
 
-Kanvis has shipped no new version since 7 October: the deployment and its code files were byte-identical on 14 October. Kanvis recruiter access is still waitlist-only, so no recruiter screen could be used. Apply was never pressed. Everything Kanvis does on the recruiter side is therefore either seen in its public demo or INFERRED.
+Kanvis has shipped no new version since 7 October: the deployment and its code files were byte-identical on 14 October. Kanvis recruiter access is still waitlist-only, so no recruiter screen could be used. Everything Kanvis does on the recruiter side is therefore either seen in its public demo or INFERRED from its public pages and code. The candidate side was OBSERVED live on 15 October: one complete application to a real employer's job, with the AI interview and the score, in the founder's own candidate account with the founder answering. A voice interview was not seen (only a dictation button), so it stays UNKNOWN.
 
 **Status words used in section 4:** Built, Partly built, Not built.
 
@@ -101,15 +134,19 @@ Kanvis has shipped no new version since 7 October: the deployment and its code f
 
 ## 2. Batch 1 (asked 14 October 2026; decided the same day by delegation, see the section at the top)
 
-| Id | Workflow | Recommended |
-|---|---|---|
-| D-01 | Candidate accounts and the candidate side | A now; C's two small pieces later |
-| D-02 | Adding people who did not apply (referrals, walk-ins, CVs already held) | C |
-| D-03 | The day-5 automatic decision message (follow-up on B6 and Q27) | A |
-| D-04 | What the AI may see when it reads a résumé | C, then re-run the fairness tests |
-| D-05 | Re-reading applicants after a live role's must-haves or skills change | C |
+The questions below are kept as they were asked. "Current Recruiting OS behavior" means the app on 14 October, before the decisions were built.
+
+| Id | Workflow | Recommended | Decided |
+|---|---|---|---|
+| D-01 | Candidate accounts and the candidate side | A now; C's two small pieces later | A (14 Oct, Claude); revised by the founder on 15 Oct to a per-company record (Waves S7 and S8) |
+| D-02 | Adding people who did not apply (referrals, walk-ins, CVs already held) | C | Not now, which keeps A (14 Oct, Claude) |
+| D-03 | The day-5 automatic decision message (follow-up on B6 and Q27) | A | A (14 Oct, Claude); built in Wave S1 |
+| D-04 | What the AI may see when it reads a résumé | C, then re-run the fairness tests | C (14 Oct, Claude); built in Waves S2 and S3 |
+| D-05 | Re-reading applicants after a live role's must-haves or skills change | C | Not now, which keeps A (14 Oct, Claude) |
 
 ### Decision D-01: Candidate accounts and the candidate side
+
+*Decided: A on 14 October (Claude, by delegation); revised by the founder on 15 October to a per-company record built from the résumé and sent chats. Built in Waves S7 and S8. See the top.*
 
 **Current Recruiting OS behavior:**
 
@@ -143,7 +180,7 @@ Kanvis is two-sided: candidates have their own accounts and tools.
 | Résumé builder (four styles, saved versions), cover letter, outreach drafts and a "Job Match" fit check | OBSERVED (entry screens only; nothing generated) |
 | A job board across companies, with a match ring, filters and a "why this is on your board" explanation | OBSERVED |
 | An applications tracker, capped at 50 applications a month | OBSERVED (empty) |
-| Applying with the profile, followed by a short conversational interview. The profile must be published first. | INFERRED (Apply never pressed; code messages) |
+| Applying with the profile, followed by a short conversational interview. The profile must be published first. | Applying OBSERVED on 15 October: the profile fills the personal details, the employer's own questions come next, then an AI interview with a counter, a review of answers written up from the candidate's replies, and after Send a score out of 100 with six bars. The profile then learned new facts from the interview. "Published first" not checked (the profile was already published). |
 
 **Why this decision matters:**
 
@@ -202,6 +239,8 @@ E. Another approach — let me specify.
 **Important:** options A and B do not authorise deleting existing functionality.
 
 ### Decision D-02: Adding people who did not apply (referrals, walk-ins, CVs already held, bulk CV import)
+
+*Decided: not now on 14 October (Claude, by delegation). Nothing changed; can be asked again.*
 
 **Current Recruiting OS behavior:**
 
@@ -280,6 +319,8 @@ E. Another approach — let me specify.
 **Important:** options A and B do not authorise deleting existing functionality.
 
 ### Decision D-03: Telling a candidate about a decision nobody has sent (the day-5 automatic message)
+
+*Decided: A on 14 October (Claude, by delegation). Since Wave S1, every screen and toast that says a decision is private also says the standard message goes by itself after 5 working days (known bugs 19 and 82). The table below shows the wording before that.*
 
 This is a follow-up on two answers you gave on 7 October, not a new question. The two answers pull against each other:
 - **B6 (Kanvis way):** decisions are always private. Telling the candidate is a separate, later action by a person.
@@ -377,6 +418,8 @@ E. Another approach — let me specify.
 
 ### Decision D-04: What the AI may see when it reads and scores a résumé
 
+*Decided: C on 14 October (Claude, by delegation). Built in Wave S2; the fairness tests and the earlier-rejection pair were added in Wave S3 and passed on the real model. After S5 a run found the score could drop when more evidence was shown (two bias pairs failed); S7 fixed it, and the run after S7 passed. The table below shows what the reading received before that.*
+
 On 13 October you decided **how** the reading is done: three readings and the middle answer, high effort, one written definition per finding, and the candidate never named in the reading's own words. This decision is only about **what goes in**.
 
 **Current Recruiting OS behavior:**
@@ -460,6 +503,8 @@ E. Another approach — let me specify (for example, also hide schools and gradu
 
 ### Decision D-05: Re-reading applicants after a live role's must-haves or skills change
 
+*Decided: not now on 14 October (Claude, by delegation). The labels stay; nothing re-reads. Can be asked again.*
+
 **Current Recruiting OS behavior:**
 
 | Fact | Evidence |
@@ -523,17 +568,17 @@ E. Another approach — let me specify.
 
 ---
 
-## 3. Later batches (pending, not yet asked)
+## 3. Later batches (the details behind "Still to decide")
 
-These come from the Recruiting OS / Kanvis comparison. They will be asked one batch at a time after batch 1. Feature ids starting with CMP- are the comparison's own ids. The other ids are from `docs/audit/feature-inventory.md`, and bug numbers are from `docs/audit/known-bugs.md`.
+These come from the Recruiting OS / Kanvis comparison. L-01, L-10 and L-12 were decided on 15 October and built in Wave S5; L-03, L-14 and L-16 were put off ("not now") the same day. The rest are asked in the short table **Still to decide** at the top; the rows below give the background. Feature ids starting with CMP- are the comparison's own ids. The other ids are from `docs/audit/feature-inventory.md`, and bug numbers are from `docs/audit/known-bugs.md`.
 
 ### Batch 2: Who may decide what
 
 | Id | Question | Summary | Recommendation | Evidence |
 |---|---|---|---|---|
 | L-01 (decided 15 Oct, as recommended; see the top) | Who may keep a fairness-flagged phrase on a live job, and must the named decision maker see wording edits? | An approver can keep wording the fairness check flagged on a live job, with their own reason, and it goes public with nobody else looking, although nobody may approve their own new role. Wording-only edits also skip the role's named decision maker. (Q10 settled what needs approval, not who may override a flag.) | A second approver must agree before a kept flag goes live (a sole owner excepted, as for new roles). The named decision maker is told about wording edits after they go live, without blocking them. | CMP-029; JOBS-11, JOBS-17; bugs 11, 59 |
-| L-03 | Should hiring managers be limited to the roles they manage? | Today any hiring manager sees and acts on every role's candidates, declines included. The spec marks the limit for release 2. | Yes: by default a hiring manager sees only roles where they are named, and an owner switch can give a hiring manager every role. | CMP-136; PLATFORM-35 |
-| L-04 | HR can file someone into the talent pool but cannot tell them: is that intended? | HR may move people to the talent pool, but may not send decision messages. HR's decision therefore waits for a colleague or the day-5 message, which ties it to D-03. | Decide after D-03. If D-03 stays A, let HR send the approved talent-pool wording (not decline wording). | CMP-107; PIPELINE-21, PIPELINE-43 |
+| L-03 (not now, 15 Oct; see the top) | Should hiring managers be limited to the roles they manage? | Today any hiring manager sees and acts on every role's candidates, declines included. The spec marks the limit for release 2. | Yes: by default a hiring manager sees only roles where they are named, and an owner switch can give a hiring manager every role. | CMP-136; PLATFORM-35 |
+| L-04 | HR can file someone into the talent pool but cannot tell them: is that intended? | HR may move people to the talent pool, but may not send decision messages. HR's decision therefore waits for a colleague or the day-5 message, which ties it to D-03. | D-03 stayed A, so: let HR send the approved talent-pool wording (not decline wording). | CMP-107; PIPELINE-21, PIPELINE-43 |
 
 ### Batch 3: Reviewing, moving and interviewing candidates
 
@@ -549,26 +594,26 @@ These come from the Recruiting OS / Kanvis comparison. They will be asked one ba
 
 | Id | Question | Summary | Recommendation | Evidence |
 |---|---|---|---|---|
-| L-08 | Tell the team when a résumé contains hidden instructions to the AI (an integrity notice)? | Résumé text is not yet cleaned of hidden instructions before the AI reads it; that fix comes first whatever you decide. Kanvis shows such a notice without penalising the candidate (INFERRED), but the notice itself could bias the reader. | Clean the text first, and tell ITS (not the hiring team) when something was removed. Revisit after the first real cases. | CMP-106; APPLY-48, AI-22 |
+| L-08 | Tell the team when a résumé contains hidden instructions to the AI (an integrity notice)? | Since Wave S2, candidate text can no longer break out of the scoring readings' data blocks. The résumé extraction and the chat's own turns are not hardened yet, and no test tries hidden instructions (known bugs 31 and 15, both fixed in part). Kanvis shows such a notice without penalising the candidate (INFERRED), but the notice itself could bias the reader. | Tell ITS (not the hiring team) when something was found. Revisit after the first real cases. | CMP-106; APPLY-48, AI-22 |
 | L-13 | Voluntary equal-opportunity questions, kept apart from every AI input? | Lawful bias monitoring (founder context section 26) needs voluntary demographic answers, kept away from every AI input and from hiring decisions. It adds sensitive data and counsel work. | Not before counsel answers and there are enough applicants to analyse. When built, only ITS sees the answers, never the team or the AI. | CMP-163; AI-21 |
-| L-14 | An invisible bot check on the apply form? | The apply form has a hidden trap field and rate limits, but no bot check. Each fake application costs two AI calls and emails whatever address was typed. Any check adds some friction for real candidates. | Add an invisible check (no puzzle), keep the trap field, and turn it on before public launch. | CMP-060; APPLY-05; bug 70 |
+| L-14 (not now, 15 Oct; see the top) | An invisible bot check on the apply form? | The apply form has a hidden trap field and rate limits, but no bot check. Each fake application costs two AI calls and emails whatever address was typed. Any check adds some friction for real candidates. | Add an invisible check (no puzzle), keep the trap field, and turn it on before public launch. | CMP-060; APPLY-05; bug 70 |
 | L-15 | A company "house voice" and reference documents for the job drafter (text only)? | Drafts would sound like the company if the drafter could use a short house-voice note and some reference text. But keeping company documents is what Q7 avoided for role files. | Later: a text-only house-voice box in Setup, with no files kept, used only by the job drafter. | CMP-033; AI-29, JOBS-08 |
 
 ### Batch 5: Company accounts, plans and privacy duties
 
 | Id | Question | Summary | Recommendation | Evidence |
 |---|---|---|---|---|
-| L-02 | Seats and trial end: enforce them, or drop them from Setup? | Setup shows a seat allowance and a trial that do nothing: seats are never counted and the trial never ends. Kanvis sells seats per plan, so this is a pricing choice. (Monthly allowances never resetting is a separate bug to fix anyway: known bug 2.) | Remove the seat line: the founder context avoids per-user pricing so managers join freely (section 20). Make the trial or pilot end a reminder to ITS and the owner, not a lock. | CMP-014; JOBS-06, OPS-25, OPS-29; bugs 60, 128 |
-| L-10 (decided 15 Oct, as recommended; see the top) | Let a member leave a company, and an owner close the company account? | There is no way out today: only another manager can remove a member, and no one can close a company. What happens to the company's candidate data must follow the retention rules (counsel item 9). | Build "leave this company" now. Make "close the company" a request to ITS that follows the retention schedule once counsel answers. | CMP-013; PLATFORM-37 |
+| L-02 | Seats and trial end: enforce them, or drop them from Setup? | Setup shows a seat allowance and a trial that do nothing: seats are never counted and the trial never ends. Kanvis sells seats per plan, so this is a pricing choice. (Monthly allowances never resetting was a separate bug, fixed in Wave S2: known bug 2.) | Remove the seat line: the founder context avoids per-user pricing so managers join freely (section 20). Make the trial or pilot end a reminder to ITS and the owner, not a lock. | CMP-014; JOBS-06, OPS-25, OPS-29; bugs 60, 128 |
+| L-10 (decided 15 Oct, as recommended; see the top) | Let a member leave a company, and an owner close the company account? | Before Wave S5 there was no way out: only another manager could remove a member, and no one could close a company. What happens to the company's candidate data must follow the retention rules (counsel item 9). | Build "leave this company" now. Make "close the company" a request to ITS that follows the retention schedule once counsel answers. | CMP-013; PLATFORM-37 |
 | L-11 | Let customers handle their own candidates' privacy requests? | Only an ITS platform admin can handle a candidate's request to copy, correct or delete their data today. Moving this to customers changes who answers for the 45-day deadline. | Keep it with ITS during the pilot (counsel item 6). Later, show customers their requests read-only. | CMP-143; PLATFORM-34 |
-| L-16 | Should customer owners and admins need a second sign-in step (an authenticator code) for release 1? | ITS staff already must use one. Customer owners and admins sign in with Google or Microsoft only, and the customer guide asks them to turn on two-step sign-in at Google or Microsoft. | Keep relying on Google's or Microsoft's own two-step sign-in for the pilot, and show owners a reminder in Setup. Add our own code for owners and admins before wider launch. | PLATFORM-08; `docs/product-audit.md` section 11.2 |
-| L-17 | May one person belong to, or own, several companies? | Invitations already let a person join a second company, but there is no company switcher, so they cannot reliably reach both (fix F-07). By a direct API call one person can also open several trial companies. | Yes for invited members, with a company switcher (fix F-07). Opening a second company of your own goes through ITS. | PLATFORM-26; ROUTES-35; bugs 9, 49, 65 |
+| L-16 (not now, 15 Oct; see the top) | Should customer owners and admins need a second sign-in step (an authenticator code) for release 1? | ITS staff already must use one. Customer owners and admins sign in with Google or Microsoft only, and the customer guide asks them to turn on two-step sign-in at Google or Microsoft. | Keep relying on Google's or Microsoft's own two-step sign-in for the pilot, and show owners a reminder in Setup. Add our own code for owners and admins before wider launch. | PLATFORM-08; `docs/product-audit.md` section 11.2 |
+| L-17 (in part: the switcher was built in Wave S5) | May one person belong to, or own, several companies? | Invitations let a person join a second company, and since Wave S5 a company switcher lets them reach both (known bugs 9 and 49 fixed). By a direct API call one person can still open several trial companies (known bug 65). | Yes for invited members, with a company switcher (fix F-07). Opening a second company of your own goes through ITS. | PLATFORM-26; ROUTES-35; bugs 9, 49, 65 |
 
 ---
 
 ## 4. Decisions already made (do not re-ask)
 
-These are reproduced from the decision record, with where each one lives in the code today. One real conflict between two recorded answers (B6 and Q27) is asked as follow-up D-03 above. Nothing else here is asked again.
+These are reproduced from the decision record, with where each one lives in the code today. The one real conflict between two recorded answers (B6 and Q27) was settled by D-03 A. Nothing here is asked again. The decisions of 14 and 15 October are in the dated sections at the top.
 
 ### 4.1 Kanvis adoption: answered 7 October 2026, built in PR #26 (merged to main 11 October 2026 as 081a806)
 
@@ -577,11 +622,11 @@ The plan question numbers Q1, Q15, Q18, Q21, Q22 and Q26 were answered as B7, B1
 | Id | Plan Q | Answer | What you decided | Where it lives in the code | Status |
 |---|---|---|---|---|---|
 | B1 | Q15 | A | The AI screening conversation in the same visit as applying, for everyone past the yes/no questions. The candidate can choose Start now, Do this later or Talk to a person. Pilot roles first, and ITS switches it on per company or role. Roles set to "ask me first" stay on the later path. | `apps/api/src/services/apply-conversation.ts:90-126`; `packages/core/src/apply-flow.ts:15`; `apps/api/src/routes/roles.ts:283-331`; `apps/api/src/routes/admin.ts:113-133`; migration 0033 (APPLY-18 to APPLY-24) | Built. It is off until ITS switches a company or role on. |
-| B2 | Q18 | B | A 0-100 match score on every applicant, worked out by code from checked findings (never written by the AI), with a points-lost breakdown and sorting. Bands use our own words. Missing information is set aside, not penalised. | `packages/core/src/match-score.ts:108-146`; `packages/contracts/src/domain/match.ts` (PIPELINE-11, AI-16) | Built. Use for New York City waits for counsel item 21. |
+| B2 | Q18 | B | A 0-100 match score on every applicant, worked out by code from checked findings (never written by the AI), with a points-lost breakdown and sorting. Bands use our own words. Missing information is set aside, not penalised. | `packages/core/src/match-score.ts:108-146`; `packages/contracts/src/domain/match.ts` (PIPELINE-11, AI-16) | Built. Use for New York City waits for counsel item 21. Since S7-1 (15 Oct) candidates also see their own score and breakdown after Send (ITS switch, on by default). |
 | B3 | new | A | A stage strip with counts and a stage button for each candidate. Moves that need a real event open that step. Moves are private; candidates see only simple steps. | `packages/core/src/stages.ts:269-304`; `apps/api/src/services/application-actions.ts:209-254`; `packages/core/src/marks.ts`; migration 0026 (PIPELINE-02 to PIPELINE-04, PIPELINE-40) | Built |
 | B4 | Q21 | B | Pool review ("Review and apply") can file the weakest group as "not moving forward" in one batch, privately, each person with their own evidence-based reason, and nobody emailed at that moment. | `apps/api/src/services/review-apply.ts`; `apps/web/src/pages/board/ReviewApply.tsx`; `apps/api/src/routes/roles.ts:530-537` (PIPELINE-16) | Built. The day-5 message applies afterwards: see D-03. |
 | B5 | Q22 | A | One-click questions about the pool first; a free-text "Ask AI" chat later, after real-model testing. | `packages/core/src/pool-summary.ts:113-180`; `apps/web/src/pages/board/AskPool.tsx` (PIPELINE-18) | Built. Free text is not built, as decided (PIPELINE-19). |
-| B6 | Q26 | B | Decisions are always private; telling the candidate is a separate, later action by a person. | `packages/core/src/stages.ts:172` (told state); `apps/api/src/services/application-actions.ts` (reject, send_decision, told_in_person, undo_decision); `apps/api/src/pages/application-record.tsx` (`decisionHeadline`: shown only once told; PIPELINE-21 to PIPELINE-25) | Built. Its fit with Q27 is follow-up D-03. |
+| B6 | Q26 | B | Decisions are always private; telling the candidate is a separate, later action by a person. | `packages/core/src/stages.ts:172` (told state); `apps/api/src/services/application-actions.ts` (reject, send_decision, told_in_person, undo_decision); `apps/api/src/pages/application-record.tsx` (`decisionHeadline`: shown only once told; PIPELINE-21 to PIPELINE-25) | Built. Its fit with Q27 was settled by D-03 A (14 Oct). |
 | B7 | Q1 | A (= plan B) | Open sign-up, but the careers page, job pages, Google listing and first candidate emails wait for a one-time ITS company check. | `apps/api/src/services/company-trust.ts:32-76`; `apps/api/src/pages/careers-pages.tsx`; `packages/agents/src/outbox.ts:88-165`; migration 0027 (JOBS-02, APPLY-03, OPS-03) | Built |
 | Q2 | | A | No email-code sign-in: Google or Microsoft only. | `apps/api/src/routes/auth.ts:42-86`. An email sign-in link remains only as a development aid, off by default in production (`apps/api/src/env.ts:136`). (PLATFORM-04, PLATFORM-05) | Built |
 | Q3 | | A | A short company form plus time zone; the rest is collected later (getting-started card, kick-off call, first hiring conversation). | `apps/web/src/pages/CompanySetup.tsx`; `apps/api/src/services/companies.ts:16-49`; `apps/api/src/services/brief.ts:434-539` (JOBS-01, JOBS-03) | Built |
@@ -591,18 +636,18 @@ The plan question numbers Q1, Q15, Q18, Q21, Q22 and Q26 were answered as B7, B1
 | Q7 | | A | Attachments when opening a role are turned into editable text and the file is not kept. | No code: the drafting space has no attachment upload. | Not built (left in the backlog, as decided) |
 | Q8 | | A | The first full draft comes after one round of up to three tap-to-answer questions (or "draft it"). Missing items show as "not set yet". Approval is blocked until six essentials are set and a person has set or confirmed the pay. | `packages/core/src/intake-builder.ts:167-202`; `packages/agents/src/intake.ts:177-206` (JOBS-08, JOBS-15) | Built |
 | Q9 | | A | The pay range is always shown on the job ad. | `packages/core/src/packet-guard.ts:216-222` | Built |
-| Q10 | | B | Edits to a live job's pay, title, location or yes/no questions need approval like a new role; wording-only edits go live after a preview. | `apps/api/src/services/packet-versions.ts:45, 134-184` (JOBS-17) | Built. Who may keep a flagged phrase is L-01. |
+| Q10 | | B | Edits to a live job's pay, title, location or yes/no questions need approval like a new role; wording-only edits go live after a preview. | `apps/api/src/services/packet-versions.ts:45, 134-184` (JOBS-17) | Built. Who may keep a flagged phrase: L-01 (built in Wave S5). |
 | Q11 | | B | Careers page and Google always; LinkedIn and Indeed when the plan names them; ZipRecruiter only with the company's own paid plan; the ticks can be changed. | `apps/web/src/components/BoardTicks.tsx`; `apps/api/src/routes/postings.ts:453-553`; `packages/core/src/posting-tasks.ts` (JOBS-24 to JOBS-26) | Built. Boards are posted by hand (ITS posting tasks or the team); no job-board API connections (JOBS-39). |
 | Q12 | | B | A closing date stops new applications at the end of that day. People part-way through can finish, nobody is rejected, and the owner is told and can extend. Closing the role stays a human decision. | `apps/api/src/services/closing-date.ts`; `packages/workflows/src/definitions/closing-date.ts`; `apps/api/src/routes/roles.ts:241-281` (JOBS-31, APPLY-17) | Built |
 | Q13 | | B | The AI drafts "about the company"; the owner edits and approves it once in Setup. | `apps/api/src/services/company-settings-profile.ts:98-120`; `packages/ai/src/prompts/company-about.ts`; `apps/web/src/pages/Setup.tsx:626-633` (AI-12, JOBS-04) | Built |
-| Q14 | | A | Every applicant gets the same "check your email" receipt; the status page is reached only from the emailed link. This closes the repeat-application privacy hole. | `apps/api/src/pages/apply-form.tsx` (the `/applied` receipt); `apps/api/src/services/applications.ts:173-185` (APPLY-12, APPLY-14) | Built. A related leak in the one-visit flow is open (known bug 17). |
+| Q14 | | A | Every applicant gets the same "check your email" receipt; the status page is reached only from the emailed link. This closes the repeat-application privacy hole. | `apps/api/src/pages/apply-form.tsx` (the `/applied` receipt); `apps/api/src/services/applications.ts:173-185` (APPLY-12, APPLY-14) | Built. A related leak in the one-visit flow (known bug 17) was fixed in part in Wave S5; the rest is accepted behaviour (section at the top). |
 | Q16 | | A | A candidate who chooses a person can either "send without the conversation" or "have a person contact me" (ITS within 4 business hours). | `apps/api/src/pages/chat-pages.tsx` (`/c/screen/:token/person`); `packages/agents/src/screening.ts:686, 716` (APPLY-24) | Built |
-| Q17 | | A | Conversation allowance: warn at 80%. If it runs out, keep accepting applications and send the conversation link once it is topped up. | `apps/web/src/allowance.ts`; `packages/agents/src/screening.ts:326`; `packages/workflows/src/definitions/screen.ts:121-146` (APPLY-28) | Built. Allowances never reset each month (known bug 2). |
+| Q17 | | A | Conversation allowance: warn at 80%. If it runs out, keep accepting applications and send the conversation link once it is topped up. | `apps/web/src/allowance.ts`; `packages/agents/src/screening.ts:326`; `packages/workflows/src/definitions/screen.ts:121-146` (APPLY-28) | Built. Allowances reset each month since Wave S2 (known bug 2 fixed). |
 | Q19 | | A | Deal-breakers are offered back as visible must-haves, after the fairness check. | `packages/core/src/intake-builder.ts:661` | Built |
 | Q23 | | A | Candidate panel sections (Overview, Screen, Résumé, Messages, Notes, History), with "waiting for you" at the top and markers for what is new. | `apps/web/src/pages/candidate-panel/helpers.ts:14-19`; `apps/web/src/pages/candidate-panel/needs-you.tsx` | Built |
 | Q24 | | B | Private team notes with before- and after-interview starters and no ratings. Interviewers add only their own after-interview note. Launch after counsel. | `apps/api/src/services/notes.ts`; `apps/api/src/routes/notes.ts`; migration 0034; `apps/web/src/pages/candidate-panel/notes.tsx`; `apps/web/src/pages/Interviews.tsx` (PIPELINE-31, INTERVIEWS-21) | Built. Use with real candidates waits for counsel item 25. |
 | Q25 | | A | Declining someone with a booked interview cancels the interview, after a confirmation. 9 October follow-up: the candidate is told at once, with no reason, that the interview is off. | `apps/api/src/services/exit-cleanup.ts`; `apps/web/src/talent-actions.ts:213-229` (INTERVIEWS-33) | Built |
-| Q27 | | A | An untold declined candidate: remind after 2 business days; after 5, send the standard message and tell the owner (unless approval is required or ITS runs the role). | `packages/agents/src/decision-messages.ts:251-314`; `packages/agents/src/orchestrator.ts:87-95`; `packages/core/src/policy.ts:97` (PIPELINE-26) | Built. See D-03. |
+| Q27 | | A | An untold declined candidate: remind after 2 business days; after 5, send the standard message and tell the owner (unless approval is required or ITS runs the role). | `packages/agents/src/decision-messages.ts:251-314`; `packages/agents/src/orchestrator.ts:87-95`; `packages/core/src/policy.ts:97` (PIPELINE-26) | Built. D-03 A (14 Oct) kept it, and the screens say so since Wave S1. |
 | Q28 | | A | Declines use approved wording plus an optional personal line. The AI may suggest lines for invitations and updates, and those emails say AI helped. | `packages/agents/src/coordinator.ts:163-171`; `apps/api/src/services/application-actions.ts:369-382`; `packages/agents/src/personal-line.ts`; `packages/agents/src/message-line.ts` (PIPELINE-22, AI-13) | Built. The wording is a draft for counsel item 23. |
 | Q29 | | B | A record-only "Offer made" step (date, private note), then Accepted or Declined. The app never writes or sends the offer. | `apps/api/src/services/offers.ts`; `apps/api/src/routes/roles.ts:898-912`; `apps/web/src/pages/candidate-panel/hiring.tsx` (PIPELINE-33) | Built |
 | Q30 | | B | When a role closes: one courteous closing message, approved once, and candidates stay in the talent pool unless they opt out. | `packages/agents/src/decision-messages.ts` (closingAudience, queueClosingMessages); `apps/api/src/services/closing-messages.ts`; `apps/web/src/components/ClosingMessage.tsx`; `apps/api/src/routes/roles.ts:485-505` (PIPELINE-27) | Built |
@@ -651,12 +696,12 @@ Your words: "if haiku thinks that the score is 81 then that is okay ... the CV s
 
 | What you decided | Where it lives in the code | Status |
 |---|---|---|
-| Three readings per application, keeping the middle answer | `packages/agents/src/triage.ts:48, 64-75, 134-151` (AI-15) | Partly built. The résumé reading is read three times; the screening scorecard is still read once (known bugs 20 and 106). |
+| Three readings per application, keeping the middle answer | `packages/agents/src/triage.ts:48, 64-75, 134-151` (AI-15) | Built. The résumé reading since 13 Oct; the screening scorecard too since Wave S5 (known bugs 20 and 106 fixed). Since Wave S7 each finding is settled by its own middle reading, and the overall reading is worked out in code. |
 | High effort for `triage.assess` and `screen.assess` | `packages/ai/src/routing.ts:94-98` (AI-02) | Built |
 | One written definition per finding (FINDING_RULES) | `packages/ai/src/prompts/registry.ts:50-57`, used in `prompts/triage.ts` and `prompts/screen.ts` | Built |
-| The candidate is never named in the readings | `packages/ai/src/prompts/triage.ts` version 3; `packages/ai/src/prompts/screen.ts` version 4 | Built. Since D-04 C (15 Oct, Wave S2) the scoring readings no longer receive the name, email, phone, street address, zip code or web links (`packages/agents/src/scoring-view.ts`; `triage.assess` version 4, `screen.assess` version 6). The résumé extraction still reads the original text to fill in the candidate's record. |
-| The expired-credential rule only settles "unknown" | `packages/agents/src/triage.ts:181-188, 257` | Partly built. Applied to the résumé reading, not to the screening scorecard (known bug 20). |
-| A "Run fairness tests" GitHub Actions button on the real model | `.github/workflows/fairness.yml`; `packages/evals/src/summary.ts`; `docs/runbooks/fairness-tests.md` (AI-24) | Built. Results are kept as GitHub artifacts, not in the repository. |
+| The candidate is never named in the readings | `packages/ai/src/prompts/triage.ts` version 3; `packages/ai/src/prompts/screen.ts` version 4 | Built. Since D-04 C (15 Oct, Wave S2) the scoring readings no longer receive the name, email, phone, street address, zip code or web links (`packages/agents/src/scoring-view.ts`; from `triage.assess` version 4 and `screen.assess` version 6, now versions 6 and 7). The résumé extraction still reads the original text to fill in the candidate's record. |
+| The expired-credential rule only settles "unknown" | `packages/agents/src/triage.ts:181-188, 257` | Built. Since Wave S5 the licence-readings rule (section at the top) is enforced in code for the résumé reading and the screening scorecard (known bug 20 fixed). |
+| A "Run fairness tests" GitHub Actions button on the real model | `.github/workflows/fairness.yml`; `packages/evals/src/summary.ts`; `docs/runbooks/fairness-tests.md` (AI-24) | Built. The latest run (15 Oct, after Wave S7, run 38717936154, about $0.42) passed all 11 résumé-reading and scoring suites it ran; the run after S5 had failed two bias pairs, fixed in S7. The button does not run the screening-chat tests, which have run only on the stand-in AI. Results are kept as GitHub artifacts, not in the repository. |
 
 ### 4.7 Standing product principles (from the founder documents and earlier decisions)
 
@@ -665,7 +710,7 @@ Your words: "if haiku thinks that the score is 81 then that is okay ... the CV s
 | Final hiring decisions are made by a person; no automatic rejection | `packages/core/src/stages.ts:133` (only a person may decline); `packages/core/src/policy.ts:40-51` (actions only a person may take) | Built |
 | Evidence before score; the AI never pretends to be a person; a candidate can always reach a human | The score is worked out from checked findings (`packages/core/src/match-score.ts`); the AI line on candidate pages (`apps/api/src/pages/conversation-frame.tsx`, `ConversationPage`); the HUMAN keyword and "talk to a person" (`packages/agents/src/screening.ts:537, 686`); a candidate can ask for a person to review their application (AI-36) | Built |
 | Deferred on purpose (September 2026): SMS switched on, interview recording, scorecards, offers and e-signature, onboarding and HR-system links, background checks, sourcing, job-board API connections, paid sponsorship, payments, Microsoft 365 calendar, rediscovery, a second jurisdiction, automatic rejection | SMS is built but switched off (OPS-07, APPLY-31). Offers are record-only (Q29). Reference and onboarding stages are defined but unreachable (PIPELINE-38). Recording, scorecards, Microsoft calendar, board APIs and sponsorship are not built (INTERVIEWS-35, INTERVIEWS-36, INTERVIEWS-05, JOBS-39, JOBS-38). | Not built, by decision |
-| Counsel (lawyer) items do not block building but do block live use: AI-in-hiring notices (NYC, Illinois, California, Colorado), the NYC bias audit for a visible score, batch declines, decline wording, team notes, the pay transparency list, talent-pool wording | `docs/spec/11-counsel-register.md` (items 1, 7, 20 to 25); `docs/STATUS.md` | Open. The register records no counsel answers yet. |
+| Counsel (lawyer) items do not block building but do block live use: AI-in-hiring notices (NYC, Illinois, California, Colorado), the NYC bias audit for a visible score, batch declines, decline wording, team notes, the pay transparency list, talent-pool wording, texting, and the Kanvis-style application (item 26) | `docs/spec/11-counsel-register.md` (items 1, 7, 10, 20 to 26); `docs/STATUS.md` | Open. The register records no counsel answers yet. Items 21 and 26 must be reviewed before real candidates in NYC, Illinois, California or Colorado, and S1's reworded apply tick box needs sign-off. |
 
 ---
 
@@ -687,4 +732,5 @@ Your words: "if haiku thinks that the score is 81 then that is okay ... the CV s
 | 15 Oct 2026 | Wave S7 on `kanvis-apply` (the Kanvis-style application, section at the top): D-01 revised to a per-company record; S7-1 (the candidate sees their score, ITS switch on by default), S7-2 (the answers sent, read back) and S7-3 (the chat's counter) built; the resume read at once to fill in the form; the company's quick and written questions; a chat with sections, one restatement and one question per message, one push and then "something similar", and no guesses; Review & send with answers written up from the candidate's own replies (the assistant's notes kept apart); the status page upgraded to the application record. Fairness fixes: a monotonic score, findings settled by the middle reading with the overall reading worked out in code, the form's answers as the candidate's own sentences. Additive API only; no migration. The candidate page files are split by part of the journey, so the line-number citations above now name the new files. Open: the real-model fairness run on this branch; whether emailed (later) chats should ask the company's written questions too. |
 | 15 Oct 2026 | Wave S8 on `kanvis-followups`, decided by Claude (delegated by the founder), settling the open point above: a screening chat by email or by text message now asks the company's written questions too, after the questions left open by the résumé reading, so it asks the same questions as the web chat in the same visit (a job with no written questions asks its screening questions, exactly as before). A chat that started before this change keeps the questions it began with. The private "What a good answer shows" is never said in these chats either. They still have no Review & send and no write-up: the answers show on the candidate's panel, and the candidate's record learns from their own words when the chat is finished. Texts keep STOP, HELP and the quiet hours as they were. |
 | 15 Oct 2026 | Wave S8, decided by Claude (delegated by the founder), building the part of D-01 revised left for later: a candidate who applies again from the emailed "use your details" link sees the facts their earlier chats at that company added, each one ticked, and unticks anything that is no longer true; what they keep becomes part of this application, in their own words, so the chat does not ask it again. Facts are kept only when the email typed on the form matches the address on file, and only facts that belong to that person; without the emailed link nothing from before is shown or used, so the form never reveals that an address applied before. The scoring still never sees earlier applications or how they ended (D-04 C). Kept facts are in a copy of the person's data and are erased on a deletion request. Same company only. No migration. |
+| 15 Oct 2026 | Register brought up to date after Waves S1 to S8: every decision now shows who made it, when and where it is built; F4 and the S5 accepted behaviour added to the tables at the top; a Wave S8 section added (S8-A, S8-B and the founder's theme switch; PR #45 in review); one short **Still to decide** table added (L-02, L-04 to L-09, L-11, L-13, L-15 and L-17 open; D-02, D-05, L-03, L-14, L-16 and migration 0040 put off but open to asking again). Settled since the entries above: the D-04 fairness tests and earlier-rejection pair (Wave S3), the scorecard's three readings and the licence rule on it (Wave S5), and the real-model fairness run after Wave S7 (run 38717936154: all 11 résumé-reading and scoring suites passed; the run after S5 had failed two bias pairs, fixed in S7; the screening-chat tests have not yet run on the real model). Kanvis's candidate side is now OBSERVED (one complete application on 15 Oct); its recruiter side is still INFERRED. No decision changed. |
 | 15 Oct 2026 | Founder request: a light/dark theme switch. A sun/moon button beside Sign out at the foot of the left menu (in the top bar on phones) switches the application between the two existing themes; the choice is remembered on that browser for a year in a small preference cookie, and with no choice the device setting is followed, as before. The candidate pages keep following the device. No new colours, no library, no migration. |

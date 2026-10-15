@@ -1,6 +1,6 @@
 # Kanvis reverse-engineering reference (Phase Two)
 
-*Written 14 October 2026 on branch `kanvis-reaudit` (from `origin/main` at `dafb730`). It brings together the Kanvis research of 7 October 2026 and the re-check of 14 October 2026. It stands on its own: you do not need the research notes to read it.*
+*Written 14 October 2026 on branch `kanvis-reaudit` (from `origin/main` at `dafb730`). It brings together the Kanvis research of 7 October 2026 and the re-check of 14 October 2026. Updated 15 October 2026: one complete Kanvis application, watched live from the first click to the score (section 5.8). It stands on its own: you do not need the research notes to read it.*
 
 **Who it is for.** The founder: each section starts in plain words. Engineers: the Evidence columns name the exact Kanvis page, route or shipped code file that each claim rests on (the key is in section 2.6).
 
@@ -41,11 +41,11 @@ Kanvis's pitch to hiring teams: "You spend your day deciding, not screening." It
 
 | We could see | We could not see |
 |---|---|
-| Every public page: home, hiring-team landing page, pricing, changelog, job board, job pages, people directory, public profiles, and (on 7 Oct) the legal documents. | Any real hiring-team screen. Hiring-team access is by waitlist only, and we have no hiring-team account. |
-| The sitemap, robots.txt and llms.txt files. | A real application or AI interview. Apply was never pressed. |
-| The program code Kanvis sends to every visitor's browser, read as text and never run. It holds the real screen wording, but nobody watched it run. | Any AI output. No résumé, letter, job-fit report, Twin answer or chat reply was generated. |
+| Every public page: home, hiring-team landing page, pricing, changelog, job board, job pages, people directory, public profiles, and (on 7 Oct) the legal documents. | Any real hiring-team screen. Hiring-team access is by waitlist only, and we have no hiring-team account. Still true on 15 Oct. |
+| The sitemap, robots.txt and llms.txt files. | Until 15 Oct, a real application or AI interview. On 15 Oct one complete application was watched live (section 5.8). |
+| The program code Kanvis sends to every visitor's browser, read as text and never run. It holds the real screen wording, but nobody watched it run. | Any AI output other than that one application's interview, written-up answers and score. No résumé, letter, job-fit report or Twin answer was generated. |
 | The public interactive demo, driven by hand on 7 and 14 October. It uses Kanvis's real screens and words with made-up data. | The emails Kanvis sends to candidates or hiring teams. |
-| The founder's candidate account: on 7 Oct while her profile was being built in it, on 14 Oct read-only. | Anything on Kanvis's servers: scoring rules, AI instructions, the database. |
+| The founder's candidate account: on 7 Oct while the profile was being built in it, on 14 Oct read-only, on 15 Oct for one complete application. | Anything on Kanvis's servers: scoring rules, AI instructions, the database. |
 
 ### 1.3 Headline: Kanvis has shipped nothing new since 7 October
 
@@ -56,15 +56,15 @@ Kanvis's pitch to hiring teams: "You spend your day deciding, not screening." It
 ### 1.4 Ten things worth knowing
 
 1. **The real "New job" is a 10-step tap-through, not a chat box.** The demo starts with "What are you hiring for?", but that prompt exists only in the demo's code. The product asks ten short tap questions (or pre-fills them from a dropped job description), writes the post, and only then offers a chat to refine it. (INFERRED, section 4.3)
-2. **Kanvis's own AI interviews every applicant as part of applying.** So, from the hiring team's seat, every applicant arrives already interviewed and scored. (Promises OBSERVED; the interview itself INFERRED, section 5.3)
+2. **Kanvis's own AI interviews every applicant as part of applying.** So, from the hiring team's seat, every applicant arrives already interviewed and scored. On 15 Oct a full application showed how: the CV fills everything personal, the form asks only the company's questions, the chat asks one thing at a time, and the AI writes up the answers for the candidate to check before Send. (Promises OBSERVED; the interview itself OBSERVED 15 Oct, section 5.8; what the hiring team then sees stays INFERRED)
 3. **The number comes from fixed rules; the AI writes the words.** That is Kanvis's claim. The screen shows the points each requirement cost. (Display OBSERVED in the demo; method INFERRED, section 4.6)
 4. **One pass decides the pool.** The board proposes; everyone starts ticked; untick anyone to look at yourself (in the demo only Lena can be unticked); one button files them privately and nobody is emailed. (OBSERVED in the demo, section 4.7)
 5. **Privacy is said out loud on every move**: "Private — the candidate wasn't notified." (OBSERVED in the demo on "Move to Hired", the only move it allows; that every move says it is INFERRED, section 4.9)
-6. **Candidates see a simpler, separate status**: Applied, Interview, Scored, Recruiter review, then Shortlisted or a gentle "Outcome". They also see their own fit score. (INFERRED, section 5.4)
+6. **Candidates see a simpler, separate status**: Applied, Interview, Scoring, Recruiter review, then a last step called Decision. They also see their own fit score. (These steps and the score with its breakdown OBSERVED 15 Oct, section 5.8; the "Shortlisted" or gentle "Outcome" wording at the Decision step still INFERRED, section 5.4)
 7. **The hiring-team product is small.** Two roles (Owner and Member), four sidebar items, one settings page. There are no approvals, no interview scheduling, no integrations and no billing screens. (INFERRED from what the code lacks, section 4.12)
 8. **Every AI failure falls back to doing it yourself**, with calm error lines such as "Your account is fine." (INFERRED, section 6)
 9. **Some promises are not met on screen.** Profile claims show no evidence links. Closed jobs still look open on the board. Screening questions never appear on real job pages, although the demo shows them. (OBSERVED, sections 3 and 6.3)
-10. **We still cannot see the real hiring-team product.** Access is waitlist-only (OBSERVED). Section 9 lists what an account would answer.
+10. **We still cannot see the real hiring-team product.** Access is waitlist-only (OBSERVED, again on 15 Oct). Everything about what a recruiter sees comes from public pages and public code only. Section 9 lists what an account would answer.
 
 ### 1.5 Kanvis's people, next to ours
 
@@ -84,7 +84,7 @@ Kanvis's pitch to hiring teams: "You spend your day deciding, not screening." It
 
 | Label | Meaning | Typical source |
 |---|---|---|
-| **OBSERVED** | Seen on 14 Oct 2026: on a live page, in the demo, or in the founder's candidate account. | Live page; demo; candidate account |
+| **OBSERVED** | Seen on 14 Oct 2026: on a live page, in the demo, or in the founder's candidate account. **OBSERVED 15 Oct** means seen during the 15 Oct application (section 5.8). | Live page; demo; candidate account |
 | **OBSERVED-EARLIER** | Seen on 7 Oct 2026 and not re-checked on 14 Oct. Nothing shipped in between, so it very likely still holds. | 7 Oct live session |
 | **INFERRED** | Read in the code Kanvis ships (real product wording, but nobody watched it run), or in Kanvis's own marketing, changelog or legal text. | Code; changelog; terms |
 | **UNKNOWN** | Public evidence does not settle it. | n/a |
@@ -103,16 +103,17 @@ Two reading rules:
 | Shipped code | The JavaScript files at `https://www.kanvis.me/_next/static/chunks/<name>.js`, read as text with search tools and never run | about 100 files on 7 Oct; 39 on 14 Oct (36 for the first time); 139 in total | Real screen wording, routes, step lists and error lines. A feature's absence holds only for these 139 files: code loaded later could hold more. |
 | Legal | Recruiter terms and data processing agreement (dated 5 Aug 2026), terms and privacy policy (dated 19 Aug 2026) | 7 Oct | Kanvis's stated rules |
 | Interactive demo | /recruiter/demo: a five-chapter film. Chapters 03 to 05 can be clicked after "Take it from here". | 7 and 14 Oct, by hand in Brave | Real screens and words; what the demo lets you do |
-| Founder's candidate account | Already signed in, in the founder's own Brave browser; one new tab. On 7 Oct the notes record her profile being built in it (CV upload, builder chat, choosing the username); on 14 Oct it was read-only | 7 and 14 Oct | The candidate workspace, tools, settings, job matching, and the profile's owner view |
+| Founder's candidate account | Already signed in, in the founder's own Brave browser; one new tab. On 7 Oct the notes record the profile being built in it (CV upload, builder chat, choosing the username); on 14 Oct it was read-only; on 15 Oct the founder applied to one real job from it and sent the application | 7, 14 and 15 Oct | The candidate workspace, tools, settings, job matching, the profile's owner view, and (15 Oct) a whole application from Apply to the score |
 
 The working notes and downloaded copies from both rounds live outside the repository, in the research sessions' scratch folders. This document does not depend on them.
 
 ### 2.3 Safety limits we kept
 
-The first two limits held on both days. The rest describe the 14 October session; on 7 October the founder's profile was built in her candidate account (a CV went in and the builder's AI chat ran), and that is where the OBSERVED-EARLIER builder findings in section 5.5 come from.
+The first limit held on all three days, and the second on 7 and 14 October. The rest describe the 14 October session; on 7 October the founder's profile was built in the founder's candidate account (a CV went in and the builder's AI chat ran), and that is where the OBSERVED-EARLIER builder findings in section 5.5 come from.
 
 - **No hiring-team account.** The waitlist form was read, never sent.
-- **Never applied.** "Apply for this role" and "Apply with your profile" were reached and not pressed.
+- **Never applied (7 and 14 Oct).** "Apply for this role" and "Apply with your profile" were reached and not pressed.
+- **15 Oct: one real application, by the founder's choice.** The founder picked a real employer's job (a robotics trainer role), gave every answer and pressed Send. Claude pressed Apply and typed the founder's first-step answers at the founder's request, then only read the screen. Separately that day, one click on "Apply with your profile" in another job's panel started an application with no confirmation; nothing was typed and it was left unsent (section 5.8). A third application, also unsent and of unknown origin, shows in the account. No employer or personal details from these applications are recorded here.
 - **No AI generation.** No résumé, cover letter, outreach message, job-fit report, Twin answer or workspace chat reply was triggered.
 - **No forms submitted, no messages sent, no settings changed.** Nothing was uploaded, and the résumé PDF was not downloaded. Settings were opened and read only. We did not sign in or out.
 - **The demo is a sandbox.** On 14 Oct two neutral test lines with no personal data were typed into the demo's pre-written "Ask AI" box. The demo's analytics may have recorded them.
@@ -167,6 +168,7 @@ Every tag in square brackets in this document means the source below. Code files
 | [sitemap] [robots] [llms] | https://www.kanvis.me/sitemap.xml, /robots.txt, /llms.txt |
 | [r-terms] [terms] [privacy] [dpa] | https://www.kanvis.me/legal/recruiter-terms, /legal/terms, /legal/privacy, /legal/dpa (read 7 Oct) |
 | [cand] | The founder's candidate account, read-only (7 and 14 Oct): /candidate/workspace and its tools, Settings, the profile's owner view |
+| [apply-15oct] | The 15 Oct application in the founder's candidate account: one real employer's robotics trainer job, answered and sent by the founder, followed to the score; plus one other job's application started by a click and left unsent. Screens read live, and the founder's screenshots of the score. |
 | [shells] | Anonymous requests for signed-in pages, which return an empty page frame (HTTP 200): /recruiter/dashboard, /recruiter/jobs, /recruiter/new-job, /candidate/workspace, /candidate/build (14 Oct); /recruiter/settings, /onboarding, /accept-invite, /jobs/[id], /jobs/[id]/decisions, /new-job/[id] (7 Oct) |
 | [requests] | The 14 Oct request log: status codes and redirect targets |
 | [sweep] | A keyword search across all 139 saved code files (7 and 14 Oct) |
@@ -948,7 +950,7 @@ The dashboard groups them as New, Longlisted, Shortlisted, Interviewing, On hold
 
 ## 5. Candidate journeys
 
-Same format as section 4. On the candidate side we saw more, because the founder's own candidate account could be read. But we never applied, and on 14 October we triggered no AI writing (the profile builder's AI was watched on 7 October), so the interview and all AI output remain OBSERVED-EARLIER or INFERRED.
+Same format as section 4. On the candidate side we saw more, because the founder's own candidate account could be read. Until 15 October we never applied, and on 14 October we triggered no AI writing (the profile builder's AI was watched on 7 October), so sections 5.2 to 5.4 rest mostly on code. On 15 October one complete application was watched live: section 5.8 records it and says where it confirmed or contradicted 5.2 to 5.4.
 
 ### 5.1 Job discovery and filters
 
@@ -1002,12 +1004,13 @@ Same format as section 4. On the candidate side we saw more, because the founder
 
 **Sequence** *(page OBSERVED; flow INFERRED from code)*
 
-1. The candidate reads the job page (4.4) and presses "Apply for this role", or "Apply with your profile" from the board's job panel. Neither was pressed. *(OBSERVED (buttons); [job-pattern] [cand])*
+1. The candidate reads the job page (4.4) and presses "Apply for this role", or "Apply with your profile" from the board's job panel. Neither was pressed until 15 Oct. *(OBSERVED (buttons); [job-pattern] [cand])*
 2. A window opens, "Applying to {Title} · {Company}", and Kanvis records a job view. Then one of four branches *([apply-js] [signin-js])*:
    - **Signed out:** "New applicant" / "Apply with your résumé", then "Sign in to apply": Google, or email with a 6-digit code ("Resend code in Ns"). No passwords.
    - **A hiring-team account:** "Apply requires a candidate account".
    - **A candidate with no published profile:** sent to /candidate/upload?apply_to=<job>.
    - **A candidate with a profile:** "Applying as {name}", "Verified Kanvis profile · ready" and "Start your application" (about 5 to 10 minutes, a short interview tailored to this role).
+   - **OBSERVED 15 Oct:** from the board's job panel, "Apply with your profile" showed no window at all. One click went straight to the set-up screen (5.8). The window after the public page's "Apply for this role" is still unseen.
 3. **No profile yet.** *([upload-js] [cbuild-js])*
    - Upload a PDF or DOCX of up to 10 MB. It is read while the person watches ("Please keep this window open…"), then they confirm their name and email. The email is locked if they signed in with it.
    - A CV that belongs to an existing account asks them to sign in with the email on that CV.
@@ -1024,7 +1027,7 @@ Same format as section 4. On the candidate side we saw more, because the founder
 | Screens, dialogs, menus | Apply window on the job page; sign-in window; upload page; builder with banner | INFERRED | [apply-js] [signin-js] [upload-js] [cbuild-js] |
 | Inputs and checks | CV file type and size; name and email confirmation; 6-digit code | INFERRED | [upload-js] [signin-js] |
 | Loading, error, success | "You've already applied to this role."; "Publish your Kanvis profile first."; "This role is no longer accepting applications."; required questions left; the company not accepting applications | INFERRED | [api-js] |
-| Loading, error, success | The monthly limit: "50 of 50 applications left this month" | OBSERVED | [cand] |
+| Loading, error, success | The monthly limit: "50 of 50 applications left this month". It drops by one when the interview starts, before anything is sent. | OBSERVED; OBSERVED 15 Oct (when it drops) | [cand]; [apply-15oct] |
 | Information collected, and when | Email at sign-in; the CV at upload; the profile in the builder; everything else in the interview (5.3) | INFERRED | [apply-js] [upload-js] |
 | Who decides | user: the candidate. code: picks the branch from the sign-in and profile state. external: Google, or the email code. | INFERRED | [apply-js] |
 | What changes afterwards | An application in progress, with the spot saved | INFERRED | [cbuild-js] [jobpage-js] |
@@ -1035,17 +1038,17 @@ Same format as section 4. On the candidate side we saw more, because the founder
 
 ### 5.3 The AI interview, review and send
 
-**In plain words.** After Apply, Kanvis prepares an interview from the job and the candidate's profile. It asks one question at a time, in text, and follows up on the candidate's own words. The candidate checks every answer before sending. Once sent, the application is frozen and scored within about a minute. *None of this was run by us: it comes from Kanvis's code, its own texts and the demo's sample transcript.*
+**In plain words.** After Apply, Kanvis prepares an interview from the job and the candidate's profile. It asks one question at a time, in text, and follows up on the candidate's own words. The candidate checks every answer before sending. Once sent, the application is frozen and scored within about a minute. *Until 15 Oct none of this was run by us: it came from Kanvis's code, its own texts and the demo's sample transcript. The 15 Oct application (5.8) confirmed most of it, but not steps 3 and 4: no AI notice was shown before the chat, and a first-step answer was asked again.*
 
 **Sequence** *(INFERRED unless marked)*
 
 1. **"Setting up your interview"** walks through four steps: reading the role, checking what this employer asks, matching it against your profile, and writing your first question. It then reports "{i} of {t} already answered", or, if all are answered, that "we just want to talk about the role". The candidate lands on /candidate/applications/<id>?focus=interview. *([apply-js])*
 2. Three steps are shown, Details, Interview and Review, with a paperclip for attachments. *([whats-new] 14 Aug)*
-3. Before starting, the candidate is told it is AI, what it is for, and that it is a conversation, not a test. *([recruiter]; [terms] §5A)*
+3. Before starting, the candidate is told it is AI, what it is for, and that it is a conversation, not a test. *([recruiter]; [terms] §5A. Not shown on 15 Oct: 5.8)*
 4. **One question at a time.** *([r-terms] §3; [whats-new] 12 Aug)*
    - Code chooses each question from the job's requirements, the employer's own questions, the private criteria (turned into neutral topics) and the gaps in the profile.
    - The AI only words the question, has no tools and cannot change the record.
-   - Questions the profile already answers are skipped.
+   - Questions the profile already answers are skipped. *(On 15 Oct a question already answered on the first step was asked again: 5.8)*
 5. Follow-ups build on the candidate's own words. The demo's sample transcript shows two, about merchants that failed reconciliation and a bug both systems shared. *(OBSERVED (demo sample); [demo])*
 6. Employer questions use small answer widgets: yes or no, pick one (a dropdown above 7 options), pick several, short text, long text, a number (with limits) or a date. Required ones are marked *. *([answers-js])*
 7. **Answers Kanvis already has.** *([answers-js]; [terms] §5A; [whats-new] 12 Aug, 6 Sep)*
@@ -1073,7 +1076,7 @@ Same format as section 4. On the candidate side we saw more, because the founder
 | Who decides | code: picks the questions and works out the score. AI: words the questions and writes up the answers. user: the candidate answers, edits and sends. | INFERRED | [r-terms] §3 |
 | What changes afterwards | A frozen application, scored within about a minute; the recruiter sees it with its score | INFERRED | [terms] §5B; [jobpage-js] |
 | Edge cases and failures | Length: about 10 minutes on /recruiter, 5 to 10 on job pages, but one employer's own description says 15 to 20; the home page sample shows "Question 3 of 6". Real length is not known. | OBSERVED (wordings; the 15 to 20 is OBSERVED-EARLIER, 7 Oct); UNKNOWN (real) | [recruiter] [job-pattern] [home]; [job-uplift] (7 Oct) |
-| Edge cases and failures | Voice: dictation exists (audio deleted after it is turned into text); voice-session code exists, but the legal text says text only. | INFERRED; UNKNOWN | [privacy] §2A; [api-js] |
+| Edge cases and failures | Voice: dictation exists (audio deleted after it is turned into text); voice-session code exists, but the legal text says text only. On 15 Oct the chat had a dictation button; no voice interview was offered. | INFERRED; OBSERVED 15 Oct (dictation button); UNKNOWN (voice interview) | [privacy] §2A; [api-js]; [apply-15oct] |
 | Edge cases and failures | If the job closes midway, the candidate can still finish. After sending, a candidate can withdraw ("Your snapshot is still on file"). | INFERRED | [whats-new] 26 Aug; [capp-js] |
 
 *Touches our decisions:* B1 (the screening conversation in the same visit as applying, with "Do this later" and "Talk to a person"), and the 9 Oct follow-up (unsent answers stay hidden until the candidate presses Send).
@@ -1085,9 +1088,9 @@ Same format as section 4. On the candidate side we saw more, because the founder
 **Sequence**
 
 1. **Applications** (OBSERVED, empty; [cand]): "Every role you've applied to through Kanvis…", a refresh button, "Browse open roles", "50 of 50 applications left this month" with a meter, and "No applications yet."
-2. **With applications** *(INFERRED; [capp-js] [cws-js])*: "Pick up where you left off", "Interview in progress", "Finish my application" or "Resume interview".
-3. **Progress** *(INFERRED; [capp-js] [answers-js])*: Applied, Interview, Scoring or Scored, Recruiter review, then Shortlisted or Not selected. For jobs collected from other sites: Sent to employer, then Employer review.
-4. **After scoring** *(INFERRED; [capp-js] [jobpage-js]; [dpa] Annex 2)*:
+2. **With applications** *(OBSERVED 15 Oct, except "Finish my application"; [apply-15oct]; [capp-js] [cws-js])*: "Pick up where you left off", "Interview in progress", "Finish my application" or "Resume interview".
+3. **Progress** *(OBSERVED 15 Oct up to Recruiter review, then a last step called "Decision"; Shortlisted or Not selected INFERRED; [apply-15oct]; [capp-js] [answers-js])*: Applied, Interview, Scoring or Scored, Recruiter review, then Shortlisted or Not selected. For jobs collected from other sites: Sent to employer, then Employer review.
+4. **After scoring** *(OBSERVED 15 Oct, except "Applied · NN/100", "See the decision" and the candidate-safe rule; [apply-15oct]; [capp-js] [jobpage-js]; [dpa] Annex 2)*:
    - "Your fit score is ready." and "The recruiter sees this score with your interview."
    - The job page gains three tabs, "The role", "Your application" and "Your answers", with "Applied · NN/100", "See your score" and "See the decision".
    - The breakdown shown is the "candidate-safe" one, without private-criteria detail.
@@ -1108,13 +1111,13 @@ Same format as section 4. On the candidate side we saw more, because the founder
 |---|---|---|---|
 | Entry point | Sidebar "Applications"; "My applications" on the board; the job page's "Your application" tab; emails | OBSERVED (sidebar, board); INFERRED (tabs) | [cand]; [jobpage-js] |
 | Person and permissions | The candidate | OBSERVED | [cand] |
-| Screens, dialogs, menus | Applications list; application page with progress; job-page tabs; Inbox | OBSERVED (list, Inbox); INFERRED (rest) | [cand]; [capp-js] |
+| Screens, dialogs, menus | Applications list; application page with progress; job-page tabs; Inbox | OBSERVED (list, Inbox); OBSERVED 15 Oct (progress, tabs) | [cand]; [apply-15oct]; [capp-js] |
 | Inputs and checks | Replies in the Inbox; withdrawal | INFERRED | [whats-new] 19 Aug; [capp-js] |
 | Loading, error, success | Empty states for Applications and Inbox ("Nothing yet") | OBSERVED | [cand] |
 | Information collected, and when | Nothing new; the application was frozen at sending | INFERRED | [terms] §5B |
 | Who decides | user: the recruiter's actions change the status (which action triggers "Shortlisted" is not known). code: refreshes the page and sends Kanvis's emails. | INFERRED; UNKNOWN | [capp-js]; [r-terms] §6 |
 | What changes afterwards | Status, score, decision; emails | INFERRED | [capp-js] |
-| Edge cases and failures | Candidates may ask for a human review, a plain explanation of a score, or deletion, by emailing Kanvis; there is no self-serve delete. Tracking with real applications was never seen. | INFERRED; UNKNOWN | [privacy] §5C, §9 |
+| Edge cases and failures | Candidates may ask for a human review, a plain explanation of a score, or deletion, by emailing Kanvis; there is no self-serve delete. Tracking a real application was seen on 15 Oct up to Recruiter review; a decision has not been seen yet. | INFERRED; OBSERVED 15 Oct; UNKNOWN (decision) | [privacy] §5C, §9; [apply-15oct] |
 
 *Touches our decisions:* Q14 (our status page opens only from the emailed link), B6 and Q27 (telling candidates), and the 9 Oct choice to keep the 30-day "still reviewing" note off by default.
 
@@ -1214,6 +1217,43 @@ Same format as section 4. On the candidate side we saw more, because the founder
 | What changes afterwards | A new saved item; the default résumé on the public profile | OBSERVED; INFERRED | [cand] |
 | Edge cases and failures | The default résumé cannot be deleted; the style names on screen differ from the template names in code (3.3, #15); output quality is not known, because nothing was generated | OBSERVED; UNKNOWN | [cand]; [cws-js] |
 
+### 5.8 The full application, watched live on 15 October
+
+**In plain words.** On 15 October the founder applied, from the founder's candidate account, to a real employer's job (a robotics trainer role), answered every question and pressed Send. It is the first Kanvis application we have seen from the first click to the score. The CV fills in everything personal. The form asks only the company's questions. An AI chat digs into gaps, one question at a time. The AI then writes up the answers for the candidate to check, and a score with six bars appears about a minute after Send. **The hiring side is still waitlist-only**: we saw nothing of what the recruiter gets, so that stays INFERRED.
+
+**What this means for us**
+- We built the same flow in Wave S7 (PR #44): the CV first, then only the company's questions, a chat with a counter, Review & send, and the score afterwards.
+- We left out its weak spots (row 8): our chat never asks again what the form answered, and the AI's notes are kept apart from the candidate's own answer.
+- We do not copy two things: a one-click start with no check, and employer questions about gender or other protected traits (our fairness check refuses them).
+- Still unknown, because nobody has a recruiter seat: what the hiring team sees and how Kanvis tells a candidate the decision.
+
+**Sequence** *(all [apply-15oct])*
+
+| # | Step | What we saw | Label |
+|---|---|---|---|
+| 1 | Entry | Browse Jobs, then "View" opens the job panel. One click on "Apply with your profile" starts the application: no confirmation, no "Applying as…" window (5.2), no time estimate. The monthly allowance drops by one at that moment, before anything is sent. | OBSERVED 15 Oct |
+| 2 | Setting up | A full-screen "Setting up your interview" shows one step at a time ("Checking what this employer asks", "Matching it against your profile") for about 8 seconds, and says this is done once per role. | OBSERVED 15 Oct (two of the four steps the code lists) |
+| 3 | The page | A plain page without the workspace menu: the company's logo, a step header, "Autosaves" and "Finish later". Three steps (Details, Interview, Review & send) for a job with quick questions; two (Interview, Review & send) for a job without. | OBSERVED 15 Oct (two jobs); INFERRED (that this is the rule) |
+| 4 | Details: the company's questions only | Name, email, phone, CV and work history are never asked: they come from the profile Kanvis built from the CV (5.5). Only the company's numbered quick questions, as large one-tap rows (a number box for pay), required ones starred. One answer came pre-filled, tagged "Suggested from your profile — check it". A counter ("N of 4 answered"); Continue works even with required answers missing. This company also asked a gender question, which our own fairness check would refuse. | OBSERVED 15 Oct |
+| 5 | The chat: what you see | The company's logo as the AI's picture. A header counter with the section name, such as "0 of 4 required · About your experience": a count, never a list of topics. An eye button, "Where your answers go", shows one line: the replies and the full transcript go to the company on submit. A dictation button. While the AI works: "Reviewing your reply…", and the reply box is locked. No AI notice, time estimate, skip button or "talk to a person" was seen. | OBSERVED 15 Oct |
+| 6 | The chat: how it asks | It opens with the first name, one project from the CV, and the biggest gap between the profile and the job's must-haves (on the other job, an eligibility gap). Every turn is one neutral sentence restating the last answer, then one specific question. A bare "yes" gets a request for the concrete thing behind it. After a "no", it asks for something similar from the candidate's own work (an analog), then for a smaller version of the same thing; a vague claim gets one push for a specific moment. Then it moves on calmly, without scolding or repeating itself. | OBSERVED 15 Oct |
+| 7 | The chat: sections and the end | Section 1, "About your experience", probes the gaps and does not count: the counter stayed at 0 for eight exchanges. Section 2, "Required questions", asks the company's required written questions (often as role-plays built on the candidate's own project). Only these move the counter, up to "4 of 4 required · Wrapping up". A last "anything else for the recruiter?", a closing message that names one strength and says to review and press Send, then the reply box becomes one "Review and send" bar. | OBSERVED 15 Oct |
+| 8 | The chat: weak spots | It asked again for a first-step answer, and for proof of it. Filler such as "That's good to know." One generous guess was written as if it were a finding. A long pasted answer that looked AI-written was accepted without comment. In section 2 the restating sentence turned mildly approving. | OBSERVED 15 Oct (one chat; how often: UNKNOWN) |
+| 9 | Analysing | After "Review and send", a short pause while Kanvis analyses the chat, then the review screen. | OBSERVED 15 Oct (the founder's report; not timed) |
+| 10 | Review & send | "Check what you're sending.", with a line that the company reads it exactly as written. First the step-1 answers, each with Edit (the profile tag kept; a sensitive answer marked "Private detail", with a label saying it is stored once and reused on future applications; the reuse itself was not seen). Then "From your interview", written up from the replies: the company's written questions, shown here for the first time and worded differently from the chat, each answered from the chat. Some answers are the candidate's own words, some a first-person summary, some the bare reply plus a third-person AI note, and one a plain note that no example was given. Every answer has Edit. "8 of 8 answered", then "Send application". The screen says nothing goes to the company before Send. | OBSERVED 15 Oct; UNKNOWN (whether the reuse happens, and whether the company sees unsent applications, row 13) |
+| 11 | Scoring | The application record is the job's own page, with tabs The role, Your application and Your answers. "Submitted <date> · Conversational · N interview turns" (39 here; the time it took was not measured). Steps: Applied → Interview → Scoring → Recruiter review → Decision. A "Scoring" card ("Analyzing your fit against the JD", usually 30 to 60 seconds) that updates by itself. A line that the recruiter sees a frozen snapshot and their private notes are never shared. | OBSERVED 15 Oct; UNKNOWN (the confetti named in the code) |
+| 12 | The score | About a minute later: "Your fit score is ready." and "The recruiter sees this score with your interview." A large 0-100 number and "How it breaks down": six bars (Skills match, Years of experience, Role relevance, Education & certs, Domain & responsibilities, Seniority fit), green, amber or red. No words explain the bars. "Your answers" lists every question with the answer sent (AI notes included) and the full transcript. The profile then gained skills and a project the candidate had mentioned only in the chat. | OBSERVED 15 Oct; UNKNOWN (how the bars are worked out) |
+| 13 | Coming back for the decision | The candidate comes back to the same job page, or to Applications: status pills with counts (All, Needs you, Shortlisted, Waiting, Closed), unsent applications under "Needs you" with "Resume interview", the sent one under "Waiting on the employer" with its score. The last step is "Decision", but on 15 Oct the application was still at "Recruiter review", so no decision screen or email was seen. No screen offers to withdraw or delete an unsent application. | OBSERVED 15 Oct; UNKNOWN (the decision screen, emails, whether the company sees unsent applications); INFERRED (the "Shortlisted" or "Outcome" wording, 5.4) |
+| 14 | The recruiter's side | Still waitlist-only. No recruiter screen was seen, so what the team gets (the score, the write-ups, the transcript) is known only from public pages and public code. | OBSERVED (waitlist); INFERRED (recruiter view) |
+
+**What the code reading got right and wrong**
+
+- **Confirmed:** the set-up screen; "Suggested from your profile — check it"; "Private detail"; autosave and "Finish later"; review with Edit and "From your interview"; the promise that nothing is sent before Send; the job page as the record; the frozen-snapshot promise; a 0-100 score about a minute after Send.
+- **Contradicted:** no "Applying as…" window from the job panel (5.2); no AI notice before the chat, when starting from the job panel (5.3 step 3); a first-step answer was asked again (5.3 step 4).
+- **Still unknown:** the decision screen and emails; the apply window on the public job page; declining a question, voice interviews and equal-opportunity questions; whether the company sees unsent applications; how the six bars are worked out; everything on the recruiter side.
+
+*Touches our decisions:* D-01 as revised on 15 Oct (a reusable record built from the CV, per company only), S7-1 (candidates see their score and breakdown), S7-2 (they can read back what they sent) and S7-3 (a counter, no topic list). The founder made these after watching this flow, and they were built in Wave S7 (PR #44). Our version avoids the weak spots in row 8: the chat gets the form's answers so it does not ask twice, the assistant's notes are kept apart from the candidate's answer, and protected-characteristic questions are refused when the job is set up.
+
 ---
 
 ## 6. Interaction design patterns, and why Kanvis feels simpler
@@ -1227,15 +1267,15 @@ Same format as section 4. On the candidate side we saw more, because the founder
 | 1 | Talk for judgement, tap for facts (C1) | Job facts are taps (the 10-step quick start). The profile, the interview and post refinement are chats. Candidate tools ask for one to three optional fields. No long form is visible anywhere. | Each screen asks for one kind of thing, in the easiest way to give it | OBSERVED (demo, tools); INFERRED (quick start) | [demo] [cand]; [newjob-js] |
 | 2 | One question at a time, with a count (C3) | The "1 OF 3" card replaces the chat box; "Step N of 10"; the builder asks one follow-up per turn; the home page sample shows "Question 3 of 6" | People always know how much is left | OBSERVED; INFERRED (quick start) | [demo] [cand] [home]; [newjob-js] |
 | 3 | Show more only when needed (C2) | The experience follow-up appears only if a minimum is set; skills come after the basics; "Choose them later"; drawers over lists; collapsed sections with counts; accordion filters; "2 more requirements at full marks." | Screens stay short; detail is one click away | OBSERVED; INFERRED | [demo] [cand]; [newjob-js] |
-| 4 | Read it first, then let the person check (C5) | The job description, website and CV are read and filled in, then marked: "Filled in from your job description.", "From you" or "Website", "Suggested from your profile — check it", "Looks right, finish setup" | Typing becomes checking, and the source is visible | INFERRED (hiring side); OBSERVED-EARLIER (CV) | [newjob-js] [onb-js] [answers-js]; [cand] |
-| 5 | AI output is always editable (C4) | A review step with Edit on every row; every profile field editable and chips removable; letters edited line by line; builder diffs; interview answers that can be corrected before sending | Nothing the AI writes is final, so people trust it | OBSERVED (profile); INFERRED (rest) | [cand]; [newjob-js] [capp-js] [builder-js] |
+| 4 | Read it first, then let the person check (C5) | The job description, website and CV are read and filled in, then marked: "Filled in from your job description.", "From you" or "Website", "Suggested from your profile — check it", "Looks right, finish setup" | Typing becomes checking, and the source is visible | INFERRED (hiring side); OBSERVED-EARLIER (CV); OBSERVED 15 Oct ("Suggested from your profile") | [newjob-js] [onb-js] [answers-js]; [cand]; [apply-15oct] |
+| 5 | AI output is always editable (C4) | A review step with Edit on every row; every profile field editable and chips removable; letters edited line by line; builder diffs; interview answers that can be corrected before sending | Nothing the AI writes is final, so people trust it | OBSERVED (profile); OBSERVED 15 Oct (interview answers); INFERRED (rest) | [cand]; [apply-15oct]; [newjob-js] [capp-js] [builder-js] |
 | 6 | Chat beside the thing it changes (C6) | Builder chat beside the live post; profile chat beside the record; "Ask the agent" on every section; Ask AI as a side panel over the board; workspace chat above the tool grid | Each answer's effect is visible at once, and editing by hand is one step away | OBSERVED | [demo] [cand] |
 | 7 | List, then drawer, then board, without losing your place (C7) | A row opens a right-side drawer (Esc closes; Shift+J/K moves on); "Screen the pool" opens a separate board and returns; after a move, the list jumps to that stage | The list is always underneath; fewer page loads | OBSERVED (demo); INFERRED (keys) | [demo]; [jobhub-js] |
 | 8 | Every suggestion says why and what next (C8) | Card headline, two strengths, one gap, a next action with its reason; the pool read and next steps; points lost per requirement; the candidate's "Why this is on your board" | The decision is half made when you arrive | OBSERVED | [demo] [cand] |
 | 9 | Evidence beside the number (C9) | The transcript is one tab from the score; Ask AI shows what it looked at; "Not evidenced yet"; the posting's own words quoted. The exception: profile claims show no sources. | Checking does not mean hunting | OBSERVED | [demo] [cand] [profiles] |
 | 10 | Everything pre-ticked, with one place to say "not this one" | Review & apply starts with every row ticked; untick to hold back; a live count; one button | Agreeing takes one click; disagreeing takes one more | OBSERVED (demo) | [demo] |
 | 11 | Private by default, and said every time (C11) | "Private — the candidate wasn't notified." on every move; each Review & apply group says private, no email; private criteria and "Only you" requirements; no screening questions or criteria on the public page | Removes the fear of telling a candidate by accident | OBSERVED; INFERRED | [demo] [job-pattern]; [rubric-js] |
-| 12 | Plain, gentle words for candidates | Candidate statuses Applied, Interview, Scored, Recruiter review, then Shortlisted or "Outcome" ("The recruiter has reviewed your application."); four plain promises on the apply card | Candidates never see internal stages | OBSERVED (apply card); INFERRED (statuses) | [job-pattern]; [capp-js] |
+| 12 | Plain, gentle words for candidates | Candidate statuses Applied, Interview, Scored, Recruiter review, then Shortlisted or "Outcome" ("The recruiter has reviewed your application."); four plain promises on the apply card | Candidates never see internal stages | OBSERVED (apply card); OBSERVED 15 Oct (statuses up to Recruiter review); INFERRED (Shortlisted, "Outcome") | [job-pattern]; [apply-15oct]; [capp-js] |
 | 13 | Never ask twice (C12) | Saved answers; "Only This Once"; the profile answers employer questions; job description and website pre-fill; company defaults pre-fill new jobs; Job Match pulls in a Kanvis job's text | Every action after the first is much faster | OBSERVED; INFERRED | [cand]; [cbuild-js] [onb-js] [settings-js] |
 | 14 | Keep my place (C13) | The quick-start draft kept in the browser; "Your spot for <role> is saved"; interviews resume with the transcript; the builder chat persists; opt-in assistant memory; frozen applications | Leaving is safe | OBSERVED; INFERRED | [cand]; [newjob-js] [cbuild-js] [cws-js] |
 | 15 | Every failure falls back to doing it yourself (C10) | Reading errors fall back to typing; calm error lines ("Your account is fine.", "Nothing you were working on is affected."); skeleton loaders; progress text in stages; empty states with one action | AI trouble never leaves a person stuck | INFERRED (errors); OBSERVED (loading, empty states) | [newjob-js] [onb-js] [ws-js]; [cand] |
@@ -1295,9 +1335,9 @@ Same format as section 4. On the candidate side we saw more, because the founder
 | A10 | Tailored ATS résumé generation | OBSERVED (start screen); INFERRED (output) | One page, ATS-safe, STAR, from the verified profile; optional tailoring to a job description. Generation not run. **Disagreement:** the code names three templates; the screen offers four styles (Modern Compact, Executive, Tech Builder, Academic) with "match" badges. The screen wins. | [cand]; [cws-js] |
 | A11 | Résumé editing, export and version history | OBSERVED (list, preview); INFERRED (editing) | A list of generated résumés with DEFAULT and STALE badges; PDF preview with Download; the default cannot be deleted. Code: drag to reorder, remove bullets, live preview, paged history. Several saved versions, not line-by-line history. | [cand]; [cws-js]; [api-js] |
 | A12 | Cover letters and outreach | OBSERVED (start screens); INFERRED (output) | Cover letter: optional role or job description (500 characters); code adds line-by-line editing, "Make it more concise", PDF. Outreach: to whom (200), what to mention (500), tone; code adds regenerate, placeholders, copy and open LinkedIn or email. **Disagreement:** the screen's tones are Warm, Direct and Formal; the code's strings are "Friendly, personable", "Concise, professional" and "Traditional, careful" (probably their descriptions). | [cand]; [cws-js] |
-| A13 | Conversational job applications | OBSERVED (promises); INFERRED (the flow) | The apply card promises a short conversational interview, no cover letter, about 5 to 10 minutes, and that the hiring team decides. Not started. **Disagreement:** the public pass labelled this OBSERVED from the promises; the browser pass labelled it INFERRED because nothing was run. Both are right about different things. | [job-pattern] [home]; [apply-js] |
-| A14 | Application-specific follow-up questions | OBSERVED (demo sample); INFERRED (candidate side) | The demo's sample transcript shows the AI following up on the candidate's own words. In code, fixed rules choose each question from requirements, employer questions and profile gaps. **Disagreement:** labelled OBSERVED-EARLIER by the public pass and INFERRED by the browser pass; the candidate-side run was never seen. | [demo]; [r-terms] §3 |
-| A15 | Candidate workspace and application tracking | OBSERVED (empty); INFERRED (with data) | Workspace home, Applications ("50 of 50 applications left this month"), Inbox, "My applications" on the board. Progress: Applied, Interview, Scored, Recruiter review, Shortlisted or Not selected. **Disagreement:** the 7 Oct catalogue called the 50 "inferred"; it is on screen. | [cand]; [capp-js] |
+| A13 | Conversational job applications | OBSERVED (promises); OBSERVED 15 Oct (the whole flow) | The apply card promises a short conversational interview, no cover letter, about 5 to 10 minutes, and that the hiring team decides. On 15 Oct one application was made from start to score: one click, the company's questions only, an AI chat, answers written up from it, review and Send (5.8). The 14 Oct disagreement between the two passes (promises seen, flow not run) is settled. | [job-pattern] [home]; [apply-js]; [apply-15oct] |
+| A14 | Application-specific follow-up questions | OBSERVED (demo sample); OBSERVED 15 Oct (candidate side); INFERRED (how questions are chosen) | The demo's sample transcript shows the AI following up on the candidate's own words. On 15 Oct the AI opened on the biggest gap between the profile and the must-haves, asked one question per turn, and after a "no" tried an analog, then a smaller version (5.8). In code, fixed rules choose each question from requirements, employer questions and profile gaps. | [demo]; [r-terms] §3; [apply-15oct] |
+| A15 | Candidate workspace and application tracking | OBSERVED (empty, 14 Oct); OBSERVED 15 Oct (with applications); UNKNOWN (the decision) | Workspace home, Applications ("50 of 50 applications left this month"), Inbox, "My applications" on the board. Seen on 15 Oct: status pills with counts; Applied, Interview, Scoring or Scored, Recruiter review, then Decision; the 0-100 score with six bars. Shortlisted or Not selected not yet seen. **Disagreement:** the 7 Oct catalogue called the 50 "inferred"; it is on screen. | [cand]; [apply-15oct]; [capp-js] |
 
 ### 7.2 B. Recruiter (hiring-team) features
 
@@ -1386,7 +1426,7 @@ The demo's fake address bar runs kanvis.me/recruiter/jobs/new, then /recruiter/j
 | /candidate/publish (?change=1 to change the username) | Choose a username and publish | OBSERVED-EARLIER; INFERRED (?change=1) | [cand]; [cws-js] |
 | /candidate/apply?apply_to=<job> | Rewritten to /jobs/<id>?apply=1 once the profile is published | INFERRED | [guards-js] |
 | /candidate/checklist | Onboarding checklist | INFERRED | [guards-js] |
-| /candidate/applications/[id]?focus=interview | Interview and application page | INFERRED | [apply-js] [capp-js] |
+| /candidate/applications/[id]?focus=interview | Interview and application page. Without ?focus it redirects to the job's page /jobs/<job id>, which is the application record. | OBSERVED 15 Oct | [apply-15oct]; [apply-js] [capp-js] |
 | /candidate/workspace?tool=<tool> | Workspace. Seen in the address bar on 14 Oct: browse_jobs, my_applications, inbox, edit_profile, resume, jd_analysis, email, cover_letter. The code also lists resume_history, resume_templates, jd_analyses, email_history and cover_letter_history (list pages, probably). | OBSERVED; INFERRED | [cand]; [cws-js] |
 | /auth, /onboarding | Sign-in and onboarding entry | INFERRED | [candroutes-js] |
 
@@ -1483,26 +1523,26 @@ Reserved usernames in the code include accept-invite, decisions, applications, d
 
 | # | What we still do not know | What it would tell us | What it needs |
 |---|---|---|---|
-| P1 | The apply window when signed out | How Kanvis asks a stranger to sign in at the moment of applying | The founder signs out of her own account and looks; nothing is sent |
-| P2 | The preparation screen; how many questions and follow-ups; the real length; how employer questions are woven in; the "Suggested from your profile" label; declining a question; voice or text; equal-opportunity questions | A reference for our screening conversation in the same visit (B1, built) | An application |
-| P3 | The review screen and sending; what "frozen" looks like to the candidate | A reference for our review-before-send (the 9 Oct follow-up) | An application |
-| P4 | After sending: the fit score the candidate sees, the decision tab, which emails arrive and when (received, fit report, job closed, the 45-day notice), the two-way Inbox | A reference for our status page and messages (Q14, B6, Q27) | An application, then a hiring-team action |
-| P5 | The output of Job Match, the résumé, the cover letter, outreach and the workspace chat | The quality bar for candidate tools | AI generation in her own account; no application |
-| P6 | Twin answers: sources, refusals, the "couldn't answer" email | How a profile chat handles questions it cannot answer | One message to the twin on her own profile |
-| P7 | Why the signed-in board shows 7 of 17 jobs | How Kanvis's job-matching settings filter the board | Reading her Job matching settings (no change) |
-| P8 | How to withdraw an application, and what remains afterwards | A reference for leaving the process | An application |
+| P1 | The apply window when signed out | How Kanvis asks a stranger to sign in at the moment of applying | The founder signs out of the candidate account and looks; nothing is sent |
+| P2 | **Mostly answered 15 Oct (5.8):** the preparation screen, the follow-ups, how employer questions are woven in, and the "Suggested from your profile" label. Still open: declining a question, a voice interview, equal-opportunity questions, and the usual length (one chat is not a measure) | A reference for our screening conversation in the same visit (B1, built) | Another application |
+| P3 | **Answered 15 Oct (5.8):** the review screen, sending, and the "frozen snapshot" line | A reference for our review-before-send (the 9 Oct follow-up) | Nothing more |
+| P4 | **Partly answered 15 Oct (5.8):** the fit score and its six bars. Still open: the decision tab, which emails arrive and when (received, fit report, job closed, the 45-day notice), the two-way Inbox | A reference for our status page and messages (Q14, B6, Q27) | A hiring-team action on the sent application |
+| P5 | The output of Job Match, the résumé, the cover letter, outreach and the workspace chat | The quality bar for candidate tools | AI generation in the founder's own account; no application |
+| P6 | Twin answers: sources, refusals, the "couldn't answer" email | How a profile chat handles questions it cannot answer | One message to the twin on the founder's own profile |
+| P7 | Why the signed-in board shows 7 of 17 jobs | How Kanvis's job-matching settings filter the board | Reading the founder's Job matching settings (no change) |
+| P8 | How to withdraw an application, and what remains afterwards. On 15 Oct no screen offered to withdraw or delete an unsent application. | A reference for leaving the process | Looking for Withdraw on the sent application (pressing it is the founder's call) |
 
 ### 9.3 How the answers could be got safely
 
-- **A hiring-team seat** needs the founder to send the waitlist form herself. It shares her name, company, email and phone with Kanvis. She would need a different email from her candidate account, because one sign-in cannot be both.
+- **A hiring-team seat** needs the founder to send the waitlist form personally. It shares the founder's name, company, email and phone with Kanvis. It would need a different email from the candidate account, because one sign-in cannot be both.
 - **The Team plan matters.** Pipeline stages, candidate emails and analytics are Team plan and up, so the seat would need the 30-day Team trial that Kanvis promises.
-- **Prefer her own test job.** The cleanest way to watch the candidate side is to apply to a test job the founder posts with that seat. Applying to a real company's job sends a real application and uses that employer's allowance. Do it only if the founder chooses the job and says yes.
-- **One yes per action.** Every account, form, application, AI generation or Twin message is done by the founder, or with her explicit yes for that one action.
+- **Prefer the founder's own test job.** The cleanest way to watch the candidate side is to apply to a test job the founder posts with that seat. Applying to a real company's job sends a real application and uses that employer's allowance. Do it only if the founder chooses the job and says yes, as on 15 Oct (5.8).
+- **One yes per action.** Every account, form, application, AI generation or Twin message is done by the founder, or with the founder's explicit yes for that one action.
 - **No REA needed.** The REA toolkit is not needed for any of these (section 2.5).
 
 ### 9.4 Recorded decisions this comparison touches (no new decisions)
 
 Two pairs of recorded decisions could look contradictory side by side. Both were settled when they were made; they are listed only so nobody reads them as open.
 
-- **B6 and Q27.** B6 keeps decisions private until a person tells the candidate. Q27 keeps a safety net: a reminder after 2 business days, and the standard message after 5. The plan kept both: the safety net stays, and the Review and apply group line says so (`docs/spec/22-match-score-and-pool-board.md` §5). Several other screens still say nothing is sent (known bug 19), so how the two fit together on screen, and for batch and role-closing decisions, is asked as follow-up D-03 in `docs/workflow-decisions.md`; that follow-up reopens neither decision. For comparison, Kanvis's hiring side never sends a decision by itself; Kanvis instead sends its own "no decision yet" notice after 45 days (INFERRED).
+- **B6 and Q27.** B6 keeps decisions private until a person tells the candidate. Q27 keeps a safety net: a reminder after 2 business days, and the standard message after 5. The plan kept both: the safety net stays, and the Review and apply group line says so (`docs/spec/22-match-score-and-pool-board.md` §5). Several other screens used to say nothing is sent (known bug 19), so how the two fit together on screen, and for batch and role-closing decisions, was asked as follow-up D-03 in `docs/workflow-decisions.md`. It was settled on 14 Oct as option A: the day-5 message stays, and every screen that says a decision is private also says it goes by itself after 5 working days (built in Wave S1). It reopened neither decision. For comparison, Kanvis's hiring side never sends a decision by itself; Kanvis instead sends its own "no decision yet" notice after 45 days (INFERRED).
 - **B6 and Q25's 9 October follow-up.** Cancelling a booked interview tells the candidate at once, without a reason, that the interview is off. This is a deliberate exception recorded on 9 October, and it is built that way.

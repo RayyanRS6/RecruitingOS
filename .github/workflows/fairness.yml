@@ -4,13 +4,21 @@
 # must read and score the same; quotes must be real; a gap, a career change or no degree is never marked down alone.
 # Since Wave S3 (14 October 2026) also: the same CV with an earlier rejection at the company sends the very same input,
 # and the scoring never sees a name, email, phone, street, zip code or link (triage.redaction).
+# Since Wave S7 (15 October 2026) the "Which tests" choice can also run the screening chat, its scorecard and the
+# answers written up from it (the screen and chat suites), which until then ran only on the stand-in model.
 # Started by hand from the Actions tab ("Run workflow"). It never runs on a pull request, so the key is never offered
-# to a fork's code. About ten cents a run. How to use it: docs/runbooks/fairness-tests.md.
+# to a fork's code. About ten cents a run for the CV tests; the chat tests make more calls and cost more. How to use
+# it: docs/runbooks/fairness-tests.md.
 name: fairness
 
 on:
   workflow_dispatch:
     inputs:
+      tests:
+        description: "Which tests (the first is the original CV reading and scoring set)"
+        type: choice
+        options: ["resume,triage", "screen,chat", "resume,triage,screen,chat"]
+        default: "resume,triage"
       screening_model:
         description: "Model that screens the CVs (the app uses claude-haiku-5-5)"
         type: choice
@@ -27,14 +35,14 @@ permissions:
 
 # One run at a time per branch and choice, so runs of different choices can be compared side by side.
 concurrency:
-  group: fairness-${{ github.ref }}-${{ inputs.screening_model }}-${{ inputs.screening_effort }}
+  group: fairness-${{ github.ref }}-${{ inputs.tests }}-${{ inputs.screening_model }}-${{ inputs.screening_effort }}
   cancel-in-progress: false
 
 jobs:
   fairness:
     name: fairness tests (real AI)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -57,7 +65,7 @@ jobs:
             exit 1
           fi
 
-      - name: CV reading and screening on the real models (synthetic CVs only)
+      - name: The chosen tests on the real models (synthetic CVs and conversations only)
         id: evals
         env:
           AI_PROVIDER: anthropic
@@ -65,7 +73,9 @@ jobs:
           # Only the two allowed models are offered; the app refuses any other (packages/ai/src/routing.ts).
           AI_MODEL_STANDARD: ${{ inputs.screening_model || 'claude-haiku-5-5' }}
           AI_EFFORT_STANDARD: ${{ inputs.screening_effort != 'app setting' && inputs.screening_effort || '' }}
-        run: pnpm --filter @ros/evals exec tsx src/runner.ts --suite resume,triage
+          # One of the fixed choices above, passed through the environment rather than pasted into the command.
+          SUITES: ${{ inputs.tests || 'resume,triage' }}
+        run: pnpm --filter @ros/evals exec tsx src/runner.ts --suite "$SUITES"
 
       - name: Summary in plain words
         if: ${{ !cancelled() && steps.evals.outcome != 'skipped' }}
