@@ -1,5 +1,5 @@
 import { EvidenceAssessment, type EligibilityResult, type ResumeExtraction, type RolePacket } from "@ros/contracts";
-import { FAIRNESS_RULES, FINDING_RULES, withoutTag, type PromptDef } from "./registry";
+import { FAIRNESS_RULES, FINDING_RULES_MUST_HAVES, FINDING_RULES_NAMING, withoutTag, type PromptDef } from "./registry";
 
 /**
  * What the résumé reading is given (founder decision D-04 = C): the candidate's texts as the scoring view shows them
@@ -62,13 +62,29 @@ export function triageDataText(text: string): string {
   return DATA_TAGS.reduce((t, tag) => withoutTag(t, tag), text);
 }
 
+/**
+ * How the résumé reading judges a competency (triage.assess v7, Wave S9 round 4), in place of the scorecard's shared
+ * definition (`FINDING_RULES_COMPETENCIES`): a named duty, procedure or tool is partly shown; shown needs how much, how
+ * often, a result or a responsibility; how well the work is done is never the missing part; the indicators are examples,
+ * not a checklist; and a must-have such as the licence never changes how a skill is read. Its examples are deliberately
+ * not the evals' CV lines, so the evals stay a held-out check. It never holds "Competencies: " or "Must-haves: ", which
+ * the stand-in model reads the role's lists by (packages/agents/src/fake-handlers.ts).
+ */
+const RESUME_COMPETENCY_LEVELS = `- Competencies (competencyFindings), read from a résumé or a written description of their work. Read each competency against its definition; its indicators are examples of that work, not a checklist, and a line need not match an indicator word for word. Quote the line the finding rests on (a few words or more) when evidenced or partially_evidenced.
+  - "evidenced": their words describe doing the work the definition describes with more than its name: how much or how often (a number, or a frequency such as "daily"), what came of it (a result), or a responsibility they held for it ("trained new hires on the charting system").
+  - "partially_evidenced": a line names a task, procedure or tool that is part of that work and says no more about it. A bare list of duties is partially_evidenced for every competency whose work it names, even when it matches no indicator word for word: "Prophylaxis, oral hygiene instruction" is partially_evidenced for a competency about clinical care and for one about explaining home care to patients.
+  - "not_evidenced": no line names any part of that work. A job title, an employer, dates or years in a job, or a yes/no answer on the form is not on its own evidence of a competency: when that is all there is, it is not_evidenced, and the question goes to unknowns.
+  - "contradicted": a quote in their own words shows the opposite.
+  - How well the work is done (thoroughly, gently, accurately, in plain language, building trust, to a standard) is for the interviews to see and a résumé cannot show it: it is never the missing part that makes a competency partially_evidenced rather than evidenced, or not_evidenced rather than partially_evidenced.
+  - Each competency is read from the lines about its own work. What the résumé says about a must-have (a licence held, lapsed, pending or not held) never changes how a competency is read: the same duty line gives the same competency findings whatever the rest of the résumé says.`;
+
 const TRIAGE_SYSTEM = `You are the triage specialist of a recruiting department. For one application you produce an evidence-based assessment against the Role Packet so the owner can decide who to talk to. You inform; you never decide.
 
 How to assess:
 - Read the resume text and the application. Every strength and concern must cite evidence: source "resume" or "application" with a verbatim quote (a contiguous excerpt of the source text). Quotes are verified in code; a quote that is not in the source is removed and the claim is discarded, so quote exactly. A claim with no quote is shown to the owner marked "no quote" and lowers what they can rely on.
 - The candidate's answers to the company's questions are their own words, one per line: the question as it was asked, then their answer. To use one as evidence, quote the whole line exactly (question and answer) with source "application". A self-reported answer is what the candidate says, not a checked fact: it never outweighs what their resume or written description shows.
 - requirementFindings: one entry per must-have (use the requirement key), decided by the definitions below; when one is unknown, add the question to unknowns.
-- competencyFindings: one entry per competency key, decided by the definitions below.
+- competencyFindings: one entry per competency key, decided by the résumé levels below.
 - overall: "strong" when the must-haves are evidenced and several competencies are evidenced; "potential" when most must-haves are evidenced or the evidence is thin but relevant; "weak" ONLY when the evidence contradicts a must-have or shows the candidate does not do this kind of work; "unknown" only when there is too little to say: no resume text and no written description of their work, an unreadable file, or contradictions. A written description of their work in the application is evidence: assess it like a short resume, quoting it with source "application".
 - Never mark "weak" for an employment gap, a career change, a non-traditional path, a missing degree, or being "overqualified". Overqualified is at most a concern with the reason stated. Contradictory information becomes an unknown, not a conclusion. Anomalies (possible AI-generated text, date inconsistencies) are listed under anomalies and have no effect on overall.
 - unknowns: the questions a screen should ask, each with why it matters for this role.
@@ -78,7 +94,9 @@ How to assess:
 - Give no number or score of any kind; the findings are the assessment.
 - Details in square brackets ([name], [email], [phone], [street address], [zip code], [link]) were replaced on purpose. They are not evidence: never guess what they were.
 
-${FINDING_RULES}
+${FINDING_RULES_MUST_HAVES}
+${RESUME_COMPETENCY_LEVELS}
+${FINDING_RULES_NAMING}
 
 ${FAIRNESS_RULES}`;
 
@@ -114,9 +132,15 @@ function packetBlock(p: RolePacket): string {
 // then the candidate's answer, never as the form's field names in JSON (a reading had quoted '"rdh_license":"yes"');
 // a whole line may be quoted as the candidate's own words. The overall reading is worked out again in code from the
 // findings (`settledOverall` in packages/agents), so it no longer moves between readings on its own.
+// Version 7 (Wave S9 round 4, real-model runs of 15 Oct 2026): the résumé reading has its own competency levels. A named
+// duty, procedure or tool is partially evidenced; evidenced needs how much, how often, a result or a responsibility; how
+// well is never the missing part; the indicators are examples, not a checklist. A must-have such as the licence never
+// changes how a skill is read. Across six runs the only findings that moved were skills on 'Scaling and root planing,
+// patient education', flipping between partially and not evidenced. The flips came most often when the licence line
+// said 'no', and they moved said_plainly between 25 and 32.
 export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
   key: "triage.assess",
-  version: 6,
+  version: 7,
   task: "triage.assess",
   agent: "triage",
   schema: TriageModelOutput,

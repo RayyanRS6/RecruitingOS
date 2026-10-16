@@ -14,7 +14,8 @@ type Result = {
   suites?: string[] | "all";
   costUsd?: number;
   calls?: number;
-  results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[] }>; passRate: number }>;
+  /** `diagnostics`: a failing case's full record (diagnostics.ts), kept in the file and not shown on the page. */
+  results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[]; diagnostics?: unknown }>; passRate: number }>;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +34,7 @@ export const SUITE_WORDS: Record<string, { name: string; means: string }> = {
   "triage.kept_in": { name: "Kept in by a person", means: "Someone the team kept in after an eligibility answer is read like anyone eligible, never as having failed." },
   "triage.edge_cases": { name: "Fair to different paths", means: "A career gap, a career change, no degree or no CV is never marked down for that alone." },
   "triage.hallucination": { name: "Honest quotes (screening)", means: "Every quote in a screening reading is really in the CV or the application." },
-  "triage.fairness_rules": { name: "Fair score rules", means: "Showing some evidence never scores lower than showing none, the overall reading follows the findings every time, and the answers to the company's questions count as the candidate's own words." },
+  "triage.fairness_rules": { name: "Fair score rules", means: "Showing some evidence never scores lower than showing none, the overall reading follows the findings every time, a skill one of the three readings found in the candidate's own words counts as partly shown whatever order the readings came in (never from a job title and dates alone), and the answers to the company's questions count as the candidate's own words." },
   "resume.extraction": { name: "Reading a CV", means: "Jobs, licences and skills are picked up correctly." },
   "resume.hallucination": { name: "Honest quotes (CV reading)", means: "Every quote taken from a CV is really in it." },
 };
@@ -69,6 +70,10 @@ export function summarize(r: Result, thresholds: Record<string, { minPassRate: n
         lines.push(`- **${x.words.name}**, case \`${c.id}\`: ${c.failures.join("; ") || "failed"}`);
         for (const note of c.notes ?? []) lines.push(`  - ${note}`);
       }
+    }
+    if (bad.some((x) => x.failed.some((c) => c.diagnostics))) {
+      lines.push("");
+      lines.push("For the screening chat, scorecard and write-up cases above, the result file keeps the whole chat and what the AI returned before the app's checks (under `diagnostics`; the fairness run keeps the file as the fairness-results download for 90 days).");
     }
   }
   return lines.join("\n");

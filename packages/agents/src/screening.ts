@@ -1,13 +1,13 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
+import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, scoredSkill, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
 import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, unfairQuestion, unplannedChatPacket, withFocusAnswer, type FocusQuestion } from "./screen-focus";
 import { PLACEHOLDER, SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
-import { TRIAGE_READINGS, answerInContext, applyEvidenceRules, combineRunOutcomes, credentialMustHaves, findingSubjects, jobWords, linkReadingRuns, sentenceAround, withoutInterviewSkills } from "./triage";
+import { TRIAGE_READINGS, answerInContext, applyEvidenceRules, closedAnswer, combineRunOutcomes, credentialFinding, credentialMustHaves, findingSubjects, jobWords, linkReadingRuns, plainlyNotHeld, sentenceAround, shownNotHeld, withoutInterviewSkills } from "./triage";
 
 /**
  * The Screening agent (docs/05). Conversation turns run when the candidate writes (web chat or SMS); the durable
@@ -509,6 +509,14 @@ export function shapeChatMessage(text: string, opts: { experience: boolean; calm
 }
 
 const ASKS = /\?["”’)]*$/;
+/** How a candidate's question to the assistant opens, after a few lead-in words ("Ok, so what…", "Before I go on, what…"). */
+const ASKS_THEM = /^(?:(?:ok(?:ay)?|so|and|but|also|sorry|hi|hello|hey|thanks|one (?:more )?question|quick question|(?:i was |i'm |just )?wondering|before i (?:go on|answer|continue))[,:.!]?\s+)*(?:what|how|when|where|why|who|which|whose|is|isn't|are|aren't|am|was|were|do|does|did|can|could|would|will|should|shall|may|might|have|has)\b/i;
+/**
+ * A sentence of the candidate's that asks the assistant something: it ends in "?" and opens as a question does ("What
+ * does it pay?", "Is it full time?"), or is only question marks. An answer said with a rising "?" ("Around $50 an
+ * hour?", "I'm looking for $52 an hour, is that ok?", "5 years, why?") is still an answer (Wave S9 review).
+ */
+const asksAssistant = (s: string) => ASKS.test(s) && (ASKS_THEM.test(s.replace(/[’‘]/g, "'")) || !/[\p{L}\p{N}]/u.test(s));
 /** A request that asks as a question does ("Tell me about…", "Walk me through…"). */
 const REQUEST = /^(?:please\s+)?(?:tell me|describe|walk me through|talk me through|share|give me|explain)\b/i;
 const asksAt = (sentences: string[]) => sentences.findIndex((s) => ASKS.test(s) || REQUEST.test(s));
@@ -561,7 +569,7 @@ function echoesNote(text: string, note: string | undefined): boolean {
  * The candidate's replies about an item since it was asked: their words, in order, for the answer recorded when it
  * settles. A keyword command ("WITHDRAW", "HUMAN", a "CONFIRM" to a withdrawal) is not an answer.
  */
-function repliesSince(transcript: ReadonlyArray<ScreenTranscriptEntry>, key: string): string {
+function replyListSince(transcript: ReadonlyArray<ScreenTranscriptEntry>, key: string): string[] {
   let at = -1;
   for (let i = transcript.length - 1; i >= 0 && at < 0; i--) if (transcript[i].role === "assistant" && transcript[i].questionKey === key) at = i;
   const words: string[] = [];
@@ -571,7 +579,82 @@ function repliesSince(transcript: ReadonlyArray<ScreenTranscriptEntry>, key: str
     if (t.role !== "candidate" || t.source === "edit" || !t.content.trim() || screenCommand(t.content, pending) !== null) continue;
     words.push(t.content.trim());
   }
-  return words.join(" ");
+  return words;
+}
+
+const BARE_YES = /^(?:yes|yeah|yep|yup|ya|sure|i have|i do|i did|i can|of course|definitely|absolutely)[.!]*$/i;
+/** A reply with nothing in it yet for an open question: a bare "yes", or a plain "No" / "I haven't" (`saysNotDone`). */
+function bareReply(text: string): boolean {
+  return BARE_YES.test(text.trim()) || saysNotDone(text);
+}
+
+/** What the conversation adds for a confused candidate when the model did not offer a person (Wave S9). */
+export const CONFUSED_OFFER = "If you would rather talk to a person, reply HUMAN.";
+
+/** Whether a message asks something: a question, or a request that asks as one does ("Tell me about…"). */
+function asksSomething(text: string): boolean {
+  return asksAt(sentencesOf(text)) >= 0;
+}
+
+/**
+ * Whether a candidate's message only asks the assistant something ("Before I go on, what does this pay per hour?",
+ * "Ok. What are the hours?"): a question they asked is never their answer (Wave S9).
+ */
+export function onlyQuestions(text: string | null | undefined): boolean {
+  const sentences = sentencesOf(text ?? "");
+  return sentences.some(asksAssistant) && sentences.every((s) => asksAssistant(s) || FILLER.test(s));
+}
+
+const CONFUSED = /^(?:(?:sorry|um+|uh+|hm+|eh|huh)\s+)*(?:what do you mean(?: by that)?|what does that mean|what is that|what|huh|sorry|pardon|come again|i (?:do not|don't|dont) (?:understand|get it|follow)(?: (?:that|the question|you|what you mean))?|i(?:'m| am) (?:confused|lost|not sure what you mean)|confused|not sure what you mean)$/;
+
+/**
+ * Whether a reply only says the candidate did not follow ("???", "What do you mean?", "Sorry, I don't understand"): such a
+ * reply gets help and the offer of a person, and is never recorded as an answer, whatever the model read (Wave S9).
+ * Narrow on purpose: "What do you mean by perio charting?" asks about the question, and the model reads it.
+ */
+export function seemsConfused(text: string | null | undefined): boolean {
+  const raw = (text ?? "").trim();
+  if (!raw || raw.length > 60) return false;
+  const plain = raw.toLowerCase().replace(/[’‘]/g, "'").replace(/[?!.,…]+/g, " ").replace(/\s+/g, " ").trim();
+  return plain ? CONFUSED.test(plain) : raw.includes("?");
+}
+
+/** A sentence as compared with another: case, spacing and the closing mark left out. */
+const sentenceKey = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, " ").replace(/[.!?…"”’)]+$/, "").trim();
+
+/**
+ * The recorded answer held to the candidate's latest message (Wave S9): a question they asked in it is never part of
+ * the answer (that sentence is left out), and a turn that answers their question records only words of that message
+ * that are not a question (an answer given in the same message, "Yes, active in CA. What does it pay?"). Null when
+ * nothing is left.
+ */
+function answerAgainstLatest(t: ScreenTurn, latest: string): ScreenTurn["answerRecorded"] {
+  const a = t.answerRecorded;
+  if (!a) return null;
+  const said = sentencesOf(latest);
+  const asked = new Set(said.filter(asksAssistant).map(sentenceKey));
+  const statements = said.filter((s) => !asksAssistant(s) && !FILLER.test(s)).map(sentenceKey).join(" ");
+  const all = sentencesOf(a.answer);
+  const kept = all.filter((s) => !asked.has(sentenceKey(s)));
+  if (t.candidateAskedAbout && !kept.every((s) => statements.includes(sentenceKey(s)))) return null;
+  if (!kept.length) return null;
+  return kept.length === all.length ? a : { ...a, answer: kept.join(" ") };
+}
+
+/**
+ * What the candidate wrote about a question since it was asked, in a chat without a plan (Wave S9): `all` their replies
+ * as they sent them, and `usable` without what is never an answer (a reply that only shows confusion or only asks the
+ * assistant something, and a question they asked inside a longer reply). Null when the question was never asked.
+ */
+function answerSince(transcript: ReadonlyArray<ScreenTranscriptEntry>, key: string): { all: string; usable: string } | null {
+  if (!transcript.some((t) => t.role === "assistant" && t.questionKey === key)) return null;
+  const replies = replyListSince(transcript, key);
+  return { all: replies.join(" "), usable: usableReplies(replies).join(" ") };
+}
+
+/** Replies without what is never an answer: one that only shows confusion or only asks the assistant something, and a question asked inside a longer one (Wave S9). */
+function usableReplies(replies: ReadonlyArray<string>): string[] {
+  return replies.filter((r) => !seemsConfused(r) && !onlyQuestions(r)).map((r) => (sentencesOf(r).some(asksAssistant) ? sentencesOf(r).filter((s) => !asksAssistant(s)).join(" ") : r)).filter(Boolean);
 }
 
 /**
@@ -586,7 +669,7 @@ function repliesSince(transcript: ReadonlyArray<ScreenTranscriptEntry>, key: str
  */
 export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, input: { transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string | null }): { turn: ScreenTurn; move: { key: string; move: ChatMove } | null } {
   const plan = progress.chat;
-  let t = enforceTurnRules(raw, packet, progress, answers, { chat: true });
+  let t = enforceTurnRules(raw, packet, progress, answers, { chat: true, transcript: input.transcript, latest: input.latest });
   if (!plan || t.humanRequested) return { turn: t, move: null };
   const current = progress.currentQuestionKey;
   const item = plan.items.find((i) => i.key === current) ?? null;
@@ -601,7 +684,8 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     composed = true;
     return next ? { ...t, questionKey: next.key, followUpReason: null, done: false, answerRecorded: recorded, messageToCandidate: lead ? `${lead}\n\n${next.question}` : next.question } : { ...t, questionKey: null, followUpReason: null, done: true, answerRecorded: recorded, messageToCandidate: lead };
   };
-  const replied = input.latest !== null && !t.candidateAskedAbout && t.sentiment !== "confused";
+  // A question the candidate asked, or a reply that only shows confusion, is not a reply to the item (Wave S9).
+  const replied = input.latest !== null && !t.candidateAskedAbout && t.sentiment !== "confused" && !onlyQuestions(input.latest);
   let move: { key: string; move: ChatMove } | null = null;
   let calm = false;
   let ladderQuestion: string | null = null;
@@ -615,11 +699,19 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     const modelStays = !!t.followUpReason && !t.questionKey && !t.done;
     const reading = ladder && saysNotDone(input.latest) ? "not_done" : t.reading === "not_done" && !ladder ? "concrete" : (t.reading ?? (modelStays ? "vague" : "concrete"));
     const expected = chatNextMove(item, reading, ladder);
-    const said = repliesSince(input.transcript, item.key);
-    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : t.answerRecorded ?? (said ? { questionKey: item.key, answer: said, complete: m === "covered" } : null));
+    // Their replies about the item, without a confused reply or a question of their own on the way (Wave S9 review):
+    // neither is ever part of the answer, and neither keeps a bare "yes" on the push from reading as one.
+    const replies = usableReplies(replyListSince(input.transcript, item.key));
+    const said = replies.join(" ");
+    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : t.answerRecorded ?? (said ? { questionKey: item.key, answer: redactProtected(said), complete: m === "covered" } : null));
     if (chatMoveStays(expected) && modelStays) {
       move = { key: item.key, move: expected };
       ladderQuestion = CHAT_LADDER_QUESTION[expected as "push" | "analog" | "smaller"];
+      // The item is still being asked (the push, the analog, the smaller version): while their replies are only a bare
+      // "yes" or a plain "No" nothing is recorded (Wave S9: the real model recorded a bare "yes" on the push), so neither
+      // ever stands as the answer, a "No" never as a "no" for a skill; it settles with every reply as its answer
+      // (`answerFor`). Words with something in them are kept as they stand, so "Keep my answer and move on" keeps them (E11).
+      t = { ...t, answerRecorded: replies.every(bareReply) ? null : t.answerRecorded ?? { questionKey: item.key, answer: redactProtected(said), complete: false } };
     } else if (chatMoveStays(expected)) {
       // The model moved on early: fine, the item settles as it stands.
       const settled: ChatMove = reading === "not_done" ? "unknown" : "covered";
@@ -652,6 +744,8 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   let message = composed ? t.messageToCandidate : shapeChatMessage(t.messageToCandidate, { experience: plan.section === "experience", calm, question: ladderQuestion ?? asking?.question ?? (item ? q(item.key)?.question ?? null : null), answering: !!t.candidateAskedAbout });
   // The question goes back to its own words (the packet's, which never carry a note).
   if (echoesAny(message)) message = shapeChatMessage("", { experience: false, calm, question: asking?.question ?? q(current)?.question ?? CHAT_WRAP_QUESTION, answering: false });
+  // A confused candidate gets the question again and the offer of a person (Wave S9), after the one question.
+  if (t.sentiment === "confused" && !/\bHUMAN\b/.test(message)) message = `${message}\n\n${CONFUSED_OFFER}`;
   return { turn: { ...t, messageToCandidate: message }, move };
 }
 
@@ -689,7 +783,7 @@ export async function applyScreenOpening(q: Queryable, input: { companyId: strin
     await emit(q, { type: "ai.run_failed", companyId: input.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: fresh.id }, payload: { reason: out.reason, error: out.error, turn: 0 } });
     return { error: out.error };
   }
-  const turn = enforceTurnRules(out.output, chatPacket(input.packet, fresh.progress), fresh.progress, answersOf(fresh));
+  const turn = enforceTurnRules(out.output, chatPacket(input.packet, fresh.progress), fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: null });
   const entry: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: new Date().toISOString(), questionKey: turn.questionKey ?? undefined, channel: fresh.channel as ScreenChannel, aiRunId: out.runId };
   const progress = advanceProgress(fresh.progress, turn);
   await q.update(screens).set({ transcript: [...fresh.transcript, entry], progress }).where(eq(screens.id, fresh.id));
@@ -1075,7 +1169,7 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
   }
 
   // A Kanvis-style chat is held to its own rules too (Wave S7), and the step it took moves its plan on.
-  const enforced = fresh.progress.chat ? enforceChatTurn(out.output, packet, fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: input.message }) : { turn: enforceTurnRules(out.output, packet, fresh.progress, answersOf(fresh)), move: null };
+  const enforced = fresh.progress.chat ? enforceChatTurn(out.output, packet, fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: input.message }) : { turn: enforceTurnRules(out.output, packet, fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: input.message }), move: null };
   let turn = enforced.turn;
   // The model never states a response time; the accurate business-hours expectation is appended in code (founder decision F12).
   if (turn.humanRequested && !/business/i.test(turn.messageToCandidate)) turn = { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(nowOf(deps), await loadBusinessCalendar(q))}.` };
@@ -1268,9 +1362,20 @@ export async function submitScreenAnswers(q: Queryable, deps: ScreenDeps, input:
  * writes the acknowledgment; the question is added here when it did not write it word for word), and no private note
  * said (`withoutPrivateNotes`, Wave S8). `chat` (a Kanvis-style chat, Wave S7): the follow-ups, the end of the questions,
  * the notes and the shape of each message are `enforceChatTurn`'s, and the model asks each item in its own words.
+ *
+ * Wave S9 (the first real-model run, 15 Oct 2026): what the candidate wrote decides what is recorded, and the code, not
+ * the model's labels, decides what kind of turn it is. `latest`: the candidate's message the turn answers (null when the
+ * assistant opens the conversation; left out when not known); `transcript`: the conversation with it. A reply that only
+ * asks the assistant something or only shows confusion is never an answer, nor is a question asked inside a longer one; a
+ * confused candidate gets the question again and the offer of a person; the question being asked, asked again, and any
+ * other turn that stays on it and asks something, is a follow-up (so the two-follow-up cap holds whatever the model
+ * labelled). Without a plan, also: an acknowledgment that asks nothing moves on, a close before every question was asked
+ * goes on to the next, a recorded answer is the candidate's own words, and a question that settles with nothing recorded
+ * (the model moved on, the cap, the fairness check) keeps what they said about it.
  */
-export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, opts: { chat?: boolean } = {}): ScreenTurn {
+export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, opts: { chat?: boolean; transcript?: ReadonlyArray<ScreenTranscriptEntry>; latest?: string | null } = {}): ScreenTurn {
   const keys = packet.screening.questions.map((q) => q.key);
+  const questionOf = (key: string | null | undefined) => (key ? packet.screening.questions.find((x) => x.key === key) : undefined);
   let t: ScreenTurn = { ...turn };
   // How an answer was recorded is the code's to say (E10): the model only ever answers.
   if (t.answerRecorded) t = { ...t, answerRecorded: { questionKey: t.answerRecorded.questionKey, answer: t.answerRecorded.answer, complete: t.answerRecorded.complete } };
@@ -1280,15 +1385,57 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
   // A skipped question is not asked again.
   if (t.questionKey && declined.has(t.questionKey)) t = { ...t, questionKey: null };
   const asked = new Set(progress.askedKeys);
-  const remaining = keys.filter((k) => !asked.has(k) && !(k in answers) && !declined.has(k) && k !== t.answerRecorded?.questionKey);
   const current = progress.currentQuestionKey;
+  const reply = typeof opts.latest === "string" ? opts.latest : null;
+  // What the candidate wrote decides what is recorded (Wave S9).
+  if (reply !== null && t.sentiment !== "distressed" && t.sentiment !== "frustrated" && seemsConfused(reply)) {
+    // A first confusion gets help and the offer of a person (founder rule), never a hand-over they did not ask for; one
+    // right after another may be handed over (docs/05).
+    if (t.humanRequested && progress.confusedTurns < 1 && current) t = { ...t, humanRequested: false, done: false, questionKey: null, messageToCandidate: `No problem. ${questionOf(current)?.question ?? ""}`.trim() };
+    if (!t.humanRequested) t = { ...t, sentiment: "confused" };
+  }
+  if (t.sentiment === "confused" || (reply !== null && onlyQuestions(reply))) t = { ...t, answerRecorded: null };
+  else if (reply !== null && t.answerRecorded) t = { ...t, answerRecorded: answerAgainstLatest(t, reply) };
+  const remaining = keys.filter((k) => !asked.has(k) && !(k in answers) && !declined.has(k) && k !== t.answerRecorded?.questionKey);
+  const stays = () => !t.humanRequested && !t.done && !t.questionKey;
+  if (!t.humanRequested && current) {
+    if (t.sentiment === "confused") {
+      // A confused candidate gets help with the same question, never a move on or a close: a follow-up that asks it again.
+      if (t.done || (t.questionKey && t.questionKey !== current)) t = { ...t, done: false, questionKey: null, messageToCandidate: `No problem. ${questionOf(current)?.question ?? ""}`.trim() };
+      t = { ...t, questionKey: null, followUpReason: t.followUpReason ?? "the candidate seemed confused" };
+    } else if (t.questionKey === current && asked.has(current) && !t.done) {
+      // The question being asked, asked again (in other words, or after answering the candidate's own question): not a move.
+      t = { ...t, questionKey: null, followUpReason: t.candidateAskedAbout ? t.followUpReason : t.followUpReason ?? "asked again" };
+    }
+  }
+  if (!opts.chat && stays() && t.sentiment !== "confused") {
+    // A packet question written out in full is the move to it, even when the model left its key out.
+    const named = packet.screening.questions.find((q) => q.key !== current && remaining.includes(q.key) && t.messageToCandidate.includes(q.question));
+    if (named) t = { ...t, questionKey: named.key, followUpReason: null };
+  }
+  // A turn that stays on the question being asked and asks something about it is a follow-up, labelled or not.
+  if (reply !== null && current && stays() && !t.followUpReason && !t.candidateAskedAbout && !onlyQuestions(reply) && asksSomething(t.messageToCandidate)) t = { ...t, followUpReason: "asked for more" };
+  if (!opts.chat && !t.humanRequested) {
+    const next = remaining[0];
+    // Whether the question being asked has an answer: the model recorded one on this turn, or on an earlier one.
+    const answered = !!current && (t.answerRecorded?.questionKey === current || current in answers);
+    if (opts.latest === null && !t.questionKey && !t.done && next) t = { ...t, questionKey: next };
+    // An acknowledgment that asks nothing is the move on the model is asked to write (the code adds the next question),
+    // once the question has an answer; before that ("One sec, let me check my notes." / "Sure, take your time.") it is
+    // the question asked again, never a move on or a close with that line as the answer (Wave S9 review). After the
+    // candidate's own question, the question being asked goes back to them instead (below).
+    else if (reply !== null && current && stays() && !t.followUpReason && !t.candidateAskedAbout && !onlyQuestions(reply) && !asksSomething(t.messageToCandidate)) t = answered ? (next ? { ...t, questionKey: next } : { ...t, done: true, messageToCandidate: `Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.` }) : { ...t, followUpReason: "asked again" };
+    // A close before every question was asked goes on to the next one, as a planned chat's does (`enforceChatTurn`); before
+    // the question being asked has an answer, back to it ("I'm no longer interested, thanks" is never its answer).
+    if (t.done && next) t = current && !answered ? { ...t, done: false, questionKey: null, followUpReason: "asked again", messageToCandidate: "Thanks." } : { ...t, done: false, questionKey: next, followUpReason: null, messageToCandidate: "Thanks." };
+  }
   const isFollowUp = !!t.followUpReason && !t.questionKey && !t.done && !t.humanRequested;
   if (!opts.chat && isFollowUp && current && (progress.followUps[current] ?? 0) >= MAX_FOLLOW_UPS) {
-    // Enough follow-ups: move on with the next packet question, or close.
+    // Enough follow-ups: move on with the next packet question, or close. What they said is kept (below).
     const next = remaining[0];
     if (next) {
       const q = packet.screening.questions.find((x) => x.key === next)!;
-      t = { ...t, messageToCandidate: `Thanks, that helps. Next: ${q.question}`, questionKey: next, followUpReason: null, answerRecorded: t.answerRecorded ?? (current ? { questionKey: current, answer: "", complete: false } : null) };
+      t = { ...t, messageToCandidate: `${t.sentiment === "confused" ? "No problem." : "Thanks, that helps."} Next: ${q.question}`, questionKey: next, followUpReason: null };
     } else {
       t = { ...t, done: true, followUpReason: null, questionKey: null, messageToCandidate: `Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.` };
     }
@@ -1310,9 +1457,23 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
     else {
       const next = t.done ? undefined : remaining[0];
       t = next
-        ? { ...t, messageToCandidate: "Thanks.", questionKey: next, followUpReason: null, answerRecorded: t.answerRecorded ?? (current ? { questionKey: current, answer: "", complete: false } : null) }
+        ? { ...t, messageToCandidate: "Thanks.", questionKey: next, followUpReason: null }
         : { ...t, done: true, questionKey: null, followUpReason: null, messageToCandidate: `Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.` };
     }
+  }
+  // The answers of a chat without a plan are the candidate's own words (Wave S9), as the scorecard and "Your answers"
+  // read them. A question that settles (the model moved on or closed, the follow-up cap or the fairness check moved on)
+  // is answered by every reply about it since it was asked, word for word and in order, never a question they asked nor
+  // a reply that only shows confusion; the model's copy stays only where it left out something personal more finely
+  // than the code does. Before that, a copy the model reworded is what they wrote instead.
+  const theirs = !opts.chat && opts.transcript && current && !t.humanRequested ? answerSince(opts.transcript, current) : null;
+  if (theirs && current) {
+    const own = theirs.usable ? redactProtected(theirs.usable) : "";
+    const recorded = t.answerRecorded?.questionKey === current ? t.answerRecorded : null;
+    const modelsAreTheirs = !!recorded && saidByCandidate(recorded.answer, theirs.all);
+    const settles = t.done || (!!t.questionKey && t.questionKey !== current);
+    if (settles && own && !(modelsAreTheirs && own !== theirs.usable)) t = { ...t, answerRecorded: { questionKey: current, answer: own, complete: recorded?.complete ?? false } };
+    else if (recorded && !modelsAreTheirs) t = { ...t, answerRecorded: own ? { ...recorded, answer: own } : null };
   }
   if (t.answerRecorded && !t.answerRecorded.answer.trim()) t = { ...t, answerRecorded: null };
   // A chat without a plan gives the model each written question's private note as its model answer (Wave S8): the note
@@ -1324,6 +1485,11 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
     const q = packet.screening.questions.find((x) => x.key === t.questionKey)!;
     if (!t.messageToCandidate.includes(q.question)) t = { ...t, messageToCandidate: `${t.messageToCandidate.trim()} ${q.question}`.trim() };
   }
+  // Staying on the question (a follow-up, the answer to their own question) with nothing asked: the question again, in its own words.
+  const again = !opts.chat && !t.questionKey && !t.done && !t.humanRequested && !asksSomething(t.messageToCandidate) ? questionOf(current) : undefined;
+  if (again) t = { ...t, messageToCandidate: `${t.messageToCandidate.trim()} ${again.question}`.trim() };
+  // A confused candidate is offered a person (Wave S9; a planned chat adds it after its one question, `enforceChatTurn`).
+  if (!opts.chat && t.sentiment === "confused" && !t.done && !t.humanRequested && !/\bHUMAN\b/.test(t.messageToCandidate)) t = { ...t, messageToCandidate: `${t.messageToCandidate.trim()} ${CONFUSED_OFFER}` };
   return t;
 }
 
@@ -1462,27 +1628,37 @@ export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: st
 /** How many times a screening chat is read for its scorecard: as many as the résumé (`TRIAGE_READINGS`). */
 export const SCORECARD_READINGS = TRIAGE_READINGS;
 
+/** The role as the scorecard's checks read it: its must-haves and skills, and its screening questions when given. */
+type ScorecardPacket = Pick<RolePacket, "requirements" | "competencies"> & Partial<Pick<RolePacket, "screening">>;
+
 /**
  * The scorecard readings as the team sees them: each through `scorecardOutcome` (quotes mapped back and checked, the
- * licence rule), then the middle answer of each finding (`combineReadings`), with the words, answers, pay, availability
- * and recommendation of the reading closest to it. Fewer than three usable readings: the first, saying so.
+ * licence rule, skills read only from answers about them), then the middle answer of each finding (`combineReadings`),
+ * with the words, answers, pay, availability and recommendation of the reading closest to it. Fewer than three usable
+ * readings: the first, saying so. With the `packet`, an interview or a strong one is then settled from those findings in
+ * code (`settledScreenRecommendation`); `incomplete`: a conversation that was not finished, never a strong interview.
  */
-export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAssessment>>, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: Pick<RolePacket, "requirements" | "competencies"> | null): RunOutcome<ScreenAssessment> {
-  return combineRunOutcomes(readings.map((r) => (r.ok ? { ...r, output: scorecardOutcome(r.output, view, screen, packet) } : r)), (r) => r, "this screening chat", SCORECARD_READINGS);
+export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAssessment>>, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: ScorecardPacket | null, opts: { incomplete?: boolean } = {}): RunOutcome<ScreenAssessment> {
+  const checked = readings.map((r) => (r.ok ? { ...r, output: scorecardOutcome(r.output, view, screen, packet) } : r));
+  const out = combineRunOutcomes(checked, (r) => r, "this screening chat", SCORECARD_READINGS);
+  if (!out.ok || !packet) return out;
+  return { ...out, output: withSettledRecommendation(out.output, checked.flatMap((r) => (r.ok ? [r.output] : [])), packet, opts) };
 }
 
 /**
  * The scorecard as the team sees it, from the model's answer. Quotes are checked against the candidate's ORIGINAL words:
  * one written around a placeholder is mapped back first; and the model's own words (summary, claims) keep no
  * placeholder: "[name]" reads "the candidate". With the `packet`, the licence rule holds for its credential must-haves
- * (`credentialFinding`) and skills checked in the interviews only are left out. Shared with the fairness evals
- * (packages/evals), so they check exactly what the app does after the model has answered.
+ * (`credentialFinding`), skills checked in the interviews only are left out, and with its screening questions a skill the
+ * chat never asked about is not read from the answers to its other questions (`withAskedSkills`). Shared with the
+ * fairness evals (packages/evals), so they check exactly what the app does after the model has answered.
  */
-export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: Pick<RolePacket, "requirements" | "competencies"> | null): ScreenAssessment {
+export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: ScorecardPacket | null): ScreenAssessment {
   const candidateText = candidateWordsOf(screen);
   const recruiterNotes = recruiterNotesOf(screen);
   const restored = withoutPlaceholders(restoreQuotes(output, view, (source) => (source === "recruiter_note" ? [recruiterNotes, candidateText] : [candidateText, recruiterNotes])));
-  const checked = verifyScreenQuotes(packet ? withoutInterviewSkills(restored, packet) : restored, candidateText, { recruiterNotes, declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)), transcript: screen.transcript, ...(packet ? { credentials: credentialMustHaves(packet), subjects: findingSubjects(packet) } : {}) });
+  const verified = verifyScreenQuotes(packet ? withoutInterviewSkills(restored, packet) : restored, candidateText, { recruiterNotes, declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)), transcript: screen.transcript, ...(packet ? { credentials: credentialMustHaves(packet), subjects: findingSubjects(packet) } : {}) });
+  const checked = packet?.screening ? withAskedSkills(verified, packet.screening.questions, screen.transcript, new Set(packet.competencies.map((c) => c.key))) : verified;
   // "incomplete_screen" marks a reading of a conversation nobody sent, written before 9 October 2026, which stays hidden
   // (`isUnsentConversationReading` in @ros/core): never on a reading of a sent one, whatever the model wrote.
   return { ...checked, anomalies: checked.anomalies.filter((a) => a.kind !== "incomplete_screen") };
@@ -1500,9 +1676,10 @@ export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringVie
  * quote sits in. With the `transcript` and the findings' `subjects`, a short answer ("Yes", "No, I don't") that is the
  * whole of a message is read with the closed question it replies to, when that question is about the finding
  * (`screenAnswerOf`): "Yes" to "Do you hold a California RDH license?" is evidence, and a bare "No" to it says plainly
- * the licence is not held.
+ * the licence is not held. A credential the candidate answered only that way is settled from their answer in code,
+ * whatever the model wrote, and added when it left the credential out (`plainCredentialAnswers`, Wave S9).
  */
-export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string, opts: { recruiterNotes?: string; declined?: string[]; answered?: string[]; credentials?: ReadonlySet<string>; transcript?: ReadonlyArray<Pick<ScreenTranscriptEntry, "role" | "content">>; subjects?: ReadonlyMap<string, string> } = {}): ScreenAssessment {
+export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string, opts: { recruiterNotes?: string; declined?: string[]; answered?: string[]; credentials?: ReadonlySet<string>; transcript?: ReadonlyArray<Pick<ScreenTranscriptEntry, "role" | "content"> & Partial<Pick<ScreenTranscriptEntry, "questionKey">>>; subjects?: ReadonlyMap<string, string> } = {}): ScreenAssessment {
   const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   const notes = norm(opts.recruiterNotes ?? "");
   const answered = new Set(opts.answered ?? []);
@@ -1522,12 +1699,13 @@ export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string, o
   });
   // Every quote in a scorecard is checked against the words it names: the candidate's, or a recruiter's notes (which pass as not the candidate's own).
   const transcript = opts.transcript ?? [];
-  const checked = applyEvidenceRules({ ...a, questionFindings, eligibilityConfirmations }, (e) => (e.source === "recruiter_note" ? (notes?.includes(norm(e.quote ?? "")) ? null : false) : saidByCandidate(e.quote ?? "", candidateText)), {
+  const evidenced = applyEvidenceRules({ ...a, questionFindings, eligibilityConfirmations }, (e) => (e.source === "recruiter_note" ? (notes?.includes(norm(e.quote ?? "")) ? null : false) : saidByCandidate(e.quote ?? "", candidateText)), {
     credentials: opts.credentials,
     ...(opts.subjects ? { subjects: opts.subjects } : {}),
     lineOf: (e) => sentenceAround(e.quote ?? "", candidateText),
     answerOf: (e, subject) => screenAnswerOf(e.quote ?? "", subject, transcript),
   });
+  const checked = opts.credentials && opts.subjects ? withPlainCredentialAnswers(evidenced, plainCredentialAnswers(transcript, opts.credentials, opts.subjects)) : evidenced;
   if (!stripped) return checked;
   return { ...checked, anomalies: [...checked.anomalies, { kind: "unverified_quote", detail: `${stripped} answer quote${stripped === 1 ? "" : "s"} not found in the transcript; discarded` }] };
 }
@@ -1535,6 +1713,8 @@ export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string, o
 /** Words too common to say what a question is about ("Do you have experience with...?"). */
 const PLAIN_WORDS = new Set(["the", "and", "you", "your", "are", "have", "has", "had", "with", "for", "any", "this", "that", "what", "how", "did", "does", "can", "will", "would", "about", "from", "years", "year", "experience", "work", "working", "able", "ability", "skills", "skill", "knowledge"]);
 const topicWords = (s: string): string[] => (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => w.length > 2 && !PLAIN_WORDS.has(w));
+/** What a finding or a question is about, for the scorecard: `topicWords`, with "licence" and "license" one word (a packet may spell it either way). */
+const findingWords = (s: string): string[] => topicWords(s.replace(/licen[cs]/gi, "licens"));
 
 /**
  * A short quote read with the question it answers (`answerInContext`), for the evidence rules: only when the quote is
@@ -1546,7 +1726,7 @@ export function screenAnswerOf(quote: string, subject: string | null, transcript
   if (!subject) return null;
   const plain = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}'’ ]+/gu, " ").replace(/\s+/g, " ").trim();
   const q = plain(quote);
-  const about = new Set(topicWords(subject));
+  const about = new Set(findingWords(subject));
   if (!q || !about.size) return null;
   let best: string | null = null;
   let bestShared = 0;
@@ -1557,7 +1737,7 @@ export function screenAnswerOf(quote: string, subject: string | null, transcript
     while (j >= 0 && transcript[j]!.role !== "assistant") j -= 1;
     if (j < 0) continue;
     const question = transcript[j]!.content;
-    const shared = new Set(topicWords(question).filter((w) => about.has(w))).size;
+    const shared = new Set(findingWords(question).filter((w) => about.has(w))).size;
     const read = shared > 0 ? answerInContext(question, t.content) : null;
     if (read && shared >= bestShared) {
       best = read;
@@ -1565,6 +1745,238 @@ export function screenAnswerOf(quote: string, subject: string | null, transcript
     }
   }
   return best;
+}
+
+type MustHaveMet = ScreenAssessment["requirementFindings"][number]["met"];
+type ChatLine = Pick<ScreenTranscriptEntry, "role" | "content"> & Partial<Pick<ScreenTranscriptEntry, "questionKey">>;
+
+/** Words that say a credential is held, but not which one: in "Active CA RDH license" only "rdh" says which. */
+const CREDENTIAL_GENERIC = new Set(["hold", "holds", "held", "active", "current", "currently", "valid", "state", "must", "license", "licenses", "licensed", "licensure", "certificate", "certificates", "certification", "certified", "registration", "registered", "permit", "permits", "credential", "credentials"]);
+/** The kinds of credential a line names (licence, certificate, permit, registration), spelling aside. */
+const credentialKinds = (s: string): Set<string> => new Set((s.toLowerCase().match(/licen[cs]|certif|permit|regist|credential/g) ?? []).map((k) => k.replace("licenc", "licens")));
+/** The words of a line that say which credential it is about. */
+const credentialWords = (s: string): Set<string> => new Set(findingWords(s).filter((w) => !CREDENTIAL_GENERIC.has(w)));
+/** Words naming an everyday licence or permit that is not a job's professional one: driving, a forklift, food or alcohol service, a firearm, security work. */
+const OTHER_CREDENTIAL = /\b(?:driv(?:e|er|ers|ing)|vehicle|car|truck|forklift|cdl|commercial|food|handler|alcohol|liquor|firearms?|gun|security)\b/i;
+
+/**
+ * The credential must-have an assistant's question is most about: the one sharing the most words that say which
+ * credential it is (never only "license" or "active"), and never one of another kind (a question about a licence is
+ * never about a permit). When it shares no such word with any, the only must-have of the kind it names ("Do you hold a
+ * California RDH license?" and "Active CA dental hygienist license": the only licence). Null when none fits, or two fit
+ * as well.
+ */
+function credentialAsked(question: string, keys: readonly string[], subjects: ReadonlyMap<string, string>): string | null {
+  const words = credentialWords(question);
+  const kinds = credentialKinds(question);
+  const sameKind = (key: string) => [...credentialKinds(subjects.get(key) ?? "")].some((k) => kinds.has(k));
+  let best: string | null = null;
+  let bestShared = 0;
+  let tie = false;
+  for (const key of keys) {
+    if (kinds.size && credentialKinds(subjects.get(key) ?? "").size && !sameKind(key)) continue;
+    const shared = [...credentialWords(subjects.get(key) ?? "")].filter((w) => words.has(w)).length;
+    if (shared > bestShared) {
+      best = key;
+      bestShared = shared;
+      tie = false;
+    } else if (shared > 0 && shared === bestShared) tie = true;
+  }
+  if (tie) return null;
+  if (best) return best;
+  // A question about an everyday credential of another kind ("Do you have a valid driver's license?") is never about
+  // the only licence the job needs (Wave S9 review): one that is itself a driver's licence matched above, by its words.
+  const ofKind = kinds.size && !OTHER_CREDENTIAL.test(question) ? keys.filter(sameKind) : [];
+  return ofKind.length === 1 ? ofKind[0]! : null;
+}
+
+/**
+ * A whole plain yes or no and nothing more ("Yes", "Yes, I do.", "No, I don't", "I do"). Anything with another word in
+ * it ("Yes, lapsed", "No, pending", "Yes, in Nevada") is the model's to read, so the licence rule reads those words
+ * (Wave S9 review: a short reply was taken as plain, and its other word was lost).
+ */
+const PLAIN_YES_NO = /^(?:(?:yes|yeah|yep|yup|correct)(?:[,.!]*\s*i (?:do|have|am|hold))?|(?:no|nope)(?:[,.!]*\s*(?:i (?:do not|don't|have not|haven't|am not)|i'm not))?|i (?:do|have|am|hold|do not|don't|have not|haven't|am not)|i'm not)[.!]*$/i;
+
+/** Whether a candidate's line speaks of a credential: its kind, or a word that says which one. */
+function mentionsCredential(line: string, subject: string): boolean {
+  const kinds = credentialKinds(subject);
+  const words = credentialWords(subject);
+  return [...credentialKinds(line)].some((k) => kinds.has(k)) || [...credentialWords(line)].some((w) => words.has(w));
+}
+
+/**
+ * Wave S9 (the first real-model run of the scorecard, 15 Oct 2026): the credential must-haves the candidate answered
+ * with a plain yes or no to the assistant's closed question about it ("Do you hold ...?", "Are you licensed ...?") and
+ * nothing more, read in code whatever each reading wrote, so the same chat always gives the same finding (the founder's
+ * licence rule, spec-s5): a plain "Yes" is "yes", a plain "No" says plainly it is not held, "no" (a "No" to "Do you have
+ * an active ...?" is unclear: "unknown"), with their message as the quote. The real model read a bare "Yes" to the
+ * licence question as "unknown" (a lone "yes" is not a quote, its prompt said). Left to the model when, while that
+ * question was asked (until the assistant moves on to another of the packet's questions, or wherever they changed that
+ * answer), they said anything more than questions or confusion; when their plain answers disagree; or when anything they
+ * said elsewhere about the credential is lapsed or pending, or goes against their answer. A question settles only the
+ * credential it is most about (`credentialAsked`), so a "Yes" to the licence question never settles a permit too.
+ */
+export function plainCredentialAnswers(transcript: ReadonlyArray<ChatLine>, credentials: ReadonlySet<string>, subjects: ReadonlyMap<string, string>): Map<string, { met: MustHaveMet; quote: string }> {
+  const keys = [...credentials].filter((k) => !!subjects.get(k)).sort();
+  const out = new Map<string, { met: MustHaveMet; quote: string }>();
+  for (const key of keys) {
+    const subject = subjects.get(key) ?? "";
+    const plain: Array<{ quote: string; held: boolean; statement: string }> = [];
+    /** Anything else they said while it was asked: the model reads it, with its quote checked. */
+    const more: string[] = [];
+    const seen = new Set<number>();
+    const askedAs = new Map<string, string>();
+    const read = (t: ChatLine, j: number, question: string) => {
+      if (seen.has(j)) return;
+      seen.add(j);
+      if (onlyQuestions(t.content) || seemsConfused(t.content)) return;
+      const closed = PLAIN_YES_NO.test(t.content.trim().replace(/[’‘]/g, "'")) && credentialAsked(question, keys, subjects) === key ? closedAnswer(question, t.content) : null;
+      if (closed) plain.push({ quote: t.content.trim(), ...closed });
+      else more.push(t.content);
+    };
+    for (let i = 0; i < transcript.length; i++) {
+      const asked = transcript[i]!;
+      if (asked.role !== "assistant" || credentialAsked(asked.content, keys, subjects) !== key) continue;
+      if (asked.questionKey) askedAs.set(asked.questionKey, asked.content);
+      // every reply while it was asked: a reply goes with the assistant's message just before it
+      let question = asked.content;
+      for (let j = i + 1; j < transcript.length; j++) {
+        const t = transcript[j]!;
+        if (t.role === "assistant") {
+          if (t.questionKey && t.questionKey !== asked.questionKey) break;
+          question = t.content;
+        } else if (t.role === "candidate") read(t, j, question);
+      }
+    }
+    // an answer to it given or changed later (a tap, or a change on "check your answers") names the question it answers
+    for (let j = 0; j < transcript.length; j++) {
+      const t = transcript[j]!;
+      const question = t.role === "candidate" && t.questionKey ? askedAs.get(t.questionKey) : undefined;
+      if (question !== undefined) read(t, j, question);
+    }
+    if (more.length || !plain.length || plain.some((p) => p.held !== plain[0]!.held)) continue;
+    const held = plain[0]!.held;
+    const answers = new Set(plain.map((p) => p.quote));
+    const elsewhere = transcript.filter((t) => t.role === "candidate" && !answers.has(t.content.trim()) && mentionsCredential(t.content, subject));
+    if (elsewhere.some((t) => shownNotHeld(t.content, subject) || (held ? plainlyNotHeld(t.content, subject) : !plainlyNotHeld(t.content, subject)))) continue;
+    const last = plain.at(-1)!;
+    out.set(key, { met: credentialFinding(held ? "yes" : "no", last.statement, subject), quote: last.quote });
+  }
+  return out;
+}
+
+/**
+ * A reading with the credentials the candidate answered plainly (`plainCredentialAnswers`) settled from their answer: the
+ * finding's answer with their message as its quote, added where the reading left it out, and the reasons say so. A
+ * finding that already says the same with a quote of theirs is kept as written.
+ */
+function withPlainCredentialAnswers(a: ScreenAssessment, plain: ReadonlyMap<string, { met: MustHaveMet; quote: string }>): ScreenAssessment {
+  if (!plain.size) return a;
+  let settled = 0;
+  const finding = (key: string, p: { met: MustHaveMet; quote: string }): ScreenAssessment["requirementFindings"][number] => ({ requirementKey: key, met: p.met, evidence: { source: "screen", quote: p.quote } });
+  const requirementFindings = a.requirementFindings.map((f): ScreenAssessment["requirementFindings"][number] => {
+    const p = plain.get(f.requirementKey);
+    if (!p || (f.met === p.met && f.evidence?.source === "screen" && f.evidence.quote && !f.evidence.unquoted)) return f;
+    settled += 1;
+    return finding(f.requirementKey, p);
+  });
+  for (const [key, p] of plain) {
+    if (a.requirementFindings.some((f) => f.requirementKey === key)) continue;
+    settled += 1;
+    requirementFindings.push(finding(key, p));
+  }
+  if (!settled) return a;
+  const reasons = [...(a.confidenceReasons ?? []), `${settled === 1 ? "a licence or certificate is" : `${settled} licences or certificates are`} read from the candidate's plain yes or no to the question about it`];
+  return { ...a, requirementFindings, confidenceReasons: reasons.slice(-6) };
+}
+
+/** Kinds of screening question about pay, the schedule or eligibility: their answers are logistics, never a skill shown. */
+const LOGISTICS_KINDS: ReadonlySet<string> = new Set(["compensation", "availability", "eligibility", "logistics"]);
+/** What a skill's finding says when its only words answered another question (`withAskedSkills`). */
+export const NOT_ASKED_NOTE = "Not asked about in this chat: the words quoted for it answered another question, and are read for that question.";
+
+/**
+ * Each answer is read for the question it answers (Wave S9 round 3, real-model run 38784488452). A skill that no question
+ * asked in this chat is about (one the packet lists with it, other than a question about pay, the schedule or
+ * eligibility) is never read from the answers to questions about another skill, nor from answers about pay, the schedule
+ * or eligibility: a finding whose quote is found only there is "not evidenced", and its note says why. The same chat
+ * read twice gave reliability "partly evidenced" three readings out of three, then "not evidenced" three out of three,
+ * from "when I run behind I tell the front desk", the answer to the question about efficiency: a skill nobody asked
+ * about was scored on another question's answer half the time. Reading it that way goes beyond what the candidate was
+ * asked (no inference), and a borrowed "partly" would also replace the résumé's checked finding in the match score.
+ * Left as the model read it: a skill a question was asked about, a finding quoting nothing or a recruiter's notes, and
+ * a quote found in none of the candidate's messages. A reply goes with the question it names, or else with the last
+ * question the assistant asked (a follow-up stays on its question). With `skills` (the role's skill keys), a question
+ * naming a skill the role does not have (a job draft can rename its skills) is about no skill.
+ */
+export function withAskedSkills(a: ScreenAssessment, questions: ReadonlyArray<Pick<ScreeningQuestion, "key" | "kind" | "competencyKey">>, transcript: ReadonlyArray<ChatLine>, skills?: ReadonlySet<string>): ScreenAssessment {
+  type Question = (typeof questions)[number];
+  const byKey = new Map<string, Question>(questions.map((q) => [q.key, q]));
+  const skillOf = (q: Question | undefined) => (q?.competencyKey && (!skills || skills.has(q.competencyKey)) ? q.competencyKey : null);
+  const asked = new Set<string>();
+  const replies: Array<{ text: string; question: Question | undefined }> = [];
+  let current: string | undefined;
+  for (const t of transcript) {
+    if (t.role === "assistant" && t.questionKey) {
+      current = t.questionKey;
+      const q = byKey.get(t.questionKey);
+      const skill = skillOf(q);
+      if (q && skill && !LOGISTICS_KINDS.has(q.kind)) asked.add(skill);
+    } else if (t.role === "candidate") replies.push({ text: t.content, question: byKey.get(t.questionKey ?? current ?? "") });
+  }
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const another = (q: Question | undefined, skill: string) => !!q && (LOGISTICS_KINDS.has(q.kind) || (skillOf(q) ?? skill) !== skill);
+  let changed = 0;
+  const competencyFindings = a.competencyFindings.map((f): ScreenAssessment["competencyFindings"][number] => {
+    const quote = f.evidence?.source === "screen" ? (f.evidence.quote ?? "") : "";
+    if (!norm(quote) || asked.has(f.competencyKey)) return f;
+    // the messages holding the quote, or a sentence of one the reading put together from several (its full stop aside)
+    const parts = [quote, ...quote.split(/(?<=[.!?])\s+/)].map((s) => norm(s).replace(/[.!?…]+$/, "")).filter(Boolean);
+    const from = replies.filter((r) => parts.some((p) => norm(r.text).includes(p)));
+    if (!from.length || !from.every((r) => another(r.question, f.competencyKey))) return f;
+    changed += 1;
+    return { competencyKey: f.competencyKey, finding: "not_evidenced", note: NOT_ASKED_NOTE };
+  });
+  return changed ? { ...a, competencyFindings } : a;
+}
+
+const shownByQuote = (e: { quote?: string; unquoted?: boolean } | undefined) => !!e?.quote?.trim() && !e.unquoted;
+
+/**
+ * The recommendation between an interview and a strong one, worked out in code from the scorecard's settled findings by
+ * the prompt's own rule (Wave S9 round 3), so it moves only when a finding moves, as the résumé reading's has since Wave
+ * S7: the same chat read twice was "strong_interview" in one read and "interview" in the other. "strong_interview" when
+ * every must-have the chat was to confirm is "yes" with a checked quote, none is shown not met, more than half of the
+ * skills it reads are evidenced with a checked quote, something is shown at all, the pay asked is not above the range
+ * and the availability fits the schedule; otherwise "interview". Never "strong_interview" for a conversation that was
+ * not finished (`incomplete`). "hold" and "decline_recommended" are the readings' own: a person decides either way.
+ */
+export function settledScreenRecommendation(reading: ScreenAssessment, packet: Pick<RolePacket, "requirements" | "competencies">, opts: { incomplete?: boolean } = {}): ScreenAssessment["recommendation"] {
+  if (reading.recommendation !== "strong_interview" && reading.recommendation !== "interview") return reading.recommendation;
+  if (opts.incomplete) return "interview";
+  const screened = packet.requirements.mustHaves.filter((m) => m.evidencedBy.includes("screen"));
+  const musts = screened.every((m) => reading.requirementFindings.some((f) => f.requirementKey === m.key && f.met === "yes" && shownByQuote(f.evidence)));
+  const notMet = reading.requirementFindings.some((f) => f.met === "no" && shownByQuote(f.evidence));
+  const skills = packet.competencies.filter(scoredSkill);
+  const shown = skills.filter((c) => reading.competencyFindings.some((f) => f.competencyKey === c.key && f.finding === "evidenced" && shownByQuote(f.evidence))).length;
+  const most = shown * 2 > skills.length;
+  const fits = reading.compensationExpectation.withinRange !== "above" && reading.availability.matchesSchedule !== "no" && reading.availability.matchesSchedule !== "partially";
+  return musts && !notMet && (skills.length === 0 || most) && (screened.length > 0 || shown > 0) && fits ? "strong_interview" : "interview";
+}
+
+/**
+ * The combined scorecard with its settled recommendation (`settledScreenRecommendation`). When that is not what the kept
+ * reading recommended, its words (summary, rationale, strengths, concerns, answers, pay and availability) come from the
+ * reading that recommended it and agrees most with the settled findings, so the words never argue with the label; the
+ * findings, the overall reading and the confidence stay the combined ones. With fewer readings than asked for, or none
+ * that recommended it, only the label changes.
+ */
+function withSettledRecommendation(kept: ScreenAssessment, readings: readonly ScreenAssessment[], packet: Pick<RolePacket, "requirements" | "competencies">, opts: { incomplete?: boolean }): ScreenAssessment {
+  const recommendation = settledScreenRecommendation(kept, packet, opts);
+  if (recommendation === kept.recommendation) return kept;
+  const agreement = (r: ScreenAssessment) => (r.overall === kept.overall ? 1000 : 0) + kept.requirementFindings.filter((k) => r.requirementFindings.some((f) => f.requirementKey === k.requirementKey && f.met === k.met)).length * 10 + kept.competencyFindings.filter((k) => r.competencyFindings.some((f) => f.competencyKey === k.competencyKey && f.finding === k.finding)).length;
+  const words = readings.length >= SCORECARD_READINGS ? readings.filter((r) => r.recommendation === recommendation).sort((x, y) => agreement(y) - agreement(x) || JSON.stringify(x).localeCompare(JSON.stringify(y)))[0] : undefined;
+  return { ...(words ?? kept), overall: kept.overall, confidence: kept.confidence, requirementFindings: kept.requirementFindings, competencyFindings: kept.competencyFindings, recommendation };
 }
 
 /** The most recent screen for an application, if any. */

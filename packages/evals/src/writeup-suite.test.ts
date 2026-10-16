@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WriteupModelOutput, screenWriteupPrompt, type StructuredRequest } from "@ros/ai";
 import { fakeScreenWriteup } from "@ros/agents";
-import { writeupCaseFailures, writeupCases, writeupContextOf, writeupModelFailures } from "./writeup-suite";
+import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf, writeupModelFailures } from "./writeup-suite";
 
 /**
  * The write-up suite (`screen.writeup`, Wave S7) without a model: every case passes on the fake provider (the code
@@ -66,5 +66,37 @@ describe("the suite names what a model must never write, and the app keeps none 
     const r = scripted("protected_detail_left_out", [{ questionKey: "wq_start", answer: "I can start on the 3rd; my kids are in school until three, so Monday to Thursday works best.", quotes: ["I can start on the 3rd."] }]);
     expect(r.model.some((f) => f.includes("protected detail"))).toBe(true);
     expect(r.kept).toEqual([]);
+  });
+
+  // Wave S9: what the real model wrote on 15 Oct 2026 (a short reply filled out with the question's words, and the
+  // conversation written up instead of the answer), each named and none kept; and the answers prompt v2 asks for pass.
+  it("a short reply filled out with the question's words, or the conversation written up", () => {
+    const real: Array<[string, string, string]> = [
+      ["no_experience_stays_no", "wq_arduino", "No, I have not built a hardware project with Arduino."],
+      ["no_experience_stays_no", "wq_class", "No, I have never taught a class, so I have no example of teaching twenty students."],
+      ["missing_example_noted_apart", "wq_debug", "I said it was very technical, but that I handled it well. When asked to walk through one specific fault, I said no, not really."],
+      ["skipped_question", "wq_patients", "I usually see about eight patients in a day."],
+    ];
+    for (const [id, key, answer] of real) {
+      const r = scripted(id, [{ questionKey: key, answer }]);
+      expect(r.model.some((f) => f.includes(`${key} says something they did not write`)), `${id} ${key}`).toBe(true);
+      expect(r.kept, `${id} ${key}`).toEqual([]);
+    }
+  });
+
+  it("short replies kept short, and a missing example noted apart, pass", () => {
+    expect(scripted("no_experience_stays_no", [{ questionKey: "wq_arduino", answer: "No, I haven't." }, { questionKey: "wq_class", answer: "I have never taught a class." }])).toEqual({ model: [], kept: [] });
+    expect(scripted("skipped_question", [{ questionKey: "wq_patients", answer: "About eight." }])).toEqual({ model: [], kept: [] });
+    expect(scripted("missing_example_noted_apart", [{ questionKey: "wq_debug", status: "partly", answer: "It was very technical, but I handled it well.", note: "No specific fault was described." }])).toEqual({ model: [], kept: [] });
+  });
+
+  it("the result file's notes name the words that were not theirs and why an answer was not kept", () => {
+    const { wc, output } = fakeRun("skipped_question");
+    const notes = writeupCaseNotes(wc, { answers: output.answers.map((x) => (x.questionKey === "wq_patients" ? { ...x, answer: "I usually see about eight patients in a day." } : x)) });
+    expect(notes[0]).toBe(`prompt: screen.writeup v${screenWriteupPrompt.version}; skipped: ["wq_more"]`);
+    expect(notes.some((n) => n.startsWith("model wq_patients:") && n.includes("not theirs: usually, patients (from the question or the assistant's lines: usually, patients)"))).toBe(true);
+    expect(notes).toContain('shown wq_patients: answered "About eight." note=- | REPLACED by their words: words they did not write');
+    expect(notes).toContain('shown wq_more: skipped "" note=- | a skip on record');
+    expect(writeupCaseNotes(wc, null, "invalid: no valid output")).toContain("no usable answer from the model: invalid: no valid output");
   });
 });

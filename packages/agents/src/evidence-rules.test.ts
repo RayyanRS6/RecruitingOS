@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { FakeProvider, callPrompt, screenAssessPrompt, triageAssessPrompt, type ScreenContext } from "@ros/ai";
+import { FINDING_RULES, FINDING_RULES_COMPETENCIES, FINDING_RULES_MUST_HAVES, FINDING_RULES_NAMING, FakeProvider, callPrompt, screenAssessPrompt, triageAssessPrompt, type ScreenContext } from "@ros/ai";
 import type { EvidenceAssessment, RolePacket, ScreenAssessment, ScreenTranscriptEntry } from "@ros/contracts";
 import { registerFakeHandlers } from "./fake-handlers";
 import { hasPlaceholder, restoreQuotes } from "./scoring-view";
@@ -195,13 +196,23 @@ describe("no number from the model", () => {
     // Version 3 (fairness run on Haiku 5.5, 14 Oct 2026): written definitions of each finding, the candidate never named;
     // version 4 (D-04 = C, Wave S2): the scoring view, no earlier applications, candidate text that cannot close a tag;
     // version 5 (Wave S5): the licence rule, a lone "yes" is no quote, skills for the interviews left out, "kept in";
-    // version 6 (Wave S7): the answers on the form as plain sentences, never field names.
-    expect(triageAssessPrompt.version).toBe(6);
+    // version 6 (Wave S7): the answers on the form as plain sentences, never field names;
+    // version 7 (Wave S9 round 4): the résumé reading's own competency levels (a named duty is partly shown, how well is
+    // never the missing part, the indicators are examples) and a must-have never changes how a skill is read.
+    expect(triageAssessPrompt.version).toBe(7);
     // Version 3 (plan Wave E): recruiter call notes kept apart, skipped questions unknown, unfinished conversations read
     // for what they have; version 4: the same definitions of each finding as the résumé reading; version 5 (D-04 = C):
     // the conversation through the scoring view; version 6: the answers and the progress in their own <answers> block;
-    // version 7 (Wave S5): read three times, the licence rule, a lone "yes" is no quote.
-    expect(screenAssessPrompt.version).toBe(7);
+    // version 7 (Wave S5): read three times, the licence rule, a lone "yes" is no quote; version 8 (Wave S9): a whole
+    // "Yes" or "No" to the closed question about a must-have is a plain answer to it; version 9 (Wave S9 round 2): how well
+    // the work is done never makes a competency partially evidenced on its own; version 10 (Wave S9 round 3): an answer
+    // to a competency's own question shows it, each answer is read for its own question, and strong_interview in the
+    // terms the code settles it by.
+    expect(screenAssessPrompt.version).toBe(10);
+    const screenPacket = { ...PACKET, screening: { questions: [], maxMinutes: 10 }, communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply HUMAN." }, interviews: { plan: [] } };
+    const assessSystem = screenAssessPrompt.system({ company: { name: "Co" }, packet: screenPacket as never, candidate: { firstName: "A" }, channel: "web", progress: { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 }, answers: {}, transcript: [], focusUnknowns: [], latestCandidateMessage: null })[0]!.text;
+    expect(assessSystem).toMatch(/How well the candidate does the work .* is never the missing part that makes a competency partially_evidenced/);
+    expect(assessSystem).toMatch(/A competency that no question asked in this conversation is listed with is never read from the answers to questions listed with another competency/);
     const input = { packet: PACKET as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: {} }, eligibility: null };
     expect(triageAssessPrompt.system(input).map((b) => b.text).join("\n")).not.toMatch(/secondaryScore|0 to 100/);
     fake.scriptNext("triage.assess", { ...reading(), secondaryScore: 87 });
@@ -212,6 +223,35 @@ describe("no number from the model", () => {
     const own = await callPrompt(rt, triageAssessPrompt, input, { companyId: null });
     if (own.result.kind !== "ok") throw new Error(`expected a reading: ${own.result.kind}`);
     expect(own.result.output).not.toHaveProperty("secondaryScore");
+  });
+
+  /**
+   * Wave S9 round 4 (real-model runs of 15 Oct 2026): the only findings that moved between readings were skills on a
+   * bare duty line, partly or not shown, most often when the licence line said "no". The résumé reading now has its own
+   * competency levels; the scorecard keeps the shared definition, word for word.
+   */
+  it("gives the résumé reading its own competency levels and leaves the scorecard's text as it was", () => {
+    const input = { packet: PACKET as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: {} }, eligibility: null };
+    const blocks = triageAssessPrompt.system(input);
+    const triageSystem = blocks.map((b) => b.text).join("\n");
+    expect(triageSystem).toMatch(/names a task, procedure or tool that is part of that work and says no more about it/);
+    expect(triageSystem).toMatch(/never changes how a competency is read/);
+    expect(triageSystem).toMatch(/indicators are examples of that work, not a checklist/);
+    expect(triageSystem).toMatch(/is never the missing part that makes a competency partially_evidenced rather than evidenced/);
+    expect(triageSystem).not.toContain("quotes show some indicators of a competency that has several");
+    // the must-haves and the naming rule are the shared ones, word for word
+    expect(triageSystem).toContain(FINDING_RULES_MUST_HAVES);
+    expect(triageSystem).toContain(FINDING_RULES_NAMING);
+    // the stand-in model finds the role's lists by these words: only the role's own block may hold them
+    expect(blocks[0]!.text).not.toContain("Competencies: ");
+    expect(blocks[0]!.text).not.toContain("Must-haves: ");
+    // the scorecard (screen.assess v10) still reads the shared definition, and the shared text is byte for byte what it was
+    const screenPacket = { ...PACKET, screening: { questions: [], maxMinutes: 10 }, communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply HUMAN." }, interviews: { plan: [] } };
+    const assessSystem = screenAssessPrompt.system({ company: { name: "Co" }, packet: screenPacket as never, candidate: { firstName: "A" }, channel: "web", progress: { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 }, answers: {}, transcript: [], focusUnknowns: [], latestCandidateMessage: null })[0]!.text;
+    expect(assessSystem).toContain("quotes show some indicators of a competency that has several");
+    expect(assessSystem).toContain(FINDING_RULES);
+    expect(FINDING_RULES).toBe([FINDING_RULES_MUST_HAVES, FINDING_RULES_COMPETENCIES, FINDING_RULES_NAMING].join("\n"));
+    expect(createHash("sha256").update(FINDING_RULES).digest("hex")).toBe("d3fbdd25ec1141c021115a2055fbf644f4a66394d64f072ede92ad472ca92629");
   });
 });
 

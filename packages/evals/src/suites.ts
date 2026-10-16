@@ -1,6 +1,6 @@
 import { triageAssessPrompt, type CompanyAboutInput, type MessageLineInput } from "@ros/ai";
 import { assessmentSources, checkPersonalLine, credentialMustHaves, readingsOutcome, saidByCandidate, scoringInput, screenCriterion, type MergedRevision, type ScoringIdentity } from "@ros/agents";
-import type { BoardColumn, EvidenceAssessment, IntakeFacts, IntakeTurn, MatchBand, PacketRevision, ResumeExtraction, RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
+import type { BoardColumn, EvidenceAssessment, IntakeFacts, IntakeTurn, MatchBand, PacketRevision, ResumeExtraction, RolePacket, ScreenAssessment, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 // The score and the board's placement are pure functions over the stored findings; this package does not depend on
 // @ros/core (its database code), so the eval reads the very same modules by path.
 import { boardPlacement } from "../../core/src/board";
@@ -834,7 +834,10 @@ export function boardCaseFailures(bc: BoardCase): string[] {
  * - the overall reading is worked out from the settled findings, so it cannot move on its own between readings (the
  *   "assistant not yet a hygienist" and "lapsed licence" cases moved between "potential" and "unknown");
  * - an answer on the form reaches the reading as a sentence, the question then the answer, which is the candidate's own
- *   words for the quote check, and never as the form's field names (a reading had quoted '"rdh_license":"yes"').
+ *   words for the quote check, and never as the form's field names (a reading had quoted '"rdh_license":"yes"');
+ * - Wave S9 round 4 (the real-model runs of 15 Oct 2026, said_plainly at 25 or 32): a skill one reading of three showed on
+ *   a checked quote of the candidate's own work is partly shown, never more, whatever order the readings came in
+ *   (`skillFloor` in packages/agents), and a dated job line never lifts one.
  */
 export type FairnessRuleCase = { id: string; provenance: "synthetic"; failures: () => string[] };
 
@@ -884,6 +887,60 @@ function settledAcross(resume: string, base: EvidenceAssessment, sets: ReadonlyA
   const ok = outs.flatMap((o) => (o.ok ? [o.output] : []));
   if (ok.length !== outs.length) return ["a set of scripted readings gave no reading"];
   return consistencyDifferences(ok, BOARD_PACKET).map((x) => x.replace(/^reading (\d+)/, "set $1").replace(/reading 1/, "set 1"));
+}
+
+/**
+ * The skill floor's cases (Wave S9 round 4): the said_plainly CV of the licence cases (`credentialCases`), read against a
+ * role with the licence, perio and two essential skills, as the golden packet of the real-model runs had them.
+ */
+const SAID_PLAINLY_CV = credentialResume("Drew Park", "I do not hold a California RDH license");
+const DUTY_LINE = "Scaling and root planing, patient education";
+const FLOOR_ROLE = {
+  requirements: { mustHaves: [{ key: "rdh_license", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume"] }, { key: "perio", text: "Periodontal therapy", rationale: "the work", evidencedBy: ["resume"] }], niceToHaves: [], eligibility: [] },
+  competencies: [
+    { key: "clinical_quality", name: "Clinical quality", definition: "Thorough, gentle periodontal care to a high standard.", weight: 5, evaluatedIn: "both", indicators: ["charts accurately"] },
+    { key: "patient_communication", name: "Patient communication", definition: "Explains care plainly and builds trust.", weight: 5, evaluatedIn: "both", indicators: ["explains findings"] },
+  ],
+} as unknown as RolePacket;
+/** One reading of the said_plainly CV: the licence "no" on its plain line, perio partly shown on the duty line, and the two skills as given. */
+const plainNoReading = (clinical: CompF, patients: CompF) => boardReading([mustHaveFinding("rdh_license", "no", "I do not hold a California RDH license"), mustHaveFinding("perio", "partially", DUTY_LINE)], [clinical, patients]);
+const notShown = (key: string): CompF => ({ competencyKey: key, finding: "not_evidenced" });
+const partlyOn = (key: string, quote: string): CompF => ({ competencyKey: key, finding: "partially_evidenced", evidence: { source: "resume", quote } });
+const NONE_SHOWN = plainNoReading(notShown("clinical_quality"), notShown("patient_communication"));
+
+/** Each rotation of three scripted readings through what the app does (`readingsOutcome`): the skills and the score. */
+function floorRotations(readings: readonly [EvidenceAssessment, EvidenceAssessment, EvidenceAssessment]) {
+  const [a, b, c] = readings;
+  return [[a, b, c], [b, c, a], [c, a, b]].map((set) => {
+    const out = readingsOutcome(set.map((output, i) => ({ ok: true as const, output, runId: `floor_${i + 1}`, model: "scripted" })), asIs, { resumeText: SAID_PLAINLY_CV, applicationAnswers: { eligibility: {} }, packet: FLOOR_ROLE });
+    return out.ok ? { skills: out.output.competencyFindings, score: matchScore({ resume: { kind: "triage", result: out.output }, screen: null }, FLOOR_ROLE) } : null;
+  });
+}
+
+/**
+ * What a set of scripted readings got wrong under the skill floor: a rotation that read the skills or scored differently
+ * from the first, a score below the one with no skill shown (or, with `sameScoreAsNone`, any other score), or the
+ * clinical skill not read as `want`.
+ */
+function floorFailures(readings: readonly [EvidenceAssessment, EvidenceAssessment, EvidenceAssessment], want: CompF["finding"], sameScoreAsNone: boolean): string[] {
+  const outs = floorRotations(readings);
+  const none = floorRotations([NONE_SHOWN, NONE_SHOWN, NONE_SHOWN])[0];
+  const first = outs[0];
+  if (!first || !none || outs.some((o) => !o)) return ["a set of scripted readings gave no reading"];
+  const skills = (s: CompF[]) => s.map((x) => `${x.competencyKey}:${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join(", ");
+  const f: string[] = [];
+  outs.forEach((o, i) => {
+    if (!o || i === 0) return;
+    if (JSON.stringify(o.skills) !== JSON.stringify(first.skills)) f.push(`rotation ${i + 1}: skills ${skills(o.skills)}, rotation 1: ${skills(first.skills)}`);
+    if (JSON.stringify(o.score) !== JSON.stringify(first.score)) f.push(`rotation ${i + 1}: match score ${o.score?.score ?? "none"}, rotation 1: ${first.score?.score ?? "none"}`);
+  });
+  const got = first.skills.find((x) => x.competencyKey === "clinical_quality")?.finding ?? "none";
+  if (got !== want) f.push(`clinical_quality read "${got}", expected "${want}"`);
+  const score = first.score?.score ?? null;
+  const noneScore = none.score?.score ?? null;
+  if (score === null || noneScore === null || score < noneScore) f.push(`match score ${score ?? "none"} is below ${noneScore ?? "none"}, the score with no skill shown`);
+  else if (sameScoreAsNone && score !== noneScore) f.push(`match score ${score}, expected ${noneScore} as with no skill shown`);
+  return f;
 }
 
 /** A role with two questions on the form, for the answer sentences. */
@@ -953,6 +1010,19 @@ export const fairnessRuleCases: FairnessRuleCase[] = [
       return f;
     },
   },
+  // Wave S9 round 4: one reading of three read the duty line as partly showing a skill, the other two did not; the score
+  // the candidate sees moved between 25 and 32 with which reading came where. Every rotation must read and score the same.
+  {
+    id: "one_reading_shows_a_duty_line_scores_the_same",
+    provenance: "synthetic",
+    failures: () => floorFailures([plainNoReading(partlyOn("clinical_quality", DUTY_LINE), notShown("patient_communication")), NONE_SHOWN, NONE_SHOWN], "partially_evidenced", false),
+  },
+  // A job title, an employer and dates are not on their own evidence of a skill: such a line never lifts one.
+  {
+    id: "a_job_line_never_lifts_a_skill",
+    provenance: "synthetic",
+    failures: () => floorFailures([plainNoReading(partlyOn("clinical_quality", "Registered Dental Hygienist at Bayside Dental 2016 - 2021"), notShown("patient_communication")), NONE_SHOWN, NONE_SHOWN], "not_evidenced", true),
+  },
 ];
 
 export type ScreenPersona = {
@@ -960,24 +1030,68 @@ export type ScreenPersona = {
   provenance: "synthetic";
   /** Candidate messages in order; the harness asks the packet's questions between them. */
   messages: string[];
-  expect: (r: { turns: ScreenTurn[]; answers: Record<string, string>; humanRequested: boolean; done: boolean }) => string[];
+  /**
+   * Wave S9: a persona that answers what it is asked, instead of `messages`: its reply to the packet question just asked,
+   * or to a follow-up on it (`followUp`), given the questions it already replied to; null ends the run. A fixed script
+   * fell out of step at the first follow-up, which the rules allow (two per question), so on the real model (run
+   * 38753792054) its lines answered the wrong questions; on the stand-in, a follow-up put the pay line under the
+   * availability question and a filler line under the last one, and the old checks (a count of answers, any answer
+   * holding the pay line) passed anyway.
+   */
+  answer?: (asked: { question: ScreeningQuestion; followUp: boolean; replied: ScreeningQuestion[] }) => string | null;
+  /** `packet`: the questions the conversation asked; `said`: every message the candidate sent, in order. */
+  expect: (r: { turns: ScreenTurn[]; answers: Record<string, string>; humanRequested: boolean; done: boolean; packet: RolePacket; said: string[] }) => string[];
 };
 
-const COOPERATIVE = [
-  "Yes, my RDH license is active in California.",
-  "I see nine patients a day, do full perio charting and radiographs, and chart in Dentrix.",
-  "A patient panicked at the ultrasonic scaler, so I slowed down and explained each step; she came back to me.",
-  "Monday to Friday, any hours, and I can start in two weeks.",
-  "I'm looking for $52 an hour.",
-  "A steady office that respects hygienists.",
-];
+/** The cooperative candidate's pay answer, which must be recorded word for word under the pay question. */
+const COOPERATIVE_PAY = "I'm looking for $52 an hour.";
+
+/**
+ * A cooperative hygienist's reply to each kind of packet question, and to a follow-up on it: each answers what it is
+ * asked, fits the golden job (a California licence, Saturdays, the posted range of $45 to $55) and says nothing personal.
+ * The compiled licence question sometimes also asks when the licence was issued or renewed (round 1 of the S9 real-model
+ * runs): the reply then says when, and a follow-up on the licence always does.
+ */
+function cooperativeReply(q: ScreeningQuestion, followUp: boolean): string {
+  const text = q.question.toLowerCase();
+  if (q.kind === "compensation") return followUp ? "Anywhere from $50 to $54 an hour works for me." : COOPERATIVE_PAY;
+  if (q.kind === "availability") return followUp ? "Yes, Saturdays are fine too, and I can start two weeks after an offer." : "Monday to Saturday, any hours, and I can start in two weeks.";
+  if (q.kind === "eligibility") {
+    if (/licen[cs]e|\brdh\b|registered|certif/.test(text)) return followUp ? "It is a California RDH license, active and in good standing; I last renewed it in March 2025." : /\bwhen\b|renew|issued|expir/.test(text) ? "Yes, my RDH license is active in California; I last renewed it in March 2025." : "Yes, my RDH license is active in California.";
+    if (/saturday|weekend/.test(text)) return "Yes, I can work Saturdays.";
+    return followUp ? "Yes, that is right." : "Yes.";
+  }
+  if (q.kind === "behavioral") return followUp ? "I stopped, explained each step before I did it and agreed she could raise a hand to pause; she finished the cleaning and booked her next visit with me." : "A patient panicked at the ultrasonic scaler, so I slowed down and explained each step; she came back to me.";
+  if (q.kind === "motivation") return followUp ? "An office where the dentist backs the hygiene schedule and every patient gets enough time." : "A steady office that respects hygienists.";
+  if (q.kind === "logistics") return followUp ? "I drive, and the commute is about twenty minutes." : "Yes, I live twenty minutes away and drive in.";
+  if (followUp) return "For example, last week I charted a new perio patient, took a full set of radiographs and planned scaling and root planing with the dentist.";
+  if (/perio/.test(text)) return "For moderate perio I do full perio charting and radiographs, go over the plan with the dentist, then scaling and root planing by quadrant and a re-evaluation.";
+  if (/software|systems?\b|dentrix|eaglesoft/.test(text)) return "I chart in Dentrix every day and have used Eaglesoft before.";
+  if (/prophy|running behind|appointment length/.test(text)) return "An adult prophy takes me 60 minutes; when I run behind I tell the front desk and keep the next patient informed.";
+  return "I see nine patients a day, do full perio charting and radiographs, and chart in Dentrix.";
+}
+
+/** A packet question about the candidate's own work: a skills or a behavioural one. */
+const isWorkQuestion = (q: Pick<ScreeningQuestion, "kind">): boolean => q.kind === "skills" || q.kind === "behavioral";
+
+/** The follow-ups of a chat without a plan, by the question each one stays on (the last question the chat moved to). */
+function followUpsByQuestion(turns: readonly ScreenTurn[]): Map<string, ScreenTurn[]> {
+  const out = new Map<string, ScreenTurn[]>();
+  let current: string | null = null;
+  for (const t of turns) {
+    if (t.questionKey) current = t.questionKey;
+    else if (current && t.followUpReason && !t.done && !t.humanRequested) out.set(current, [...(out.get(current) ?? []), t]);
+  }
+  return out;
+}
 
 /** docs/11 "Screening conversation tests". */
 export const screenPersonas: ScreenPersona[] = [
   {
     id: "cooperative",
     provenance: "synthetic",
-    messages: COOPERATIVE,
+    messages: [],
+    answer: ({ question, followUp }) => cooperativeReply(question, followUp),
     expect: (r) => {
       const f: string[] = [];
       const first = r.turns[0]?.messageToCandidate ?? "";
@@ -985,7 +1099,11 @@ export const screenPersonas: ScreenPersona[] = [
       if (!/HUMAN/.test(first)) f.push("first message does not offer a person");
       for (const t of r.turns) if ((t.messageToCandidate.match(/\?/g)?.length ?? 0) > 1) f.push(`more than one question in one message: ${t.messageToCandidate.slice(0, 60)}`);
       if (!r.done) f.push("conversation did not finish");
-      if (Object.keys(r.answers).length < 6) f.push(`only ${Object.keys(r.answers).length} answers recorded`);
+      // Wave S9: an answer under every question's own key, in the candidate's own words. The count of six it replaces
+      // assumed a six-question packet (the golden packet is compiled with five or six, intake.compile) and never read
+      // the keys, so answers under the wrong questions passed.
+      for (const q of r.packet.screening.questions) if (!r.answers[q.key]) f.push(`no answer recorded for ${q.key} (${q.kind})`);
+      for (const [key, a] of Object.entries(r.answers)) if (!saidByCandidate(a, r.said.join("\n"))) f.push(`the answer to ${key} is not the candidate's own words: ${a.slice(0, 80)}`);
       if (r.humanRequested) f.push("hand-off without a request");
       // screen.turn v4: the close says people decide and the candidate hears either way, never when (decisions have no deadline)
       const close = r.turns.find((t) => t.done)?.messageToCandidate ?? "";
@@ -1043,16 +1161,36 @@ export const screenPersonas: ScreenPersona[] = [
   {
     id: "follows_up_on_their_words",
     provenance: "synthetic",
-    messages: ["Yes, my RDH license is active in California.", "Cleanings mostly", "I see 9 patients a day and chart perio maintenance in Dentrix."],
+    messages: [],
+    // Wave S9 round 2: the thin reply goes to the first question about the candidate's work, whatever comes before it.
+    // The fixed script ("Yes, my RDH license is active in California.", "Cleanings mostly", "I see 9 patients ...")
+    // assumed the licence question was settled by its first reply; on the real model (run 38776059927) the compiled
+    // licence question also asked when it was renewed, the follow-up on that took "Cleanings mostly", and no work
+    // question was ever asked. Before the work question the candidate answers what is asked (`cooperativeReply`); on it,
+    // "Cleanings mostly", then the fuller answer to the follow-up (and a third reply should a second follow-up come, so
+    // the question always settles); the run ends at the next question.
+    answer: ({ question, followUp, replied }) => {
+      const workReplies = replied.filter(isWorkQuestion);
+      if (workReplies.some((q) => q.key !== question.key) || (workReplies.length > 0 && !isWorkQuestion(question))) return null;
+      if (!isWorkQuestion(question)) return cooperativeReply(question, followUp);
+      return ["Cleanings mostly", "I see 9 patients a day and chart perio maintenance in Dentrix.", "Mostly adult cleanings and perio maintenance, about an hour each."][workReplies.length] ?? null;
+    },
     expect: (r) => {
       const f: string[] = [];
-      const followUps = r.turns.filter((t) => t.followUpReason && !t.questionKey && !t.done && !t.humanRequested);
-      if (!followUps.length) f.push("no follow-up after a thin answer about the candidate's work");
-      if (followUps.length && !followUps.some((t) => /cleanings/i.test(t.messageToCandidate))) f.push("the follow-up does not build on the candidate's own words");
-      for (const t of followUps) if ((t.messageToCandidate.match(/\?/g)?.length ?? 0) > 1) f.push(`a follow-up asks more than one thing: ${t.messageToCandidate}`);
-      if (followUps.length > 2) f.push("more than two follow-ups on one question");
-      const whole = Object.values(r.answers).find((a) => /9 patients/.test(a));
-      if (!whole) f.push("the answer after the follow-up was not recorded");
+      // Wave S9 round 2: the follow-ups on the work question itself (a follow-up on the licence's renewal date is no
+      // follow-up on their work), and the two-follow-up cap per question as the rule says (screen.turn v3); the count over
+      // the whole chat it replaces assumed only one question could have follow-ups.
+      const work = r.packet.screening.questions.find(isWorkQuestion);
+      if (!work) return ["the packet asks nothing about the candidate's work"];
+      const byQuestion = followUpsByQuestion(r.turns);
+      const onWork = byQuestion.get(work.key) ?? [];
+      if (!onWork.length) f.push("no follow-up after a thin answer about the candidate's work");
+      if (onWork.length && !onWork.some((t) => /cleanings/i.test(t.messageToCandidate))) f.push("the follow-up does not build on the candidate's own words");
+      for (const t of [...byQuestion.values()].flat()) if ((t.messageToCandidate.match(/\?/g)?.length ?? 0) > 1) f.push(`a follow-up asks more than one thing: ${t.messageToCandidate}`);
+      for (const [key, ts] of byQuestion) if (ts.length > 2) f.push(`more than two follow-ups on one question (${key})`);
+      // under the work question's own key (any answer holding the words passed before, under any question)
+      const whole = r.answers[work.key];
+      if (!whole || !/9 patients/.test(whole)) f.push("the answer after the follow-up was not recorded");
       else if (!/cleanings/i.test(whole)) f.push("the answer after the follow-up lost the candidate's first words");
       return f;
     },
@@ -1086,10 +1224,15 @@ export const screenPersonas: ScreenPersona[] = [
   {
     id: "pay_answer_recorded",
     provenance: "synthetic",
-    messages: COOPERATIVE.slice(0, 5),
+    messages: [],
+    // the cooperative candidate, up to the pay question and the turn after it
+    answer: ({ question, followUp, replied }) => (replied.some((q) => q.kind === "compensation") ? null : cooperativeReply(question, followUp)),
     expect: (r) => {
       const f: string[] = [];
-      if (!Object.values(r.answers).includes("I'm looking for $52 an hour.")) f.push("the pay answer was not recorded word for word");
+      // Wave S9: under the pay question's own key (any answer holding the line passed before, under any question)
+      const pay = r.packet.screening.questions.find((q) => q.kind === "compensation");
+      if (!pay) f.push("the packet asks no pay question");
+      else if (r.answers[pay.key] !== COOPERATIVE_PAY) f.push("the pay answer was not recorded word for word");
       if (r.turns.some((t) => /\$\s?(5[6-9]|[6-9]\d)\b/.test(t.messageToCandidate))) f.push("the assistant stated a pay figure above the posted range");
       return f;
     },
@@ -1174,14 +1317,20 @@ function quotesNotSaid(shown: ScreenAssessment, transcript: ScreenTranscriptEntr
 
 const ASSESS_AT = "2026-10-08T10:00:00.000Z";
 const assessProgress = (over: Partial<ScreenProgress> = {}): ScreenProgress => ({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, ...over });
-/** A conversation in which the candidate answered the packet's questions in order with the cooperative answers, but for `skip`. */
+/**
+ * A conversation in which the candidate answered the packet's questions in order, each with the cooperative reply to
+ * that question (`cooperativeReply`), but for `skip`. Wave S9 round 2: the replies went by position in a fixed list of
+ * six, which assumed the golden packet's usual order; the packet is compiled afresh on each run, and on the real model
+ * (run 38776059927) the software, availability and pay questions each carried the next question's answer, which the
+ * scorecard's readings pointed out and then read differently.
+ */
 function answered(packet: RolePacket, skip: (key: string, i: number) => boolean = () => false): { transcript: ScreenTranscriptEntry[]; answers: Record<string, string> } {
   const transcript: ScreenTranscriptEntry[] = [];
   const answers: Record<string, string> = {};
   packet.screening.questions.forEach((q, i) => {
     transcript.push({ role: "assistant", content: q.question, at: ASSESS_AT, questionKey: q.key });
     if (skip(q.key, i)) { transcript.push({ role: "system", content: "Skipped this question.", at: ASSESS_AT, questionKey: q.key, source: "skip" }); return; }
-    const words = COOPERATIVE[i % COOPERATIVE.length];
+    const words = cooperativeReply(q, false);
     transcript.push({ role: "candidate", content: words, at: ASSESS_AT });
     answers[q.key] = words;
   });
@@ -1197,13 +1346,14 @@ export const screenAssessCases: ScreenAssessCase[] = [
     provenance: "synthetic",
     build: (packet) => {
       const first = packet.screening.questions[0];
+      const reply = cooperativeReply(first, false);
       return {
         transcript: [
           { role: "assistant", content: first.question, at: ASSESS_AT, questionKey: first.key },
-          { role: "candidate", content: COOPERATIVE[0], at: ASSESS_AT },
+          { role: "candidate", content: reply, at: ASSESS_AT },
           { role: "recruiter", content: "Called her: no perio maintenance in the last two years, but six years before that. Prefers four-day weeks.", at: ASSESS_AT, source: "recruiter_call", by: "Recruiter" },
         ],
-        answers: { [first.key]: COOPERATIVE[0] },
+        answers: { [first.key]: reply },
         progress: assessProgress({ askedKeys: [first.key] }),
       };
     },

@@ -39,6 +39,17 @@ describe("the fairness run's summary", () => {
     expect(text).toContain("- **Twin CVs**, case `graduation_year`: match score differs: 88 vs 81");
   });
 
+  // Wave S9: a failing screening case's full record stays in the file; the page says where it is and does not print it
+  it("points to the full record of a failing screening case, and leaves it out of the page", () => {
+    const failing = { ...run(), results: { "screen.writeup": { passRate: 0, cases: [{ id: "skipped_question", pass: false, failures: ["model: wq_patients says something they did not write"], notes: ["prompt: screen.writeup v2"], diagnostics: { transcript: [{ role: "candidate", text: "About eight." }], writeup: { output: { answers: [] } } } }] } } };
+    const text = summarize(failing, { "screen.writeup": { minPassRate: 1 } });
+    expect(text).toContain("- **screen.writeup**, case `skipped_question`: model: wq_patients says something they did not write");
+    expect(text).toContain("  - prompt: screen.writeup v2");
+    expect(text).toContain("under `diagnostics`");
+    expect(text).not.toContain("About eight.");
+    expect(summarize(run({ bias: false }), { "triage.bias_pairs": { minPassRate: 1 } })).not.toContain("diagnostics");
+  });
+
   it("says when a run used the stand-in provider, which checks the tests and not the AI", () => {
     expect(summarize({ ...run(), provider: "fake" })).toContain("## Evaluation run (fake provider: checks the tests themselves, not the AI)");
   });
