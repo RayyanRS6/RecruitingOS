@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ScreenWriteup } from "@ros/contracts";
 import { WriteupModelOutput, screenWriteupPrompt, writeupLine, type StructuredRequest, type WriteupContext } from "@ros/ai";
 import { fakeScreenWriteup } from "./fake-writeup";
-import { WRITEUP_NOT_GIVEN_NOTE, WRITEUP_PARTLY_NOTE, draftWriteup, groundedIn, keepsNegations, plainNo, settleWriteup, withWrittenAnswer, writeupCounts, writeupSegments, type WriteupEntry } from "./screen-writeup";
+import { WRITEUP_NOT_GIVEN_NOTE, WRITEUP_PARTLY_NOTE, draftWriteup, groundedIn, keepsNegations, plainNo, settleWriteup, withWrittenAnswer, wordsNotTheirs, writeupCounts, writeupRefusal, writeupSegments, type WriteupEntry } from "./screen-writeup";
 
 /**
  * The write-up on Review & send (Wave S7, slice S7-D): the code that holds the model's write-up to the candidate's own
@@ -93,6 +93,15 @@ describe("the prompt", () => {
     expect(text).not.toContain("SECRET-CRITERION");
     expect(text.match(/<\/transcript>/g)).toHaveLength(1);
     expect(screenWriteupPrompt.task).toBe("screen.writeup");
+  });
+
+  it("version 2 (Wave S9): a short reply stays short, and a no is never finished with the question's words", () => {
+    expect(screenWriteupPrompt.version).toBe(2);
+    const system = screenWriteupPrompt.system({ company: { name: "Co" }, roleTitle: "Role", questions: [], transcript: [], skipped: [] }).map((b) => b.text).join("\n");
+    expect(system).not.toContain("No, I have not ...");
+    expect(system).toContain("a short reply stays as short as they wrote it");
+    expect(system).toContain("never take words from it or from the assistant's lines");
+    expect(system).toContain("Write the answer, never the conversation");
   });
 });
 
@@ -197,6 +206,18 @@ describe("words that stay within what they wrote", () => {
     expect(groundedIn("I manage the recall list.", said)).toBe(true);
     expect(groundedIn("I see nine patients a day and chart in Eaglesoft, Open Dental and Curve.", said)).toBe(false);
     expect(groundedIn("I see 9 patients a day.", said)).toBe(false);
+  });
+
+  it("a short reply filled out with the question's words is not theirs (the real model, Wave S9), and the refusal says why", () => {
+    expect(groundedIn("About eight.", "About eight.")).toBe(true);
+    expect(groundedIn("I usually see about eight patients in a day.", "About eight.")).toBe(false);
+    expect(wordsNotTheirs("No, I have not built a hardware project with Arduino.", "No, I haven't.")).toEqual(["built", "hardware", "project", "arduino"]);
+    expect(wordsNotTheirs("I see 9 patients a day.", said)).toEqual(["9"]);
+    const m = (answer: string, over: Partial<WriteupModelOutput["answers"][number]> = {}) => ({ answer, status: "answered" as const, quotes: [], note: null, ...over });
+    expect(writeupRefusal(m("I usually see about eight patients in a day.", { quotes: ["About eight."] }), ["About eight."], "About eight.")).toBe("words they did not write");
+    expect(writeupRefusal(m("About eight."), ["About eight."], "About eight.")).toBeNull();
+    expect(writeupRefusal(m("Yes, I have.", { quotes: ["I haven't."] }), ["I haven't."], "I haven't.")).toBe("their plain no lost");
+    expect(writeupRefusal(m("I explained periodontal charting.", { quotes: ["something they never said"] }), [], said)).toBe("no quote of theirs");
   });
 });
 

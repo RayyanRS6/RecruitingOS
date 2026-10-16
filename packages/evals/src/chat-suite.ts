@@ -1,13 +1,14 @@
 import type { RolePacket, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
-import type { ScreenContext } from "@ros/ai";
+import { screenTurnPrompt, type ScreenContext } from "@ros/ai";
 import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, chatPacket, enforceChatTurn, screenContextOf, unfairQuestion, withChatPlan, type ChatFacts } from "@ros/agents";
+import { traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 
 /** The step a turn took on the item it was about (`chatNextMove` in @ros/core, which this package does not depend on). */
 type ChatStep = ReturnType<typeof enforceChatTurn>["move"];
 
 /**
  * The chat.* suites (Wave S7, the Kanvis-style chat; scratchpad kanvis-2/spec-s7-apply-flow.md step 6): one turn of the
- * chat put to the model (`screen.turn` v6), then held to the code's rules exactly as the app holds it
+ * chat put to the model (`screen.turn` v7), then held to the code's rules exactly as the app holds it
  * (`enforceChatTurn`). Each case checks two things: what the model did on its own (it read the reply, it followed the
  * ladder, it moved on when it should), and what the candidate is shown after the code's checks (one restatement and one
  * question, no praise in "About your experience", no inference, nothing the form already asked, no private note, no
@@ -255,15 +256,47 @@ export const chatCases: ChatCase[] = [
   },
 ];
 
-/** The cases of each suite run with `run` (the prompt against a model); null from `run` is a failed call. */
-export async function runChatSuite(run: (ctx: ScreenContext, c: ChatCase) => Promise<ScreenTurn | null>, only?: (suite: string) => boolean): Promise<Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[] }>; passRate: number }>> {
-  const out: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[] }>; passRate: number }> = {};
+/**
+ * What a failing case needs to be diagnosed (Wave S9; synthetic data, kept with the results): the plan's item, the chat,
+ * the model's own turn, and the turn after the code's rules with the step it took.
+ */
+export function chatCaseNotes(c: ChatCase, raw: ScreenTurn): string[] {
+  const progress = chatCaseProgress(c);
+  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
+  const { turn, move } = enforceChatTurn(raw, chatPacket(CHAT_PACKET, progress), progress, {}, { transcript: transcriptOf(c), latest });
+  const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const item = progress.chat?.items.find((i) => i.key === c.asking);
+  return [
+    `item: ${c.asking}${item ? ` (${item.kind}, step ${item.step}, pushes ${item.pushes})` : ""}; prompt ${screenTurnPrompt.key} v${screenTurnPrompt.version}`,
+    ...c.transcript.map((t) => `${t.role}: ${cut(t.content, 200)}`),
+    `model: ${cut(JSON.stringify(raw), 500)}`,
+    `turn: move=${move?.move ?? "-"} questionKey=${turn.questionKey ?? "-"} recorded=${turn.answerRecorded ? `${turn.answerRecorded.questionKey}: ${cut(turn.answerRecorded.answer, 120)}` : "-"} done=${turn.done} | ${cut(turn.messageToCandidate, 300)}`,
+  ];
+}
+
+/**
+ * The full record of a failing case for the result file (Wave S9, diagnostics.ts; synthetic data): the chat, and the
+ * model's turn as it returned it and after the code's rules, with the step the plan took. `raw` null: the call failed.
+ */
+export function chatCaseDiagnostics(c: ChatCase, raw: ScreenTurn | null): CaseDiagnostics {
+  const transcript = traceTranscript(c.transcript);
+  if (!raw) return { transcript };
+  const progress = chatCaseProgress(c);
+  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
+  const { turn, move } = enforceChatTurn(raw, chatPacket(CHAT_PACKET, progress), progress, {}, { transcript: transcriptOf(c), latest });
+  return { transcript, turns: [{ model: traceTurn(raw), afterRules: traceTurn(turn), move: move?.move ?? null }] };
+}
+
+/** The cases of each suite run with `run` (the prompt against a model); null from `run` is a failed call, and a string why it failed. */
+export async function runChatSuite(run: (ctx: ScreenContext, c: ChatCase) => Promise<ScreenTurn | string | null>, only?: (suite: string) => boolean): Promise<Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[]; diagnostics?: CaseDiagnostics }>; passRate: number }>> {
+  const out: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[]; diagnostics?: CaseDiagnostics }>; passRate: number }> = {};
   for (const c of chatCases) {
     if (only && !only(c.suite)) continue;
-    const raw = await run(chatCaseContext(c), c);
-    const failures = raw ? chatCaseFailures(c, raw) : ["the model call failed"];
+    const got = await run(chatCaseContext(c), c);
+    const raw = typeof got === "string" ? null : got;
+    const failures = raw ? chatCaseFailures(c, raw) : [typeof got === "string" ? `the model call failed: ${got}` : "the model call failed"];
     const suite = out[c.suite] ?? { cases: [], passRate: 0 };
-    suite.cases.push({ id: c.id, pass: failures.length === 0, failures });
+    suite.cases.push({ id: c.id, pass: failures.length === 0, failures, ...(failures.length && raw ? { notes: chatCaseNotes(c, raw) } : {}), ...(failures.length ? { diagnostics: chatCaseDiagnostics(c, raw) } : {}) });
     out[c.suite] = suite;
   }
   for (const s of Object.values(out)) s.passRate = s.cases.filter((x) => x.pass).length / Math.max(1, s.cases.length);

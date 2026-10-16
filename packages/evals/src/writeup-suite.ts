@@ -1,6 +1,6 @@
 import type { ScreenWriteup } from "@ros/contracts";
-import type { WriteupContext, WriteupModelOutput } from "@ros/ai";
-import { EMPTY_SCREEN_PROGRESS, candidateWordsOf, groundedIn, keepsNegations, keepsNo, notTheirVoice, plainNo, saidByCandidate, settleWriteup, writeupSegments, type WriteupEntry } from "@ros/agents";
+import { screenWriteupPrompt, writeupLine, type WriteupContext, type WriteupModelOutput } from "@ros/ai";
+import { EMPTY_SCREEN_PROGRESS, candidateWordsOf, groundedIn, keepsNegations, keepsNo, notTheirVoice, plainNo, saidByCandidate, settleWriteup, wordsNotTheirs, writeupRefusal, writeupSegments, type WriteupEntry } from "@ros/agents";
 
 /**
  * The write-up on Review & send (`screen.writeup`, Wave S7, slice S7-D), evaluated (docs/11). Each case is a short chat
@@ -214,8 +214,46 @@ export function writeupSettledFailures(wc: WriteupCase, w: ScreenWriteup): strin
   return [...answerFailures(wc, w.answers, "kept"), ...quotes, ...wc.expect(w)];
 }
 
+const wordsOfText = (s: string): string[] => s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+
+/** What the app keeps of the model's answer for a case (null: the call failed), as Review & send would show it. */
+function settledOf(wc: WriteupCase, output: WriteupModelOutput | null): ScreenWriteup {
+  return settleWriteup(output, { questions: wc.questions, transcript: wc.transcript, declined: wc.declined ?? [] }, { at: "2026-10-15T00:00:00.000Z", aiRunId: output ? "eval" : null, promptVersion: output ? screenWriteupPrompt.version : null });
+}
+
 /** One case, end to end: the model's answer (null when the call failed), then what the app keeps from it. */
 export function writeupCaseFailures(wc: WriteupCase, output: WriteupModelOutput | null): string[] {
-  const settled = settleWriteup(output, { questions: wc.questions, transcript: wc.transcript, declined: wc.declined ?? [] }, { at: "2026-10-15T00:00:00.000Z", aiRunId: output ? "eval" : null, promptVersion: output ? 1 : null });
-  return [...(output ? writeupModelFailures(wc, output) : ["the model gave no usable answer"]), ...writeupSettledFailures(wc, settled)];
+  return [...(output ? writeupModelFailures(wc, output) : ["the model gave no usable answer"]), ...writeupSettledFailures(wc, settledOf(wc, output))];
+}
+
+/**
+ * What a failing case needs to be diagnosed next time (Wave S9; synthetic data only): the prompt's version, the chat's
+ * lines as the prompt sends them and the skips; for each question the model's whole answer (its status, note and quotes,
+ * and the words in it the candidate never wrote, naming those taken from the question or the assistant's lines); and the
+ * answer as Review & send would show it, saying whether the model's answer was kept and, if not, the rule it broke.
+ * `error`: why the call gave nothing usable.
+ */
+export function writeupCaseNotes(wc: WriteupCase, output: WriteupModelOutput | null, error: string | null = null): string[] {
+  const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const said = saidIn(wc);
+  const own = writeupSegments(wc.transcript, new Set(wc.questions.map((q) => q.key))).said;
+  const settled = settledOf(wc, output);
+  const assistant = wc.transcript.filter((t) => t.role === "assistant").map((t) => t.content);
+  const notes = [`prompt: screen.writeup v${screenWriteupPrompt.version}; skipped: ${JSON.stringify(wc.declined ?? [])}`, ...wc.transcript.map(writeupLine).filter((l): l is string => l !== null).map((l) => `line: ${cut(l, 200)}`)];
+  if (!output) notes.push(`no usable answer from the model: ${cut(error ?? "unknown", 200)}`);
+  for (const q of wc.questions) {
+    const m = output?.answers.find((x) => x.questionKey === q.key);
+    if (m) {
+      const notTheirs = wordsNotTheirs(m.answer, said);
+      const asked = new Set(wordsOfText([q.question, ...assistant].join(" ")));
+      const borrowed = notTheirs.filter((w) => asked.has(w));
+      notes.push(`model ${q.key}: ${m.status} "${cut(m.answer, 300)}" note=${m.note === null ? "-" : `"${cut(m.note, 150)}"`} quotes=${cut(JSON.stringify(m.quotes), 200)}${notTheirs.length ? ` | not theirs: ${notTheirs.join(", ")}${borrowed.length ? ` (from the question or the assistant's lines: ${borrowed.join(", ")})` : ""}` : ""}`);
+    }
+    const s = settled.answers.find((x) => x.questionKey === q.key);
+    if (!s) continue;
+    const refused = m && m.status !== "not_given" && m.answer.trim() ? writeupRefusal(m, own.get(q.key) ?? [], said) : null;
+    const how = s.status === "skipped" ? "a skip on record" : !m ? "the code draft (no model answer)" : refused ? `REPLACED by their words: ${refused}` : m.status === "not_given" || !m.answer.trim() ? "the model gave none" : "KEPT";
+    notes.push(`shown ${q.key}: ${s.status} "${cut(s.answer, 200)}" note=${s.note === null ? "-" : `"${cut(s.note, 150)}"`} | ${how}`);
+  }
+  return notes;
 }

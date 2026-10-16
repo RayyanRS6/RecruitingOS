@@ -866,7 +866,7 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
 }
 
 /**
- * The scorecard's must-have findings (screen.assess v7), the way the model is asked to write them: for each must-have the
+ * The scorecard's must-have findings (screen.assess v8 to v10), the way the model is asked to write them: for each must-have the
  * chat was to confirm, the candidate's message about it quoted verbatim (a short "Yes" or "No" quoted as it is, when it
  * answers a question about it): "no" when they say plainly they do not meet it, "unknown" for a credential they say is
  * lapsed or pending, "yes" when they speak to it; nothing when the chat never touched it. The code's checks
