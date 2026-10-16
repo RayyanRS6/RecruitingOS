@@ -100,7 +100,7 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
 - What runs there: `apps/api/src/worker.ts`, the always-on queue poller (workflows, reminders, timers, credential
   revocations, privacy deadlines). It listens on `PORT` (Railway provides it) for its own health check only, `GET
   /healthz`, set in the worker service's Settings; the probe runs inside Railway, so no public networking or domain is needed.
-- Service creation: in the project, `New`, then the GitHub repository `identified-talent-solutions/recruiting-os`
+- Service creation: in the project, `New`, then the GitHub repository `RayyanRS6/RecruitingOS` (until 16 October 2026 `identified-talent-solutions/recruiting-os`)
   (the Railway GitHub App must have access to that private repository), branch `main`. The worker service's Settings hold
   the build and deploy values (from `railway.json` until 15 Oct 2026): builder Railpack, build command `pnpm worker:check` (a typecheck; the worker runs from source
   with `tsx`, which is a runtime dependency of `@ros/api` for that reason), start command `pnpm worker:start`, restart
