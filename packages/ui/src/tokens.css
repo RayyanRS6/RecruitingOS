@@ -212,7 +212,8 @@ svg.icon { flex: none; vertical-align: middle; }
 .rail-org-text span { font-size: 12.5px; color: var(--ink-3); }
 .rail-start { width: 100%; justify-content: flex-start; margin: 4px 0 10px; }
 .rail-start .kbd { margin-left: auto; }
-.rail-sub { list-style: none; margin: 2px 0 6px 21px; padding: 0 0 0 10px; border-left: 1px solid var(--line); display: grid; gap: 1px; }
+/* minmax(0, 1fr): the column stays as wide as the rail, so a long job name ends in "…" and its count or word stays in view. */
+.rail-sub { list-style: none; margin: 2px 0 6px 21px; padding: 0 0 0 10px; border-left: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
 .rail-sub a:not(.btn) { padding: 6px 8px; font-size: 13.5px; font-weight: 400; }
 .rail-sub .rail-sub-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-sub .rail-count { color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
