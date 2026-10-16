@@ -8,7 +8,7 @@ import { invitations, memberships, policies, users } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { FIXED, SETTABLE } from "./routes/policies";
-import { signInAs, signInWithIdentity } from "./test-helpers";
+import { signInAs, signInWithIdentity, usePlan } from "./test-helpers";
 
 /**
  * Team and permission hardening (plan B7). Only owners and admins make someone an admin (HR manages the rest of the
@@ -38,6 +38,8 @@ describe("team and permission hardening", () => {
     setClock(0);
     owner = await signInWithIdentity(app, container, { email: "dana@harden.test", name: "Dana Owner", provider: "google", aal2: false });
     companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Harden Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    // More than the Trial plan's 3 people are invited here (founder decision L-02 B; the seats are tested in team.test.ts).
+    await usePlan(container, companyId);
     hr = await signInAs(container, app, { companyId, role: "hr", email: "hope.hr@harden.test", name: "Hope HR" });
     admin = await signInAs(container, app, { companyId, role: "admin", email: "abe.admin@harden.test", name: "Abe Admin" });
   });

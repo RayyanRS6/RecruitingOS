@@ -23,6 +23,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 
 (globalThis as { React?: typeof React }).React = React;
 const { CUSTOMER_SORT, CUSTOMER_SORT_CHOICES, CustomersSection, customerAnnouncement, customerFilterFrom, customerInFilter, customerMatches, customerOrder, customersSearch, customerTabFrom, nextCustomerSort, planChangedToast, planLimitsLine, screeningLine, sortedCustomers, waitingCustomers, waitingWords } = await import("@ros/web/src/pages/admin/customers");
+const { extensionDaysOk, extensionLines, seatsWords, trialExtendedTo, trialExtendedToast, trialExtensionQuestion } = await import("@ros/web/src/pages/admin/customers");
 const { Outcomes, outcomeWords } = await import("@ros/web/src/pages/admin/outcomes");
 const { sortRows } = await import("@ros/ui");
 
@@ -374,5 +375,60 @@ describe("the plan and the recruiter requests on the console", () => {
   it("flags a company past its recruiter requests, for a billing conversation", () => {
     const customers = readFileSync(new URL("../../web/src/pages/admin/customers.tsx", import.meta.url), "utf8");
     expect(customers).toContain("c.recruiterAsks?.over ? <Chip tone=\"caution\">{RECRUITER_ASKS_OVER_CHIP}</Chip>");
+  });
+});
+
+describe("the Trial plan on the console (founder decision L-02 B)", () => {
+  const ended = { started: true, startedAt: "2026-09-01T19:00:00.000Z", endsAt: "2026-10-15T19:00:00.000Z", daysLeft: 0, endingSoon: false, ended: true, extendedDays: 14 };
+  const term = { startedAt: "2026-09-01T19:00:00.000Z", endsAt: "2026-10-15T19:00:00.000Z", startedBy: "its_check", extensions: [{ days: 14, reason: "The kick-off call moved.", by: { kind: "user", id: "s1", name: "Ada Admin" }, at: "2026-09-25T17:00:00.000Z", from: "2026-10-01T19:00:00.000Z", to: "2026-10-15T19:00:00.000Z" }] };
+  const onTrial = (id: string, name: string, trial: Record<string, unknown> | null, over: Record<string, unknown> = {}) => company(id, name, { planKey: "trial", status: "trial", timezone: "America/Los_Angeles", trial, trialTerm: trial?.started ? term : null, seats: { used: 3, limit: 3 }, ...over });
+  const rows = () => [
+    onTrial("co7", "Sunrise Dental", ended),
+    onTrial("co8", "Maple Dental", { started: true, startedAt: "2026-10-01T19:00:00.000Z", endsAt: "2026-10-31T19:00:00.000Z", daysLeft: 20, endingSoon: false, ended: false, extendedDays: 0 }, { trialTerm: null }),
+    onTrial("co9", "Cedar Dental", { started: false, startedAt: null, endsAt: null, daysLeft: null, endingSoon: false, ended: false, extendedDays: 0 }, { verifiedAt: null, createdAt: daysAgo(1) }),
+    company("co3", "Avon Dental", { planKey: "growth", trial: null, trialTerm: null, seats: { used: 5, limit: null } }),
+  ];
+  const plans: [unknown[], unknown] = [["admin", "plans"], [{ key: "trial", name: "Trial", limits: { seats: 3 } }, { key: "growth", name: "Growth", limits: { seats: null } }]];
+  const qc = () => client([[["admin", "customers"], rows()], [["admin", "alerts"], []], plans], admin);
+
+  it("the list's plan cell says when each trial ends, and flags one that has ended", () => {
+    const table = from(render(qc(), Customers()), '<section class="table-wrap"');
+    const words = text(table);
+    expect(words).toContain("Sunrise Dental dental · 20-49 Confirmed Trial · Trial ended Oct 15, paused Trial ended");
+    expect(words).toContain("Maple Dental dental · 20-49 Confirmed Trial · Trial ends Oct 31");
+    expect(words).toContain("starts at the ITS check");
+    // the caution chip on the one that ended only
+    expect(table.match(/>Trial ended</g)).toHaveLength(1);
+  });
+
+  it("the Overview's Plan fact adds the trial, the people in use and each extension with its reason", () => {
+    const words = text(render(qc(), Customers("open=co7")));
+    expect(words).toContain("Trial · Trial Change plan Trial ended Oct 15, paused 3 of 3 people (invitations not yet answered count too) Extended by 14 days on Sep 25 by Ada Admin, to Oct 15: The kick-off call moved.");
+  });
+
+  it("the Plan tab offers Extend the trial only for a Trial customer whose 30 days have started", () => {
+    const html = render(qc(), Customers("open=co7&tab=plan"));
+    const words = text(html);
+    expect(words).toContain("Extend the trial The trial ended on October 15: new applications, new jobs and new screening chats are paused. An extension counts from the later of the end and today.");
+    expect(html).toContain('<input id="trial-days" class="input" type="number" inputMode="numeric" min="1" max="90" step="1" value="14"/>');
+    expect(html).toContain('<label for="trial-why">Why (required, kept with the change)</label>');
+    // no reason yet: nothing to confirm
+    expect(html).toContain('<button type="button" class="btn primary" disabled="">Extend the trial</button>');
+    expect(text(render(qc(), Customers("open=co8&tab=plan")))).toContain("The trial ends on October 31.");
+    expect(text(render(qc(), Customers("open=co9&tab=plan")))).not.toContain("Extend the trial");
+    expect(text(render(qc(), Customers("open=co3&tab=plan")))).not.toContain("Extend the trial");
+  });
+
+  it("says the extension, its date and the change of plan off Trial in plain words", () => {
+    expect(trialExtensionQuestion("Sunrise Dental", 14, "2026-11-13T19:00:00.000Z", "America/Los_Angeles")).toBe("Extend Sunrise Dental's trial by 14 days, to November 13?");
+    expect(trialExtensionQuestion("Sunrise Dental", 1, "2026-11-13T19:00:00.000Z", "America/Los_Angeles")).toBe("Extend Sunrise Dental's trial by 1 day, to November 13?");
+    expect(trialExtendedToast("2026-11-13T19:00:00.000Z", "America/Los_Angeles")).toBe("Trial extended to November 13.");
+    // counted from the later of the end and now, as the API counts it
+    expect(trialExtendedTo({ endsAt: "2026-10-15T19:00:00.000Z" }, 14, Date.parse("2026-10-01T00:00:00.000Z"))).toBe("2026-10-29T19:00:00.000Z");
+    expect(trialExtendedTo({ endsAt: "2026-10-15T19:00:00.000Z" }, 14, Date.parse("2026-10-20T00:00:00.000Z"))).toBe("2026-11-03T00:00:00.000Z");
+    expect([0, 1, 90, 91, 1.5].map(extensionDaysOk)).toEqual([false, true, true, false, false]);
+    expect(planChangedToast("Sunrise Dental", "Growth", true)).toEqual({ title: "Sunrise Dental is on Growth now.", detail: "The trial has ended; new applications are open again. The new limits apply at once. This month's usage stays; the reset date does not move." });
+    expect(seatsWords({ used: 2, limit: 3 })).toBe("2 of 3 people (invitations not yet answered count too)");
+    expect(extensionLines(null)).toEqual([]);
   });
 });

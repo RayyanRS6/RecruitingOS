@@ -101,3 +101,35 @@ describe("Team card: pending invitations", () => {
     expect(annRow).not.toContain("Withdraw");
   });
 });
+
+describe("Team card: the Trial plan's people (founder decision L-02 B)", () => {
+  const INVITE_OPEN = /<button type="submit" class="btn primary"(?! disabled)[^>]*>Invite<\/button>/;
+  const INVITE_WAITS = /<button type="submit" class="btn primary" disabled=""[^>]*>Invite<\/button>/;
+  const withSeats = (seats: { used: number; limit: number | null }) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+    qc.setQueryData(["members"], members.slice(0, 2));
+    qc.setQueryData(["invitations"], []);
+    return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(TeamCard, { myRole: "owner", myUserId: "u-owner", seats })));
+  };
+
+  it("says above the invite form how many people are in use, invitations not yet answered included", () => {
+    const html = withSeats({ used: 2, limit: 3 });
+    const words = text(html);
+    expect(words).toContain("Your trial includes 3 people: 2 in use, counting invitations not yet answered.");
+    expect(words.indexOf("Your trial includes 3 people")).toBeLessThan(words.indexOf("Invite by email"));
+    expect(html).toMatch(INVITE_OPEN);
+    expect(words).not.toContain("Choose a plan to add more.");
+  });
+
+  it("when every place is in use, Invite waits and says why in the API's words", () => {
+    const html = withSeats({ used: 3, limit: 3 });
+    expect(text(html)).toContain("Your trial includes 3 people. Choose a plan to add more.");
+    expect(html).toMatch(INVITE_WAITS);
+  });
+
+  it("on a plan with no limit of people there is no line and nothing waits", () => {
+    const html = withSeats({ used: 7, limit: null });
+    expect(text(html)).not.toContain("Your trial includes");
+    expect(html).toMatch(INVITE_OPEN);
+  });
+});

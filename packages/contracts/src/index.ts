@@ -13,6 +13,7 @@ export * from "./domain/company";
 export * from "./domain/packet-revision";
 export * from "./domain/match";
 export * from "./domain/apply-questions";
+export * from "./domain/trial";
 export * from "./api";
 export * from "./api/board";
 export * from "./api/notifications";

@@ -106,6 +106,16 @@ describe("the job builder", () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Start the quick questions/);
   });
 
+  it("when the trial has ended (L-02 B), says the owner's one line and asks ITS to choose a plan, with no roles to close", () => {
+    const ended = { ok: false, limit: 1, used: 1, holding: [], message: "Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan.", trialEnded: true };
+    const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [], room: ended }], [["company"], { name: "Bright Dental", vertical: "dental", settings: {} }]]);
+    expect(html).toContain("Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan.");
+    expect(html).toContain("Ask ITS to choose a plan");
+    expect(html).not.toContain("Talk to ITS about more roles");
+    expect(html).not.toContain('href="/roles/r1"');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Start the quick questions/);
+  });
+
   it("opens the quick questions at ?way=quick: one question a screen, Step 1 of 10, a job ad to fill in the steps, and the other way back", () => {
     nav.search = "way=quick";
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [{ id: "s9", status: "active", title: "Hygienist", startedBy: { userId: "u-dana", name: "Dana" }, mine: true, createdAt: "", updatedAt: "", ownerMessages: 1, hasDraft: false, missing: [] }], room }], [["company"], { name: "Bright Dental", vertical: "dental", settings: {} }]]);

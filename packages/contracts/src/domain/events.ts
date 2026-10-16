@@ -9,6 +9,9 @@ export const EventType = z.enum([
   // Team membership through invitations (docs/spec/21, area A): someone joined on an invitation, was removed, or an invitation was withdrawn.
   "member.joined", "member.removed", "invitation.revoked",
   "integration.connected", "integration.failed", "policy.changed", "plan.changed", "entitlement.exceeded",
+  // The Trial plan's 30 days (founder decision L-02 B): started (at the ITS check, by the hourly check, or on a change
+  // back to Trial), extended by ITS from the console with a reason, and ended (ITS and the owners told once).
+  "trial.started", "trial.extended", "trial.ended",
   "intake.started", "intake.turn_completed", "intake.compiled", "intake.abandoned",
   // The job builder (Wave C): tapped answers applied, the draft written beside the conversation, pay set or confirmed by a
   // person, a draft taken over by an owner or admin, approval asked for, and a flagged phrase kept with a reason.

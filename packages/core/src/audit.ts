@@ -20,6 +20,10 @@ export type AuditAction =
   | "staff.tenant_accessed"
   | "admin.break_glass"
   | "plan.changed"
+  /** The Trial plan's 30 days (founder decision L-02 B): started, extended by ITS with a reason (days, end before and after), ended. */
+  | "trial.started"
+  | "trial.extended"
+  | "trial.ended"
   /** A recruiter or administrator looked at the pre-acceptance preview of a customer's request (correction 11). */
   | "escalation.preview_viewed"
   | "calendar.changed"

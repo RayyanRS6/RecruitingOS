@@ -11,7 +11,7 @@ import { isItsStaff } from "../apply-flow";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { RoleApplyMode } from "../components/ApplyMode";
 import { useCompanyCheck } from "../components/use-company-check";
-import { canApproveRole, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob } from "../roles";
+import { canApproveRole, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canTryWeights } from "../roles";
 import { outdatedBoardsLine } from "../publishing";
 import { payShownLabel } from "../role-words";
 import { REASON_WORD } from "./new-role/rules";
@@ -26,6 +26,7 @@ import { ActivityTab, CandidatesSeeThis, InterviewPlanTab, PacketApprovalCard, P
 import { EditPacket } from "./RoleEditor";
 import { ReportTab } from "./RoleReport";
 import { ApplicantQuestions } from "./role/ApplicantQuestions";
+import { WeightsPreview } from "./role/WeightsPreview";
 import { CandidatePreview } from "./new-role/CandidatePreview";
 import { RoleRefine } from "./new-role/RoleRefine";
 import { RoomAlert } from "./new-role/StartView";
@@ -115,6 +116,8 @@ export function RoleDetail() {
   const check = useCompanyCheck();
   // "See what candidates will see" (plan C9) and "Hire for this job again" (C14).
   const [previewOpen, setPreviewOpen] = useState(false);
+  // "Try different weights" (founder decision L-07 A): a preview that saves nothing, from the Scoring tab or the More menu.
+  const [weightsOpen, setWeightsOpen] = useState(false);
   const again = useStartDraft();
   // The screen right after approval (plan D2): where the job is going, opened by the approval card.
   const [afterApproval, setAfterApproval] = useState<{ editWhileOpen: boolean } | null>(null);
@@ -170,7 +173,10 @@ export function RoleDetail() {
   const newestVersion = Math.max(0, ...r.packetVersions.map((v) => v.version));
   const openEditor = (focus: EditorFocus | null = null) => { if (editSource) setEditBase({ version: editSource.version, packet: editSource.packet, proposed: !!proposed && editSource === proposed, newestAtOpen: newestVersion, focus }); };
   const share = canShareJob(myRole);
-  const tabItems = jobTabs({ seesCandidates: talent, candidates: r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0 });
+  const applicants = r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0;
+  const tabItems = jobTabs({ seesCandidates: talent, candidates: applicants });
+  // Only with someone to put in order, and never on an ITS grant about one candidate (roles.ts canTryWeights).
+  const mayTryWeights = canTryWeights(myRole, me.data?.staffAccess?.scope) && !!current && applicants > 0;
   const visibleTab: JobPageTab = tabItems.some((o) => o.id === tab) ? tab : "job";
 
   return (
@@ -194,6 +200,7 @@ export function RoleDetail() {
               on={{
                 edit: editSource ? () => openEditor() : undefined,
                 preview: shown && talent ? () => setPreviewOpen(true) : undefined,
+                weights: mayTryWeights ? () => setWeightsOpen(true) : undefined,
                 close: () => setClosing({ outcome: "filled_outside_platform" }),
                 // Not while the close card is up (it shows the closing message, then its Undo): the sheet would not open under it.
                 "closing-message": () => setClosingMessage(true),
@@ -275,7 +282,7 @@ export function RoleDetail() {
                 <Card title="What we look for">
                   <ul style={{ paddingLeft: 18, margin: 0 }}>{p.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong> <span className="sbar-tag">{importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip><br /><span className="small muted">{c.definition}</span></li>)}</ul>
                   <p className="small muted" style={{ marginTop: 8 }}>{SCORE_WEIGHTS_LINE}</p>
-                  {editPacket ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" icon="edit" onClick={() => openEditor("skills")}>Change the skills or how much each counts</Button></div> : null}
+                  {editPacket ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" icon="edit" onClick={() => openEditor("skills")}>Change the skills or how much each counts</Button>{mayTryWeights ? <Button size="sm" onClick={() => setWeightsOpen(true)}>Try different weights</Button> : null}</div> : null}
                 </Card>
                 <Card title="Nice-to-haves" aside={<CandidatesSeeThis />}><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
                 <Card title={`Screening questions (about ${p.screening.maxMinutes} minutes)`}>
@@ -329,6 +336,8 @@ export function RoleDetail() {
       ) : null}
 
       {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} advanced={canEditPacketJson(myRole)} roleStatus={r.status} mayApprove={canApproveRole(myRole)} whoPosts={r.whoPosts} closingDate={r.closingDate ?? null} canManage={manage} focus={editBase.focus} /> : null}
+      {/* "Use these weights" closes the preview and opens the editor at the part that changed; nothing is carried over. */}
+      {weightsOpen && current ? <WeightsPreview roleId={r.id} packet={current.packet} onClose={() => setWeightsOpen(false)} onUse={(focus) => { setWeightsOpen(false); openEditor(focus); }} /> : null}
       {afterApproval ? <AfterApproval open onClose={() => setAfterApproval(null)} roleId={r.id} roleTitle={r.title} companyName={companyName} editWhileOpen={afterApproval.editWhileOpen} canManage={manage} canShare={share} canEditPacket={editPacket} onOpenTab={(t) => pickTab(t)} /> : null}
       {/* The preview shows pay, so it is offered to the roles that see pay (everyone but an interviewer). */}
       {shown && talent ? <CandidatePreview open={previewOpen} onClose={() => setPreviewOpen(false)} path={`/api/v1/roles/${r.id}/preview?version=${shown.version}`} /> : null}

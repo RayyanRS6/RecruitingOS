@@ -2,7 +2,7 @@
 /** @jsxImportSource hono/jsx */
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
-import { isCompanyVerified, type RolePacket } from "@ros/contracts";
+import { isCompanyVerified, trialPaused, type RolePacket } from "@ros/contracts";
 import { jobNoticesFor, type Notice } from "@ros/core";
 import { candidates, companies, rolePackets, roles, withTenant } from "@ros/db";
 import type { Vars } from "../middleware/session";
@@ -55,6 +55,15 @@ export function screenPath(token: string): string {
  */
 export function acceptingApplications(role: { status: string; acceptingApplications: boolean }): boolean {
   return role.status === "open" && role.acceptingApplications;
+}
+
+/**
+ * Whether this job takes a new application now: the job's own rule above, and the company's trial not ended (founder
+ * decision L-02 B). A trial that ended reads to candidates exactly like a job that is not taking applications: the same
+ * neutral line, never a word about a trial or a plan.
+ */
+export function jobTakesApplications(job: { role: { status: string; acceptingApplications: boolean }; company: { planKey: string; settings: unknown } }, now: Date): boolean {
+  return acceptingApplications(job.role) && !trialPaused(job.company, now);
 }
 
 /**

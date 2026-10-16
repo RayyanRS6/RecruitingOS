@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { companies } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInStaff, testContainerOptions } from "./test-helpers";
+import { signInAs, signInStaff, signInWithIdentity, testContainerOptions } from "./test-helpers";
 
 /**
  * Founder decision F1 through the HTTP layer: no request header selects a tenant; tenancy comes from the
@@ -72,5 +74,79 @@ describe("tenant selection and isolation at the API", () => {
     const me = (await (await json(cookieStaff, "GET", "/api/v1/auth/me")).json()) as { activeCompanyId: string | null; user: { platformRole: string } };
     expect(me.user.platformRole).toBe("its_recruiter");
     expect(me.activeCompanyId).toBeNull();
+  });
+});
+
+/**
+ * A second company of one's own goes through ITS (founder decision L-17 A, 16 October 2026; known bug 65): POST
+ * /companies refuses a person who already belongs to a company, or already created one, in plain words. A platform admin
+ * sets companies up as before, and someone invited to several companies keeps the switcher (team.test.ts).
+ */
+describe("a second company of one's own", () => {
+  let container: Container;
+  let app: ReturnType<typeof createApp>;
+  const json = (cookie: string, method: string, path: string, body?: unknown) =>
+    app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
+  const create = (cookie: string, name: string) => json(cookie, "POST", "/api/v1/companies", { name, vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
+  const refusal = { error: { code: "another_company_needs_its", message: "To open another company, contact ITS." } };
+  const companiesNamed = async (name: string) => (await container.db.select({ id: companies.id }).from(companies).where(eq(companies.name, name))).length;
+  let first = "";
+  let firstCompany = "";
+
+  beforeAll(async () => {
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
+    app = createApp(container);
+    first = await signInWithIdentity(app, container, { email: "fay@second.test", name: "Fay First", provider: "google", aal2: false });
+    const made = await create(first, "First Dental");
+    expect(made.status).toBe(201);
+    firstCompany = ((await made.json()) as { id: string }).id;
+  });
+  afterAll(async () => {
+    await container.close();
+  });
+
+  it("refuses a second company from the same person with 409 and one plain line, and makes nothing", async () => {
+    const again = await create(first, "Second Dental");
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject(refusal);
+    expect(await companiesNamed("Second Dental")).toBe(0);
+  });
+
+  it("refuses someone invited into another company: they keep that company, and ITS opens a company of their own", async () => {
+    const ian = await signInAs(container, app, { companyId: firstCompany, role: "interviewer", email: "ian@second.test", name: "Ian" });
+    const r = await create(ian, "Ian Dental");
+    expect(r.status).toBe(409);
+    expect(await r.json()).toMatchObject(refusal);
+  });
+
+  it("refuses a person who created a company and then left it", async () => {
+    const lia = await signInWithIdentity(app, container, { email: "lia@second.test", name: "Lia Leaver", provider: "google", aal2: false });
+    const made = (await (await create(lia, "Lia Dental")).json()) as { id: string };
+    await signInAs(container, app, { companyId: made.id, role: "owner", email: "otto@second.test", name: "Otto" });
+    expect((await json(lia, "POST", "/api/v1/companies/current/leave", { confirm: true })).status).toBe(200);
+    const back = await signInWithIdentity(app, container, { email: "lia@second.test", name: "Lia Leaver", provider: "google", aal2: false });
+    const r = await create(back, "Lia Dental Again");
+    expect(r.status).toBe(409);
+    expect(await r.json()).toMatchObject(refusal);
+  });
+
+  it("lets someone who was removed from another person's company open their own", async () => {
+    const rex = await signInAs(container, app, { companyId: firstCompany, role: "interviewer", email: "rex@second.test", name: "Rex" });
+    const rexId = ((await (await json(rex, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
+    expect((await json(first, "PATCH", `/api/v1/companies/current/members/${rexId}`, { status: "removed" })).status).toBe(200);
+    const again = await signInWithIdentity(app, container, { email: "rex@second.test", name: "Rex", provider: "google", aal2: false });
+    expect((await create(again, "Rex Dental")).status).toBe(201);
+  });
+
+  it("lets a platform admin set companies up as before", async () => {
+    const admin = await signInStaff(app, container, "ada@its.test", "platform_admin", "Ada Admin");
+    expect((await create(admin, "Set Up One")).status).toBe(201);
+    expect((await create(admin, "Set Up Two")).status).toBe(201);
+  });
+
+  it("still answers a bad body with 400 first", async () => {
+    const r = await json(first, "POST", "/api/v1/companies", { name: "" });
+    expect(r.status).toBe(400);
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("invalid_request");
   });
 });

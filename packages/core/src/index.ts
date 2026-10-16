@@ -53,3 +53,4 @@ export * from "./intake-builder";
 export * from "./apply-questions";
 export * from "./answer-sentences";
 export * from "./candidate-score";
+export * from "./hidden-text";

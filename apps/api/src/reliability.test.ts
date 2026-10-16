@@ -314,6 +314,8 @@ describe("ITS hears about every request, within the hour", () => {
     await container.db.update(recruiterEscalations).set({ slaDueAt: new Date(now.getTime() - 2 * 3600_000).toISOString() }).where(eq(recruiterEscalations.id, late.id));
     const first = await runHourlyChecks(container.db, now, { workerInline: true });
     expect(first.interruptedSends).toBe(1);
+    // the Trial plan's 30 days are settled in the same hour (founder decision L-02 B): nothing to start or end here
+    expect(first).toMatchObject({ trialsStarted: 0, trialsEnded: 0 });
     expect(first.overdueRequests).toBeGreaterThanOrEqual(1);
     expect((await container.db.select().from(communications).where(eq(communications.id, stuck.id)))[0].status).toBe("unknown");
     const overdue = () => container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, ESCALATION_OVERDUE_ALERT_KIND)).then((rows) => rows.filter((a) => a.target?.id === late.id));

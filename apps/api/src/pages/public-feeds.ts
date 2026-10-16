@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { and, eq, sql } from "drizzle-orm";
+import { trialPaused } from "@ros/contracts";
 import { jobNoticesFor } from "@ros/core";
 import { companies, rolePackets, roles, withPlatform } from "@ros/db";
 import { jobFeedJson, jobFeedXml, jobValidThrough, linkedInFeedXml, schemaEmploymentType, type FeedJob } from "@ros/integrations";
@@ -45,20 +46,22 @@ async function cached(container: Container, key: string, build: () => Promise<st
 
 /**
  * Open roles that accept applications, with the approved packet the role currently runs on, of companies ITS has
- * confirmed (founder decision B7: an unconfirmed company is in no feed and no sitemap). Platform read: the feeds span
- * every company.
+ * confirmed (founder decision B7: an unconfirmed company is in no feed and no sitemap). A company whose trial has ended
+ * (founder decision L-02 B) takes no new applications, so its jobs leave the feeds and the sitemap too. Platform read:
+ * the feeds span every company.
  */
 async function listings(container: Container): Promise<Listing[]> {
   const rows = await withPlatform(container.db, (tx) =>
     tx
-      .select({ roleId: roles.id, title: roles.title, updatedAt: roles.updatedAt, openedAt: roles.openedAt, createdAt: roles.createdAt, closesOn: roles.applicationsCloseOn, companyName: companies.name, slug: companies.slug, vertical: companies.vertical, companyLocations: companies.locations, companySettings: companies.settings, packet: rolePackets.packet })
+      .select({ roleId: roles.id, title: roles.title, updatedAt: roles.updatedAt, openedAt: roles.openedAt, createdAt: roles.createdAt, closesOn: roles.applicationsCloseOn, companyName: companies.name, slug: companies.slug, vertical: companies.vertical, companyLocations: companies.locations, companySettings: companies.settings, planKey: companies.planKey, packet: rolePackets.packet })
       .from(roles)
       .innerJoin(companies, eq(companies.id, roles.companyId))
       .innerJoin(rolePackets, and(eq(rolePackets.roleId, roles.id), eq(rolePackets.version, roles.currentPacketVersion)))
       .where(and(eq(roles.status, "open"), eq(roles.acceptingApplications, true), sql`coalesce(${companies.settings}->>'verifiedAt', '') <> ''`))
       .orderBy(roles.openedAt),
   );
-  return rows.map((r) => {
+  const now = container.engine.clock();
+  return rows.filter((r) => !trialPaused({ planKey: r.planKey, settings: r.companySettings }, now)).map((r) => {
     const notices = jobNoticesFor({ jobLocations: r.packet.identity.locations, companyLocations: r.companyLocations, overrides: r.companySettings.notices });
     return { roleId: r.roleId, title: r.title, updatedAt: r.updatedAt, datePosted: (r.openedAt ?? r.createdAt).slice(0, 10), companyName: r.companyName, slug: r.slug, vertical: r.vertical, packet: r.packet, showPay: payShown(r.packet, notices), closesOn: r.closesOn ?? null };
   });

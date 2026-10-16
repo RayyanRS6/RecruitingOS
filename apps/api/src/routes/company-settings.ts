@@ -24,7 +24,7 @@ export const companySettingsRoutes = new Hono<Vars>();
 const ADMIN_ONLY_COMPANY_KEYS: Record<string, string> = {
   planKey: "the plan", plan: "the plan", status: "the account status", slug: "the careers page address", vertical: "the kind of business", id: "the company id", entitlements: "the allowances", usage: "the allowances",
 };
-const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan", verifiedAt: "the ITS company check", verifiedBy: "the ITS company check", onboarding: "the getting-started checklist", candidateScoreShown: "whether candidates see their match score", candidateScoreSetBy: "whether candidates see their match score" };
+const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan", verifiedAt: "the ITS company check", verifiedBy: "the ITS company check", onboarding: "the getting-started checklist", candidateScoreShown: "whether candidates see their match score", candidateScoreSetBy: "whether candidates see their match score", trial: "the trial dates" };
 
 /** Settings with their own routes below (plan D10): named here so a PATCH that sends them gets a plain answer. */
 const PROFILE_SETTINGS_KEYS: Record<string, string> = {

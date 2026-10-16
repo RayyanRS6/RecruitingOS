@@ -12,6 +12,7 @@ import { jobUrls, shareTargets, trackedLinkUrl } from "../services/job-urls";
 import { currentVersionOf } from "../services/packet-versions";
 import { boardChoices, closingDateFor, postingTaskViews, publishingState, sharePlaceLink, shareText, shareView } from "../services/publishing";
 import { tellItsQueueAboutTasks } from "../services/publishing-backfill";
+import { assertNoNewWork } from "../services/trial";
 import { replayHeldEmails } from "../webhooks/postmark";
 
 /**
@@ -745,6 +746,8 @@ postingRoutes.post("/:id/applications/accepting", requireTenant, async (c) => {
     if (role.status === "closed") throw new HttpError(409, "role_closed", "The role is closed, so it is not taking applications.");
     const pick = (r: RoleRow) => ({ id: r.id, acceptingApplications: r.acceptingApplications, applicationsClosedAt: r.applicationsClosedAt, applicationsClosedReason: r.applicationsClosedReason });
     if (role.acceptingApplications === body.accepting) return { ok: true, changed: false, role: pick(role) };
+    // Turning applications back on is new work once a trial has ended (founder decision L-02 B): it waits for a plan. Turning them off never does.
+    if (body.accepting) await assertNoNewWork(tx, t.companyId, container.engine.clock());
     // A closing date that has passed would stop them again at once and tell candidates a date in the past (plan D7).
     if (body.accepting && role.applicationsCloseOn) {
       const [co] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);

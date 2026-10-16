@@ -6,7 +6,7 @@ import { applications, auditRecords, candidates, entitlements, events, integrati
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { putOnInterview, signInAs, signInWithIdentity } from "./test-helpers";
+import { putOnInterview, signInAs, signInWithIdentity, usePlan } from "./test-helpers";
 
 /**
  * Team invitations, members and per-role permissions (docs/spec/21, area A, and section 7 P0): an invitation is a row
@@ -60,6 +60,8 @@ describe("team invitations, members and roles", () => {
     owner = await signInWithIdentity(app, container, { email: "dana@teamtest.test", name: "Dana Owner", provider: "google", aal2: false });
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Teamtest Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     companyId = co.id;
+    // This suite invites more than the Trial plan's 3 people (founder decision L-02 B); the seats have their own suite below.
+    await usePlan(container, companyId);
     ownerId = (await me(owner)).user.id;
     roleId = await compileRole();
   });
@@ -634,5 +636,140 @@ describe("leaving a company, and switching between companies", () => {
     expect((await json(ivy, "GET", "/api/v1/auth/me")).status).toBe(401);
     const [row] = await container.db.select({ status: memberships.status }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(users.email, "ivy@leave.test"), eq(memberships.companyId, companyA)));
     expect(row.status).toBe("removed");
+  });
+});
+
+/**
+ * The Trial plan's people (founder decision L-02 B, 16 October 2026): at most 3 in the company, members of any role, and
+ * invitations not yet answered count; ITS (a recruiter's grant, a platform-staff account) never does. A 4th invitation,
+ * and an invitation accepted when the trial is full, are refused in plain words; nobody already in is ever removed.
+ */
+describe("people on the Trial plan", () => {
+  let container: Container;
+  let app: ReturnType<typeof createApp>;
+  const idp = () => container.integrations.identity as FakeIdentityProvider;
+  const json = (cookie: string, method: string, path: string, body?: unknown) =>
+    app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
+  // each sign-in from an address of its own: the sign-in route's per-address limit is shared by every suite in this file
+  let ip = 0;
+  const nextAddress = () => {
+    ip += 1;
+    return `203.0.113.${ip}`;
+  };
+  const session = (accessToken: string, cookie?: string) =>
+    app.request("/api/v1/auth/session", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": nextAddress(), ...(cookie ? { cookie } : {}) }, body: JSON.stringify({ accessToken }) });
+  const cookieNamed = (r: Response, name: string) => r.headers.getSetCookie().find((c) => c.startsWith(`${name}=`))?.split(";")[0] ?? null;
+  const cleared = (r: Response, name: string) => r.headers.getSetCookie().some((c) => c.startsWith(`${name}=`) && /max-age=0/i.test(c));
+  const pathOf = (link: string) => link.replace(container.env.APP_BASE_URL, "");
+  const invite = (cookie: string, body: unknown) => json(cookie, "POST", "/api/v1/companies/current/members/invite", body);
+  const seats = async () => ((await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { usage: Record<string, { used: number; limit: number | null }> }).usage.seats;
+  const statusOf = async (email: string) => (await container.db.select({ status: invitations.status }).from(invitations).where(and(eq(invitations.companyId, companyId), eq(invitations.email, email))).orderBy(invitations.createdAt)).at(-1)?.status;
+  type Invited = { invitation: { id: string }; replaced: number; devLink: string };
+  const FULL = "Your trial includes 3 people. Choose a plan to add more.";
+  let owner = "";
+  let companyId = "";
+
+  beforeAll(async () => {
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
+    app = createApp(container);
+    owner = await signInWithIdentity(app, container, { email: "olga@seats.test", name: "Olga Owner", provider: "google", aal2: false });
+    companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Seat Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+  });
+  afterAll(async () => {
+    await container.close();
+  });
+
+  it("the owner and two invitations fill the trial; a 4th invitation is refused in plain words and sends nothing", async () => {
+    expect(await seats()).toEqual({ used: 1, limit: 3 });
+    expect((await invite(owner, { email: "hana@seats.test", role: "hiring_manager" })).status).toBe(201);
+    expect((await invite(owner, { email: "ian@seats.test", role: "interviewer" })).status).toBe(201);
+    expect(await seats()).toEqual({ used: 3, limit: 3 });
+    const fourth = await invite(owner, { email: "jo@seats.test", role: "interviewer" });
+    expect(fourth.status).toBe(409);
+    expect(await fourth.json()).toMatchObject({ error: { code: "seats_full", message: FULL } });
+    expect(await statusOf("jo@seats.test")).toBeUndefined();
+    expect((container.integrations.email as unknown as FakeEmailAdapter).sent.filter((m) => m.to === "jo@seats.test")).toHaveLength(0);
+  });
+
+  it("inviting the same address again replaces its invitation without counting it twice", async () => {
+    const again = await invite(owner, { email: "ian@seats.test", role: "hr" });
+    expect(again.status).toBe(201);
+    expect(((await again.json()) as Invited).replaced).toBe(1);
+    expect(await seats()).toEqual({ used: 3, limit: 3 });
+  });
+
+  it("withdrawing an invitation frees its place", async () => {
+    const [ian] = await container.db.select({ id: invitations.id }).from(invitations).where(and(eq(invitations.email, "ian@seats.test"), eq(invitations.status, "pending")));
+    expect((await json(owner, "POST", `/api/v1/companies/current/invitations/${ian.id}/revoke`)).status).toBe(200);
+    expect(await seats()).toEqual({ used: 2, limit: 3 });
+    expect((await invite(owner, { email: "jo@seats.test", role: "interviewer" })).status).toBe(201);
+    expect(await seats()).toEqual({ used: 3, limit: 3 });
+  });
+
+  it("an invitation that lapsed gives its place back, and sending it again when the trial is full is refused", async () => {
+    const [hana] = await container.db.select({ id: invitations.id }).from(invitations).where(and(eq(invitations.email, "hana@seats.test"), eq(invitations.status, "pending")));
+    await withPlatform(container.db, (tx) => tx.update(invitations).set({ expiresAt: new Date(Date.now() - 1000).toISOString() }).where(eq(invitations.id, hana.id)));
+    expect(await seats()).toEqual({ used: 2, limit: 3 });
+    expect((await invite(owner, { email: "kai@seats.test", role: "interviewer" })).status).toBe(201);
+    const resent = await json(owner, "POST", `/api/v1/companies/current/invitations/${hana.id}/resend`);
+    expect(resent.status).toBe(409);
+    expect(await resent.json()).toMatchObject({ error: { code: "seats_full", message: FULL } });
+    // a pending invitation already holds its place: sending it again is fine
+    const [jo] = await container.db.select({ id: invitations.id }).from(invitations).where(and(eq(invitations.email, "jo@seats.test"), eq(invitations.status, "pending")));
+    expect((await json(owner, "POST", `/api/v1/companies/current/invitations/${jo.id}/resend`)).status).toBe(200);
+  });
+
+  it("an invitation carried at sign-in into a full trial is refused (invite_seats_full); it and the others stay pending", async () => {
+    // someone joins outside an invitation (as ITS sets a company up): the owner, Lee, Jo's and Kai's invitations make 4
+    await signInAs(container, app, { companyId, role: "interviewer", email: "lee@seats.test", name: "Lee" });
+    const [jo] = await container.db.select({ id: invitations.id }).from(invitations).where(and(eq(invitations.email, "jo@seats.test"), eq(invitations.status, "pending")));
+    const resent = (await (await json(owner, "POST", `/api/v1/companies/current/invitations/${jo.id}/resend`)).json()) as Invited;
+    const page = await app.request(pathOf(resent.devLink));
+    const inviteCookie = cookieNamed(page, "ros_invite")!;
+    const r = await session(idp().mint({ email: "jo@seats.test", name: "Jo", provider: "google" }), inviteCookie);
+    expect(r.status).toBe(403);
+    expect(await r.json()).toMatchObject({ error: { code: "invite_seats_full", message: "This company's trial includes 3 people. Ask the person who invited you to choose a plan to add more." } });
+    expect(cookieNamed(r, "ros_session")).toBeNull();
+    expect(cleared(r, "ros_invite")).toBe(true);
+    expect(await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "signin.refused"), eq(auditRecords.reason, "invite_seats_full")))).toHaveLength(1);
+    expect(await statusOf("jo@seats.test")).toBe("pending");
+    expect(await statusOf("kai@seats.test")).toBe("pending");
+    // a plain sign-in opens a session in no company: the invitation waits for a place instead of joining
+    const plain = await session(idp().mint({ email: "jo@seats.test", name: "Jo", provider: "google" }));
+    expect(plain.status).toBe(200);
+    expect(((await plain.json()) as { activeCompanyId: string | null }).activeCompanyId).toBeNull();
+    expect(await statusOf("jo@seats.test")).toBe("pending");
+  });
+
+  it("never counts ITS: a recruiter's grant and a platform-staff account in the company take no place", async () => {
+    const before = await seats();
+    await withPlatform(container.db, async (tx) => {
+      const [rita] = await tx.insert(users).values({ email: "rita@identifiedtalent.com", name: "Rita Recruiter" }).returning();
+      await tx.insert(memberships).values({ companyId, userId: rita.id, role: "recruiter", status: "active" });
+      const [sam] = await tx.insert(users).values({ email: "sam@identifiedtalent.com", name: "Sam Staff", platformRole: "its_recruiter" }).returning();
+      await tx.insert(memberships).values({ companyId, userId: sam.id, role: "interviewer", status: "active" });
+    });
+    expect(await seats()).toEqual(before);
+  });
+
+  it("a company already past 3 keeps everyone; only new invitations are refused", async () => {
+    expect((await seats()).used).toBeGreaterThan(3);
+    const members = (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as Array<{ email: string }>;
+    expect(members.map((m) => m.email)).toEqual(expect.arrayContaining(["olga@seats.test", "lee@seats.test"]));
+    const refused = await invite(owner, { email: "max@seats.test", role: "interviewer" });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "seats_full", message: FULL } });
+    // the owner's own request is never touched by it
+    expect((await json(owner, "GET", "/api/v1/companies/current/members")).status).toBe(200);
+  });
+
+  it("another plan has no limit of people: invitations go out again", async () => {
+    await usePlan(container, companyId, "growth");
+    expect((await seats()).limit).toBeNull();
+    expect((await invite(owner, { email: "max@seats.test", role: "interviewer" })).status).toBe(201);
+    // and Jo, still invited, joins at the next sign-in
+    const r = await session(idp().mint({ email: "jo@seats.test", name: "Jo", provider: "google" }));
+    expect({ status: r.status, body: await r.json() }).toMatchObject({ status: 200, body: { activeCompanyId: companyId } });
+    expect(await statusOf("jo@seats.test")).toBe("accepted");
   });
 });

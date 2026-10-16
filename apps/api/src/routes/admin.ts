@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { desc, eq, gt, gte, inArray, ne, sql } from "drizzle-orm";
 import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
-import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, candidateScoreShown, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
+import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
-import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
+import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, invitations, jobs, memberships, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
-import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, resolveAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
+import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, resolveAlert, resolveAlertsFor, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
 import { CorrectOutcome } from "@ros/contracts";
 import { listCspReports, reviewCspReport } from "@ros/core";
 import { hiringOutcomes, unconfirmedScreens } from "@ros/db";
@@ -19,6 +19,7 @@ import { customerReport } from "../services/role-report";
 import { setJobBoardAccess, unverifyCompany, verifyCompany } from "../services/company-trust";
 import { resetPublicFeedCache } from "../pages/public-feeds";
 import { failedEmailApplications, retryFailedEmail } from "../webhooks/postmark";
+import { TRIAL_ENDED_ALERT, extendTrial, replayHeldEmailsForCompany } from "../services/trial";
 
 /** Platform admin console API (docs/16). Every read is audited with the reason the admin supplies. */
 export const adminRoutes = new Hono<Vars>();
@@ -50,6 +51,18 @@ adminRoutes.get("/customers", async (c) => {
   const asks = await allowanceOf(entitlements.RECRUITER_ASKS);
   // This month's screening conversations (plan E9, Q17): counted at a candidate's first answer, so ITS can see a company nearing its allowance.
   const conversations = await allowanceOf(entitlements.TEXT_SCREENS);
+  // People on the plan (founder decision L-02 B: 3 on Trial), counted as Settings counts them (core entitlements.seatsInUse):
+  // active members of any team role but ITS's, plus invitations not yet answered. Two grouped counts and the seats rows.
+  const now = c.get("container").engine.clock();
+  const memberCounts = byCompany(await db.select({ companyId: memberships.companyId, n: sql<number>`count(*)` }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.status, "active"), ne(memberships.role, "recruiter"), eq(users.platformRole, "none"))).groupBy(memberships.companyId));
+  const inviteCounts = byCompany(await db.select({ companyId: invitations.companyId, n: sql<number>`count(*)` }).from(invitations).where(and(eq(invitations.status, "pending"), gt(invitations.expiresAt, now.toISOString()))).groupBy(invitations.companyId));
+  const seatRows = byCompany(await db.select({ companyId: entitlementRows.companyId, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.SEATS)));
+  const planLimits = new Map((await db.select({ key: plans.key, limits: plans.limits }).from(plans)).map((p) => [p.key, p.limits]));
+  const seatsOf = (co: typeof companies.$inferSelect) => {
+    const row = seatRows.get(co.id);
+    const fallback = planLimits.get(co.planKey)?.[entitlements.SEATS];
+    return { used: Number(memberCounts.get(co.id)?.n ?? 0) + Number(inviteCounts.get(co.id)?.n ?? 0), limit: row ? row.limit ?? null : typeof fallback === "number" ? fallback : null };
+  };
   return c.json(rows.map((co) => ({
     ...co,
     roles: Number(roleCounts.get(co.id)?.n ?? 0),
@@ -69,6 +82,11 @@ adminRoutes.get("/customers", async (c) => {
     // Whether its candidates see their match score after sending (founder decision S7-1): on unless ITS turned it off
     // with POST /customers/:id/candidate-score.
     candidateScoreShown: candidateScoreShown(co.settings),
+    // The Trial plan's 30 days (founder decision L-02 B): where they stand (null on another plan), the dates with every
+    // extension, and the people used of the plan's limit.
+    trial: trialStanding(co, now),
+    trialTerm: co.settings.trial ?? null,
+    seats: seatsOf(co),
   })));
 });
 
@@ -139,6 +157,30 @@ adminRoutes.post("/customers/:id/apply-flow", async (c) => {
   });
   if (!result) throw new HttpError(404, "not_found", "Company not found.");
   return c.json({ ok: true, companyId, applyFlow: result.to, changed: result.changed });
+});
+
+/**
+ * ITS extends a customer's trial (founder decision L-02 B), from the console's Plan tab: a number of days (1 to 90) and
+ * a reason, confirmed. The new end counts from the later of the old end and now; the extension is kept on the dates,
+ * audited with the reason (the customer sees it in their history), the "trial ended" alert is resolved and the owners
+ * are told. 409 `not_on_trial` on another plan; 409 `trial_not_started` before the ITS check (nothing to extend yet).
+ * A company that was paused takes applications again: the emails held meanwhile are added once this has committed.
+ */
+adminRoutes.post("/customers/:id/trial", async (c) => {
+  const s = c.get("session")!;
+  const container = c.get("container");
+  const companyId = c.req.param("id") ?? "";
+  if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  const body = TrialExtensionRequest.parse(await c.req.json().catch(() => ({})));
+  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  const now = container.engine.clock();
+  const result = await withPlatform(container.db, (tx) => extendTrial(tx, { companyId, days: body.days, reason: body.reason, actor, now }));
+  if (result.wasPaused) {
+    resetPublicFeedCache(container);
+    await replayHeldEmailsForCompany(container, companyId);
+  }
+  await container.kick();
+  return c.json({ ok: true, companyId, trial: result.standing });
 });
 
 /**
@@ -497,6 +539,12 @@ adminRoutes.get("/plans", async (c) => {
  * Founder decision F8: a platform admin puts a customer on the Design Partner plan (or another plan). Pilot term 90 days,
  * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move.
  * Allowance alerts the new limits clear are resolved.
+ *
+ * The Trial plan (founder decision L-02 B): moving a customer to Trial sets its status to "trial" and starts a new 30
+ * days when the company is confirmed (otherwise they start at the ITS check). Moving it to another plan ends the trial
+ * with nothing to write (only the Trial plan reads the dates, which stay as a record): the "trial ended" alert is
+ * resolved, and a company that was paused takes applications again, so the emails held meanwhile are added once this
+ * has committed. The answer is the company, with `trialEnded` true when this change ended a trial.
  */
 adminRoutes.post("/customers/:id/plan", async (c) => {
   const s = c.get("session")!;
@@ -508,8 +556,10 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
   const reason = body.reason?.trim() ?? "";
   if (reason.length < 5) throw new HttpError(400, "reason_required", "Say why the plan is changing (at least five characters).");
   const now = new Date();
+  const container = c.get("container");
+  const clock = container.engine.clock();
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const result = await withPlatform(c.get("container").db, async (tx) => {
+  const result = await withPlatform(container.db, async (tx) => {
     // Locked: the settings are written back whole, so the ITS check or a customer's change made meanwhile is kept.
     const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
     if (!co) throw new HttpError(404, "not_found", "Company not found.");
@@ -522,12 +572,29 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     const pilot = body.planKey === "design_partner"
       ? { startedAt: co.settings.pilot?.startedAt ?? now.toISOString(), endsAt: co.settings.pilot?.endsAt ?? new Date(now.getTime() + (body.pilotDays ?? 90) * 86_400_000).toISOString(), ...(body.extendUntil ? { extendedUntil: body.extendUntil } : {}) }
       : co.settings.pilot;
-    const [updated] = await tx.update(companies).set({ status: body.planKey === "design_partner" ? "design_partner" : co.status === "trial" ? "active" : co.status, settings: { ...co.settings, pilot } }).where(eq(companies.id, companyId)).returning();
-    await emit(tx, { type: "plan.changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from: co.planKey, to: body.planKey, pilot } });
-    await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey } });
-    return updated;
+    // The Trial plan's 30 days (L-02 B): a move to Trial starts new ones from today when the company is confirmed (and
+    // waits for the ITS check otherwise); a move away ends the trial and leaves the dates as a record.
+    const toTrial = onTrialPlan(body.planKey) && !onTrialPlan(co.planKey);
+    const leavingTrial = onTrialPlan(co.planKey) && !onTrialPlan(body.planKey);
+    const wasPaused = leavingTrial && trialStanding(co, clock)?.ended === true;
+    const term = toTrial && isCompanyVerified(co.settings) ? newTrialTerm(clock, "plan_change") : null;
+    const { trial: oldTerm, ...others } = co.settings;
+    const settings = { ...others, pilot, ...(toTrial ? (term ? { trial: term } : {}) : oldTerm ? { trial: oldTerm } : {}) };
+    const status = onTrialPlan(body.planKey) ? "trial" : body.planKey === "design_partner" ? "design_partner" : co.status === "trial" ? "active" : co.status;
+    const [updated] = await tx.update(companies).set({ status, settings }).where(eq(companies.id, companyId)).returning();
+    if (leavingTrial) await resolveAlertsFor(tx, TRIAL_ENDED_ALERT, companyId, clock);
+    await emit(tx, { type: "plan.changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from: co.planKey, to: body.planKey, pilot, ...(leavingTrial ? { trialEnded: true } : {}) } });
+    await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey, ...(term ? { trial: { startedAt: term.startedAt, endsAt: term.endsAt } } : {}), ...(leavingTrial ? { trialEnded: true } : {}) } });
+    if (term) await emit(tx, { type: "trial.started", companyId, actor, subject: { type: "company", id: companyId }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
+    return { updated, wasPaused, leavingTrial };
   });
-  return c.json(result);
+  if (result.wasPaused) {
+    // Paused no more: the jobs go back on the feeds, and the emails that arrived meanwhile are added to their jobs.
+    resetPublicFeedCache(container);
+    await replayHeldEmailsForCompany(container, companyId);
+    await container.kick();
+  }
+  return c.json({ ...result.updated, trialEnded: result.leavingTrial });
 });
 
 /**

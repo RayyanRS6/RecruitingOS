@@ -1,3 +1,4 @@
+import type { TrialStanding, TrialTerm } from "@ros/contracts";
 import type { ApplyMode } from "../../apply-flow";
 import type { RecruiterAskStanding } from "../../recruiter-requests";
 
@@ -43,8 +44,10 @@ export const adminKeys = {
  * A customer as GET /admin/customers lists it. `applyFlowDefault`: how the company's roles meet the screening
  * conversation unless a role has its own setting (plan E1). `candidateScoreShown`: whether its candidates see their
  * match score after sending (founder decision S7-1; on unless ITS turned it off; absent from an older API reads as on).
+ * `trial`, `trialTerm` and `seats` (founder decision L-02 B): where the Trial plan's 30 days stand (null on another
+ * plan), the dates with every extension, and the people in use of the plan's limit; absent from an older API.
  */
-export type CustomerRow ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string; candidateScoreSetBy?: { at: string; by: { id: string; name?: string }; reason: string } }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null; resetsAt?: string | null }; candidateScoreShown?: boolean };
+export type CustomerRow ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone?: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string; candidateScoreSetBy?: { at: string; by: { id: string; name?: string }; reason: string } }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null; resetsAt?: string | null }; candidateScoreShown?: boolean; trial?: TrialStanding | null; trialTerm?: TrialTerm | null; seats?: { used: number; limit: number | null } };
 
 /** An alert as GET /admin/alerts and GET /admin/failures list it. */
 export type AlertRow ={ id: string; kind: string; severity: string; title: string; body: string; status: string; companyId: string | null; target: { type: string; id: string } | null; details: Record<string, unknown>; createdAt: string };

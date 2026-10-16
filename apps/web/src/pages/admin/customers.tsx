@@ -10,9 +10,11 @@ import { RoleApplyMode } from "../../components/ApplyMode";
 import { useNavigate, useSearchParams } from "../../nav";
 import { RECRUITER_ASKS_OVER_CHIP } from "../../recruiter-requests";
 import { toast } from "../../toast";
+import { trialDate } from "../../trial";
 import { CustomerReportPanel } from "../AdminCustomerReport";
 import { type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
-import { activityWords, exactMoney, exactWhen, money, planStatusWords, planWords, whenWords } from "./admin-words";
+import { activityWords, exactMoney, exactWhen, money, planStatusWords, planWords, trialWords, whenWords } from "./admin-words";
+import type { TrialStanding, TrialTerm } from "@ros/contracts";
 import { Outcomes } from "./outcomes";
 
 /*
@@ -279,6 +281,9 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
       </td>
       <td>
         <div style={LINE}>{planWords(c.planKey)}{c.status !== "active" ? ` · ${planStatusWords(c.status)}` : ""}</div>
+        {/* The Trial plan's 30 days (L-02 B): when they end, or that they ended and new applications are paused. */}
+        {c.trial ? <div className="small muted">{trialWords(c.trial, c.timezone)}</div> : null}
+        {c.trial?.ended ? <Chip tone="caution">Trial ended</Chip> : null}
         {usage ? <div className="small muted">{usage.used}{usage.limit !== null ? ` of ${usage.limit}` : ""} chats this month</div> : null}
         {low ? <span title={allowanceChip(low)}><Chip tone="caution">{low.level === "used_up" ? "Used up" : "Running low"}</Chip></span> : null}
       </td>
@@ -359,6 +364,9 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
         <dt>Plan</dt>
         <dd>
           <Fact action={<Button size="sm" variant="quiet" onClick={() => onTab("plan")}>Change plan</Button>}>{planWords(c.planKey)} · {planStatusWords(c.status)}</Fact>
+          {c.trial ? <div className="small muted">Trial {trialWords(c.trial, c.timezone)}</div> : null}
+          {c.seats && c.seats.limit !== null ? <div className="small muted">{seatsWords(c.seats)}</div> : null}
+          {extensionLines(c.trialTerm, c.timezone).map((line) => <div key={line.key} className="small muted">{line.text}</div>)}
           {c.screeningConversations ? <div className="small muted">{screeningLine(c.screeningConversations)}</div> : null}
           {low ? <Chip tone="caution">{allowanceChip(low)}</Chip> : null}
         </dd>
@@ -406,9 +414,45 @@ export function planLimitsLine(limits: Record<string, number | null>): string {
   return LIMIT_WORDS.filter(([k]) => k in limits).map(([k, words]) => `${limits[k] === null ? "unlimited" : limits[k]} ${words}`).join(" · ");
 }
 
-/** The toast after a plan change. */
-export function planChangedToast(company: string, plan: string): { title: string; detail: string } {
-  return { title: `${company} is on ${plan} now.`, detail: "The new limits apply at once. This month's usage stays; the reset date does not move." };
+/** The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B). */
+export function planChangedToast(company: string, plan: string, endedTrial = false): { title: string; detail: string } {
+  const limits = "The new limits apply at once. This month's usage stays; the reset date does not move.";
+  return { title: `${company} is on ${plan} now.`, detail: endedTrial ? `The trial has ended; new applications are open again. ${limits}` : limits };
+}
+
+/** "2 of 3 people (invitations not yet answered count too)": the Trial plan's people (founder decision L-02 B). */
+export function seatsWords(seats: { used: number; limit: number | null }): string {
+  return `${seats.used}${seats.limit !== null ? ` of ${seats.limit}` : ""} people (invitations not yet answered count too)`;
+}
+
+/** Each extension of a trial, oldest first: "Extended by 14 days on Oct 20 by Sam, to Nov 13: the owner's kick-off moved." */
+export function extensionLines(term: TrialTerm | null | undefined, timeZone?: string | null): Array<{ key: string; text: string }> {
+  return (term?.extensions ?? []).map((e) => ({ key: `${e.at}|${e.to}`, text: `Extended by ${e.days} ${e.days === 1 ? "day" : "days"} on ${trialDate(e.at, timeZone, { short: true })}${e.by.name ? ` by ${e.by.name}` : ""}, to ${trialDate(e.to, timeZone, { short: true })}: ${e.reason}` }));
+}
+
+const DAY_MS = 86_400_000;
+/** The longest one extension may be (the API refuses more, TrialExtensionRequest). */
+export const TRIAL_EXTENSION_MAX_DAYS = 90;
+
+/** Where an extension by `days` would take the trial: from the later of its end and now, as the API counts it. */
+export function trialExtendedTo(trial: Pick<TrialStanding, "endsAt">, days: number, now: number = Date.now()): string {
+  const end = trial.endsAt ? Date.parse(trial.endsAt) : now;
+  return new Date(Math.max(Number.isFinite(end) ? end : now, now) + days * DAY_MS).toISOString();
+}
+
+/** A number of days the API takes: a whole number from 1 to 90. */
+export function extensionDaysOk(days: number): boolean {
+  return Number.isInteger(days) && days >= 1 && days <= TRIAL_EXTENSION_MAX_DAYS;
+}
+
+/** The confirm line before an extension: "Extend Bright Dental's trial by 14 days, to November 13?" */
+export function trialExtensionQuestion(company: string, days: number, to: string, timeZone?: string | null): string {
+  return `Extend ${company}'s trial by ${days} ${days === 1 ? "day" : "days"}, to ${trialDate(to, timeZone)}?`;
+}
+
+/** The toast once it is extended. */
+export function trialExtendedToast(to: string, timeZone?: string | null): string {
+  return `Trial extended to ${trialDate(to, timeZone)}.`;
 }
 
 /**
@@ -424,9 +468,9 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
   const [confirming, setConfirming] = useState(false);
   const chosen = (plans.data ?? []).find((p) => p.key === pick) ?? null;
   const save = useMutation({
-    mutationFn: () => api.post(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
-    onSuccess: () => {
-      const t = planChangedToast(company.name, chosen?.name ?? pick);
+    mutationFn: () => api.post<{ trialEnded?: boolean }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
+    onSuccess: (r) => {
+      const t = planChangedToast(company.name, chosen?.name ?? pick, !!r?.trialEnded);
       toast(t.title, t.detail);
       setWhy("");
       setConfirming(false);
@@ -459,7 +503,47 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
           </div>
         )}
       </Card>
+      {company.trial?.started && company.trial.endsAt ? <TrialExtensionCard company={company} trial={company.trial} /> : null}
     </div>
+  );
+}
+
+/**
+ * "Extend the trial" (founder decision L-02 B), on the Plan tab of a customer on the Trial plan whose 30 days have
+ * started: a number of days (1 to 90) and a reason, then a second press to confirm. The new end counts from the later of
+ * the old end and today (POST /admin/customers/:id/trial); the extension is audited with the reason, the owners are told,
+ * the "trial ended" alert is resolved and a paused company takes applications again.
+ */
+function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: TrialStanding }) {
+  const qc = useQueryClient();
+  const [days, setDays] = useState("14");
+  const [why, setWhy] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const count = Number(days);
+  const ready = extensionDaysOk(count) && reasonReady(why);
+  const to = trialExtendedTo(trial, extensionDaysOk(count) ? count : 0);
+  const extend = useMutation({
+    mutationFn: () => api.post<{ trial: TrialStanding | null }>(`/api/v1/admin/customers/${company.id}/trial`, { days: count, reason: why.trim(), confirm: true }, reason),
+    onSuccess: (r) => {
+      toast(trialExtendedToast(r.trial?.endsAt ?? to, company.timezone));
+      setWhy("");
+      setConfirming(false);
+      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
+      qc.invalidateQueries({ queryKey: ["admin", "alerts"] });
+    },
+    onError: (e) => { setConfirming(false); toast(e instanceof ApiError ? e.message : "Could not extend the trial."); },
+  });
+  return (
+    <Card title="Extend the trial">
+      <p className="small muted">{trial.ended ? `The trial ended on ${trialDate(trial.endsAt ?? "", company.timezone)}: new applications, new jobs and new screening chats are paused.` : `The trial ends on ${trialDate(trial.endsAt ?? "", company.timezone)}.`} An extension counts from the later of the end and today. The owners are told, and they see your reason in their activity history.</p>
+      <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+        <Field label="Days to add" htmlFor="trial-days" hint={`From 1 to ${TRIAL_EXTENSION_MAX_DAYS}.`}><input id="trial-days" className="input" type="number" inputMode="numeric" min={1} max={TRIAL_EXTENSION_MAX_DAYS} step={1} value={days} onChange={(e) => { setDays(e.target.value); setConfirming(false); }} /></Field>
+        <Field label="Why (required, kept with the change)" htmlFor="trial-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="trial-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
+        {confirming ? (
+          <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{trialExtensionQuestion(company.name, count, to, company.timezone)}</span><span className="row"><Button size="sm" variant="primary" loading={extend.isPending} onClick={() => extend.mutate()}>Yes, extend it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+        ) : <div className="row"><Button variant="primary" disabled={!ready} onClick={() => setConfirming(true)}>Extend the trial</Button></div>}
+      </div>
+    </Card>
   );
 }
 

@@ -182,7 +182,7 @@ async function consumeWithInvitation(c: Context<Vars>, container: Container, tok
     return result;
   } catch (err) {
     if (err instanceof InvitationRefused) {
-      if (err.code === "invite_expired") clearInviteCookie(c, container);
+      if (err.code === "invite_expired" || err.code === "invite_seats_full") clearInviteCookie(c, container);
       // The transaction rolled back, so the refusal is recorded outside it, as openSession does: refusals are never silent.
       await audit(container.db, { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "signin.refused", reason: err.code, ip: clientIp(c), details: { provider: "magic_link", ...(err.email ? { email: err.email } : {}) } });
     }

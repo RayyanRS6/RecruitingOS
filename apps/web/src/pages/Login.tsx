@@ -9,6 +9,8 @@ import { api, ApiError } from "../api/client";
 const ERRORS: Record<string, string> = {
   invite_email_mismatch: "That invitation was sent to a different email address. Sign in with the address the invitation was sent to, or continue without it.",
   invite_expired: "That invitation has expired or was withdrawn. Ask the person who invited you for a new one, then sign in as usual.",
+  // The company's Trial plan has all its people (founder decision L-02 B).
+  invite_seats_full: "This company's trial is full. Ask the person who invited you to choose a plan, then open the invitation link again.",
   mfa_expired: "The second-factor step timed out. Sign in again.",
   mfa_failed: "The code was wrong too many times. Sign in again.",
   mfa_unavailable: "The second-factor service is not available right now. Try again in a few minutes.",

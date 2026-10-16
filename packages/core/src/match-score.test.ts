@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, type EvidenceAssessment, type RolePacket } from "@ros/contracts";
+import { MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, matchWeightOf, previewMatch, type EvidenceAssessment, type MatchCriterion, type MatchScore, type RolePacket } from "@ros/contracts";
 import { coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, scoredSkill, type ScoredReading } from "./match-score";
 
 /**
@@ -28,6 +28,17 @@ const must = (key: string, met: Req["met"], quote?: string): Req => ({ requireme
 const skill = (key: string, finding: Comp["finding"], quote?: string): Comp => ({ competencyKey: key, finding, ...(quote ? { evidence: q(quote) } : {}) });
 const reading = (kind: "triage" | "screen", requirementFindings: Req[], competencyFindings: Comp[] = [], over: Partial<ScoredReading> = {}): ScoredReading => ({ kind, confidence: "medium", packetVersion: 1, createdAt: "2026-10-01T10:00:00Z", result: { requirementFindings, competencyFindings, confidence: "medium" }, ...over });
 const pair = (resume: ScoredReading | null, screen: ScoredReading | null = null) => ({ resume, screen });
+
+/** A small fixed-seed generator, so every run checks the same cases. */
+function seeded(start: number): () => number {
+  let seed = start;
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 describe("matchScore", () => {
   it("gives 100 when every requirement is met, based on all of them, and names the band in the badge's words", () => {
@@ -78,14 +89,7 @@ describe("matchScore", () => {
   });
 
   it("is monotonic: moving any one requirement up (not met, not known, partly, met) never lowers the score", () => {
-    // a small fixed-seed generator, so every run checks the same cases
-    let seed = 20261015;
-    const rand = () => {
-      seed = (seed + 0x6d2b79f5) | 0;
-      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
+    const rand = seeded(20261015);
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)] as T;
     type Level = "no" | "unknown" | "partly" | "yes" | "yes_unquoted";
     const ORDER: Level[] = ["no", "unknown", "partly", "yes"];
@@ -257,5 +261,116 @@ describe("mustHaveSummary and the version label", () => {
     const card = reading("screen", [], [], { createdAt: "2026-10-02T00:00:00Z" });
     expect(readingPair([old, card, fresh])).toEqual({ resume: fresh, screen: card });
     expect(readingPair([old])).toEqual({ resume: old, screen: null });
+  });
+});
+
+/**
+ * "Try different weights" (founder decision L-07 A, preview only): the job page works a person's score out again in
+ * the browser, from the breakdown their stored score already carries, with the same sums (packages/contracts
+ * weighRequirements). With the job's own weights it must give the real score back, to the point.
+ */
+describe("a preview with other weights (L-07 A)", () => {
+  const same = (m: MatchScore) => {
+    const p = previewMatch(m, matchWeightOf);
+    return { score: p.score, capped: p.capped, band: p.band };
+  };
+  const real = (m: MatchScore) => ({ score: m.score, capped: m.capped, band: m.band });
+  const one = { ...packet, requirements: { ...packet.requirements, mustHaves: [packet.requirements.mustHaves[0]!] }, competencies: [] };
+  const interview = { ...packet, competencies: packet.competencies.map((c) => (c.key === "software" ? { ...c, evaluatedIn: "interview" as const } : c)) };
+  const picked = { ...packet, competencies: packet.competencies.map((c) => (c.key === "software" ? { ...c, importance: "essential" as const } : c)) };
+  const all = [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")];
+  const against = [skill("chairside", "contradicted", "I never work chairside"), skill("patients", "contradicted", "I avoid patients"), skill("software", "contradicted", "never used dental software")];
+  // the worked case above (43): the licence met, perio partly shown, every skill going against the candidate
+  const worked = () => matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], against)), packet)!;
+  // the held case above (54): the licence shown not met in their own words, everything else met
+  const held = () => matchScore(pair(reading("triage", [must("rdh_license", "no", "My RDH license lapsed in 2021"), must("perio", "yes", "perio")], all)), packet)!;
+  const weighted = (key: string, mustHave: boolean, weight: number) => (c: MatchCriterion) => (c.key === key && c.mustHave === mustHave ? weight : matchWeightOf(c));
+
+  it("gives back the real score, its band and the hold for every case in this file", () => {
+    const cases: Array<[ReturnType<typeof pair>, Pick<RolePacket, "requirements" | "competencies">]> = [
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license CA active"), must("perio", "yes", "Perio charting daily")], all)), packet],
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], against)), packet],
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], [skill("chairside", "partially_evidenced", "assisted"), skill("patients", "evidenced", "calm"), skill("software", "contradicted", "never used dental software")])), packet],
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "unknown")], [skill("chairside", "not_evidenced"), skill("patients", "evidenced", "calm"), skill("software", "contradicted", "never used dental software")])), packet],
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license CA active"), must("perio", "yes", "Periodontal charting, scaling and root planing")], [skill("chairside", "partially_evidenced", "Periodontal charting, scaling and root planing"), skill("patients", "evidenced", "Patient education"), skill("software", "contradicted", "I have never used dental software")])), packet],
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "unknown")], [skill("chairside", "not_evidenced"), skill("patients", "evidenced", "calm")])), packet],
+      [pair(reading("triage", [must("rdh_license", "no"), must("perio", "yes", "perio")])), packet],
+      [pair(reading("triage", [must("rdh_license", "no", "My RDH license lapsed in 2021"), must("perio", "yes", "perio")], all)), packet],
+      [pair(reading("triage", [must("rdh_license", "no", "No license"), must("perio", "no", "Never charted perio")])), packet],
+      [pair(reading("triage", [must("rdh_license", "unknown")])), packet],
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "unknown")], [skill("chairside", "partially_evidenced", "assisted")], { confidence: "low" }), reading("screen", [must("perio", "yes", "I chart perio every day")], [skill("chairside", "evidenced", "I anticipate the next instrument")], { createdAt: "2026-10-02T10:00:00Z" })), packet],
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license CA active")]), reading("screen", [{ requirementKey: "rdh_license", met: "yes", evidence: { source: "screen", unquoted: true } }])), one],
+      [pair(reading("triage", [must("rdh_license", "unknown")]), reading("screen", [{ requirementKey: "rdh_license", met: "yes", evidence: { source: "screen", unquoted: true } }])), one],
+      [pair(reading("triage", [must("rdh_license", "yes"), { requirementKey: "perio", met: "yes", evidence: { source: "resume", unquoted: true } }], [skill("chairside", "evidenced"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")])), packet],
+      [pair(reading("triage", [must("rdh_license", "yes"), must("perio", "yes", "Perio charting daily")], against)), packet],
+      [pair(reading("triage", [must("rdh_license", "yes"), must("perio", "yes")])), packet],
+      [pair(reading("triage", [must("rdh_license", "yes", "RDH license CA active"), must("perio", "yes", "Perio charting daily")], [...all.slice(0, 2), skill("software", "contradicted", "never used dental software")])), interview],
+      [pair(reading("triage", [must("rdh_license", "partially", "a"), must("perio", "yes", "b")], [skill("software", "partially_evidenced", "c"), skill("chairside", "evidenced", "d"), skill("patients", "partially_evidenced", "e")])), packet],
+      [pair(reading("triage", [], [skill("software", "evidenced", "z"), skill("patients", "contradicted", "I avoid nervous patients")])), picked],
+    ];
+    for (const [p, role] of cases) {
+      const m = matchScore(p, role)!;
+      expect(same(m), JSON.stringify(m.breakdown.map((c) => [c.key, c.pctMet]))).toEqual(real(m));
+    }
+    expect(cases.map(([p, role]) => matchScore(p, role)!.score)).toEqual([100, 43, 86, 86, 91, 100, 100, MISSING_MUST_HAVE_CAP, 0, null, 100, 100, 50, 100, 43, 50, 100, 100, 60]);
+  });
+
+  it("gives back the real score over 400 random cases, with screening chats, picked importances and interview-only skills", () => {
+    const rand = seeded(20261016);
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)] as T;
+    const MUST: Array<(k: string) => Req> = [(k) => must(k, "no", `I have never done ${k}`), (k) => must(k, "no"), (k) => must(k, "unknown"), (k) => must(k, "partially", `some ${k} work`), (k) => must(k, "yes", `${k} every day`), (k) => must(k, "yes")];
+    const SKILL: Array<(k: string) => Comp> = [(k) => skill(k, "contradicted", `I avoid ${k}`), (k) => skill(k, "not_evidenced"), (k) => skill(k, "partially_evidenced", `some ${k}`), (k) => skill(k, "evidenced", `${k} daily`), (k) => skill(k, "evidenced")];
+    let checked = 0;
+    for (let n = 0; n < 400; n++) {
+      const mustKeys = Array.from({ length: Math.floor(rand() * 5) }, (_, i) => `m${i}`);
+      const skillKeys = Array.from({ length: Math.floor(rand() * 6) }, (_, i) => `s${i}`);
+      const role = {
+        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: ["resume"] })) },
+        competencies: skillKeys.map((key) => ({ key, name: `Skill ${key}`, definition: "d", weight: 1 + Math.floor(rand() * 5), evaluatedIn: pick(["both", "screen", "both", "interview"]), indicators: ["x"], ...(rand() < 0.3 ? { importance: pick(["essential", "important", "helpful"]) } : {}) })),
+      } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+      const resume = reading("triage", mustKeys.map((k) => pick(MUST)(k)), skillKeys.map((k) => pick(SKILL)(k)));
+      const screen = rand() < 0.4 ? reading("screen", mustKeys.filter(() => rand() < 0.5).map((k) => pick(MUST)(k)), skillKeys.filter(() => rand() < 0.5).map((k) => pick(SKILL)(k)), { createdAt: "2026-10-02T10:00:00Z" }) : null;
+      const m = matchScore(pair(resume, screen), role)!;
+      expect(same(m), JSON.stringify(m.breakdown.map((c) => [c.key, c.mustHave, c.importance, c.pctMet]))).toEqual(real(m));
+      if (m.score !== null) checked += 1;
+    }
+    expect(checked).toBeGreaterThan(300);
+  });
+
+  it("works the case above out again with chairside counted Helpful instead of Essential: 50 instead of 43", () => {
+    const m = worked();
+    expect(m.score).toBe(43);
+    // must-haves 4 + 4, chairside now 1, patients 2, software 1: 12 in all. The rest (met or not met) is at 4/8 = 50%,
+    // so perio counts half. Lost: chairside 1/12 = 8.33, perio 4/12 × 50 = 16.67, patients 2/12 = 16.67,
+    // software 1/12 = 8.33, 50 in all.
+    expect(previewMatch(m, weighted("chairside", false, 1))).toEqual({ score: 50, band: "low", capped: false });
+    // the real score is not touched
+    expect(m.score).toBe(43);
+  });
+
+  it("lifts the hold when a must-have shown not met is left out of the score", () => {
+    const m = held();
+    expect(m).toMatchObject({ score: 54, capped: true });
+    expect(previewMatch(m, weighted("rdh_license", true, 0))).toEqual({ score: 100, band: "very_high", capped: false });
+    // left out as a skill key it is not: the must-have still holds the score
+    expect(previewMatch(m, weighted("rdh_license", false, 0))).toEqual({ score: 54, band: "low", capped: true });
+  });
+
+  it("has no score when every judged requirement is left out, and ignores weights that are not numbers", () => {
+    expect(previewMatch(worked(), () => 0)).toEqual({ score: null, band: null, capped: false });
+    expect(previewMatch(worked(), () => Number.NaN)).toEqual({ score: null, band: null, capped: false });
+    expect(previewMatch(worked(), () => -3)).toEqual({ score: null, band: null, capped: false });
+    expect(previewMatch({ breakdown: [] }, matchWeightOf)).toEqual({ score: null, band: null, capped: false });
+  });
+
+  it("gives the same score whatever the order of the breakdown", () => {
+    const m = matchScore(pair(reading("triage", [must("rdh_license", "partially", "a"), must("perio", "yes", "b")], [skill("software", "partially_evidenced", "c"), skill("chairside", "contradicted", "d"), skill("patients", "partially_evidenced", "e")])), packet)!;
+    const weightOf = weighted("patients", false, 3);
+    const want = previewMatch(m, weightOf);
+    const b = m.breakdown;
+    for (const order of [[...b].reverse(), [...b.slice(2), ...b.slice(0, 2)], [b[1], b[3], b[0], b[4], b[2]]]) {
+      expect(previewMatch({ breakdown: order as MatchCriterion[] }, weightOf)).toEqual(want);
+      expect(previewMatch({ breakdown: order as MatchCriterion[] }, matchWeightOf).score).toBe(m.score);
+    }
   });
 });

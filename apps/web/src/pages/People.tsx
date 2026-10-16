@@ -17,7 +17,7 @@ import { useIsClient } from "../components/use-is-client";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { focusLost, rowFocusAfterMove } from "../focus-after";
 import { activeCompanyOf } from "../rail";
-import { canDecline, canManageInterviews, canSeeTalent, canShareJob } from "../roles";
+import { canDecline, canManageInterviews, canSeeTalent, canShareJob, canTryWeights } from "../roles";
 import { jobTabs, roleStatus } from "../role-status";
 import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, newTimesToast, noticeText, panelStepFrom, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
 import { InlineUndo } from "../components/InlineUndo";
@@ -35,6 +35,7 @@ import { ReviewApply } from "./board/ReviewApply";
 import { boardOrder, boardSearch, modeFrom, type TalentMode } from "./board/board-model";
 import { JobHeader, JobMenu, JobTabs, jobFactsFor } from "./JobHeader";
 import { NotOnThisJob, notOnThisJob } from "./RoleDetail";
+import { WeightsPreview } from "./role/WeightsPreview";
 import { CandidatePreview } from "./new-role/CandidatePreview";
 import { RoomAlert } from "./new-role/StartView";
 import { useStartDraft } from "./new-role/use-start-draft";
@@ -147,6 +148,8 @@ export function People() {
   const [closing, setClosing] = useState(false);
   const [closingMessage, setClosingMessage] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // "Try different weights" (founder decision L-07 A): a preview that saves nothing; its "Use these weights" opens the editor on the job page.
+  const [weightsOpen, setWeightsOpen] = useState(false);
   const again = useStartDraft();
 
   // The pool board (plan F6): its view and Review and apply live in the address, so Home's links open them. The board
@@ -259,6 +262,8 @@ export function People() {
   // in, so the line is never empty and nothing jumps when the details arrive.
   const facts = job ? jobFactsFor(job) : null;
   const sub = !roleId ? undefined : facts ?? (apps.data ? headline : undefined);
+  // Only with someone to put in order, and never on an ITS grant about one candidate (roles.ts canTryWeights).
+  const mayTryWeights = canTryWeights(myRole, me.data?.staffAccess?.scope) && !!job?.currentPacket && total > 0;
 
   // An interviewer: a job they are not on says so; on their own job, where the people they interview are.
   if (interviewer && roleId) {
@@ -308,6 +313,7 @@ export function People() {
                   compare: () => setCompareOpen((v) => !v),
                   edit: () => nav(`/roles/${roleId}?edit=1`),
                   preview: () => setPreviewOpen(true),
+                  weights: mayTryWeights ? () => setWeightsOpen(true) : undefined,
                   close: () => setClosing(true),
                   "closing-message": () => setClosingMessage(true),
                   "hire-again": () => again.hireAgain(roleId),
@@ -451,6 +457,8 @@ export function People() {
       {sendingNewTimes && roleId ? <NewTimesSheet roleId={roleId} people={underCancelled} onClose={() => setSendingNewTimes(false)} /> : null}
       {/* The job page as candidates see it, from the More menu (the version the job runs on). */}
       {roleId && job?.currentPacket ? <CandidatePreview open={previewOpen} onClose={() => setPreviewOpen(false)} path={`/api/v1/roles/${roleId}/preview?version=${job.currentPacket.version}`} /> : null}
+      {/* "Use these weights" opens the job page's editor at the part that changed (its ?edit= link); nothing is carried over. */}
+      {weightsOpen && roleId && job?.currentPacket ? <WeightsPreview roleId={roleId} packet={job.currentPacket.packet} onClose={() => setWeightsOpen(false)} onUse={(focus) => nav(`/roles/${roleId}?tab=scoring&edit=${focus}`)} /> : null}
     </div>
   );
 }

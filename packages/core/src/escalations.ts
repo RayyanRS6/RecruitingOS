@@ -8,6 +8,7 @@ import { raiseAlert } from "./alerts";
 import { emit } from "./events";
 import { escalationReplyBy, type CalendarSource } from "./business-hours";
 import { loadBusinessCalendar } from "./business-calendar";
+import { hiddenTextNoteOf } from "./hidden-text";
 import { ESCALATION_ACCESS_DAYS, endStaffGrant, grantStaffAccess, type StaffGrant } from "./staff-access";
 import { defaultUrgency, genericSummary, requestOrigin, requiredExpertise, servedSummary, type EscalationUrgency } from "./escalation-preview";
 import { screenAnswersOf, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents } from "./screen-answers";
@@ -302,12 +303,18 @@ export async function buildEscalationContext(q: Queryable, companyId: string, ro
       const evs = await q.select().from(events).where(eq(events.subjectId, applicationId)).orderBy(desc(events.occurredAt)).limit(100);
       ctx.application = { id: app.id, stage: app.stage, source: app.source, packetVersion: app.packetVersion, answers: app.answers, eligibility: app.eligibility };
       ctx.candidate = cand ? { id: cand.id, name: `${cand.firstName} ${cand.lastName}`, email: cand.email, phone: cand.phone, locationText: cand.locationText, consent: cand.consent, preferences: cand.preferences } : null;
-      ctx.resumeText = docs.find((d) => d.kind === "resume")?.textExtracted ?? null;
+      const resumeText = docs.find((d) => d.kind === "resume")?.textExtracted ?? null;
+      ctx.resumeText = resumeText;
       // "Hide them until they send" (9 October 2026): the recruiter reads what the team may read. A conversation the
       // candidate has not sent (or never will) shows a recruiter's call notes alone, with no reading built on it and
       // none of the messages they typed in it; nor does the history say a reading of it was written.
       const hiddenReadings = unsentScreenReadings(scr, asmts);
-      ctx.assessments = asmts.filter((a) => !hiddenReadings.has(a.id)).map((a) => ({ kind: a.kind, overall: a.overall, confidence: a.confidence, result: a.result, createdAt: a.createdAt }));
+      const teamReadings = asmts.filter((a) => !hiddenReadings.has(a.id));
+      ctx.assessments = teamReadings.map((a) => ({ kind: a.kind, overall: a.overall, confidence: a.confidence, result: a.result, createdAt: a.createdAt }));
+      // "ITS sees it too" (founder decision L-08 B): the one line the candidate panel shows when the résumé or the written
+      // answers held text aimed at the AI, from the same readings the recruiter may read. Kept in this snapshot only, which
+      // no AI is given, an access export leaves out and the candidate's deletion empties.
+      ctx.hiddenTextNote = hiddenTextNoteOf({ resumeText, answers: app.answers, extraction: app.extraction, readings: teamReadings });
       ctx.screens = scr.map(teamScreenView).map((s) => ({ channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s), answersShared: s.answersShared }));
       ctx.interviews = ivs.map((i) => ({ roundKey: i.roundKey, title: i.title, status: i.status, startsAt: i.startsAt }));
       ctx.scorecards = cards.map((c) => ({ interviewId: c.interviewId, status: c.status, entries: c.entries, recommendation: c.recommendation }));

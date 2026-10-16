@@ -232,6 +232,18 @@ describe("the Candidates page", () => {
     expect(text(html)).not.toContain("triage-agent");
   });
 
+  it("says once, as a plain line on the Overview's match card, when the CV held text aimed at the AI (L-08 B), and nothing otherwise", () => {
+    // the API's sentence (`HIDDEN_TEXT_IN_CV` in packages/core/src/hidden-text.ts, the founder's words), shown as sent
+    const HIDDEN_TEXT_IN_CV = "This CV contained hidden text aimed at the AI. It was ignored and did not change the score.";
+    nav.search = "open=a1";
+    const html = render(client([detail(maria, { hiddenTextNote: HIDDEN_TEXT_IN_CV })]), createElement(People));
+    expect(text(html).split(HIDDEN_TEXT_IN_CV).length - 1).toBe(1);
+    // a calm grey line, never a warning
+    expect(html).toContain(`<p class="small muted" style="margin:10px 0 0">${HIDDEN_TEXT_IN_CV}</p>`);
+    expect(text(render(client([detail(maria)]), createElement(People)))).not.toContain("aimed at the AI");
+    expect(text(render(client([detail(maria, { hiddenTextNote: null })]), createElement(People)))).not.toContain("aimed at the AI");
+  });
+
   it("keeps Previous and Next in place while the next person loads, so the button pressed keeps the focus", () => {
     // a2 is not loaded yet (nothing is fetched ahead for the neighbours)
     const html = render(client([detail(maria)]), createElement(CandidatePanel, { id: "a2", roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { ALERT_EMAIL_JOB_KIND, acknowledgeAlert, emailCriticalAlert, entitlements as allowance, raiseAlert, raiseAlertOnce, resolveAlertsOfKind, setAlertEmails } from "@ros/core";
-import { adminAlerts, auditRecords, entitlements, jobs, plans, users, withPlatform, withTenant } from "@ros/db";
+import { adminAlerts, auditRecords, companies, entitlements, jobs, plans, users, withPlatform, withTenant } from "@ros/db";
 import { checkOperationalHealth } from "./maintenance";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -242,5 +242,112 @@ describe("allowances, plans and alerts", () => {
     expect(await emailCriticalAlert(container.db, { send: (m) => container.integrations.email.send(m), from: "x <x@example.test>" }, { alertId: loud.id })).toMatchObject({ skipped: true });
     expect(mail().slice(before).filter((m) => m.subject.startsWith("Critical alert"))).toHaveLength(1);
     setAlertEmails(null);
+  });
+});
+
+/**
+ * The Trial plan's 30 days from the console (founder decision L-02 B): ITS extends a trial by 1 to 90 days with a reason,
+ * counted from the later of its end and now, audited, the "trial ended" alert resolved; and a change of plan to Trial
+ * sets the customer's status to trial and starts new dates when the company is confirmed.
+ */
+describe("extending a trial, and putting a customer on Trial", () => {
+  let container: Container;
+  let app: ReturnType<typeof createApp>;
+  let owner = "";
+  let admin = "";
+  let trialCo = "";
+  let growthCo = "";
+  let waitingCo = "";
+  const DAY = 86_400_000;
+  const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "test" }, body: body ? JSON.stringify(body) : undefined });
+  const signIn = async (email: string) => {
+    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+    const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
+    return (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
+  };
+  const create = async (cookie: string, name: string) => ((await (await json(cookie, "POST", "/api/v1/companies", { name, vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+  const settingsOf = async (id: string) => (await container.db.select({ settings: companies.settings, status: companies.status, planKey: companies.planKey }).from(companies).where(eq(companies.id, id)))[0];
+  const extend = (id: string, body: Record<string, unknown>, cookie = admin) => json(cookie, "POST", `/api/v1/admin/customers/${id}/trial`, body);
+  const codeOf = async (r: Response) => ((await r.json()) as { error: { code: string; message: string } }).error;
+  const near = (iso: string | undefined, ms: number) => Math.abs(Date.parse(iso ?? "") - ms) < 60_000;
+
+  beforeAll(async () => {
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
+    app = createApp(container);
+    owner = await signIn("owner@extend.test");
+    // confirmed at sign-up here (COMPANY_CHECK=auto), so its 30 days run from now
+    trialCo = await create(owner, "Extend Dental");
+    growthCo = await create(await signIn("owner@growth-plan.test"), "Growth Dental");
+    await withPlatform(container.db, (tx) => allowance.applyPlan(tx, growthCo, "growth"));
+    // a company on Trial still waiting for the ITS check: no dates yet
+    waitingCo = await create(await signIn("owner@waiting.test"), "Waiting Dental");
+    await withPlatform(container.db, (tx) => tx.update(companies).set({ settings: sql`${companies.settings} - 'trial' - 'verifiedAt' - 'verifiedBy'` }).where(eq(companies.id, waitingCo)));
+    admin = await signInAdmin(app, container, "ida.admin@identifiedtalent.com", "Ida Admin");
+  });
+  afterAll(async () => {
+    await container.close();
+  });
+
+  it("only ITS extends a trial, by 1 to 90 days with a reason and a confirmation; never another plan's, nor one not started", async () => {
+    expect((await extend(trialCo, { days: 14, reason: "The kick-off call moved.", confirm: true }, owner)).status).toBe(403);
+    expect((await extend(trialCo, { days: 14, reason: "ok", confirm: true })).status).toBe(400);
+    expect((await extend(trialCo, { days: 14, reason: "The kick-off call moved." })).status).toBe(400);
+    expect((await extend(trialCo, { days: 91, reason: "The kick-off call moved.", confirm: true })).status).toBe(400);
+    expect((await extend("not-a-company", { days: 14, reason: "The kick-off call moved.", confirm: true })).status).toBe(404);
+    const other = await extend(growthCo, { days: 14, reason: "The kick-off call moved.", confirm: true });
+    expect(other.status).toBe(409);
+    expect(await codeOf(other)).toEqual({ code: "not_on_trial", message: "This customer is not on the Trial plan." });
+    const waiting = await extend(waitingCo, { days: 14, reason: "The kick-off call moved.", confirm: true });
+    expect(waiting.status).toBe(409);
+    expect(await codeOf(waiting)).toEqual({ code: "trial_not_started", message: "The trial starts when ITS confirms the company, so there is nothing to extend yet." });
+    expect(await container.db.select().from(auditRecords).where(eq(auditRecords.action, "trial.extended"))).toHaveLength(0);
+  });
+
+  it("counts from the later of the end and now, keeps every extension with its reason, audits it and resolves the alert", async () => {
+    const before = (await settingsOf(trialCo)).settings.trial!;
+    const alert = await withPlatform(container.db, (tx) => raiseAlert(tx, { kind: "billing.trial_ended", severity: "high", title: "Extend Dental's trial has ended", body: "x", companyId: trialCo, target: { type: "company", id: trialCo } }));
+    // still running: from its end
+    const r = await extend(trialCo, { days: 10, reason: "The kick-off call moved.", confirm: true });
+    expect(r.status).toBe(200);
+    const first = (await settingsOf(trialCo)).settings.trial!;
+    expect(first.endsAt).toBe(new Date(Date.parse(before.endsAt) + 10 * DAY).toISOString());
+    expect(((await r.json()) as { trial: { extendedDays: number; ended: boolean } }).trial).toMatchObject({ extendedDays: 10, ended: false });
+    expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.id, alert.id)))[0].status).toBe("resolved");
+    // already over: from now
+    await withPlatform(container.db, (tx) => tx.update(companies).set({ settings: sql`${companies.settings} || jsonb_build_object('trial', (${companies.settings}->'trial') || jsonb_build_object('endsAt', ${new Date(Date.now() - 2 * DAY).toISOString()}::text, 'endNoticeAt', ${new Date().toISOString()}::text))` }).where(eq(companies.id, trialCo)));
+    expect((await extend(trialCo, { days: 5, reason: "Waiting for the owner's decision.", confirm: true })).status).toBe(200);
+    const second = (await settingsOf(trialCo)).settings.trial!;
+    expect(near(second.endsAt, Date.now() + 5 * DAY)).toBe(true);
+    expect(second.endNoticeAt).toBeUndefined();
+    expect(second.extensions?.map((e) => ({ days: e.days, reason: e.reason, by: e.by.name }))).toEqual([{ days: 10, reason: "The kick-off call moved.", by: "Ida Admin" }, { days: 5, reason: "Waiting for the owner's decision.", by: "Ida Admin" }]);
+    const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, trialCo), eq(auditRecords.action, "trial.extended")));
+    expect(audited.map((a) => a.reason)).toEqual(["The kick-off call moved.", "Waiting for the owner's decision."]);
+    expect(audited[0].details).toMatchObject({ days: 10, from: before.endsAt, to: first.endsAt });
+    // the console's list shows where it stands, the dates with each extension, and the people used
+    const rows = (await (await json(admin, "GET", "/api/v1/admin/customers")).json()) as Array<{ id: string; trial: { extendedDays: number } | null; trialTerm: { extensions: unknown[] } | null; seats: { used: number; limit: number | null } }>;
+    const mine = rows.find((c) => c.id === trialCo)!;
+    expect(mine.trial).toMatchObject({ started: true, ended: false, extendedDays: 15 });
+    expect(mine.trialTerm?.extensions).toHaveLength(2);
+    expect(mine.seats).toEqual({ used: 1, limit: 3 });
+    expect(rows.find((c) => c.id === growthCo)).toMatchObject({ trial: null, seats: { used: 1, limit: null } });
+  });
+
+  it("a change of plan to Trial sets the status to trial and starts new dates when the company is confirmed; not before", async () => {
+    const r = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "trial", reason: "Back on Trial while they decide." });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ planKey: "trial", status: "trial", trialEnded: false });
+    const co = await settingsOf(growthCo);
+    expect(co.settings.trial).toMatchObject({ startedBy: "plan_change" });
+    expect(near(co.settings.trial?.startedAt, Date.now())).toBe(true);
+    expect(Date.parse(co.settings.trial!.endsAt) - Date.parse(co.settings.trial!.startedAt)).toBe(30 * DAY);
+    // and back off Trial: the trial has ended, nothing is written over the dates
+    const off = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "growth", reason: "They chose Growth." });
+    expect(await off.json()).toMatchObject({ planKey: "growth", status: "active", trialEnded: true });
+    expect((await settingsOf(growthCo)).settings.trial).toEqual(co.settings.trial);
+    // a company still waiting for the ITS check gets its dates at the check, not now
+    await withPlatform(container.db, (tx) => allowance.applyPlan(tx, waitingCo, "growth"));
+    expect((await json(admin, "POST", `/api/v1/admin/customers/${waitingCo}/plan`, { planKey: "trial", reason: "Trial until the check." })).status).toBe(200);
+    expect((await settingsOf(waitingCo))).toMatchObject({ status: "trial", planKey: "trial" });
+    expect((await settingsOf(waitingCo)).settings.trial).toBeUndefined();
   });
 });

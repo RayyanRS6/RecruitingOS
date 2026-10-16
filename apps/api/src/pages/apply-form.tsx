@@ -2,7 +2,7 @@
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
-import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
+import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
 import { answerCvLines, chatFactsWithKept } from "@ros/agents";
 import { applicationAnswerSentences, candidateNotices, emit, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
@@ -14,11 +14,11 @@ import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware
 import { createApplication, markUploadUsed, uploadAlreadyUsed, type ResumeInput as ResumeUpload } from "../services/applications";
 import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, readingFor, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
 import { startApplyConversation } from "../services/apply-conversation";
-import { lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
+import { formOpenedBefore, lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { contactLineFor, type ContactLine } from "../services/company-settings-profile";
 import { applyTimeLine, type ApplyFlowView } from "../services/job-preview";
 import { factsToKeep, keepFactsOn, keptFactsOf, reusedDetailsFor, type ReusedDetails } from "../services/profile-facts";
-import { CONVERSATION_COOKIE, CONVERSATION_PURPOSE, acceptingApplications, jobFlow, jobNotices, loadJob, maskEmail, screenPath, type ConversationPayload, type Job } from "./candidate-shared";
+import { CONVERSATION_COOKIE, CONVERSATION_PURPOSE, acceptingApplications, jobFlow, jobNotices, jobTakesApplications, loadJob, maskEmail, screenPath, type ConversationPayload, type Job } from "./candidate-shared";
 import { Icon } from "./icons";
 import { JobFacts, publicPay } from "./job-facts";
 import { ContactLink, HelpLine, PreviewNote, type PreviewInfo } from "./job-page";
@@ -879,12 +879,18 @@ function applyFormFor(container: Container, job: Job, flow: ApplyFlowView): Omit
 /**
  * Whether this submission (or upload) is taken: while the role takes applications, and for a while after its closing
  * date passed when the form was opened before it (plan D7, services/closing-date.ts). A role a person paused or switched
- * off takes nothing new.
+ * off takes nothing new. Once the company's trial has ended (founder decision L-02 B) a form is still taken for the same
+ * while when it was opened before the trial's end (`trialGrace`): someone part-way through applying finishes.
  */
-function admits(container: Container, role: Job["role"], formOpened: string | null | undefined): { ok: boolean; late: boolean } {
-  if (acceptingApplications(role)) return { ok: true, late: false };
-  const late = lateApplicationAllowed({ role, sealed: formOpened, secret: container.env.SESSION_SECRET, now: container.engine.clock() });
-  return { ok: late, late };
+function admits(container: Container, job: Job, formOpened: string | null | undefined): { ok: boolean; late: boolean; trialGrace: boolean } {
+  const { role } = job;
+  const now = container.engine.clock();
+  const late = acceptingApplications(role) ? false : lateApplicationAllowed({ role, sealed: formOpened, secret: container.env.SESSION_SECRET, now });
+  if (!acceptingApplications(role) && !late) return { ok: false, late: false, trialGrace: false };
+  const trial = trialStanding(job.company, now);
+  if (!trial?.ended || !trial.endsAt) return { ok: true, late, trialGrace: false };
+  const trialGrace = formOpenedBefore({ sealed: formOpened, roleId: role.id, secret: container.env.SESSION_SECRET, moment: new Date(trial.endsAt), now });
+  return { ok: trialGrace, late, trialGrace };
 }
 
 /** The upload a form carries, when its grant still opens and is for this company and job. */
@@ -904,7 +910,7 @@ const UPLOAD_EXPIRED = "Your uploaded resume could not be attached (the upload e
 candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
-  if (!job || !acceptingApplications(job.role)) return c.notFound();
+  if (!job || !jobTakesApplications(job, container.engine.clock())) return c.notFound();
   // Funnel measurement without identity (correction 14): a random per-visit reference, no candidate data, no client script; the source comes from the tracked-link cookie when there is one.
   void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: resolveApplicationSource(c, job.role.id).source } }).catch(() => undefined);
   // Applied to this company before (S7-F): the emailed link fills in the details on file, each marked for checking, and
@@ -925,7 +931,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLIC
   let raw: unknown = null;
   try { raw = await c.req.json(); } catch { raw = null; }
   const opened = (raw as { formOpened?: unknown } | null)?.formOpened;
-  if (!job || !admits(container, job.role, typeof opened === "string" ? opened : null).ok) return c.json({ error: { code: "not_found", message: "This position is not taking new applications right now." } }, 404);
+  if (!job || !admits(container, job, typeof opened === "string" ? opened : null).ok) return c.json({ error: { code: "not_found", message: "This position is not taking new applications right now." } }, 404);
   const intent = checkUploadIntent(raw);
   if (!intent.ok) return c.json({ error: { code: "invalid_file", message: intent.error } }, 400);
   const uploadId = uuidv7();
@@ -968,7 +974,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   if (!job) return c.notFound();
   const body = (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   const str = bodyString(body);
-  if (!admits(container, job.role, str("formOpened")).ok) return c.notFound();
+  if (!admits(container, job, str("formOpened")).ok) return c.notFound();
   const flow = await jobFlow(container, job);
   const form = applyFormFor(container, job, flow);
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock());
@@ -1040,7 +1046,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", rateLimit(READ_
   if (!job) return c.notFound();
   const body = (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   const str = bodyString(body);
-  if (!admits(container, job.role, str("formOpened")).ok) return c.notFound();
+  if (!admits(container, job, str("formOpened")).ok) return c.notFound();
   const flow = await jobFlow(container, job);
   const form = applyFormFor(container, job, flow);
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock());
@@ -1080,7 +1086,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   if (!job) return c.notFound();
   const body = (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   const str = bodyString(body);
-  const admitted = admits(container, job.role, str("formOpened"));
+  const admitted = admits(container, job, str("formOpened"));
   if (!admitted.ok) return c.notFound();
   const { company, role, packet } = job;
   const smsEnabled = container.env.SMS_ENABLED;
@@ -1212,7 +1218,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
       formReading,
       resume,
       ip,
-    }, { kind: "candidate", id: "applicant" }, { closingGrace: admitted.late });
+    }, { kind: "candidate", id: "applicant" }, { closingGrace: admitted.late, trialGrace: admitted.trialGrace });
     // Kept only on a new application of the very person the link is for (a repeat submission changes nothing on file):
     // this application's own answers, which its chat reads as the candidate's own words and does not ask again.
     const kept = keeping && !created.duplicate && created.candidate.id === keeping.candidateId ? keptFactsOf(keeping.facts, container.engine.clock().toISOString()) : [];

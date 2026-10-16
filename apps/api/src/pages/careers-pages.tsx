@@ -2,6 +2,7 @@
 /** @jsxImportSource hono/jsx */
 import { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
+import { trialPaused, trialStanding } from "@ros/contracts";
 import { CLOSING_DATE_REASON, applyByLabel, benefitsDescriptionFor, closingDayWords, noticesFor } from "@ros/core";
 import { rolePackets, roles, type companies } from "@ros/db";
 import { LOGO_FILE, jobPostingJsonLd } from "@ros/integrations";
@@ -45,8 +46,12 @@ function publicLogoUrl(company: typeof companies.$inferSelect, env: Container["e
   return logo ? logoPublicUrl(env, company.slug, logo) : company.settings.logoUrl ?? null;
 }
 
-function jobRoleView(role: typeof roles.$inferSelect): JobPageRole {
-  const accepting = acceptingApplications(role);
+/**
+ * The job as its page shows it. `companyPaused`: the company's trial has ended (founder decision L-02 B), so the page
+ * says what a job not taking applications says, in the same neutral words, and never why.
+ */
+function jobRoleView(role: typeof roles.$inferSelect, companyPaused: boolean): JobPageRole {
+  const accepting = acceptingApplications(role) && !companyPaused;
   return { id: role.id, accepting, closedMessage: accepting ? null : closedMessage(role), postedOn: role.openedAt ?? role.createdAt, applyBy: accepting && role.applicationsCloseOn ? applyByLabel(role.applicationsCloseOn) : null };
 }
 
@@ -66,6 +71,8 @@ candidatePages.get("/careers/:slug", async (c) => {
     .where(and(eq(roles.companyId, company.id), eq(roles.status, "open")))
     .orderBy(desc(roles.openedAt));
   const view = publicCompany(company, container.env);
+  // A trial that ended (L-02 B) shows every job as not taking new applications, in the words a job's own stop uses.
+  const paused = trialPaused(company, container.engine.clock());
   const intro = company.settings.careersPage?.intro ?? "We respond to every applicant and keep the process short.";
   const summary = `${open.length ? `${open.length} open ${open.length === 1 ? "job" : "jobs"} at ${company.name}.` : `Jobs at ${company.name}.`} ${view.about ?? intro}`.slice(0, 300);
   return c.html(
@@ -88,7 +95,7 @@ candidatePages.get("/careers/:slug", async (c) => {
           <ul class="roles">
             {open.map(({ role: r, packet }) => {
               const title = packet.identity.title;
-              const accepting = r.acceptingApplications;
+              const accepting = r.acceptingApplications && !paused;
               return (
                 <li class="card role">
                   <div class="role-main">
@@ -134,6 +141,11 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
   const urls = jobUrls(container.env, { slug: company.slug, roleId: role.id });
   const allNotices = jobNotices(packet, company);
   const logoUrl = publicLogoUrl(company, container.env);
+  const trial = trialStanding(company, container.engine.clock());
+  const trialEnded = trial?.ended === true;
+  // A trial that ended (L-02 B) stops the job taking applications on the day it ended, so search engines stop listing it
+  // as the feeds and the sitemap already do.
+  const datedRole = trialEnded && trial?.endsAt && role.acceptingApplications ? { ...role, acceptingApplications: false, applicationsClosedAt: trial.endsAt } : role;
   // The JobPosting block stays on paused and closed pages (docs/spec/20 item 4). validThrough is a real date only: the
   // closing day, the day the role stopped taking applications, or its closing date; an open role with none carries none.
   const jsonLd = jobPostingJsonLd({
@@ -144,7 +156,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
     jobUrl: urls.job,
     applyUrl: urls.apply,
     datePosted: (role.openedAt ?? role.createdAt).slice(0, 10),
-    validThrough: roleValidThrough(role) ?? null,
+    validThrough: roleValidThrough(datedRole) ?? null,
     showPay: payShown(packet, allNotices),
     companyWebsite: company.settings.website ?? null,
     companyLogoUrl: logoUrl,
@@ -154,7 +166,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
     <JobPage
       packet={packet}
       company={publicCompany(company, container.env)}
-      role={jobRoleView(role)}
+      role={jobRoleView(role, trialEnded)}
       notices={allNotices}
       smsEnabled={container.env.SMS_ENABLED}
       flow={await jobFlow(container, job)}

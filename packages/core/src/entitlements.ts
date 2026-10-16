@@ -1,10 +1,57 @@
-import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
-import { adminAlerts, companies, entitlements, plans, roles, usageEvents, type Queryable } from "@ros/db";
+import { and, asc, eq, gt, inArray, ne, sql } from "drizzle-orm";
+import { adminAlerts, companies, entitlements, invitations, memberships, plans, roles, usageEvents, users, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
 import { audit } from "./audit";
 
 /** The plan's allowance of roles at a time. */
 export const ACTIVE_ROLES = "active_roles";
+
+/** The plan's allowance of people (founder decision L-02 B: 3 on the Trial plan, no limit on the others). */
+export const SEATS = "seats";
+
+/**
+ * The people using the plan's places now, counted live (never from a running total): active members of any team role,
+ * plus invitations sent and not yet answered (an unexpired pending one holds its place, so a 4th invitation is refused
+ * before anyone accepts). ITS never counts: a person with a platform role, and a membership with the role "recruiter"
+ * (always an ITS recruiter's grant; the team page never offers that role). `exceptEmail` leaves out the invitations to
+ * one address, for a new invitation that replaces an open one to the same address and for the one being accepted.
+ */
+export async function seatsInUse(q: Queryable, companyId: string, opts: { now: Date; exceptEmail?: string }): Promise<number> {
+  const [members] = await q
+    .select({ n: sql<number>`count(*)` })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(and(eq(memberships.companyId, companyId), eq(memberships.status, "active"), ne(memberships.role, "recruiter"), eq(users.platformRole, "none")));
+  const open = [eq(invitations.companyId, companyId), eq(invitations.status, "pending"), gt(invitations.expiresAt, opts.now.toISOString())];
+  if (opts.exceptEmail) open.push(ne(invitations.email, opts.exceptEmail.trim().toLowerCase()));
+  const [invited] = await q.select({ n: sql<number>`count(*)` }).from(invitations).where(and(...open));
+  return Number(members?.n ?? 0) + Number(invited?.n ?? 0);
+}
+
+/** The company's limit of people: its seats row, else its plan's own limit; null when there is none. */
+async function seatLimit(q: Queryable, companyId: string): Promise<number | null> {
+  const [row] = await q.select({ limit: entitlements.limit }).from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, SEATS))).limit(1);
+  if (row) return row.limit ?? null;
+  const [plan] = await q.select({ limits: plans.limits }).from(companies).innerJoin(plans, eq(plans.key, companies.planKey)).where(eq(companies.id, companyId)).limit(1);
+  const limit = plan?.limits?.[SEATS];
+  return typeof limit === "number" ? limit : null;
+}
+
+/** Two invitations (or an invitation and an acceptance) at the same moment take turns, so together they never pass the limit. */
+async function lockSeats(q: Queryable, companyId: string): Promise<void> {
+  try { await (q as unknown as { execute: (s: unknown) => Promise<unknown> }).execute(sql`select pg_advisory_xact_lock(hashtext(${`seats:${companyId}`}))`); } catch { /* not in a transaction, or not supported: the count below still applies */ }
+}
+
+/**
+ * Room for one more person: takes the company's seat lock first (held to the end of the caller's transaction), then
+ * counts. `ok` false means the plan's people are all in use, counting invitations not yet answered.
+ */
+export async function seatRoom(q: Queryable, companyId: string, opts: { now: Date; exceptEmail?: string }): Promise<{ ok: boolean; limit: number | null; used: number }> {
+  await lockSeats(q, companyId);
+  const limit = await seatLimit(q, companyId);
+  const used = await seatsInUse(q, companyId, opts);
+  return { ok: limit === null || used + 1 <= limit, limit, used };
+}
 
 /**
  * A role uses one of the plan's places from the moment it is created until it closes: while it waits for approval, is
@@ -33,8 +80,9 @@ export const PERIOD_DAYS = 30;
 const PERIOD_MS = PERIOD_DAYS * 86_400_000;
 
 /**
- * The allowances that start again each period. Every other key (roles, seats, anything metered later) keeps its count:
- * a plan's seats never reset by themselves, and Settings shows no reset date for them.
+ * The allowances that start again each period. Every other key keeps its count and Settings shows no reset date for
+ * it: roles and seats are counted live (from the roles using a place, and from the members and open invitations), so
+ * they go down by themselves when a role closes or someone leaves; anything metered later keeps its running total.
  */
 export const MONTHLY_KEYS: readonly string[] = ["text_screens", "recruiter_asks", "screen_person_requests", "voice_minutes", "sourcing_contacts"];
 export const isMonthly = (key: string): boolean => MONTHLY_KEYS.includes(key);
@@ -82,7 +130,7 @@ async function rollIfEnded(q: Queryable, row: EntitlementRow, now: Date): Promis
 export async function check(q: Queryable, companyId: string, key: string, delta = 1, opts: { now?: Date } = {}): Promise<{ ok: boolean; limit: number | null; used: number }> {
   const [row] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
   if (!row) return { ok: true, limit: null, used: 0 }; // unmetered
-  const used = key === ACTIVE_ROLES ? (await rolesUsingAPlace(q, companyId)).length : currentPeriod(row, opts.now).used;
+  const used = key === ACTIVE_ROLES ? (await rolesUsingAPlace(q, companyId)).length : key === SEATS ? await seatsInUse(q, companyId, { now: opts.now ?? new Date() }) : currentPeriod(row, opts.now).used;
   if (row.limit === null) return { ok: true, limit: null, used };
   return { ok: used + delta <= row.limit, limit: row.limit, used };
 }
@@ -112,13 +160,20 @@ export async function record(q: Queryable, companyId: string, key: string, quant
 /** One allowance as the company's settings show it; `resetsAt` is when a monthly one starts again from zero (left out for roles, which never reset). */
 export type UsageLine = { used: number; limit: number | null; resetsAt?: string | null };
 
-/** The plan's usage as the company's settings show it: roles counted from the roles using a place now, the rest within their period. */
+/**
+ * The plan's usage as the company's settings show it: roles counted from the roles using a place now, people from the
+ * members and open invitations now (known bug 128: the stored count never moved), the rest within their period.
+ */
 export async function usageOf(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<Record<string, UsageLine>> {
   const rows = await q.select().from(entitlements).where(eq(entitlements.companyId, companyId));
   const out: Record<string, UsageLine> = {};
   for (const e of rows) {
     if (e.key === ACTIVE_ROLES) {
       out[e.key] = { used: (await rolesUsingAPlace(q, companyId)).length, limit: e.limit };
+      continue;
+    }
+    if (e.key === SEATS) {
+      out[e.key] = { used: await seatsInUse(q, companyId, { now: opts.now ?? new Date() }), limit: e.limit };
       continue;
     }
     const p = currentPeriod(e, opts.now);

@@ -6,6 +6,7 @@ import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Pill, Skeleton } 
 import { api, ApiError } from "../api/client";
 import { useNavigate, useRefresh } from "../nav";
 import { toast } from "../toast";
+import { seatLine, seatsAllUsed, seatsFullWords, type SeatUsage } from "../trial";
 
 type Member = { userId: string; role: string; status: string; email: string; name: string | null; calendar: { provider: string; status: string; email: string | null } | null; availability: { timezone: string; windows: number } | null; schedulable: boolean };
 type Invitation = { id: string; email: string; role: string; name: string | null; expiresAt: string; invitedBy: { name: string | null }; createdAt: string };
@@ -47,15 +48,20 @@ function explain(e: unknown, fallback: string): string {
     case "not_found": return "That person is no longer on the team. Refresh the page.";
     case "forbidden": return "Your role cannot do that.";
     case "invalid_request": return "Check the email address and the role.";
+    // The Trial plan's people are all in use (founder decision L-02 B): the API's own words say so and what to do.
+    case "seats_full": return e.message;
     default: return e.message || fallback;
   }
 }
 
 /**
  * The team (docs/spec/21, area A): who is here and as what, who is invited and not yet in, and the changes an owner,
- * admin or HR can make. Every change that affects someone else asks first and says what will happen.
+ * admin or HR can make. Every change that affects someone else asks first and says what will happen. `seats`: the
+ * plan's people (GET /companies/current `usage.seats`); with a limit (3 on the Trial plan, founder decision L-02 B) the
+ * line above the invite form says how many are in use, invitations not yet answered included, and when all are, Invite
+ * waits and says why.
  */
-export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: string; myUserId: string; onReauthRequired?: () => void }) {
+export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole: string; myUserId: string; onReauthRequired?: () => void; seats?: SeatUsage }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const refreshFrame = useRefresh();
@@ -67,7 +73,10 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
   const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Member[]>("/api/v1/companies/current/members") });
   // Pending invitations are for those who manage the team (the API refuses everyone else): never asked for otherwise.
   const invitations = useQuery({ queryKey: ["invitations"], queryFn: () => api.get<Invitation[]>("/api/v1/companies/current/invitations"), enabled: canManage });
-  const refresh = async () => { await qc.invalidateQueries({ queryKey: ["members"] }); await qc.invalidateQueries({ queryKey: ["invitations"] }); };
+  // The company's usage too: the people line counts the members and the invitations not yet answered.
+  const refresh = async () => { await qc.invalidateQueries({ queryKey: ["members"] }); await qc.invalidateQueries({ queryKey: ["invitations"] }); await qc.invalidateQueries({ queryKey: ["company"] }); };
+  const seatWords = seatLine(seats);
+  const full = seatsAllUsed(seats);
 
   const [invite, setInvite] = useState({ email: "", role: "hiring_manager", name: "" });
   const [inviteLink, setInviteLink] = useState<string | null>(null);
@@ -223,12 +232,14 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
       ) : null}
 
       {canManage ? (
-        <form className="stack" style={{ marginTop: 12, gap: 8 }} onSubmit={(e) => { e.preventDefault(); sendInvite.mutate(); }}>
+        <form className="stack" style={{ marginTop: 12, gap: 8 }} onSubmit={(e) => { e.preventDefault(); if (!full) sendInvite.mutate(); }}>
+          {seatWords ? <p className="small muted" style={{ margin: 0 }}>{seatWords}</p> : null}
+          {full && seats ? <Alert tone="caution">{seatsFullWords(seats)}</Alert> : null}
           <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 8 }}>
             <Field label="Invite by email" htmlFor="inv"><input id="inv" className="input" type="email" required value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} /></Field>
             <Field label="Name (optional)" htmlFor="invname"><input id="invname" className="input" type="text" value={invite.name} onChange={(e) => setInvite({ ...invite, name: e.target.value })} /></Field>
             <Field label="Role" htmlFor="invrole"><select id="invrole" className="select" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>{grantable(myRole).map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}</select></Field>
-            <Button type="submit" variant="primary" loading={sendInvite.isPending}>Invite</Button>
+            <Button type="submit" variant="primary" loading={sendInvite.isPending} disabled={full}>Invite</Button>
           </div>
           <p className="small muted">{ROLES.find((r) => r.value === invite.role)?.help}</p>
         </form>

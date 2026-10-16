@@ -88,6 +88,10 @@ describe("Slice 1 API", () => {
     await useLaterApplyFlow(container, co.id);
     const cur = await json("GET", "/api/v1/companies/current");
     expect(cur.status).toBe(200);
+    // the Trial plan's 3 people, counted live: the owner is the one in use (founder decision L-02 B, known bug 128)
+    const body = (await cur.json()) as { usage: Record<string, { used: number; limit: number | null }>; trial: { started: boolean; ended: boolean } | null };
+    expect(body.usage.seats).toEqual({ used: 1, limit: 3 });
+    expect(body.trial).toMatchObject({ started: true, ended: false });
   });
 
   it("runs the intake conversation and compiles a role packet", async () => {

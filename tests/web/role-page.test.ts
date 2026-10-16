@@ -282,6 +282,14 @@ describe("the job's one header, tab strip and More menu (Wave S1)", () => {
     expect(ids({ status: "draft", can: all })).toEqual(["edit", "preview"]);
   });
 
+  it("offers \"Try different weights\" (L-07 A) only where the page allows it, right after Candidate view", () => {
+    expect(ids({ status: "open", accepting: true, can: { ...all, weights: true }, comparing: false })).toEqual(["edit", "preview", "weights", "compare", "pause", "stop-accepting", "close"]);
+    expect(jobActions({ status: "open", can: { ...none, weights: true } })).toEqual([{ id: "weights", label: "Try different weights" }]);
+    expect(ids({ status: "closed", can: { ...all, weights: true } })).toEqual(["edit", "preview", "weights", "hire-again", "closing-message"]);
+    expect(ids({ status: "open", accepting: true, can: { ...all, weights: false } })).not.toContain("weights");
+    expect(ids({ status: "open", accepting: true, can: all })).not.toContain("weights");
+  });
+
   it("offers nothing the person's team role cannot do (apps/web/src/roles.ts)", () => {
     expect(ids({ status: "open", accepting: true, can: none })).toEqual([]);
     expect(ids({ status: "open", accepting: true, can: { ...none, close: true } })).toEqual(["close"]);

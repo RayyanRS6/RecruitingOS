@@ -421,7 +421,9 @@ describe("candidate privacy requests", () => {
     expect((await form(`/c/status/${token}/privacy`, { kind: "withdrawal" })).status).toBe(302);
     expect((await container.db.select().from(dr)).length).toBe(before);
     // another company's ids in the form change nothing: everything comes from the token
-    const other = (await (await json(owner, "POST", "/api/v1/companies", { name: "Other Co", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
+    // another person's company: a second company of one's own goes through ITS (founder decision L-17 A)
+    const otherOwner = await signIn("owner@other-co.test");
+    const other = (await (await json(otherOwner, "POST", "/api/v1/companies", { name: "Other Co", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     outbox().length = 0;
     const r = await form(`/c/status/${token}/privacy`, { kind: "access", details: "What do you hold about me?", companyId: other.id, candidateId: "00000000-0000-0000-0000-000000000000", applicationId: "00000000-0000-0000-0000-000000000000", requesterEmail: "attacker@example.com", status: "fulfilled" });
     expect(r.status).toBe(302);
