@@ -1,4 +1,4 @@
-import { MATCH_WEIGHT, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, type Confidence, type EvidenceAssessment, type Importance, type MatchCriterion, type MatchScore, type MatchUnknown, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
+import { MATCH_WEIGHT, importanceOf, matchBand, weighRequirements, type Confidence, type EvidenceAssessment, type Importance, type MatchCriterion, type MatchScore, type MatchUnknown, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
 
 /**
  * The match score (founder decision B2; plan-adjustments section 1): a 0-100 number worked out by code from the stored,
@@ -27,6 +27,8 @@ import { MATCH_WEIGHT, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, type Conf
  * - Per requirement the screening conversation's finding wins where it has one with a checked quote (the candidate
  *   spoke to it directly); then the résumé reading's checked one; a finding with nothing quoted counts only when neither
  *   reading has a checked one (the screen's first).
+ * - The sums themselves (`weighRequirements`) live in packages/contracts, so the weights preview on the job's page
+ *   (founder decision L-07 A), which cannot import this package, runs the same code over the same findings.
  */
 export const MATCH_SCORE_PROMISE = "A match score worked out from checked evidence, with the breakdown shown. A person always decides.";
 
@@ -131,20 +133,6 @@ const confidenceOf = (r: ScoredReading | null): Confidence | null => {
 };
 
 /**
- * How much of a partly shown requirement the score counts (`PARTLY_SHOWN_RULE`): half, or the level of the rest of
- * the evidence (the requirements met or not met, by their weights) when that is higher. Counted at that level, the
- * partly shown ones leave the score where leaving them out would put it; counted at half when the rest is lower, they
- * raise it. So a partly shown requirement never scores below one nothing was said about.
- */
-function partlyCredit(known: readonly Requirement[]): number {
-  const decided = known.filter((r) => r.found.status === "yes" || r.found.status === "no");
-  const weight = decided.reduce((n, r) => n + r.weight, 0);
-  if (!weight) return PCT.partly;
-  const rest = decided.reduce((n, r) => n + r.weight * PCT[r.found.status as "yes" | "no"], 0) / weight;
-  return Math.max(PCT.partly, rest);
-}
-
-/**
  * The match score of one application from its readings, against the version of the role they were read against.
  * Null when there is no reading at all; `score` null when no requirement could be judged yet.
  */
@@ -152,25 +140,16 @@ export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirem
   if (!pair.resume && !pair.screen) return null;
   const all = requirementsOf(pair, packet);
   const known = all.filter((r) => r.found.status !== "unknown");
-  const total = known.reduce((n, r) => n + r.weight, 0);
-  const partlyAt = partlyCredit(known);
-  let lost = 0;
-  const breakdown: MatchCriterion[] = known.map((r) => {
+  // the sums (shares, the partly shown rule, the six-place rounding and the hold at 54) live in the contracts
+  const { score, capped, parts } = weighRequirements(known.map((r) => ({ weight: r.weight, status: r.found.status as Exclude<Status, "unknown">, mustHave: r.mustHave })));
+  const breakdown: MatchCriterion[] = known.map((r, i) => {
     const status = r.found.status as Exclude<Status, "unknown">;
-    const share = (100 * r.weight) / total;
-    const counted = status === "partly" ? partlyAt : PCT[status];
-    const exactLost = share * (1 - counted / 100);
-    lost += exactLost;
-    return { key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(share), pctMet: PCT[status], ...(status === "partly" && counted > PCT.partly ? { countedPct: Math.round(counted) } : {}), pointsLost: Math.round(exactLost), finding: (r.mustHave ? MUST_HAVE_WORDS : SKILL_WORDS)[status], source: r.found.source, quote: r.found.quote, unquoted: r.found.unquoted };
+    const { share, counted, lost } = parts[i];
+    return { key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(share), pctMet: PCT[status], ...(status === "partly" && counted > PCT.partly ? { countedPct: Math.round(counted) } : {}), pointsLost: Math.round(lost), finding: (r.mustHave ? MUST_HAVE_WORDS : SKILL_WORDS)[status], source: r.found.source, quote: r.found.quote, unquoted: r.found.unquoted };
   });
   // The costliest first; then must-haves, the heavier, and by name, so the order never depends on the input's.
   breakdown.sort((a, b) => b.pointsLost - a.pointsLost || Number(b.mustHave) - Number(a.mustHave) || b.weightPct - a.weightPct || a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
   const missingMustHave = known.filter((r) => r.mustHave && r.found.status === "no").map((r) => ({ key: r.key, label: r.label, quote: r.found.quote ?? "" }));
-  // to six places first, so the same sum reached in another order (with a partly shown requirement at the rest's level,
-  // or left out) rounds the same way at a half point
-  const raw = known.length ? Math.round(Number((100 - lost).toFixed(6))) : null;
-  const capped = raw !== null && missingMustHave.length > 0 && raw > MISSING_MUST_HAVE_CAP;
-  const score = raw === null ? null : Math.min(100, Math.max(0, capped ? MISSING_MUST_HAVE_CAP : raw));
   const band = matchBand(score);
   const unknown: MatchUnknown[] = all.filter((r) => r.found.status === "unknown").map((r) => ({ key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, ...(r.found.unquotedNo ? { unquotedNo: true } : {}) }));
   const sources = new Set(known.map((r) => r.found.source));

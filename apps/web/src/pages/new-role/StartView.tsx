@@ -9,6 +9,7 @@ import { Link, useNavigate } from "../../nav";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { presetOf } from "../../recruiter-access";
 import { browserStorage, QUICK_START_HREF } from "../../start-hire";
+import { TRIAL_ASK } from "../../trial";
 import { Composer } from "./Composer";
 import { AssistantMark, ChatMessage, Thinking } from "./Conversation";
 import { composerPlaceholder, startHireHref, type RecruiterAction } from "./rules";
@@ -27,6 +28,8 @@ const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting f
 /**
  * Where the plan stands, when it has no room: the roles using the places now (open, paused, waiting for approval or sent
  * back for changes; closing one gives its place back), each a link to close it from, and a way to ask ITS for more (C13).
+ * When the trial has ended (L-02 B) the ask is to choose a plan, also when the room came from GET /intake/room or
+ * /intake/sessions, which carry no ask of their own.
  */
 export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }) {
   return (
@@ -39,7 +42,7 @@ export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }
           </ul>
         ) : null}
         <div className="row">
-          <AskRecruiter label={ask?.label ?? "Talk to ITS about more roles"} size="sm" variant="secondary" preset={ask ? presetOf(ask.body) : { kind: "ask", about: "all", topic: "plan", question: "We would like to open more roles than our plan includes. Can we talk about adding more?" }} />
+          <AskRecruiter label={ask?.label ?? (room.trialEnded ? "Ask ITS to choose a plan" : "Talk to ITS about more roles")} size="sm" variant="secondary" preset={ask ? presetOf(ask.body) : room.trialEnded ? TRIAL_ASK : { kind: "ask", about: "all", topic: "plan", question: "We would like to open more roles than our plan includes. Can we talk about adding more?" }} />
         </div>
       </div>
     </Alert>

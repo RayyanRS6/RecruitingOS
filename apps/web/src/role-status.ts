@@ -64,7 +64,7 @@ export function jobTabs(opts: { seesCandidates: boolean; candidates?: number | n
 /* The job's More menu                                                                                            */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-export type JobAction = "edit" | "preview" | "compare" | "pause" | "resume" | "stop-accepting" | "accept-again" | "extend-date" | "hire-again" | "closing-message" | "close";
+export type JobAction = "edit" | "preview" | "weights" | "compare" | "pause" | "resume" | "stop-accepting" | "accept-again" | "extend-date" | "hire-again" | "closing-message" | "close";
 export type JobActionItem = { id: JobAction; label: string; danger?: boolean };
 
 /** The accepting-applications switch's three ways, in the words the menu and the banner use. */
@@ -79,7 +79,8 @@ export function jobActions(input: {
   status: string;
   accepting?: boolean | null;
   closedByDate?: boolean;
-  can: { manage: boolean; edit: boolean; preview: boolean; close: boolean; tell: boolean; hireAgain: boolean };
+  /** `weights`: "Try different weights" (L-07 A, a preview that saves nothing); left out where the page does not offer it. */
+  can: { manage: boolean; edit: boolean; preview: boolean; close: boolean; tell: boolean; hireAgain: boolean; weights?: boolean };
   comparing?: boolean | null;
   closingMessageOpen?: boolean;
 }): JobActionItem[] {
@@ -88,6 +89,7 @@ export function jobActions(input: {
   const out: JobActionItem[] = [];
   if (can.edit) out.push({ id: "edit", label: "Edit" });
   if (can.preview) out.push({ id: "preview", label: "Candidate view" });
+  if (can.weights) out.push({ id: "weights", label: "Try different weights" });
   if (input.comparing === true || input.comparing === false) out.push({ id: "compare", label: input.comparing ? "Done comparing" : "Compare" });
   if (can.manage && status === "open") out.push({ id: "pause", label: "Pause" });
   if (can.manage && status === "paused") out.push({ id: "resume", label: "Resume" });

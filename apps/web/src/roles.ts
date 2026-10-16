@@ -37,6 +37,13 @@ const PACKET_EDIT_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "ad
 export const canEditPacket = (role: string | null | undefined): boolean => !!role && PACKET_EDIT_ROLES.has(role);
 
 /**
+ * "Try different weights" (founder decision L-07 A, preview only): whoever may edit the job (packet.edit) and read its
+ * applicants (application.read), so never an interviewer and never HR. Never an ITS grant about one candidate either:
+ * one person has no order to change. Nothing is sent or saved, so the page alone decides.
+ */
+export const canTryWeights = (role: string | null | undefined, scope?: { applicationId: string | null } | null): boolean => canEditPacket(role) && canSeeTalent(role) && !scope?.applicationId;
+
+/**
  * The packet editor's "Everything (advanced)": the whole packet as JSON (plan C11). Kept to admins and recruiters; every
  * other editor uses the plain fields, which cover everything an owner or hiring manager changes.
  */

@@ -40,10 +40,10 @@ const alerts = {
   email: "dana@bright.test",
 };
 
-function page(opts: { role?: string; search?: string; members?: unknown[] } = {}) {
+function page(opts: { role?: string; search?: string; members?: unknown[]; company?: Record<string, unknown> } = {}) {
   nav.search = opts.search ?? "";
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
-  qc.setQueryData(["company"], company);
+  qc.setQueryData(["company"], opts.company ?? company);
   qc.setQueryData(["me"], { user: { id: "u1" }, activeCompanyId: "co1", memberships: [{ companyId: "co1", role: opts.role ?? "owner", companyName: "Bright Dental" }] });
   qc.setQueryData(["public-profile"], { hiringContact: null, contactShown: { email: "help@its.test", name: null, kind: "its" } });
   qc.setQueryData(["policies"], policies);
@@ -154,5 +154,37 @@ describe("each card says one line, the rest one click away", () => {
     expect(words).toContain("Who did what in your workspace, newest first.");
     // services in plain words, not code names
     expect(words).toContain("Job board LinkedIn Not connected");
+  });
+});
+
+describe("Settings: the Trial plan's 30 days and 3 people (founder decision L-02 B)", () => {
+  const ending = { started: true, startedAt: "2026-10-01T19:00:00.000Z", endsAt: "2026-10-31T19:00:00.000Z", daysLeft: 6, endingSoon: true, ended: false, extendedDays: 0 };
+  const onTrial = (trial: Record<string, unknown>, seats = { used: 2, limit: 3 }) => ({ ...company, planKey: "trial", status: "trial", plan: { key: "trial", name: "Trial", limits: { seats: 3 } }, usage: { ...company.usage, seats }, trial });
+
+  it("the Plan line says until when, on the company's calendar, and the usage counts people with invitations not yet answered", () => {
+    const words = text(page({ company: onTrial({ ...ending, endingSoon: false, daysLeft: 20 }) }));
+    expect(words).toContain("Plan Trial · trial until October 31");
+    expect(words).toContain("people (invitations not yet answered count too): 2 of 3");
+    expect(words).not.toContain("Your trial ends on");
+  });
+
+  it("owners see when it ends in its last 7 days, and the one line once it has ended; a hiring manager sees neither", () => {
+    expect(text(page({ company: onTrial(ending) }))).toContain("Your trial ends on October 31. Contact ITS to choose a plan before then; nothing stops until it ends.");
+    const ended = text(page({ company: onTrial({ ...ending, endingSoon: false, ended: true, daysLeft: 0 }) }));
+    expect(ended).toContain("Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan.");
+    expect(ended).toContain("Plan Trial · trial ended on October 31");
+    const hm = text(page({ role: "hiring_manager", company: onTrial({ ...ending, endingSoon: false, ended: true, daysLeft: 0 }) }));
+    expect(hm).not.toContain("New applications are paused until a plan is chosen.");
+  });
+
+  it("a trial waiting for the ITS check says its 30 days start then", () => {
+    expect(text(page({ company: onTrial({ started: false, startedAt: null, endsAt: null, daysLeft: null, endingSoon: false, ended: false, extendedDays: 0 }) }))).toContain("Plan Trial · your 30-day trial starts when ITS confirms your company");
+  });
+
+  it("the Team tab's invite form knows the people: all 3 in use, Invite waits and says why", () => {
+    const html = page({ search: "?tab=team", company: onTrial(ending, { used: 3, limit: 3 }) });
+    expect(text(html)).toContain("Your trial includes 3 people: 3 in use, counting invitations not yet answered.");
+    expect(text(html)).toContain("Your trial includes 3 people. Choose a plan to add more.");
+    expect(html).toMatch(/<button type="submit" class="btn primary" disabled=""[^>]*>Invite<\/button>/);
   });
 });

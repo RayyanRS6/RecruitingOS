@@ -1,5 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Actor, ApplyMode, CompanyOnboarding, Location } from "@ros/contracts";
+import type { Actor, ApplyMode, CompanyOnboarding, Location, TrialTerm } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 
 export type CompanySettings = {
@@ -30,6 +30,12 @@ export type CompanySettings = {
   businessHours?: { days: number[]; start: string; end: string };
   /** Design Partner pilot term (founder decision F8): roles in progress are never cut off when it ends. */
   pilot?: { startedAt: string; endsAt: string; extendedUntil?: string };
+  /**
+   * The Trial plan's 30 days (founder decision L-02 B): set by the ITS check, by the hourly check for a company already
+   * on Trial, and by ITS from the console (an extension, a change back to Trial); never by the customer. Read only while
+   * the company is on the Trial plan (`trialStanding` in @ros/contracts). Every write is one JSON-merge statement.
+   */
+  trial?: TrialTerm;
   /** The one-time ITS check (founder decision B7): set and cleared from the admin console only (apps/api services/company-trust.ts). */
   verifiedAt?: string;
   verifiedBy?: Actor;

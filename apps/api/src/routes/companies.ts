@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { desc, eq } from "drizzle-orm";
-import { CreateCompany, InviteMember, UpdateMember } from "@ros/contracts";
+import { CreateCompany, InviteMember, UpdateMember, trialStanding } from "@ros/contracts";
 import { assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
@@ -13,15 +13,19 @@ import { HttpError } from "../middleware/errors";
 export const companyRoutes = new Hono<Vars>();
 
 /**
- * Open sign-up (founder decision B7): anyone signed in may create a company and draft and approve roles at once. Its
- * public side waits for the one-time ITS check, so the ITS queue is told here (COMPANY_CHECK=auto confirms it instead).
+ * Open sign-up (founder decision B7): anyone signed in who has no company yet may create one and draft and approve roles
+ * at once. Its public side waits for the one-time ITS check, so the ITS queue is told here (COMPANY_CHECK=auto confirms
+ * it instead). A second company of one's own goes through ITS (founder decision L-17 A, known bug 65): a person who
+ * already belongs to a company, or already created one, is refused with 409 `another_company_needs_its` ("To open
+ * another company, contact ITS."). A platform admin sets companies up as before; someone invited to several companies
+ * keeps the company switcher. The body is checked first, so a bad one still answers 400.
  */
 companyRoutes.post("/", requireUser, async (c) => {
   const body = CreateCompany.parse(await c.req.json());
   const s = c.get("session")!;
   const container = c.get("container");
   const autoVerify = container.env.COMPANY_CHECK === "auto";
-  const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock() });
+  const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock(), mayOpenAnother: s.user.platformRole === "platform_admin" });
   await setActiveCompany(container.db, s.sessionId, company.id);
   await withTenant(container.db, company.id, (tx) => container.engine.start(tx, { workflowKey: "stuck_role_detector", companyId: company.id, subject: { type: "company", id: company.id }, state: { companyId: company.id }, idempotencyKey: `stuck_role_detector:${company.id}`, actor: actorOf(c) }));
   if (!autoVerify) await tellItsAboutNewCompany(container, { company: { id: company.id, name: company.name, vertical: company.vertical, sizeBand: company.sizeBand, website: body.website ?? null }, owner: { name: body.ownerName ?? s.user.name ?? null, email: s.user.email } });
@@ -33,12 +37,15 @@ companyRoutes.get("/current", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.read");
   const container = c.get("container");
+  const now = container.engine.clock();
   const row = await withTenant(container.db, t.companyId, async (tx) => {
     const [co] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
     const [plan] = await tx.select().from(plans).where(eq(plans.key, co.planKey)).limit(1);
-    // Roles are counted from the roles using a place now, so closing one shows its place free again (polish list).
-    const usage = await entitlements.usageOf(tx, t.companyId);
-    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: plan.limits } : null, usage };
+    // Roles are counted from the roles using a place now, so closing one shows its place free again (polish list); people
+    // from the members and the invitations not yet answered (known bug 128).
+    const usage = await entitlements.usageOf(tx, t.companyId, { now });
+    // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
+    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: plan.limits } : null, usage, trial: trialStanding(co, now) };
   });
   return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id } });
 });

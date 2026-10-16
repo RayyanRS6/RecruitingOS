@@ -30,7 +30,8 @@ export function signInPolicy(container: Container): SignInPolicy {
  * are never silent. The team invitation the browser carries (the sealed `ros_invite` cookie) is honoured here for every
  * sign-in path (the OAuth callback, the JSON session route, the staff second-factor step): accepted, the cookie is
  * dropped; refused because the address differs, the cookie stays so the person can sign in again with the right
- * account; refused because the invitation is gone, the cookie is dropped.
+ * account; refused because the invitation is gone, or because the company's trial has all its people (founder decision
+ * L-02 B; the person opens the link again once a plan is chosen), the cookie is dropped.
  */
 export async function openSession(container: Container, c: Context<Vars>, identity: Parameters<typeof openSessionFromIdentity>[1]["identity"]) {
   const invitationTokenHash = readInviteCookie(c, container);
@@ -41,7 +42,7 @@ export async function openSession(container: Container, c: Context<Vars>, identi
   } catch (err) {
     if (err instanceof SignInRefused && err.auditRecord) await audit(container.db, err.auditRecord);
     if (err instanceof InvitationRefused) {
-      if (err.code === "invite_expired") clearInviteCookie(c, container);
+      if (err.code === "invite_expired" || err.code === "invite_seats_full") clearInviteCookie(c, container);
       await audit(container.db, { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "signin.refused", reason: err.code, ip: clientIp(c), details: { email: normalizeEmail(identity.email), provider: identity.provider } });
       throw new SignInRefused(err.code, err.message);
     }

@@ -130,3 +130,31 @@
 .ask-looked { display: flex; align-items: flex-start; gap: 6px; color: var(--ink-3); font-size: 12.5px; }
 .ask-looked svg.icon { margin-top: 2px; }
 .ask-own { margin: 0; padding-top: 12px; border-top: 1px solid var(--line); }
+
+/* Try different weights (founder decision L-07 A, preview only): the weights on the left, the order they give on the right. */
+.weights-preview { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 18px 24px; align-items: start; }
+.weights-pick, .weights-result { display: grid; align-content: start; gap: 12px; min-width: 0; }
+.weights-pick p, .weights-result p { margin: 0; }
+.weights-set { display: grid; gap: 8px; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); min-width: 0; }
+.weights-set legend { padding: 0 4px; font-size: 13.5px; font-weight: 600; }
+.weights-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 180px); align-items: center; gap: 4px 10px; font-size: 13.5px; }
+.weights-row label { min-width: 0; overflow-wrap: anywhere; }
+.weights-row .select { padding: 4px 8px; font-size: 13px; }
+.weights-changes { display: grid; gap: 6px; }
+.weights-changes ul { margin: 0; padding-left: 18px; color: var(--ink); }
+.weights-status { color: var(--ink); font-size: 14px; font-weight: 600; }
+.weights-order { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+.weights-person { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: start; gap: 4px 12px; padding: 10px 14px; }
+.weights-person + .weights-person { border-top: 1px solid var(--line); }
+.weights-rank { color: var(--ink-3); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.weights-who { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.weights-meta { color: var(--ink-3); font-size: 12.5px; }
+.weights-score { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 4px 8px; color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+/* On a phone (the drawer is full width there): one column, the order after the weights, each choice full width. */
+@media (max-width: 760px) {
+  .weights-preview { grid-template-columns: minmax(0, 1fr); }
+  .weights-row { grid-template-columns: minmax(0, 1fr); }
+  .weights-row .select { width: 100%; }
+  .weights-person { grid-template-columns: 28px minmax(0, 1fr); }
+  .weights-score { grid-column: 2; justify-content: flex-start; }
+}

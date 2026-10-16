@@ -4,6 +4,8 @@
  * file lacks keeps it in its own file. Codes the maps do not know read as their words (underscores as spaces), never as
  * a raw code.
  */
+import type { TrialStanding } from "@ros/contracts";
+import { trialDate } from "../../trial";
 
 /** "screen_invited" -> "screen invited": an unknown code, readable. */
 export function plainCode(code: string): string {
@@ -43,6 +45,18 @@ export const verificationWords = (code: string) => wordFor(VERIFICATION_WORDS, c
 /** A customer's plan, by its key (the plans table). */
 export const PLAN_WORDS: Readonly<Record<string, string>> = { trial: "Trial", core: "Core", growth: "Growth", company: "Company", design_partner: "Design Partner" };
 export const planWords = (key: string) => wordFor(PLAN_WORDS, key);
+
+/**
+ * Where a Trial customer's 30 days stand (founder decision L-02 B; GET /admin/customers `trial`), for the plan cell:
+ * "ends Oct 30", "ended Oct 30, paused", or "starts at the ITS check"; empty on another plan. The date is on the
+ * company's calendar when its time zone is known.
+ */
+export function trialWords(trial: TrialStanding | null | undefined, timeZone?: string | null): string {
+  if (!trial) return "";
+  if (!trial.started || !trial.endsAt) return "starts at the ITS check";
+  const day = trialDate(trial.endsAt, timeZone, { short: true });
+  return trial.ended ? `ended ${day}, paused` : `ends ${day}`;
+}
 
 /** Where a customer stands with its plan (`companies.status`). Design Partner is a pilot, never called a free trial. */
 export const PLAN_STATUS_WORDS: Readonly<Record<string, string>> = { trial: "Trial", active: "Active", design_partner: "Design Partner pilot" };

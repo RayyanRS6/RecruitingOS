@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { HELD_STATUS, detectStuckRoles, queueCommunication, releaseHeldCommunications } from "@ros/agents";
-import type { ApplicationStage, GettingStarted } from "@ros/contracts";
+import type { ApplicationStage, GettingStarted, TrialTerm } from "@ros/contracts";
 import { createApplicationLink, defaultClosingDate } from "@ros/core";
 import { applications, auditRecords, candidates, communications, companies, events, interviews, jobs, notifications, postings, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
@@ -29,6 +29,7 @@ describe("the ITS company check and getting started", () => {
   let roleId = "";
   let applicationId = "";
   let held = 0;
+  let trialTerm: TrialTerm | undefined;
   const mail = () => container.integrations.email as unknown as FakeEmailAdapter;
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   type Card = { kind: string; title: string; body: string; actions: Array<{ label: string; method: string; path: string; body?: Record<string, unknown> }>; gettingStarted?: GettingStarted };
@@ -187,6 +188,12 @@ describe("the ITS company check and getting started", () => {
     const told = await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "company.verified")));
     expect(told.length).toBeGreaterThanOrEqual(1);
     expect(told[0].body).toContain(`${held} messages to candidates that were waiting for this are on their way.`);
+    // the Trial plan's 30 days start at this check (founder decision L-02 B), and the owners are told when they end
+    const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    expect(co.settings.trial).toMatchObject({ startedBy: "its_check" });
+    expect(Date.parse(co.settings.trial!.endsAt) - Date.parse(co.settings.trial!.startedAt)).toBe(30 * 86_400_000);
+    expect(told[0].body).toMatch(/Your 30-day trial starts today and ends on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}\.$/);
+    trialTerm = co.settings.trial;
     // the console lists it as confirmed; confirming again changes nothing
     const list = (await (await json(admin, "GET", "/api/v1/admin/customers")).json()) as Array<{ id: string; verifiedAt: string | null; heldMessages: number }>;
     expect(list.find((c) => c.id === companyId)).toMatchObject({ heldMessages: 0 });
@@ -232,9 +239,12 @@ describe("the ITS company check and getting started", () => {
     expect(await written.json()).toMatchObject({ ok: true, status: "held" });
     expect((await setupCard(owner))?.gettingStarted?.heldMessages).toBe(2);
     expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "company.unverified")))).length).toBeGreaterThanOrEqual(1);
-    // confirmed again for the next checks
+    // confirmed again for the next checks: the same 30 days, never restarted by a confirmation taken back and given again
     expect((await verify(admin, { verified: true, reason: "Spoke with the owner; the website was updated.", confirm: true })).status).toBe(200);
     await container.drain();
+    const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    expect(co.settings.trial).toEqual(trialTerm);
+    expect(await container.db.select().from(events).where(and(eq(events.companyId, companyId), eq(events.type, "trial.started")))).toHaveLength(1);
   });
 });
 

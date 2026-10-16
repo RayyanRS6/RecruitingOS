@@ -102,7 +102,8 @@ export function JobMenu(props: { roleId: string; role: RoleDetail | null; status
     status: r?.status ?? props.status,
     accepting: r ? r.acceptingApplications : null,
     closedByDate: !!r?.closingDate?.applicationsClosedByDate,
-    can: { manage: canManageRole(props.myRole), edit: canEditPacket(props.myRole) && !!packet, preview: canSeeTalent(props.myRole) && !!r?.currentPacket, close: canRecordOutcome(props.myRole), tell: canDecline(props.myRole), hireAgain: canStartHire(props.myRole) },
+    // weights: "Try different weights" (L-07 A); the page decides the rest (a one-candidate grant, nobody scored yet)
+    can: { manage: canManageRole(props.myRole), edit: canEditPacket(props.myRole) && !!packet, preview: canSeeTalent(props.myRole) && !!r?.currentPacket, close: canRecordOutcome(props.myRole), tell: canDecline(props.myRole), hireAgain: canStartHire(props.myRole), weights: canEditPacket(props.myRole) && canSeeTalent(props.myRole) && !!r?.currentPacket },
     comparing: props.comparing,
     closingMessageOpen: props.closingMessageOpen,
   }).filter((i) => BUILT_IN.includes(i.id) || !!props.on[i.id]);

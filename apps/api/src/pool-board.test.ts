@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
-import type { BatchPreview, BatchResult, BoardView, EvidenceAssessment, MatchScore, PoolAnswer, RolePacket } from "@ros/contracts";
+import { matchWeightOf, previewMatch, type BatchPreview, type BatchResult, type BoardView, type EvidenceAssessment, type MatchScore, type PoolAnswer, type RolePacket } from "@ros/contracts";
 import { anonymizeCandidate, entitlements, matchScore, readingPair } from "@ros/core";
 import { FAKE_SAMPLE_RESUMES } from "@ros/agents";
 import { applicationMarks, applications, assessments, candidates, communications, escalationMessages, events, randomToken, recruiterEscalations, withPlatform, withTenant } from "@ros/db";
@@ -134,6 +134,14 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       // the card carries what the page shows under the reason: the must-have line, what the score rests on, what happened
       expect(b.columns.shortlist[0]).toMatchObject({ mustHaves: { words: "Must-haves: 2 of 2 shown" }, score: { basedOn: "resume" }, facts: { openScreen: false, suggestionWaiting: false } });
       expect(b.summary.nextSteps[0]).toMatchObject({ name: "Ada Pool" });
+      // "Try different weights" (L-07 A) works each score out again in the browser from this answer's breakdown: with
+      // the job's own weights it gives every real score back
+      const scored = [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward, ...b.stillApplying].filter((c) => c.score);
+      expect(scored.length).toBe(3);
+      for (const c of scored) {
+        expect(previewMatch(c.score!, matchWeightOf).score, c.name).toBe(c.score!.score);
+        expect(previewMatch(c.score!, matchWeightOf).capped, c.name).toBe(c.score!.capped);
+      }
     });
 
     it("is open to those who read applications only, and to an interviewer not at all", async () => {
@@ -347,6 +355,16 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const cmp = await get<{ candidates: Array<{ readingVersion: { readAgainst: number } | null }>; reminder: string }>(`/api/v1/roles/${roleId}/compare?ids=${ids.ben}`);
       expect(cmp.candidates[0].readingVersion).toMatchObject({ readAgainst: 1 });
       expect(cmp.reminder).toMatch(/^People decide\. Each match score is worked out from checked evidence/);
+      // the weights preview (L-07 A) on Ben's card, read against version 1, with the first skill counted Helpful gives
+      // what a reading against the new version gives; his real score stays the one of version 1
+      const board = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
+      const ben = [...board.columns.shortlist, ...board.columns.longlist, ...board.columns.not_moving_forward].find((c) => c.applicationId === ids.ben)!;
+      const benReadings = await container.db.select().from(assessments).where(eq(assessments.applicationId, ids.ben));
+      expect(ben.readingVersion).toMatchObject({ readAgainst: 1 });
+      expect(ben.score!.score).toBe(matchScore(readingPair(benReadings), packet)!.score);
+      const helpful = previewMatch(ben.score!, (c) => (!c.mustHave && c.key === next.competencies[0].key ? 1 : matchWeightOf(c)));
+      expect(helpful.score).toBe(matchScore(readingPair(benReadings), v.packet)!.score);
+      expect(helpful.score).not.toBe(ben.score!.score);
       // a new reading against the new version uses its importance
       const fresh = await seed("Max", resultOf([yes(0, "RDH license CA active"), yes(1, "perio")], { competencyFindings: [{ competencyKey: next.competencies[0].key, finding: "contradicted", evidence: { source: "resume", quote: "I rush cleanings" } }] }), { packetVersion: v.version });
       const max = (await get<Row[]>(`/api/v1/roles/${roleId}/applications`)).find((x) => x.id === fresh)!;

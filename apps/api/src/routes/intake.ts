@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, isNotNull, or, sql } from "drizzle-orm";
-import { ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, StartIntake, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
+import { ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, StartIntake, TRIAL_ENDED_LINE, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeEdit, draftIntake, keepDraftFlag, requestIntakeApproval, runIntakeTurn, sessionView, startIntakeSession, type IntakeDeps, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
 import { IntakeEditError, assertCan, can, emit, entitlements, looksLikePastedAd, normalizeFacts, notify, packetToFacts } from "@ros/core";
 import { entitlements as entitlementRows, events, intakeSessions, recruiterEscalations, rolePackets, roles, withTenant, type Tx } from "@ros/db";
@@ -9,6 +9,7 @@ import { HttpError, messageTooLong } from "../middleware/errors";
 import { POLICIES, checkRateLimits } from "../middleware/rate-limit";
 import { briefViewerOf, composeBrief } from "../services/brief";
 import { IntakeSuggestRequest, suggestForQuickStart } from "../services/intake-suggest";
+import { TRIAL_PLAN_QUESTION, companyTrialStanding } from "../services/trial";
 import type { Container } from "../container";
 
 /**
@@ -125,6 +126,8 @@ function turnReply(r: IntakeTurnOutcome, sessionId: string) {
 
 const MORE_ROLES_QUESTION = "We would like to open more roles than our plan includes. Can we talk about adding more?";
 const askAboutPlan = { label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: MORE_ROLES_QUESTION } };
+/** The same request when the trial has ended (founder decision L-02 B): choosing a plan is done by ITS. */
+const askToChoosePlan = { label: "Ask ITS to choose a plan", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: TRIAL_PLAN_QUESTION } };
 
 /** A role's state as the room message names it; an open role needs no word. */
 const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting for approval", draft: "sent back for changes", paused: "paused" };
@@ -135,10 +138,13 @@ const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting f
  * the place back (polish list: the count once only went up), so a full plan says so and names the roles using the
  * places. There is nowhere in the product to change plans, so a full plan also offers asking ITS about more roles (a talk
  * about the plan, which never uses one of the plan's recruiter requests). `newRoleId` is a role created in this very
- * transaction, which is not counted against itself.
+ * transaction, which is not counted against itself. A trial that has ended comes first (founder decision L-02 B): no
+ * new job starts until a plan is chosen, whatever room the plan has, and the message is the owner's one line. No roles are
+ * listed then: closing one would not help.
  */
-async function planRoom(tx: Tx, companyId: string, opts: { newRoleId?: string } = {}): Promise<PlanRoom> {
+async function planRoom(tx: Tx, companyId: string, opts: { newRoleId?: string; now?: Date } = {}): Promise<PlanRoom> {
   const room = await entitlements.roleRoom(tx, companyId, { except: opts.newRoleId });
+  if ((await companyTrialStanding(tx, companyId, opts.now ?? new Date()))?.ended) return { ok: false, limit: room.limit, used: room.used, holding: [], message: TRIAL_ENDED_LINE, trialEnded: true };
   const names = room.holding.map((r) => (PLACE_STATUS_WORD[r.status] ? `${r.title} (${PLACE_STATUS_WORD[r.status]})` : r.title));
   const message = room.ok
     ? null
@@ -147,7 +153,8 @@ async function planRoom(tx: Tx, companyId: string, opts: { newRoleId?: string } 
 }
 
 function limitReached(t: Tenant, room: PlanRoom): HttpError {
-  return new HttpError(402, "limit_reached", room.message ?? "Your plan has no room for another role.", { actions: can(t.role, "escalation.create") ? [askAboutPlan] : [], room });
+  const ask = room.trialEnded ? askToChoosePlan : askAboutPlan;
+  return new HttpError(402, "limit_reached", room.message ?? "Your plan has no room for another role.", { actions: can(t.role, "escalation.create") ? [ask] : [], room });
 }
 
 /** "Hire again" (C14): the facts of the role's latest approved version; pay is carried over to be confirmed again, never as confirmed. */
@@ -173,7 +180,7 @@ intakeRoutes.post("/sessions", requireTenant, async (c) => {
   const container = c.get("container");
   const actor = actorOf(c);
   const started = await withTenant(container.db, t.companyId, async (tx) => {
-    const room = await planRoom(tx, t.companyId);
+    const room = await planRoom(tx, t.companyId, { now: container.engine.clock() });
     if (!room.ok) throw limitReached(t, room);
     const seed = body.fromRoleId ? await hireAgainSeed(tx, body.fromRoleId) : null;
     const message = body.initialMessage
@@ -215,7 +222,7 @@ intakeRoutes.get("/sessions", requireTenant, async (c) => {
     const escalated = mine ? null : await escalatedDraftOf(tx, t);
     const own = or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`, ...(escalated ? [eq(intakeSessions.id, escalated)] : []));
     const rows = await tx.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, t.companyId), eq(intakeSessions.status, "active"), ...(everyone ? [] : [own]))).orderBy(desc(intakeSessions.updatedAt));
-    return { sessions: rows.map((r) => summaryOf(r, t.userId)), room: await planRoom(tx, t.companyId) };
+    return { sessions: rows.map((r) => summaryOf(r, t.userId)), room: await planRoom(tx, t.companyId, { now: c.get("container").engine.clock() }) };
   });
   return c.json(out);
 });
@@ -239,7 +246,7 @@ intakeRoutes.post("/suggestions", requireTenant, async (c) => {
 intakeRoutes.get("/room", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertMayDraft(t);
-  return c.json(await withTenant(c.get("container").db, t.companyId, (tx) => planRoom(tx, t.companyId)));
+  return c.json(await withTenant(c.get("container").db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: c.get("container").engine.clock() })));
 });
 
 /** The conversation the caller was in the middle of, so a page reload resumes it instead of starting over. Never someone else's. */
@@ -339,7 +346,7 @@ async function askForApproval(c: Context<Vars>, draftFirst: boolean) {
   const t = c.get("tenant")!;
   const row = await loadDraft(c, c.req.param("id") ?? "");
   const container = c.get("container");
-  const first = row.roleId ? null : await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId));
+  const first = row.roleId ? null : await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: container.engine.clock() }));
   if (first && !first.ok) throw limitReached(t, first);
   let workflowRunId: string | null = null;
   let result: Awaited<ReturnType<typeof requestIntakeApproval>>;
@@ -350,7 +357,7 @@ async function askForApproval(c: Context<Vars>, draftFirst: boolean) {
         // Two drafts asked for at once take turns on the plan's count, so together they never go past it.
         await tx.select({ id: entitlementRows.id }).from(entitlementRows).where(and(eq(entitlementRows.companyId, t.companyId), eq(entitlementRows.key, "active_roles"))).for("update");
         // The new role is already in this transaction: it is the one asking for a place, not one holding it.
-        const again = await planRoom(tx, t.companyId, { newRoleId: compiled.roleId });
+        const again = await planRoom(tx, t.companyId, { newRoleId: compiled.roleId, now: container.engine.clock() });
         if (!again.ok) throw limitReached(t, again);
         const { runId } = await container.engine.start(tx, {
           workflowKey: "role_approval",
@@ -434,7 +441,7 @@ intakeRoutes.post("/conversation/messages", requireTenant, async (c) => {
   const routed = await withTenant(container.db, t.companyId, async (tx): Promise<{ sessionId: string; continuing: boolean }> => {
     const [active] = await tx.select({ id: intakeSessions.id }).from(intakeSessions).where(and(eq(intakeSessions.companyId, t.companyId), eq(intakeSessions.status, "active"), or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`))).orderBy(desc(intakeSessions.updatedAt)).limit(1);
     if (active) return { sessionId: active.id, continuing: true };
-    const room = await planRoom(tx, t.companyId);
+    const room = await planRoom(tx, t.companyId, { now: container.engine.clock() });
     if (!room.ok) throw limitReached(t, room);
     const kind = looksLikePastedAd(body.message) ? ("pasted_ad" as const) : ("text" as const);
     return { sessionId: (await startIntakeSession(tx, { companyId: t.companyId, actor, userId: t.userId, message: { content: body.message, kind }, via: "conversation" })).id, continuing: false };

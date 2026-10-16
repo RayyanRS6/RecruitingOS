@@ -57,7 +57,7 @@ const roles = [
 ];
 const updates = [{ id: "n1", kind: "screen.assessed", title: "Maria finished the screening chat", body: "Her answers are on her page.", action: { label: "Open", href: "/roles/r1/talent?open=a1" }, readAt: null, createdAt: "2026-10-14T09:00:00Z" }];
 
-function render(seed: { role?: string; cards?: unknown[] | null; summary?: string; notifications?: unknown[]; roles?: unknown[]; usage?: unknown } = {}): string {
+function render(seed: { role?: string; cards?: unknown[] | null; summary?: string; notifications?: unknown[]; roles?: unknown[]; usage?: unknown; trial?: unknown } = {}): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
   qc.setQueryData(["me"], me(seed.role ?? "owner"));
   // `cards: null`: the brief has not come back yet
@@ -65,7 +65,7 @@ function render(seed: { role?: string; cards?: unknown[] | null; summary?: strin
   qc.setQueryData(["notifications", "unread"], seed.notifications ?? updates);
   qc.setQueryData(["roles"], seed.roles ?? roles);
   qc.setQueryData(["escalations", "mine"], []);
-  qc.setQueryData(["company"], { settings: {}, planKey: "starter", usage: seed.usage ?? {} });
+  qc.setQueryData(["company"], { settings: {}, planKey: seed.trial ? "trial" : "starter", timezone: "America/Los_Angeles", usage: seed.usage ?? {}, trial: seed.trial ?? null });
   return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(Home)));
 }
 
@@ -150,6 +150,31 @@ describe("Needs you", () => {
     const html = render();
     expect(html).toContain('<a href="/roles/new?session=s1" class="btn secondary sm">Continue</a>');
     expect(html).toMatch(/<button type="button" class="btn quiet sm"[^>]*>Discard<\/button>/);
+  });
+});
+
+describe("Home: the Trial plan's 30 days (founder decision L-02 B)", () => {
+  const ending = { started: true, startedAt: "2026-10-01T19:00:00.000Z", endsAt: "2026-10-31T19:00:00.000Z", daysLeft: 6, endingSoon: true, ended: false, extendedDays: 0 };
+
+  it("in the last 7 days, owners get one row first under Needs you: when it ends, Ask ITS to choose a plan, See plan; it counts", () => {
+    const html = render({ trial: ending });
+    const words = text(html);
+    expect(words).toContain("Needs you Your trial ends on October 31 Trial ends soon Contact ITS to choose a plan before then; nothing stops until it ends.");
+    const needsYou = html.slice(html.indexOf(">Needs you</h2>"));
+    expect(needsYou.indexOf("Your trial ends on October 31")).toBeLessThan(needsYou.indexOf("Interview? Dental Hygienist"));
+    expect(words).toContain("Ask ITS to choose a plan");
+    expect(html).toContain('<a href="/setup" class="btn quiet sm">See plan</a>');
+    expect(html).toContain('<p class="page-header-sub">8 things need you</p>');
+  });
+
+  it("once it has ended, the row says so in the owner's one line", () => {
+    const words = text(render({ cards: [], trial: { ...ending, endingSoon: false, ended: true, daysLeft: 0 } }));
+    expect(words).toContain("Your trial has ended Trial ended Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan.");
+  });
+
+  it("says nothing earlier in the trial, and nothing to a hiring manager", () => {
+    expect(text(render({ trial: { ...ending, endingSoon: false, daysLeft: 20 } }))).not.toContain("Your trial");
+    expect(text(render({ role: "hiring_manager", trial: { ...ending, endingSoon: false, ended: true, daysLeft: 0 } }))).not.toContain("Your trial");
   });
 });
 

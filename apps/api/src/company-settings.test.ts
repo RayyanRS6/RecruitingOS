@@ -7,7 +7,7 @@ import type { FakeEmailAdapter } from "@ros/integrations";
 import { armNewTimes } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, signInAs, signInWithIdentity } from "./test-helpers";
+import { signInAdmin, signInAs, signInWithIdentity, usePlan } from "./test-helpers";
 
 /**
  * Package COMPANY (audit findings A8, A9, A11, A12, D13, J16): typed company preferences with audit and notice
@@ -93,7 +93,8 @@ describe("company preferences, audit history, sessions, re-authentication and th
     });
 
     it("refuses the plan, the pilot term, the allowances and anything else that is not a preference, with 400", async () => {
-      for (const body of [{ planKey: "growth" }, { status: "active" }, { vertical: "beauty" }, { slug: "other" }, { settings: { pilot: { startedAt: "2026-01-01", endsAt: "2027-01-01" } } }, { settings: { retention: { documents: 1 } } }, { settings: { brief: { channel: "email", hourLocal: 7 } } }]) {
+      // the trial dates (founder decision L-02 B) are ITS's to set, like the pilot term
+      for (const body of [{ planKey: "growth" }, { status: "active" }, { vertical: "beauty" }, { slug: "other" }, { settings: { pilot: { startedAt: "2026-01-01", endsAt: "2027-01-01" } } }, { settings: { retention: { documents: 1 } } }, { settings: { brief: { channel: "email", hourLocal: 7 } } }, { settings: { trial: { startedAt: "2026-01-01T00:00:00.000Z", endsAt: "2027-01-01T00:00:00.000Z", startedBy: "its_check" } } }]) {
         const r = await json(owner, "PATCH", "/api/v1/companies/current", body);
         expect(r.status, JSON.stringify(body)).toBe(400);
         expect(await errorCode(r)).toBe("not_yours_to_change");
@@ -352,7 +353,8 @@ describe("company preferences, audit history, sessions, re-authentication and th
       expect((await json(ivy, "GET", "/api/v1/auth/me")).status).toBe(401);
       expect((await json(owner, "POST", `/api/v1/companies/current/members/${coOwnerId}/sign-out`)).status).toBe(200);
       expect((await json(coOwner, "GET", "/api/v1/auth/me")).status).toBe(401);
-      // HR still invites
+      // HR still invites (on a plan with room for more people: the Trial plan's 3 are in use here, founder decision L-02 B)
+      await usePlan(container, companyId);
       expect((await json(hr, "POST", "/api/v1/companies/current/members/invite", { email: "new.interviewer@settings.test", role: "interviewer" })).status).toBe(201);
     });
 

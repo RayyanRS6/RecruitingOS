@@ -7,7 +7,7 @@ import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { confirmRepeat, repeatConfirmationView, type RepeatConfirmationView } from "../services/apply-conversation";
 import { applicationForStatusToken, changeLearnedFact, learnFromConfirmedRepeat, otherRolesFor, queueReuseLink, queueReuseLinkFor, type OtherRole } from "../services/profile-facts";
-import { acceptingApplications, anonymizedFor, linkGone, loadJob } from "./candidate-shared";
+import { anonymizedFor, jobTakesApplications, linkGone, loadJob } from "./candidate-shared";
 import { Layout } from "./layout";
 
 /**
@@ -210,14 +210,17 @@ function ReuseRequestSent(props: { companyName: string; roleTitle: string; formP
   );
 }
 
-/** The job named by a public address, while its form takes applications; otherwise the page answers as the form does (404). */
-async function openJob(db: Vars["Variables"]["container"]["db"], slug: string, roleId: string) {
-  const job = await loadJob(db, slug, roleId);
-  return job && acceptingApplications(job.role) ? job : null;
+/**
+ * The job named by a public address, while its form takes applications (and the company's trial has not ended, founder
+ * decision L-02 B); otherwise the page answers as the form does (404).
+ */
+async function openJob(container: Vars["Variables"]["container"], slug: string, roleId: string) {
+  const job = await loadJob(container.db, slug, roleId);
+  return job && jobTakesApplications(job, container.engine.clock()) ? job : null;
 }
 
 candidatePages.get("/careers/:slug/jobs/:roleId/apply/reuse", async (c) => {
-  const job = await openJob(c.get("container").db, c.req.param("slug"), c.req.param("roleId"));
+  const job = await openJob(c.get("container"), c.req.param("slug"), c.req.param("roleId"));
   if (!job) return c.notFound();
   const formPath = `/careers/${job.company.slug}/jobs/${job.role.id}/apply`;
   c.header("Cache-Control", "no-store");
@@ -227,7 +230,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply/reuse", async (c) => {
 
 candidatePages.post("/careers/:slug/jobs/:roleId/apply/reuse", rateLimit(POLICIES.linkRequest), async (c) => {
   const container = c.get("container");
-  const job = await openJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
+  const job = await openJob(container, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
   if (!job) return c.notFound();
   const formPath = `/careers/${job.company.slug}/jobs/${job.role.id}/apply`;
   const sent = `${formPath}/reuse?sent=1`;

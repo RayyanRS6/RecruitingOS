@@ -6,6 +6,7 @@ import { decidersInWords } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
 import { currentVersionOf, type PacketRow, type RoleRow } from "./packet-versions";
+import { assertNoNewWork } from "./trial";
 
 /**
  * The legal check of a version before it goes public (plan D5): what the law of the job's places asks of the ad, with
@@ -88,10 +89,13 @@ export type ApprovalRow = typeof approvalRequests.$inferSelect;
  * phrase the packet guard flagged is still open (plan C1: edited out, or kept by a person with a reason), or 409
  * `legal_check` while something the law of the job's places asks of the ad is missing (plan D5; `details.missing`
  * lists the items); passes silently otherwise. Sending a version back is never blocked by flags or the legal check.
+ * A job going live for the first time (not open or paused yet) is refused with 402 `trial_ended` once the company's
+ * trial has ended (founder decision L-02 B); an approved edit to a job already live never is.
  */
 export async function assertMayApprovePacket(tx: Tx, input: { tenant: Tenant; req: ApprovalRow; role: RoleRow; version: PacketRow | null; now?: Date }): Promise<void> {
   const decide = mayDecideApproval(input.req, { userId: input.tenant.userId, role: input.tenant.role });
   if (!decide.ok) throw new HttpError(403, decide.code, decide.message);
+  if (!["open", "paused"].includes(input.role.status)) await assertNoNewWork(tx, input.tenant.companyId, input.now ?? new Date());
   const self = await selfApprovalCheck(tx, { companyId: input.tenant.companyId, userId: input.tenant.userId, roleCreatedBy: input.role.createdBy, versionCreatedBy: input.version?.createdBy ?? input.role.createdBy });
   if (!self.ok) throw new HttpError(409, self.code, self.message);
   if (await keptTheirOwnFlag(tx, { tenant: input.tenant, req: input.req, role: input.role, version: input.version })) throw new HttpError(409, "self_approval", keptOwnFlagMessage(input.req.requiredRoles));

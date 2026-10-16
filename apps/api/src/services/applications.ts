@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
-import { SCREEN_PERSON_ROUTE_STATUSES, inspectResumeFile, type Actor } from "@ros/contracts";
+import { SCREEN_PERSON_ROUTE_STATUSES, inspectResumeFile, trialPaused, type Actor } from "@ros/contracts";
 import { fromAddress, queueCommunication, replyToFor, sendPrivacyCompletion, sendRepeatApplicationNotice, sendStatusLinks, statusUrlFor } from "@ros/agents";
 import { CLOSING_DATE_REASON, audit, createDataRequest, dedupeKey, emit, fulfilWithdrawal, normalizeEmailForDedupe, normalizePhone, transition } from "@ros/core";
 import { applications, candidates, companies, documents, events, interviews, lowercaseToken, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type ConsentRecord, type Db, type Tx } from "@ros/db";
@@ -78,12 +78,19 @@ export type ResumeInput =
  * acknowledged as if the role were still hiring (the intake workflow only acknowledges a fresh application); its
  * résumé is still scanned and read so the person can be found for a later opening.
  */
-export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean; closingGrace?: boolean } = {}) {
+export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean; closingGrace?: boolean; trialGrace?: boolean } = {}) {
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) throw new Error("role not found");
   // `closingGrace`: a form opened before the role's closing date passed may still be sent (plan D7; services/closing-date.ts).
   const admits = (role.status === "open" && role.acceptingApplications) || (!!opts.intoTalentPool && role.status === "closed") || (!!opts.closingGrace && role.status === "open" && role.applicationsClosedReason === CLOSING_DATE_REASON);
   if (!admits || !role.currentPacketVersion) throw new Error("role is not accepting applications");
+  // A trial that ended takes no new application (founder decision L-02 B), refused the way a job not taking applications
+  // is: `trialGrace` for a form opened before the end (pages/apply-form.tsx), and held emails going to the talent pool
+  // when their role closed (`intoTalentPool`), are the only ones still taken.
+  if (!opts.trialGrace && !opts.intoTalentPool) {
+    const [company] = await tx.select({ planKey: companies.planKey, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
+    if (company && trialPaused(company, container.engine.clock())) throw new Error("role is not accepting applications");
+  }
 
   const email = input.email ? input.email.trim().toLowerCase() : null;
   const phone = normalizePhone(input.phone);

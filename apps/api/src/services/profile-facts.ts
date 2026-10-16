@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
-import { LearnedFact, isCompanyVerified, type KeptFact, type LearnedFactKind, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type ScreeningQuestion, type WriteupAnswer } from "@ros/contracts";
+import { LearnedFact, isCompanyVerified, trialPaused, type KeptFact, type LearnedFactKind, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type ScreeningQuestion, type WriteupAnswer } from "@ros/contracts";
 import { KEPT_FACTS_MAX, candidateWordsOf, fromAddress, loadScreenBundle, queueCommunication, redactProtected, replyToFor, saidByCandidate, statusUrlFor } from "@ros/agents";
 import { openPayload, screenAnswersOf, screenAnswersSent, sealPayload, writtenQuestionsOf } from "@ros/core";
 import { applications, candidates, companies, roles, unconfirmedScreens, withPlatform, withTenant, type ApplicationAnswers, type Db, type Tx } from "@ros/db";
@@ -423,6 +423,8 @@ export async function otherRolesFor(container: Container, input: { companyId: st
     const [company] = await tx.select().from(companies).where(eq(companies.id, input.companyId)).limit(1);
     if (!company) return { companyName: "", slug: null, roles: [] };
     if (!isCompanyVerified(company.settings)) return { companyName: company.name, slug: null, roles: [] };
+    // A company whose trial ended takes no new applications (founder decision L-02 B): nothing to offer, and nothing said why.
+    if (trialPaused(company, container.engine.clock())) return { companyName: company.name, slug: company.slug, roles: [] };
     const applied = new Set((await tx.select({ roleId: applications.roleId }).from(applications).where(and(eq(applications.companyId, input.companyId), eq(applications.candidateId, input.candidateId)))).map((a) => a.roleId));
     const openRoles = await tx.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, input.companyId), eq(roles.status, "open"), eq(roles.acceptingApplications, true))).orderBy(roles.title);
     return { companyName: company.name, slug: company.slug, roles: openRoles.filter((r) => !applied.has(r.id)).map((r) => ({ roleId: r.id, title: r.title })) };

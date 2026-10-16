@@ -114,6 +114,80 @@ export function matchBand(score: number | null | undefined): { band: MatchBand; 
   return { band: b.band, label: b.label };
 }
 
+/* ------------------------------------------------------------------------------------------------------------ */
+/* The match score's sums, shared by the real score and the weights preview (founder decision L-07 A).            */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/** A judged requirement as the sums read it: met, partly met or not met (one nothing was said about is never here). */
+export type WeighedFinding = "yes" | "partly" | "no";
+export type WeighedRequirement = { weight: number; status: WeighedFinding; mustHave: boolean };
+
+const WEIGHED_PCT: Record<WeighedFinding, number> = { yes: 100, partly: 50, no: 0 };
+
+/**
+ * How much of a partly shown requirement the score counts (`PARTLY_SHOWN_RULE`): half, or the level of the rest of
+ * the evidence (the requirements met or not met, by their weights) when that is higher. Counted at that level, the
+ * partly shown ones leave the score where leaving them out would put it; counted at half when the rest is lower, they
+ * raise it. So a partly shown requirement never scores below one nothing was said about.
+ */
+function partlyCredit(items: readonly WeighedRequirement[]): number {
+  const decided = items.filter((r) => r.status === "yes" || r.status === "no");
+  const weight = decided.reduce((n, r) => n + r.weight, 0);
+  if (!weight) return WEIGHED_PCT.partly;
+  const rest = decided.reduce((n, r) => n + r.weight * WEIGHED_PCT[r.status], 0) / weight;
+  return Math.max(WEIGHED_PCT.partly, rest);
+}
+
+/**
+ * The match score's sums over the judged requirements, in the order given (packages/core match-score.ts reads them from
+ * the stored findings): each one's share of the score, the share it counted and the points it lost, then the score out
+ * of 100, held at `MISSING_MUST_HAVE_CAP` when a must-have is shown not met. The real score and the weights preview
+ * (L-07 A) both run this, so a preview with the job's own weights gives the real score back. `score` is null when
+ * nothing is left to weigh.
+ */
+export function weighRequirements(items: readonly WeighedRequirement[]): { score: number | null; capped: boolean; parts: Array<{ share: number; counted: number; lost: number }> } {
+  const total = items.reduce((n, r) => n + r.weight, 0);
+  if (!items.length || !total) return { score: null, capped: false, parts: items.map(() => ({ share: 0, counted: 0, lost: 0 })) };
+  const partlyAt = partlyCredit(items);
+  let lost = 0;
+  const parts = items.map((r) => {
+    const share = (100 * r.weight) / total;
+    const counted = r.status === "partly" ? partlyAt : WEIGHED_PCT[r.status];
+    const exactLost = share * (1 - counted / 100);
+    lost += exactLost;
+    return { share, counted, lost: exactLost };
+  });
+  // to six places first, so the same sum reached in another order (with a partly shown requirement at the rest's level,
+  // or left out) rounds the same way at a half point
+  const raw = Math.round(Number((100 - lost).toFixed(6)));
+  const capped = items.some((r) => r.mustHave && r.status === "no") && raw > MISSING_MUST_HAVE_CAP;
+  const score = Math.min(100, Math.max(0, capped ? MISSING_MUST_HAVE_CAP : raw));
+  return { score, capped, parts };
+}
+
+/** The job's own weight of a judged requirement: a must-have 4, a skill by its importance (Essential 3, Important 2, Helpful 1). */
+export const matchWeightOf = (c: Pick<MatchCriterion, "mustHave" | "importance">): number => (c.mustHave ? MATCH_WEIGHT.must_have : MATCH_WEIGHT[c.importance ?? "helpful"]);
+
+/** One person's score in the weights preview (L-07 A): a number nobody else sees, never saved. */
+export type PreviewScore = { score: number | null; band: MatchBand | null; capped: boolean };
+
+/**
+ * "Try different weights" (founder decision L-07 A, preview only): one person's match score worked out again from the
+ * requirements their stored score already judged, with other weights. Nothing is read again, no AI is asked, and nothing
+ * is saved or sent; the real score stays as it is. A weight of 0 leaves that requirement out of the score; requirements
+ * nothing was said about stay set aside, as in the real score. With `matchWeightOf` it gives the real score back.
+ */
+export function previewMatch(match: Pick<MatchScore, "breakdown">, weightOf: (c: MatchCriterion) => number): PreviewScore {
+  const items: WeighedRequirement[] = [];
+  for (const c of match.breakdown) {
+    const w = weightOf(c);
+    const weight = Number.isFinite(w) ? Math.max(0, w) : 0;
+    if (weight > 0) items.push({ weight, status: c.pctMet === 100 ? "yes" : c.pctMet === 0 ? "no" : "partly", mustHave: c.mustHave });
+  }
+  const { score, capped } = weighRequirements(items);
+  return { score, band: matchBand(score)?.band ?? null, capped };
+}
+
 /**
  * The must-have line on a card (plan F1): how many of the role's must-haves the latest evidence shows, partly shows,
  * shows are not met (a verified quote only), and does not say. `gaps` are the must-haves shown not met, with the quote.

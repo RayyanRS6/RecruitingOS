@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
-import { MAX_RESUME_BYTES, type Actor } from "@ros/contracts";
+import { MAX_RESUME_BYTES, trialPaused, type Actor } from "@ros/contracts";
 import { claimWebhookReceipt, notify } from "@ros/core";
 import { handleEmailEvent } from "@ros/agents";
 import { companies, inboundEmails, notifications, postings, roles, withPlatform, withTenant, type Tx } from "@ros/db";
@@ -62,8 +62,11 @@ postmarkWebhook.post("/inbound", async (c) => {
     await container.db.update(inboundEmails).set({ status: "unmatched", companyId: posting.companyId, error: "role not open" }).where(eq(inboundEmails.id, inbound.id));
     return c.json({ ok: true, matched: false });
   }
-  if (role.status === "paused" || !role.acceptingApplications) {
-    await holdInboundEmail(container, { inbound, mail, companyId: posting.companyId, role });
+  // A company whose trial ended (founder decision L-02 B) holds an emailed application exactly as a paused job does; the
+  // sender is told nothing about a trial (they get no answer either way), the team's notice says why.
+  const trialEnded = await companyPaused(container, posting.companyId);
+  if (role.status === "paused" || !role.acceptingApplications || trialEnded) {
+    await holdInboundEmail(container, { inbound, mail, companyId: posting.companyId, role, trialEnded });
     return c.json({ ok: true, matched: true, held: true });
   }
   const attachment = resumeAttachment(mail);
@@ -104,6 +107,12 @@ async function parkResume(container: Container, input: { inbound: InboundRow; ma
 /** An email application that could not be imported, as the Admin console lists it (known-bugs row 120). */
 export type FailedEmailApplication = { id: string; receivedAt: string; companyId: string | null; companyName: string | null; roleId: string | null; roleTitle: string | null; from: string | null; subject: string | null; error: string | null; hasResume: boolean; canRetry: boolean; /** The start of the email as it arrived: the original, for a person to read. */ text: string };
 
+/** Whether the company's trial has ended (founder decision L-02 B): no emailed application is admitted while it has. Platform read. */
+async function companyPaused(container: Container, companyId: string): Promise<boolean> {
+  const [company] = await withPlatform(container.db, (tx) => tx.select({ planKey: companies.planKey, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1));
+  return !!company && trialPaused(company, container.engine.clock());
+}
+
 /** The intake address's role, when the token still names an email posting. Read inside the caller's platform transaction. */
 async function roleForIntake(tx: Tx, intakeDomain: string, toAddress: string): Promise<RoleRow | null> {
   const token = extractIntakeToken(toAddress, intakeDomain);
@@ -127,8 +136,10 @@ export async function failedEmailApplications(container: Container, limit = 100)
     for (const row of rows) {
       if (!extractIntakeToken(row.toAddress, intakeDomain) || extractReplyToken(row.toAddress, intakeDomain)) continue;
       const role = await roleForIntake(tx, intakeDomain, row.toAddress);
-      const [company] = row.companyId ? await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, row.companyId)).limit(1) : [];
-      out.push({ id: row.id, receivedAt: row.createdAt, companyId: row.companyId, companyName: company?.name ?? null, roleId: role?.id ?? null, roleTitle: role?.title ?? null, from: row.fromAddress, subject: row.subject, error: row.error, hasResume: !!row.rawStorageKey, canRetry: !!role && role.status === "open" && role.acceptingApplications, text: String((row.parsed as HeldParsed).text ?? "").slice(0, 2000) });
+      const [company] = row.companyId ? await tx.select({ name: companies.name, planKey: companies.planKey, settings: companies.settings }).from(companies).where(eq(companies.id, row.companyId)).limit(1) : [];
+      // a company whose trial ended takes no application until a plan is chosen (L-02 B), so it cannot be tried yet
+      const paused = !!company && trialPaused(company, container.engine.clock());
+      out.push({ id: row.id, receivedAt: row.createdAt, companyId: row.companyId, companyName: company?.name ?? null, roleId: role?.id ?? null, roleTitle: role?.title ?? null, from: row.fromAddress, subject: row.subject, error: row.error, hasResume: !!row.rawStorageKey, canRetry: !!role && role.status === "open" && role.acceptingApplications && !paused, text: String((row.parsed as HeldParsed).text ?? "").slice(0, 2000) });
       if (out.length >= limit) break;
     }
     return out;
@@ -147,7 +158,7 @@ export async function retryFailedEmail(container: Container, inboundId: string):
   if (!row) return { ok: false, reason: "This email is not waiting for a retry." };
   const giveBack = () => withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "error" }).where(and(eq(inboundEmails.id, row.id), eq(inboundEmails.status, "retrying"))));
   const role = await withPlatform(container.db, (tx) => roleForIntake(tx, container.integrations.env.intakeDomain, row.toAddress));
-  if (!role || role.status !== "open" || !role.acceptingApplications) {
+  if (!role || role.status !== "open" || !role.acceptingApplications || (await companyPaused(container, role.companyId))) {
     await giveBack();
     return { ok: false, reason: role ? "The job is not taking applications right now. Try again once it is." : "The job this email was sent to no longer has an email address for applications." };
   }
@@ -235,14 +246,16 @@ function heldEmailNotice(role: RoleRow, count: number, why: string): { title: st
  * adding another row, since the intake address is public and a closed role can receive a burst); nothing else is
  * created. `replayHeldEmails` turns the held emails into applications when the role opens again.
  */
-async function holdInboundEmail(container: Container, input: { inbound: InboundRow; mail: InboundEmail; companyId: string; role: RoleRow }): Promise<void> {
+async function holdInboundEmail(container: Container, input: { inbound: InboundRow; mail: InboundEmail; companyId: string; role: RoleRow; trialEnded?: boolean }): Promise<void> {
   const { inbound, mail, companyId, role } = input;
   const { rawStorageKey, parsed } = await parkResume(container, { inbound, mail, companyId });
   // The row has no company yet, so this write runs as the platform; everything after it is the company's.
   await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "held", companyId, rawStorageKey, parsed }).where(eq(inboundEmails.id, inbound.id)));
   await withTenant(container.db, companyId, async (tx) => {
     const waiting = (await heldEmailsFor(tx, container, companyId, role.id)).length;
-    const notice = heldEmailNotice(role, waiting, role.status === "paused" ? "the role is paused" : "applications are closed");
+    // Why, for the team only (the sender is told nothing): the role's own stop first, else the trial that ended (L-02 B).
+    const why = role.status === "paused" ? "the role is paused" : !role.acceptingApplications ? "applications are closed" : input.trialEnded ? "new applications are paused because your trial has ended" : "applications are closed";
+    const notice = heldEmailNotice(role, waiting, why);
     const unread = await unreadHeldNotices(tx, companyId, role.id);
     if (unread.length) await tx.update(notifications).set(notice).where(inArray(notifications.id, unread));
     else await notify(tx, { companyId, kind: HELD_EMAIL_NOTIFICATION_KIND, ...notice, action: { label: "Open the role", href: `/roles/${role.id}` } });
@@ -261,6 +274,9 @@ export async function replayHeldEmails(container: Container, input: { companyId:
   const found = await withTenant(container.db, companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, roleId)).limit(1);
     if (role?.status !== "open" || !role.acceptingApplications) return null;
+    // Still held while the company's trial has ended (L-02 B): an extension or a plan replays them (services/trial.ts).
+    const [company] = await tx.select({ planKey: companies.planKey, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    if (company && trialPaused(company, container.engine.clock())) return null;
     return { role, held: await heldEmailsFor(tx, container, companyId, roleId) };
   });
   if (!found?.held.length) return { replayed: 0, failed: 0 };

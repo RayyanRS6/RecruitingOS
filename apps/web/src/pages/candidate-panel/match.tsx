@@ -57,6 +57,8 @@ export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?:
         </div>
       ) : null}
       {children}
+      {/* L-08 B: text aimed at the AI was found and ignored; a plain line, never a warning, and never a reason to decline */}
+      {a.hiddenTextNote ? <p className="small muted" style={{ margin: "10px 0 0" }}>{a.hiddenTextNote}</p> : null}
     </Card>
   );
 }

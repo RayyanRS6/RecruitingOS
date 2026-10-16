@@ -281,8 +281,11 @@ export type IntakeSessionSummary = {
   missing: IntakeEssentialKey[];
 };
 
-/** Room on the plan for another role (C13): checked when the page opens and before any assistant run. */
-export type PlanRoom = { ok: boolean; limit: number | null; used: number; holding: Array<{ roleId: string; title: string; status: string }>; message: string | null };
+/**
+ * Room on the plan for another role (C13): checked when the page opens and before any assistant run. `trialEnded`: the
+ * company's trial has ended (founder decision L-02 B), so no new job starts until a plan is chosen; `message` says so.
+ */
+export type PlanRoom = { ok: boolean; limit: number | null; used: number; holding: Array<{ roleId: string; title: string; status: string }>; message: string | null; trialEnded?: boolean };
 
 /** What the server refused from an answer or an edit: a value that failed the fairness check, with the reason and a lawful alternative. */
 export type IntakeRefusal = { field: string; text: string; reason: string; alternative: string | null };

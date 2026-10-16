@@ -1,10 +1,11 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { companyVerifiedAt, type Actor } from "@ros/contracts";
+import { companyVerifiedAt, newTrialTerm, onTrialPlan, trialTermOf, type Actor } from "@ros/contracts";
 import { BOARD_UP_STATES, audit, closingDateRequired, defaultClosingDate, emit, isBoardChannel, notify, raiseAlert, transitionPosting, type PostingState } from "@ros/core";
 import { releaseHeldCommunications } from "@ros/agents";
 import { companies, postings, rolePackets, roles, type Queryable } from "@ros/db";
 import { armClosingDate, companyVerifiedSignal } from "@ros/workflows";
 import type { Container } from "../container";
+import { trialDateWords, trialPatch } from "./trial";
 
 /**
  * The one-time ITS check of a company that signed itself up (founder decision B7, plan B1) and the getting-started
@@ -30,12 +31,22 @@ export type VerificationResult = { companyId: string; name: string; changed: boo
  * (confirming again is the way to repair one that slipped past the first release). Null when there is no such company.
  */
 export async function verifyCompany(tx: Queryable, container: Container, input: { companyId: string; actor: Actor; reason: string; now: Date }): Promise<VerificationResult | null> {
-  const [co] = await tx.select({ id: companies.id, name: companies.name, settings: companies.settings }).from(companies).where(eq(companies.id, input.companyId)).limit(1).for("update");
+  const [co] = await tx.select({ id: companies.id, name: companies.name, settings: companies.settings, planKey: companies.planKey, timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1).for("update");
   if (!co) return null;
   const already = companyVerifiedAt(co.settings);
   if (already) return { companyId: co.id, name: co.name, changed: false, verifiedAt: already, released: await releaseHeldCommunications(tx, { companyId: co.id, actor: input.actor, now: input.now }) };
   const at = input.now.toISOString();
-  await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('verifiedAt', ${at}::text, 'verifiedBy', ${JSON.stringify(input.actor)}::jsonb)` }).where(eq(companies.id, co.id));
+  // The Trial plan's 30 days start at this check, the first day the company can go live (founder decision L-02 B), in
+  // the same statement as the confirmation. Dates already there are kept, so confirming again (or after a confirmation
+  // was taken back) never restarts a trial.
+  const startsTrial = onTrialPlan(co.planKey) && !trialTermOf(co.settings);
+  const term = startsTrial ? newTrialTerm(input.now, "its_check") : null;
+  const trial = term ? sql` || ${trialPatch(term, { keep: true })}` : sql``;
+  await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('verifiedAt', ${at}::text, 'verifiedBy', ${JSON.stringify(input.actor)}::jsonb)${trial}` }).where(eq(companies.id, co.id));
+  if (term) {
+    await audit(tx, { companyId: co.id, actor: input.actor, action: "trial.started", target: { type: "company", id: co.id }, reason: "the 30-day trial starts when ITS confirms the company", details: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
+    await emit(tx, { type: "trial.started", companyId: co.id, actor: input.actor, subject: { type: "company", id: co.id }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
+  }
   const released = await releaseHeldCommunications(tx, { companyId: co.id, actor: input.actor, now: input.now });
   await emit(tx, { type: "company.verified", companyId: co.id, actor: input.actor, subject: { type: "company", id: co.id }, payload: { released } });
   await audit(tx, { companyId: co.id, actor: input.actor, action: "company.verified", target: { type: "company", id: co.id }, reason: input.reason, details: { released } });
@@ -46,7 +57,7 @@ export async function verifyCompany(tx: Queryable, container: Container, input: 
     companyId: co.id,
     kind: "company.verified",
     title: "ITS confirmed your company",
-    body: `Your careers page and job pages are public now, and any approved role is being published.${released ? ` ${released} ${released === 1 ? "message" : "messages"} to candidates that ${released === 1 ? "was" : "were"} waiting for this ${released === 1 ? "is" : "are"} on ${released === 1 ? "its" : "their"} way.` : ""}`,
+    body: `Your careers page and job pages are public now, and any approved role is being published.${released ? ` ${released} ${released === 1 ? "message" : "messages"} to candidates that ${released === 1 ? "was" : "were"} waiting for this ${released === 1 ? "is" : "are"} on ${released === 1 ? "its" : "their"} way.` : ""}${term ? ` Your 30-day trial starts today and ends on ${trialDateWords(term.endsAt, co.timezone)}.` : ""}`,
     action: { label: "Open Home", href: "/" },
     roles: ["owner", "admin", "hiring_manager"],
   });

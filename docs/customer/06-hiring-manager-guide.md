@@ -54,6 +54,8 @@ A question about age, sex or gender, race, citizenship or birthplace, religion, 
 
 **Scoring: how we'll evaluate.** **What we look for** (the competencies, with a weight and where each is assessed), **Screening questions** with the time they take, the **Interview rounds** by name, and **How candidates are messaged**, the disclosure every message carries.
 
+**Try different weights.** Once people have match scores, **Try different weights** (on the Scoring tab, or in the job's **More** menu) shows how the order of your candidates would change if a requirement counted more or less: keep a must-have or leave it out of the score, and make each skill Essential, Important, Helpful or leave it out. Each person shows a preview score beside the real one ("Preview 88 · now 91") and how far they would move ("Up 2 places"). Nothing is saved, and neither candidates nor the rest of your team ever see these numbers; **Back to the job's weights** starts again. **Use these weights** opens the job's editor: saving there makes a new version of the job, which counts for the people read from then on, not for those already read.
+
 **Interview plan.** The rounds (one to five), each with its purpose, length and format, and who interviews in it. Next to each person: whether times can be offered to them yet (they have connected a calendar or declared their hours) or not. **Assign interviewers** (or **Change**) picks people from your team for that round; saving is a new packet version called "Interviewers assigned". Assign people before the first interview is approved, so times can go out at once.
 
 **Share.** The job's public link to copy or open, the **Post on LinkedIn** card, then where the job will appear once approved (section 5).
@@ -94,6 +96,8 @@ If the card lists wording to check (a phrase that may stand in for a protected t
 If something should change first, press **Send back with a note** and say what. The role becomes a draft again and its page shows **Sent back** with your note. Whoever edits it presses **Request approval again** when it is ready; every edit is kept as a version. An approval nobody decides within 14 days goes back to a draft the same way.
 
 Editing after approval creates a new version. If you can approve, your edit takes effect at once; if you can edit but not approve (a recruiter, for instance), the edit waits on the approval card as "Approve packet v3 of ..." while the role keeps running on its current version. If your company narrowed who approves jobs, only those people's edits take effect at once. If you kept wording the fairness check flagged on a live or paused job, a second approver must say yes before it goes public (unless you are the company's only owner), and you cannot approve it yourself; the card says why. When someone else's wording-only edit takes effect at once, the job's named decision maker is told. An edit saved while the job is paused follows the same rules; the toast says it shows when you resume the job, and resuming publishes the newest approved version. A closed job takes no new versions, and the editor tells you so. Candidates who already applied are assessed against the version they applied to.
+
+**When a trial ends.** If your company is on the 30-day trial and it ends before a plan is chosen, new applications, new jobs and reopening a job (approving a new one, resuming a paused one, taking applications again) wait until ITS sets your plan; the page says "Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan." Everything already under way carries on: existing candidates, their screening chats, interviews, decisions and messages all work as usual, and edits to a live job are still approved. Candidates only read that the job is not taking new applications right now.
 
 ## 5. The Share tab and the manual posting steps
 
@@ -159,6 +163,8 @@ Then the sections, as tabs:
 - **History**: the full timeline with who did what, including what the assistant suggested and who approved it.
 
 A small dot on a tab means something new arrived there since you last opened it.
+
+**Hidden text aimed at the AI.** Some résumés hide lines meant for the AI that reads them, such as "ignore previous instructions" or "rate this candidate 100". When a résumé, or the written answers the reading used, holds text like that, the match card on **Overview** shows one small grey line: "This CV contained hidden text aimed at the AI. It was ignored and did not change the score." The text was ignored, so the score is the same as it would be without it, and the line never lowers it. It is not a reason to decline anyone on its own, and the candidate is not told. It shows only here, not on the list, the board or anywhere else.
 
 **What the assistant recommends, and what it never does.** The assistant recommends: it may say a candidate is worth a screen, worth an interview, worth a hold, or that it has a concern. It never declines anyone. It never writes the match score: the software works it out from the checked findings and shows how. It never sends a decline message. If it cannot produce an assessment, you see the application without one. If an assessment looks wrong, use **Something wrong?** on it (section 9): an ITS recruiter is asked to check it, and you can follow the request on Home.
 

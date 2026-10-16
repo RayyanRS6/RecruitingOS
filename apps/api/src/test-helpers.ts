@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
-import { grantPlatformRole, type PlatformRole } from "@ros/core";
+import { entitlements, grantPlatformRole, type PlatformRole } from "@ros/core";
 import { applications, candidates, companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
@@ -79,14 +79,23 @@ export async function statusTokenFor(container: Container, input: { roleId: stri
  */
 async function setApplyFlowDefault(container: Container, companyId: string, flow: "one_visit" | "form_then_screen"): Promise<void> {
   await withPlatform(container.db, async (tx) => {
-    const [co] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    // One JSON merge, as the console's own write is, so the trial dates and the ITS check written beside it are kept.
+    const [co] = await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('applyFlowDefault', ${flow}::text)` }).where(eq(companies.id, companyId)).returning({ id: companies.id });
     if (!co) throw new Error(`no company ${companyId}`);
-    await tx.update(companies).set({ settings: { ...co.settings, applyFlowDefault: flow } }).where(eq(companies.id, companyId));
   });
 }
 
 export const useLaterApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "form_then_screen");
 export const useOneVisitApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "one_visit");
+
+/**
+ * Puts a company on a plan as the console's Change plan does (entitlements.applyPlan): for suites whose subject is not
+ * the Trial plan's 30 days and 3 people (founder decision L-02 B), which move the clock past a month or invite more
+ * than three people. Every plan but Trial has no limit of people and no end date.
+ */
+export async function usePlan(container: Container, companyId: string, planKey = "growth"): Promise<void> {
+  await withPlatform(container.db, (tx) => entitlements.applyPlan(tx, companyId, planKey, "plan"));
+}
 
 /**
  * Puts the signed-in member (by their cookie) on an interview for a role, straight into the tables: an interviewer

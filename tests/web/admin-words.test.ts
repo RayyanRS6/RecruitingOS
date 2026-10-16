@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  activityWords, aiStatusWords, exactMoney, exactWhen, money, planStatusWords, planWords, plainCode, privacyStatusWords, runStatusWords, severityWords, STEP_STATUS_WORDS, verificationWords, whenWords, workflowWords,
+  activityWords, aiStatusWords, exactMoney, exactWhen, money, planStatusWords, planWords, plainCode, privacyStatusWords, runStatusWords, severityWords, STEP_STATUS_WORDS, trialWords, verificationWords, whenWords, workflowWords,
 } from "../../apps/web/src/pages/admin/admin-words";
 
 /** The ITS console's plain words (redesign spec 3.3), one file every console section imports (Wave S6, S6-0). */
@@ -61,5 +61,14 @@ describe("the console's plain words", () => {
   it("names AI-run and step statuses the same on every screen", () => {
     expect(["ok", "refused", "error", "invalid_output"].map(aiStatusWords)).toEqual(["OK", "Refused", "Provider error", "Answer not usable"]);
     expect(STEP_STATUS_WORDS).toEqual({ ok: "done", error: "failed" });
+  });
+
+  it("says where a Trial customer's 30 days stand, on the company's calendar (founder decision L-02 B)", () => {
+    const standing = { started: true, startedAt: "2026-10-01T19:00:00.000Z", endsAt: "2026-10-31T19:00:00.000Z", daysLeft: 20, endingSoon: false, ended: false, extendedDays: 0 };
+    expect(trialWords(standing, "America/Los_Angeles")).toBe("ends Oct 31");
+    expect(trialWords({ ...standing, endingSoon: true, daysLeft: 3 }, "America/Los_Angeles")).toBe("ends Oct 31");
+    expect(trialWords({ ...standing, ended: true, daysLeft: 0 }, "America/Los_Angeles")).toBe("ended Oct 31, paused");
+    expect(trialWords({ ...standing, started: false, startedAt: null, endsAt: null, daysLeft: null })).toBe("starts at the ITS check");
+    expect(trialWords(null)).toBe("");
   });
 });
