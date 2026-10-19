@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert, raiseAlertOnce, resolveAlertsOfKind, stoppedRunQuestion } from "@ros/core";
+import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert, raiseAlertOnce, resolveAlertsOfKind, settleRetriedRunRequest, stoppedRunQuestion } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
 import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
 
@@ -424,6 +424,17 @@ export class WorkflowEngine {
     }
 
     if (outcome.kind === "ended") return "stop";
+    // A run that had stopped and raised a request, and finished after ITS pressed Retry: the request is closed if nobody
+    // picked it up yet, or noted for the recruiter who has it. In its own transaction after the run's has committed, so
+    // the finished work never depends on it; if it fails, the request simply stays open for ITS to resolve by hand.
+    if (outcome.kind === "complete" && run.escalationId) {
+      const escalationId = run.escalationId;
+      try {
+        await withTenant(this.deps.db, companyId, (q) => settleRetriedRunRequest(q, { escalationId, companyId, now: this.now() }));
+      } catch {
+        // a courtesy; the request is still in the queue
+      }
+    }
     if (outcome.kind === "threw" || (outcome.kind === "fail" && outcome.retryable !== false)) {
       const error = outcome.kind === "threw" ? outcome.error : outcome.error;
       return this.handleRetry(def, run, stepKey, seq, error, actor);

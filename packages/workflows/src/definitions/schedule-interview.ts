@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
 import { can, computeSlots, createEscalation, emit, freshSchedulingWindow, holidaysBetween, loadBusinessCalendar, missingAvailability, newTimesOffered, noCommonTimesNoticeKey, notify, openFollowUpOf, roleTakenOver, slotStillAhead, slotStillFree, transition } from "@ros/core";
 import { applications, candidates, communications, companies, interviewFollowups, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
-import { AUTO_TIMES_TAKEN_OVER, HELD_REASON, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
+import { AUTO_TIMES_TAKEN_OVER, HELD_REASON, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsLapsed, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
 import { randomToken } from "@ros/db";
 import { newTimesStoppedByTakeover, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia } from "../new-times-reopen";
 import type { StepContext, WorkflowDefinition } from "../types";
@@ -340,6 +340,9 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (b.iv.selectedSlot) return { kind: "next", step: "book" };
       await ctx.q.update(interviews).set({ status: "offer_expired", scheduleToken: null, scheduleTokenExpiresAt: null }).where(eq(interviews.id, b.iv.id));
       await emit(ctx.q, { type: "interview.offer_expired", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt }, correlationId: ctx.run.id });
+      // The candidate is told the times have passed (not left wondering why the link died); it promises no new times. A
+      // failed send changes nothing here: the team is told below either way and decides what comes next.
+      await sendSlotsLapsed(ctx.q, ctx.services.integrations, messageInput(b, ctx));
       // New times for someone under Cancelled that lapsed: they stay there, and only a person sends again (one automatic set, ever).
       const followUp = await openFollowUpOf(ctx.q, b.app.id);
       const body = followUp?.currentInterviewId === b.iv.id ? "Four days passed with a reminder. They stay under Cancelled: send new times again, or decide." : "Four days passed with a reminder. Offer times again, decide, or bring in a recruiter.";

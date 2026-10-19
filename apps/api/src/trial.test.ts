@@ -140,11 +140,33 @@ describe("the Trial plan's 30 days", () => {
     expect(await (await app.request("/feeds/jobs.xml")).text()).toContain(roleA);
   });
 
-  it("in the last 7 days the owners see when the trial ends", async () => {
+  it("in the last 7 days the owners see when the trial ends, and are emailed a week and a day before, once each", async () => {
+    const ending = () => container.db.select().from(notifications).where(and(eq(notifications.userId, ownerId), eq(notifications.kind, "company.trial_ending"))).orderBy(notifications.createdAt);
     setClock(22);
     expect((await current()).trial).toMatchObject({ endingSoon: false });
+    expect((await withPlatform(container.db, (tx) => settleTrials(tx, now()))).warned).toBe(0);
     setClock(24);
     expect((await current()).trial).toMatchObject({ started: true, endingSoon: true, ended: false, daysLeft: 6 });
+    expect((await withPlatform(container.db, (tx) => settleTrials(tx, now()))).warned).toBe(1);
+    expect((await withPlatform(container.db, (tx) => settleTrials(tx, now()))).warned).toBe(0);
+    const week = await ending();
+    expect(week).toHaveLength(1);
+    expect(week[0].title).toMatch(/^Your trial ends on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}$/);
+    expect(week[0].body).toContain("new applications, new jobs and new screening chats pause until a plan is chosen; everything already started carries on.");
+    // the last day: one more notice, "tomorrow", and nothing again within the day
+    setClock(29.2);
+    expect((await withPlatform(container.db, (tx) => settleTrials(tx, now()))).warned).toBe(1);
+    expect((await withPlatform(container.db, (tx) => settleTrials(tx, now()))).warned).toBe(0);
+    const both = await ending();
+    expect(both).toHaveLength(2);
+    expect(both[1].title).toBe("Your trial ends tomorrow");
+    expect(both[1].body).toMatch(/^Your trial ends tomorrow, [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}\./);
+    const term = await termOf(companyId);
+    expect(term).toMatchObject({ soonNoticeFor: term?.endsAt, lastDayNoticeFor: term?.endsAt });
+    // the account email goes to the owner as it happens
+    await container.drain();
+    const mail = (container.integrations.email as unknown as { sent: Array<{ to: string; subject: string }> }).sent.filter((m) => m.to === "olive@trialdental.test" && m.subject === "Your trial ends soon");
+    expect(mail.length).toBeGreaterThanOrEqual(1);
   });
 
   it("before the end: a chat is under way, a form is open, and a second job waits for approval", async () => {
@@ -266,6 +288,12 @@ describe("the Trial plan's 30 days", () => {
     expect(iv.status, await iv.clone().text()).toBe(201);
     const msg = await json(owner, "POST", `/api/v1/applications/${ben.id}/messages`, { text: "Hi Ben, could you come in on Friday?" });
     expect(msg.status, await msg.clone().text()).toBe(201);
+    // a new screening chat is new work: it waits for a plan, with the owners' line and the way to ask ITS
+    const dan = await seedApplicant("Dan");
+    const invite = await act(dan.id, { action: "invite_screen" });
+    expect(invite.status, await invite.clone().text()).toBe(402);
+    expect(await errorOf(invite)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE });
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, dan.id))).toHaveLength(0);
     const cara = await seedApplicant("Cara");
     expect((await act(cara.id, { action: "reject", reason: "not_a_match_experience", note: "Not this time." })).status).toBe(200);
     const sent = await act(cara.id, { action: "send_decision" });

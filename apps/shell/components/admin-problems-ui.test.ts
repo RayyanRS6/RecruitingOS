@@ -198,6 +198,18 @@ describe("email that could not go", () => {
     expect(text(html)).toContain("A spam complaint is never released from here: the person asked not to be emailed.");
     expect(html.indexOf("How you confirmed the address (required to release)")).toBeLessThan(html.indexOf("<table"));
   });
+
+  it("offers 'Stop emails to an address' under the list, even when the list is empty, asking for the address and why", () => {
+    const html = section("email", { suppressions: [] });
+    expect(text(html)).toContain("Stop emails to an address");
+    expect(text(html)).toContain("For someone who asked, by phone or in person, not to be emailed.");
+    expect(html).toContain('id="sup-address"');
+    expect(html).toContain('id="sup-reason"');
+    // nothing typed yet: the button waits
+    expect(html.slice(html.indexOf('id="sup-reason"'))).toMatch(/<button[^>]*disabled/);
+    const problems = readFileSync(new URL("../../web/src/pages/admin/problems.tsx", import.meta.url), "utf8");
+    expect(problems).toContain('api.post("/api/v1/admin/email-suppressions", { address: form.address.trim(), reason: form.reason.trim() }, reason)');
+  });
 });
 
 describe("security reports", () => {

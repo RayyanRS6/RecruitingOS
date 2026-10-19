@@ -405,6 +405,16 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     expect(((await ok.json()) as { sessionsEnded: number }).sessionsEnded).toBeGreaterThanOrEqual(1);
     expect((await h.me(paul.jar)).status).toBe(401);
     expect((await h.auditsOf("session.revoked")).some((r) => (r.target as { id?: string }).id === paulRow!.id && (r.details as { by?: string }).by === "administrator")).toBe(true);
+    // the console asks for the address they sign in with, not an id: the same rules, and an unknown address says so
+    const again = await h.browserSignIn({ email: "paul@identifiedtalent.com", name: "Paul", provider: "azure", aal2: true });
+    expect((await h.me(again.jar)).status).toBe(200);
+    const byEmail = (body: unknown) => app.request("/api/v1/admin/sessions/revoke", { method: "POST", headers: { cookie: cookieHeader(admin), "content-type": "application/json", "x-admin-reason": "lost device" }, body: JSON.stringify(body) });
+    expect((await byEmail({ email: "paul@identifiedtalent.com", reason: "lost laptop", confirm: false })).status).toBe(400);
+    expect((await byEmail({ email: "nobody@identifiedtalent.com", reason: "lost laptop", confirm: true })).status).toBe(404);
+    const done = await byEmail({ email: " Paul@IdentifiedTalent.com ", reason: "lost laptop", confirm: true });
+    expect(done.status).toBe(200);
+    expect(((await done.json()) as { sessionsEnded: number }).sessionsEnded).toBeGreaterThanOrEqual(1);
+    expect((await h.me(again.jar)).status).toBe(401);
     void nadine;
   });
 

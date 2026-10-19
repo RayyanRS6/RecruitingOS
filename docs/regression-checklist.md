@@ -399,10 +399,10 @@ These are for the owner, admin, hiring manager, HR, interviewer, and an ITS recr
 | business calendar | Business calendar | `api/business-calendar.test.ts`, `e2e/routes.spec.ts` |
 | break-glass, staff-access, escalations | **none** | `api/staff-access.test.ts` |
 | platform-roles | Administrators | `api/platform-roles.test.ts`, `e2e/routes.spec.ts` |
-| users/:id/sessions/revoke | **none** | `api/mfa.test.ts` |
+| users/:id/sessions/revoke; sessions/revoke (by email) | Administrators, "Sign someone out everywhere" | `api/mfa.test.ts`, `shell/components/admin-system-ui.test.ts` |
 | outcomes, correct | Outcomes | `api/outcomes.test.ts`, `e2e/routes.spec.ts` |
 | data-requests | Privacy requests | `api/privacy-requests.test.ts`; manual |
-| ai-runs/:id, adding an email suppression, the privacy deadline check and candidate lookup | **none** | API only (`02-routes.md` §4.3); no browser test |
+| ai-runs/:id, the privacy deadline check and candidate lookup (adding an email suppression: Problems › Email since 20 Oct 2026) | **none** | API only (`02-routes.md` §4.3); no browser test |
 | observability/test-error | **none** | `api/observability-route.test.ts` |
 | everything above, refused to non-admins | | `api/app.test.ts` ("blocks admin routes for non-admins") |
 

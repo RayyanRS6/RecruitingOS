@@ -268,6 +268,17 @@ describe("System and settings: Administrators", () => {
     expect(html).not.toContain(">platform admin<");
     expect(html).toContain('<select id="pr-role" class="select">');
   });
+
+  it("signs someone out everywhere by the address they sign in with, with a reason and a confirmation", () => {
+    const html = render(client([[["admin", "platform-roles"], { grants: [], activeAdmins: 1, bootstrap: { configured: 0, ignored: false } }]]), createElement(Administrators));
+    expect(text(html)).toContain("Sign someone out everywhere");
+    expect(html).toContain('id="so-email"');
+    expect(html).toContain('id="so-reason"');
+    expect(html.slice(html.indexOf('id="so-reason"'))).toMatch(/<button[^>]*disabled/);
+    const system = readFileSync(new URL("../../web/src/pages/admin/system.tsx", import.meta.url), "utf8");
+    expect(system).toContain('"/api/v1/admin/sessions/revoke", { email: form.email.trim(), reason: form.reason.trim(), confirm: true }, reason)');
+    expect(system).toContain("Yes, sign them out");
+  });
 });
 
 describe("the admin console's retries", () => {

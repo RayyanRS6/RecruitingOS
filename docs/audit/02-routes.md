@@ -325,7 +325,7 @@ Applies to every route below: a change under `/api` is refused if the browser sa
 | GET /ai-runs | AI runs tab |
 | GET /ai-runs/:id | none (API only) |
 | GET /failures; GET /alerts; POST /alerts/:id/acknowledge; POST /integrations/:id/retry-deletion; GET /email-suppressions; POST /email-suppressions/:id/release; GET /csp-reports; POST /csp-reports/:id/review | Failures tab |
-| POST /email-suppressions | none (API only) |
+| POST /email-suppressions `{address, reason}` (reason required since 20 Oct 2026) | Problems › Email, "Stop emails to an address" |
 | GET /costs | Costs tab |
 | GET /queue | Queue tab |
 | GET /calendar; POST /calendar; POST /calendar/recalculate | Business calendar tab |
@@ -334,6 +334,7 @@ Applies to every route below: a change under `/api` is refused if the browser sa
 | GET /staff-access | none (API only) |
 | GET /platform-roles; POST /platform-roles; POST /platform-roles/:grantId/revoke | Administrators tab |
 | POST /users/:userId/sessions/revoke | none (API only) |
+| POST /sessions/revoke `{email, reason, confirm}` | Administrators, "Sign someone out everywhere" (20 Oct 2026) |
 | GET /outcomes; POST /outcomes/:id/correct | Outcomes tab |
 | GET /data-requests; POST /data-requests; GET /data-requests/:id; POST /data-requests/:id/assign, /notes, /verify, /escalate, /counsel, /fulfil, /decline; GET /data-requests/:id/export | Privacy requests tab |
 | POST /data-requests/deadlines/check; GET /data-requests/lookup/candidate | none (API only) |

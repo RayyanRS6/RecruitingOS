@@ -65,6 +65,7 @@ Global states: signed out → /login; signed in without a company → /setup/com
 | disposition:eligibility, disposition:human | candidate | window elapsed; human decline | built |
 | screen_invite, screen_reminder, screen_* SMS | candidate | screen workflow | built |
 | interview_slots, interview_slots_reminder | candidate | slots offered; 48 h. New times after a cancel or a no-show keep `interview_slots` (the ITS check and the disclosure apply) with their own subject and opening: "New times for your interview: …" ("As you asked when you cancelled, here are new times…") and "New interview times: …" (the team's send); neither blames anyone or hints at a decision | new; changed (1A to 4A) |
+| interview_slots_lapsed | candidate | offered times passed without a pick (48 h, a reminder, 48 h more): "Your interview times have passed: …", the link no longer works, reply if still interested, the status link; promises no new times, hints at no decision | new (20 Oct 2026) |
 | interview_confirmed (ICS), interview_reminder_24h, interview_reminder_2h, interview_rescheduled, interview_cancelled | candidate and interviewers | scheduling. The candidate's own cancel adds one sentence for their choice: the day new times go out "unless the team gets in touch first", "someone from the team will be in touch about them", or "We let the team know you are no longer interested" | new; changed (1A to 4A) |
 | interviewer_assigned, interviewer_no_availability | interviewer | interview approval | new |
 | intervention (message, offer) | owner | ladder | built |

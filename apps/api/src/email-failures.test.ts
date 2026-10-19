@@ -155,6 +155,20 @@ describe("email failure handling", () => {
     expect(active.reason).toBe("spam_complaint");
   });
 
+  it("an administrator adds an address by hand, with why: it is refused without a valid address or a reason, then nothing goes to it", async () => {
+    expect((await json(admin, "POST", "/api/v1/admin/email-suppressions", { address: "not an address", reason: "Asked by phone not to be emailed." })).status).toBe(400);
+    const noWhy = await json(admin, "POST", "/api/v1/admin/email-suppressions", { address: "quiet.please@example.com", reason: "no" });
+    expect(noWhy.status).toBe(400);
+    expect(((await noWhy.json()) as { error: { code: string } }).error.code).toBe("reason_required");
+    const added = await json(admin, "POST", "/api/v1/admin/email-suppressions", { address: "Quiet.Please@example.com", reason: "Asked by phone not to be emailed." });
+    expect(added.status).toBe(201);
+    const [row] = await container.db.select().from(emailSuppressions).where(and(eq(emailSuppressions.address, "quiet.please@example.com"), eq(emailSuppressions.active, true)));
+    expect(row).toMatchObject({ reason: "manual", source: "admin", details: { note: "Asked by phone not to be emailed." } });
+    const r = await container.integrations.email.send({ to: "quiet.please@example.com", from: "x <updates@test>", subject: "Should not go", text: "Hello", idempotencyKey: "manual-suppression-1" });
+    expect(r.status).toBe("failed");
+    expect(fake().sent.some((m) => m.subject === "Should not go")).toBe(false);
+  });
+
   it("a bounce on a team member's address raises an administrator alert", async () => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@harbor.test" }) });
     expect(r1.status).toBe(200);

@@ -35,8 +35,10 @@ export type TrialExtension = { days: number; reason: string; by: Actor; at: stri
  * A company's trial dates (`companies.settings.trial`). `startedBy` says what started the 30 days: the ITS check, the
  * hourly check for a company already on Trial when this shipped, or a change of plan back to Trial. `endNoticeAt` is
  * when ITS and the owners were told the trial ended; an extension clears it so the next end is told again.
+ * `soonNoticeFor` and `lastDayNoticeFor` hold the end date the owners were last emailed about, TRIAL_NOTICE_DAYS before
+ * and one day before: each goes once per end date, so an extension that moves the end can be told again.
  */
-export type TrialTerm = { startedAt: string; endsAt: string; startedBy: "its_check" | "switched_on" | "plan_change"; extensions?: TrialExtension[]; endNoticeAt?: string };
+export type TrialTerm = { startedAt: string; endsAt: string; startedBy: "its_check" | "switched_on" | "plan_change"; extensions?: TrialExtension[]; endNoticeAt?: string; soonNoticeFor?: string; lastDayNoticeFor?: string };
 
 /** Whether a plan key is the Trial plan: the one place the plan's name is compared. */
 export function onTrialPlan(planKey: string | null | undefined): boolean {

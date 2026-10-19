@@ -1,11 +1,12 @@
 import { and, asc, desc, eq, inArray, isNull, like, lt, sql } from "drizzle-orm";
 import type { Actor, EscalationThreadEntry } from "@ros/contracts";
 import {
-  adminAlerts, applications, assessments, candidates, communications, companies, documents, escalationMessages, events, intakeSessions, interviews, jobs, recruiterEscalations,
+  adminAlerts, applications, assessments, candidates, communications, companies, documents, escalationMessages, events, intakeSessions, interviews, jobs, memberships, recruiterEscalations,
   rolePackets, roles, scorecards, screens, staffAccessGrants, users, type EscalationMessageKind, type EscalationMessageSide, type Queryable,
 } from "@ros/db";
 import { raiseAlert } from "./alerts";
 import { emit } from "./events";
+import { notify } from "./notifications";
 import { escalationReplyBy, type CalendarSource } from "./business-hours";
 import { loadBusinessCalendar } from "./business-calendar";
 import { hiddenTextNoteOf } from "./hidden-text";
@@ -184,6 +185,36 @@ export async function addEscalationReply(q: Queryable, input: { escalation: Pick
   const row = await insertMessage(q, { ...input, kind: "reply" });
   await emit(q, { type: input.side === "customer" ? "customer.replied" : "recruiter.replied", companyId: input.escalation.companyId, actor: input.author, subject: { type: "escalation", id: input.escalation.id }, payload: { messageId: row.id } });
   return row;
+}
+
+/** What a request raised by a stopped run says once that run, tried again by ITS, finished. */
+export const RETRIED_RUN_FINISHED = "ITS ran the stopped step again and it finished. Nothing more is needed from you.";
+const RETRY_ACTOR: Actor = { kind: "system", id: "workflow:retry", name: "Recruiting OS" };
+
+/**
+ * A run that stopped raised a request (`workflow_runs.escalation_id`, packages/workflows engine.ts failForGood); ITS
+ * pressed Retry and the run has now finished. A request nobody has picked up yet is answered and closed with
+ * RETRIED_RUN_FINISHED, so the team is not left waiting on work that is done and the queue no longer shows it; the
+ * owners and whoever asked are told, as for any answer. A request a recruiter has already accepted stays theirs to
+ * resolve: it gets the same line as a note on its thread. Anything else (answered, cancelled) is left as it is. Runs in
+ * the company's transaction; no access was granted on an open request, so there is none to end.
+ */
+export async function settleRetriedRunRequest(q: Queryable, input: { escalationId: string; companyId: string; now: Date }): Promise<"resolved" | "noted" | null> {
+  const [e] = await q.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.id, input.escalationId), eq(recruiterEscalations.companyId, input.companyId))).limit(1).for("update");
+  if (!e) return null;
+  if (e.status === "claimed" || e.status === "in_progress") {
+    await addEscalationReply(q, { escalation: e, side: "recruiter", author: RETRY_ACTOR, body: RETRIED_RUN_FINISHED, now: input.now });
+    return "noted";
+  }
+  if (e.status !== "open") return null;
+  const at = input.now.toISOString();
+  await q.update(recruiterEscalations).set({ status: "resolved", resolvedAt: at, resolution: RETRIED_RUN_FINISHED, firstResponseAt: e.firstResponseAt ?? at }).where(eq(recruiterEscalations.id, e.id));
+  await recordEscalationAnswer(q, { escalation: e, author: RETRY_ACTOR, body: RETRIED_RUN_FINISHED, now: input.now });
+  await emit(q, { type: "recruiter.resolved", companyId: e.companyId, actor: RETRY_ACTOR, subject: { type: "escalation", id: e.id }, payload: { resolution: RETRIED_RUN_FINISHED, minutesSpent: null, responseMinutes: null, retriedRun: true } });
+  const owners = await q.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.companyId, e.companyId), eq(memberships.role, "owner"), eq(memberships.status, "active")));
+  const readers = [...new Set([...(e.requestedBy.kind === "user" ? [e.requestedBy.id] : []), ...owners.map((m) => m.userId)])];
+  await notify(q, { companyId: e.companyId, kind: "recruiter.resolved", title: "A stopped step is working again", body: RETRIED_RUN_FINISHED, action: { label: "Read the answer", href: `/?request=${e.id}` }, userIds: readers });
+  return "resolved";
 }
 
 /** The recruiter's answer, kept on the thread as well as on the request, so a reopened request keeps every answer it was given. */

@@ -75,6 +75,7 @@ const HEADLINES: Record<string, string> = {
   "company.unverified": "Your careers page is offline while ITS checks your company again",
   // The Trial plan's 30 days (founder decision L-02 B).
   "company.trial_started": "Your 30-day trial has started",
+  "company.trial_ending": "Your trial ends soon",
   "company.trial_extended": "ITS extended your trial",
   "company.trial_ended": "Your trial has ended",
   "entitlement.text_screens": "News about your plan's screening chats",

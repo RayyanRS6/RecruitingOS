@@ -111,6 +111,30 @@ ${footer(packet, company)}`;
 }
 
 /**
+ * The offered times lapsed without a pick (two days, a reminder, two more days): the candidate is told plainly that the
+ * link no longer works, so they are not left wondering, and how to say they are still interested. It closes the offer
+ * step, so it goes even though the times link has died; it never hints at a decision (founder decision B6) and promises
+ * no new times (only a person sends those, founder decision 2A). The status page says the same.
+ */
+export function slotsLapsedMessage(input: InterviewMessageInput): { subject: string; text: string } {
+  const { candidate, company, packet, application } = input;
+  const text = `Hi ${candidate.firstName},
+
+The interview times ${company.name} offered you for the ${packet.identity.title} position have passed, so that link no longer works. If you would still like to interview, reply to this email and the hiring team will be in touch.
+
+You can check where things stand any time: ${input.appBaseUrl}/c/status/${application.statusToken}
+
+${footer(packet, company)}`;
+  return { subject: `Your interview times have passed: ${packet.identity.title} at ${company.name}`, text };
+}
+
+export async function sendSlotsLapsed(q: Queryable, integrations: Integrations, input: InterviewMessageInput): Promise<SendResult> {
+  const { candidate, interview } = input;
+  const message = slotsLapsedMessage(input);
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_slots_lapsed", subject: message.subject, text: message.text, idempotencyKey: `slots_lapsed:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email });
+}
+
+/**
  * The interview's calendar file. One UID per interview; the sequence always grows: a booking at attempt n is 2(n-1), its
  * cancellation 2(n-1)+1, and the next booking (a later attempt) is higher again, so a calendar app takes a time moved after
  * a cancellation file as the newer one.

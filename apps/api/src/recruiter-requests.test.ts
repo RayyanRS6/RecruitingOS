@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { createDataRequest, createEscalation, openHumanReview } from "@ros/core";
-import { adminAlerts, applications, candidates, events, notifications, randomToken, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { RETRIED_RUN_FINISHED, createDataRequest, createEscalation, openHumanReview } from "@ros/core";
+import { adminAlerts, applications, candidates, escalationMessages, events, notifications, randomToken, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { WorkflowDefinition } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -188,6 +188,43 @@ describe("what a recruiter request covers, and saying so", () => {
     // the customer reads the request: plain words, never the error, the workflow's key or the step's
     expect(esc.question).toBe("An automatic step stopped after the first try and needs a person to take over.");
     expect(withRole.lastError).toBe("nothing to work on");
+  });
+
+  it("a stopped run that ITS retries and that then finishes closes the request it raised, or notes it for the recruiter who has it", async () => {
+    let failing = true;
+    const sometimes: WorkflowDefinition = { key: "test_retried_finishes", version: 1, initialStep: "go", maxAttempts: 1, steps: { go: async () => (failing ? { kind: "fail", error: "the provider said no", retryable: false } : { kind: "complete" }) } };
+    container.engine.register(sometimes);
+    const admin = await signInStaff(app, container, "ana.admin@its.test", "platform_admin", "Ana Admin");
+    const startRun = async () => {
+      const { runId } = await withTenant(container.db, companyId, (tx) => container.engine.start(tx, { workflowKey: sometimes.key, companyId, subject: { type: "role", id: roleId }, state: { roleId } }));
+      await container.drain();
+      const [run] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, runId));
+      expect(run.status).toBe("failed");
+      return { runId, escalationId: run.escalationId! };
+    };
+    const retry = async (runId: string) => {
+      failing = false;
+      expect((await json(admin, "POST", `/api/v1/admin/runs/${runId}/retry`, {})).status).toBe(200);
+      await container.drain();
+      expect((await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, runId)))[0].status).toBe("completed");
+      failing = true;
+    };
+    const request = async (id: string) => (await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id)))[0];
+    // nobody had picked it up: answered and closed in plain words, and the owner is told
+    const first = await startRun();
+    expect(await request(first.escalationId)).toMatchObject({ status: "open" });
+    await retry(first.runId);
+    expect(await request(first.escalationId)).toMatchObject({ status: "resolved", resolution: RETRIED_RUN_FINISHED });
+    const told = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "recruiter.resolved")))).filter((n) => n.action?.href === `/?request=${first.escalationId}`);
+    expect(told.length).toBeGreaterThanOrEqual(1);
+    expect(told[0]).toMatchObject({ title: "A stopped step is working again", body: RETRIED_RUN_FINISHED });
+    // a recruiter already has the next one: it stays theirs to resolve, with the same line as a note on its thread
+    const second = await startRun();
+    expect((await json(recruiter, "POST", `/api/v1/escalations/${second.escalationId}/claim`, {})).status).toBe(200);
+    await retry(second.runId);
+    expect((await request(second.escalationId)).status).toBe("claimed");
+    const thread = await container.db.select().from(escalationMessages).where(eq(escalationMessages.escalationId, second.escalationId));
+    expect(thread.map((m) => m.body)).toContain(RETRIED_RUN_FINISHED);
   });
 
   it("a request for a person's review with nothing attached goes to ITS administrators, not to a company-wide recruiter", async () => {
