@@ -25,7 +25,7 @@ import { QuestionCard } from "./QuestionCard";
 import { quickStartDraftKey } from "./quick-start";
 import { RoomAlert } from "./StartView";
 import {
-  NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersPayload, approvalHelp, askFromDetails, cardsKey, cardsToShow, changedSections, composerPlaceholder, draftRecruiterAsk, draftSections,
+  NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersPayload, approvalHelp, askFromDetails, cardsKey, cardsToShow, changedSections, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
   draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, turnProblem,
   type CardState, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
 } from "./rules";
@@ -340,7 +340,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const hasDraft = view.readiness.hasDraft;
   const cards = cardsToShow(view);
   const deckKey = cardsKey(cards);
-  const live = deck.key === deckKey ? deck : { key: deckKey, state: initialCards(), closed: false };
+  const live = deckFor(deck, cards);
   const showCards = cards.length > 0 && !live.closed;
   const draftRunning = draft.isPending || draftingNow(view.progress) || (approve.isPending && draftingNow(view.progress));
   const busy = send.isPending || answer.isPending || revise.isPending || draft.isPending || approve.isPending;

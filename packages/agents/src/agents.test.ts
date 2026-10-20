@@ -4,7 +4,7 @@ import { DraftRolePacket, IntakeExtraction, IntakeTurn, type IntakeQuestion } fr
 import { consumerPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { futureRolesLine, reminderClosingLine } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
-import { mergeFacts, prepareQuestions } from "./intake";
+import { factsSetOnPanel, fieldsKnownFromFacts, fieldsSetOnPanel, keepAnswered, mergeFacts, ownerWordsOf, prepareQuestions, rememberPrompts, sameQuestion, settle, typedSinceReply, typedWordsOf } from "./intake";
 import { verifyQuotes } from "./triage";
 
 describe("what candidate emails say about future roles (Wave 0 item 0.11)", () => {
@@ -147,9 +147,14 @@ describe("market pay in the assistant's words, from the real prompt (intake.turn
   });
 
   it("writes money and places the way the pay card does", async () => {
-    expect(intakeTurnPrompt.version).toBe(4);
+    expect(intakeTurnPrompt.version).toBe(5);
     // v4: option values and facts in plain words, never codes (staging, 13 Oct 2026).
     expect(intakeTurnPrompt.system(ctx(null)).map((b) => b.text).join("\n")).toContain('never a code: "California RDA license", not "rda_license"');
+    // v5: what was already asked is in the notes and never asked again; a job for another business is said once, never asked
+    const withAsked = intakeTurnPrompt.system({ ...ctx(null), alreadyAsked: ["compensation", "interviewers", "reason_for_hire", "interviewers"] }).map((b) => b.text).join("\n");
+    expect(withAsked).toContain("Already asked or answered in this draft (never ask about these again, on a card or in your message): the pay; who interviews; why they are hiring, and who the job is for.");
+    expect(withAsked).toContain("do not ask which company it is for");
+    expect(intakeTurnPrompt.system(ctx(null)).map((b) => b.text).join("\n")).not.toContain("Already asked or answered in this draft (");
     const c = ctx({ basis: "salary", p25: 121130, p50: 164920, p75: 212050, source: "BLS OEWS 2025, SOC 112021, area 0012420", metro: "austin area", origin: "market", asOf: "2025" });
     // the model is handed the figure already written as the pay card writes it
     expect(intakeTurnPrompt.system(c).map((b) => b.text).join("\n")).toContain("write it as the pay card does: $121,130–$212,050 a year (middle $164,920), never bare numbers, and name places with capital letters.");
@@ -281,6 +286,108 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
 
   it("never shows a pay card once a person confirmed the pay", () => {
     expect(prepareQuestions([card({ field: "compensation", mode: "pay" })], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: [] })).toEqual([]);
+  });
+
+  it("never asks twice: a field already asked, set on the panel or told by the owner is dropped, the hourly-or-salary card included (staging, 20 Oct 2026)", () => {
+    const asked = prepareQuestions([
+      card({ field: "compensation", mode: "pay" }),
+      card({ field: "interviewers", mode: "team", prompt: "Who interviews?" }),
+      card({ field: "reason_for_hire", mode: "single", prompt: "Which company is this role for?", options: [{ label: "Growth Guild", value: "Growth Guild", origin: "owner" }] }),
+      card({ field: "timeline", mode: "single", options: [{ label: "Soon", value: "asap", origin: "assistant" }] }),
+    ], { turnNo: 3, team, basisKnown: false, payConfirmed: false, dealBreakers: [], settled: ["compensation", "interviewers", "reason_for_hire"] });
+    // pay, the interviewers and the "which company" card were asked before; the basis card is not put back either
+    expect(asked.map((q) => q.field)).toEqual(["timeline"]);
+    expect(asked[0].id).toBe("q3_1");
+  });
+
+  it("works out what the owner already said from the facts, and what a panel edit settles", () => {
+    const facts = { mustHaves: ["REST APIs"], niceToHaves: [], eligibilityNotes: [], interviewers: ["Me"], dealBreakers: [], declinedCriteria: [], title: "Backend engineer", reason: "other", reasonDetail: "for Growth Guild in Lahore", compensationBasis: "hourly", decisionMaker: "Rayyan" };
+    expect(fieldsKnownFromFacts(facts, false).sort()).toEqual(["compensation_basis", "decision_maker", "interviewers", "reason_for_hire", "title"].sort());
+    // a must-haves list the owner typed can still be offered once to tick; it is not "already asked"
+    expect(fieldsKnownFromFacts(facts, false)).not.toContain("must_haves");
+    expect(fieldsKnownFromFacts(facts, true)).toEqual(expect.arrayContaining(["compensation", "compensation_basis"]));
+    expect(fieldsSetOnPanel({ set: { pay: { basis: "hourly", min: 15, max: 20 }, decisionMakerUserId: "u-owner" }, add: [{ field: "mustHaves", value: "SQL" }], clear: ["targetStartDate"] }).sort()).toEqual(["compensation", "compensation_basis", "decision_maker", "must_haves", "timeline"].sort());
+    expect(settle(["title"], ["title", "location"])).toEqual(["title", "location"]);
+  });
+
+  it("keeps what the owner answered as they gave it when the model's turn would change it", () => {
+    const before = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], locationText: "Lahore, Pakistan", reason: "other", reasonDetail: "for Growth Guild" };
+    const merged = { ...before, locationText: "Irvine, CA", reason: "growth", reasonDetail: undefined as string | undefined, title: "Backend engineer" };
+    keepAnswered(merged, before, ["locationText", "reason", "reasonDetail", "mustHaves"]);
+    expect(merged).toMatchObject({ locationText: "Lahore, Pakistan", reason: "other", reasonDetail: "for Growth Guild", title: "Backend engineer" });
+    // only the facts given are held: the words of the reason set on the panel leave the reason itself to the assistant
+    expect(factsSetOnPanel({ set: { reasonDetail: "Maria left last week" } })).toEqual(["reasonDetail"]);
+    expect(factsSetOnPanel({ set: { pay: { basis: "hourly", min: 15, max: 20 }, decisionMakerUserId: "u-owner", interviewerUserIds: ["u-owner"] }, clear: ["targetStartDate"] })).toEqual(["compensationBasis", "decisionMaker", "targetStartDate"]);
+    const m2 = { ...before, reason: "replacement" as string | undefined, reasonDetail: "Maria left last week" };
+    keepAnswered(m2, { ...before, reason: undefined, reasonDetail: "Maria left last week" }, ["reasonDetail"]);
+    expect(m2).toMatchObject({ reason: "replacement", reasonDetail: "Maria left last week" });
+  });
+
+  it("reads typed words since the last reply, so a correction whose reply failed is not undone", () => {
+    const at = "2026-10-20T09:00:00.000Z";
+    expect(typedSinceReply([{ role: "owner", content: "Hi", at }, { role: "assistant", content: "Cards", at }, { role: "owner", content: "Location: Irvine", at, kind: "answers" }])).toBe(false);
+    expect(typedSinceReply([{ role: "assistant", content: "Cards", at }, { role: "owner", content: "Actually it's in Costa Mesa", at, kind: "text" }, { role: "owner", content: "Location: Irvine", at, kind: "answers" }])).toBe(true);
+    // the summaries of card answers are not the owner's typed words
+    expect([...typedWordsOf([{ role: "owner", content: "Paid: By the hour", at, kind: "answers" }, { role: "owner", content: "A dental assistant", at, kind: "text" }])]).toEqual(["dental", "assistant"]);
+  });
+
+  it("labels an answer \"Your words\" only when the words are the owner's (staging, 20 Oct 2026)", () => {
+    const words = ownerWordsOf([
+      { role: "owner", content: "this is for a software engineering firm in lahore pakistan, named Growth Guild", at: "2026-10-20T09:00:00.000Z" },
+      { role: "assistant", content: "The home care business in Irvine is your company profile.", at: "2026-10-20T09:00:01.000Z" },
+    ]);
+    const out = prepareQuestions([card({ field: "reason_for_hire", mode: "single", options: [
+      { label: "Growth Guild, a software engineering firm in Lahore, Pakistan", value: "Growth Guild", origin: "owner" },
+      { label: "The home care business in Irvine, CA from your company profile", value: "home care", origin: "owner" },
+      { label: "Yes, remote", value: "yes", origin: "owner" },
+      { label: "Me", value: "me", origin: "owner" },
+    ] })], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: [], ownerWords: words });
+    // a label with no words of the owner's is the assistant's; one too short to tell keeps its label
+    expect(out[0].options.map((o) => o.origin)).toEqual(["owner", "assistant", "assistant", "owner"]);
+    // an answer drawn from the company profile is never "Your words", even when the owner used those words
+    const said = ownerWordsOf([{ role: "owner", content: "use the home care business in Irvine from my company profile", at: "2026-10-20T09:00:00.000Z" }]);
+    const profile = prepareQuestions([card({ field: "location", mode: "single", options: [{ label: "Irvine, CA from your company profile", value: "Irvine, CA", origin: "owner" }] })], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: [], ownerWords: said });
+    expect(profile[0].options[0].origin).toBe("assistant");
+  });
+
+  it("counts the place and the benefits as told only when the owner's own words are in them", () => {
+    const facts = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], locationText: "Irvine, CA", benefits: "Health insurance, paid time off" };
+    // copied from the company profile: asked once on a card
+    expect(fieldsKnownFromFacts(facts, false, ownerWordsOf([{ role: "owner", content: "I need a backend engineer.", at: "2026-10-20T09:00:00.000Z" }]))).toEqual([]);
+    // the owner said them
+    const words = ownerWordsOf([{ role: "owner", content: "A backend engineer in Irvine, with health insurance and paid time off.", at: "2026-10-20T09:00:00.000Z" }]);
+    expect(fieldsKnownFromFacts(facts, false, words).sort()).toEqual(["benefits", "location"]);
+    // one shared word is not enough ("dental" in the job, "dental" in the profile's benefits)
+    const profile = { ...facts, benefits: "Medical, dental and vision insurance, paid time off" };
+    expect(fieldsKnownFromFacts(profile, false, ownerWordsOf([{ role: "owner", content: "I need a dental assistant in Irvine.", at: "2026-10-20T09:00:00.000Z" }]))).toEqual(["location"]);
+  });
+
+  it("never asks the same thing under another label, and never asks which company the job is for (staging, 20 Oct 2026)", () => {
+    const asked = ["Which business is this job for?", "Who will be interviewing candidates for this role?", "What is the pay range for this job?"];
+    const out = prepareQuestions([
+      card({ field: "decision_maker", mode: "free", prompt: "Who will be interviewing the candidates?" }),
+      card({ field: "location", mode: "free", prompt: "What company is hiring, and where is it based?" }),
+      card({ field: "schedule", mode: "free", prompt: "Which days and hours will they work?" }),
+      card({ field: "timeline", mode: "single", prompt: "When should they start?", options: [{ label: "Soon", value: "asap", origin: "assistant" }] }),
+      card({ field: "remote_policy", mode: "free", prompt: "What days and hours would they work on site?" }),
+    ], { turnNo: 4, team, basisKnown: true, payConfirmed: true, dealBreakers: [], askedPrompts: asked });
+    // the interviewers came back as "decision maker"; the company card goes; a same-turn repeat of the hours goes
+    expect(out.map((q) => q.field)).toEqual(["schedule", "timeline"]);
+    expect(sameQuestion("What is the pay range for this job?", "What is the schedule for this job?")).toBe(false);
+    expect(sameQuestion("Who has the final say?", "Who will interview?")).toBe(false);
+    // opposite questions are never the same, however alike their wording
+    expect(sameQuestion("Which of these skills are must-haves?", "Which of these skills are nice-to-haves?")).toBe(false);
+    expect(sameQuestion("What does success look like in the first 90 days?", "What does failure look like in the first 90 days?")).toBe(false);
+    const both = prepareQuestions([
+      card({ field: "must_haves", mode: "multi", prompt: "Which skills or experience must candidates have?", options: [{ label: "SQL", value: "SQL", origin: "assistant" }] }),
+      card({ field: "nice_to_haves", mode: "multi", prompt: "Which skills or experience would be nice for candidates to have?", options: [{ label: "Go", value: "Go", origin: "assistant" }] }),
+      // a card that only mentions the business is not a "which company" card
+      card({ field: "schedule", mode: "free", prompt: "What business hours should they cover?" }),
+    ], { turnNo: 5, team, basisKnown: true, payConfirmed: true, dealBreakers: [] });
+    expect(both.map((q) => q.field)).toEqual(["must_haves", "nice_to_haves", "schedule"]);
+    expect(prepareQuestions([card({ field: "location", mode: "free", prompt: "Which company location will they work at?" }), card({ field: "benefits", mode: "free", prompt: "What company benefits should the job post mention?" }), card({ field: "title", mode: "free", prompt: "Which business is this job for?" })], { turnNo: 5, team, basisKnown: true, payConfirmed: true, dealBreakers: [] }).map((q) => q.field)).toEqual(["location", "benefits"]);
+    expect(rememberPrompts(Array.from({ length: 60 }, (_, i) => `p${i}`), out)).toHaveLength(60);
+    expect(rememberPrompts([], out)).toEqual(["Which days and hours will they work?", "When should they start?"]);
   });
 });
 

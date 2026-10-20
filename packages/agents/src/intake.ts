@@ -1,8 +1,8 @@
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import {
   DraftRolePacket as DraftRolePacketSchema, IntakeServerState, RolePacket as RolePacketSchema,
-  type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeMessage,
-  type IntakeQuestion, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole, type RolePacket,
+  type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact, type IntakeMessage,
+  type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole, type RolePacket,
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
@@ -149,6 +149,7 @@ function contextFrom(inputs: IntakeInputs, bench: BenchmarkResult): IntakeContex
     ad: adText ? { text: adText } : null,
     confirmedPay: confirmedPayOf(facts, state),
     fromRole: state.fromRole ? { title: state.fromRole.title, version: state.fromRole.version } : null,
+    alreadyAsked: settle(state.settledFields, state.fromRole ? [] : fieldsKnownFromFacts(facts, payConfirmed(facts, state), typedWordsOf(session.messages))),
   };
 }
 
@@ -168,16 +169,225 @@ const BASIS_CARD = (id: string): IntakeQuestion => ({
   why: "So the pay is compared with the right market figures.",
 });
 
+/** The field a card sets as the server keeps it: the pay card is always "compensation". */
+function cardField(q: Pick<IntakeQuestion, "field" | "mode">): IntakeQuestionField {
+  return q.mode === "pay" ? "compensation" : q.field;
+}
+
+/** The server's own card that offers stated deal-breakers back as must-haves. */
+const DEAL_PROMPT = "You named these as deal-breakers. Which should count openly as must-haves?";
+function isDealCard(q: Pick<IntakeQuestion, "field" | "prompt">): boolean {
+  return q.field === "must_haves" && q.prompt === DEAL_PROMPT;
+}
+
 /**
- * The cards as they are stored and shown (C6, C15, C17). The server, not the model: numbers every card; fills team cards
- * with the real team (deciders only for the final say) and "Someone not on the team yet"; clears the options of the
- * pay card (drawn from the pay data); drops any offered answer that fails the fairness check; asks hourly or salary first
- * when nobody knows; offers stated deal-breakers back as must-haves. Three cards at most.
+ * What showing a card settles: the pay card asks hourly or salary too (it opens with that choice). The deal-breaker card
+ * settles nothing: it asks about the owner's own deal-breakers, not the must-haves, which are still asked once.
  */
-export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number; team: TeamMember[]; basisKnown: boolean; payConfirmed: boolean; dealBreakers: string[] }): IntakeQuestion[] {
+function cardFields(q: Pick<IntakeQuestion, "field" | "mode" | "prompt">): IntakeQuestionField[] {
+  if (isDealCard(q)) return [];
+  return q.mode === "pay" ? ["compensation", "compensation_basis"] : [q.field];
+}
+
+/**
+ * Card fields the owner has already told us in their own words (the facts hold what they said; the model reads facts
+ * only from the owner), so a card would ask it again. Lists stay open to one card unless they were asked: a must-haves
+ * card offers choices to tick even after the owner named some. The place and the benefits count only when most of their
+ * words are the owner's own typed words (`typedWords`): the model can copy both from the company profile, and those are
+ * asked once.
+ */
+export function fieldsKnownFromFacts(f: IntakeFacts, payIsConfirmed: boolean, typedWords?: ReadonlySet<string>): IntakeQuestionField[] {
+  const said = (text: string | undefined) => {
+    if (!text) return false;
+    if (!typedWords) return true;
+    const w = wordsOf(text);
+    return !w.length || w.filter((x) => typedWords.has(x)).length * 2 >= w.length;
+  };
+  const out: IntakeQuestionField[] = [];
+  if (f.title) out.push("title");
+  if (said(f.locationText)) out.push("location");
+  if (f.employmentType) out.push("employment_type");
+  if (f.schedule) out.push("schedule");
+  if (f.remotePolicy) out.push("remote_policy");
+  if (f.reason || f.reasonDetail) out.push("reason_for_hire");
+  if (f.compensationBasis === "hourly" || f.compensationBasis === "salary") out.push("compensation_basis");
+  if (payIsConfirmed) out.push("compensation", "compensation_basis");
+  if (f.targetStartDate || f.urgency) out.push("timeline");
+  if (f.whatFailureLooksLike) out.push("what_failure_looks_like");
+  if (said(f.benefits)) out.push("benefits");
+  if (f.decisionMaker || f.decisionMakerUserId) out.push("decision_maker");
+  if (f.interviewers.length || f.interviewerUserIds?.length) out.push("interviewers");
+  return out;
+}
+
+const PATCH_SET_FIELD: Partial<Record<keyof NonNullable<IntakeFactsPatch["set"]>, IntakeQuestionField[]>> = {
+  title: ["title"], locationText: ["location"], employmentType: ["employment_type"], schedule: ["schedule"], remotePolicy: ["remote_policy"],
+  reason: ["reason_for_hire"], reasonDetail: ["reason_for_hire"], benefits: ["benefits"], targetStartDate: ["timeline"], urgency: ["timeline"],
+  whatFailureLooksLike: ["what_failure_looks_like"], decisionMaker: ["decision_maker"], decisionMakerUserId: ["decision_maker"],
+  interviewerUserIds: ["interviewers"], pay: ["compensation", "compensation_basis"],
+};
+const LIST_FACT_FIELD: Record<IntakeListFact, IntakeQuestionField> = {
+  mustHaves: "must_haves", niceToHaves: "nice_to_haves", dealBreakers: "deal_breakers", interviewers: "interviewers", eligibilityNotes: "eligibility",
+  responsibilities: "responsibilities", screeningQuestions: "screening_questions",
+};
+const CLEAR_FIELD: Record<NonNullable<IntakeFactsPatch["clear"]>[number], IntakeQuestionField> = {
+  title: "title", locationText: "location", employmentType: "employment_type", schedule: "schedule", remotePolicy: "remote_policy", reason: "reason_for_hire",
+  reasonDetail: "reason_for_hire", benefits: "benefits", targetStartDate: "timeline", urgency: "timeline", whatFailureLooksLike: "what_failure_looks_like", decisionMaker: "decision_maker",
+};
+
+/** The card fields a panel edit touches: a fact the owner set, added to, took from or cleared is theirs, and not asked about again. */
+export function fieldsSetOnPanel(patch: IntakeFactsPatch | undefined): IntakeQuestionField[] {
+  if (!patch) return [];
+  const out: IntakeQuestionField[] = [];
+  for (const k of Object.keys(patch.set ?? {}) as Array<keyof NonNullable<IntakeFactsPatch["set"]>>) out.push(...(PATCH_SET_FIELD[k] ?? []));
+  for (const x of [...(patch.add ?? []), ...(patch.remove ?? [])]) out.push(LIST_FACT_FIELD[x.field]);
+  for (const c of patch.clear ?? []) out.push(CLEAR_FIELD[c]);
+  return out;
+}
+
+/** The single-value facts behind each card field, which `keepAnswered` holds as the owner gave them. */
+const ANSWER_FACTS: Partial<Record<IntakeQuestionField, Array<keyof IntakeFacts>>> = {
+  title: ["title"], location: ["locationText"], employment_type: ["employmentType"], schedule: ["schedule"], remote_policy: ["remotePolicy"],
+  reason_for_hire: ["reason", "reasonDetail"], compensation_basis: ["compensationBasis"], timeline: ["targetStartDate", "urgency"],
+  what_failure_looks_like: ["whatFailureLooksLike"], benefits: ["benefits"], decision_maker: ["decisionMaker"],
+};
+const KEPT_FACTS = new Set<string>(Object.values(ANSWER_FACTS).flatMap((x) => x ?? []));
+
+/** The single-value facts a card answer sets. */
+export function factsAnswered(q: Pick<IntakeQuestion, "field" | "mode" | "prompt">): string[] {
+  return cardFields(q).flatMap((f) => ANSWER_FACTS[f] ?? []);
+}
+
+/**
+ * The single-value facts a panel edit sets or clears, by name: only those are held, so a panel edit of the words of the
+ * reason alone still lets the assistant fill in the reason itself.
+ */
+export function factsSetOnPanel(patch: IntakeFactsPatch | undefined): string[] {
+  if (!patch) return [];
+  const set = Object.keys(patch.set ?? {}).map((k) => (k === "decisionMakerUserId" ? "decisionMaker" : k === "pay" ? "compensationBasis" : k));
+  return [...set, ...(patch.clear ?? [])].filter((k) => KEPT_FACTS.has(k));
+}
+
+/** Puts back the single-value facts the owner gave (by name), as they stood before the model's turn. */
+export function keepAnswered(merged: IntakeFacts, before: IntakeFacts, answered: readonly string[]): void {
+  const m = merged as Record<string, unknown>;
+  const b = before as Record<string, unknown>;
+  for (const k of answered) {
+    if (!KEPT_FACTS.has(k)) continue;
+    if (b[k] === undefined) delete m[k];
+    else m[k] = b[k];
+  }
+}
+
+/** Adds fact names to the held list, once each. */
+export function holdFacts(held: readonly string[], more: readonly string[]): string[] {
+  return [...new Set([...held, ...more])];
+}
+
+/** Adds fields to the settled list, once each, in the order first seen. */
+export function settle(settled: readonly IntakeQuestionField[], more: readonly IntakeQuestionField[]): IntakeQuestionField[] {
+  return [...new Set([...settled, ...more])];
+}
+
+const WORD = /[a-z0-9]+/g;
+/** Words too common to show whose words an answer is in. */
+const COMMON = new Set(["the", "and", "for", "with", "from", "your", "our", "you", "this", "that", "are", "was", "who", "its", "per", "not", "all", "any", "one", "can", "will", "has", "have", "into", "out", "about", "own", "they", "them", "their", "his", "her", "him", "she", "named", "called"]);
+function wordsOf(text: string): string[] {
+  return (text.toLowerCase().match(WORD) ?? []).filter((w) => w.length >= 3 && !COMMON.has(w));
+}
+
+/**
+ * An option the model labels as the owner's own words ("Your words") must be in them: at least half of its words appear
+ * in what the owner wrote or answered. Otherwise it is the assistant's own idea and is labelled so (staging, 20 Oct 2026:
+ * "The home care business in Irvine, CA from your company profile" was shown as "Your words").
+ */
+export function honestOrigins(q: IntakeQuestion, ownerWords: ReadonlySet<string>): IntakeQuestion {
+  const options = q.options.map((o) => {
+    if (o.origin !== "owner") return o;
+    if (PROFILE_WORDS.test(o.label)) return { ...o, origin: "assistant" as const };
+    const w = wordsOf(o.label);
+    if (!w.length) return o;
+    const hits = w.filter((x) => ownerWords.has(x)).length;
+    return hits * 2 >= w.length ? o : { ...o, origin: "assistant" as const };
+  });
+  return { ...q, options };
+}
+
+/** Every word the owner has typed or answered in this draft, for `honestOrigins`. */
+export function ownerWordsOf(messages: IntakeMessage[]): Set<string> {
+  return new Set(messages.filter((m) => m.role === "owner").flatMap((m) => wordsOf(m.content)));
+}
+
+/** Only the words the owner typed or pasted, not the summaries of their card answers (which carry the cards' own labels). */
+export function typedWordsOf(messages: IntakeMessage[]): Set<string> {
+  return ownerWordsOf(messages.filter((m) => m.kind !== "answers"));
+}
+
+/** Whether the owner typed anything since the assistant last replied (a reply that failed leaves their words unread). */
+export function typedSinceReply(messages: IntakeMessage[]): boolean {
+  const since = messages.slice(messages.map((m) => m.role).lastIndexOf("assistant") + 1);
+  return since.some((m) => m.role === "owner" && (m.kind ?? "text") === "text");
+}
+
+/** An offered answer drawn from the company profile is the assistant's, never "Your words". */
+const PROFILE_WORDS = /\b(?:company|business|your)\s+profile\b/i;
+
+/**
+ * A card asking which company or business the job is for. Every job here is the workspace company's (a second company is
+ * set up by ITS, founder decision L-17), so the card is never shown; the assistant says so once in its message instead.
+ */
+// "Which company is this for?", "What business?"; not "What business hours…" or "Which company location…".
+const COMPANY_QUESTION = /\b(?:which|what)\s+(?:company|business|employer|organi[sz]ation|firm)(?=\s*(?:[?,.]|$)|\s+(?:is|are|does|do|for|name)\b)|\b(?:company|business|employer|firm)(?:'s)?\s+name\b|\bname\s+of\s+(?:the|your)\s+(?:company|business|employer|firm)\b/i;
+
+/** Words every card shares, left out when two cards' wording is compared. */
+const PROMPT_COMMON = new Set(["what", "which", "how", "when", "where", "does", "did", "should", "would", "could", "job", "role", "position", "person", "new", "hire", "need", "want", "there", "else", "also", "yet", "still", "like", "much", "many", "kind", "type"]);
+function promptWords(text: string): Set<string> {
+  return new Set(wordsOf(text).filter((w) => !PROMPT_COMMON.has(w)));
+}
+
+/** Pairs of words that make two alike prompts ask opposite things: must-haves and nice-to-haves, success and failure. */
+const OPPOSED: Array<[RegExp, RegExp]> = [
+  [/\b(?:must|required|essential|mandatory)\b/i, /\b(?:nice|preferred|bonus|plus|optional)\b/i],
+  [/\b(?:success\w*|succeed\w*|great|good|best)\b/i, /\b(?:fail\w*|poor|bad|wrong|worst)\b/i],
+];
+
+/**
+ * Two cards ask the same thing when most of their wording is shared (at least two words, and 60% of all words between
+ * them) and they are not on opposite sides of a pair above: staging, 20 Oct 2026, the same question came back under
+ * another field label.
+ */
+export function sameQuestion(a: string, b: string): boolean {
+  if (OPPOSED.some(([p, n]) => (p.test(a) && n.test(b)) || (n.test(a) && p.test(b)))) return false;
+  const x = promptWords(a);
+  const y = promptWords(b);
+  const shared = [...x].filter((w) => y.has(w)).length;
+  const all = new Set([...x, ...y]).size;
+  return shared >= 2 && shared / all >= 0.6;
+}
+
+/** Keeps the wording of the cards shown in a draft, the latest 60 (not the server's own deal-breaker card). */
+export function rememberPrompts(asked: readonly string[], shown: readonly IntakeQuestion[]): string[] {
+  return [...asked, ...shown.filter((q) => !isDealCard(q)).map((q) => q.prompt)].slice(-60);
+}
+
+/**
+ * The cards as they are stored and shown (C6, C15, C17). The server, not the model: numbers every card; drops a card
+ * whose field was already asked in this draft or that the owner already told us (`settled`), so nothing is asked twice;
+ * fills team cards with the real team (deciders only for the final say) and "Someone not on the team yet"; clears the
+ * options of the pay card (drawn from the pay data); drops any offered answer that fails the fairness check; labels
+ * "Your words" only where the words are the owner's; asks hourly or salary first when nobody knows; offers stated
+ * deal-breakers back as must-haves. Three cards at most.
+ */
+export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number; team: TeamMember[]; basisKnown: boolean; payConfirmed: boolean; dealBreakers: string[]; settled?: readonly IntakeQuestionField[]; ownerWords?: ReadonlySet<string>; askedPrompts?: readonly string[] }): IntakeQuestion[] {
+  const settled = new Set(input.settled ?? []);
+  const asked = input.askedPrompts ?? [];
   const out: IntakeQuestion[] = [];
-  for (const q of raw) {
+  for (const raw1 of raw) {
+    const q = input.ownerWords ? honestOrigins(raw1, input.ownerWords) : raw1;
+    if (settled.has(cardField(q))) continue;
     if (out.some((x) => x.field === q.field)) continue;
+    if (COMPANY_QUESTION.test(q.prompt)) continue;
+    if ([...asked, ...out.map((x) => x.prompt)].some((p) => sameQuestion(p, q.prompt))) continue;
     if (q.mode === "team" || q.field === "interviewers" || (q.field === "decision_maker" && q.mode !== "free")) {
       const deciders = q.field === "decision_maker";
       const members = input.team.filter((m) => !deciders || DECIDER_ROLES.includes(m.role));
@@ -194,12 +404,14 @@ export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number;
     out.push({ ...q, options });
   }
   const cards: IntakeQuestion[] = [];
-  if (!input.basisKnown && !input.payConfirmed && !out.some((q) => q.field === "compensation_basis" || q.mode === "pay")) cards.push(BASIS_CARD("basis"));
+  const payAsked = settled.has("compensation_basis") || settled.has("compensation");
+  if (!input.basisKnown && !input.payConfirmed && !payAsked && !out.some((q) => q.field === "compensation_basis" || q.mode === "pay")) cards.push(BASIS_CARD("basis"));
   const deal: IntakeQuestion | null = input.dealBreakers.length
-    ? { id: "deal", field: "must_haves", prompt: "You named these as deal-breakers. Which should count openly as must-haves?", mode: "multi", options: input.dealBreakers.slice(0, 6).map((d) => ({ label: d.slice(0, 200), value: d.slice(0, 500), origin: "owner" as const })), allowOwn: false, why: "Every application is reviewed against the must-haves, and a person can explain them to a candidate; anything left out here is not used to judge anyone." }
+    ? { id: "deal", field: "must_haves", prompt: DEAL_PROMPT, mode: "multi", options: input.dealBreakers.slice(0, 6).map((d) => ({ label: d.slice(0, 200), value: d.slice(0, 500), origin: "owner" as const })), allowOwn: false, why: "Every application is reviewed against the must-haves, and a person can explain them to a candidate; anything left out here is not used to judge anyone." }
     : null;
   const room = 3 - cards.length - (deal ? 1 : 0);
-  // The deal-breaker card replaces a must-haves card of the model's own, so the owner is asked once.
+  // The deal-breaker card takes the place of a must-haves card of the model's own on this turn (one list card at a time);
+  // the model's card can come on a later turn, as the deal card settles nothing.
   cards.push(...out.filter((q) => !(deal && q.field === "must_haves")).slice(0, Math.max(0, room)));
   if (deal) cards.push(deal);
   return cards.slice(0, 3).map((q, i) => ({ ...q, id: `q${input.turnNo}_${i + 1}` }));
@@ -311,6 +523,9 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
     merged.decisionMakerUserId = before.decisionMakerUserId;
     merged.interviewerUserIds = before.interviewerUserIds;
     merged.suggestions = before.suggestions;
+    // What the owner just answered on a card or set on the panel stays as they gave it: on a turn that follows answers
+    // alone the model does not rewrite it (only words the owner typed can change it).
+    if (!typedSinceReply(session.messages)) keepAnswered(merged, before, state.answeredFacts);
     if (merged.decisionMakerUserId && merged.decisionMaker !== before.decisionMaker) merged.decisionMakerUserId = undefined;
     const offer = dealBreakerOffer(merged, state.dealBreakersOffered);
     if (offer.declined.length) merged.declinedCriteria = [...merged.declinedCriteria, ...offer.declined.filter((d) => !merged.declinedCriteria.some((x) => normalizeCriterion(x.requested) === normalizeCriterion(d.requested))).map((d) => ({ requested: d.requested, reason: d.reason, ...(d.alternative ? { alternative: d.alternative } : {}) }))];
@@ -337,8 +552,14 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
       if (state.pay.ceiling !== undefined) merged.compensationCeiling = state.pay.ceiling;
       else delete merged.compensationCeiling;
     }
-    const questions = notARole ? [] : prepareQuestions(out.output.questions, { turnNo, team, basisKnown, payConfirmed: payConfirmed(merged, state), dealBreakers: offer.offer });
+    // Nothing is asked twice: not a card already shown in this draft, not a fact the owner set on the panel, and not
+    // something they already told us in their own words.
+    // A "hire again" draft starts from the old role's facts, not the owner's words: its cards ask what has changed (once).
+    const settledNow = settle(state.settledFields, state.fromRole ? [] : fieldsKnownFromFacts(merged, payConfirmed(merged, state), typedWordsOf(session.messages)));
+    const questions = notARole ? [] : prepareQuestions(out.output.questions, { turnNo, team, basisKnown, payConfirmed: payConfirmed(merged, state), dealBreakers: offer.offer, settled: settledNow, ownerWords: ownerWordsOf(session.messages), askedPrompts: state.askedPrompts });
     state.openQuestions = questions;
+    state.settledFields = settle(state.settledFields, questions.flatMap(cardFields));
+    state.askedPrompts = rememberPrompts(state.askedPrompts, questions);
     state.dealBreakersOffered = [...state.dealBreakersOffered, ...offer.offer];
     state.benchmark = bench.benchmark;
     state.benchmarkGap = bench.gap;
@@ -386,7 +607,14 @@ export async function applyIntakeEdit(db: Db, input: { companyId: string; sessio
       await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: pay.via } });
     }
     const answered = new Set(input.answers.map((a) => a.questionId));
-    state.openQuestions = state.openQuestions.filter((x) => !answered.has(x.id));
+    // Cards were settled when they were shown; a fact set on the panel is the owner's too, and not asked about again.
+    state.settledFields = settle(state.settledFields, [...state.openQuestions.filter((x) => answered.has(x.id)).flatMap(cardFields), ...fieldsSetOnPanel(input.patch)]);
+    // The facts the owner gave are held as given (by name: a panel edit of the reason's words alone holds only those).
+    const givenIds = new Set(input.answers.filter((a) => !a.skipped).map((a) => a.questionId));
+    state.answeredFacts = holdFacts(state.answeredFacts, [...state.openQuestions.filter((x) => givenIds.has(x.id)).flatMap(factsAnswered), ...factsSetOnPanel(input.patch)]);
+    // A card about something the owner just set on the panel is answered there, and goes; the deal-breaker card stays.
+    const setOnPanel = new Set(fieldsSetOnPanel(input.patch));
+    state.openQuestions = state.openQuestions.filter((x) => !answered.has(x.id) && (isDealCard(x) || !setOnPanel.has(cardField(x))));
     if (input.answers.length) state.answeredRounds += 1;
     if (input.draftIt && !state.draftRequestedAt) state.draftRequestedAt = now;
     if (input.note && DRAFT_IT_WORDS.test(input.note) && !state.draftRequestedAt) state.draftRequestedAt = now;

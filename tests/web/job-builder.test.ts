@@ -7,7 +7,7 @@ import { VERTICAL_TO_PLAYBOOK, findPlaybook, matchPlaybookRole } from "../../pac
 import { samplePacket } from "../../packages/agents/src/fixtures/sample-packet";
 import {
   NEW_ROLE_FRESH_HREF, SOMEONE_NEW, addOwn, answerOf, answerPayload, answersPayload, approvalHelp, askFromDetails, basicsChips, cardsKey, cardsToShow, changedSections,
-  composerPlaceholder, draftOutOfDate, draftRecruiterAsk, draftSections, draftSteps, draftTitle, draftingNow, echoText, enterSends, errorWords, goTo, initialCards, isDiscardDraft,
+  composerPlaceholder, deckFor, draftOutOfDate, draftRecruiterAsk, draftSections, draftSteps, draftTitle, draftingNow, echoText, enterSends, errorWords, goTo, initialCards, isDiscardDraft,
   marketRange, marketSource, mayHireAgain, mayTakeOverDrafts, messageLimit, messageProblem, nextLabel, parseAmount, payFormFrom, payPayload, payProblem, pickHint, readinessList,
   redraftWarning, removeOwn, sectionOfPath, setDraft, setPayForm, startHireHref, togglePick, turnProblem, DRAFT_SEEN_BY, TAKEN_OVER_TOAST, type CardState,
 } from "../../apps/web/src/pages/new-role/rules";
@@ -115,6 +115,22 @@ describe("question cards", () => {
     const view = { status: "active", questions: [reason, pay], pay: { confirmed: { byName: "Dana", at: "", via: "typed" } } } as unknown as IntakeSessionView;
     expect(cardsToShow(view).map((x) => x.id)).toEqual(["q1_1"]);
     expect(cardsToShow({ ...view, status: "compiled" })).toEqual([]);
+  });
+
+  it("keep the picks on the other cards when one is answered on the draft panel, and start afresh for new cards", () => {
+    const picked = togglePick(initialCards(), reason, reason.options[0]!.value);
+    const deck = { key: cardsKey([reason, must, pay]), state: { ...picked, index: 2 }, closed: true };
+    // the pay card was set on the panel and went: the reason pick, the card being looked at and the closed deck stay
+    const after = deckFor(deck, [reason, must]);
+    expect(after.key).toBe(cardsKey([reason, must]));
+    expect(answerOf(after.state, reason).selected).toEqual([reason.options[0]!.value]);
+    expect(after.state.index).toBe(1);
+    expect(after.closed).toBe(true);
+    expect(deckFor(deck, [reason, must, pay])).toBe(deck);
+    // new cards from the assistant: afresh
+    const fresh = deckFor(deck, [{ ...must, id: "q2_1" }]);
+    expect(fresh).toEqual({ key: "q2_1", state: initialCards(), closed: false });
+    expect(deckFor({ key: "", state: initialCards(), closed: false }, [reason])).toEqual({ key: cardsKey([reason]), state: initialCards(), closed: false });
   });
 });
 
