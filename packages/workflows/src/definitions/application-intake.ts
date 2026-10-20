@@ -6,9 +6,18 @@ import { aiRuns, applications, assessments, candidates, communications, companie
 import { assessApplication, extractResume, sendAcknowledgment, verifyQuotes, type AcknowledgedConversation } from "@ros/agents";
 import { twoPhase, type WorkflowDefinition } from "../types";
 import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
+import { FORM_READ_EVENT, FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, linkFormReading } from "../form-reading";
 import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
 
-type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number; noticeWaitSince?: string; noAiReading?: boolean } & SuggestionState;
+/**
+ * `formUploadId`, `formReadAskedAt` (20 Oct, R20-1): the upload the apply form sent and when the form asked for its
+ * reading, so `extract` ties a reading that finished after Send, or waits a little for one still running, instead of
+ * reading the file a second time.
+ */
+type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number; noticeWaitSince?: string; noAiReading?: boolean; formUploadId?: string; formReadAskedAt?: string } & SuggestionState;
+
+/** What `extract` found before its transaction: a reading (the form's, tied by its upload, or a new one), or a form reading still running. */
+type Extracted = { kind: "read"; documentId: string; out: RunOutcome<ResumeExtraction>; tieUpload?: string } | { kind: "wait"; documentId: string; until: string };
 
 /**
  * Known-bugs row 16 (Wave S5 review): an applicant who emailed their application saw no form and no AI notice; the
@@ -140,7 +149,14 @@ export const applicationIntake: WorkflowDefinition<State> = {
       return { kind: "next", step: "eligibility", state: { noticeWaitSince: undefined, noAiReading: true } };
     },
 
-    extract: twoPhase<State, { documentId: string; out: RunOutcome<ResumeExtraction> } | null>({
+    /**
+     * The résumé is read by the model once (20 Oct, R20-1). The apply form's own reading is reused when it is tied to the
+     * document already, or found here by the upload the form sent (it finished after Send), unless another application
+     * sent from the same upload holds it. While that reading is still running (asked under `FORM_READ_WAIT_MS` ago, no
+     * note yet) the step waits for the reading job's signal, at most until then. Otherwise the file is read here: the
+     * text the scan step extracted decides whether there is anything to read, whatever the form's note said.
+     */
+    extract: twoPhase<State, Extracted | null>({
       async prepare(ctx) {
         const doc = await ctx.read(async (q) => {
           const loaded = await load(q, ctx.state.applicationId);
@@ -149,13 +165,23 @@ export const applicationIntake: WorkflowDefinition<State> = {
           return d && d.status === "clean" && d.textExtracted ? d : null;
         });
         if (!doc) return null;
+        const text = doc.textExtracted ?? "";
         // Wave S7: the apply form read this very file already (after the same checks and scan, on the worker); its reading
         // is reused, its quotes checked again against the text the scan step extracted, and the model is not asked twice.
         const formRun = doc.extractedByAiRunId;
         const reused = formRun ? await ctx.read((q) => formReadingOf(q, { aiRunId: formRun, documentId: doc.id })) : null;
-        if (reused) return { documentId: doc.id, out: { ok: true, output: verifyQuotes(reused.output, doc.textExtracted ?? ""), runId: reused.runId, model: reused.model } };
+        if (reused) return { kind: "read", documentId: doc.id, out: { ok: true, output: verifyQuotes(reused.output, text), runId: reused.runId, model: reused.model } };
+        const uploadId = !formRun ? ctx.state.formUploadId : undefined;
+        if (uploadId) {
+          const late = await ctx.read((q) => formReadingRun(q, { companyId: ctx.companyId, uploadId, applicationId: ctx.state.applicationId }));
+          if (late) return { kind: "read", documentId: doc.id, out: { ok: true, output: verifyQuotes(late.output, text), runId: late.runId, model: late.model }, tieUpload: uploadId };
+          // A note means the reading finished (its run, if any, is another application's, or it found nothing to use): read it here.
+          const outcome = await formReadingOutcome(ctx.services.integrations.storage, { companyId: ctx.companyId, roleId: ctx.state.roleId, uploadId });
+          const askedAt = Date.parse(ctx.state.formReadAskedAt ?? "");
+          if (!outcome && Number.isFinite(askedAt) && ctx.now.getTime() < askedAt + FORM_READ_WAIT_MS) return { kind: "wait", documentId: doc.id, until: new Date(askedAt + FORM_READ_WAIT_MS).toISOString() };
+        }
         const out = await extractResume(ctx.db, ctx.services.ai, { companyId: ctx.companyId, workflowRunId: ctx.run.id, text: doc.textExtracted!, filename: doc.filename, documentId: doc.id });
-        return { documentId: doc.id, out };
+        return { kind: "read", documentId: doc.id, out };
       },
       async run(ctx, prepared) {
         const loaded = await load(ctx.q, ctx.state.applicationId);
@@ -170,11 +196,22 @@ export const applicationIntake: WorkflowDefinition<State> = {
           return { kind: "next", step: "eligibility" };
         }
         if (!prepared || prepared.documentId !== doc.id) return { kind: "fail", error: "the résumé text arrived after the read phase; running the extraction again", retryable: true };
+        if (prepared.kind === "wait") {
+          const uploadId = ctx.state.formUploadId ?? "";
+          // The reading may have finished since the read phase looked (its signal then found nobody waiting): go round once more.
+          if (await formReadingRun(ctx.q, { companyId: ctx.companyId, uploadId, applicationId: app.id })) return { kind: "next", step: "extract" };
+          return { kind: "wait", wait: { kind: "event", eventTypes: [FORM_READ_EVENT], subjectId: uploadId, until: prepared.until, reason: "the apply form's own reading of this résumé is still running; it is used instead of reading the file a second time" }, resumeStep: "extract" };
+        }
         const out = prepared.out;
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
           await emit(ctx.q, { type: "resume.extraction_failed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { reason: out.error, aiRunId: out.runId }, correlationId: ctx.run.id });
           return { kind: "next", step: "eligibility" };
+        }
+        // The form's reading found by its upload belongs to the application from now on, as one tied at Send does. Another
+        // application from the same upload took it meanwhile: round once more, where it no longer counts and the file is read here.
+        if (prepared.tieUpload && !(await linkFormReading(ctx.q, { companyId: ctx.companyId, uploadId: prepared.tieUpload, applicationId: app.id, documentId: doc.id }))) {
+          return { kind: "next", step: "extract" };
         }
         await ctx.q.update(applications).set({ extraction: out.output }).where(eq(applications.id, app.id));
         await ctx.q.update(documents).set({ extractedByAiRunId: out.runId }).where(eq(documents.id, doc.id));

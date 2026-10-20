@@ -47,7 +47,11 @@ bucket-scoped at the provider, so the project holds exactly one bucket for this 
 
 1. Supabase dashboard, project `recruiting-os-staging`, **Storage**, **New bucket**: name `resumes`, **Private** (the
    default; never public), file size limit `8 MB`, allowed MIME types `application/pdf`,
-   `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `text/plain`, `text/markdown`.
+   `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `text/plain`, `text/markdown`, and the
+   logo types `image/png`, `image/jpeg`, `image/webp` (company logos go to the same bucket,
+   `apps/api/src/routes/company-settings.ts`). The apply form's reading note (`quarantine/…/<upload>.read.json`) is
+   saved as `text/plain` (20 October 2026), so it needs no type of its own; a bucket that refuses a type answers the
+   write with an error and the file is not kept.
 2. **Storage**, **Settings**: global file size limit at least 8 MB (the per-bucket limit cannot exceed it).
 3. **Storage**, **S3 Configuration**: enable the S3 protocol; note the endpoint and region shown there.
 4. **Storage**, **S3 Configuration**, **Access keys**, **New access key**: description `recruiting-os-staging-app`.

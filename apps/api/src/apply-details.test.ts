@@ -1,15 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { QuickQuestionView, ResumeExtraction } from "@ros/contracts";
 import { entitlements } from "@ros/core";
-import { aiRuns, applications, candidates, documents, rolePackets, roles, screens } from "@ros/db";
-import { EICAR_TEST_STRING, type MemoryStorageAdapter } from "@ros/integrations";
+import { aiRuns, applications, candidates, documents, events, jobs, rolePackets, roles, screens, uuidv7, workflowRuns } from "@ros/db";
+import { EICAR_TEST_STRING, StorageError, type Integrations, type MemoryStorageAdapter } from "@ros/integrations";
+import { DISCARD_OBJECT_JOB_KIND } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { CSS } from "./pages/layout";
-import { APPLY_CSS, FROM_RESUME_TAG, RESUME_READ_NOTICE, SUGGESTED_FROM_RESUME_TAG, formQuestions, postedApplyForm, reusedState, withResumeReading } from "./pages/apply-form";
+import { APPLY_CSS, APPLY_READ_WAIT_JS, FROM_RESUME_TAG, RESUME_READ_NOTICE, SUGGESTED_FROM_RESUME_TAG, formQuestions, postedApplyForm, reusedState, withResumeReading } from "./pages/apply-form";
 import { JOURNEY_CSS } from "./pages/journey";
-import { RESUME_READING_JOB_KIND, detailsFrom, expireResumeReading, factsFrom, readingFor, readingKey, splitName, suggestQuickAnswer, workSummaryFrom, type ResumeReading } from "./services/apply-details";
+import { RESUME_READING_EXPIRE_JOB_KIND, RESUME_READING_JOB_KIND, detailsFrom, expireResumeReading, factsFrom, readingFor, readingKey, runResumeReading, splitName, suggestQuickAnswer, workSummaryFrom, type ResumeReading } from "./services/apply-details";
+import type { UploadGrantPayload } from "./uploads";
 import { useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -175,9 +177,88 @@ describe("the apply form: résumé first, check your details, questions from the
   const inputValue = (html: string, name: string) => html.match(new RegExp(`name="${name}"[^>]*value="([^"]*)"`))?.[1] ?? html.match(new RegExp(`value="([^"]*)"[^>]*name="${name}"`))?.[1] ?? null;
   const textareaOf = (html: string, name: string) => html.match(new RegExp(`<textarea[^>]*name="${name}"[^>]*>([^<]*)</textarea>`))?.[1] ?? null;
   const grantOf = (html: string) => html.match(/name="uploadGrant" value="([^"]*)"/)?.[1] ?? "";
+  /** The staging bucket's résumé types (docs/runbooks/resume-storage.md): every write here is held to them, as the real bucket holds it. */
+  const RESUME_BUCKET_TYPES = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain", "text/markdown"];
+  const extractCalls = () => container.fake!.calls.filter((c) => c.task === "resume.extract").length;
+  const runsOfUpload = async (uploadId: string) => (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"))).filter((r) => r.inputRef.uploadId === uploadId);
+  const status = (grant: string) => app.request(`/careers/${slug}/jobs/${roleId}/apply/read-status`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant }) });
+  /** A file the browser put straight into storage (with script), and its grant. */
+  const directUpload = async (filename: string, text: string): Promise<UploadGrantPayload> => {
+    const bytes = new TextEncoder().encode(text);
+    const ir = await app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": `198.51.100.${ip++}` }, body: JSON.stringify({ filename, size: bytes.byteLength, type: "text/plain" }) });
+    const j = (await ir.json()) as { url: string; method: string; headers: Record<string, string>; grant: string };
+    expect((await app.request(new URL(j.url).pathname, { method: j.method, headers: j.headers, body: bytes.slice().buffer as ArrayBuffer })).status).toBe(200);
+    return container.uploadGrants.open(j.grant)!;
+  };
+  /** A résumé in quarantine as an upload leaves it, named as the reading job's payload names it. */
+  const quarantined = async (name: string) => {
+    const uploadId = uuidv7();
+    const ref = { companyId, roleId, uploadId, key: `quarantine/${companyId}/${roleId}/${uploadId}.txt`, filename: `${name.split(" ")[0].toLowerCase()}.txt`, mime: "text/plain" };
+    await container.integrations.storage.put(ref.key, new TextEncoder().encode(RESUME.replace("Dana Kept", name)), "text/plain");
+    return ref;
+  };
+  /** The storage with some of its answers changed: `put` and `get` stand in for the real ones where they say so. */
+  const storageWith = (over: { put?: Integrations["storage"]["put"]; get?: Integrations["storage"]["get"] }): Integrations["storage"] => Object.assign(Object.create(container.integrations.storage) as Integrations["storage"], over);
+  /** The reading's note refused the first `times` writes, as a bucket that does not take its type refuses it. */
+  const refusingNotes = (times: number) => {
+    let left = times;
+    const real = container.integrations.storage;
+    return storageWith({ put: async (key, bytes, type) => { if (key.endsWith(".read.json") && left-- > 0) throw new StorageError("put", 415); return real.put(key, bytes, type); } });
+  };
+  const readingDeps = (storage: Integrations["storage"]) => ({ db: container.db, ai: container.ai, integrations: { ...container.integrations, storage }, engine: container.engine });
+  const attempt = (n: number) => ({ attempt: n, maxAttempts: 3, now: new Date() });
+  /**
+   * Runs the waiting page's script on a stand-in page whose read-status answers `states` in turn (the last one again and
+   * again): a state, or an HTTP status that is not OK (a 429, a 502 while the app redeploys, a 404 for a spent grant).
+   */
+  const waitScript = async (states: Array<string | number>) => {
+    let tries = 0;
+    let submitted = 0;
+    const added: Array<{ name?: string; value?: string }> = [];
+    const timers: Array<() => void> = [];
+    const form = { getAttribute: () => "/read-status", querySelector: () => ({ value: "grant" }), addEventListener: () => undefined, appendChild: (el: { name?: string; value?: string }) => added.push(el), submit: () => { submitted++; } };
+    const fetchStub = async () => {
+      const answer = states[Math.min(tries++, states.length - 1)];
+      return typeof answer === "number" ? { ok: false, status: answer, json: async () => ({ state: "unknown" }) } : { ok: true, status: 200, json: async () => ({ state: answer }) };
+    };
+    const page = { querySelector: () => form, getElementById: () => ({ textContent: "" }), createElement: () => ({}) };
+    new Function("document", "window", "fetch", APPLY_READ_WAIT_JS)(page, { fetch: fetchStub, setTimeout: (fn: () => void) => timers.push(fn) }, fetchStub);
+    for (let i = 0; i < 200 && timers.length && !submitted; i++) {
+      timers.shift()!();
+      for (let k = 0; k < 5; k++) await new Promise((r) => setImmediate(r));
+    }
+    return { submitted, skip: added.some((e) => e.name === "skip" && e.value === "yes"), tries };
+  };
+  /** The worker held back (it is behind): what `fn` queues stays queued until the test runs it. */
+  const withoutWorker = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const kick = container.kick;
+    container.kick = async () => undefined;
+    try {
+      return await fn();
+    } finally {
+      container.kick = kick;
+    }
+  };
+  /** The reading jobs of an upload taken off the queue (the test finishes the reading itself, or never). */
+  const holdReadings = (uploadId: string) => container.db.update(jobs).set({ status: "done" }).where(and(eq(jobs.kind, RESUME_READING_JOB_KIND), sql`${jobs.payload}->>'uploadId' = ${uploadId}`));
+  /** A form sent with every eligibility question answered yes (and the days ones Monday). */
+  const sendable = (extra: Record<string, string>) => {
+    const fd = fields({ acknowledged: "yes", q_cq_software: "Dentrix", ...extra });
+    for (const e of eligibility) {
+      if (e.days) fd.append(`elig_${e.key}`, "Mon"); else fd.set(`elig_${e.key}`, "yes");
+    }
+    return fd;
+  };
+  const applicationOf = async (email: string) => {
+    const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, email));
+    return (await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id))))[0];
+  };
+  const intakeOf = async (applicationId: string) => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.idempotencyKey, `application_intake:${applicationId}`)))[0];
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "false", APP_BASE_URL: "http://localhost:3000" } });
+    // Every write is held to the bucket's types, as staging holds it: a note saved under another type fails here too.
+    (container.integrations.storage as MemoryStorageAdapter).allowTypes(RESUME_BUCKET_TYPES);
     // The reading's jobs are registered by container.ts itself, in every process (the web process and the worker).
     app = createApp(container);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@details.test" }) });
@@ -252,6 +333,8 @@ describe("the apply form: résumé first, check your details, questions from the
     expect(html).toContain('<h2 id="resume-title">Your resume</h2>');
     expect(html).toContain("We read dana-resume.txt and filled in your details below. It stays attached to your application.");
     expect(html).toContain('<h2 id="details-title">Check your details</h2>');
+    // the form says it showed the reading, so a form sent back says so again
+    expect(inputValue(html, "readShown")).toBe("yes");
     // the empty fields are filled and marked; what the candidate typed stays as typed, unmarked
     expect(inputValue(html, "firstName")).toBe("Dana");
     expect(inputValue(html, "lastName")).toBe("Kept-Lopez");
@@ -271,10 +354,12 @@ describe("the apply form: résumé first, check your details, questions from the
     if (work) expect(html).not.toMatch(new RegExp(`name="elig_${work.key}" value="yes"[^>]*checked`));
     // the résumé travels with a grant for the app's own quarantined copy; the reading is beside it, and the run is the form's
     const grant = container.uploadGrants.open(grantOf(html))!;
-    expect(grant).toMatchObject({ companyId, roleId, filename: "dana-resume.txt", via: "server" });
+    expect(grant).toMatchObject({ companyId, roleId, filename: "dana-resume.txt", via: "server", readAskedAt: expect.any(Number) });
     expect(grant.key).toBe(`quarantine/${companyId}/${roleId}/${grant.uploadId}.txt`);
     const reading = (await readingFor(container.integrations.storage, grant))!;
     expect(reading).toMatchObject({ outcome: "read", uploadId: grant.uploadId });
+    // the note is plain text, a type the résumé bucket takes (it refused the JSON type on staging; 20 Oct)
+    expect((await container.integrations.storage.head(readingKey(grant)))?.contentType).toBe("text/plain");
     const runs = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"));
     expect(runs.length).toBe(runsBefore + 1);
     expect(runs.find((x) => x.id === reading.aiRunId)!.inputRef).toMatchObject({ uploadId: grant.uploadId, purpose: "apply_form" });
@@ -289,7 +374,7 @@ describe("the apply form: résumé first, check your details, questions from the
     const grant = grantOf(read);
     const opened = container.uploadGrants.open(grant)!;
     const reading = (await readingFor(container.integrations.storage, opened))!;
-    const fd = fields({ firstName: "Lee", lastName: "Reuse", email: "lee.reuse@example.com", phone: "(949) 555-0199", locationText: "", workSummary: textareaOf(read, "workSummary")!, uploadGrant: grant, formOpened: inputValue(read, "formOpened")!, acknowledged: "yes", q_cq_software: "Dentrix", q_cq_years: "7" });
+    const fd = fields({ firstName: "Lee", lastName: "Reuse", email: "lee.reuse@example.com", phone: "(949) 555-0199", locationText: "", workSummary: textareaOf(read, "workSummary")!, uploadGrant: grant, formOpened: inputValue(read, "formOpened")!, readShown: inputValue(read, "readShown")!, acknowledged: "yes", q_cq_software: "Dentrix", q_cq_years: "7" });
     for (const e of eligibility) {
       if (e.days) { fd.append(`elig_${e.key}`, "Mon"); fd.append(`elig_${e.key}`, "Tue"); } else fd.set(`elig_${e.key}`, "yes");
     }
@@ -347,8 +432,9 @@ describe("the apply form: résumé first, check your details, questions from the
     const j = (await ir.json()) as { url: string; method: string; headers: Record<string, string>; grant: string };
     expect((await app.request(new URL(j.url).pathname, { method: j.method, headers: j.headers, body: bytes.slice().buffer as ArrayBuffer })).status).toBe(200);
     const g = container.uploadGrants.open(j.grant)!;
-    const status = (grant: string) => app.request(`/careers/${slug}/jobs/${roleId}/apply/read-status`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant }) });
-    // nothing asked for it yet: the waiting page, with everything typed carried along and both ways on
+    // nothing asked for it yet (the grant says no time it was asked): the waiting page as before, with no deadline, with
+    // everything typed carried along and both ways on
+    expect(g.readAskedAt).toBeUndefined();
     expect(await (await status(j.grant)).json()).toEqual({ state: "reading" });
     const wait = await post("/apply/details", fields({ uploadGrant: j.grant, firstName: "Max", acknowledged: "yes", q_cq_years: "3" }));
     expect(wait.status).toBe(200);
@@ -370,7 +456,7 @@ describe("the apply form: résumé first, check your details, questions from the
     expect(await (await status(j.grant)).json()).toEqual({ state: "done" });
     // the grant the form carries from here lasts longer, for the same file
     const longer = container.uploadGrants.open(grantOf(read))!;
-    expect(longer).toMatchObject({ uploadId: g.uploadId, key: g.key });
+    expect(longer).toMatchObject({ uploadId: g.uploadId, key: g.key, readAskedAt: expect.any(Number) });
     expect(longer.exp).toBeGreaterThan(g.exp);
     expect((await status("not-a-grant")).status).toBe(404);
   });
@@ -405,18 +491,269 @@ describe("the apply form: résumé first, check your details, questions from the
     const html = decode(await (await post("/apply/read", fields({ resume: new File([RESUME.replace("Dana Kept", "Una Sent")], "una.txt", { type: "text/plain" }) }))).text());
     const g = container.uploadGrants.open(grantOf(html))!;
     const reading = (await readingFor(container.integrations.storage, g))!;
-    // the clean-up was queued with it: the record and the file go after a day unless an application holds the file
+    // the clean-up was queued with it: the note and the file go after a day unless an application holds the file, and
+    // the words of every reading of this upload that no application holds
     const stored = container.integrations.storage as MemoryStorageAdapter;
     expect(stored.has(readingKey(g))).toBe(true);
+    const queued = (await container.db.select().from(jobs).where(inArray(jobs.kind, [DISCARD_OBJECT_JOB_KIND, RESUME_READING_EXPIRE_JOB_KIND]))).filter((j) => j.payload.uploadId === g.uploadId || j.payload.key === g.key || j.payload.key === readingKey(g));
+    expect(queued.filter((j) => j.kind === DISCARD_OBJECT_JOB_KIND).map((j) => j.payload.key).sort()).toEqual([g.key, readingKey(g)].sort());
+    const expire = queued.filter((j) => j.kind === RESUME_READING_EXPIRE_JOB_KIND);
+    expect(expire.map((j) => j.payload)).toEqual([{ companyId, uploadId: g.uploadId, aiRunId: reading.aiRunId }]);
     // asking again for the same upload reads nothing new
     const runs = (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"))).length;
     await container.engine.enqueue(container.db, { kind: RESUME_READING_JOB_KIND, payload: { companyId, roleId, uploadId: g.uploadId, key: g.key, filename: g.filename, mime: g.mime } });
     await container.drain();
     expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"))).length).toBe(runs);
-    await expireResumeReading(container.db, { companyId, aiRunId: reading.aiRunId });
+    await expireResumeReading(container.db, expire[0].payload);
     const [run] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, reading.aiRunId!));
     expect(JSON.stringify(run.structuredOutput)).not.toContain("Una Sent");
     expect(run.task).toBe("resume.extract");
+  });
+
+  it("a note the bucket refuses after a good reading is not read again: the next try takes the same reading, one model call (20 Oct)", async () => {
+    const ref = await quarantined("Ira Retry");
+    const deps = readingDeps(refusingNotes(1));
+    const before = extractCalls();
+    await expect(runResumeReading(deps, ref, attempt(1))).rejects.toThrow("storage put failed with HTTP 415");
+    expect(extractCalls()).toBe(before + 1);
+    expect(await readingFor(container.integrations.storage, ref)).toBeNull();
+    await runResumeReading(deps, ref, attempt(2));
+    expect(extractCalls()).toBe(before + 1);
+    const reading = (await readingFor(container.integrations.storage, ref))!;
+    expect(reading).toMatchObject({ outcome: "read", uploadId: ref.uploadId, details: { firstName: "Ira", lastName: "Retry" } });
+    expect((await runsOfUpload(ref.uploadId)).map((r) => r.id)).toEqual([reading.aiRunId]);
+    expect((await container.integrations.storage.head(readingKey(ref)))?.contentType).toBe("text/plain");
+  });
+
+  it("the clean-up is queued even when the note is never written (every try refused, as on staging before 20 Oct)", async () => {
+    const ref = await quarantined("Ola Orphan");
+    const deps = readingDeps(refusingNotes(Number.POSITIVE_INFINITY));
+    const before = extractCalls();
+    for (const n of [1, 2, 3]) await expect(runResumeReading(deps, ref, attempt(n))).rejects.toThrow("storage put failed with HTTP 415");
+    // one model call for all three tries, and no note
+    expect(extractCalls()).toBe(before + 1);
+    expect(await readingFor(container.integrations.storage, ref)).toBeNull();
+    // the note, the file and the reading's words go a day later all the same
+    const queued = (await container.db.select().from(jobs).where(inArray(jobs.kind, [DISCARD_OBJECT_JOB_KIND, RESUME_READING_EXPIRE_JOB_KIND]))).filter((j) => j.payload.uploadId === ref.uploadId || j.payload.key === ref.key || j.payload.key === readingKey(ref));
+    expect(new Set(queued.filter((j) => j.kind === DISCARD_OBJECT_JOB_KIND).map((j) => j.payload.key))).toEqual(new Set([ref.key, readingKey(ref)]));
+    const expire = queued.filter((j) => j.kind === RESUME_READING_EXPIRE_JOB_KIND);
+    expect(expire.length).toBeGreaterThan(0);
+    for (const j of queued) expect(Date.parse(j.runAt) - Date.now()).toBeGreaterThan(23 * 3_600_000);
+    expect(JSON.stringify((await runsOfUpload(ref.uploadId))[0].structuredOutput)).toContain("Ola Orphan");
+    await expireResumeReading(container.db, expire[0].payload);
+    const [scrubbed] = await runsOfUpload(ref.uploadId);
+    expect(JSON.stringify(scrubbed.structuredOutput)).not.toContain("Ola Orphan");
+    expect(scrubbed.inputRef).toMatchObject({ uploadId: ref.uploadId, purpose: "apply_form" });
+  });
+
+  it("the page never waits forever: about 75 seconds after asking it goes on to the form, the résumé attached, with and without script (20 Oct)", async () => {
+    const g = await directUpload("pat.txt", RESUME.replace("Dana Kept", "Pat Late"));
+    const askedAgo = (seconds: number) => container.uploadGrants.seal({ ...g, readAskedAt: Math.floor(Date.now() / 1000) - seconds });
+    // asked 10 seconds ago and not done: still waiting, with script and without
+    const fresh = askedAgo(10);
+    expect(await (await status(fresh)).json()).toEqual({ state: "reading" });
+    expect(decode(await (await post("/apply/details", fields({ uploadGrant: fresh, firstName: "Pat" }))).text())).toContain("Still reading pat.txt…");
+    // asked 80 seconds ago and still nothing (the worker is behind): the script hears gave_up; Continue without script, and
+    // what the script sends (skip=yes), both go on to the form with the résumé attached
+    const late = askedAgo(80);
+    expect(await (await status(late)).json()).toEqual({ state: "gave_up" });
+    for (const extra of [{}, { skip: "yes" }] as Array<Record<string, string>>) {
+      const r = await post("/apply/details", fields({ uploadGrant: late, firstName: "Pat", ...extra }));
+      expect(r.status).toBe(200);
+      const html = decode(await r.text());
+      expect(html).not.toContain("<h1>Reading your resume</h1>");
+      expect(html).toContain("We could not read pat.txt just now, so please fill in your details yourself. It stays attached to your application.");
+      expect(grantOf(html)).toBe(late);
+      expect(inputValue(html, "firstName")).toBe("Pat");
+      expect(html).not.toContain(FROM_RESUME_TAG);
+      expect(inputValue(html, "readShown")).toBeNull();
+    }
+    // a reading that failed gives up at once
+    const failed: ResumeReading = { v: 1, uploadId: g.uploadId, outcome: "failed", aiRunId: null, readAt: new Date().toISOString(), details: null, facts: null };
+    await container.integrations.storage.put(readingKey(g), new TextEncoder().encode(JSON.stringify(failed)), "text/plain");
+    expect(await (await status(fresh)).json()).toEqual({ state: "gave_up" });
+    // the waiting page's script: done goes on as it is; gave_up, or no answer within its tries, goes on as "Fill it in myself instead"
+    expect(await waitScript(["reading", "done"])).toEqual({ submitted: 1, skip: false, tries: 2 });
+    expect(await waitScript(["reading", "reading", "gave_up"])).toEqual({ submitted: 1, skip: true, tries: 3 });
+    expect(await waitScript(["reading"])).toEqual({ submitted: 1, skip: true, tries: 30 });
+    // a busy answer (the app redeploying, too many asks from one address) is asked again, never the end of the asking
+    expect(await waitScript([502, 429, "gave_up"])).toEqual({ submitted: 1, skip: true, tries: 3 });
+    expect(await waitScript([503, "done"])).toEqual({ submitted: 1, skip: false, tries: 2 });
+    expect(await waitScript([429])).toEqual({ submitted: 1, skip: true, tries: 30 });
+    // only a grant that no longer opens stops it, and leaves the two buttons
+    expect(await waitScript([404])).toEqual({ submitted: 0, skip: false, tries: 1 });
+  });
+
+  it("Continue and 'Fill it in myself' are not under the asking's limit: once the waiting pages behind one address used it up, they still go on (20 Oct)", async () => {
+    const g = await directUpload("vic.txt", RESUME.replace("Dana Kept", "Vic Busy"));
+    const late = container.uploadGrants.seal({ ...g, readAskedAt: Math.floor(Date.now() / 1000) - 80 });
+    // the same app with the asking's limit at two an hour, as many waiting pages behind one address would leave it
+    const limited = createApp({ ...container, env: { ...container.env, RATE_LIMIT_OVERRIDES: { ...container.env.RATE_LIMIT_OVERRIDES, "apply.read_status": 2 } } });
+    const from = { "x-forwarded-for": "203.0.113.7" };
+    const ask = () => limited.request(`/careers/${slug}/jobs/${roleId}/apply/read-status`, { method: "POST", headers: { "content-type": "application/json", ...from }, body: JSON.stringify({ grant: late }) });
+    expect([(await ask()).status, (await ask()).status, (await ask()).status]).toEqual([200, 200, 429]);
+    for (const extra of [{}, { skip: "yes" }] as Array<Record<string, string>>) {
+      const r = await limited.request(`/careers/${slug}/jobs/${roleId}/apply/details`, { method: "POST", body: fields({ uploadGrant: late, firstName: "Vic", ...extra }), headers: from });
+      expect(r.status).toBe(200);
+      expect(decode(await r.text())).toContain("We could not read vic.txt just now");
+    }
+  });
+
+  it("Send before the reading finishes: the intake waits for the form's reading and takes it, one model call in all (20 Oct)", async () => {
+    const g = await directUpload("sol.txt", RESUME.replace("Dana Kept", "Sol Early").replace("dana.kept", "sol.early"));
+    // "Read my resume" asked for it just now; the worker has the file but has not answered when Send is pressed
+    const grant = container.uploadGrants.seal({ ...g, readAskedAt: Math.floor(Date.now() / 1000) });
+    const bytes = (await container.integrations.storage.get(g.key))!;
+    const before = extractCalls();
+    const fd = fields({ firstName: "Sol", lastName: "Early", email: "sol.early@example.com", uploadGrant: grant, acknowledged: "yes", q_cq_software: "Dentrix" });
+    for (const e of eligibility) {
+      if (e.days) fd.append(`elig_${e.key}`, "Mon"); else fd.set(`elig_${e.key}`, "yes");
+    }
+    expect((await post("/apply", fd)).status).toBe(302);
+    await container.drain();
+    const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, "sol.early@example.com"));
+    const appOf = async () => (await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id))))[0];
+    // the intake did not read the file itself: it waits for the form's reading, at most three minutes after it was asked for
+    expect((await appOf()).extraction).toBeNull();
+    expect(extractCalls()).toBe(before);
+    const [intake] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.idempotencyKey, `application_intake:${(await appOf()).id}`));
+    expect(intake).toMatchObject({ status: "waiting", currentStep: "extract", state: expect.objectContaining({ formUploadId: g.uploadId, formReadAskedAt: expect.any(String) }) });
+    expect((intake.wait as { keys?: string[] }).keys).toEqual([`${g.uploadId}:resume.form_read`]);
+    // the reading job (it had the file before the intake moved it) finishes: its signal wakes the intake, which takes it
+    const withFile = storageWith({ get: async (key) => (key === g.key ? bytes : container.integrations.storage.get(key)) });
+    await runResumeReading(readingDeps(withFile), { companyId, roleId, uploadId: g.uploadId, key: g.key, filename: g.filename, mime: g.mime }, attempt(1));
+    await container.drain();
+    expect(extractCalls()).toBe(before + 1);
+    const a = await appOf();
+    expect(a.extraction).toMatchObject({ fullName: "Sol Early" });
+    const [run] = await runsOfUpload(g.uploadId);
+    expect(run.inputRef).toMatchObject({ applicationId: a.id, documentId: a.resumeDocumentId, purpose: "apply_form" });
+    const [doc] = await container.db.select().from(documents).where(eq(documents.id, a.resumeDocumentId!));
+    expect(doc).toMatchObject({ status: "clean", extractedByAiRunId: run.id });
+  });
+
+  it("without script: Read my resume, the worker behind, 'Fill it in myself', Send: the intake waits for the form's reading and takes it, one model call (20 Oct)", async () => {
+    const before = extractCalls();
+    // the file inside the form; the worker has not got to it, so the waiting page comes back
+    const first = decode(await withoutWorker(async () => (await post("/apply/read", fields({ firstName: "Noor", resume: new File([RESUME.replace("Dana Kept", "Noor Late").replace("dana.kept", "noor.late")], "noor.txt", { type: "text/plain" }) }))).text()));
+    expect(first).toContain("<h1>Reading your resume</h1>");
+    const grant = grantOf(first);
+    const g = container.uploadGrants.open(grant)!;
+    expect(g).toMatchObject({ via: "server", filename: "noor.txt", readAskedAt: expect.any(Number) });
+    await holdReadings(g.uploadId);
+    const bytes = (await container.integrations.storage.get(g.key))!;
+    // Continue (no script): still reading; "Fill it in myself instead": the form, the résumé attached
+    const formOpened = inputValue(first, "formOpened")!;
+    expect(decode(await (await post("/apply/details", fields({ uploadGrant: grant, formOpened, firstName: "Noor" }))).text())).toContain("Still reading noor.txt…");
+    const form = decode(await (await post("/apply/details", fields({ uploadGrant: grant, formOpened, firstName: "Noor", skip: "yes" }))).text());
+    expect(form).toContain("noor.txt is attached to your application. Fill in your details below.");
+    expect(grantOf(form)).toBe(grant);
+    // Send while the reading still runs: the intake does not read the file, it waits for the form's reading
+    expect((await post("/apply", sendable({ firstName: "Noor", lastName: "Late", email: "noor.late@example.com", uploadGrant: grantOf(form), formOpened: inputValue(form, "formOpened")! }))).status).toBe(302);
+    await container.drain();
+    const sent = await applicationOf("noor.late@example.com");
+    expect(sent.extraction).toBeNull();
+    expect(extractCalls()).toBe(before);
+    expect(await intakeOf(sent.id)).toMatchObject({ status: "waiting", currentStep: "extract", state: expect.objectContaining({ formUploadId: g.uploadId }) });
+    // the worker reads it at last (it had the file before the intake moved it): its signal wakes the intake, which takes it
+    const withFile = storageWith({ get: async (key) => (key === g.key ? bytes : container.integrations.storage.get(key)) });
+    await runResumeReading(readingDeps(withFile), { companyId, roleId, uploadId: g.uploadId, key: g.key, filename: g.filename, mime: g.mime }, attempt(1));
+    await container.drain();
+    expect(extractCalls()).toBe(before + 1);
+    const a = await applicationOf("noor.late@example.com");
+    expect(a.extraction).toMatchObject({ fullName: "Noor Late" });
+    const runs = await runsOfUpload(g.uploadId);
+    expect(runs.length).toBe(1);
+    expect(runs[0].inputRef).toMatchObject({ applicationId: a.id, documentId: a.resumeDocumentId, purpose: "apply_form" });
+  });
+
+  it("two applications sent at once from one read upload: the first keeps the form's reading, the second reads its own copy and never fails (20 Oct)", async () => {
+    const read = decode(await (await post("/apply/read", fields({ resume: new File([RESUME.replace("Dana Kept", "Kim Twice").replace("dana.kept", "kim.twice")], "kim.txt", { type: "text/plain" }) }))).text());
+    const grant = grantOf(read);
+    const g = container.uploadGrants.open(grant)!;
+    const reading = (await readingFor(container.integrations.storage, g))!;
+    const before = extractCalls();
+    const send = (email: string) => post("/apply", sendable({ firstName: "Kim", lastName: "Twice", email, uploadGrant: grant, formOpened: inputValue(read, "formOpened")!, readShown: "yes" }));
+    // both Sends passed the one-use check before either was recorded (the check runs before the Send's transaction)
+    await withoutWorker(async () => {
+      expect((await send("kim.one@example.com")).status).toBe(302);
+      await container.db.delete(events).where(and(eq(events.type, "document.upload_used"), sql`${events.payload}->>'uploadId' = ${g.uploadId}`));
+      expect((await send("kim.two@example.com")).status).toBe(302);
+    });
+    await container.drain();
+    const one = await applicationOf("kim.one@example.com");
+    const two = await applicationOf("kim.two@example.com");
+    const [run] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, reading.aiRunId!));
+    expect(run.inputRef).toMatchObject({ applicationId: one.id });
+    expect(one.extraction).toMatchObject({ fullName: "Kim Twice" });
+    // the second looked for the form's reading by the upload, found it was the first's, and read the file itself once
+    expect(two.extraction).toMatchObject({ fullName: "Kim Twice" });
+    expect(extractCalls()).toBe(before + 1);
+    expect(await intakeOf(two.id)).toMatchObject({ state: expect.objectContaining({ formUploadId: g.uploadId }) });
+    expect((await intakeOf(two.id)).status).not.toBe("failed");
+  });
+
+  it("a form note that says unreadable does not stop the intake reading a file whose text it has: one model call (20 Oct)", async () => {
+    const g = await directUpload("uma.txt", RESUME.replace("Dana Kept", "Uma Note").replace("dana.kept", "uma.note"));
+    // the form's own text extraction came back empty once (a parser that threw), the intake's does not
+    const note: ResumeReading = { v: 1, uploadId: g.uploadId, outcome: "unreadable", aiRunId: null, readAt: new Date().toISOString(), details: null, facts: null };
+    await container.integrations.storage.put(readingKey(g), new TextEncoder().encode(JSON.stringify(note)), "text/plain");
+    const grant = container.uploadGrants.seal({ ...g, readAskedAt: Math.floor(Date.now() / 1000) });
+    const before = extractCalls();
+    expect((await post("/apply", sendable({ firstName: "Uma", lastName: "Note", email: "uma.note@example.com", uploadGrant: grant }))).status).toBe(302);
+    await container.drain();
+    expect(extractCalls()).toBe(before + 1);
+    const a = await applicationOf("uma.note@example.com");
+    expect(a.extraction).toMatchObject({ fullName: "Uma Note" });
+  });
+
+  it("a reading that arrives after the page gave up fills in nothing: a form sent back says the résumé is attached, not that it was read (20 Oct)", async () => {
+    const g = await directUpload("rae.txt", RESUME.replace("Dana Kept", "Rae Later").replace("dana.kept", "rae.later"));
+    const late = container.uploadGrants.seal({ ...g, readAskedAt: Math.floor(Date.now() / 1000) - 80 });
+    const form = decode(await (await post("/apply/details", fields({ uploadGrant: late, firstName: "Rae" }))).text());
+    expect(form).toContain("We could not read rae.txt just now");
+    // the worker finishes after all
+    await runResumeReading(readingDeps(container.integrations.storage), { companyId, roleId, uploadId: g.uploadId, key: g.key, filename: g.filename, mime: g.mime }, attempt(1));
+    expect((await readingFor(container.integrations.storage, g))?.outcome).toBe("read");
+    // typed by hand (as the résumé has it), sent without the notice box: back with the résumé attached, nothing marked or filled
+    const typed = { uploadGrant: grantOf(form), formOpened: inputValue(form, "formOpened")!, firstName: "Rae", lastName: "Later", email: "rae.later@example.com" };
+    const back = await post("/apply", fields(typed));
+    expect(back.status).toBe(400);
+    const html = decode(await back.text());
+    expect(html).toContain("rae.txt is attached to your application. Fill in your details below.");
+    expect(html).not.toContain("We read rae.txt");
+    expect(html).toContain('<h2 id="details-title">Your details</h2>');
+    expect(html).not.toContain(FROM_RESUME_TAG);
+    expect(inputValue(html, "phone")).toBe("");
+    expect(inputValue(html, "readShown")).toBeNull();
+    // the form the reading filled in ("Check your details") still says so when it comes back
+    const shown = decode(await (await post("/apply", fields({ ...typed, readShown: "yes" }))).text());
+    expect(shown).toContain("We read rae.txt and filled in your details below.");
+    expect(shown).toContain(`<label for="firstName">First name</label><p class="tag" id="firstName-tag">${FROM_RESUME_TAG}</p>`);
+    expect(inputValue(shown, "readShown")).toBe("yes");
+  });
+
+  it("a reload of the waiting page does not restart its clock: the grant keeps the time the reading was first asked for (20 Oct)", async () => {
+    const g = await directUpload("ray.txt", RESUME.replace("Dana Kept", "Ray Reload"));
+    // the upload's own grant, as the first waiting page's form posts it again on a reload
+    const plain = container.uploadGrants.seal(g);
+    const first = decode(await withoutWorker(async () => (await post("/apply/read", fields({ uploadGrant: plain }))).text()));
+    expect(first).toContain("<h1>Reading your resume</h1>");
+    // the first ask was 80 seconds ago (its job says so), and the worker is still behind
+    await container.db.update(jobs).set({ createdAt: new Date(Date.now() - 80_000).toISOString() }).where(and(eq(jobs.kind, RESUME_READING_JOB_KIND), sql`${jobs.payload}->>'uploadId' = ${g.uploadId}`));
+    await holdReadings(g.uploadId);
+    const reload = decode(await withoutWorker(async () => (await post("/apply/read", fields({ uploadGrant: plain }))).text()));
+    await holdReadings(g.uploadId);
+    expect(reload).toContain("<h1>Reading your resume</h1>");
+    const kept = container.uploadGrants.open(grantOf(reload))!;
+    expect(Math.abs(kept.readAskedAt! - (Math.floor(Date.now() / 1000) - 80))).toBeLessThanOrEqual(2);
+    // so the page gives up on time, not 75 seconds after the reload
+    expect(await (await status(grantOf(reload))).json()).toEqual({ state: "gave_up" });
+    // a grant that already says when it was asked keeps that time
+    const askedAt = Math.floor(Date.now() / 1000) - 30;
+    const again = decode(await withoutWorker(async () => (await post("/apply/read", fields({ uploadGrant: container.uploadGrants.seal({ ...g, readAskedAt: askedAt }) }))).text()));
+    await holdReadings(g.uploadId);
+    expect(container.uploadGrants.open(grantOf(again))!.readAskedAt).toBe(askedAt);
   });
 
   it("the questions are the readers' own (formQuestions): eligibility first, then the company's, with their plain lines", async () => {

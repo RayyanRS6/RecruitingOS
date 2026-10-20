@@ -1,11 +1,11 @@
-import { eq } from "drizzle-orm";
+import { and, asc, eq, or, sql } from "drizzle-orm";
 import { MAX_RESUME_BYTES, inspectResumeFile, type QuickQuestionView, type ResumeExtraction } from "@ros/contracts";
 import { resumeExtractPrompt, runPromptDetached, type AiRuntime } from "@ros/ai";
 import { cvLinesOf, documentToText, verifyQuotes } from "@ros/agents";
 import { scrubAiRun } from "@ros/core";
-import { aiRuns, documents, withTenant, type Db, type Queryable } from "@ros/db";
+import { aiRuns, jobs, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
-import { DISCARD_OBJECT_JOB_KIND, type WorkflowEngine } from "@ros/workflows";
+import { DISCARD_OBJECT_JOB_KIND, FORM_READING_KEEP_MS, formReadSignal, formReadingNoteKey, formReadingRun, linkFormReading, type WorkflowEngine } from "@ros/workflows";
 
 /**
  * Reading a résumé for the apply form (Wave S7, spec steps 2 to 4, slice S7-B): the candidate chooses their résumé
@@ -15,11 +15,13 @@ import { DISCARD_OBJECT_JOB_KIND, type WorkflowEngine } from "@ros/workflows";
  * The reading is the existing `resume.extract` task (Haiku 5.5, the existing schema), run by the worker as a job: the
  * app never opens a file that has not been scanned (founder decision 2; the malware engine is reachable from the worker
  * only), so the job inspects the bytes, scans them, extracts the text and then asks the model, exactly as the intake
- * workflow does. Its result is a small JSON record next to the quarantined file (`readingKey`), which the form reads;
- * nothing about the person is written to an event. When the application is sent, the reading's AI run is tied to the
- * application and its résumé document (`linkResumeReading`), so the intake workflow reuses it instead of reading the
- * file a second time, and a deletion request finds and scrubs it with the rest. A reading nobody sent is removed after a
- * day: the record and the file by the existing discard job, the AI run's words by `RESUME_READING_EXPIRE_JOB_KIND`.
+ * workflow does. Its result is a small JSON note next to the quarantined file (`readingKey`, saved as `text/plain`, a
+ * type the résumé bucket already takes), which the form reads; nothing about the person is written to an event. When
+ * the application is sent, the reading's AI run is tied to the application and its résumé document by the upload
+ * (`linkResumeReading`), so the intake workflow reuses it instead of reading the file a second time (and waits a little
+ * for one still running), and a deletion request finds and scrubs it with the rest. A reading nobody sent is removed
+ * after a day: the note and the file by the existing discard job, the AI run's words by `RESUME_READING_EXPIRE_JOB_KIND`;
+ * both are queued before the note is written, so a note that cannot be written never skips them.
  */
 
 /** The job that reads one uploaded résumé for the form. */
@@ -27,11 +29,13 @@ export const RESUME_READING_JOB_KIND = "apply.read_resume";
 /** The job that, a day later, scrubs the words of a reading that never became part of an application. */
 export const RESUME_READING_EXPIRE_JOB_KIND = "apply.read_resume_expire";
 /** How long a reading and its file are kept when nobody sends the application. */
-export const RESUME_READING_KEEP_MS = 24 * 3_600_000;
+export const RESUME_READING_KEEP_MS = FORM_READING_KEEP_MS;
 /** How long the form may still attach a résumé it has read (the grant the form carries), so checking the details is never rushed. */
 export const READ_GRANT_TTL_SECONDS = 2 * 3600;
 /** How long the request that asked for a reading waits for it before showing "Reading your resume…" with a Continue button. */
-export const READ_WAIT_MS = 25_000;
+export const READ_WAIT_MS = 15_000;
+/** How long after asking the page stops waiting for a reading and goes on to the form, the résumé attached (20 Oct, R20-3). */
+export const READ_GIVE_UP_MS = 75_000;
 const READ_POLL_MS = 700;
 
 /** Which upload a reading is about: the sealed grant's own fields. */
@@ -59,11 +63,22 @@ export type ResumeFacts = {
  */
 export type ResumeReading = { v: 1; uploadId: string; outcome: "read" | "unreadable" | "refused" | "failed"; aiRunId: string | null; readAt: string; details: ResumeDetails | null; facts: ResumeFacts | null; cvLines?: string[] };
 
-export type ReadingDeps = { db: Db; ai: AiRuntime; integrations: Integrations; engine: Pick<WorkflowEngine, "enqueue"> };
+export type ReadingDeps = { db: Db; ai: AiRuntime; integrations: Integrations; engine: Pick<WorkflowEngine, "enqueue" | "signal"> };
 
 /** Where a reading's record lives: beside its quarantined file, under the company's own quarantine area. */
 export function readingKey(ref: Pick<ResumeReadRef, "companyId" | "roleId" | "uploadId">): string {
-  return `quarantine/${ref.companyId}/${ref.roleId}/${ref.uploadId}.read.json`;
+  return formReadingNoteKey(ref);
+}
+
+/**
+ * Whether the page stops waiting for a reading (20 Oct, R20-3): the reading failed, or none came within `READ_GIVE_UP_MS`
+ * of asking. Only for a grant that says when it was asked for (`readAskedAt`, sealed by "Read my resume"); an older
+ * grant keeps waiting as it always did.
+ */
+export function readingGaveUp(grant: { readAskedAt?: number }, reading: ResumeReading | null, now: Date): boolean {
+  if (typeof grant.readAskedAt !== "number") return false;
+  if (reading) return reading.outcome === "failed";
+  return now.getTime() - grant.readAskedAt * 1000 >= READ_GIVE_UP_MS;
 }
 
 /** The reading for an upload, once the worker wrote it; null while it runs (or when it never ran). */
@@ -89,6 +104,17 @@ export async function waitForReading(storage: Integrations["storage"], ref: Pick
   return found;
 }
 
+/**
+ * When the reading of an upload was first asked for (epoch seconds, its first job), or null when it never was: a reload
+ * of the waiting page posts the same grant again, and the page's wait goes on from the first ask instead of restarting
+ * (20 Oct, R20-3). The API may read the job queue; nothing about the person is in the lookup.
+ */
+export async function readingAskedAt(db: Db, ref: Pick<ResumeReadRef, "companyId" | "uploadId">): Promise<number | null> {
+  const [first] = await db.select({ at: jobs.createdAt }).from(jobs).where(and(eq(jobs.kind, RESUME_READING_JOB_KIND), sql`${jobs.payload}->>'companyId' = ${ref.companyId}`, sql`${jobs.payload}->>'uploadId' = ${ref.uploadId}`)).orderBy(asc(jobs.id)).limit(1);
+  const at = first ? Date.parse(first.at) : Number.NaN;
+  return Number.isFinite(at) ? Math.floor(at / 1000) : null;
+}
+
 /** Asks the worker to read an uploaded résumé. Safe to call twice: the job does nothing once a reading exists. */
 export async function startResumeReading(deps: { db: Db; engine: Pick<WorkflowEngine, "enqueue"> }, ref: ResumeReadRef): Promise<void> {
   await deps.engine.enqueue(deps.db, { kind: RESUME_READING_JOB_KIND, payload: { ...ref }, maxAttempts: 3 });
@@ -105,7 +131,10 @@ function refOf(payload: Record<string, unknown>): ResumeReadRef | null {
 /**
  * The worker's job: inspect, scan, extract the text, read it with `resume.extract`, check every quote against the text,
  * and write the reading. A scanner or an assistant that does not answer is tried again; on the last try the reading
- * says so, and the candidate fills in the form themselves. The clean-up of a reading nobody sends is queued with it.
+ * says so, and the candidate fills in the form themselves. The model reads an upload once (20 Oct, R20-1): a try after
+ * a good reading whose note could not be written uses that reading again. The clean-up of a reading nobody sends is
+ * queued before the note is written, and an intake waiting for this reading (Send came first) is signalled when the
+ * job finishes, whether the note was written or not.
  */
 export async function runResumeReading(deps: ReadingDeps, payload: Record<string, unknown>, ctx: { attempt: number; maxAttempts: number; now: Date }): Promise<void> {
   const ref = refOf(payload);
@@ -115,11 +144,17 @@ export async function runResumeReading(deps: ReadingDeps, payload: Record<string
   const last = ctx.attempt >= ctx.maxAttempts;
   const finish = async (outcome: ResumeReading["outcome"], aiRunId: string | null = null, extraction: ResumeExtraction | null = null) => {
     const reading: ResumeReading = { v: 1, uploadId: ref.uploadId, outcome, aiRunId, readAt: ctx.now.toISOString(), details: extraction ? detailsFrom(extraction) : null, facts: extraction ? factsFrom(extraction) : null, ...(extraction ? { cvLines: cvLinesOf(extraction) } : {}) };
-    await storage.put(readingKey(ref), new TextEncoder().encode(JSON.stringify(reading)), "application/json");
     const runAt = new Date(ctx.now.getTime() + RESUME_READING_KEEP_MS);
-    // The record always goes; the file only if no document row points at it by then (the discard job checks).
+    // The note always goes; the file only if no document row points at it by then (the discard job checks); the words of
+    // every reading of this upload no application holds by then (`expireResumeReading`).
     for (const key of [readingKey(ref), ref.key]) await deps.engine.enqueue(deps.db, { kind: DISCARD_OBJECT_JOB_KIND, payload: { companyId: ref.companyId, key }, runAt });
-    if (aiRunId) await deps.engine.enqueue(deps.db, { kind: RESUME_READING_EXPIRE_JOB_KIND, payload: { companyId: ref.companyId, aiRunId }, runAt });
+    await deps.engine.enqueue(deps.db, { kind: RESUME_READING_EXPIRE_JOB_KIND, payload: { companyId: ref.companyId, uploadId: ref.uploadId, ...(aiRunId ? { aiRunId } : {}) }, runAt });
+    try {
+      // Plain text: the bucket takes the résumé types only (docs/runbooks/resume-storage.md); `readingFor` reads the bytes whatever the type.
+      await storage.put(readingKey(ref), new TextEncoder().encode(JSON.stringify(reading)), "text/plain");
+    } finally {
+      await withTenant(deps.db, ref.companyId, (q) => deps.engine.signal(q, { companyId: ref.companyId, key: formReadSignal(ref.uploadId) }));
+    }
   };
   try {
     await readAndFinish(deps, ref, last, finish);
@@ -147,6 +182,9 @@ async function readAndFinish(deps: ReadingDeps, ref: ResumeReadRef, last: boolea
   if (scan.verdict === "infected") return finish("refused");
   const text = await documentToText(bytes, look.mime, ref.filename);
   if (!text.trim()) return finish("unreadable");
+  // An earlier try read it and then stopped (the note could not be written, the worker went away): the same reading again, its quotes checked again.
+  const earlier = await withTenant(deps.db, ref.companyId, (q) => formReadingRun(q, { companyId: ref.companyId, uploadId: ref.uploadId }));
+  if (earlier) return finish("read", earlier.runId, verifyQuotes(earlier.output, text));
   const out = await runPromptDetached(deps.db, deps.ai, resumeExtractPrompt, { text, filename: ref.filename }, { companyId: ref.companyId, workflowRunId: null, inputRef: { uploadId: ref.uploadId, roleId: ref.roleId, purpose: "apply_form", chars: text.length } });
   if (!out.ok) {
     if (out.reason === "error" && !last) throw new Error(out.error);
@@ -157,23 +195,28 @@ async function readAndFinish(deps: ReadingDeps, ref: ResumeReadRef, last: boolea
 
 /**
  * A day later: a reading that did not become part of an application (nobody sent it, or it was a repeat submission)
- * keeps only its bookkeeping in the AI run log; what the model read and wrote goes. One tied to an application stays
- * with it, and leaves with it on a deletion request.
+ * keeps only its bookkeeping in the AI run log; what the model read and wrote goes. Every form reading of the upload
+ * (`uploadId`; a try that failed after the model answered, a reading the intake did not wait for), or the one run an
+ * older job names (`aiRunId`). One tied to an application stays with it, and leaves with it on a deletion request.
  */
 export async function expireResumeReading(db: Db, payload: Record<string, unknown>): Promise<void> {
   const companyId = typeof payload.companyId === "string" ? payload.companyId : "";
   const aiRunId = typeof payload.aiRunId === "string" ? payload.aiRunId : "";
-  if (!companyId || !aiRunId) return;
+  const uploadId = typeof payload.uploadId === "string" ? payload.uploadId : "";
+  if (!companyId || (!aiRunId && !uploadId)) return;
   await withTenant(db, companyId, async (q) => {
-    const [run] = await q.select({ id: aiRuns.id, inputRef: aiRuns.inputRef, toolCalls: aiRuns.toolCalls, structuredOutput: aiRuns.structuredOutput, policyDecision: aiRuns.policyDecision, humanOverride: aiRuns.humanOverride, finalOutcome: aiRuns.finalOutcome, error: aiRuns.error }).from(aiRuns).where(eq(aiRuns.id, aiRunId)).limit(1);
-    if (!run || run.inputRef.purpose !== "apply_form" || run.inputRef.applicationId) return;
-    const { id, ...before } = run;
-    await q.update(aiRuns).set(scrubAiRun(before)).where(eq(aiRuns.id, id));
+    const about = [...(aiRunId ? [eq(aiRuns.id, aiRunId)] : []), ...(uploadId ? [sql`${aiRuns.inputRef}->>'uploadId' = ${uploadId}`] : [])];
+    const runs = await q.select({ id: aiRuns.id, inputRef: aiRuns.inputRef, toolCalls: aiRuns.toolCalls, structuredOutput: aiRuns.structuredOutput, policyDecision: aiRuns.policyDecision, humanOverride: aiRuns.humanOverride, finalOutcome: aiRuns.finalOutcome, error: aiRuns.error }).from(aiRuns).where(and(eq(aiRuns.companyId, companyId), or(...about)));
+    for (const run of runs) {
+      if (run.inputRef.purpose !== "apply_form" || run.inputRef.applicationId) continue;
+      const { id, ...before } = run;
+      await q.update(aiRuns).set(scrubAiRun(before)).where(eq(aiRuns.id, id));
+    }
   });
 }
 
 /** Registers both jobs on an engine: every process that may queue a reading, and the worker that runs it. */
-export function registerApplyDetailsJobs(engine: Pick<WorkflowEngine, "registerJob" | "enqueue">, deps: Omit<ReadingDeps, "engine">): void {
+export function registerApplyDetailsJobs(engine: Pick<WorkflowEngine, "registerJob" | "enqueue" | "signal">, deps: Omit<ReadingDeps, "engine">): void {
   engine.registerJob(RESUME_READING_JOB_KIND, (payload, ctx) => runResumeReading({ ...deps, engine }, payload, ctx));
   engine.registerJob(RESUME_READING_EXPIRE_JOB_KIND, (payload) => expireResumeReading(deps.db, payload));
 }
@@ -181,15 +224,12 @@ export function registerApplyDetailsJobs(engine: Pick<WorkflowEngine, "registerJ
 /**
  * When an application is created from a form whose résumé was read: the reading's AI run names the application and the
  * document (so a deletion request scrubs it, and the clean-up leaves it alone), and the document points at the run, so
- * the intake workflow reuses the reading once the file is checked instead of asking the model again. Only a run that
- * read exactly this upload, for this company, is tied.
+ * the intake workflow reuses the reading once the file is checked instead of asking the model again. The run is found by
+ * the upload (20 Oct, R20-1), so a reading whose note never reached the form is tied all the same; only a good form
+ * reading of exactly this upload, for this company, is tied. None yet (still running): the intake ties it later.
  */
-export async function linkResumeReading(q: Queryable, input: { aiRunId: string; uploadId: string; applicationId: string; documentId: string }): Promise<boolean> {
-  const [run] = await q.select({ id: aiRuns.id, task: aiRuns.task, status: aiRuns.status, inputRef: aiRuns.inputRef }).from(aiRuns).where(eq(aiRuns.id, input.aiRunId)).limit(1);
-  if (!run || run.task !== "resume.extract" || run.status !== "ok" || run.inputRef.uploadId !== input.uploadId || run.inputRef.purpose !== "apply_form") return false;
-  await q.update(aiRuns).set({ inputRef: { ...run.inputRef, applicationId: input.applicationId, documentId: input.documentId } }).where(eq(aiRuns.id, run.id));
-  await q.update(documents).set({ extractedByAiRunId: run.id }).where(eq(documents.id, input.documentId));
-  return true;
+export async function linkResumeReading(q: Queryable, input: { companyId: string; uploadId: string; applicationId: string; documentId: string }): Promise<boolean> {
+  return (await linkFormReading(q, input)) !== null;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

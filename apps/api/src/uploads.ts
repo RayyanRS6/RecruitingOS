@@ -40,8 +40,10 @@ export function quarantineKey(companyId: string, roleId: string, uploadId: strin
 /**
  * `via` "server": the file came inside the form to be read (Wave S7, the résumé read first), and the app put it in
  * quarantine itself; the grant then carries it through the rest of the form like a direct upload. Absent: a direct upload.
+ * `readAskedAt` (epoch seconds): when "Read my resume" asked for its reading, so the page stops waiting for it after a
+ * while (20 Oct, R20-3) and the intake knows how long it may still be running. Absent: never asked, or an older grant.
  */
-export type UploadGrantPayload = { v: 1; companyId: string; roleId: string; uploadId: string; key: string; filename: string; mime: string; size: number; exp: number; via?: "server" };
+export type UploadGrantPayload = { v: 1; companyId: string; roleId: string; uploadId: string; key: string; filename: string; mime: string; size: number; exp: number; via?: "server"; readAskedAt?: number };
 
 /** Seals and opens upload grants with a key derived from the session secret. The payload is signed, not encrypted: it holds no secret. */
 export class UploadGrants {

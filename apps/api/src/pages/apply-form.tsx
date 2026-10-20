@@ -12,7 +12,7 @@ import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware/rate-limit";
 import { createApplication, markUploadUsed, uploadAlreadyUsed, type ResumeInput as ResumeUpload } from "../services/applications";
-import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, readingFor, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
+import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, readingAskedAt, readingFor, readingGaveUp, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
 import { startApplyConversation } from "../services/apply-conversation";
 import { formOpenedBefore, lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { contactLineFor, type ContactLine } from "../services/company-settings-profile";
@@ -484,6 +484,8 @@ export function ApplyFormPage(props: ApplyFormProps) {
           <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
           <input type="hidden" name="uploadGrant" value={props.state?.resume?.grant ?? ""} />
           <input type="hidden" name="formOpened" value={props.formOpened} />
+          {/* This page showed the reading ("Check your details"): a form sent back says so again only then (20 Oct). */}
+          {reading?.outcome === "read" ? <input type="hidden" name="readShown" value="yes" /> : null}
           <ApplyFields {...props} questions={questions} />
           <input type="hidden" name="noticeVersionsShown" value={noticeVersionsFor(props.notices, props.smsEnabled).join(",")} />
           <button class="btn" type="submit">Send my application</button>
@@ -765,9 +767,10 @@ function HiddenForm(props: { posted: PostedApplyForm; questions: QuickQuestionVi
 }
 
 /**
- * The page shown while a slow reading finishes (the request already waited about 20 seconds). With script it asks
- * every two seconds and moves on by itself; without, Continue shows the details once they are ready (or this page again,
- * a little later), and "Fill it in myself instead" goes on at once. The résumé stays attached either way.
+ * The page shown while a slow reading finishes (the request already waited about 15 seconds). With script it asks
+ * every three seconds and moves on by itself; without, Continue shows the details once they are ready (or this page again,
+ * a little later), and "Fill it in myself instead" goes on at once. It never waits forever (20 Oct, R20-3): about 75
+ * seconds after asking, or as soon as the reading failed, both go on to the form to fill in. The résumé stays attached.
  */
 export function ReadingPage(props: { company: { name: string }; title: string; flow: ApplyFlowView; links: { details: string; readStatus: string }; posted: PostedApplyForm; questions: QuickQuestionView[]; grant: string; filename: string; formOpened: string; still: boolean }) {
   return (
@@ -778,7 +781,7 @@ export function ReadingPage(props: { company: { name: string }; title: string; f
       <div class="card reading" role="status" id="read-status">
         <p><strong>{props.still ? `Still reading ${props.filename}…` : `Reading ${props.filename}…`}</strong></p>
         <p>Software is filling in your details from your resume. This usually takes about 20 seconds.</p>
-        <p class="meta" id="read-next">Press Continue when you are ready. If it is not done yet, this page asks you to wait a little longer.</p>
+        <p class="meta" id="read-next">Press Continue when you are ready. If it is not done yet, this page asks you to wait a little longer; after about a minute, Continue takes you on to fill in your details yourself.</p>
       </div>
       <form method="post" action={props.links.details} data-read-status={props.links.readStatus}>
         <HiddenForm posted={props.posted} questions={props.questions} grant={props.grant} formOpened={props.formOpened} />
@@ -791,18 +794,25 @@ export function ReadingPage(props: { company: { name: string }; title: string; f
   );
 }
 
-/** Asks whether the reading is done and goes on once it is (ES5, no inline handlers). */
+/**
+ * Asks every three seconds whether the reading is done and goes on once it is (ES5, no inline handlers). `gave_up`, or
+ * no answer within its tries (about 90 seconds), goes on as "Fill it in myself instead" does (`skip=yes`), so the page
+ * never waits forever. A busy answer (429, 5xx) or no answer at all is asked again; only a grant that no longer opens
+ * (404) stops the asking and leaves the two buttons.
+ */
 export const APPLY_READ_WAIT_JS = `(function(){
 var form=document.querySelector('form[data-read-status]');if(!form||!window.fetch){return;}
 var url=form.getAttribute('data-read-status');var grant=form.querySelector('input[name=uploadGrant]');var next=document.getElementById('read-next');
-if(next){next.textContent='This page moves on by itself when it is done.';}
+if(next){next.textContent='This page moves on by itself when it is done, within about a minute.';}
 var tries=0;var done=false;
 form.addEventListener('submit',function(){done=true;});
+function go(skip){done=true;if(skip){var s=document.createElement('input');s.type='hidden';s.name='skip';s.value='yes';form.appendChild(s);}form.submit();}
+function again(){if(done){return;}if(tries<30){window.setTimeout(tick,3000);}else{go(true);}}
 function tick(){if(done){return;}tries++;
 fetch(url,{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({grant:grant?grant.value:''})})
-.then(function(r){return r.ok?r.json():{state:'unknown'};})
-.then(function(j){if(done){return;}if(j&&j.state==='done'){done=true;form.submit();return;}if(j&&j.state==='unknown'){if(next){next.textContent='Press Continue, or Fill it in myself instead.';}return;}if(tries<45){window.setTimeout(tick,2000);}else if(next){next.textContent='This is taking longer than usual. You can fill in your details yourself; your resume stays attached.';}})
-.catch(function(){if(tries<45){window.setTimeout(tick,3000);}else if(next){next.textContent='Press Continue, or Fill it in myself instead.';}});
+.then(function(r){if(r.status===404){return {state:'unknown'};}if(!r.ok){throw new Error('busy');}return r.json();})
+.then(function(j){if(done){return;}if(j&&j.state==='done'){go(false);return;}if(j&&j.state==='gave_up'){go(true);return;}if(j&&j.state==='unknown'){if(next){next.textContent='Press Continue, or Fill it in myself instead.';}return;}again();})
+.catch(function(){again();});
 }
 window.setTimeout(tick,1500);
 })();`;
@@ -943,7 +953,10 @@ candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLIC
   return c.json({ uploadId, url: upload.url, method: upload.method, headers: upload.headers, grant, expiresAt: upload.expiresAt, maxBytes: MAX_RESUME_BYTES });
 });
 
-/** Reading a résumé costs a model call: fewer per address than sending forms. Asking whether it is done is cheap. */
+/**
+ * Reading a résumé costs a model call: fewer per address than sending forms. Asking whether it is done is cheap, and its
+ * limit is the asking's alone: Continue and "Fill it in myself instead" (`…/apply/details`) are not under it (20 Oct).
+ */
 const READ_POLICY: Policy = { name: "apply.read_resume", rules: [{ by: "ip", windowMs: 3_600_000, limit: 30 }, { by: "role", windowMs: 3_600_000, limit: 600, param: "roleId" }] };
 const READ_STATUS_POLICY: Policy = { name: "apply.read_status", rules: [{ by: "ip", windowMs: 3_600_000, limit: 1200 }] };
 
@@ -965,7 +978,7 @@ function checkedForm(container: Container, posted: PostedApplyForm, questions: Q
 /**
  * "Read my resume" (Wave S7, spec step 2). The form posts itself here with the file inside it (no script) or with the
  * grant of a file the browser already uploaded. The file is put in quarantine (the form's own copy) and the worker reads
- * it; this request waits up to about 20 seconds for the reading and then shows "Check your details", or the page that
+ * it; this request waits up to about 15 seconds for the reading and then shows "Check your details", or the page that
  * waits a little longer. Nothing to read (Enter pressed before choosing a file) shows the form again with a plain line.
  */
 candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POLICY), async (c) => {
@@ -999,15 +1012,18 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
     const key = quarantineKey(job.company.id, job.role.id, uploadId, look.extension);
     await container.integrations.storage.put(key, bytes, look.mime);
     await withTenant(container.db, job.company.id, (tx) => emit(tx, { type: "document.upload_authorized", companyId: job.company.id, actor: { kind: "candidate", id: "applicant" }, subject: { type: "role", id: job.role.id }, payload: { uploadId, extension: look.extension, sizeBytes: bytes.byteLength } }));
-    upload = { v: 1, companyId: job.company.id, roleId: job.role.id, uploadId, key, filename: file.name.trim().slice(0, 200) || `resume.${look.extension}`, mime: look.mime, size: bytes.byteLength, exp: Math.floor(now.getTime() / 1000) + READ_GRANT_TTL_SECONDS, via: "server" };
+    upload = { v: 1, companyId: job.company.id, roleId: job.role.id, uploadId, key, filename: file.name.trim().slice(0, 200) || `resume.${look.extension}`, mime: look.mime, size: bytes.byteLength, exp: Math.floor(now.getTime() / 1000) + READ_GRANT_TTL_SECONDS, via: "server", readAskedAt: Math.floor(now.getTime() / 1000) };
   } else {
     const held = heldUpload(container, job, posted.grant);
     if (held) {
       if (await withTenant(container.db, job.company.id, (tx) => uploadAlreadyUsed(tx, { roleId: job.role.id, uploadId: held.uploadId }))) return show(UPLOAD_EXPIRED, true);
       const head = await container.integrations.storage.head(held.key);
       if (!head || head.size === 0) return show("Your uploaded resume did not arrive. Please attach the file again.", true);
-      // Checking the details takes as long as it takes: the grant the form carries from here lasts a while longer.
-      upload = { ...held, exp: Math.max(held.exp, Math.floor(now.getTime() / 1000) + READ_GRANT_TTL_SECONDS) };
+      // Checking the details takes as long as it takes: the grant the form carries from here lasts a while longer. It
+      // says when the reading was first asked for, so the waiting page gives up on it in time (20 Oct, R20-3): the time
+      // the grant already carries, else the reading's first job (a reload posts the upload's own grant again), else now.
+      const askedAt = held.readAskedAt ?? (await readingAskedAt(container.db, held)) ?? Math.floor(now.getTime() / 1000);
+      upload = { ...held, exp: Math.max(held.exp, Math.floor(now.getTime() / 1000) + READ_GRANT_TTL_SECONDS), readAskedAt: askedAt };
     }
   }
   if (!upload && !file && !posted.grant) {
@@ -1034,13 +1050,24 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
     // The reading could not even be asked for: the résumé stays attached and the candidate fills in the form.
     console.warn(`[apply] the résumé reading could not be queued: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const checked = checkedForm(container, posted, questions, { grant, filename: upload.filename }, reading ?? { v: 1, uploadId: upload.uploadId, outcome: "failed", aiRunId: null, readAt: now.toISOString(), details: null, facts: null });
+  const checked = checkedForm(container, posted, questions, { grant, filename: upload.filename }, reading ?? failedReading(upload.uploadId, now));
   c.header("Cache-Control", "no-store");
   return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={{ ...checked.state, earlier }} />);
 });
 
-/** "Continue" on the page that waits for a reading: the details once it is done, that page again while it is not. */
-candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", rateLimit(READ_STATUS_POLICY), async (c) => {
+/** A reading that did not come (it could not be asked for, or the page stopped waiting): the form says "We could not read … just now". */
+function failedReading(uploadId: string, now: Date): ResumeReading {
+  return { v: 1, uploadId, outcome: "failed", aiRunId: null, readAt: now.toISOString(), details: null, facts: null };
+}
+
+/**
+ * "Continue" on the page that waits for a reading: the details once it is done, that page again while it is not. Once
+ * the page has waited long enough (`readingGaveUp`, about 75 seconds after asking) Continue always goes on: the form,
+ * the résumé attached, and the line that it could not be read just now. The waiting page's script sends the same. It
+ * writes nothing and asks no model, so only the candidate pages' own limit applies: the way on never runs out because
+ * the waiting pages behind one address used up the asking's limit (20 Oct).
+ */
+candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
   if (!job) return c.notFound();
@@ -1058,12 +1085,17 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", rateLimit(READ_
   const earlier = await earlierFormState(container, job, posted);
   if (!held) return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={UPLOAD_EXPIRED} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost: true, earlier }} />, 400);
   const reading = await readingFor(container.integrations.storage, held);
-  if (!reading && str("skip") !== "yes") return c.html(<ReadingPage company={job.company} title={job.packet.identity.title} flow={flow} links={applyLinks(job)} posted={posted} questions={questions} grant={posted.grant} filename={held.filename} formOpened={formOpened} still />);
-  const checked = checkedForm(container, posted, questions, { grant: posted.grant, filename: held.filename }, reading);
+  const now = container.engine.clock();
+  const gaveUp = readingGaveUp(held, reading, now);
+  if (!reading && !gaveUp && str("skip") !== "yes") return c.html(<ReadingPage company={job.company} title={job.packet.identity.title} flow={flow} links={applyLinks(job)} posted={posted} questions={questions} grant={posted.grant} filename={held.filename} formOpened={formOpened} still />);
+  const checked = checkedForm(container, posted, questions, { grant: posted.grant, filename: held.filename }, gaveUp ? reading ?? failedReading(held.uploadId, now) : reading);
   return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={{ ...checked.state, earlier }} />);
 });
 
-/** The waiting page's question (with script): is the reading done? Only for the upload the asking page holds. */
+/**
+ * The waiting page's question (with script): is the reading done? Only for the upload the asking page holds. `gave_up`
+ * once the page has waited long enough or the reading failed (`readingGaveUp`): the script then goes on to the form.
+ */
 candidatePages.post("/careers/:slug/jobs/:roleId/apply/read-status", rateLimit(READ_STATUS_POLICY), async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
@@ -1073,7 +1105,9 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read-status", rateLimit(R
   const held = job && typeof token === "string" ? heldUpload(container, job, token) : null;
   c.header("Cache-Control", "no-store");
   if (!held) return c.json({ state: "unknown" }, 404);
-  return c.json({ state: (await readingFor(container.integrations.storage, held)) ? "done" : "reading" });
+  const reading = await readingFor(container.integrations.storage, held);
+  if (readingGaveUp(held, reading, container.engine.clock())) return c.json({ state: "gave_up" });
+  return c.json({ state: reading ? "done" : "reading" });
 });
 
 /**
@@ -1104,8 +1138,12 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   // what came from it (Wave S7), on the page shown again and in the application (`answers.fromCv`).
   const held = heldUpload(container, job, posted.grant);
   const reading = held ? await readingFor(container.integrations.storage, held) : null;
-  const marked = withResumeReading({ values, answers }, reading, questions, { fill: false, now: container.engine.clock() });
-  const readView: ApplyFormReading | null = held && reading && reading.outcome !== "refused" ? { filename: held.filename, outcome: reading.outcome } : null;
+  // A reading counts on this form only if the form showed it (`readShown`, "Check your details"): one that arrived after
+  // the candidate went on without it (the page gave up, or "Fill it in myself") filled in nothing, so a form sent back
+  // says the résumé is attached, not that it was read, and nothing typed is marked as the résumé's (20 Oct).
+  const shown = reading?.outcome === "read" && str("readShown") !== "yes" ? null : reading;
+  const marked = withResumeReading({ values, answers }, shown, questions, { fill: false, now: container.engine.clock() });
+  const readView: ApplyFormReading | null = held && reading && reading.outcome !== "refused" ? { filename: held.filename, outcome: shown ? reading.outcome : "skipped" } : null;
   // A resume the browser already uploaded stays attached: its grant, still valid for this company and role, goes back into
   // the form. A file posted inside the form (or a grant that no longer opens) cannot be put back, and the page says so.
   const keptResume = held ? { grant: posted.grant, filename: held.filename } : null;
@@ -1171,8 +1209,10 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
     }
   }
   if (!resume && !parsed.data.noResumeAnswers) return again("Upload a resume, or answer at least one of the four short questions about your work.", ["noResume"]);
-  // The form's reading of this very upload goes with the application, so it is not read a second time (Wave S7).
-  const formReading = held && usedUploadId === held.uploadId && reading?.outcome === "read" && reading.aiRunId ? { aiRunId: reading.aiRunId, uploadId: held.uploadId, storageKey: held.key } : null;
+  // The form's reading of this very upload goes with the application, so it is not read a second time (Wave S7). By the
+  // upload, also with no note yet (20 Oct, R20-1): a reading still running, or one whose note never came, is tied at
+  // Send when it is there, else by the intake, which waits a little for one still running.
+  const formReading = held && usedUploadId === held.uploadId ? { uploadId: held.uploadId, storageKey: held.key, readAskedAt: held.readAskedAt ?? null } : null;
   // What this visit typed, for the chat that follows to name (Wave S7, spec steps 4 to 6): the CV's lines from the form's
   // own reading of this very upload, the summary they checked and the no-résumé answers, and every form answer as a
   // sentence. A first application and a repeat one get exactly the same, so the two chats read alike.
