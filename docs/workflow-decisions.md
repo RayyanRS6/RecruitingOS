@@ -98,6 +98,21 @@ The founder answered every remaining choice on 16 October (asked in three groups
 - **L-07 A.** "Try different weights" on the job's Scoring tab and in its More menu (`apps/web/src/weights-preview.ts`, `apps/web/src/pages/role/WeightsPreview.tsx`), worked out in the browser from the board's scores with the real score's own sums (`weighRequirements` and `previewMatch` in `packages/contracts/src/domain/match.ts`, which `packages/core/src/match-score.ts` now uses). Nothing is saved; "Use these weights" opens the job's editor. Owners, admins, hiring managers and an ITS recruiter working on the job; never HR, interviewers or an ITS recruiter under a grant about one candidate.
 - **L-08 B.** One neutral grey line on the candidate panel's Overview, and in the ITS recruiter queue, when the résumé or the written answers held text aimed at the AI (`packages/core/src/hidden-text.ts`, phrase rules in code plus the reading's own flags); worked out on every read, never stored, never given to the reading or the score, never a decline reason, never shown to the candidate. No prompt changed, so bugs 15 and 31 stay partly fixed.
 
+## 20 October 2026: gaps found while mapping the flows
+
+While drawing the candidate, company and ITS flows (the "Recruiting OS Flow Map"), six small gaps were found; the founder asked for them to be fixed. One proposed fix was dropped because it contradicted decision 4A: after a candidate's no-show nothing goes to them automatically, as before.
+
+| Gap | What changed | Where |
+|---|---|---|
+| Interview times lapsed and the candidate heard nothing | When offered times pass without a pick (two days, a reminder, two more days), the candidate gets one short email: the times have passed, the link no longer works, reply if still interested, and their status link. It promises no new times and hints at no decision. Withdrawn if they leave the process before it goes. | `packages/agents/src/interview-messages.ts` (`interview_slots_lapsed`), `schedule-interview.ts` step `expire_offer` |
+| "We did not show" read as "Thanks for interviewing" | The candidate's page says sorry: the interviewer could not join, the team will be in touch about what happens next (founder decision L-12). | `apps/api/src/pages/application-record.tsx` |
+| The 7-day trial warning was only in the app | The hourly check also tells owners and admins (an account notice, emailed as it happens) once 7 days before the end and once the day before; once each per end date, so an extension inside the last week does not repeat its own date. | `apps/api/src/services/trial.ts` (`warnTrialEnding`) |
+| "Invite to a screen" still worked during a trial pause | A new screening chat is new work: refused with the trial-ended line (402) until a plan is chosen; chats already under way carry on. | `apps/api/src/services/application-actions.ts` |
+| Retry left the stopped run's request open | When a run ITS retried finishes, the request it raised is answered and closed if nobody picked it up ("ITS ran the stopped step again and it finished. Nothing more is needed from you."); a request a recruiter holds gets that line as a note instead. | `packages/core/src/escalations.ts` (`settleRetriedRunRequest`), `packages/workflows/src/engine.ts` |
+| Two ITS actions existed only behind the scenes | Console: Problems › Email "Stop emails to an address" (address and why, required), and System › Administrators "Sign someone out everywhere" (by email, reason, confirmation). Break-glass access stays API-only. | `apps/web/src/pages/admin/problems.tsx`, `system.tsx`; `POST /api/v1/admin/sessions/revoke` |
+
+Not changed, for the founder: "Ask ITS to run this hire" still only creates a request; whether takeovers are needed for the first customers is their call.
+
 ## Still to decide
 
 Nothing is open. Put off ("not now"), and open to asking again: D-02, D-05, L-03 (hiring managers see every job), L-14 (no bot check on the apply form), L-15 (house voice), L-16 (our own second sign-in step) and migration 0040.

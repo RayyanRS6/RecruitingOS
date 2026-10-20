@@ -688,6 +688,10 @@ describe("the loop after an interview", () => {
     await book(iv2.id);
     expect((await json(owner, "POST", `/api/v1/interviews/${iv2.id}/outcome`, { outcome: "no_show_interviewer" })).status).toBe(200);
     expect(await followUpOf(stoodUp.id)).toBeUndefined();
+    // their page never thanks them for an interview that did not happen: it says sorry and promises nothing
+    const missedPage = await statusPage(stoodUp.id);
+    expect(missedPage.match(/<h2>What happens next<\/h2><p>([^<]*)<\/p>/)?.[1]).toBe("We are sorry: the interviewer could not join your interview. The hiring team will be in touch about what happens next.");
+    expect(missedPage).not.toContain("Thanks for interviewing");
     const next = (await (await json(owner, "GET", `/api/v1/applications/${stoodUp.id}/interview-draft`)).json()) as { roundKey: string; nextRound: boolean; sameRoundAgain?: string };
     expect(next).toMatchObject({ roundKey: plan[0].key, nextRound: false, sameRoundAgain: "missed_by_us" });
     // the owner may still choose another round: the decision moves them to the next one as before

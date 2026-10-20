@@ -11,6 +11,7 @@ import { exitCleanup } from "./exit-cleanup";
 import { OFFER_FROM, offerBlockedReason } from "./offers";
 import { UNSTARTED_SCREEN_STATUSES, stopScreenInvitation } from "./screens";
 import { keepInTalentPool } from "./talent-pool";
+import { assertNoNewWork } from "./trial";
 
 /**
  * What may be done with an application in its current state, decided in one place. The API answers with the list
@@ -608,6 +609,9 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
     case "invite_screen":
     case "ask_in_screen": {
       assertCan(t.role, "application.act");
+      // A new screening chat is new work: once a trial has ended it waits for a plan, as the owners' and ITS's notices
+      // say (founder decision L-02 B, 402 `trial_ended`). A chat already under way carries on.
+      await assertNoNewWork(tx, t.companyId, now);
       // "Ask about this in a screen": the same invitation, opened with the assessment's open questions (docs/spec/21, P1).
       const focus = body.action === "ask_in_screen" || body.focus === "unknowns" ? ("unknowns" as const) : undefined;
       const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, channel: body.channel, invitedBy: t.userId, ...(focus ? { focus } : {}) }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor });

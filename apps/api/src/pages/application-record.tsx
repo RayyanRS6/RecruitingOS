@@ -205,8 +205,10 @@ function decisionLine(input: { stage: ApplicationStage; wording: DecisionWording
  * 4A), in the candidate's words. `cancelled`: their own cancel, with what may be promised about new times
  * (`candidateNewTimesPromise`: never a decision, never times that will not come). `gettingReady`: they asked for new times
  * and they are being worked out. `lapsed`: the new times we sent passed without a pick. `noShow`: they did not come.
+ * `missedByUs`: our interviewer did not come (founder decision L-12), so the page never thanks them for an interview
+ * that did not happen; it says sorry and promises nothing about what comes next.
  */
-type InterviewNews = { cancelled?: { promise: NewTimesPromise; day: string | null }; gettingReady?: boolean; lapsed?: boolean; noShow?: boolean };
+type InterviewNews = { cancelled?: { promise: NewTimesPromise; day: string | null }; gettingReady?: boolean; lapsed?: boolean; noShow?: boolean; missedByUs?: boolean };
 
 /**
  * The newest interview's news (above), read in the company's transaction. Their own cancel is matched on the interview
@@ -224,11 +226,12 @@ async function interviewNewsFor(tx: Tx, input: { iv: typeof interviews.$inferSel
   }
   const open = input.closed ? null : await openFollowUpOf(tx, input.applicationId);
   const noShow = (iv.status === "no_show" && iv.outcome === "no_show_candidate") || open?.kind === "candidate_no_show";
-  if (!open) return { held: false, noShow };
+  const missedByUs = iv.status === "no_show" && iv.outcome === "no_show_interviewer";
+  if (!open) return { held: false, noShow, missedByUs };
   const [slots] = iv.status === "scheduling" && open.currentInterviewId === iv.id ? await tx.select({ status: communications.status }).from(communications).where(eq(communications.idempotencyKey, `slots:${iv.id}:${iv.attempt}`)).limit(1) : [];
   const held = slots?.status === "held";
   const preparing = iv.status === "proposed" || (iv.status === "scheduling" && (!iv.offeredSlots.length || held));
-  return { held, noShow, gettingReady: open.choice === "new_times" && preparing, lapsed: iv.status === "offer_expired" };
+  return { held, noShow, missedByUs, gettingReady: open.choice === "new_times" && preparing, lapsed: iv.status === "offer_expired" };
 }
 
 /** The line about the candidate's own cancel; null when nothing may be said beyond the standard line. */
@@ -264,6 +267,7 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
     if (input.interview === "offered") return "The team would like to interview you. Pick a time below.";
     if (news.lapsed) return "The interview times we sent have passed. The hiring team will be in touch.";
     if (news.noShow) return "The hiring team will be in touch about next steps.";
+    if (news.missedByUs) return "We are sorry: the interviewer could not join your interview. The hiring team will be in touch about what happens next.";
     if (stage === "interview_complete" || stage === "debrief") return "Thanks for interviewing. The team is deciding, and you will hear from them either way.";
     return "The hiring team will be in touch about next steps.";
   }

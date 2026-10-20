@@ -303,7 +303,28 @@ function Suppressions() {
           <p className="small muted">A spam complaint is never released from here: the person asked not to be emailed.</p>
         </>
       ) : <Empty />}
+      <StopEmailsToAddress />
     </Card>
+  );
+}
+
+/**
+ * "Stop emails to an address" (POST /admin/email-suppressions): someone asked by phone or in person not to be emailed,
+ * or an address bounces where the provider does not report it. Why is required and kept with the address; it is audited.
+ */
+function StopEmailsToAddress() {
+  const qc = useQueryClient();
+  const [form, setForm] = useState({ address: "", reason: "" });
+  const add = useMutation({ mutationFn: () => api.post("/api/v1/admin/email-suppressions", { address: form.address.trim(), reason: form.reason.trim() }, reason), onSuccess: () => { toast(`Added. Nothing more will be emailed to ${form.address.trim()}.`); setForm({ address: "", reason: "" }); qc.invalidateQueries({ queryKey: adminKeys.suppressions }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not add the address.") });
+  const ready = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.address.trim()) && form.reason.trim().length >= 5;
+  return (
+    <div className="stack" style={{ gap: 8, marginTop: 14, maxWidth: 520 }}>
+      <h3 className="eyebrow">Stop emails to an address</h3>
+      <p className="small muted">For someone who asked, by phone or in person, not to be emailed. Every message to this address stops, for every customer, until it is released.</p>
+      <Field label="Email address" htmlFor="sup-address"><input id="sup-address" className="input" type="email" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
+      <Field label="Why (required)" htmlFor="sup-reason"><input id="sup-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
+      <div className="row"><Button variant="secondary" disabled={!ready} loading={add.isPending} onClick={() => add.mutate()}>Add to the list</Button></div>
+    </div>
   );
 }
 

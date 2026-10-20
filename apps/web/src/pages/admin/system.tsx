@@ -607,8 +607,35 @@ export function Administrators() {
           ) : <div className="row"><Button variant="primary" disabled={!form.email.includes("@") || form.reason.trim().length < 5} onClick={() => setConfirming(true)}>Grant</Button></div>}
         </div>
       </Card>
+      <SignOutEverywhere />
       {past.length ? <Card title="Past roles"><ul className="small" style={{ paddingLeft: 18 }}>{past.map((g) => <li key={g.id}>{g.email} · {roleWords(g.role)} · granted {new Date(g.grantedAt).toLocaleDateString()} by {g.grantedBy.name ?? g.grantedBy.id} · revoked {g.revokedAt ? new Date(g.revokedAt).toLocaleDateString() : ""} by {g.revokedBy?.name ?? g.revokedBy?.id}: {g.revokeReason}</li>)}</ul></Card> : null}
     </div>
+  );
+}
+
+/**
+ * "Sign someone out everywhere" (POST /admin/sessions/revoke): after a lost or stolen phone or laptop, or when someone
+ * leaves, every session they have ends at once and they must sign in again. A reason and a confirmation; audited.
+ */
+export function SignOutEverywhere() {
+  const [form, setForm] = useState({ email: "", reason: "" });
+  const [confirming, setConfirming] = useState(false);
+  const signOut = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; sessionsEnded: number }>("/api/v1/admin/sessions/revoke", { email: form.email.trim(), reason: form.reason.trim(), confirm: true }, reason),
+    onSuccess: (r) => { toast(r.sessionsEnded ? `Signed out. ${r.sessionsEnded} session${r.sessionsEnded === 1 ? "" : "s"} ended.` : "Done. They had no open sessions."); setForm({ email: "", reason: "" }); setConfirming(false); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not sign them out."),
+  });
+  return (
+    <Card title="Sign someone out everywhere">
+      <p className="small muted">Use it after a lost or stolen phone or laptop, or when someone leaves. Every place they are signed in ends at once; nothing else about them changes. For a lost second-factor device, reset it in the identity service first.</p>
+      <div className="stack" style={{ gap: 8, marginTop: 8, maxWidth: 520 }}>
+        <Field label="Email they sign in with" htmlFor="so-email"><input id="so-email" className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
+        <Field label="Reason" htmlFor="so-reason"><input id="so-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
+        {confirming ? (
+          <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>Sign {form.email.trim()} out of every device?</span><span className="row"><Button size="sm" variant="destructive" loading={signOut.isPending} onClick={() => signOut.mutate()}>Yes, sign them out</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+        ) : <div className="row"><Button variant="secondary" disabled={!form.email.includes("@") || form.reason.trim().length < 5} onClick={() => setConfirming(true)}>Sign out everywhere</Button></div>}
+      </div>
+    </Card>
   );
 }
 

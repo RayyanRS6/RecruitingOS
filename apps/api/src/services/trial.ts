@@ -1,5 +1,5 @@
 import { and, eq, sql, type SQL } from "drizzle-orm";
-import { TRIAL_ENDED_LINE, TRIAL_PLAN_KEY, newTrialTerm, onTrialPlan, trialStanding, trialTermOf, type Actor, type TrialExtension, type TrialStanding, type TrialTerm } from "@ros/contracts";
+import { TRIAL_ENDED_LINE, TRIAL_NOTICE_DAYS, TRIAL_PLAN_KEY, newTrialTerm, onTrialPlan, trialStanding, trialTermOf, type Actor, type TrialExtension, type TrialStanding, type TrialTerm } from "@ros/contracts";
 import { audit, closingDayWords, companyToday, emit, notify, raiseAlert, resolveAlertsFor } from "@ros/core";
 import { companies, roles, withTenant, type Queryable } from "@ros/db";
 import type { Container } from "../container";
@@ -78,7 +78,10 @@ export async function extendTrial(q: Queryable, input: { companyId: string; days
   const to = new Date(Math.max(Date.parse(term.endsAt), now.getTime()) + days * DAY_MS).toISOString();
   const extension: TrialExtension = { days, reason, by: actor, at: now.toISOString(), from: term.endsAt, to };
   const { endNoticeAt: _told, ...rest } = term;
-  const next: TrialTerm = { ...rest, endsAt: to, extensions: [...(term.extensions ?? []), extension] };
+  // The owners' notice below names the new end, so an extension that lands inside the last days does not also send
+  // the "your trial ends" email for the same date an hour later.
+  const left = Date.parse(to) - now.getTime();
+  const next: TrialTerm = { ...rest, endsAt: to, extensions: [...(term.extensions ?? []), extension], ...(left <= TRIAL_NOTICE_DAYS * DAY_MS ? { soonNoticeFor: to } : {}), ...(left <= DAY_MS ? { lastDayNoticeFor: to } : {}) };
   await writeTrialTerm(q, co.id, next);
   await audit(q, { companyId, actor, action: "trial.extended", target: { type: "company", id: companyId }, reason, details: { days, from: term.endsAt, to } });
   await emit(q, { type: "trial.extended", companyId, actor, subject: { type: "company", id: companyId }, payload: { days, from: term.endsAt, to, wasPaused } });
@@ -111,11 +114,16 @@ export async function replayHeldEmailsForCompany(container: Container, companyId
  *   2. A trial that has ended and was not told yet: the end is stamped by an update that matches only an unstamped term
  *      with the same end date and returns the row, so exactly one run tells it. ITS gets one alert, the owners and
  *      admins one notice, and the end is emitted and audited.
- * Returns how many trials started and ended in this run.
+ *   3. A trial still running that ends within TRIAL_NOTICE_DAYS, then within a day: the owners and admins are told
+ *      once each ("Your trial ends on …", "Your trial ends tomorrow"), stamped the same way per end date. These are
+ *      account updates, so they are emailed as they happen unless a person turned that off; Home and Settings show the
+ *      date too.
+ * Returns how many trials started, ended and were warned in this run.
  */
-export async function settleTrials(q: Queryable, now: Date): Promise<{ started: number; ended: number }> {
+export async function settleTrials(q: Queryable, now: Date): Promise<{ started: number; ended: number; warned: number }> {
   let started = 0;
   let ended = 0;
+  let warned = 0;
   const waiting = await q
     .select({ id: companies.id, timezone: companies.timezone })
     .from(companies)
@@ -134,13 +142,17 @@ export async function settleTrials(q: Queryable, now: Date): Promise<{ started: 
     await notify(q, { companyId: co.id, kind: "company.trial_started", title: "Your 30-day trial has started", body: `Your 30-day trial runs until ${trialDateWords(term.endsAt, co.timezone)}.`, action: { label: "See your plan", href: "/setup" }, roles: ["owner", "admin"] });
   }
   const running = await q
-    .select({ id: companies.id, name: companies.name, settings: companies.settings })
+    .select({ id: companies.id, name: companies.name, settings: companies.settings, timezone: companies.timezone })
     .from(companies)
     .where(and(eq(companies.planKey, TRIAL_PLAN_KEY), sql`${companies.settings}->'trial' is not null`, sql`${companies.settings}->'trial'->>'endNoticeAt' is null`));
   const at = now.toISOString();
   for (const co of running) {
     const term = trialTermOf(co.settings);
-    if (!term || Date.parse(term.endsAt) > now.getTime()) continue;
+    if (!term) continue;
+    if (Date.parse(term.endsAt) > now.getTime()) {
+      if (await warnTrialEnding(q, co, term, now)) warned += 1;
+      continue;
+    }
     const [stamped] = await q
       .update(companies)
       .set({ settings: sql`${companies.settings} || jsonb_build_object('trial', (${companies.settings}->'trial') || jsonb_build_object('endNoticeAt', ${at}::text))` })
@@ -162,5 +174,39 @@ export async function settleTrials(q: Queryable, now: Date): Promise<{ started: 
     await emit(q, { type: "trial.ended", companyId: co.id, actor: TRIAL_SYSTEM, subject: { type: "company", id: co.id }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, extensions: extensions.length } });
     await audit(q, { companyId: co.id, actor: TRIAL_SYSTEM, action: "trial.ended", target: { type: "company", id: co.id }, reason: "the trial's days are over and no other plan was chosen", details: { startedAt: term.startedAt, endsAt: term.endsAt, extensions: extensions.length } });
   }
-  return { started, ended };
+  return { started, ended, warned };
+}
+
+/** Which "your trial ends" notice is due for a running trial: the last day's, else the last week's; each once per end date. */
+export function trialEndingNoticeDue(term: TrialTerm, now: Date): "last_day" | "soon" | null {
+  const left = Date.parse(term.endsAt) - now.getTime();
+  if (left <= 0) return null;
+  if (left <= DAY_MS) return term.lastDayNoticeFor === term.endsAt ? null : "last_day";
+  if (left <= TRIAL_NOTICE_DAYS * DAY_MS) return term.soonNoticeFor === term.endsAt ? null : "soon";
+  return null;
+}
+
+/**
+ * Tells the owners and admins once that the trial ends soon (step 3 of `settleTrials`). The stamp is written by an update
+ * that matches only the same end date not yet told, so two runs never both tell it; the last day's notice also stamps
+ * the week's, so a trial that reaches its last day untold gets one notice, not two. True when a notice went.
+ */
+async function warnTrialEnding(q: Queryable, co: { id: string; timezone: string | null }, term: TrialTerm, now: Date): Promise<boolean> {
+  const due = trialEndingNoticeDue(term, now);
+  if (!due) return false;
+  const field = due === "last_day" ? "lastDayNoticeFor" : "soonNoticeFor";
+  const stamp = due === "last_day"
+    ? sql`jsonb_build_object('lastDayNoticeFor', ${term.endsAt}::text, 'soonNoticeFor', ${term.endsAt}::text)`
+    : sql`jsonb_build_object('soonNoticeFor', ${term.endsAt}::text)`;
+  const [stamped] = await q
+    .update(companies)
+    .set({ settings: sql`${companies.settings} || jsonb_build_object('trial', (${companies.settings}->'trial') || ${stamp})` })
+    .where(and(eq(companies.id, co.id), eq(companies.planKey, TRIAL_PLAN_KEY), sql`${companies.settings}->'trial'->>'endsAt' = ${term.endsAt}`, sql`(${companies.settings}->'trial'->>${sql.raw(`'${field}'`)}) is distinct from ${term.endsAt}`))
+    .returning({ id: companies.id });
+  if (!stamped) return false;
+  const date = trialDateWords(term.endsAt, co.timezone);
+  const when = due === "last_day" ? (date === trialDateWords(now.toISOString(), co.timezone) ? "today" : "tomorrow") : `on ${date}`;
+  const body = `Your trial ends ${due === "last_day" ? `${when}, ${date}` : when}. After that, new applications, new jobs and new screening chats pause until a plan is chosen; everything already started carries on. To keep going, ask ITS to choose a plan from Settings.`;
+  await notify(q, { companyId: co.id, kind: "company.trial_ending", title: `Your trial ends ${when}`, body, action: { label: "See your plan", href: "/setup" }, roles: ["owner", "admin"] });
+  return true;
 }

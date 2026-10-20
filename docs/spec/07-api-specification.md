@@ -182,7 +182,8 @@ The daily `stuck_role_detector` run counts yesterday's applications per open rol
 | POST /admin/observability/test-error → a deliberate error carrying a token-shaped value and an address, for the Sentry scrubbing proof; audited `admin.bypass` with the reason; exists in a development or test process and in a production build whose `SENTRY_ENVIRONMENT` is exactly `staging`, 404 everywhere else | new (30 Sep 2026; `apps/api/src/routes/observability.ts`) |
 | GET /admin/alerts ; POST /admin/alerts/:id/acknowledge ; POST /admin/integrations/:id/retry-deletion ; GET /admin/failures now also returns `alerts` and `pendingDeletions` | new (correction 10) |
 | GET /admin/data-requests ; POST /admin/data-requests (email intake) ; GET /admin/data-requests/:id ; POST …/assign, /notes, /verify, /escalate, /counsel, /fulfil, /decline ; GET …/export ; POST /admin/data-requests/deadlines/check (it raises alerts, so never a GET) ; GET /admin/data-requests/lookup/candidate | new (correction 7, built 18 Sep; platform administrators only) |
-| GET /admin/email-suppressions ; POST /admin/email-suppressions ; POST /admin/email-suppressions/:id/release `{reason}` | new (item 5, 18 Sep) |
+| GET /admin/email-suppressions ; POST /admin/email-suppressions `{address, reason}` ; POST /admin/email-suppressions/:id/release `{reason}` | new (item 5, 18 Sep); the addition's reason required, 20 Oct 2026 |
+| POST /admin/sessions/revoke `{email, reason, confirm: true}` → `{ok, sessionsEnded}` | new (20 Oct 2026): "Sign someone out everywhere" in the console, by the address they sign in with |
 | POST /c/status/:token/privacy `{kind, details?}` (candidate, verified by the link) | new (correction 7) |
 | POST /webhooks/postmark/bounces, /spam, /events (basic auth or `x-webhook-secret`; one receipt per event id) | new (item 5) |
 | POST /admin/users/:id/platform-role `{platformRole: "none" \| "its_recruiter" \| "platform_admin"}` | new |

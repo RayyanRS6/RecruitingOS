@@ -337,6 +337,13 @@ describe("interview scheduling", () => {
     expect((await app.request(`/c/schedule/${token2}`)).status).toBe(404);
     const expired = await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.offer_expired")));
     expect(expired.filter((x) => x.action?.href === `/interviews/${iv.id}`).length).toBeGreaterThanOrEqual(1);
+    // the candidate is told once that the times passed: the dead link is not repeated, their status page is, nothing is promised
+    const lapsed = outbox().filter((m) => m.to === cand.email && /^Your interview times have passed/.test(m.subject));
+    expect(lapsed).toHaveLength(1);
+    expect(lapsed[0].text).toContain("reply to this email and the hiring team will be in touch");
+    expect(lapsed[0].text).toContain("/c/status/");
+    expect(lapsed[0].text).not.toContain(token2);
+    expect(lapsed[0].text).not.toContain("new times");
     setClock(0);
   });
 
@@ -774,6 +781,11 @@ describe("interview scheduling", () => {
       await withPlatform(container.db, (tx) => (verified ? verifyCompany(tx, container, { companyId, actor, reason: "test", now: container.engine.clock() }) : unverifyCompany(tx, { companyId, actor, reason: "test" })));
       await container.drain();
     };
+    // Asked on a Wednesday, whatever day the tests run: the 8 times span Thursday to the next Tuesday, so some are still
+    // ahead after the five held days (asked on a Monday, every time would have passed by then and the link would read
+    // "expired").
+    const d0 = ((3 - new Date(BASE).getUTCDay() + 7) % 7) * DAY;
+    setClock(d0);
     const cand = await apply("Ines", "Cruz");
     await its(false);
     const iv = await requestInterview(cand.id);
@@ -787,7 +799,7 @@ describe("interview scheduling", () => {
     expect(await waiting()).toHaveLength(1);
     expect((await waiting())[0]!.body).toContain("wait for ITS to confirm your company");
     // five days pass with the email still held: no reminder, and the offer does not lapse
-    setClock(5 * DAY);
+    setClock(d0 + 5 * DAY);
     await container.drain();
     expect(await interview(iv.id)).toMatchObject({ status: "scheduling", scheduleToken: row.scheduleToken });
     expect(await waiting()).toHaveLength(1);
@@ -798,10 +810,10 @@ describe("interview scheduling", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].text).toContain(`/c/schedule/${row.scheduleToken}`);
     expect((await app.request(`/c/schedule/${row.scheduleToken}`)).status).toBe(200);
-    setClock(5 * DAY + 47 * H);
+    setClock(d0 + 5 * DAY + 47 * H);
     await container.drain();
     expect(outbox().some((m) => m.to === cand.email && /^Reminder: pick a time/.test(m.subject))).toBe(false);
-    setClock(5 * DAY + 49 * H);
+    setClock(d0 + 5 * DAY + 49 * H);
     await container.drain();
     expect(outbox().some((m) => m.to === cand.email && /^Reminder: pick a time/.test(m.subject))).toBe(true);
     expect((await interview(iv.id)).status).toBe("scheduling");

@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { desc, eq, gt, gte, inArray, ne, sql } from "drizzle-orm";
@@ -325,11 +325,19 @@ adminRoutes.post("/failed-email-applications/:id/retry", async (c) => {
 
 /** The email do-not-send list (item 5): what is suppressed, why, and a release once a person has confirmed the address. */
 adminRoutes.get("/email-suppressions", async (c) => c.json((await listSuppressions(c.get("container").db, c.req.query("all") !== "1")).map((s) => ({ id: s.id, address: s.address, reason: s.reason, source: s.source, active: s.active, count: s.count, firstAt: s.firstAt, lastAt: s.lastAt, details: s.details, releasedAt: s.releasedAt, releaseReason: s.releaseReason }))));
+/**
+ * An administrator adds an address by hand (Problems › Email, "Stop emails to an address"): someone asked by phone not
+ * to be emailed, or an address bounces somewhere the provider does not report. Why is required and kept on the row; the
+ * addition is audited.
+ */
 adminRoutes.post("/email-suppressions", async (c) => {
   const s = c.get("session")!;
-  const body = (await c.req.json()) as { address?: string; reason?: string };
-  if (!body.address || !/@/.test(body.address)) throw new HttpError(400, "invalid_request", "An email address is required.");
-  const row = await suppressAddress(c.get("container").db, { address: body.address, reason: "manual", source: "admin", details: { note: body.reason ?? "" }, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email } });
+  const body = (await c.req.json().catch(() => ({}))) as { address?: string; reason?: string };
+  const address = String(body.address ?? "").trim();
+  const note = String(body.reason ?? "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw new HttpError(400, "invalid_request", "Enter one email address, like name@example.com.");
+  if (note.length < 5) throw new HttpError(400, "reason_required", "Say why this address must not be emailed (at least five characters).");
+  const row = await suppressAddress(c.get("container").db, { address, reason: "manual", source: "admin", details: { note }, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email } });
   return c.json({ id: row.id, address: row.address, reason: row.reason, active: row.active }, 201);
 });
 adminRoutes.post("/email-suppressions/:id/release", async (c) => {
@@ -680,19 +688,32 @@ async function notifyOtherAdmins(container: Container, actorUserId: string, subj
  * identity service, an application session on that device must not outlive the reset. Audited with the reason.
  */
 adminRoutes.post("/users/:userId/sessions/revoke", async (c) => {
+  const userId = c.req.param("userId") ?? "";
+  return signOutEverywhere(c, (q) => q.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, userId)).limit(1));
+});
+
+/** The same, by the person's email address: what the console's Administrators part asks for ("Sign someone out everywhere"). */
+adminRoutes.post("/sessions/revoke", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { email?: string };
+  const email = String(body.email ?? "").trim().toLowerCase();
+  if (!email.includes("@")) return c.json({ error: { code: "invalid_request", message: "Enter the email address the person signs in with." } }, 400);
+  return signOutEverywhere(c, (q) => q.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, email)).limit(1));
+});
+
+/** Ends every session of one person, after a confirmation and a reason; audited with both. */
+async function signOutEverywhere(c: Context<Vars>, find: (q: Container["db"]) => Promise<Array<{ id: string; email: string }>>) {
   const container = c.get("container");
   const s = c.get("session")!;
   const body = (await c.req.json().catch(() => ({}))) as { reason?: string; confirm?: boolean };
   const reason = String(body.reason ?? "").trim();
   if (body.confirm !== true) return c.json({ error: { code: "confirmation_required", message: "Confirm that every session of this person should end." } }, 400);
   if (reason.length < 5) return c.json({ error: { code: "reason_required", message: "Give a reason of at least five characters." } }, 400);
-  const userId = c.req.param("userId") ?? "";
-  const [who] = await container.db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
-  if (!who) return c.json({ error: { code: "not_found", message: "No such person." } }, 404);
+  const [who] = await find(container.db);
+  if (!who) return c.json({ error: { code: "not_found", message: "Nobody signs in with that address." } }, 404);
   const ended = await revokeAllSessions(container.db, who.id, { now: container.engine.clock() });
   await audit(container.db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "session.revoked", target: { type: "user", id: who.id }, reason, details: { email: who.email, sessionsEnded: ended, by: "administrator" } });
   return c.json({ ok: true, sessionsEnded: ended });
-});
+}
 
 adminRoutes.get("/outcomes", async (c) => {
   const db = c.get("container").db;
