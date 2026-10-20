@@ -100,8 +100,9 @@ test.describe("the Kanvis-style application", () => {
       await cand.getByRole("checkbox", { name: /I have read the full notice above/ }).check();
       await cand.getByRole("button", { name: "Send my application" }).click();
 
-      // the chat's introduction, then the chat: the counter in the steps header, never the questions themselves
-      await cand.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/);
+      // the waiting room opens the chat's introduction once the résumé is read (R20-12), then the chat: the counter in the
+      // steps header, never the questions themselves
+      await cand.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/, { timeout: 90_000 });
       await expect(cand.getByText("Your application is sent.")).toBeVisible();
       await accessibleAtBothWidths(cand, "chat introduction");
       await cand.getByRole("button", { name: "Start" }).click();

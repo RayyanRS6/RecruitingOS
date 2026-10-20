@@ -7,9 +7,7 @@ import { Alert, Button, Card, Chip, EmptyState, ErrorState, Skeleton } from "@ro
 import { formatPayRange } from "@ros/contracts";
 import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
-import { isItsStaff } from "../apply-flow";
 import { AskRecruiter } from "../components/AskRecruiter";
-import { RoleApplyMode } from "../components/ApplyMode";
 import { useCompanyCheck } from "../components/use-company-check";
 import { canApproveRole, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canTryWeights } from "../roles";
 import { outdatedBoardsLine } from "../publishing";
@@ -316,8 +314,7 @@ export function RoleDetail() {
           {visibleTab === "plan" ? <InterviewPlanTab roleId={r.id} canEdit={editPacket} /> : null}
 
           {visibleTab === "share" ? <PostingTab roleId={r.id} roleStatus={r.status} canManage={manage} canShare={share} roleTitle={r.title} companyName={companyName} /> : null}
-          {/* ITS only (plan E1): whether this job's applicants apply and talk in one visit, or get the chat later. */}
-          {visibleTab === "share" && isItsStaff(me.data) ? <RoleApplyMode roleId={r.id} roleTitle={r.title} /> : null}
+          {/* ITS's "apply and talk in one visit" switch is hidden since 20 Oct 2026 (R20-12): every applicant takes the same path. */}
 
           {visibleTab === "report" ? <ReportTab roleId={r.id} /> : null}
 

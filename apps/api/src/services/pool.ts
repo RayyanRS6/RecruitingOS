@@ -143,7 +143,7 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
   const invites = scr.length ? await tx.select({ subjectId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.type, "screen.invited"), inArray(events.subjectId, scr.map((s) => s.id)))) : [];
   const automatic = new Set(invites.filter((e) => (e.payload as { invitedBy?: unknown }).invitedBy === "system").map((e) => e.subjectId));
   const ivs = await tx.select({ applicationId: interviews.applicationId, status: interviews.status }).from(interviews).where(inArray(interviews.applicationId, appIds));
-  const waiting = new Set((await tx.select({ applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["application.invite_screen", "application.recommend_interview"]), eq(approvalRequests.status, "pending")))).map((r) => r.applicationId));
+  const waiting = new Set((await tx.select({ applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), eq(approvalRequests.actionType, "application.recommend_interview"), eq(approvalRequests.status, "pending")))).map((r) => r.applicationId));
   const rows = apps.map((loaded): PoolRow => {
     const { app, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hidden);
     const doc = docs.find((d) => d.id === app.resumeDocumentId);

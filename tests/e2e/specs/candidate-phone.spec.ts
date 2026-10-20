@@ -120,11 +120,11 @@ test.describe("candidate journey on a phone", () => {
     }
     await expectAccessible(page, "apply form with the acknowledgment missing");
 
-    // ticking the box sends it; in one visit (plan E1) the form leads straight to the conversation's introduction, which
-    // says the application went through and where its link went (masked), and never shows the status link
+    // ticking the box sends it; the waiting room (20 Oct 2026, R20-12) opens the AI interview's introduction by itself once
+    // the résumé is read, which says the application went through and where its link went (masked), never the status link
     await page.getByRole("checkbox", { name: /I have read the full notice above/ }).check();
     await page.getByRole("button", { name: "Send my application" }).click();
-    await page.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/);
+    await page.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/, { timeout: 90_000 });
     await expect(page.getByText(/This conversation is with .+'s AI assistant, a software program, not a person\./)).toBeVisible();
     await expect(page.getByText("Your application is sent.")).toBeVisible();
     await expect(page.getByText(/m\*\*\*@example\.com/)).toBeVisible();
@@ -225,7 +225,7 @@ test.describe("candidate journey on a phone", () => {
     // the candidate's own steps (plan A1; the Wave S2 progress line Applied, Screening chat, Review, Interview, Decision),
     // the current one marked; the team's stage names and private marks never show
     await expect(page.locator('ol.track [aria-current="step"]')).toHaveCount(1);
-    await expect(page.locator('ol.track [aria-current="step"]')).toHaveText(/^(Applied|Screening chat|Review)$/);
+    await expect(page.locator('ol.track [aria-current="step"]')).toHaveText(/^(Applied|AI interview|Review)$/);
     await page.getByText("How AI is used", { exact: true }).first().click();
     await expect(page.getByText(/who is interviewed, hired or turned down is always a person's decision/)).toBeVisible();
     await expectAccessible(page, "status page");
@@ -235,7 +235,7 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.getByRole("button", { name: "Withdraw my application" })).toHaveCSS("background-color", "rgb(255, 255, 255)");
     // the messages read as a conversation (plan G7): what we sent, oldest first, and no reply box (replies go by email)
     await expect(page.getByRole("heading", { level: 2, name: "Messages about your application" })).toBeVisible();
-    await expect(page.locator("ol.thread li.msg.team").first()).toContainText(/We received your application/);
+    await expect(page.locator("ol.thread li.msg.team").first()).toContainText(/Thank you for applying/);
     await page.getByText("Ask for a copy, a fix, deletion, or a person's review", { exact: true }).click();
     await expect(page.getByRole("textbox")).toHaveCount(1); // the privacy request's details, nothing else
     // "Future roles" is one click either way, lands back at the choice (where the decision messages link) and says it was saved (Wave 0 item 0.11, Q30)

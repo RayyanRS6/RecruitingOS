@@ -225,7 +225,8 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the screening chat (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their screening chat should have closed by itself and did not, so their application has not reached you as ready and they may be waiting. Their answers appear only once they send them; a recruiter can contact them.`, action: { label: "See who", href: `/roles/${role.id}/talent` } });
     }
     const pending = await q.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
-    const oldPending = pending.filter((p) => p.actionType !== "role_packet.approve" && now.getTime() - Date.parse(p.createdAt) >= 2 * DAYS && !(p.applicationId && parked({ id: p.applicationId })));
+    // An "Invite to a screening chat?" from before 20 Oct 2026 is no decision any more (the daily check retires it).
+    const oldPending = pending.filter((p) => p.actionType !== "role_packet.approve" && p.actionType !== "application.invite_screen" && now.getTime() - Date.parse(p.createdAt) >= 2 * DAYS && !(p.applicationId && parked({ id: p.applicationId })));
     if (oldPending.length) {
       const days = Math.floor((now.getTime() - Math.min(...oldPending.map((p) => Date.parse(p.createdAt)))) / DAYS);
       out.push({ detector: "approval_pending", roleId: role.id, roleTitle: role.title, days, title: `A decision has been waiting ${days} days (${role.title})`, body: oldPending.map((p) => p.rationale ?? p.actionType.replace(/[._]/g, " ")).join("; "), action: { label: "Decide", href: "/" } });

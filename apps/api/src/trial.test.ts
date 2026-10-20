@@ -9,7 +9,7 @@ import { createContainer, type Container } from "./container";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { otherRolesFor } from "./services/profile-facts";
 import { settleTrials } from "./services/trial";
-import { signInAdmin, useOneVisitApplyFlow } from "./test-helpers";
+import { followApply, signInAdmin, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * The Trial plan's 30 days (founder decision L-02 B, 16 October 2026), end to end with the ITS check on
@@ -173,8 +173,9 @@ describe("the Trial plan's 30 days", () => {
     setClock(29.9);
     const applied = await applyForm({ first: "Maria", last: "Chat", email: "maria.chat@example.com" });
     await container.drain();
-    expect(applied.headers.get("location") ?? "").toMatch(/^\/c\/screen\//);
-    chatToken = (applied.headers.get("location") ?? "").slice("/c/screen/".length);
+    // the waiting room opens her AI interview once her résumé is read (20 Oct 2026)
+    chatToken = (await followApply(app, applied)).token ?? "";
+    expect(chatToken).not.toBe("");
     expect((await post(`/c/screen/${chatToken}/start`)).status).toBe(302);
     const form = await app.request(`/careers/${slug}/jobs/${roleA}/apply`);
     expect(form.status).toBe(200);
@@ -219,7 +220,18 @@ describe("the Trial plan's 30 days", () => {
     await container.drain();
     const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, "grace.window@example.com"));
     expect(cand).toBeTruthy();
-    expect(await container.db.select().from(applications).where(and(eq(applications.candidateId, cand.id), eq(applications.roleId, roleA)))).toHaveLength(1);
+    const taken = await container.db.select().from(applications).where(and(eq(applications.candidateId, cand.id), eq(applications.roleId, roleA)));
+    expect(taken).toHaveLength(1);
+    // R20-12: the page says plainly that the AI interview's link comes by email, with no loader and never the link
+    const landed = await followApply(app, r);
+    expect(landed.token).toBeNull();
+    expect(visible(landed.html)).toContain("We email you its link shortly");
+    expect(landed.html).not.toContain("preparing your AI interview");
+    expect(landed.html).not.toContain("/c/screen/");
+    // candidates are unaffected by the pause (L-02 B): her AI interview and its one email go as anyone's
+    const [interview] = await container.db.select().from(screens).where(eq(screens.applicationId, taken[0].id));
+    expect(interview).toMatchObject({ invitedVia: "with_application" });
+    expect((container.integrations.email as unknown as { sent: Array<{ to: string; text: string }> }).sent.find((m) => m.to === "grace.window@example.com")?.text).toContain(`/c/screen/${interview.token}`);
     // a form opened now gets no grace (it is not even shown), and a made-up value none either
     expect((await applyForm({ first: "Not", last: "Graced", email: "not.graced@example.com" }, { formOpened: "v1.made-up" })).status).toBe(404);
   });

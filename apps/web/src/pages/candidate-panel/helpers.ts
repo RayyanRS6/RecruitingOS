@@ -562,6 +562,7 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
     // Their screens (recorded on the screen).
     case "screen.invited":
       if (p.invitedVia === "apply") return { ...base, what: "Offered the screening chat right after the application form" };
+      if (p.invitedVia === "with_application") return { ...base, what: "AI interview offered with the application (on the page and by email)" };
       return { ...base, what: p.focus === "unknowns" ? "Screening chat invitation sent, starting with the open questions" : "Screening chat invitation sent" };
     case "screen.started":
       return { ...base, what: "Started the screening chat" };

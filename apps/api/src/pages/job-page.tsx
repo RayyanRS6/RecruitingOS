@@ -149,7 +149,7 @@ export type JobPageProps = {
   /** Every notice for the job's places; the page decides which it renders. */
   notices: Notice[];
   smsEnabled: boolean;
-  /** How applicants meet the screening conversation (services/job-preview.ts `applyFlowOf`): what the time and the steps say. */
+  /** How applicants meet the AI interview (services/job-preview.ts `APPLY_FLOW`): what the time and the steps say. */
   flow: ApplyFlowView;
   /** The benefits the law (or the company) has the page describe: the role's own, else the company's (Setup). */
   benefits: string | null;

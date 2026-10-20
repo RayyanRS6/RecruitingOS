@@ -9,8 +9,9 @@ import { signInWithIdentity, useLaterApplyFlow } from "./test-helpers";
 
 /**
  * The company's contact hours reach the automated texts themselves (audit findings A8 and J16), not only the helper that
- * computes the window (company-settings.test.ts): the screening invitation, its reminder and the text that follows a
- * bounced email all wait for the company's next opening. The company texts Monday to Friday, 9:00 to 17:00, in Phoenix,
+ * computes the window (company-settings.test.ts): a texted AI interview invitation, its reminder and the text that follows
+ * a bounced email all wait for the company's next opening. Every applicant's own AI interview goes on the web with one
+ * email (20 Oct 2026, R20-4 and R20-6), so a texted one is a person's "Send a new link" by text. The company texts Monday to Friday, 9:00 to 17:00, in Phoenix,
  * which keeps standard time all year (UTC-7): local noon is 19:00 UTC every day and no clock change falls on the weekend.
  * Saturday and Sunday noon are inside the legal window (8:00 to 21:00), so only the company's hours hold the texts back.
  */
@@ -37,8 +38,15 @@ describe("the company's contact hours hold back every automated text", () => {
   const mail = () => container.integrations.email as unknown as FakeEmailAdapter;
   const texts = () => (container.integrations.sms as FakeSmsAdapter).sent;
   const textsTo = (phone: string) => texts().filter((m) => m.to === phone);
-  const screenRun = async (applicationId: string) => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "screen"))).find((r) => (r.state as { applicationId?: string }).applicationId === applicationId)!;
-  const screensOf = (applicationId: string) => container.db.select().from(screens).where(eq(screens.applicationId, applicationId));
+  /** The run of the texted invitation a person sent (the AI interview that went with the application has its own). */
+  const screenRun = async (applicationId: string) => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "screen"))).find((r) => (r.state as { applicationId?: string; channel?: string }).applicationId === applicationId && (r.state as { channel?: string }).channel === "sms")!;
+  const screensOf = async (applicationId: string) => (await container.db.select().from(screens).where(eq(screens.applicationId, applicationId))).filter((s) => s.channel === "sms");
+  /** The team takes back the AI interview that went with the application and sends a new link by text instead. */
+  const textInstead = async (applicationId: string) => {
+    expect((await json("POST", `/api/v1/applications/${applicationId}/actions`, { action: "cancel_screen", note: "Asked for texts." })).status).toBe(200);
+    expect((await json("POST", `/api/v1/applications/${applicationId}/actions`, { action: "invite_screen", channel: "sms" })).status).toBe(200);
+    await container.drain();
+  };
 
   let owner = "";
   let companyId = "";
@@ -70,7 +78,7 @@ describe("the company's contact hours hold back every automated text", () => {
     const co = (await (await json("POST", "/api/v1/companies", { name: "Desert Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Phoenix", region: "AZ", country: "US" }] })).json()) as { id: string; slug: string };
     companyId = co.id;
     slug = co.slug;
-    // Texted screens come with the later path only: the conversation offered with the application is on the web (plan Wave E).
+    // The ITS switch is ignored since 20 Oct 2026 (R20-12): the AI interview that goes with the application is on the web.
     await useLaterApplyFlow(container, co.id);
     const started = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Phoenix, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active RDH license. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json("POST", `/api/v1/intake/sessions/${started.session.id}/compile`)).json()) as { roleId: string }).roleId;
@@ -103,11 +111,14 @@ describe("the company's contact hours hold back every automated text", () => {
     expect(new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(MONDAY_NINE))).toBe("Mon 09:00");
   });
 
-  it("on Friday at noon a consenting applicant is invited by text at once", async () => {
+  it("on Friday at noon a consenting applicant's new link by text goes at once", async () => {
     await at(FRIDAY_NOON);
     const ben = await apply(BEN);
     benId = ben.id;
     expect(ben.stage).toBe("screen_invited");
+    expect(textsTo(BEN_PHONE)).toHaveLength(0); // the AI interview that goes with the application is on the web
+    await textInstead(benId);
+    expect((await container.db.select().from(applications).where(eq(applications.id, benId)))[0].stage).toBe("screen_invited");
     const [scr] = await screensOf(benId);
     expect(scr.channel).toBe("sms");
     expect(textsTo(BEN_PHONE)).toHaveLength(1);
@@ -116,7 +127,7 @@ describe("the company's contact hours hold back every automated text", () => {
 
   it("on Saturday at noon a bounced email's text waits for Monday 9:00 instead of going out", async () => {
     await at(SATURDAY_NOON);
-    const ack = mail().sent.find((m) => m.to === BEN.email && /received your application/.test(m.subject))!;
+    const ack = mail().sent.find((m) => m.to === BEN.email && /^Thank you for applying/.test(m.subject))!;
     expect(ack).toBeTruthy();
     const r = await webhook(fakePostmarkEvent({ providerMessageId: ack.providerMessageId, email: BEN.email, type: "HardBounce", id: 7001 }));
     expect(r.status).toBe(200);
@@ -131,10 +142,11 @@ describe("the company's contact hours hold back every automated text", () => {
     expect(texts()).toHaveLength(textsBeforeTheWeekend);
   });
 
-  it("on Saturday at noon a consenting applicant's screening invitation waits for Monday 9:00: no text, no screen, no model call", async () => {
+  it("on Saturday at noon a consenting applicant's new link by text waits for Monday 9:00: no text, no screen, no model call", async () => {
     const ana = await apply(ANA);
     anaId = ana.id;
-    expect(ana.stage).toBe("triaged");
+    await textInstead(anaId);
+    expect((await container.db.select().from(applications).where(eq(applications.id, anaId)))[0].stage).toBe("triaged");
     const run = await screenRun(anaId);
     expect(run.status).toBe("waiting");
     expect(run.currentStep).toBe("invite");
@@ -143,7 +155,7 @@ describe("the company's contact hours hold back every automated text", () => {
     expect(await container.db.select().from(aiRuns).where(and(eq(aiRuns.workflowRunId, run.id), eq(aiRuns.task, "screen.turn")))).toHaveLength(0);
     expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, anaId), eq(communications.channel, "sms")))).toHaveLength(0);
     expect(textsTo(ANA_PHONE)).toHaveLength(0);
-    expect(mail().sent.filter((m) => m.to === ANA.email && /screening conversation/.test(m.subject))).toHaveLength(0);
+    expect(mail().sent.filter((m) => m.to === ANA.email && /^Your next step: a short AI interview/.test(m.subject))).toHaveLength(0);
     expect(texts()).toHaveLength(textsBeforeTheWeekend);
   });
 
@@ -174,7 +186,7 @@ describe("the company's contact hours hold back every automated text", () => {
     expect(await container.db.select().from(aiRuns).where(and(eq(aiRuns.workflowRunId, run.id), eq(aiRuns.task, "screen.turn")))).toHaveLength(1);
     // the waiting step sends when it wakes: its first pass (the wait) must not count as the invitation having gone out
     expect(textsTo(ANA_PHONE)).toHaveLength(1);
-    expect(mail().sent.filter((m) => m.to === ANA.email && /screening conversation/.test(m.subject))).toHaveLength(1);
+    expect(mail().sent.filter((m) => m.to === ANA.email && /^Your next step: a short AI interview/.test(m.subject))).toHaveLength(1);
     const [allowance] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "text_screens")));
     expect(allowance.used).toBe(0); // a conversation counts at its first answer, never at the invitation (plan E9): neither has answered yet
     // Ben: the reminder and the text that replaces his bounced email
@@ -183,7 +195,7 @@ describe("the company's contact hours hold back every automated text", () => {
     expect(Date.parse(benScreen.remindedAt!)).toBe(MONDAY_NINE);
     const ben = textsTo(BEN_PHONE).map((m) => m.body);
     expect(ben).toHaveLength(3);
-    expect(ben.filter((b) => /your screening for .* is waiting/.test(b))).toHaveLength(1);
+    expect(ben.filter((b) => /your AI interview for .* is waiting/.test(b))).toHaveLength(1);
     expect(ben.filter((b) => /could not reach you by email/.test(b))).toHaveLength(1);
     expect((await container.db.select().from(jobs).where(eq(jobs.kind, "email.fallback_sms")))[0].status).toBe("done");
     expect(texts()).toHaveLength(textsBeforeTheWeekend + 3);

@@ -38,19 +38,19 @@ describe("the words a page uses: email lines on the web, quoted replies, the wor
     expect(ownWords("> only quoted")).toBe("> only quoted");
   });
 
-  it("the progress line (Wave S2, K4): Applied, the screening chat only where there is one, Review, Interview, Decision; the current step read off the candidate's step", () => {
+  it("the progress line (Wave S2, K4): Applied, the AI interview only where there is one, Review, Interview, Decision; the current step read off the candidate's step", () => {
     const line = (input: Parameters<typeof progressLine>[0]) => { const p = progressLine(input); return `${p.steps.map((s) => (s === p.current ? `[${PROGRESS_STEP_LABEL[s]}]` : PROGRESS_STEP_LABEL[s])).join(" > ")}`; };
     const base = { hasChat: false, chatOpen: false, hadInterview: false };
     expect(line({ ...base, step: "received" })).toBe("[Applied] > Review > Interview > Decision");
     expect(line({ ...base, step: "under_review" })).toBe("Applied > [Review] > Interview > Decision");
     // a chat they have, open or paused, is where they are; once it closed the team reviews
-    expect(line({ ...base, step: "under_review", hasChat: true, chatOpen: true })).toBe("Applied > [Screening chat] > Review > Interview > Decision");
-    expect(line({ ...base, step: "under_review", hasChat: true })).toBe("Applied > Screening chat > [Review] > Interview > Decision");
-    expect(line({ ...base, step: "received", hasChat: true, chatOpen: true })).toBe("[Applied] > Screening chat > Review > Interview > Decision");
-    expect(line({ ...base, step: "interview", hasChat: true })).toBe("Applied > Screening chat > Review > [Interview] > Decision");
+    expect(line({ ...base, step: "under_review", hasChat: true, chatOpen: true })).toBe("Applied > [AI interview] > Review > Interview > Decision");
+    expect(line({ ...base, step: "under_review", hasChat: true })).toBe("Applied > AI interview > [Review] > Interview > Decision");
+    expect(line({ ...base, step: "received", hasChat: true, chatOpen: true })).toBe("[Applied] > AI interview > Review > Interview > Decision");
+    expect(line({ ...base, step: "interview", hasChat: true })).toBe("Applied > AI interview > Review > [Interview] > Decision");
     // at the decision the interview is on the line only when there was one
     expect(line({ ...base, step: "decision" })).toBe("Applied > Review > [Decision]");
-    expect(line({ ...base, step: "decision", hasChat: true, hadInterview: true })).toBe("Applied > Screening chat > Review > Interview > [Decision]");
+    expect(line({ ...base, step: "decision", hasChat: true, hadInterview: true })).toBe("Applied > AI interview > Review > Interview > [Decision]");
     expect(line({ ...base, step: "interview" })).toBe("Applied > Review > [Interview] > Decision");
   });
 
@@ -153,7 +153,7 @@ describe("the candidate's status page: the conversation, the decision in its own
     expect(html).toContain("What we sent you and what you wrote back, oldest first. To write to the team, reply to any of our emails.");
     const thread = html.slice(html.indexOf('<ol class="thread">'), html.indexOf("</ol>", html.indexOf('<ol class="thread">')));
     // the acknowledgment first, then the conversation in the order it happened
-    const order = ["We received your application", "Interview times at Thread Dental", "Tuesday at 10 works for me.", "Running five minutes late", "See you Tuesday"].map((t) => thread.indexOf(t));
+    const order = ["Thank you for applying: your next step", "Interview times at Thread Dental", "Tuesday at 10 works for me.", "Running five minutes late", "See you Tuesday"].map((t) => thread.indexOf(t));
     for (const i of order) expect(i).toBeGreaterThan(-1);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
     // the team's on the left with the company's name and the subject, the candidate's own on the right, said in words too
@@ -174,7 +174,7 @@ describe("the candidate's status page: the conversation, the decision in its own
     for (let i = 1; i <= THREAD_LIMIT; i++) await message(a, { direction: "outbound", subject: `Update number ${i}`, text: `Update ${i}.`, status: "sent", createdAt: at(10 + i) });
     const html = await page(`/c/status/${a.statusToken}`);
     expect(html).toContain(`oldest first; the latest ${THREAD_LIMIT} are shown.`);
-    expect(html).not.toContain("We received your application");
+    expect(html).not.toContain("Thank you for applying");
     expect(html).toContain("Update number 1<");
     expect(html).toContain(`Update number ${THREAD_LIMIT}<`);
   });

@@ -4,7 +4,7 @@ import type { FakeHandler, StructuredRequest } from "@ros/ai";
 import type { LearnedFact, RolePacket } from "@ros/contracts";
 import { KEPT_FACTS_MAX, chatFactsOf, chatFactsWithKept, chatGaps, chatOpening, keptFactLines } from "@ros/agents";
 import { entitlements } from "@ros/core";
-import { applications, candidates, screens, unconfirmedScreens } from "@ros/db";
+import { applications, candidates } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { changeLearnedFact, factsToKeep, reuseToken } from "./services/profile-facts";
@@ -108,12 +108,14 @@ describe("a form opened from the reuse link: the earlier facts, kept or unticked
     return cand ? (await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id))))[0] : undefined;
   };
   /** What the chat that follows the form reads: a known person's detached chat, or a new person's own. */
-  const chatFactsAfter = async (res: Response) => {
-    const token = (res.headers.get("location") ?? "").replace("/c/screen/", "");
-    const [copy] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.token, token));
-    if (copy) return copy.progress.typedFacts;
-    const [own] = await container.db.select().from(screens).where(eq(screens.token, token));
-    return own?.progress.typedFacts;
+  /**
+   * What the AI interview of the application this address made for the role reads (20 Oct 2026): the application's own
+   * facts (`chatFactsOf`), since the interview is made after the résumé is read and never from what a visit typed.
+   */
+  const chatFactsAfter = async (role: { id: string; packet: RolePacket }, email: string) => {
+    await container.drain();
+    const a = await applicationOf(role.id, email);
+    return a ? chatFactsOf(role.packet, a) : undefined;
   };
   const tokenFor = (roleId: string, over: { companyId?: string; candidateId?: string } = {}) => reuseToken(container.env.SESSION_SECRET, { companyId: over.companyId ?? companyId, candidateId: over.candidateId ?? mariaId, roleId }, container.engine.clock(), 72);
 
@@ -245,8 +247,9 @@ describe("a form opened from the reuse link: the earlier facts, kept or unticked
     const { fd, path } = applyForm(roles.b, { first: "Maria", last: "Reyes", email: "Maria.Reyes@Example.com" }, { reuse: tokenFor(roles.b.id), keep: ["lf_kept_license", "lf_kept_trained", "lf_omar_desk", "lf_forged", "I run the whole clinic."] });
     const res = await post(path, fd);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toMatch(/^\/c\/screen\//);
-    const facts = await chatFactsAfter(res);
+    // she is known here (an earlier application): only "check your email", never the link on the page (R20-12)
+    expect(res.headers.get("location")).toBe(`/careers/${slug}/jobs/${roles.b.id}/applied`);
+    const facts = await chatFactsAfter(roles.b, "maria.reyes@example.com");
     await container.drain();
     const a = (await applicationOf(roles.b.id, "maria.reyes@example.com"))!;
     expect(a.candidateId).toBe(mariaId);
@@ -280,7 +283,7 @@ describe("a form opened from the reuse link: the earlier facts, kept or unticked
     const other = applyForm(roles.c, { first: "Sam", last: "Other", email: "sam.other@example.com" }, { reuse: tokenFor(roles.c.id), keep: ["lf_kept_license", "lf_kept_car"] });
     const r1 = await post(other.path, other.fd);
     expect(r1.status).toBe(302);
-    const f1 = await chatFactsAfter(r1);
+    const f1 = await chatFactsAfter(roles.c, "sam.other@example.com");
     await container.drain();
     const sam = (await applicationOf(roles.c.id, "sam.other@example.com"))!;
     expect(sam.candidateId).not.toBe(mariaId);
@@ -292,7 +295,7 @@ describe("a form opened from the reuse link: the earlier facts, kept or unticked
     const plain = applyForm(roles.c, { first: "Maria", last: "Reyes", email: "maria.reyes@example.com" }, { keep: ["lf_kept_license"] });
     const r2 = await post(plain.path, plain.fd);
     expect(r2.status).toBe(302);
-    const f2 = await chatFactsAfter(r2);
+    const f2 = await chatFactsAfter(roles.c, "maria.reyes@example.com");
     await container.drain();
     const mine = (await applicationOf(roles.c.id, "maria.reyes@example.com"))!;
     expect(mine.answers.kept).toBeUndefined();

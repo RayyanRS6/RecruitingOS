@@ -176,8 +176,9 @@ export type AssessmentResult = {
  */
 export type ScreenTranscriptLine = { role: string; content: string; at: string; questionKey?: string; channel?: string; source?: string; by?: string };
 /**
- * Wave E: `invitedVia` is "apply" when the conversation was offered in the visit that sent the application (older
- * answers leave it out; `progress.flow` says the same). `progress.declined` lists the questions the candidate chose not
+ * Wave E: `invitedVia` is "apply" when the conversation was offered in the visit that sent the application, and
+ * "with_application" for every applicant's AI interview since 20 October 2026 (older answers leave it out;
+ * `progress.flow` says the same). `progress.declined` lists the questions the candidate chose not
  * to answer, `progress.edits` the answers they changed before sending. `answersShared: false` (founder decision of
  * 9 October 2026, "hide them until they send"): the candidate has not sent their answers, or never did, so the API sends
  * none of them: no answer, no transcript line but a recruiter's call notes, and nothing about how far they got. Older

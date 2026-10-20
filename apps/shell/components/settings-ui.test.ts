@@ -27,7 +27,9 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, 
 const company = { id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "pilot", status: "active", locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: "2026-10-01T00:00:00.000Z" }, integrations: [{ kind: "jobboard", provider: "linkedin_basic", status: "not_connected" }], ai: { provider: "fake" }, usage: { active_roles: { used: 1, limit: 3 }, text_screens: { used: 4, limit: 50, resetsAt: "2026-10-30T12:00:00.000Z" } } };
 const policy = (actionType: string, group: string, over: Record<string, unknown> = {}) => ({ group, actionType, level: "approval", approverRoles: ["owner"], source: "default", locked: false, available: true, settable: true, does: null, defaultLevel: "approval", minLevel: null, maxLevel: null, ...over });
 const policies = [
-  policy("application.invite_screen", "Applicants", { level: "auto_notify", defaultLevel: "auto_notify" }),
+  // fixed since 20 Oct 2026 (R20-4): every applicant gets the AI interview, so there is nothing to choose
+  policy("application.invite_screen", "Applicants", { level: "auto", defaultLevel: "auto", maxLevel: "auto", settable: false, does: "Every applicant is invited to a short AI interview as soon as their résumé is read." }),
+  policy("application.recommend_interview", "Applicants", { level: "approval", defaultLevel: "approval" }),
   policy("application.triage", "Applicants", { level: "auto", settable: false, does: "The assistant reads every applicant and writes an assessment for you to review. It never decides anything with it." }),
   policy("application.reject_on_assessment", "Applicants", { level: "human_only", locked: true, settable: false }),
   policy("disposition.send", "Messages"),
@@ -138,9 +140,12 @@ describe("each card says one line, the rest one click away", () => {
     const html = page();
     const words = text(html);
     expect(words).toContain("Choose how much the AI does without asking you. How this works What the product does today");
-    expect(html).toContain('aria-label="Invite an applicant to the screening chat"');
+    expect(html).not.toContain('aria-label="Invite an applicant to the screening chat"');
+    expect(html).not.toContain('aria-label="Invite every applicant to the AI interview"');
     expect(words).toContain("Decline a candidate on judgment always a person");
-    expect(words).toContain("What it always does the same way (1) Read and assess applicants (information only) Nothing to choose The assistant reads every applicant");
+    expect(words).toContain("What it always does the same way (2)");
+    expect(words).toContain("Read and assess applicants (information only) Nothing to choose The assistant reads every applicant");
+    expect(words).toContain("Invite every applicant to the AI interview Nothing to choose Every applicant is invited to a short AI interview as soon as their résumé is read.");
     expect(words).toContain("Coming later (1)");
     // the decision message: short on view, and what happens after five working days one click away (D-03 = A)
     expect(words).toContain("Send the decision message when someone presses Send");

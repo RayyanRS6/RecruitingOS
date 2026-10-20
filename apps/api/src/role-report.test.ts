@@ -139,16 +139,18 @@ describe("role report", () => {
     ids.ivy = await apply("Ivy", "Chen", "ivy.chen@example.com", { role: role2Id });
 
     // People decide: Eve's eligibility answer is overridden, Ben goes to interview, Ana is held and her assessment flagged, Hal is hired.
-    // Since Wave S5 the reading treats someone kept in as eligible (known bug 30), so the stand-in would suggest a
-    // screening chat; hers is scripted to leave her to a person (her exam is next week), so she waits on the owner as
-    // this report expects. Since Wave S7 the recommendation follows the overall reading worked out in code, so the
-    // scripted readings say "unknown" (nothing to judge her licence on until the exam), which leaves her to a person.
+    // The scripted readings say "unknown" (nothing to judge her licence on until the exam).
     for (let i = 0; i < TRIAGE_READINGS; i++) container.fake!.scriptNext("triage.assess", { overall: "unknown", confidence: "medium", confidenceReasons: [], summary: "Hygiene work; the licence exam is still to come.", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], recommendation: "review_manually", rationale: "Scripted: a person looks first." });
     expect((await json(owner, "POST", `/api/v1/applications/${ids.eve}/actions`, { action: "override_eligibility", note: "She sits the exam next week." })).status).toBe(200);
     // the held application's review timer notices the override when it fires (as in app.test.ts): a day passes
     setClock(25 * HOUR);
     await container.drain();
     container.fake!.clearScripts();
+    // "Keep them in" sends her AI interview link by itself (R20-10); the owner takes it back to review her themselves
+    // (her exam is next week), so she waits on the owner as this report expects
+    expect((await container.db.select().from(applications).where(eq(applications.id, ids.eve)))[0].stage).toBe("screen_invited");
+    expect((await json(owner, "POST", `/api/v1/applications/${ids.eve}/actions`, { action: "cancel_screen", note: "I'll review her myself." })).status).toBe(200);
+    await container.drain();
     setClock(0);
     expect((await json(owner, "POST", `/api/v1/applications/${ids.ben}/actions`, { action: "advance_to_interview", note: "Strong referral." })).status).toBe(200);
     expect((await json(owner, "POST", `/api/v1/applications/${ids.ana}/actions`, { action: "hold", note: "Waiting on her reply." })).status).toBe(200);

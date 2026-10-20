@@ -22,8 +22,12 @@ export const SCREEN_ACTIVE_STATUSES: readonly ScreenStatus[] = ["invited", "remi
 /** Where "I'd rather talk to a person" still works: an open conversation, and one paused while the assistant is down (E5). */
 export const SCREEN_PERSON_ROUTE_STATUSES: readonly ScreenStatus[] = ["invited", "reminded", "in_progress", "paused"];
 
-/** How the conversation was offered (migration 0033): in the visit that sent the application, after a confirmed repeat submission, or (null) by email. */
-export const ScreenInvitedVia = z.enum(["apply", "confirmed_repeat"]);
+/**
+ * How the conversation was offered (migration 0033): in the visit that sent the application (before 20 Oct 2026), after a
+ * confirmed repeat submission, `with_application` (20 Oct 2026, R20-4: the AI interview every applicant gets once their
+ * résumé is read, on the apply page and in the one email), or (null) by email from a person.
+ */
+export const ScreenInvitedVia = z.enum(["apply", "confirmed_repeat", "with_application"]);
 export type ScreenInvitedVia = z.infer<typeof ScreenInvitedVia>;
 
 /**

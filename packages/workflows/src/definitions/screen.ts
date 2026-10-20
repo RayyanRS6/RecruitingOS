@@ -1,25 +1,29 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { ScreenAssessment, ScreenChannel, ScreenTurn } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
 import { runPromptDetached, screenTurnPrompt } from "@ros/ai";
-import { audit, emit, entitlements, gate, humanResponseExpectation, isOneVisitFlow, loadBusinessCalendar, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
-import { applications, assessments, candidates, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
+import { audit, emit, entitlements, evaluateEligibility, gate, humanResponseExpectation, isOneVisitFlow, loadBusinessCalendar, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
+import { applications, assessments, candidates, communications, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
-  answersOf, applyScreenOpening, assessScreen, chatFactsFor, createScreen, finishScreenTurn, focusQuestionsFrom, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
+  HELD_REASON, answersOf, applyScreenOpening, assessScreen, chatFactsFor, createScreen, finishScreenTurn, focusQuestionsFrom, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
   sendConversationNotOfferedNote, sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, type FocusQuestion, type ScreenDeps,
 } from "@ros/agents";
-import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
+import type { SendResult } from "@ros/integrations";
+import { twoPhase, type StepContext, type StepResult, type WorkflowDefinition } from "../types";
 import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
+import { INTERVIEW_LINK_HOURS, READING_SETTLED_EVENT, READING_WAIT_MINUTES, offerInterview, overDesignPartnerAllowance, readingSettled, readingSettledSignal } from "../with-application";
+import { HELD_DECISION_EVENT, aiNoticeSentSignal } from "./application-intake";
 
 /**
  * `focus: "unknowns"` ("Ask about this in a screen"): the screen opens with the résumé assessment's open questions before the packet's own.
  * `invitedVia`: the screen was created before this run (with the application, after a confirmed repeat submission, or to
  * write the scorecard of a recruiter's call notes), so the run sends no invitation; `screenId` names it from the start.
  * `waitingForAllowance`: when the run started waiting for the plan's allowance to be topped up (Q17).
- * `flow`: the screen it creates is the conversation offered with the application (the apply page started this run when
- * the allowance was used up), so it reads the same once the link goes out by email.
+ * `flow`: the screen it creates is the conversation that goes with the application, so it reads the same once the link goes out by email.
+ * `mode` "with_application" (20 Oct 2026, R20-4): every applicant's AI interview, started by the intake; `readingDeadline`
+ * is when it stops waiting for the résumé reading, `heldSince` when a must-have "No" started holding it (R20-10).
  */
-type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns"; invitedVia?: "apply" | "confirmed_repeat" | "recruiter_call"; waitingForAllowance?: string; flow?: "one_visit" } & SuggestionState;
+type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns"; invitedVia?: "apply" | "confirmed_repeat" | "recruiter_call" | "with_application"; waitingForAllowance?: string; flow?: "one_visit"; mode?: "with_application"; readingDeadline?: string; heldSince?: string } & SuggestionState;
 
 /** A screen that is over without a scorecard: handed to a person, left, stopped by the team or closed with the application. Nothing more is sent. */
 const ENDED = ["human_requested", "abandoned", "cancelled", "expired"];
@@ -64,14 +68,34 @@ function depsOf(ctx: { services: StepContext["services"] }): ScreenDeps {
  * then emails the candidate to finish, or after a day hands it to a person and tells them (E5); and when the plan's
  * allowance is used up the run waits for it to be topped up instead of giving up, so everyone for a role gets the same
  * process (Q17).
+ *
+ * 20 October 2026 (R20-4, R20-5): the intake starts one for every applicant (`mode` "with_application"). It waits for the
+ * résumé reading (`await_reading`, at most ten minutes), then `invite` offers the AI interview and queues the one email
+ * (`offerInterview`); a must-have "No" waits for "Keep them in" (`after_hold`). Every other run starts at `invite` as before.
  */
 export const screen: WorkflowDefinition<State> = {
   key: "screen",
   version: 1,
-  initialStep: "invite",
+  initialStep: "await_reading",
   maxAttempts: 4,
   escalationKind: "candidate_issue",
   steps: {
+    /**
+     * Every applicant's AI interview waits for the intake's reading of the résumé (its signal, or what is stored when the
+     * signal came before this run waited), at most until ten minutes after the run started, so the one email goes once
+     * the interview's questions can come from the reading, and never later than that. Any other run goes straight on.
+     */
+    async await_reading(ctx) {
+      if (ctx.state.mode !== "with_application" || ctx.state.screenId) return { kind: "next", step: "invite" };
+      const deadline = ctx.state.readingDeadline ?? new Date(ctx.now.getTime() + READING_WAIT_MINUTES * 60_000).toISOString();
+      const signalled = ctx.wake?.kind === "event" && ctx.wake.key === readingSettledSignal(ctx.state.applicationId);
+      if (signalled || ctx.now.getTime() >= Date.parse(deadline)) return { kind: "next", step: "invite", state: { readingDeadline: undefined } };
+      const [app] = await ctx.q.select({ id: applications.id, stage: applications.stage }).from(applications).where(eq(applications.id, ctx.state.applicationId)).limit(1);
+      if (!app) return { kind: "fail", error: "application not found", retryable: false };
+      if (await readingSettled(ctx.q, app)) return { kind: "next", step: "invite", state: { readingDeadline: undefined } };
+      return { kind: "wait", wait: { kind: "event", eventTypes: [READING_SETTLED_EVENT], subjectId: app.id, until: deadline, reason: "the AI interview waits for the résumé reading, at most ten minutes after applying" }, state: { readingDeadline: deadline }, resumeStep: "await_reading" };
+    },
+
     invite: twoPhase<State, { channel: ScreenChannel; opening: RunOutcome<ScreenTurn> | null }>({
       async prepare(ctx) {
         if (ctx.state.invitedVia) return { channel: "web", opening: null };
@@ -107,12 +131,24 @@ export const screen: WorkflowDefinition<State> = {
           if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
           if (!scr.workflowRunId) await ctx.q.update(screens).set({ workflowRunId: ctx.run.id }).where(eq(screens.id, scr.id));
           if (scr.status !== "invited") return { kind: "next", step: "after_invite", state: { channel: scr.channel as ScreenChannel } };
-          const until = new Date(Date.parse(scr.invitedAt ?? ctx.now.toISOString()) + INVITE_WAIT_HOURS * HOUR).toISOString();
-          return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until, reason: "offered with the application; reminder after 48h" }, state: { channel: scr.channel as ScreenChannel }, resumeStep: "after_invite" };
+          // An emailed-in applicant's interview, made with their one email in the intake (R20-5): held for the ITS company check, its clock waits for it (B7).
+          const held = scr.invitedVia === "with_application" && (await linkEmailWaiting(ctx.q, scr));
+          return waitForStart(scr, new Date(Date.parse(scr.invitedAt ?? ctx.now.toISOString()) + INVITE_WAIT_HOURS * HOUR), { channel: scr.channel as ScreenChannel }, held);
         }
         const b = await load(ctx.q, ctx.state.applicationId);
         if (!b) return { kind: "fail", error: "application not found", retryable: false };
         const { app, candidate, role, company, packet } = b;
+        // Every applicant's AI interview and the one email (20 Oct 2026): no gate, no SMS (R20-6), the job's own length.
+        if (ctx.state.mode === "with_application") {
+          const offer = await offerInterview(ctx.q, { integrations: ctx.services.integrations, jobsBaseUrl: ctx.services.env.jobsBaseUrl }, b, { now: ctx.now, actor: ctx.actor, correlationId: ctx.run.id, workflowRunId: ctx.run.id });
+          if (offer.kind === "invited") return waitForStart({ id: offer.screenId, applicationId: app.id }, new Date(ctx.now.getTime() + INVITE_WAIT_HOURS * HOUR), { screenId: offer.screenId, channel: "web", waitingForAllowance: undefined }, emailHeld(offer.email));
+          if (offer.kind === "held") {
+            const heldSince = ctx.state.heldSince ?? ctx.now.toISOString();
+            return { kind: "wait", wait: { kind: "event", eventTypes: [HELD_DECISION_EVENT], subjectId: app.id, until: new Date(ctx.now.getTime() + HELD_RECHECK_HOURS * HOUR).toISOString(), reason: "a must-have answer was No: the AI interview link goes once a person keeps them in" }, state: { heldSince }, resumeStep: "after_hold" };
+          }
+          if (offer.kind === "used_up") return waitForAllowance(ctx, b, offer);
+          return { kind: "complete" }; // left the process (the neutral thank-you went), or a person sent a link already
+        }
         if (!["triaged", "eligible", "received", "screen_invited", "screening"].includes(app.stage)) {
           // Left the process while waiting for the allowance: nothing to send, and nobody to page.
           if (ctx.state.waitingForAllowance) return { kind: "complete" };
@@ -120,30 +156,9 @@ export const screen: WorkflowDefinition<State> = {
         }
         const ent = await entitlements.check(ctx.q, ctx.companyId, entitlements.TEXT_SCREENS, 1);
         if (!ent.ok) {
-          if (company.planKey === "design_partner") {
-            // Founder decision F8: a billing limit never interrupts an active candidate process for a design partner; the owner and ITS are told.
-            await emit(ctx.q, { type: "entitlement.exceeded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { key: entitlements.TEXT_SCREENS, limit: ent.limit, used: ent.used, plan: company.planKey }, correlationId: ctx.run.id });
-            await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Over the pilot's included screening chats", body: `${candidate.firstName} ${candidate.lastName} gets the screening chat anyway: the Design Partner pilot never interrupts a candidate in progress. ITS has been told so the allowance can be reviewed.`, action: { label: "See usage", href: "/setup" } });
-          } else {
-            // Q17: the application stays, and the conversation link goes out by email once the allowance is topped up, so
-            // everyone for the role has the same process. The owner is told once per person; the run looks again later.
-            const since = ctx.state.waitingForAllowance ?? ctx.now.toISOString();
-            if (!ctx.state.waitingForAllowance) {
-              await emit(ctx.q, { type: "entitlement.exceeded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { key: entitlements.TEXT_SCREENS, limit: ent.limit, used: ent.used, plan: company.planKey }, correlationId: ctx.run.id });
-              await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Screening chats used up for this month", body: `Your plan includes ${ent.limit} screening chats this month. ${candidate.firstName} ${candidate.lastName} is waiting for one and gets the link by email as soon as more are added, so everyone for ${role.title} has the same process. ITS has been told. You can also review them yourself.`, action: { label: "See usage", href: "/setup" } });
-            }
-            if (ctx.now.getTime() - Date.parse(since) > ALLOWANCE_WAIT_DAYS * 24 * HOUR) {
-              // Still used up after the whole wait: no silent lapse (plan G10). Someone whose receipt and acknowledgment
-              // promised the link by email (the conversation offered with the application) is told it is not going ahead
-              // and that nothing is needed; the team is told the person never got it, whoever started the run.
-              const promised = ctx.state.flow === "one_visit";
-              await emit(ctx.q, { type: "screen.allowance_lapsed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { waitingSince: since, days: ALLOWANCE_WAIT_DAYS, promised }, correlationId: ctx.run.id });
-              if (promised) await sendConversationNotOfferedNote(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id });
-              await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the screening chat`, body: `Your plan's screening chats stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review; you can also ask a recruiter to call them.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
-              return { kind: "complete" };
-            }
-            return { kind: "wait", wait: { kind: "timer", until: new Date(ctx.now.getTime() + ALLOWANCE_RECHECK_HOURS * HOUR).toISOString(), reason: "the plan's screening chats are used up; waiting for more" }, state: { waitingForAllowance: since }, resumeStep: "invite" };
-          }
+          // Founder decision F8: a billing limit never interrupts an active candidate process for a design partner; the owner and ITS are told.
+          if (company.planKey === "design_partner") await overDesignPartnerAllowance(ctx.q, { companyId: ctx.companyId, applicationId: app.id, name: `${candidate.firstName} ${candidate.lastName}`, ent, planKey: company.planKey, actor: ctx.actor, correlationId: ctx.run.id });
+          else return waitForAllowance(ctx, b, ent);
         }
         // The conversation that goes with the application is on the web only, whatever the candidate agreed to (E1, Q17).
         const channel = ctx.state.flow === "one_visit" ? "web" : chooseChannel(ctx.state.channel, candidate);
@@ -155,6 +170,9 @@ export const screen: WorkflowDefinition<State> = {
         // "Ask about this in a screen": the open questions are fixed on the screen now, so a later assessment never changes a conversation under way.
         const focusQuestions = ctx.state.focus === "unknowns" ? await focusQuestionsFor(ctx.q, app.id) : null;
         const scr = await createScreen(ctx.q, { companyId: ctx.companyId, applicationId: app.id, channel, workflowRunId: ctx.run.id, expiresAt, now: ctx.now, focusQuestions, flow: ctx.state.flow ?? null });
+        // An interview another run made first (every applicant's own, made while this one waited): that run carries it,
+        // and this one sends nothing, so the team still hears once when it is scored (R20-8).
+        if (scr.workflowRunId && scr.workflowRunId !== ctx.run.id) return { kind: "complete" };
         let opening: string | null = null;
         if (channel === "sms") {
           if (prepared.channel !== "sms") return { kind: "fail", error: "the channel changed after the read phase; preparing the opening again", retryable: true };
@@ -178,6 +196,24 @@ export const screen: WorkflowDefinition<State> = {
       },
     }),
 
+    /**
+     * A must-have "No" on the form held the AI interview (R20-10): "Keep them in" wakes this at once, and the link goes by
+     * itself after the kept-in application's reading, with nothing more to approve. Still held, it looks again every
+     * day; a decline or the role closing ends it at `invite` with nothing more sent. Nobody is ever declined here.
+     */
+    async after_hold(ctx) {
+      const b = await load(ctx.q, ctx.state.applicationId);
+      if (!b) return { kind: "fail", error: "application not found", retryable: false };
+      const { app, packet } = b;
+      const heldSince = ctx.state.heldSince ?? ctx.now.toISOString();
+      const held = app.stage === "ineligible" || (["applied", "received"].includes(app.stage) && !evaluateEligibility(packet.requirements.eligibility, (app.answers.eligibility ?? {}) as Record<string, unknown>, ctx.now).passed);
+      if (held) {
+        if (ctx.now.getTime() - Date.parse(heldSince) > HELD_WAIT_DAYS * 24 * HOUR) return { kind: "complete" };
+        return { kind: "wait", wait: { kind: "event", eventTypes: [HELD_DECISION_EVENT], subjectId: app.id, until: new Date(ctx.now.getTime() + HELD_RECHECK_HOURS * HOUR).toISOString(), reason: "a must-have answer was No: the AI interview link goes once a person keeps them in" }, state: { heldSince }, resumeStep: "after_hold" };
+      }
+      return { kind: "next", step: "await_reading", state: { heldSince: undefined, readingDeadline: new Date(ctx.now.getTime() + READING_WAIT_MINUTES * 60_000).toISOString() } };
+    },
+
     async after_invite(ctx) {
       // Woken by the candidate (event) or by a timer; the engine hands us either.
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
@@ -193,6 +229,15 @@ export const screen: WorkflowDefinition<State> = {
         const due = lastActive + (scr.idleRemindedAt ? IDLE_CLOSE_HOURS : IDLE_REMIND_HOURS) * HOUR;
         if (ctx.now.getTime() >= due) return { kind: "next", step: scr.idleRemindedAt ? "close_unfinished" : "idle_remind" };
         return { kind: "wait", wait: { kind: "event", eventTypes: ["completed", "human", "paused"], subjectId: `screen:${scr.id}`, until: new Date(due).toISOString(), reason: "conversation under way" }, resumeStep: "after_invite" };
+      }
+      // B7: the one email with the link was held for the ITS company check. The link's five days and the 48-hour reminder
+      // count from when it leaves (the outbox signals it), never from when the interview was made.
+      if (scr.invitedVia === "with_application" && scr.status === "invited") {
+        if (ctx.wake?.kind === "event" && ctx.wake.key === aiNoticeSentSignal(scr.applicationId)) {
+          await ctx.q.update(screens).set({ expiresAt: new Date(ctx.now.getTime() + INTERVIEW_LINK_HOURS * HOUR).toISOString() }).where(eq(screens.id, scr.id));
+          return waitForStart(scr, new Date(ctx.now.getTime() + INVITE_WAIT_HOURS * HOUR), {}, false);
+        }
+        if (ctx.wake?.kind === "timer" && (await linkEmailWaiting(ctx.q, scr))) return waitForStart(scr, new Date(ctx.now.getTime() + HELD_RECHECK_HOURS * HOUR), {}, true);
       }
       if (ctx.wake?.kind !== "timer") return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until: scr.expiresAt ?? new Date(ctx.now.getTime() + INVITE_WAIT_HOURS * HOUR).toISOString() }, resumeStep: "after_invite" };
       if (!scr.remindedAt) return { kind: "next", step: "remind" };
@@ -234,7 +279,8 @@ export const screen: WorkflowDefinition<State> = {
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
       if (!scr || !b) return { kind: "fail", error: "screen missing", retryable: false };
       if (scr.status !== "invited" && scr.status !== "reminded") return { kind: "next", step: "after_invite" };
-      const oneVisit = isOneVisitFlow(scr.progress);
+      // A person's new link that lapses is told as a link that closed (below), never as an application without the chat.
+      const oneVisit = isOneVisitFlow(scr.progress) && !byPerson(ctx.state);
       await ctx.q.update(screens).set({ status: "expired" }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.expired", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, remindedAt: scr.remindedAt, ...(oneVisit ? { oneVisit: true } : {}) }, correlationId: ctx.run.id });
       const name = `${b.candidate.firstName} ${b.candidate.lastName}`;
@@ -247,9 +293,9 @@ export const screen: WorkflowDefinition<State> = {
         return { kind: "complete" };
       }
       // No silent expiry (plan G10): the candidate is told the link closed, that the application is still with the team,
-      // and that a reply brings a new link from a person.
+      // and that a reply brings a new link from a person. The team's per-person alert went with 20 Oct 2026 (R20-8): every
+      // applicant gets a link now, and the team hears once, when an interview is scored.
       await sendScreenExpiredNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} did not answer the screening chat invitation`, body: `Invited ${scr.invitedAt?.slice(0, 10)} and reminded once. They were told the link has closed and that they can reply for a new one. You can invite them again, decline with a reason, keep them in the talent pool, or ask a recruiter to call.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
       return { kind: "complete" };
     },
 
@@ -454,6 +500,67 @@ export const screen: WorkflowDefinition<State> = {
 async function notifyUnfinished(ctx: { q: Tx; companyId: string }, b: NonNullable<Awaited<ReturnType<typeof load>>>): Promise<void> {
   const name = `${b.candidate.firstName} ${b.candidate.lastName}`;
   await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.unfinished", title: `${name} didn't finish the screening chat`, body: "They did not send their answers, even after a reminder, so you won't see them, and their AI review and match score come from their application alone. Their application is ready for your review.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+}
+
+/**
+ * A person's own new link ("Send a new AI interview link": `invitedBy` names them), not the interview every applicant
+ * gets ("system"), or the one the apply page promised before 20 Oct 2026 ("apply"). Since 21 Oct it is the same AI
+ * interview (`flow`), but nothing promised it: a lapse is a link that closed, and an allowance that never came is no
+ * broken promise to the candidate.
+ */
+function byPerson(state: State): boolean {
+  return !!state.invitedBy && state.invitedBy !== "system" && state.invitedBy !== "apply";
+}
+
+/** A must-have "No" (R20-10): looked at again every day, and given up after sixty days still held; "Keep them in" later starts it again (`startInterviewAgain`). */
+const HELD_RECHECK_HOURS = 24;
+const HELD_WAIT_DAYS = 60;
+
+/**
+ * Waiting for the candidate to start, with the reminder at `until`. While the email carrying the link is held for the
+ * ITS company check (B7), its leaving wakes the run too (the outbox's `aiNoticeSentSignal`), and the clock starts then.
+ */
+function waitForStart(scr: { id: string; applicationId: string }, until: Date, state: Partial<State>, held: boolean): StepResult<State> {
+  const keys = ["started", "completed", "human"].map((e) => `screen:${scr.id}:${e}`);
+  return { kind: "wait", wait: { kind: "event", eventTypes: held ? [...keys, aiNoticeSentSignal(scr.applicationId)] : keys, until: until.toISOString(), reason: held ? "the email with the link waits for the ITS company check; the reminder clock starts when it leaves" : "waiting for the candidate to start; reminder after 48h" }, state, resumeStep: "after_invite" };
+}
+
+/** Whether a queued email is held for the ITS company check (its queue answer says so). */
+function emailHeld(email: SendResult): boolean {
+  return email.status === "pending" && email.reason === HELD_REASON;
+}
+
+/** B7: the email that carries this interview's link (its own, or the one email) has not left yet: held for the ITS check, or still queued. */
+async function linkEmailWaiting(q: Tx, scr: { id: string; applicationId: string }): Promise<boolean> {
+  const own = `screen_invite:${scr.id}`;
+  const rows = await q.select({ key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, [own, `ack:${scr.applicationId}`]));
+  const carrier = rows.find((r) => r.key === own) ?? rows[0];
+  return !!carrier && ["queued", "held", "sending"].includes(carrier.status);
+}
+
+/**
+ * Q17 (kept on 20 Oct 2026, R20-11): the month's AI interviews are used up. The application stays, and the link goes out
+ * by email once more are added, so everyone for the role has the same process. The owner is told once per person and ITS
+ * is told (the read phase); the run looks again every few hours, and after sixty days says so instead of lapsing silently.
+ */
+async function waitForAllowance(ctx: StepContext<State>, b: NonNullable<Awaited<ReturnType<typeof load>>>, ent: { used: number; limit: number | null }): Promise<StepResult<State>> {
+  const { app, candidate, role, company, packet } = b;
+  const since = ctx.state.waitingForAllowance ?? ctx.now.toISOString();
+  if (!ctx.state.waitingForAllowance) {
+    await emit(ctx.q, { type: "entitlement.exceeded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { key: entitlements.TEXT_SCREENS, limit: ent.limit, used: ent.used, plan: company.planKey }, correlationId: ctx.run.id });
+    await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Screening chats used up for this month", body: `Your plan includes ${ent.limit} screening chats this month. ${candidate.firstName} ${candidate.lastName} is waiting for one and gets the link by email as soon as more are added, so everyone for ${role.title} has the same process. ITS has been told. You can also review them yourself.`, action: { label: "See usage", href: "/setup" } });
+  }
+  if (ctx.now.getTime() - Date.parse(since) > ALLOWANCE_WAIT_DAYS * 24 * HOUR) {
+    // Still used up after the whole wait: no silent lapse (plan G10). Someone whose email promised the link (the
+    // interview that goes with the application) is told it is not going ahead and that nothing is needed; the team is
+    // told the person never got it, whoever started the run.
+    const promised = ctx.state.flow === "one_visit" && !byPerson(ctx.state);
+    await emit(ctx.q, { type: "screen.allowance_lapsed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { waitingSince: since, days: ALLOWANCE_WAIT_DAYS, promised }, correlationId: ctx.run.id });
+    if (promised) await sendConversationNotOfferedNote(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id });
+    await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the screening chat`, body: `Your plan's screening chats stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review; you can also ask a recruiter to call them.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+    return { kind: "complete" };
+  }
+  return { kind: "wait", wait: { kind: "timer", until: new Date(ctx.now.getTime() + ALLOWANCE_RECHECK_HOURS * HOUR).toISOString(), reason: "the plan's screening chats are used up; waiting for more" }, state: { waitingForAllowance: since }, resumeStep: "invite" };
 }
 
 /** The open questions of the latest résumé assessment, as the first questions of a focused screen. */

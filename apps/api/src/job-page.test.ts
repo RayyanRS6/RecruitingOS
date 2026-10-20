@@ -180,7 +180,7 @@ describe("the job page and the careers page (plan D10)", () => {
     let html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
     const its = container.env.EMAIL_REPLY_TO;
     expect(html).toContain("<li><svg class=\"icon\"");
-    for (const point of [`About ${oneVisitMinutes({ screening: { maxMinutes } })} minutes, including a short written conversation with Ledger Dental's AI assistant.`, "A resume, or a few lines about your work. No cover letter.", "People at Ledger Dental make every hiring decision."]) expect(html).toContain(point);
+    for (const point of [`About ${oneVisitMinutes({ screening: { maxMinutes } })} minutes, including a short AI interview with Ledger Dental's AI assistant.`, "A resume, or a few lines about your work. No cover letter.", "People at Ledger Dental make every hiring decision."]) expect(html).toContain(point);
     expect(html).toContain(`Questions? Email <a href="mailto:${its}">${its}</a> to reach a person.`);
     expect(html).toContain(`Need help applying, or a change to how you apply because of a disability? Email <a href="mailto:${its}">${its}</a> and a person will help.`);
     await setSettings((s) => { s.hiringContact = { email: "jobs@ledger.test", name: "Maya", setAt: new Date().toISOString(), setBy: { kind: "user", id: "u1" } }; });
@@ -192,39 +192,33 @@ describe("the job page and the careers page (plan D10)", () => {
     await setSettings((s) => { delete s.hiringContact; });
   });
 
-  it("says how long applying really takes (plan E8): the conversation included when it follows the form, the form alone when the role or the owner's rule keeps it for later", async () => {
+  it("says how long applying really takes (plan E8): the form and the AI interview every applicant has, with the job's own length; the same whatever ITS's old switch says (20 Oct 2026)", async () => {
     const total = oneVisitMinutes({ screening: { maxMinutes } });
-    let html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
-    // one visit: the time on the panel and the steps count the conversation, and say who it is with
-    expect(html).toContain(`<span>About ${total} minutes, including a short written conversation with Ledger Dental's AI assistant.</span>`);
-    expect(html).toContain(`<li>Apply in about ${total} minutes, including a short written conversation with Ledger Dental's AI assistant. We confirm by email.</li>`);
-    expect(html).toContain(`<li>The conversation: ${questionCount} questions, about ${maxMinutes} minutes. It is not a test. You can skip a question, stop and come back later, or ask for a person instead.</li>`);
-    // at a glance, the first sentence of each; every step in full one click away (founder brief, 14 October 2026)
-    const glance = html.slice(html.indexOf("<h2>What to expect</h2>"), html.indexOf('<details class="more"><summary>More about each step</summary>'));
-    expect(glance).toContain(`<li>Apply in about ${total} minutes, including a short written conversation with Ledger Dental's AI assistant.</li>`);
-    expect(glance).toContain(`<li>The conversation: ${questionCount} questions, about ${maxMinutes} minutes.</li>`);
-    expect(glance).toContain("<li>A decision, and a real answer either way.</li>");
-    expect(glance.match(/<li>/g)!.length).toBeLessThanOrEqual(4);
-    expect(html).not.toMatch(/three minutes|looks like a fit/);
-    let form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
-    expect(form).toContain(`<p class="lead">About ${total} minutes, including a short written conversation with Ledger Dental's AI assistant. First, this form; no cover letter needed.</p>`);
-    expect(form).toContain("Next comes the short written conversation with Ledger Dental's AI assistant. You can start it straight away, do it later, or ask for a person instead.");
-    expect(form).not.toContain("three minutes");
-    // ITS switched the role back to "form now, conversation later": the form alone, and a conversation that may follow by email
+    const check = async () => {
+      const html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
+      // the time on the panel and the steps count the AI interview, and say who it is with; minutes, never a count of questions
+      expect(html).toContain(`<span>About ${total} minutes, including a short AI interview with Ledger Dental's AI assistant.</span>`);
+      expect(html).toContain("<li>Send a short form, about 3 minutes. We confirm by email.</li>");
+      expect(html).toContain(`<li>A short AI interview with Ledger Dental's AI assistant, about ${maxMinutes} minutes. It opens right after the form, usually within a minute, and its link comes by email too, so you can do it later. It is not a test: you can skip a question, stop and come back later, or ask for a person instead.</li>`);
+      expect(html).not.toContain(`${questionCount} questions`);
+      // at a glance, the first sentence of each; every step in full one click away (founder brief, 14 October 2026)
+      const glance = html.slice(html.indexOf("<h2>What to expect</h2>"), html.indexOf('<details class="more"><summary>More about each step</summary>'));
+      expect(glance).toContain(`<li>A short AI interview with Ledger Dental's AI assistant, about ${maxMinutes} minutes.</li>`);
+      expect(glance).toContain("<li>A decision, and a real answer either way.</li>");
+      expect(glance.match(/<li>/g)!.length).toBeLessThanOrEqual(4);
+      expect(html).not.toMatch(/three minutes|looks like a fit|Possibly a short written conversation/);
+      const form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
+      expect(form).toContain(`<p class="lead">About ${total} minutes, including a short AI interview with Ledger Dental's AI assistant. First, this form; no cover letter needed.</p>`);
+      expect(form).toContain("Next comes a short AI interview with Ledger Dental's AI assistant. It opens here once your résumé is read, usually within a minute, and its link comes by email too");
+      expect(form).not.toContain("three minutes");
+    };
+    await check();
+    // ITS's old "form now, conversation later" for the role, or a rule saved before: nothing changes (R20-12, R20-4)
     await container.db.update(roles).set({ applyMode: "form_then_screen" }).where(eq(roles.id, roleId));
-    html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
-    expect(html).toContain("<span>A short form, about 3 minutes.</span>");
-    expect(html).toContain(`<li>Possibly a short written conversation with Ledger Dental's AI assistant (online, about ${maxMinutes} minutes). If so, we email you the link.</li>`);
-    expect(html).not.toContain("including a short written conversation");
-    form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
-    expect(form).toContain('<p class="lead">A short form, about 3 minutes. No cover letter needed.</p>');
-    expect(form).not.toContain("Next comes the short written conversation");
+    await check();
     await container.db.update(roles).set({ applyMode: null }).where(eq(roles.id, roleId));
-    // the owner's rule for screen invitations is "Ask me first": the same later path, so the same words
-    expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"] })).status).toBe(200);
-    expect(decode(await page(`/careers/${slug}/jobs/${roleId}`))).toContain("<span>A short form, about 3 minutes.</span>");
-    expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] })).status).toBe(200);
-    expect(decode(await page(`/careers/${slug}/jobs/${roleId}`))).toContain(`<span>About ${total} minutes, including`);
+    expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"] })).status).toBe(400);
+    await check();
   });
 
   it("shows the text about the company only once a person approved it, with the website; a draft waiting in Setup never shows", async () => {
@@ -326,8 +320,8 @@ describe("the job page and the careers page (plan D10)", () => {
       expect((await intent(opened)).status).toBe(200);
       const late = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applyForm({ email: "late.finisher@example.com", nr_recentWork: "Hygienist at Coastal Dental since 2019.", formOpened: opened }) });
       expect(late.status).toBe(302);
-      // they finish applying like anyone else: the conversation follows in the same visit (plan E1)
-      expect(late.headers.get("location")).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
+      // they finish applying like anyone else: the waiting room, which opens the AI interview once it is ready (R20-12)
+      expect(late.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
       await container.drain();
       expect((await container.db.select().from(applications).where(eq(applications.roleId, roleId))).length).toBeGreaterThan(0);
     } finally {

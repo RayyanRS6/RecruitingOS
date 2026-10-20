@@ -4,10 +4,9 @@ import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import { isCompanyVerified, trialPaused, type RolePacket } from "@ros/contracts";
 import { jobNoticesFor, type Notice } from "@ros/core";
-import { candidates, companies, rolePackets, roles, withTenant } from "@ros/db";
+import { candidates, companies, rolePackets, roles } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
-import { applyFlowOf, type ApplyFlowView } from "../services/job-preview";
 import { Layout } from "./layout";
 
 /**
@@ -86,14 +85,6 @@ export async function loadJob(db: Vars["Variables"]["container"]["db"], slug: st
   return { company, role, packet: pv.packet };
 }
 export type Job = NonNullable<Awaited<ReturnType<typeof loadJob>>>;
-
-/**
- * How this job's applicants meet the screening conversation, so the job page and the form say how long applying really
- * takes (plan E8): the same rule the apply POST follows (services/apply-conversation.ts).
- */
-export function jobFlow(container: Container, job: Job): Promise<ApplyFlowView> {
-  return withTenant(container.db, job.company.id, (tx) => applyFlowOf(tx, job.company, job.role));
-}
 
 /** After a fulfilled deletion the link is dead: the page says so and nothing is recorded or sent (docs/readiness/14). */
 export async function anonymizedFor(container: Container, candidateId: string): Promise<boolean> {

@@ -147,7 +147,8 @@ export function CandidatePanel(props: PanelProps) {
   };
   const more: MenuItem[] = a
     ? [
-        { id: "invite_screen", label: "Invite to a screening chat", icon: "send", disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen },
+        // Every applicant gets the AI interview by itself (20 Oct 2026); a person's invitation is a new link.
+        { id: "invite_screen", label: "Send a new AI interview link", icon: "send", disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen },
         { id: "record_outcome", label: "Record an outcome", icon: "edit", disabled: !a.allowedActions.includes("record_outcome"), reason: a.blockedReasons.record_outcome },
       ]
     : [];

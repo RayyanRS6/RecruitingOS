@@ -20,9 +20,11 @@ export const MIN_LEVELS: Partial<Record<ActionType, PolicyLevel>> = {
 };
 /**
  * Actions that may never be set above a level. Role approval is a person's click: "only a person" would leave every new
- * role waiting for a decision the system is told never to ask for, so it stays at "ask me first".
+ * role waiting for a decision the system is told never to ask for, so it stays at "ask me first". The AI interview goes
+ * to every applicant by itself (20 Oct 2026, R20-4): a row saved as "Do it and tell me", "Ask me first" or "Only a
+ * person" before then is read as "Do it", with no migration.
  */
-export const MAX_LEVELS: Partial<Record<ActionType, PolicyLevel>> = { "role_packet.approve": "approval" };
+export const MAX_LEVELS: Partial<Record<ActionType, PolicyLevel>> = { "role_packet.approve": "approval", "application.invite_screen": "auto" };
 const LEVEL_RANK: Record<PolicyLevel, number> = { auto: 0, auto_notify: 1, approval: 2, human_only: 3 };
 export function levelAtLeast(level: PolicyLevel, min: PolicyLevel): boolean {
   return LEVEL_RANK[level] >= LEVEL_RANK[min];
@@ -71,7 +73,8 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "application.hold_ineligible": { level: "auto_notify", approverRoles: [], params: { reviewWindowHours: 24, remindEveryHours: 24, escalateAfterHours: 72 } },
   "application.reject_ineligible": { level: "human_only", approverRoles: [] },
   "application.reject_on_assessment": { level: "human_only", approverRoles: [] },
-  "application.invite_screen": { level: "auto_notify", approverRoles: [] },
+  /** Fixed since 20 Oct 2026 (R20-4): every applicant gets the AI interview; the team hears once it is scored. */
+  "application.invite_screen": { level: "auto", approverRoles: [] },
   "screen.conduct": { level: "auto", approverRoles: [] },
   "application.recommend_interview": { level: "auto_notify", approverRoles: [] },
   "interview.request": { level: "approval", approverRoles: ["owner", "hiring_manager", "recruiter"] },
@@ -149,7 +152,8 @@ export async function resolvePolicy(q: Queryable, companyId: string, roleId: str
   const moved = clamped !== decision.level;
   if (moved) decision = { ...decision, level: clamped };
   if (decision.level === "approval" && !decision.approverRoles.length && (moved || actionType === "role_packet.approve")) decision = { ...decision, approverRoles: def.approverRoles };
-  if (roleId && (decision.level === "auto" || decision.level === "auto_notify") && (await roleTakenOver(q, companyId, roleId))) {
+  // An action pinned to "Do it" (the AI interview every applicant gets) goes during a takeover too.
+  if (roleId && MAX_LEVELS[actionType] !== "auto" && (decision.level === "auto" || decision.level === "auto_notify") && (await roleTakenOver(q, companyId, roleId))) {
     decision = { ...decision, level: "approval", approverRoles: ["recruiter"], source: "takeover" };
   }
   return decision;

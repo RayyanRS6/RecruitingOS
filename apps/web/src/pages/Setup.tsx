@@ -318,7 +318,7 @@ function actionLabel(a: string): string {
   return ({
     "role_packet.approve": "Approve a drafted job, pay included", "posting.sponsor_spend": "Spend on sponsored ads within budget",
     "application.triage": "Read and assess applicants (information only)", "application.hold_ineligible": "Hold an applicant who answers no to an eligibility question", "application.reject_ineligible": "Decline an applicant held on an eligibility answer",
-    "application.reject_on_assessment": "Decline a candidate on judgment", "application.invite_screen": "Invite an applicant to the screening chat", "screen.conduct": "Run the screening chat",
+    "application.reject_on_assessment": "Decline a candidate on judgment", "application.invite_screen": "Invite every applicant to the AI interview", "screen.conduct": "Run the AI interview",
     "application.recommend_interview": "Recommend who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate",
     "disposition.send": "Send the decision message when someone presses Send",
     "message.still_reviewing": STILL_REVIEWING_LABEL,

@@ -140,11 +140,15 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       const body = may.openFlags ? `${openFlagsMessage(may.openFlags)} It can be approved after that.` : legal?.missing.length ? `${legalCheckMessage(legal.missing)} It can be approved after that.` : p.rationale ?? (editWhileOpen ? "The job keeps running on its approved version until you decide." : "Review the job details and approve them to start posting.");
       const label = may.openFlags ? "Review the wording" : legal?.missing.length ? "See what is missing" : editWhileOpen ? "Review the change" : "Review and approve";
       cards.push({ kind: "decision", title: editWhileOpen ? `Approve version ${proposal.version ?? "?"} of ${role?.title ?? "the job"}` : `Approve the job: ${role?.title ?? "new job"}`, body, roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label, method: "GET", path: `/roles/${p.roleId}` }] });
-    } else if (p.actionType === "application.invite_screen" || p.actionType === "application.recommend_interview") {
+    } else if (p.actionType === "application.invite_screen") {
+      // No "Invite to a screening chat?" card (20 Oct 2026, R20-4): every applicant gets the AI interview by itself, and
+      // an old suggestion still waiting lapses on its own within its week.
+      continue;
+    } else if (p.actionType === "application.recommend_interview") {
       // The card's "Yes" posts to the decide route, which refuses anyone outside the request's approver roles (during a recruiter takeover, everyone but the recruiter).
       if (viewer && !mayDecideByRole(p.requiredRoles, viewer.role)) continue;
       // "Not now" turns the suggestion down (plan A6); the candidate stays where they are and nothing is sent.
-      const verb = p.actionType === "application.invite_screen" ? "Invite to a screening chat" : "Interview";
+      const verb = "Interview";
       cards.push({ kind: "decision", title: `${verb}? ${role?.title ?? ""}`.trim(), body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: `Yes, ${verb.toLowerCase()}`, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Not now", method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "reject", note: "Not now" } }, { label: "Review first", method: "GET", path: p.applicationId ? `/roles/${p.roleId}/talent?open=${p.applicationId}` : `/roles/${p.roleId}/talent` }] });
     } else if (p.actionType === "message.send_freeform") {
       // A message a team member wrote to a candidate, waiting for an approver (F11): the text is on the card, so the decision can be made from here.

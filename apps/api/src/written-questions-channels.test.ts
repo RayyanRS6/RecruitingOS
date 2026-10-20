@@ -13,7 +13,7 @@ import { signInAs, useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Wave S8, slice A (spec-s8-followups.md section A): the chats without a plan, by text and on the web from an emailed
- * link, ask what the web chat asks: the company's written questions, each as written, never their private note. A chat
+ * link (one a person sent before 21 Oct 2026; since then a new web link has a plan), ask what the web chat asks: the company's written questions, each as written, never their private note. A chat
  * created before keeps the list it began with. Such a chat is sent at its end, with no Review & send and no write-up,
  * and the candidate's record then learns from their own words.
  */
@@ -64,6 +64,19 @@ describe("the company's written questions in chats by text and from an emailed l
     const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, email));
     const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id)));
     expect(a.stage).toBe("screen_invited");
+    // Every applicant's AI interview has its plan (R20-4); a chat without one is a person's "Send a new link": the team
+    // takes the first back and sends a new link, by text when the candidate gave a phone, else by email.
+    expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "cancel_screen" })).status).toBe(200);
+    expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "invite_screen", channel: p.phone ? "sms" : "web" })).status).toBe(200);
+    await container.drain();
+    // Since 21 Oct 2026 a person's new link on the web is the same AI interview, with a plan; the chat without one it was
+    // before is kept for the links sent earlier, and is made here as those were (before Start, which fixes the plan).
+    if (!p.phone) {
+      const scr = await screenOf(a.id);
+      expect(scr.progress.flow).toBe("one_visit");
+      const { flow: _flow, ...before } = scr.progress;
+      await container.db.update(screens).set({ progress: before }).where(eq(screens.id, scr.id));
+    }
     return { application: a, email };
   }
 
@@ -78,7 +91,7 @@ describe("the company's written questions in chats by text and from an emailed l
     slug = co.slug;
     companyId = co.id;
     await entitlements.applyPlan(container.db, co.id, "growth");
-    // The later path: the chat's link goes out by email, or the chat goes by text, after the résumé reading.
+    // The ITS switch is ignored since 20 Oct 2026 (R20-12); the chats here are a person's new links (see `apply`).
     await useLaterApplyFlow(container, co.id);
     const s = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json("POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
@@ -102,10 +115,12 @@ describe("the company's written questions in chats by text and from an emailed l
     let scr = await screenOf(application.id);
     expect(scr.channel).toBe("sms");
     expect(scr.progress.asks).toBe("written");
-    // the opening by text asks the first written question; the invitation counts the questions the chat asks
+    // the opening by text asks the first written question; the emailed link gives minutes, never the private note
     expect(scr.transcript[0]).toMatchObject({ role: "assistant", questionKey: "wq_calm" });
     expect(textsTo(phone).some((b) => b.includes(written[0].question))).toBe(true);
-    expect(emailOutbox().find((m) => m.to === email && /screening conversation/.test(m.subject))!.text).toContain(`${written.length} questions`);
+    const invite = emailOutbox().find((m) => m.to === email && /^Your next step: a short AI interview/.test(m.subject))!;
+    expect(invite.text).toContain(`/c/screen/${scr.token}`);
+    expect(invite.text).not.toMatch(NOTED);
     expect((await text(phone, CALM, "SM-wq1")).status).toBe(200);
     expect(textsTo(phone).at(-1)).toContain(written[1].question);
     expect((await text(phone, LATE, "SM-wq2")).status).toBe(200);

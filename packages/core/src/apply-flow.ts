@@ -1,4 +1,4 @@
-import type { ApplyMode, ChatItem, ChatPlan, ChatReading, ChatSection, PolicyLevel, RolePacket, ScreeningFunnel, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, TapAnswer, TapFormat } from "@ros/contracts";
+import type { ApplyMode, ChatItem, ChatPlan, ChatReading, ChatSection, RolePacket, ScreeningFunnel, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, TapAnswer, TapFormat } from "@ros/contracts";
 import { screenAnswersSent } from "./screen-answers";
 
 /**
@@ -8,9 +8,9 @@ import { screenAnswersSent } from "./screen-answers";
  */
 
 /**
- * A role's own setting wins; otherwise the company's default; otherwise "form now, conversation later". The one-visit
- * flow runs on pilot roles first (founder decision B1/Q15, and the counsel item on notice timing): ITS switches it on for
- * a role or a company, and it becomes everyone's default only by a later decision.
+ * What ITS's old "apply and talk in one visit" switch says for a role (its own setting, else the company's default, else
+ * "form now, conversation later"). Kept readable only: since 20 October 2026 (R20-12) every applicant takes the same path
+ * (the AI interview after the résumé is read, on the page and by email), so no flow decision reads it.
  */
 export function resolveApplyMode(role: { applyMode?: string | null }, settings: { applyFlowDefault?: string | null } | null | undefined): ApplyMode {
   if (role.applyMode === "one_visit" || role.applyMode === "form_then_screen") return role.applyMode;
@@ -20,20 +20,16 @@ export function resolveApplyMode(role: { applyMode?: string | null }, settings: 
 /** What a company's roles follow when ITS has not set a default for it (see `resolveApplyMode`). */
 export const APPLY_FLOW_FALLBACK: ApplyMode = "form_then_screen";
 
-/**
- * Whether the owner's rule for `application.invite_screen` lets the conversation start with the application. "Ask me
- * first" (approval) and "Only a person" (human_only) keep the later path: the owner decides who is invited.
- */
-export function oneVisitPolicyAllows(level: PolicyLevel): boolean {
-  return level === "auto" || level === "auto_notify";
-}
+/** Screens that come with the application: offered in the visit (before 20 Oct 2026), or every applicant's AI interview since. */
+const WITH_APPLICATION: readonly string[] = ["apply", "with_application"];
 
 /**
- * "Still applying" (E6): offered the conversation in the visit that sent the application, and not yet finished, sent
- * without it, handed to a person or closed. Until then nothing about them reaches the owner's alerts.
+ * "Still applying" (E6): the conversation that comes with the application, not yet finished, sent without it, handed to
+ * a person or closed. Until then nothing about them reaches the owner's alerts. Since 20 October 2026 (R20-4) that is
+ * every applicant's AI interview.
  */
 export function isStillApplying(screen: { status: string; invitedVia?: string | null } | null | undefined): boolean {
-  return !!screen && screen.invitedVia === "apply" && ["invited", "reminded", "in_progress", "paused"].includes(screen.status);
+  return !!screen && WITH_APPLICATION.includes(screen.invitedVia ?? "") && ["invited", "reminded", "in_progress", "paused"].includes(screen.status);
 }
 
 /** A conversation offered with the application (E1): the fixed introduction, check-your-answers, and pause on an outage. */

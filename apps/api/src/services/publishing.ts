@@ -1,8 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { isCompanyVerified, type AutoActionLine, type AutoActionsOnOpen, type BoardChoice, type BoardChoiceView, type ClosingDateView, type PostingTaskKind, type PostingTaskView, type PublishingState, type RolePacket, type SharePlace, type ShareView } from "@ros/contracts";
-import { BOARD_CHANNELS, BOARD_NAME, SHARE_PLACES, chosenBoards, closingDateRequired, closingDateView, isPostingTask, postingTaskLabel, publishChannelsFor, resolvePolicy, zipRecruiterOffered, type ApplicationLinkRow, type PostingRow, type PostingTaskRow } from "@ros/core";
-import { approvalRequests, companies, roles, workflowRuns, type Tx } from "@ros/db";
-import { applyFlowOf } from "./job-preview";
+import { BOARD_CHANNELS, BOARD_NAME, SHARE_PLACES, chosenBoards, closingDateRequired, closingDateView, isPostingTask, postingTaskLabel, publishChannelsFor, zipRecruiterOffered, type ApplicationLinkRow, type PostingRow, type PostingTaskRow } from "@ros/core";
+import { approvalRequests, companies, workflowRuns, type Tx } from "@ros/db";
 
 /**
  * What the role page and the screen right after approval show about publishing (plan Wave D, items D2, D6, D7, D8,
@@ -15,35 +14,22 @@ type CompanyRow = { name: string; settings: typeof companies.$inferSelect.settin
 /** Where the team changes the rules these lines come from. */
 export const AI_RULES_HREF = "/setup#setup-rules";
 
-/** The confirmation email is the same for every company (routes/policies.ts lists it as fixed), so it is not looked up. */
-const CONFIRMATION_LINE: AutoActionLine = { actionType: "message.send_templated", level: "auto", text: "Every applicant gets an email confirming their application, sent on its own in the approved wording." };
-
-/** The line for a role on the one-visit flow (founder decision B1): the conversation is part of applying, not a later invitation. */
-export const ONE_VISIT_LINE = "Applicants have a short screening chat with the AI assistant as part of applying, right after the form. They can skip a question, finish later or ask for a person instead, and a person still makes every decision.";
+/** The one email is the same for every company (routes/policies.ts lists it as fixed), so it is not looked up. */
+const CONFIRMATION_LINE: AutoActionLine = { actionType: "message.send_templated", level: "auto", text: "Every applicant gets one email, sent on its own in the approved wording: thank you, and the link to their AI interview." };
 
 /**
- * One plain line per action that can start on its own once the job is live (D9): the confirmation email every
- * applicant gets (the same for every company, routes/policies.ts lists it as fixed), and the screening conversation, from
- * the company's rules for this role. On the one-visit flow (B1) the conversation comes with the application, by the same
- * rule the apply page follows (job-preview.ts `applyFlowOf`); otherwise the invitation follows the assistant's reading of
- * each application (application-intake.ts), and the line says so: the AI's part is never hidden (docs/01).
+ * The line for the AI interview every applicant gets (20 Oct 2026, R20-4): part of applying, not an invitation anyone
+ * approves. Fixed for every company and role (routes/policies.ts lists it as fixed).
  */
-export async function autoActionsOnOpen(tx: Tx, companyId: string, roleId: string): Promise<AutoActionsOnOpen> {
-  const invite = await resolvePolicy(tx, companyId, roleId, "application.invite_screen");
-  const [company] = await tx.select({ id: companies.id, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
-  const [role] = await tx.select({ applyMode: roles.applyMode }).from(roles).where(eq(roles.id, roleId)).limit(1);
-  const oneVisit = !!company && (await applyFlowOf(tx, company, { id: roleId, applyMode: role?.applyMode ?? null })) === "one_visit";
-  const reading = "When the AI review of an application suggests a good fit,";
-  const inviteText: Record<string, string> = {
-    auto: `${reading} the applicant is invited to a short screening chat on their own. A person still makes every decision.`,
-    auto_notify: `${reading} the applicant is invited to a short screening chat on their own, and you are told each time.`,
-    approval: `${reading} the invitation to a short screening chat waits for your approval.`,
-    human_only: "Only a person invites applicants to the screening chat.",
-  };
-  const lines: AutoActionLine[] = [
-    CONFIRMATION_LINE,
-    { actionType: "application.invite_screen", level: invite.level, text: oneVisit ? ONE_VISIT_LINE : inviteText[invite.level] },
-  ];
+export const ONE_VISIT_LINE = "Every applicant has a short AI interview with the assistant as soon as their résumé is read: it opens on the page right after the form, and the link is in their email. They can skip a question, finish later or ask for a person instead. You hear about each person once, when their interview is scored, and a person still makes every decision.";
+
+/**
+ * One plain line per action that can start on its own once the job is live (D9): the one email every applicant gets and
+ * the AI interview that comes with it (both the same for every company, routes/policies.ts lists them as fixed): the AI's
+ * part is never hidden (docs/01).
+ */
+export function autoActionsOnOpen(): AutoActionsOnOpen {
+  const lines: AutoActionLine[] = [CONFIRMATION_LINE, { actionType: "application.invite_screen", level: "auto", text: ONE_VISIT_LINE }];
   return { lines, changeHref: AI_RULES_HREF };
 }
 

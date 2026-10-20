@@ -7,7 +7,7 @@ import { aiRuns, applications, assessments, communications, companies, events, n
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
-import { conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, startApplyConversation, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
+import { applyVisitNext, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
 import { signInAdmin, signInAs, signInStaff, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -53,13 +53,16 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const eligibilityAnswers = Object.fromEntries(packet.requirements.eligibility.map((r) => [r.key, "yes"]));
     const out = await withTenant(container.db, company.id, async (tx) => {
       const created = await createApplication(tx, container, { companyId: company.id, roleId, source: "careers_page", firstName: p.first, lastName: p.last, email: p.email, phone: null, smsConsent: false, consentSource: "careers_page_apply", noticeVersionsShown: ["ai_use@2026-10-08", "privacy@2026-09-01"], eligibilityAnswers, resume: { kind: "bytes", filename: `${p.first.toLowerCase()}.txt`, mime: "text/plain", bytes: new TextEncoder().encode(RESUME(`${p.first} ${p.last}`)), via: "server" } }, { kind: "candidate", id: "applicant" });
-      const outcome: ApplyVisitOutcome = await startApplyConversation(tx, container, { ...created, role, company, packet: pv.packet as RolePacket, typedFirstName: p.first, eligibilityAnswers });
+      const outcome: ApplyVisitOutcome = await applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, packet: pv.packet as RolePacket, eligibilityAnswers });
       return { applicationId: created.application.id, candidateId: created.application.candidateId, outcome };
     });
     await container.kick();
     await container.drain();
-    if (out.outcome.kind !== "conversation") throw new Error(`expected a conversation, got ${out.outcome.reason}`);
-    return { applicationId: out.applicationId, candidateId: out.candidateId, ref: (await findConversation(container.db, out.outcome.token))! };
+    // the AI interview that goes with the application, made once the résumé is read (20 Oct 2026)
+    if (out.outcome.kind !== "interview") throw new Error(`expected the AI interview, got ${out.outcome.reason}`);
+    const wait = await interviewWaitFor(container.db, out.applicationId);
+    if (wait.state !== "ready") throw new Error(`expected the AI interview to be ready, got ${wait.state}`);
+    return { applicationId: out.applicationId, candidateId: out.candidateId, ref: (await findConversation(container.db, wait.token))! };
   }
 
   /** The first question by tap, then one typed answer carrying `marker`, both in the transcript and recorded as the answer. */

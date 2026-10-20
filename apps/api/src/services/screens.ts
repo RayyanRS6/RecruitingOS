@@ -148,13 +148,13 @@ async function sendScreenStopped(tx: Tx, container: Container, input: { app: App
   const packet = pv.packet;
   const text = `Hi ${candidate.firstName},
 
-You can ignore the screening conversation we sent you for the ${packet.identity.title} position at ${company.name}: the hiring team is reviewing your application themselves instead. Nothing is needed from you right now, and they will be in touch about next steps.
+You can ignore the AI interview we sent you for the ${packet.identity.title} position at ${company.name}: the hiring team is reviewing your application themselves instead. Nothing is needed from you right now, and they will be in touch about next steps.
 
 ${packet.communication.humanAlternativeText}
 
 ${packet.communication.signature || `The hiring team at ${company.name}`}
 
 ${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  const sent = await deliver(tx, container.integrations, { application: app, candidate, role, company, packet, actor: input.actor, channel: "email", templateKey: "screen_stopped", subject: `No need to complete the screening for ${packet.identity.title}`, text, idempotencyKey: `screen_stopped:${input.screenId}`, eventOnSent: "message.sent", to: candidate.email });
+  const sent = await deliver(tx, container.integrations, { application: app, candidate, role, company, packet, actor: input.actor, channel: "email", templateKey: "screen_stopped", subject: `No need to do the AI interview for ${packet.identity.title}`, text, idempotencyKey: `screen_stopped:${input.screenId}`, eventOnSent: "message.sent", to: candidate.email });
   return sent.status !== "failed";
 }

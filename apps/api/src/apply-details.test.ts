@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { QuickQuestionView, ResumeExtraction } from "@ros/contracts";
+import { chatFactsOf } from "@ros/agents";
 import { entitlements } from "@ros/core";
 import { aiRuns, applications, candidates, documents, events, jobs, rolePackets, roles, screens, uuidv7, workflowRuns } from "@ros/db";
 import { EICAR_TEST_STRING, StorageError, type Integrations, type MemoryStorageAdapter } from "@ros/integrations";
@@ -12,7 +13,7 @@ import { APPLY_CSS, APPLY_READ_WAIT_JS, FROM_RESUME_TAG, RESUME_READ_NOTICE, SUG
 import { JOURNEY_CSS } from "./pages/journey";
 import { RESUME_READING_EXPIRE_JOB_KIND, RESUME_READING_JOB_KIND, detailsFrom, expireResumeReading, factsFrom, readingFor, readingKey, runResumeReading, splitName, suggestQuickAnswer, workSummaryFrom, type ResumeReading } from "./services/apply-details";
 import type { UploadGrantPayload } from "./uploads";
-import { useOneVisitApplyFlow } from "./test-helpers";
+import { followApply, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * Wave S7, slice S7-B (spec steps 2 to 5): the résumé first, read at once by the worker (checked, scanned, then
@@ -778,12 +779,18 @@ describe("the apply form: résumé first, check your details, questions from the
       }
       const sent = await post("/apply", fd);
       expect(sent.status).toBe(302);
-      const token = (sent.headers.get("location") ?? "").replace("/c/screen/", "");
       await container.drain();
-      // what the visit typed is the chat's: the CV's lines from the reading, and every form answer as a sentence
+      // the waiting room opens the AI interview once the reading is done (20 Oct 2026); the chat reads the application's
+      // own facts: the CV's lines from the form's one reading, and every form answer as a sentence
+      const token = (await followApply(app, sent)).token ?? "";
       const [scr] = await container.db.select().from(screens).where(eq(screens.token, token));
-      expect(scr.progress.typedFacts?.cv[0]).toBe("Dental hygienist at Coastal Dental (2019 to now)");
-      expect(scr.progress.typedFacts?.formAnswers).toEqual(expect.arrayContaining(["Which dental software have you used most? Dentrix."]));
+      expect(scr).toMatchObject({ invitedVia: "with_application" });
+      expect(scr.progress.typedFacts).toBeUndefined();
+      const [gia] = await container.db.select().from(applications).where(eq(applications.id, scr.applicationId));
+      expect(chatFactsOf(pv.packet, gia).cv[0]).toBe("Dental hygienist at Coastal Dental (2019 to now)");
+      expect(chatFactsOf(pv.packet, gia).formAnswers).toEqual(expect.arrayContaining(["Which dental software have you used most? Dentrix."]));
+      // one model reading of the résumé in all: the form's, reused by the intake (R20-1)
+      expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"))).filter((r) => (r.inputRef as { uploadId?: string }).uploadId === container.uploadGrants.open(grantOf(read))!.uploadId)).toHaveLength(1);
       await app.request(`/c/screen/${token}/start`, { method: "POST" });
       const html = decode(await (await app.request(`/c/screen/${token}`)).text());
       const now = html.match(/<li class="msg assistant now" id="question">([\s\S]*?)<\/li>/)?.[1] ?? "";

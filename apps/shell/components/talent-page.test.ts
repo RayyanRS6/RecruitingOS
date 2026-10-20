@@ -64,7 +64,7 @@ function detail(row: Row, over: Record<string, unknown> = {}) {
     candidate: { firstName, lastName, email: row.candidate.email, phone: null, locationText: row.candidate.locationText, consent: {}, preferences: {} },
     documents: [], screens: [], communications: [], extraction: null, answers: {},
     assessments: row.assessment ? [{ id: "as1", kind: "triage", overall: "strong", confidence: "high", createdAt: daysAgo(3), result: { summary: "Active RDH license and four years of hygiene work.", strengths: [{ claim: "Licensed", evidence: { source: "resume", quote: "RDH, CA" } }], concerns: [], unknowns: [{ question: "Can they work Saturdays?", whyItMatters: "The schedule includes Saturdays." }], rationale: "Meets the must-haves.", recommendation: "screen", requirementFindings: [{ requirementKey: "mh_1", met: "yes", evidence: { source: "resume", quote: "RDH, CA" } }] } }] : [],
-    pendingApprovals: row.stage === "triaged" ? [{ id: "p1", actionType: "application.invite_screen", rationale: "Strong résumé; a screen would confirm Saturdays.", createdAt: daysAgo(1), requiredRoles: ["owner", "admin"] }] : [],
+    pendingApprovals: row.stage === "triaged" ? [{ id: "p1", actionType: "application.recommend_interview", rationale: "Strong résumé; an interview would confirm Saturdays.", createdAt: daysAgo(1), requiredRoles: ["owner", "admin"] }] : [],
     packetLabels: { mustHaves: [{ key: "mh_1", text: "Active CA RDH license" }], competencies: [], questions: [] },
     timeline: [
       { type: "application.received", occurredAt: daysAgo(4), actor: { kind: "candidate", id: "c" }, payload: {} },
@@ -219,9 +219,9 @@ describe("the Candidates page", () => {
     expect(html.match(/aria-label="Stage: New\. Move to another stage"/g)?.length).toBe(2);
     // the list it opened from: one person, so next and previous say so
     expect(text(html)).toContain("1 of 1");
-    // the assistant's suggestion, with Yes and Not now, in the staff glossary's words (screening chat)
-    expect(text(html)).toContain("The assistant suggests a screening chat");
-    expect(text(html)).toContain("Yes, invite to a screening chat");
+    // the assistant's suggestion, with Yes and Not now (there is no "Invite to a screen?" card since 20 Oct 2026, R20-4)
+    expect(text(html)).toContain("The assistant suggests an interview");
+    expect(text(html)).toContain("Yes, interview");
     expect(text(html)).toContain("Not now");
     // sections, and the Overview's verdict with the full breakdown one click away (the candidate drawer is slice C's;
     // these stay loose so its wording can settle); the assistant is named, never its internal id

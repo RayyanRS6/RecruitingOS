@@ -1,10 +1,10 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
+import { randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
-import { answerCvLines, chatFactsWithKept } from "@ros/agents";
-import { applicationAnswerSentences, candidateNotices, emit, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
+import { candidateNotices, emit, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey, type UploadGrantPayload } from "../uploads";
@@ -13,12 +13,12 @@ import type { Container } from "../container";
 import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware/rate-limit";
 import { createApplication, markUploadUsed, uploadAlreadyUsed, type ResumeInput as ResumeUpload } from "../services/applications";
 import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, readingAskedAt, readingFor, readingGaveUp, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
-import { startApplyConversation } from "../services/apply-conversation";
+import { applyVisitNext, interviewWaitFor, type InterviewWait } from "../services/apply-conversation";
 import { formOpenedBefore, lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { contactLineFor, type ContactLine } from "../services/company-settings-profile";
-import { applyTimeLine, type ApplyFlowView } from "../services/job-preview";
+import { APPLY_FLOW, applyTimeLine, type ApplyFlowView } from "../services/job-preview";
 import { factsToKeep, keepFactsOn, keptFactsOf, reusedDetailsFor, type ReusedDetails } from "../services/profile-facts";
-import { CONVERSATION_COOKIE, CONVERSATION_PURPOSE, acceptingApplications, jobFlow, jobNotices, jobTakesApplications, loadJob, maskEmail, screenPath, type ConversationPayload, type Job } from "./candidate-shared";
+import { CONVERSATION_COOKIE, CONVERSATION_PURPOSE, acceptingApplications, jobNotices, jobTakesApplications, loadJob, maskEmail, screenPath, type ConversationPayload, type Job } from "./candidate-shared";
 import { Icon } from "./icons";
 import { JobFacts, publicPay } from "./job-facts";
 import { ContactLink, HelpLine, PreviewNote, type PreviewInfo } from "./job-page";
@@ -150,7 +150,7 @@ export type ApplyFormProps = {
   privacyEmail: string;
   /** The sealed "form opened at" value (services/closing-date.ts): a form opened before the closing date may still be sent. */
   formOpened: string;
-  /** How applicants meet the screening conversation: the lead says how long applying takes (plan E8). */
+  /** How applicants meet the AI interview: the lead says how long applying takes (plan E8). */
   flow: ApplyFlowView;
   /**
    * `apply` where the form sends the application (its own address: a form shown after a reading is at another one);
@@ -476,7 +476,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
             <legend class="sr-only">The form as candidates see it; it sends nothing here</legend>
             <ApplyFields {...props} questions={questions} />
             <button class="btn" type="button" disabled>Send my application</button>
-            {props.flow === "one_visit" ? <p class="meta">Next comes the short written conversation with {props.company.name}'s AI assistant. You can start it straight away, do it later, or ask for a person instead. Your details go to {props.company.name} now; your chat answers go only when you press Send my answers.</p> : null}
+            {props.flow === "one_visit" ? <p class="meta">Next comes a short AI interview with {props.company.name}'s AI assistant. It opens here once your résumé is read, usually within a minute, and its link comes by email too: start it straight away, do it later, or ask for a person instead. Your details go to {props.company.name} now; your interview answers go only when you press Send my answers.</p> : null}
           </fieldset>
         </div>
       ) : (
@@ -489,7 +489,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
           <ApplyFields {...props} questions={questions} />
           <input type="hidden" name="noticeVersionsShown" value={noticeVersionsFor(props.notices, props.smsEnabled).join(",")} />
           <button class="btn" type="submit">Send my application</button>
-          {props.flow === "one_visit" ? <p class="meta">Next comes the short written conversation with {props.company.name}'s AI assistant. You can start it straight away, do it later, or ask for a person instead. Your details go to {props.company.name} now; your chat answers go only when you press Send my answers.</p> : null}
+          {props.flow === "one_visit" ? <p class="meta">Next comes a short AI interview with {props.company.name}'s AI assistant. It opens here once your résumé is read, usually within a minute, and its link comes by email too: start it straight away, do it later, or ask for a person instead. Your details go to {props.company.name} now; your interview answers go only when you press Send my answers.</p> : null}
           {/* After a reading the résumé field moves below the button, so pressing Enter in a field sends the form, not a new reading. */}
           {replace ? (
             <details class="more replace" open={!!props.state?.resumeLost || undefined}>
@@ -830,33 +830,68 @@ export const RECEIPT_COOKIE = "ros_applied";
 const RECEIPT_PURPOSE = "application-receipt";
 const RECEIPT_TTL_MS = 30 * 60_000;
 /**
- * `next` is what the receipt says comes next (plan Wave E): "review" (the team reviews; also the neutral answer when an
- * eligibility answer did not match, E7) or "conversation_by_email" (the month's conversations are used up, so the link
- * comes by email once more are added, Q17). Worked out from the same inputs for a first and a repeat submission.
+ * `next` is what the receipt says comes next (20 Oct 2026, R20-12): `interview` (the waiting room), `check_email` (the
+ * plain receipt: also the neutral words for a must-have answer, E7), `held`, `used_up` (Q17: the link follows by email)
+ * or `paused` (the company's trial ended: the link comes by email). `wait`: the application the waiting room waits for,
+ * sealed in the cookie, or, for a repeat, an address the company had or a bot (Q14), an id that names none; `until`: the
+ * waiting room says "preparing" until then whatever is stored (the moment of Send for a real one; about as long as a
+ * reading takes for one that names none). Both have the same shape, so the sealed value tells nothing either. Cookies
+ * from before 20 October say "review" or "conversation_by_email" and read as `check_email` and `used_up`.
  */
-type ReceiptNext = "review" | "conversation_by_email";
-type ReceiptPayload = { v: 1; roleId: string; to: string; exp: number; next?: ReceiptNext };
+type ReceiptNext = "interview" | "check_email" | "held" | "used_up" | "paused";
+type ReceiptPayload = { v: 1; roleId: string; to: string; exp: number; next?: ReceiptNext | "review" | "conversation_by_email"; wait?: string; until?: number };
 
 function receiptPath(slug: string, roleId: string): string {
   return `/careers/${slug}/jobs/${roleId}/applied`;
 }
 
-/** Sends the browser to the receipt, with the masked address it shows. The same answer for every kind of submission. */
-function toReceipt(c: Context<Vars>, job: { company: { slug: string }; role: { id: string } }, typedEmail: string, next: ReceiptNext = "review") {
+/**
+ * Sends the browser to the receipt or the waiting room, with the masked address it shows. `wait` null: the waiting room
+ * for a submission whose interview is never opened on the page (Q14), with an id of no application and a short random wait.
+ */
+function toReceipt(c: Context<Vars>, job: { company: { slug: string }; role: { id: string } }, typedEmail: string, next: ReceiptNext = "check_email", wait?: string | null) {
   const container = c.get("container");
   const path = receiptPath(job.company.slug, job.role.id);
-  const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: container.engine.clock().getTime() + RECEIPT_TTL_MS, next };
+  const now = container.engine.clock().getTime();
+  const waiting = next === "interview" ? { wait: wait ?? uuidv7(), until: wait ? now : now + LOOK_ALIKE_MIN_MS + randomInt(LOOK_ALIKE_SPREAD_MS) } : {};
+  const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: now + RECEIPT_TTL_MS, next, ...waiting };
   setCookie(c, RECEIPT_COOKIE, sealPayload(RECEIPT_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
   return c.redirect(path);
 }
 
-/** Sends the browser from the form straight to the conversation's introduction (plan E1). */
-function toConversation(c: Context<Vars>, token: string, typedEmail: string) {
+/** Opens the AI interview from the waiting room: its introduction says the application is sent and where its link went (plan E1). */
+function toInterview(c: Context<Vars>, token: string, maskedTo: string | null) {
   const container = c.get("container");
   const path = screenPath(token);
-  const payload: ConversationPayload = { v: 1, token, to: maskEmail(typedEmail), exp: container.engine.clock().getTime() + RECEIPT_TTL_MS };
-  setCookie(c, CONVERSATION_COOKIE, sealPayload(CONVERSATION_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
+  if (maskedTo) {
+    const payload: ConversationPayload = { v: 1, token, to: maskedTo, exp: container.engine.clock().getTime() + RECEIPT_TTL_MS };
+    setCookie(c, CONVERSATION_COOKIE, sealPayload(CONVERSATION_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
+  }
   return c.redirect(path);
+}
+
+/**
+ * The waiting room's grant (20 Oct 2026, R20-12): the application it waits for, its role, until when it says "preparing"
+ * whatever is stored (`u`, as the cookie's `until`) and when it stops working (the receipt's half hour), sealed with the
+ * session secret like the upload grant and the receipt, and carried in the page. Only a first application from a new
+ * address names its own: a repeat, an address the company had or a bot gets the same page with an id of no application
+ * (Q14), so it says "preparing" for a while and then "check your email", and nobody can open another person's interview
+ * by typing their email.
+ */
+const WAIT_PURPOSE = "interview-wait";
+type WaitGrant = { v: 1; a: string; r: string; exp: number; u: number };
+/** How long the waiting room of a submission naming no application says "preparing": 40 to 90 seconds, as a reading takes. */
+const LOOK_ALIKE_MIN_MS = 40_000;
+const LOOK_ALIKE_SPREAD_MS = 50_000;
+
+function openWaitGrant(container: Container, grant: unknown, roleId: string): WaitGrant | null {
+  const g = typeof grant === "string" && grant.length < 2000 ? openPayload<WaitGrant>(WAIT_PURPOSE, grant, container.env.SESSION_SECRET, container.engine.clock().getTime()) : null;
+  return g?.v === 1 && g.r === roleId && typeof g.a === "string" ? { ...g, u: typeof g.u === "number" ? g.u : 0 } : null;
+}
+
+/** Where the waiting room stands: "preparing" until the grant's `u`, then as the application it names stands (none: "email"). */
+async function waitStateOf(container: Container, grant: WaitGrant): Promise<InterviewWait> {
+  return grant.u > container.engine.clock().getTime() ? { state: "preparing" } : interviewWaitFor(container.db, grant.a);
 }
 
 /** Without JavaScript the résumé travels inside the form itself, which the platform refuses above a few megabytes; this cap gives that case a plain answer (D14). */
@@ -928,7 +963,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const reuse = c.req.query("reuse") ?? "";
   const reused = reuse ? await reusedDetailsFor(container, { companyId: job.company.id, roleId: job.role.id, token: reuse }) : null;
   if (reuse) c.header("Cache-Control", "no-store");
-  return c.html(<ApplyFormPage {...applyFormFor(container, job, await jobFlow(container, job))} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} state={reused ? reusedState(reused, { token: reuse, timeZone: job.company.timezone }) : undefined} />);
+  return c.html(<ApplyFormPage {...applyFormFor(container, job, APPLY_FLOW)} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} state={reused ? reusedState(reused, { token: reuse, timeZone: job.company.timezone }) : undefined} />);
 });
 
 /**
@@ -988,7 +1023,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   const body = (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   const str = bodyString(body);
   if (!admits(container, job, str("formOpened")).ok) return c.notFound();
-  const flow = await jobFlow(container, job);
+  const flow = APPLY_FLOW;
   const form = applyFormFor(container, job, flow);
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock());
   const questions = formQuestions(form.packet);
@@ -1074,7 +1109,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", async (c) => {
   const body = (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   const str = bodyString(body);
   if (!admits(container, job, str("formOpened")).ok) return c.notFound();
-  const flow = await jobFlow(container, job);
+  const flow = APPLY_FLOW;
   const form = applyFormFor(container, job, flow);
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock());
   const questions = formQuestions(form.packet);
@@ -1124,7 +1159,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   if (!admitted.ok) return c.notFound();
   const { company, role, packet } = job;
   const smsEnabled = container.env.SMS_ENABLED;
-  const form = applyFormFor(container, job, await jobFlow(container, job));
+  const form = applyFormFor(container, job, APPLY_FLOW);
   // A form shown again keeps the moment it was first opened, so the closing date's grace still applies to it.
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, role.id, container.engine.clock());
   // The versions recorded as shown are the server's own, computed from the same inputs as the render; a browser cannot claim a different set.
@@ -1153,8 +1188,8 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   if (earlier) c.header("Cache-Control", "no-store");
   const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume, marks: { fromResume: marked.fromResume, suggested: marked.suggested }, reading: resume.resume ? readView : null, earlier });
   const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={state(missing, resume)} />, 400);
-  // Honeypot: a filled hidden field gets exactly the receipt a person gets, and nothing is recorded.
-  if (posted.website) return toReceipt(c, job, values.email);
+  // Honeypot: a filled hidden field gets the waiting room a person gets (naming no application), and nothing is recorded.
+  if (posted.website) return toReceipt(c, job, values.email, "interview", null);
   const fromCv = [...marked.fromResume, ...marked.suggested];
   const workSummary = values.workSummary.trim();
   const parsed = ApplyRequest.safeParse({
@@ -1213,14 +1248,6 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   // upload, also with no note yet (20 Oct, R20-1): a reading still running, or one whose note never came, is tied at
   // Send when it is there, else by the intake, which waits a little for one still running.
   const formReading = held && usedUploadId === held.uploadId ? { uploadId: held.uploadId, storageKey: held.key, readAskedAt: held.readAskedAt ?? null } : null;
-  // What this visit typed, for the chat that follows to name (Wave S7, spec steps 4 to 6): the CV's lines from the form's
-  // own reading of this very upload, the summary they checked and the no-résumé answers, and every form answer as a
-  // sentence. A first application and a repeat one get exactly the same, so the two chats read alike.
-  const readCv = held && usedUploadId === held.uploadId && reading?.outcome === "read" ? reading.cvLines ?? [] : [];
-  const typedFacts = {
-    cv: [...readCv, ...answerCvLines({ workSummary: parsed.data.workSummary ?? null, noResume: parsed.data.noResumeAnswers ?? null })].slice(0, 20),
-    formAnswers: applicationAnswerSentences(packet, { eligibility: eligibilityAnswers, quick: parsed.data.quickAnswers ?? null }).map((s) => s.sentence).slice(0, 20),
-  };
   // The earlier facts still ticked on a form opened from the reuse link (Wave S8): the link is opened again, the address
   // typed must be the one on file, and only ids come from the form (services/profile-facts.ts). Without a link, nothing.
   const keeping = await factsToKeep(container, { companyId: company.id, roleId: role.id, token: posted.reuse, typedEmail: parsed.data.email, ids: posted.keep });
@@ -1229,10 +1256,10 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   const ip = clientIp(c);
   // The source comes from the tracked-link cookie when it names this role (docs/spec/20 items 8 and 19); the token itself is never stored.
   const origin = resolveApplicationSource(c, role.id);
-  // A new application and a repeat one end on the same pages (Wave 0 item 0.1, plan E1): the page never shows or links to
-  // an existing application, so typing someone else's address reveals nothing and changes nothing on their record. Where
-  // the role takes the conversation in the same visit, both go on to its introduction: a repeat's is a detached copy that
-  // touches nothing until the owner of the address on file confirms it (services/apply-conversation.ts).
+  // The page never shows or links to an existing application (Wave 0 item 0.1), so typing someone else's address changes
+  // nothing on their record. A first application waits on the page for its own AI interview (20 Oct 2026, R20-12); a
+  // repeat or an address the company already had gets the same waiting room, naming no application, which ends on "check
+  // your email", where the link goes to the address on file (Q14; services/apply-conversation.ts `applyVisitNext`).
   const next = await withTenant(container.db, company.id, async (tx) => {
     if (usedUploadId) await markUploadUsed(tx, { companyId: company.id, roleId: role.id, uploadId: usedUploadId });
     const created = await createApplication(tx, container, {
@@ -1263,14 +1290,13 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
     // this application's own answers, which its chat reads as the candidate's own words and does not ask again.
     const kept = keeping && !created.duplicate && created.candidate.id === keeping.candidateId ? keptFactsOf(keeping.facts, container.engine.clock().toISOString()) : [];
     await keepFactsOn(tx, { applicationId: created.application.id, facts: kept });
-    // The conversation offered in the same visit (plan E1), or the receipt: decided in this transaction, from what was typed.
-    return startApplyConversation(tx, container, { ...created, role, company, packet, typedFirstName: parsed.data.firstName, eligibilityAnswers, quickAnswers: parsed.data.quickAnswers ?? null, typedFacts: chatFactsWithKept(typedFacts, kept) });
+    // The waiting room or a plain receipt: decided in this transaction, from what was typed.
+    return applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, packet, eligibilityAnswers, trialPaused: admitted.trialGrace });
   });
   await container.kick();
   clearApplicationSource(c);
-  if (next.kind === "conversation") return toConversation(c, next.token, parsed.data.email);
-  // An answer that did not match an eligibility question gets the neutral receipt (E7): no conversation, nothing said about why.
-  return toReceipt(c, job, parsed.data.email, next.reason === "conversation_by_email" ? "conversation_by_email" : "review");
+  // An answer that did not match an eligibility question gets the neutral receipt (E7): nothing said about why.
+  return next.kind === "interview" ? toReceipt(c, job, parsed.data.email, "interview", next.applicationId) : toReceipt(c, job, parsed.data.email, next.reason);
 }
 
 candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), (c) => sendApplication(c));
@@ -1298,11 +1324,13 @@ export function applyFormProblem(missing: readonly string[]): string {
 }
 
 /**
- * The receipt (Wave 0 item 0.1). Identical for a first application, a repeat one and a bot; it never names a status
- * link. When the month's conversations are used up (Q17), it says the conversation's link comes by email; an answer that
- * did not match an eligibility question reads like any other application (E7).
+ * The receipt (Wave 0 item 0.1), in plain words and with no loader: it never names a status link. An answer that did not
+ * match a must-have question (E7) and a waiting room that stopped waiting read the same: check your email, the team
+ * reviews, you hear either way. When the month's AI interviews are used up (Q17) or the trial ended, it says the AI
+ * interview's link comes by email. Worked out from what was typed, so a known address reads as a new one (Q14).
  */
-function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null; next: ReceiptNext }) {
+function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null; next: Exclude<ReceiptNext, "interview"> }) {
+  const minutes = props.packet.screening.maxMinutes;
   return (
     <Layout title="Check your email">
       <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
@@ -1313,30 +1341,151 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
       </div>
       <h2>What happens next</h2>
       <ol class="steps">
-        {props.next === "conversation_by_email" ? <li>We email you a link to a short written conversation with {props.company.name}'s AI assistant (about {props.packet.screening.maxMinutes} minutes). Answer it whenever suits you, or ask for a person instead.</li> : null}
+        {props.next === "used_up" ? <li>Your next step is a short AI interview with {props.company.name}'s AI assistant, about {minutes} minutes. We email you its link as soon as it is ready. You can skip any question, or ask for a person instead.</li> : null}
+        {props.next === "paused" ? <li>Your next step is a short AI interview with {props.company.name}'s AI assistant, about {minutes} minutes. We email you its link shortly; do it whenever suits you, or ask for a person instead.</li> : null}
         <li>The hiring team at {props.company.name} reviews your application. People make every decision.</li>
         <li>You hear from us by email either way.</li>
       </ol>
-      {/* "No email?" one click away (founder brief, 14 October 2026). The earlier-emails line is true for a first application
-          and a repeat alike: a repeat's reminder goes at most once a day, so it may be in an earlier email. */}
-      <details class="more">
-        <summary>No email?</summary>
-        <p>It can take a few minutes. Look in your spam or promotions folder too. If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.</p>
-        <p>If it still has not arrived, we can send your link again.</p>
-        <a class="btn secondary" href="/c/link-request">Send my link again</a>
-      </details>
+      <NoEmail />
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>
   );
+}
+
+/**
+ * "No email?" one click away (founder brief, 14 October 2026). The earlier-emails line is true for a first application
+ * and a repeat alike: a repeat's reminder goes at most once a day, so it may be in an earlier email.
+ */
+function NoEmail() {
+  return (
+    <details class="more">
+      <summary>No email?</summary>
+      <p>It can take a few minutes. Look in your spam or promotions folder too. If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.</p>
+      <p>If it still has not arrived, we can send your link again.</p>
+      <a class="btn secondary" href="/c/link-request">Send my link again</a>
+    </details>
+  );
+}
+
+const WAIT_CSS = `.wait{display:flex;gap:14px;align-items:flex-start}.loader{flex:none;width:22px;height:22px;margin-top:2px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:ros-spin .9s linear infinite}@keyframes ros-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.loader{animation:none}}`;
+
+/**
+ * The waiting room (20 Oct 2026, R20-12): after Send the page waits for this application's AI interview (the résumé read
+ * and the fit check done, usually about a minute) and opens it by itself; the one email carries the same link, for
+ * later. With script it asks `…/applied/status` every two seconds, then every five, and stops after about twelve
+ * minutes with "check your email", its loader stopped. Without script there is no loader and no promise that the page
+ * moves: "Start my interview" opens it when it is ready, or shows this page again. The grant names this application
+ * only (`WaitGrant`), or none at all for a repeat, a known address or a bot (Q14), whose page reads the same.
+ */
+function WaitingRoom(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null; grant: string; again?: boolean }) {
+  const base = receiptPath(props.company.slug, props.role.id);
+  return (
+    <Layout title="Preparing your AI interview" extraCss={WAIT_CSS}>
+      <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
+      <h1>Thanks for applying</h1>
+      <div class="card wait" role="status" aria-live="polite">
+        {/* Shown by the script only: without it nothing on the page moves by itself. */}
+        <span class="loader" aria-hidden="true" hidden />
+        <div>
+          <p><strong id="wait-line">We're preparing your AI interview…</strong></p>
+          <p id="wait-more">{props.again ? "It is not ready yet. It usually takes about a minute: press Start my interview again in a moment." : "We are reading your application so the questions fit your experience. It usually takes about a minute: press Start my interview in a moment to begin."}</p>
+        </div>
+      </div>
+      <p>Your next step is a short interview with {props.company.name}'s AI assistant: a written chat of about {props.packet.screening.maxMinutes} minutes. You can skip any question, or ask for a person instead.</p>
+      <p>We've also emailed you the link{props.to ? ` (to ${props.to})` : ""}, so you can join later from there.</p>
+      <form method="post" action={`${base}/start`} data-wait-status={`${base}/status`} data-wait-done={base}>
+        <input type="hidden" name="grant" value={props.grant} />
+        <button class="btn" type="submit">Start my interview</button>
+      </form>
+      <NoEmail />
+      <p class="foot"><a href="/privacy">How we handle your information</a></p>
+      <script nonce={currentNonce()} dangerouslySetInnerHTML={{ __html: APPLY_WAIT_JS }} />
+    </Layout>
+  );
+}
+
+/**
+ * Asks whether the AI interview is ready (ES5, no inline handlers): every two seconds for two minutes, then every five,
+ * about twelve minutes in all (180 tries). It shows the loader and says the page opens the interview by itself; giving
+ * up, it hides the loader again. `ready` presses Start my interview (which opens it); anything other than `preparing`
+ * loads the receipt again, which then says plainly what happens next; a busy answer or none at all is asked again.
+ */
+export const APPLY_WAIT_JS = `(function(){
+var form=document.querySelector('form[data-wait-status]');if(!form||!window.fetch){return;}
+var url=form.getAttribute('data-wait-status');var done=form.getAttribute('data-wait-done');var grant=form.querySelector('input[name=grant]');
+var line=document.getElementById('wait-line');var more=document.getElementById('wait-more');var loader=document.querySelector('.wait .loader');
+if(loader){loader.hidden=false;}
+if(more){more.textContent='We are reading your application so the questions fit your experience. It usually takes about a minute, and this page opens your interview by itself.';}
+var tries=0;var stopped=false;
+form.addEventListener('submit',function(){stopped=true;});
+function again(){if(stopped){return;}tries++;if(tries>=180){stopped=true;if(loader){loader.hidden=true;}if(line){line.textContent='Your AI interview link is in your email.';}if(more){more.textContent='It is taking longer than usual. Use the link in our email whenever you are ready, or press Start my interview.';}return;}window.setTimeout(tick,tries<60?2000:5000);}
+function tick(){if(stopped){return;}
+fetch(url,{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({grant:grant?grant.value:''})})
+.then(function(r){if(r.status===404){return {state:'gone'};}if(!r.ok){throw new Error('busy');}return r.json();})
+.then(function(j){if(stopped){return;}if(j&&j.state==='ready'){stopped=true;form.submit();return;}if(j&&j.state==='preparing'){again();return;}stopped=true;window.location.assign(done);})
+.catch(function(){again();});
+}
+window.setTimeout(tick,1500);
+})();`;
+
+/** What the receipt shows for a waiting room that is not waiting any more (or never was). */
+function receiptFor(state: InterviewWait["state"]): Exclude<ReceiptNext, "interview"> {
+  return state === "used_up" ? "used_up" : "check_email";
+}
+
+/**
+ * The receipt or the waiting room, as the cookie (or the grant a "Start my interview" press carried) and the application
+ * stand now; a ready interview opens at once.
+ */
+async function receiptPage(c: Context<Vars>, job: Job, opts: { again?: boolean; grant?: WaitGrant } = {}): Promise<Response> {
+  const container = c.get("container");
+  const sealed = openPayload<ReceiptPayload>(RECEIPT_PURPOSE, getCookie(c, RECEIPT_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  const mine = sealed?.v === 1 && sealed.roleId === job.role.id;
+  const to = mine && typeof sealed.to === "string" ? sealed.to : null;
+  c.header("Cache-Control", "no-store");
+  const props = { company: job.company, role: job.role, packet: job.packet, to };
+  const waitFor: WaitGrant | null = opts.grant ?? (mine && sealed.next === "interview" && typeof sealed.wait === "string" ? { v: 1, a: sealed.wait, r: job.role.id, exp: sealed.exp, u: typeof sealed.until === "number" ? sealed.until : 0 } : null);
+  if (waitFor) {
+    const wait = await waitStateOf(container, waitFor);
+    if (wait.state === "ready") return toInterview(c, wait.token, to);
+    if (wait.state === "preparing") return c.html(<WaitingRoom {...props} grant={sealPayload<WaitGrant>(WAIT_PURPOSE, waitFor, container.env.SESSION_SECRET)} again={opts.again} />);
+    return c.html(<Receipt {...props} next={receiptFor(wait.state)} />);
+  }
+  const next = !mine ? "check_email" : sealed.next === "conversation_by_email" || sealed.next === "used_up" ? "used_up" : sealed.next === "paused" ? "paused" : "check_email";
+  return c.html(<Receipt {...props} next={next} />);
 }
 
 candidatePages.get("/careers/:slug/jobs/:roleId/applied", async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
   if (!job) return c.notFound();
-  const sealed = openPayload<ReceiptPayload>(RECEIPT_PURPOSE, getCookie(c, RECEIPT_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
-  const mine = sealed?.v === 1 && sealed.roleId === job.role.id;
-  const to = mine && typeof sealed.to === "string" ? sealed.to : null;
+  return receiptPage(c, job);
+});
+
+/** The waiting room's question (with script): is this application's AI interview ready? Only for the application the grant names. */
+const WAIT_STATUS_POLICY: Policy = { name: "apply.wait_status", rules: [{ by: "ip", windowMs: 3_600_000, limit: 1200 }] };
+
+candidatePages.post("/careers/:slug/jobs/:roleId/applied/status", rateLimit(WAIT_STATUS_POLICY), async (c) => {
+  const container = c.get("container");
+  let raw: unknown = null;
+  try { raw = await c.req.json(); } catch { raw = null; }
+  const grant = openWaitGrant(container, (raw as { grant?: unknown } | null)?.grant, c.req.param("roleId") ?? "");
   c.header("Cache-Control", "no-store");
-  return c.html(<Receipt company={job.company} role={job.role} packet={job.packet} to={to} next={mine && sealed.next === "conversation_by_email" ? "conversation_by_email" : "review"} />);
+  if (!grant) return c.json({ state: "unknown" }, 404);
+  const wait = await waitStateOf(container, grant);
+  // Never the link itself: the page presses Start my interview, which opens it.
+  return c.json({ state: wait.state });
+});
+
+/**
+ * "Start my interview" (and the script's press once it is ready): opens the AI interview of the application the grant
+ * names when it exists, otherwise the waiting room again (or the receipt, saying what happens instead).
+ */
+candidatePages.post("/careers/:slug/jobs/:roleId/applied/start", async (c) => {
+  const container = c.get("container");
+  const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
+  if (!job) return c.notFound();
+  const body = (await c.req.parseBody()) as Record<string, unknown>;
+  const grant = openWaitGrant(container, body.grant, job.role.id);
+  return receiptPage(c, job, grant ? { grant, again: true } : {});
 });

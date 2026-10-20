@@ -9,8 +9,9 @@ import { LOGO_FILE, jobPostingJsonLd } from "@ros/integrations";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse, profileOf } from "../services/company-settings-profile";
+import { APPLY_FLOW } from "../services/job-preview";
 import { jobUrls } from "../services/job-urls";
-import { acceptingApplications, jobFlow, jobNotices, loadJob, loadPublicCompany } from "./candidate-shared";
+import { acceptingApplications, jobNotices, loadJob, loadPublicCompany } from "./candidate-shared";
 import { descriptionExcerpt } from "./description";
 import { Icon } from "./icons";
 import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
@@ -169,7 +170,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
       role={jobRoleView(role, trialEnded)}
       notices={allNotices}
       smsEnabled={container.env.SMS_ENABLED}
-      flow={await jobFlow(container, job)}
+      flow={APPLY_FLOW}
       benefits={benefitsDescriptionFor(packet.compensation, company.settings)}
       links={{ careers: `/careers/${company.slug}`, apply: `/careers/${company.slug}/jobs/${role.id}/apply` }}
       jsonLd={jsonLd}

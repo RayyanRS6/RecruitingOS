@@ -5,8 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, Drawer, ErrorState, Field, Menu, nextSort, Segmented, Skeleton, type SortDir, type SortKind, sortAnnouncement, sortRows, Table, type TableHead, TabPanel, Tabs } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { type AllowanceAlert, allowanceAlerts, allowanceChip } from "../../allowance";
-import { APPLY_MODE_HELP, APPLY_MODE_LABEL, APPLY_MODE_NOTE, REASON_MIN, companyFlowToast, reasonReady, type ApplyMode } from "../../apply-flow";
-import { RoleApplyMode } from "../../components/ApplyMode";
+import { EVERY_APPLICANT_LINE, REASON_MIN, reasonReady } from "../../apply-flow";
 import { useNavigate, useSearchParams } from "../../nav";
 import { RECRUITER_ASKS_OVER_CHIP } from "../../recruiter-requests";
 import { toast } from "../../toast";
@@ -372,7 +371,7 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
         </dd>
         <dt>How people apply</dt>
         <dd>
-          <Fact action={<Button size="sm" variant="quiet" ariaLabel="Change how people apply" onClick={() => onTab("apply")}>Change</Button>}>{APPLY_MODE_LABEL[c.applyFlowDefault ?? "form_then_screen"]}</Fact>
+          <Fact>The same for everyone: the form, then the AI interview</Fact>
         </dd>
         <dt>Applicants' match score</dt>
         <dd>
@@ -548,55 +547,15 @@ function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: T
 }
 
 /**
- * How a customer's applicants meet the screening conversation (plan E1; founder decision B1), ITS only: the company's
- * default ("form now, conversation later" until ITS switches the one-visit flow on for pilot roles or the whole company) and each role's own setting. Every change needs a reason, which is
- * audited and kept with who made it. Roles that already have their own setting keep it when the default changes.
+ * How a customer's applicants apply (plan E1). Since 20 October 2026 (R20-12) ITS's "apply and talk in one visit" switch
+ * is hidden and ignored: every applicant takes the same path, said here in one line. What ITS still sets on this tab is
+ * whether applicants see their match score (S7-1).
  */
 function ApplyFlowPanel({ company }: { company: CustomerRow }) {
-  const qc = useQueryClient();
-  const current: ApplyMode = company.applyFlowDefault ?? "form_then_screen";
-  const [flow, setFlow] = useState<ApplyMode>(current);
-  const [why, setWhy] = useState("");
-  const roles = useQuery({ queryKey: ["admin", "customer-report", company.id], queryFn: () => api.get<{ roles: Array<{ id: string; title: string; status: string }> }>(`/api/v1/admin/customers/${company.id}/report`, reason) });
-  const save = useMutation({
-    mutationFn: () => api.post<{ applyFlow: ApplyMode; changed: boolean }>(`/api/v1/admin/customers/${company.id}/apply-flow`, { applyFlow: flow, reason: why.trim() }, reason),
-    onSuccess: (r) => {
-      const t = companyFlowToast(company.name, r.applyFlow, r.changed);
-      toast(t.title, t.detail);
-      setWhy("");
-      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
-      // each role's "the company's default" now names the new one
-      qc.invalidateQueries({ queryKey: ["role"] });
-    },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save the default."),
-  });
-  const openRoles = (roles.data?.roles ?? []).filter((r) => r.status !== "closed");
   return (
     <div className="stack" style={{ gap: 14 }}>
-      <Card title="The company's default">
-        <p className="small muted">For every role of {company.name} without its own setting. {APPLY_MODE_NOTE}</p>
-        <div className="stack" style={{ gap: 8, marginTop: 8 }}>
-          <Segmented value={flow} onChange={setFlow} ariaLabel="The company's default" options={[{ value: "one_visit", label: APPLY_MODE_LABEL.one_visit }, { value: "form_then_screen", label: APPLY_MODE_LABEL.form_then_screen }]} />
-          <p className="small" style={{ margin: 0, color: "var(--ink-2)" }}>{APPLY_MODE_HELP[flow]}</p>
-          {flow !== current ? (
-            <>
-              <Field label="Why (required, kept with the change)" htmlFor="apply-flow-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="apply-flow-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
-              <div className="row"><Button variant="primary" disabled={!reasonReady(why)} loading={save.isPending} onClick={() => save.mutate()}>Save the default</Button><Button variant="quiet" onClick={() => { setFlow(current); setWhy(""); }}>Cancel</Button></div>
-            </>
-          ) : null}
-        </div>
-      </Card>
-      <Card title="Each role">
-        {roles.isLoading ? <Skeleton lines={3} /> : roles.error ? <ErrorState message="Could not load the roles." onRetry={() => roles.refetch()} /> : openRoles.length ? (
-          <div className="stack" style={{ gap: 12 }}>
-            {openRoles.map((r) => (
-              <div key={r.id} className="stack" style={{ gap: 6, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-                <strong>{r.title} <span className="small muted">({r.status.replace(/_/g, " ")})</span></strong>
-                <RoleApplyMode roleId={r.id} roleTitle={r.title} compact />
-              </div>
-            ))}
-          </div>
-        ) : <p className="small muted">No open or draft roles.</p>}
+      <Card title="How people apply">
+        <p className="small muted">{EVERY_APPLICANT_LINE}</p>
       </Card>
       <CandidateScorePanel company={company} />
     </div>

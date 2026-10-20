@@ -167,7 +167,8 @@ describe("the ITS company check and getting started", () => {
     expect(await r.json()).toMatchObject({ ok: true, verified: true, changed: true, releasedMessages: held });
     await container.drain();
     // what waited went out, once each
-    expect(mail().sent.filter((m) => m.to === "hana.held@example.com" && m.subject.startsWith("We received your application"))).toHaveLength(1);
+    // held on a must-have answer: the neutral thank-you, without the AI interview link (R20-10)
+    expect(mail().sent.filter((m) => m.to === "hana.held@example.com" && m.subject.startsWith("Thank you for applying: "))).toHaveLength(1);
     expect(mail().sent.some((m) => m.subject === "Queued before")).toBe(true);
     expect((await container.db.select().from(communications).where(eq(communications.applicationId, applicationId))).filter((m) => m.status === HELD_STATUS)).toHaveLength(0);
     expect((await container.db.select().from(events).where(and(eq(events.companyId, companyId), eq(events.type, "message.released"))))).toHaveLength(held);

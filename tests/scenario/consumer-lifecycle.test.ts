@@ -83,9 +83,11 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     form.set("acknowledged", "yes");
     const applied = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(applied.status).toBe(302);
-    // one visit (plan E1): the form leads straight to the conversation's introduction
-    expect(applied.headers.get("location")).toMatch(/^\/c\/screen\//);
+    // the waiting room (20 Oct 2026, R20-12): it opens the AI interview by itself once the résumé is read
+    expect(applied.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
     await container.drain();
+    const room = await app.request(applied.headers.get("location")!, { headers: { cookie: applied.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } });
+    expect(room.status).toBe(302);
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     expect(a.stage).toBe("screen_invited");
     const triage = (await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).find((x) => x.kind === "triage")!;
@@ -95,7 +97,7 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     expect(triage.result.requirementFindings.length).toBeGreaterThan(0);
     // the web screen, question by question, with the playbook's questions: the introduction, Start, the answers, then "check your answers" and Send
     const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
-    expect(applied.headers.get("location")).toBe(`/c/screen/${scr.token}`);
+    expect(room.headers.get("location")).toBe(`/c/screen/${scr.token}`);
     expect(await (await app.request(`/c/screen/${scr.token}`)).text()).toContain(`/c/screen/${scr.token}/start`);
     const post = (path: string, fields: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
     expect((await post(`/c/screen/${scr.token}/start`)).status).toBe(302);
@@ -129,10 +131,11 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     expect(after.stage).toBe("interview_recommended");
     const screenAsmt = (await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).find((x) => x.kind === "screen")!;
     expect((screenAsmt.result as { compensationExpectation: { withinRange: string } }).compensationExpectation.withinRange).toBe("yes");
-    // no separate invitation: the acknowledgment carried the conversation's link
+    // one email: thank you and the AI interview's link (R20-5); no separate invitation
     const mail = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "dev.mehta@example.com");
-    expect(mail.some((m) => /screening conversation/.test(m.subject))).toBe(false);
-    expect(mail.find((m) => /received your application/.test(m.subject))?.text).toContain(`/c/screen/${scr.token}`);
+    expect(mail).toHaveLength(1);
+    expect(mail[0].subject).toMatch(/^Thank you for applying: your next step for /);
+    expect(mail[0].text).toContain(`/c/screen/${scr.token}`);
   });
 
   it("An applicant with no resume is assessed from their own words, never marked weak for a non-traditional path", async () => {

@@ -2,13 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket, ScreenWriteup } from "@ros/contracts";
 import { CHAT_WRAP_QUESTION, WRITEUP_NOT_GIVEN_NOTE } from "@ros/agents";
-import { CHAT_WRAP_KEY } from "@ros/core";
-import { aiRuns, applications, rolePackets, roles, screens, unconfirmedScreens } from "@ros/db";
+import { CHAT_WRAP_KEY, applicationAnswerSentences } from "@ros/core";
+import { aiRuns, applications, candidates, companies, rolePackets, roles, screens, unconfirmedScreens, withTenant } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { SCREEN_BUSY_JS } from "./pages/candidate";
-import { conversationView, findConversation } from "./services/apply-conversation";
-import { useOneVisitApplyFlow } from "./test-helpers";
+import { conversationView, findConversation, startDetachedConversation } from "./services/apply-conversation";
+import { followApply, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * Review & send (Wave S7, slice S7-D; scratchpad kanvis-2/spec-s7-apply-flow.md step 7), over HTTP the way a browser
@@ -56,9 +56,10 @@ describe("Review & send", () => {
     ip += 1;
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": `198.51.100.${ip}` } });
     await container.drain();
-    const to = r.headers.get("location") ?? "";
-    expect(to).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
-    return to.slice("/c/screen/".length);
+    // the waiting room opens the AI interview once the résumé is read (20 Oct 2026, R20-12)
+    const { token } = await followApply(app, r);
+    expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
+    return token!;
   }
 
   /** Start, then every question: a tap where offered, a skip where asked, the same words otherwise; ends at the chat's end. */
@@ -256,8 +257,19 @@ describe("Review & send", () => {
     expect(await page(`/c/screen/${t}`)).toContain("<h1>Check what you're sending</h1>");
   });
 
-  it("a repeat submission's conversation reads the same: written up on its own copy, with nothing of the person on file", async () => {
-    const t = await apply({ first: "Mia", last: "Other", email: "maria.reyes@example.com" });
+  /** A repeat submission's detached copy, as the apply page opened one before 20 Oct 2026 (it now only says "check your email"). */
+  async function detachedCopy(email: string, firstName: string): Promise<string> {
+    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    const [company] = await container.db.select().from(companies).where(eq(companies.id, role.companyId));
+    const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, email));
+    const [first] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id)));
+    const formAnswers = applicationAnswerSentences(packet, { eligibility: Object.fromEntries(packet.requirements.eligibility.map((r) => [r.key, "yes"])), quick: null }).map((s) => s.sentence);
+    const made = await withTenant(container.db, company.id, (tx) => startDetachedConversation(tx, container, { application: first, role, company, firstName, typedFacts: { cv: [], formAnswers } }));
+    return made!.token;
+  }
+
+  it("a repeat submission's conversation (opened before 20 Oct 2026) reads the same: written up on its own copy, with nothing of the person on file", async () => {
+    const t = await detachedCopy("maria.reyes@example.com", "Mia");
     const [row] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.token, t));
     expect(row).toBeTruthy();
     await answerAll(t);

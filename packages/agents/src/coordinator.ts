@@ -75,64 +75,80 @@ export async function sendFreeformMessage(q: Queryable, integrations: Integratio
 }
 
 /**
- * The screening conversation that goes with the application (plan E1), as the acknowledgment tells it:
- * - `open`: still to be done; the acknowledgment carries its link, so a candidate who chose "Do this later" or closed
- *   the page can come back.
- * - `by_email`: the month's conversations were used up when they applied (Q17); the link follows by email.
- * - `closed`: answered and sent, sent without it, or handed to a person before this email went: nothing to promise.
+ * The AI interview the one email offers (20 Oct 2026, R20-5, R20-10, R20-11):
+ * - `link`: its link, with the job's own length (`minutes`, the job's screening length);
+ * - `follows`: the month's AI interviews are used up (Q17): the link follows by email once more are added;
+ * - `none`: the neutral thank-you, for someone held on a must-have answer or who left the process before it went.
  */
-export type AcknowledgedConversation = { state: "open"; url: string; questions: number; minutes: number } | { state: "by_email"; minutes: number } | { state: "closed" };
+export type AcknowledgedInterview = { kind: "link"; url: string; minutes: number } | { kind: "follows"; minutes: number } | { kind: "none" };
+
+/** The address already belonged to someone on the company's records (known-bugs row 17): the email says it was sent using it. */
+const KNOWN_ADDRESS_LINE = "This application was sent using your email address. If you did not send it, reply to this email and a person will look into it.";
 
 /**
- * The acknowledgment every applicant gets within a minute. Templated, disclosed, idempotent. It says honestly what comes
- * next (plan E8): the conversation that goes with the application as it stands, otherwise that a conversation may
- * follow by email.
+ * The one email every applicant gets (20 Oct 2026, R20-5): thank you, and the AI interview as their next step, sent the
+ * moment the interview is ready (the résumé read, at the latest ten minutes after applying). Templated, disclosed,
+ * idempotent; the template key and the `ack:` key are the acknowledgment's, which the AI-notice wait, the outbox signal
+ * and the provider's tags rely on. It says "next step", never "to qualify" (R20-6): not doing it never stops the
+ * application. Never in SCREEN_LINK_TEMPLATES (outbox.ts): it carries the status link and the AI notice, so it goes even
+ * when the interview closed before it left.
  */
 export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & {
   appBaseUrl: string;
-  /** Texting is off by default (decision M2); the email then promises an online conversation only. */
-  smsEnabled?: boolean;
-  conversation?: AcknowledgedConversation | null;
-  /**
-   * The address already belonged to someone on the company's records (known-bugs row 17): anyone can type an address, so
-   * the email says it was sent using it, and how to say it was not them.
-   */
+  interview: AcknowledgedInterview;
   knownAddress?: boolean;
 }): Promise<SendResult> {
   const { application, candidate, company, packet } = input;
   const statusUrl = `${input.appBaseUrl}/c/status/${application.statusToken}`;
   const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
-  const steps = packet.interviews.plan.map((r, i) => `${i + 2}. ${r.title} (${r.durationMinutes} min)`).join("\n");
-  const screenHow = input.smsEnabled ? "by text or online" : "online";
-  const conv = input.conversation;
-  const first = conv?.state === "open"
-    ? `1. A short written conversation with ${company.name}'s AI assistant: ${conv.questions} questions, about ${conv.minutes} minutes. It is not a test, and you can skip a question or ask for a person instead. If you have not finished it, pick it up here: ${conv.url}`
-    : conv?.state === "by_email"
-      ? `1. We email you a link to a short written conversation with ${company.name}'s AI assistant (about ${conv.minutes} minutes). Answer it whenever suits you, or ask for a person instead.`
-      : conv?.state === "closed"
-        ? `1. The hiring team at ${company.name} reviews your application, with your answers from the short written conversation if you sent them.`
-        : `1. Possibly a short written conversation with ${company.name}'s AI assistant (${screenHow}, about ${packet.screening.maxMinutes} minutes). If so, we email you the link.`;
-  const text = `Hi ${candidate.firstName},
-
-Thank you for applying for the ${packet.identity.title} position at ${company.name}. We received your application. People on the hiring team review it and make every decision.${input.knownAddress ? "\n\nThis application was sent using your email address. If you did not send it, reply to this email and a person will look into it." : ""}
-
-What happens next:
-${first}
-${steps}
-
-You can check where things stand any time: ${statusUrl}
-
-${packet.communication.humanAlternativeText}
+  const iv = input.interview;
+  const title = packet.identity.title;
+  const known = input.knownAddress ? `\n\n${KNOWN_ADDRESS_LINE}` : "";
+  const footer = `${packet.communication.humanAlternativeText}
 
 ${signature(packet, company)}
 
 ${disclosure}`;
+  const body = iv.kind === "link"
+    ? `Thank you for applying for the ${title} position at ${company.name}. We have your application.
+
+Your next step is a short interview with ${company.name}'s AI assistant. Everyone who applies gets the same interview, so every application is looked at the same way. It is a written chat of about ${iv.minutes} minutes; find a quiet moment when you can give it your attention.
+
+Start your AI interview: ${iv.url}
+
+How it works:
+- The assistant asks one question at a time about your experience and this job, and you answer in your own words.
+- You can skip any question.
+- If you stop part-way, your answers are saved: use the same link to carry on.
+- At the end you check your answers and press Send. Nothing goes to the hiring team before you do.
+- The link stays open for 5 days, and we send you one reminder.
+
+Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email.
+If you need an adjustment, such as more time or another format, reply and tell us.
+Not doing the interview never stops your application: it still goes to the hiring team. People on the hiring team read every application and make every decision.
+
+Check where things stand at any time: ${statusUrl}${known}`
+    : iv.kind === "follows"
+      ? `Thank you for applying for the ${title} position at ${company.name}. We have your application.
+
+Your next step is a short interview with ${company.name}'s AI assistant, a written chat of about ${iv.minutes} minutes. Everyone who applies gets the same interview. We will email you its link as soon as it is ready.
+
+You can skip any question, and you can choose to talk to a person instead. If you need an adjustment, such as more time or another format, reply and tell us. Not doing the interview never stops your application. People on the hiring team read every application and make every decision.
+
+Check where things stand at any time: ${statusUrl}${known}`
+      : `Thank you for applying for the ${title} position at ${company.name}. We received your application. People on the hiring team review it and make every decision.${known}
+
+What happens next:
+1. The hiring team at ${company.name} reviews your application.
+${packet.interviews.plan.map((r, i) => `${i + 2}. ${r.title} (${r.durationMinutes} min)`).join("\n")}
+
+You can check where things stand any time: ${statusUrl}`;
   return deliver(q, integrations, {
     ...input,
     channel: "email",
     templateKey: "acknowledgment",
-    subject: `We received your application: ${packet.identity.title} at ${company.name}`,
-    text,
+    subject: iv.kind === "none" ? `Thank you for applying: ${title} at ${company.name}` : `Thank you for applying: your next step for ${title} at ${company.name}`,
+    text: `Hi ${candidate.firstName},\n\n${body}\n\n${footer}`,
     idempotencyKey: `ack:${application.id}`,
     eventOnSent: "message.sent",
     to: candidate.email,
@@ -290,17 +306,24 @@ function screenUrl(input: ScreenMessageInput): string {
   return `${input.appBaseUrl}/c/screen/${input.screen.token}`;
 }
 
-/** The screen invitation: always by email with the web link; by SMS as well when the candidate consented. Disclosed on both. */
+/**
+ * The AI interview's link in an email of its own: a person's "Send a new link", or the link that follows the one email
+ * (someone kept in after a must-have answer, or the month's interviews topped up; 20 Oct 2026). Always by email with the
+ * web link; by SMS as well when a person chose texts and the candidate consented. Disclosed on both. It gives minutes, not
+ * a number of questions: the chat fixes its plan when it starts.
+ */
 export async function sendScreenInvite(q: Queryable, integrations: Integrations, input: ScreenMessageInput): Promise<{ email: SendResult; sms: SendResult | null }> {
   const { candidate, company, packet } = input;
   const url = screenUrl(input);
   const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
   const text = `Hi ${candidate.firstName},
 
-Thanks again for applying for the ${packet.identity.title} position at ${company.name}. The next step is a short screening conversation: ${packet.screening.questions.length} questions, about ${packet.screening.maxMinutes} minutes, at whatever time suits you.
+Thanks again for applying for the ${packet.identity.title} position at ${company.name}. Your next step is a short interview with ${company.name}'s AI assistant: a written chat of about ${packet.screening.maxMinutes} minutes, at whatever time suits you.
 
-Start here: ${url}
+Start your AI interview: ${url}
 ${input.screen.channel === "sms" && candidate.phone ? "\nYou can also answer by text; we sent the first question to your phone.\n" : ""}
+You can skip any question, and if you stop part-way your answers are saved. Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email. Not doing the interview never stops your application.
+
 ${packet.communication.humanAlternativeText}
 
 ${signature(packet, company)}
@@ -310,7 +333,7 @@ ${disclosure}`;
     ...input,
     channel: "email",
     templateKey: "screen_invite",
-    subject: `Next step: a short screening conversation for ${packet.identity.title}`,
+    subject: `Your next step: a short AI interview for ${packet.identity.title}`,
     text,
     idempotencyKey: `screen_invite:${input.screen.id}`,
     eventOnSent: "message.sent",
@@ -318,7 +341,7 @@ ${disclosure}`;
   });
   let sms: SendResult | null = null;
   if (input.screen.channel === "sms") {
-    const body = `${input.opening ?? `${company.name} hiring team (AI-assisted): a short screening for ${packet.identity.title}. Reply HUMAN for a person, STOP to opt out.`}${input.opening ? "" : `\nOr answer online: ${url}`}`;
+    const body = `${input.opening ?? `${company.name} hiring team (AI-assisted): a short AI interview for ${packet.identity.title}. Reply HUMAN for a person, STOP to opt out.`}${input.opening ? "" : `\nOr answer online: ${url}`}`;
     sms = await deliverSms(q, integrations, { ...input, text: body, idempotencyKey: `screen_invite_sms:${input.screen.id}`, templateKey: "screen_invite", disclosureIncluded: true });
   }
   return { email, sms };
@@ -329,7 +352,7 @@ export async function sendScreenReminder(q: Queryable, integrations: Integration
   const url = screenUrl(input);
   const text = `Hi ${candidate.firstName},
 
-A quick reminder: the short screening conversation for the ${packet.identity.title} position at ${company.name} is waiting for you whenever you have ${packet.screening.maxMinutes} minutes: ${url}
+A quick reminder: your short AI interview for the ${packet.identity.title} position at ${company.name} is waiting for you whenever you have ${packet.screening.maxMinutes} minutes: ${url}
 
 ${reminderClosingLine(candidate)}
 
@@ -338,23 +361,23 @@ ${packet.communication.humanAlternativeText}
 ${signature(packet, company)}
 
 ${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  const email = await deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_reminder", subject: `Reminder: your screening conversation for ${packet.identity.title}`, text, idempotencyKey: `screen_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  const email = await deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_reminder", subject: `Reminder: your AI interview for ${packet.identity.title}`, text, idempotencyKey: `screen_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
   let sms: SendResult | null = null;
   if (input.screen.channel === "sms") {
-    sms = await deliverSms(q, integrations, { ...input, text: `${company.name} hiring team (AI-assisted): your screening for ${packet.identity.title} is waiting: ${url} Reply HUMAN for a person, STOP to opt out.`, idempotencyKey: `screen_reminder_sms:${input.screen.id}`, templateKey: "screen_reminder", disclosureIncluded: true });
+    sms = await deliverSms(q, integrations, { ...input, text: `${company.name} hiring team (AI-assisted): your AI interview for ${packet.identity.title} is waiting: ${url} Reply HUMAN for a person, STOP to opt out.`, idempotencyKey: `screen_reminder_sms:${input.screen.id}`, templateKey: "screen_reminder", disclosureIncluded: true });
   }
   return { email, sms };
 }
 
 /**
- * The screening link lapsed without the candidate starting it (plan G10): no silent expiry. The application is still
+ * The AI interview link lapsed without the candidate starting it (plan G10): no silent expiry. The application is still
  * with the team, and a reply brings a new link from a person. One per screen.
  */
 export async function sendScreenExpiredNote(q: Queryable, integrations: Integrations, input: MessageInput & { screen: { id: string } }): Promise<SendResult> {
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-The link to the short screening conversation for the ${packet.identity.title} position at ${company.name} has now closed, because it was not started. Your application is still with the hiring team, and people on the team make every decision.
+The link to your short AI interview for the ${packet.identity.title} position at ${company.name} has now closed, because it was not started. Your application is still with the hiring team, and people on the team make every decision.
 
 If you would still like to answer the questions, reply to this email and someone on the team can send you a new link.
 
@@ -363,7 +386,7 @@ ${packet.communication.humanAlternativeText}
 ${signature(packet, company)}
 
 ${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_expired", subject: `Your screening link for ${packet.identity.title} has closed`, text, idempotencyKey: `screen_expired:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_expired", subject: `Your AI interview link for ${packet.identity.title} has closed`, text, idempotencyKey: `screen_expired:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**

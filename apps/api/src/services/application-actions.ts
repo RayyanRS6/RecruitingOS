@@ -3,7 +3,7 @@ import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type Applic
 import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, type PersonalLine } from "@ros/agents";
-import { heldDecisionSignal } from "@ros/workflows";
+import { heldDecisionSignal, intakeOn, interviewsBeingPrepared, startInterviewAgain } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
@@ -38,8 +38,10 @@ export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "intervi
  * `followUp`: their open follow-up (the Cancelled column, founder decisions 1A to 4A; `activeFollowUpsFor`), or null.
  * `undoToCancelled`: taking the decision back puts them back under Cancelled (they were declined from there), so the
  * stage button offers it on that row.
+ * `interviewPreparing`: every applicant's AI interview is still being prepared (`interviewsBeingPrepared`: its run waits
+ * for the reading or for more interviews), so "Send a new AI interview link" waits too: it would race it.
  */
-export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean };
+export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean };
 
 /** Why a choice is not available right now, in the reader's words; the page puts it on the disabled button. */
 export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
@@ -76,6 +78,7 @@ const CAPABILITIES = Object.keys(CAPABILITY) as ApplicationCapability[];
 const TEAM_ROLES: MembershipRole[] = ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"];
 const ROLE_WORDS: Record<MembershipRole, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "HR", recruiter: "a recruiter", interviewer: "an interviewer" };
 const CHECK_ELIGIBILITY_FIRST = "Check their eligibility answer first: keep them in or decline.";
+const INTERVIEW_PREPARING = "Their AI interview is being prepared, and its link goes to them by itself.";
 
 /** "an owner, an admin or a hiring manager": who holds a permission, read off the matrix so the words never drift from it. */
 function whoMay(permission: Permission): string {
@@ -95,7 +98,7 @@ function allowedByState(f: ApplicationFacts): ApplicationCapability[] {
   const out: ApplicationCapability[] = [];
   const terminal = TERMINAL_STAGES.includes(f.stage);
   const sortable = !terminal && f.stage !== "talent_pool" && f.stage !== "ineligible";
-  if (["triaged", "eligible", "received", "screen_invited", "screening"].includes(f.stage) && !f.hasOpenScreen) out.push("invite_screen");
+  if (["triaged", "eligible", "received", "screen_invited", "screening"].includes(f.stage) && !f.hasOpenScreen && !f.interviewPreparing) out.push("invite_screen");
   // The one-click follow-up on an assessment with open questions: the same invitation, opened with those questions.
   if (out.includes("invite_screen") && (f.openUnknowns ?? 0) > 0) out.push("ask_in_screen");
   if (["triaged", "screen_complete", "interview_recommended", "interview_complete", "eligible", "screen_invited", "screening"].includes(f.stage) && !f.hasActiveInterview) out.push("interview");
@@ -139,9 +142,9 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
   const step = `Not available at this step (${(STAGE_LABEL as Record<string, string>)[f.stage] ?? f.stage.replace(/_/g, " ")}).`;
   switch (cap) {
     case "invite_screen":
-      return f.hasOpenScreen ? "A screening chat invitation is already open." : step;
+      return f.hasOpenScreen ? "A screening chat invitation is already open." : f.interviewPreparing ? INTERVIEW_PREPARING : step;
     case "ask_in_screen":
-      return f.hasOpenScreen ? "A screening chat invitation is already open." : !(f.openUnknowns ?? 0) ? "The AI review left no open questions to ask about." : step;
+      return f.hasOpenScreen ? "A screening chat invitation is already open." : f.interviewPreparing ? INTERVIEW_PREPARING : !(f.openUnknowns ?? 0) ? "The AI review left no open questions to ask about." : step;
     case "interview":
       return f.hasActiveInterview ? "An interview is already in motion." : step;
     case "hold":
@@ -261,11 +264,12 @@ export function applicationFactsFrom(
   interviewRows: Array<{ status: string; decision: string | null }>,
   role?: MembershipRole | null,
   triage?: { result: { unknowns: unknown[] } } | null,
-  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean } = {},
+  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean } = {},
 ): ApplicationFacts {
   return {
     ...(extra.decidedFrom !== undefined ? { decidedFrom: extra.decidedFrom } : {}),
     ...(extra.undoToCancelled ? { undoToCancelled: true } : {}),
+    ...(extra.interviewPreparing ? { interviewPreparing: true } : {}),
     roleClosed: !!extra.roleClosed,
     followUp: extra.followUp ?? null,
     stage: app.stage,
@@ -312,7 +316,8 @@ export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$in
   const mark = (await activeMarksFor(tx, [app.id])).get(app.id) ?? null;
   const pending = await pendingDecisionMessages(tx, [app.id]);
   const followUp = (await activeFollowUpsFor(tx, [app.id])).get(app.id) ?? null;
-  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id), followUp, ...(await undoFacts(tx, app)) });
+  const interviewPreparing = (await interviewsBeingPrepared(tx, [app.id])).has(app.id);
+  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id), followUp, interviewPreparing, ...(await undoFacts(tx, app)) });
 }
 
 /** Whether the message is out or on its way (held for the ITS check counts: it goes on its own): what `dispositionSent` has always meant. */
@@ -516,6 +521,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
   const facts = await applicationFacts(tx, app, t.role);
   if (!allowedApplicationActions(facts).includes(body.action)) {
     if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open screening chat invitation.");
+    if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.interviewPreparing) throw new HttpError(409, "interview_preparing", INTERVIEW_PREPARING);
     if (body.action === "ask_in_screen" && !(facts.openUnknowns ?? 0)) throw new HttpError(409, "nothing_to_ask", "The AI review left no open questions to ask about; invite them to the usual screening chat instead.");
     if (body.action === "override_eligibility") throw new HttpError(409, "invalid", "Only ineligible applications can be overridden.");
     if (body.action === "review_anyway") throw new HttpError(409, "invalid", "Only applications declined on an eligibility answer can be reopened here.");
@@ -548,8 +554,10 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       if (!body.note?.trim()) throw new HttpError(400, "reason_required", "Say why you are keeping them in; it is recorded so the system can learn.");
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor, reason: body.note });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "override_eligibility", note: body.note } });
-      // The held run goes on to the reading now, not when its next reminder is due.
+      // The held runs go on now, not when their next reminder is due: the reading, and the AI interview, whose link
+      // follows by itself; when that run ended already (the sixty days were up, or it came before 20 Oct 2026), it starts again.
       await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
+      await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now });
       return { ok: true, stage: "eligible", ownerStage: "new" };
     }
     case "review_anyway": {
@@ -558,7 +566,12 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor, reason: body.note ?? "review anyway" });
       await tx.update(applications).set({ rejectedAt: null, rejectReason: null, rejectNote: null }).where(eq(applications.id, app.id));
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "review_anyway", note: body.note ?? null } });
-      const { runId } = await container.engine.start(tx, { workflowKey: "application_intake", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId }, idempotencyKey: `application_intake:${app.id}:reopen:${Date.now()}`, actor });
+      // An intake still holding them reads them again once woken (below), so no second one reads beside it; one that ended is started again.
+      const runId = (await intakeOn(tx, app.id)) ?? (await container.engine.start(tx, { workflowKey: "application_intake", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId }, idempotencyKey: `application_intake:${app.id}:reopen:${Date.now()}`, actor })).runId;
+      // Their AI interview follows the new reading by itself: a run still holding it goes on now, and one that ended
+      // (it saw the decline) starts again.
+      await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
+      await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now });
       return { ok: true, stage: "eligible", ownerStage: "new", workflowRunId: runId };
     }
     case "move_to_talent_pool": {
@@ -614,7 +627,11 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await assertNoNewWork(tx, t.companyId, now);
       // "Ask about this in a screen": the same invitation, opened with the assessment's open questions (docs/spec/21, P1).
       const focus = body.action === "ask_in_screen" || body.focus === "unknowns" ? ("unknowns" as const) : undefined;
-      const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, channel: body.channel, invitedBy: t.userId, ...(focus ? { focus } : {}) }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor });
+      // "Send a new AI interview link": the same AI interview every applicant gets (its plan, Review & send, on the web),
+      // by text only when a person chose texts. "Ask about this in a screen" stays its own short chat that opens with the
+      // open questions, as it says.
+      const same = body.channel === "sms" || focus ? { channel: body.channel } : { channel: "web" as const, flow: "one_visit" as const };
+      const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, ...same, invitedBy: t.userId, ...(focus ? { focus } : {}) }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: body.action, channel: body.channel ?? "auto", focus: focus ?? null, note: body.note ?? null, workflowRunId: runId, ...provenance } });
       return { ok: true, stage: app.stage, workflowRunId: runId, next: focus ? "Invitation on its way. The screening chat starts with the open questions from the AI review; the answers land on the candidate's page." : undefined };
     }
@@ -637,6 +654,9 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       // On the engine's clock: it decides whether a promised set's day is still ahead (`restoreFollowUpAfterUndo`).
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to, by, actor, reason: "decision taken back before the candidate was told", undoDecision: true, payload: { undo: true, note: body.note ?? null }, now });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "undo_decision", from: app.stage, to, note: body.note ?? null } });
+      // A decision that stopped their AI interview before it was made (waiting for the reading, more interviews or "Keep
+      // them in"): it starts again, and the link follows by itself.
+      await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now, cutShort: true });
       // Someone declined from Cancelled goes back there with their choice; their promised set too while its day is ahead.
       const restored = await openFollowUpOf(tx, app.id);
       if (restored) return { ok: true, stage: to, ownerStage: "cancelled", mark: null, toldState: "not_told", candidateNotice: "not_told", next: `Decision taken back: they are back under Cancelled. They were never told.${await restoredSetWords(tx, restored)}` };

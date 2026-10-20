@@ -10,7 +10,7 @@ import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, sc
 import { applyBatch, previewBatch } from "../services/review-apply";
 import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
 import { COMPARE_MAX, compareCandidates } from "./compare";
-import { armClosingDate } from "@ros/workflows";
+import { armClosingDate, interviewsBeingPrepared } from "@ros/workflows";
 import { readingRunIds, untoldFallbackAt, workingDayRulesFor } from "@ros/agents";
 import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/publishing";
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
@@ -143,7 +143,7 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     const approval = await packetApprovalView(tx, { tenant: t, role, packets, pending, now });
     // Wave D: what starts on its own once the job is live (D9), the board ticks and who posts them (D3, D6), the closing date (D7).
     const publishing = {
-      autoActionsOnOpen: await autoActionsOnOpen(tx, role.companyId, role.id),
+      autoActionsOnOpen: autoActionsOnOpen(),
       boards: boardChoices(role, current?.packet ?? null, company?.settings),
       whoPosts: boardPostingOf(company?.settings),
       closingDate: closingDateFor(role, company ?? null, current?.packet ?? null, now),
@@ -314,17 +314,18 @@ roleRoutes.post("/:id/closing-date", requireTenant, async (c) => {
 });
 
 /**
- * How this role's applicants meet the screening conversation (plan E1, founder decision B1): "one_visit" (straight
- * after the form; the pilot), "form_then_screen" (by email later), or null to follow the company's default. ITS only,
- * never the customer, with a second factor: a platform administrator, or an ITS recruiter whose active grant for the
- * company covers this role (founder decision Q31: staff reach a customer's hiring only through a grant). A reason is
- * required and recorded. GET answers `{ roleId, applyMode, companyDefault, effective }`; PUT answers the same after the change.
+ * ITS's old "apply and talk in one visit" switch for a role (plan E1, founder decision B1): "one_visit", "form_then_screen",
+ * or null to follow the company's default. Since 20 October 2026 (R20-12) it is ignored and hidden: every applicant waits
+ * on the page for their AI interview and gets its link by email, so `effective` is always "one_visit". The saved setting
+ * stays readable (and writable, changing nothing) for ITS only, with a second factor: a platform administrator, or an ITS
+ * recruiter whose active grant for the company covers this role (founder decision Q31). A reason is required and
+ * recorded. GET answers `{ roleId, applyMode, companyDefault, effective }`; PUT answers the same after the change.
  */
 async function applyModeView(tx: Tx, roleId: string) {
   const [role] = await tx.select({ id: roles.id, companyId: roles.companyId, applyMode: roles.applyMode }).from(roles).where(eq(roles.id, roleId)).limit(1);
   if (!role) throw new HttpError(404, "not_found", "Role not found.");
   const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-  return { role, view: { roleId: role.id, applyMode: role.applyMode ?? null, companyDefault: resolveApplyMode({ applyMode: null }, company?.settings), effective: resolveApplyMode(role, company?.settings) } };
+  return { role, view: { roleId: role.id, applyMode: role.applyMode ?? null, companyDefault: resolveApplyMode({ applyMode: null }, company?.settings), effective: "one_visit" as const } };
 }
 
 /** A platform administrator always; an ITS recruiter only under an active grant for the company that covers the role. */
@@ -426,6 +427,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const waitingToTell = await pendingDecisionMessages(tx, appIds);
     // "Still applying" (plan E6): offered the conversation with the application and not finished yet; shown apart.
     const applying = await stillApplyingFor(tx, appIds);
+    // Whose AI interview is still being prepared: a person's own link waits for it (`interviewPreparing`).
+    const preparing = await interviewsBeingPrepared(tx, appIds);
     const rows = apps.map((loaded) => {
       const cand = cands.find((x) => x.id === loaded.candidateId);
       const { app: a, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hiddenReadings);
@@ -437,7 +440,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
       const evidence = scored.evidence;
       const followUp = followUps.get(a.id) ?? null;
       const strip = ownerStage(a, mark, followUp);
-      const facts = applicationFactsFrom(a, scr.filter((s) => s.applicationId === a.id).map((s) => s.status), ivs.filter((i) => i.applicationId === a.id), t.role, asmt?.kind === "triage" ? asmt : null, { mark, decisionMessagePending: waitingToTell.has(a.id), followUp });
+      const facts = applicationFactsFrom(a, scr.filter((s) => s.applicationId === a.id).map((s) => s.status), ivs.filter((i) => i.applicationId === a.id), t.role, asmt?.kind === "triage" ? asmt : null, { mark, decisionMessagePending: waitingToTell.has(a.id), followUp, interviewPreparing: preparing.has(a.id) });
       return {
         id: a.id,
         stage: a.stage,
@@ -675,7 +678,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     // Their own decision message waiting for an approver, or a closed role's one closing message that names them (Q30).
     const decisionMessageWaiting = (await pendingDecisionMessages(tx, [app.id])).has(app.id);
     // A decision nobody told can be taken back (plan G1): where it was made from, and whether the role has closed.
-    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, followUp, ...(await undoFacts(tx, app)) });
+    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, followUp, interviewPreparing: (await interviewsBeingPrepared(tx, [app.id])).has(app.id), ...(await undoFacts(tx, app)) });
     const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
     // What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent.
     const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId });

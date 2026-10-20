@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { APPLY_MODE_HELP, APPLY_MODE_LABEL, APPLY_MODE_NOTE, applyModeToast, companyFlowToast, isItsStaff, reasonReady, roleApplyModeBody, roleApplyModeLine, roleChoiceOf, roleChoices } from "../../apps/web/src/apply-flow";
+import { APPLY_MODE_HELP, APPLY_MODE_LABEL, EVERY_APPLICANT_LINE, APPLY_MODE_NOTE, applyModeToast, companyFlowToast, isItsStaff, reasonReady, roleApplyModeBody, roleApplyModeLine, roleChoiceOf, roleChoices } from "../../apps/web/src/apply-flow";
 
 /**
  * How applicants meet the screening conversation (plan E1; founder decision B1): the ITS-only control's words, who sees
  * it, and what it sends. New roles apply and talk in one visit; ITS can switch a role or a company back.
  */
 const me = (platformRole: string) => ({ user: { id: "u1", email: "x@example.com", name: "X", platformRole } });
+
+describe("since 20 October 2026 (R20-12)", () => {
+  it("says the one way every applicant takes, with the AI interview, the email and the must-have hold, never a choice", () => {
+    expect(EVERY_APPLICANT_LINE).toMatch(/^Every applicant: a short form, then the AI interview once their résumé is read\./);
+    expect(EVERY_APPLICANT_LINE).toContain("its link comes by email too");
+    expect(EVERY_APPLICANT_LINE).toContain("Keep them in");
+    expect(EVERY_APPLICANT_LINE).not.toMatch(/screening|conversation later|default/i);
+  });
+});
 
 describe("who sees the control", () => {
   it("is ITS staff only: a platform administrator or an ITS recruiter, never a customer", () => {

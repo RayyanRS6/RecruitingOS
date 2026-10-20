@@ -222,7 +222,7 @@ describe("the application record (status page) after sending", () => {
     const open = await addScreen(a, { status: "in_progress", answers: { [q1.key]: "UNSENT ANSWER" }, transcript: [{ role: "candidate", content: "UNSENT ANSWER", at: at(0) }] });
     let { html } = await page(`/c/status/${a.statusToken}`);
     expect(html).not.toContain("UNSENT ANSWER");
-    expect(html).toContain('<h2 id="score-h">Shown once your screening chat is sent</h2>');
+    expect(html).toContain('<h2 id="score-h">Shown once your AI interview is sent</h2>');
     expect(html).not.toContain("Your match score is ready");
     const answers = html.slice(html.indexOf('<section id="answers"'), html.indexOf("</section>", html.indexOf('<section id="answers"')));
     expect(answers).toContain("<h3>Your details</h3>");

@@ -64,14 +64,13 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(preview).toMatchObject({ notPublicYet: true, company: { name: "Harbor Dental", verified: true }, pay: { shown: true, text: "$45–$55 an hour", requiredByLaw: true } });
       expect(preview.banner).toMatch(/Nothing is public until the role is approved/);
       expect(preview.job.facts.map((f) => f.key)).toEqual(["location", "workplace", "job_type", "pay"]);
-      // a new role follows the company's flow: "form now, conversation later" until ITS switches the pilot on (plan E8, B1)
+      // every role's applicants have the form, then the AI interview (20 Oct 2026, R20-4): the job's own length, never a count of questions
       expect(preview.job.steps[0]).toBe("Send a short form, about 3 minutes. We confirm by email.");
-      expect(preview.job.steps[1]).toMatch(/^Possibly a short written conversation with Harbor Dental's AI assistant \((online|by text or online), about \d+ minutes\)\. If so, we email you the link\.$/);
-      // a pilot company: the conversation in the same visit as the form, counted in the time
+      expect(preview.job.steps[1]).toMatch(/^A short AI interview with Harbor Dental's AI assistant, about \d+ minutes\. It opens right after the form, usually within a minute, and its link comes by email too/);
+      // ITS's old switch changes nothing (R20-12)
       await useOneVisitApplyFlow(container, companyId);
       const pilot = await read<JobPreview>(await json(owner, "GET", `/api/v1/intake/sessions/${draftId}/preview`));
-      expect(pilot.job.steps[0]).toMatch(/^Apply in about \d+ minutes, including a short written conversation with Harbor Dental's AI assistant\. We confirm by email\.$/);
-      expect(pilot.job.steps[1]).toMatch(/^The conversation: \d+ questions, about \d+ minutes\./);
+      expect(pilot.job.steps).toEqual(preview.job.steps);
       await useLaterApplyFlow(container, companyId);
       expect(preview.job.notices.map((n) => n.key)).toEqual(["ai_use", "pay_transparency"]);
       expect(preview.apply.questions.map((q) => q.key)).toEqual(expect.arrayContaining(["rdh_license", "schedule"]));

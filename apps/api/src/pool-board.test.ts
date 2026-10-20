@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { matchWeightOf, previewMatch, type BatchPreview, type BatchResult, type BoardView, type EvidenceAssessment, type MatchScore, type PoolAnswer, type RolePacket } from "@ros/contracts";
 import { anonymizeCandidate, entitlements, matchScore, readingPair } from "@ros/core";
 import { FAKE_SAMPLE_RESUMES } from "@ros/agents";
-import { applicationMarks, applications, assessments, candidates, communications, escalationMessages, events, randomToken, recruiterEscalations, withPlatform, withTenant } from "@ros/db";
+import { applicationMarks, applications, assessments, candidates, communications, escalationMessages, events, randomToken, recruiterEscalations, screens, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -392,6 +392,11 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const strong = await apply("Sol", FAKE_SAMPLE_RESUMES.strong);
       const possible = await apply("Pat", FAKE_SAMPLE_RESUMES.possible);
       const weak = await apply("Wes", FAKE_SAMPLE_RESUMES.weak);
+      // every applicant is invited to the AI interview (R20-4) and waits apart until it is done; here their links lapse,
+      // so the board places them on their résumé reading alone
+      const waiting = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
+      expect(waiting.stillApplying.map((c) => c.applicationId)).toEqual(expect.arrayContaining([strong, possible, weak]));
+      await container.db.update(screens).set({ status: "expired" }).where(inArray(screens.applicationId, [strong, possible, weak]));
       const b = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
       const where = (id: string) => [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward].find((c) => c.applicationId === id)!;
       expect(where(strong).placement.column).toBe("shortlist");

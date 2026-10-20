@@ -7,7 +7,7 @@ import {
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
   sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
-import { addBusinessHours, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, oneVisitPolicyAllows, resolveApplyMode, resolvePolicy, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
+import { addBusinessHours, chatCounter, deadlineWords, emit, entitlements, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { WorkflowEngine } from "@ros/workflows";
@@ -17,27 +17,23 @@ import { learnFromSentChat } from "./profile-facts";
 import { screenDeps } from "./screens";
 
 /**
- * Applying and the screening conversation in one visit (plan Wave E, item E1; founder decision B1/Q15).
+ * Applying and the AI interview (plan Wave E, item E1; since 20 October 2026, R20-4 and R20-12, every applicant's).
  *
- * `startApplyConversation` runs inside the apply page's transaction, right after `createApplication`, and says what the
- * page shows next: the conversation's introduction (Start, Do this later, I'd rather talk to a person), or the receipt.
+ * `applyVisitNext` runs inside the apply page's transaction, right after `createApplication`, and says what the page
+ * shows next: the waiting room for the application's own AI interview (`interviewWaitFor`), or a plain receipt.
  *
- * Repeat submissions (Q14 x Q15), design (a): anyone can type anyone's address, so a second application from an address
- * that already applied for the role must look exactly like a first one and change nothing. It gets the same introduction
- * and conversation, bound to a detached, unconfirmed session (`unconfirmed_screens`) that never touches the real
- * application: no stage, no screen, no message thread, no history entry, no allowance. When it ends, the address on
- * file gets an email; only if its owner opens the link and confirms are the answers (or the request for a person) added
- * to their application. Unconfirmed, what was typed is wiped after seven days. A withdrawal asked for inside it is never
- * carried out from there: the email points the address owner to their own status page. A first application to another
- * role from an address the company already knows gets the same detached conversation (known-bugs row 17): a stranger
- * never sees the first name on file, and their answers never join the real person's record unconfirmed.
+ * Repeat submissions (Q14 x Q15), design (a), before 20 October 2026: a second application from an address that already
+ * applied (or a first one to another role from an address the company knew, known-bugs row 17) got a conversation bound
+ * to a detached, unconfirmed session (`unconfirmed_screens`) that never touched the real application; only if the
+ * address owner confirmed by email were its answers added. Since then such a submission is only told to check its email
+ * (`startDetachedConversation` is no longer called from the page); the detached conversations opened before keep working
+ * to their end: their pages, the confirmation, the seven-day wipe and the retry after an outage.
  *
  * The page reads a conversation by its link with `findConversation` and `conversationView`, and acts on it with the
  * `conversation*` functions, without knowing which kind it is: both render and behave the same.
  */
 
 type Application = typeof applications.$inferSelect;
-type Candidate = typeof candidates.$inferSelect;
 type Role = typeof roles.$inferSelect;
 type Company = typeof companies.$inferSelect;
 type Unconfirmed = typeof unconfirmedScreens.$inferSelect;
@@ -51,110 +47,78 @@ const PAUSE_GIVE_UP_HOURS = 24;
 const HOUR = 3600_000;
 const ACTIVE = new Set<string>(SCREEN_ACTIVE_STATUSES);
 const WEB_ACTOR: Actor = { kind: "system", id: "screen_web" };
-const APPLY_ACTOR: Actor = { kind: "system", id: "apply_page" };
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* The apply page's next step                                                                                    */
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /**
- * What the apply page shows after the form, for a first application and a repeat one alike:
- * - `conversation`: redirect to `/c/screen/<token>`, the fixed introduction of the conversation.
- * - `receipt`, with why: `later_flow` (the role uses "form now, conversation later", or the owner's rule for
- *   invitations is "ask me first" or "only a person": today's receipt); `under_review` (an answer to an eligibility
- *   question did not match: no conversation, a neutral receipt, and the status page says "Under review"; plan E7);
- *   `conversation_by_email` (the month's conversations are used up: the link comes by email once more are added; Q17;
- *   a repeat submission gets it too once the application has had its day's conversations,
- *   `CONVERSATIONS_PER_APPLICATION_PER_DAY`).
+ * What the apply page shows after Send (20 October 2026, R20-12: both ways to start). Worked out from what was typed and
+ * the company's standing at that moment, writing nothing (the intake and the interview's run do the work):
+ * - `interview`: the waiting room. The page waits for the AI interview of this very application and opens it by itself
+ *   once it exists; the one email carries the same link. `applicationId` null: a repeat submission, or an address the
+ *   company already had. Anyone can type anyone's address, so the link is never handed over on the page, only in the
+ *   email to the address on file; the page is the same waiting room, naming no application, which says "preparing" for
+ *   about as long as a reading takes and then "check your email" (Q14: the page right after Send never tells the two apart).
+ * - `receipt`, with why, and no loader, worked out from what was typed alone, so a known address gets the same one:
+ *   `held` (an answer to a must-have question was No: the neutral words, never why; R20-10, E7); `used_up` (the month's
+ *   AI interviews are used up: the link follows by email; Q17, R20-11); `paused` (the company's trial has ended and this
+ *   form was opened before; checked last, so it only ever says the link is on its way when it is).
  */
-export type ApplyVisitOutcome = { kind: "conversation"; token: string } | { kind: "receipt"; reason: "later_flow" | "under_review" | "conversation_by_email" };
+export type ApplyVisitOutcome = { kind: "interview"; applicationId: string | null } | { kind: "receipt"; reason: "held" | "used_up" | "paused" };
 
 export type ApplyVisitInput = {
-  /** `createApplication`'s result: the application (the existing one for a repeat), its candidate, and whether it was a repeat. */
+  /** `createApplication`'s result: the application (the existing one for a repeat), and whether it was a repeat. */
   application: Application;
-  candidate: Candidate;
   duplicate: boolean;
-  /**
-   * The company had this person before the form was sent (an earlier application to another role). Typing someone's
-   * address must never show their first name or add to their record (known-bugs row 17), so the conversation is the
-   * same detached one a repeat submission gets: its answers join the application only once the address owner confirms
-   * by email. Absent means a new person.
-   */
+  /** The company had this person before the form was sent (an earlier application to another role; known-bugs row 17). */
   knownPerson?: boolean;
-  role: Role;
   company: Company;
   /** The role's current packet: the version the job page and the form were built from. */
   packet: RolePacket;
-  /** What the form said, never what is on file: a repeat submission's conversation greets the name that was typed. */
-  typedFirstName: string;
   eligibilityAnswers: Record<string, unknown>;
-  /** The answers to the company's own quick questions, as the form posted them (for the form-answer sentences). */
-  quickAnswers?: Record<string, string> | null;
-  /**
-   * Wave S7: what was typed in this visit, for the chat to name: the CV's lines (as `chatFactsOf` makes them from the
-   * form's own reading of the CV, or the no-résumé answers) and the form's answers as sentences
-   * (`applicationAnswerSentences`). A first application's chat then names its own CV and answers; a repeat
-   * submission's, these. Absent: neither names any, so the two still read alike.
-   */
-  typedFacts?: ChatFacts | null;
+  /** The form was taken only because it was opened before the company's trial ended (founder decision L-02 B). */
+  trialPaused?: boolean;
 };
 
-/**
- * Called by the apply POST inside its transaction, after `createApplication` (plan E1). For a first application on a
- * role using the one-visit flow whose eligibility answers pass and whose invitation rule lets it start on its own: the
- * eligibility result is recorded, the application moves applied → received → eligible → invited to a screen, the
- * conversation is created on the web (never by text, whatever the candidate agreed to), and the `screen` workflow
- * starts with `invited_via` = "apply", sending no invitation (the acknowledgment and the status page carry the link).
- * A repeat submission computes the same answer from the same inputs and gets a detached conversation instead.
- */
-export async function startApplyConversation(tx: Tx, container: Container, input: ApplyVisitInput): Promise<ApplyVisitOutcome> {
-  const { application: app, role, company, packet } = input;
-  const now = container.engine.clock();
-  if (resolveApplyMode(role, company.settings) !== "one_visit") return { kind: "receipt", reason: "later_flow" };
-  const policy = await resolvePolicy(tx, company.id, role.id, "application.invite_screen");
-  if (!oneVisitPolicyAllows(policy.level)) return { kind: "receipt", reason: "later_flow" };
-  const eligibility = evaluateEligibility(packet.requirements.eligibility, input.eligibilityAnswers, now);
-  if (!eligibility.passed) return { kind: "receipt", reason: "under_review" };
+/** Called by the apply POST inside its transaction, after `createApplication`: what the page shows next (see above). */
+export async function applyVisitNext(tx: Tx, container: Container, input: ApplyVisitInput): Promise<ApplyVisitOutcome> {
+  const { application: app, company, packet } = input;
+  if (!evaluateEligibility(packet.requirements.eligibility, input.eligibilityAnswers, container.engine.clock()).passed) return { kind: "receipt", reason: "held" };
   const ent = await entitlements.check(tx, company.id, entitlements.TEXT_SCREENS, 1);
-  const usedUp = !ent.ok && company.planKey !== "design_partner";
-  // A repeat submission, or a first application to this role from an address the company already knows: the same page
-  // as a new person's, on a detached conversation. A known person's new application goes on to the team as the form path
-  // takes it (the intake workflow reads it, and any screening invitation goes to the address on file).
-  if (input.duplicate || input.knownPerson) {
-    if (usedUp) return { kind: "receipt", reason: "conversation_by_email" };
-    // Past the day's conversations for this application, the same receipt as when the month's are used up: no row, no
-    // link, no model calls. Never an existing conversation's link instead: that would show one person's words to the next.
-    if (!(await anotherConversationToday(tx, app.id))) return { kind: "receipt", reason: "conversation_by_email" };
-    // Its chat names only what this visit typed: what the visit passed, or at least the form's answers (`chatFactsFor`).
-    const typedFacts = input.typedFacts ?? { cv: [], formAnswers: applicationAnswerSentences(packet, { eligibility: input.eligibilityAnswers, quick: input.quickAnswers ?? null }).map((s) => s.sentence) };
-    const row = await createUnconfirmedConversation(tx, container, { application: app, role, company, firstName: input.typedFirstName, now, typedFacts });
-    return { kind: "conversation", token: row.token };
-  }
-  // The intake workflow has not run yet; anything else means this application was already under way.
-  if (app.stage !== "applied") return { kind: "receipt", reason: "later_flow" };
-  await tx.update(applications).set({ eligibility }).where(eq(applications.id, app.id));
-  await emit(tx, { type: "eligibility.evaluated", companyId: company.id, actor: APPLY_ACTOR, subject: { type: "application", id: app.id }, payload: { passed: true, failed: [], unverifiable: eligibility.unverifiable.map((u) => u.key), at: "apply" } });
-  await transition(tx, { applicationId: app.id, companyId: company.id, to: "received", by: "system", actor: APPLY_ACTOR });
-  await transition(tx, { applicationId: app.id, companyId: company.id, to: "eligible", by: "system", actor: APPLY_ACTOR });
-  if (usedUp) {
-    // Q17: the conversation link goes out by email once the allowance is topped up (the screen workflow waits for it).
-    // On the web, as the receipt says, whatever the candidate agreed to about texts.
-    await container.engine.start(tx, { workflowKey: "screen", companyId: company.id, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: role.id, invitedBy: "apply", flow: "one_visit", channel: "web" }, idempotencyKey: `screen:${app.id}`, actor: APPLY_ACTOR });
-    return { kind: "receipt", reason: "conversation_by_email" };
-  }
-  const scr = await createScreen(tx, { companyId: company.id, applicationId: app.id, channel: "web", expiresAt: new Date(now.getTime() + SCREEN_LINK_HOURS * HOUR).toISOString(), now, invitedVia: "apply", flow: "one_visit" });
-  // The visit passed what was typed: the chat names exactly that (`chatFactsFor` reads `typedFacts` first), as a repeat
-  // submission's does, since the application's own reading of the CV may not have run yet when the chat starts. Erased
-  // with the candidate's other words (`withoutCandidateWords`).
-  if (input.typedFacts && !scr.progress.ownFacts) {
-    const typedFacts = { cv: input.typedFacts.cv.slice(0, 20).map((l) => l.slice(0, 500)), formAnswers: input.typedFacts.formAnswers.slice(0, 20).map((l) => l.slice(0, 500)) };
-    await tx.update(screens).set({ progress: { ...scr.progress, ownFacts: true, typedFacts } }).where(eq(screens.id, scr.id));
-  }
-  await transition(tx, { applicationId: app.id, companyId: company.id, to: "screen_invited", by: "system", actor: APPLY_ACTOR });
-  await emit(tx, { type: "screen.invited", companyId: company.id, actor: APPLY_ACTOR, subject: { type: "screen", id: scr.id }, payload: { channel: "web", applicationId: app.id, invitedBy: "apply", invitedVia: "apply" } });
-  const run = await container.engine.start(tx, { workflowKey: "screen", companyId: company.id, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: role.id, screenId: scr.id, channel: "web", invitedVia: "apply", invitedBy: "apply" }, idempotencyKey: `screen:${app.id}`, actor: APPLY_ACTOR });
-  await tx.update(screens).set({ workflowRunId: run.runId }).where(eq(screens.id, scr.id));
-  return { kind: "conversation", token: scr.token };
+  if (!ent.ok && company.planKey !== "design_partner") return { kind: "receipt", reason: "used_up" };
+  if (input.trialPaused) return { kind: "receipt", reason: "paused" };
+  return { kind: "interview", applicationId: input.duplicate || input.knownPerson ? null : app.id };
+}
+
+/**
+ * Where the waiting room stands for one application (`interviewWaitFor`): `ready` (its AI interview exists and can be
+ * opened: `token`), `preparing` (the résumé is being read; the interview follows), or what happens instead, said plainly
+ * with no loader: `held` (a must-have answer: neutral words), `used_up` (the link follows by email), `closed` (the role
+ * closed or the application left the process), `email` (anything else: the link is in their email).
+ */
+export type InterviewWait = { state: "ready"; token: string } | { state: "preparing" | "held" | "used_up" | "closed" | "email" };
+
+/** Stages before the AI interview exists, while it is being prepared. */
+const PREPARING_STAGES: readonly string[] = ["applied", "received", "eligible", "triaged"];
+const LEFT_STAGES: readonly string[] = ["withdrawn", "rejected", "declined", "talent_pool", "hired"];
+
+/** The waiting room's answer, read from what is stored for the application the sealed grant names. */
+export async function interviewWaitFor(db: Db, applicationId: string): Promise<InterviewWait> {
+  const [app] = await db.select({ id: applications.id, companyId: applications.companyId, stage: applications.stage }).from(applications).where(eq(applications.id, applicationId)).limit(1);
+  if (!app) return { state: "email" };
+  return withTenant(db, app.companyId, async (tx) => {
+    const [scr] = await tx.select({ token: screens.token, status: screens.status, invitedVia: screens.invitedVia }).from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1);
+    if (scr?.invitedVia === "with_application" && (SCREEN_PERSON_ROUTE_STATUSES as readonly string[]).includes(scr.status)) return { state: "ready", token: scr.token };
+    if (scr) return { state: "email" };
+    if (LEFT_STAGES.includes(app.stage)) return { state: "closed" };
+    if (app.stage === "ineligible") return { state: "held" };
+    // The interview's run: waiting for more interviews (Q17), or held on a must-have answer it checked itself (the fallback).
+    const [run] = await tx.select({ state: workflowRuns.state, currentStep: workflowRuns.currentStep }).from(workflowRuns).where(eq(workflowRuns.idempotencyKey, `screen:${app.id}`)).limit(1);
+    if (run && (run.state as { waitingForAllowance?: string }).waitingForAllowance) return { state: "used_up" };
+    if (run?.currentStep === "after_hold") return { state: "held" };
+    return PREPARING_STAGES.includes(app.stage) ? { state: "preparing" } : { state: "email" };
+  });
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -201,6 +165,18 @@ async function anotherConversationToday(tx: Tx, applicationId: string): Promise<
   const [own] = await tx.select({ n: sql<number>`count(*)` }).from(screens).where(and(eq(screens.applicationId, applicationId), sql`${screens.createdAt} > ${since}`));
   const [repeats] = await tx.select({ n: sql<number>`count(*)` }).from(unconfirmedScreens).where(and(eq(unconfirmedScreens.applicationId, applicationId), sql`${unconfirmedScreens.createdAt} > ${since}`));
   return Number(own?.n ?? 0) + Number(repeats?.n ?? 0) < CONVERSATIONS_PER_APPLICATION_PER_DAY;
+}
+
+/**
+ * A repeat submission's detached conversation, as the apply page opened one before 20 October 2026 (see the module
+ * note): the typed first name and what that visit typed, nothing on file. Null past the application's conversations for
+ * the day (`CONVERSATIONS_PER_APPLICATION_PER_DAY`). No longer called from the page; kept for the conversations already
+ * open and their tests.
+ */
+export async function startDetachedConversation(tx: Tx, container: Container, input: { application: Application; role: Role; company: Company; firstName: string; typedFacts?: ChatFacts | null }): Promise<{ token: string } | null> {
+  if (!(await anotherConversationToday(tx, input.application.id))) return null;
+  const row = await createUnconfirmedConversation(tx, container, { ...input, now: container.engine.clock(), typedFacts: input.typedFacts ?? null });
+  return { token: row.token };
 }
 
 async function createUnconfirmedConversation(tx: Tx, container: Container, input: { application: Application; role: Role; company: Company; firstName: string; now: Date; typedFacts: ChatFacts | null }): Promise<Unconfirmed> {

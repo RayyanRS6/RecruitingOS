@@ -45,13 +45,16 @@ export function recruiterNoteLabel(by: string | null | undefined): string {
   return `Notes from a call${by ? ` by ${by}` : " by a recruiter"}. Not the candidate's own words.`;
 }
 
+/** Screens that come with the application: offered in the visit (plan E1), or every applicant's AI interview since 20 Oct 2026. */
+const WITH_APPLICATION = ["apply", "with_application"];
+
 /**
- * The conversation was offered in the visit that sent the application (plan E1). The screen's own `invitedVia` says so
- * when the API sends it; otherwise the invitation's history entry does.
+ * The conversation came with the application (plan E1; since 20 Oct 2026 every applicant's AI interview). The screen's
+ * own `invitedVia` says so when the API sends it; otherwise the invitation's history entry does.
  */
 export function offeredWithApplication(s: Pick<Screen, "id" | "invitedVia">, timeline: readonly EventLike[] = []): boolean {
-  if (s.invitedVia !== undefined) return s.invitedVia === "apply";
-  return timeline.some((e) => e.type === "screen.invited" && e.payload.invitedVia === "apply" && (e.subjectId === undefined || e.subjectId === s.id));
+  if (s.invitedVia !== undefined) return WITH_APPLICATION.includes(s.invitedVia ?? "");
+  return timeline.some((e) => e.type === "screen.invited" && WITH_APPLICATION.includes(String(e.payload.invitedVia ?? "")) && (e.subjectId === undefined || e.subjectId === s.id));
 }
 
 /** The answers came from a second application whose address owner confirmed them by email (repeat submissions, Q14 x Q15). */

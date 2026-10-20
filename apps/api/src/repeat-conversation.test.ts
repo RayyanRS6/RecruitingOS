@@ -7,7 +7,8 @@ import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
-import { CONVERSATIONS_PER_APPLICATION_PER_DAY, DETACHED_EMAILS_PER_DAY, confirmRepeat, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, repeatConfirmationView, startApplyConversation, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
+import { applicationAnswerSentences } from "@ros/core";
+import { CONVERSATIONS_PER_APPLICATION_PER_DAY, DETACHED_EMAILS_PER_DAY, applyVisitNext, confirmRepeat, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, interviewWaitFor, repeatConfirmationView, startDetachedConversation, type ConversationRef } from "./services/apply-conversation";
 import { useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -35,21 +36,36 @@ describe("a repeat submission's conversation is detached until the address owner
   const eventsOn = async (applicationId: string) => container.db.select().from(events).where(eq(events.subjectId, applicationId));
   const confirmLink = (to: string) => mail().filter((m) => m.to === to && /^Please confirm/.test(m.subject)).at(-1)?.text.match(/\/c\/confirm-answers\/([A-Za-z0-9_-]+)/)?.[1] ?? null;
 
-  async function applyNow(p: { first: string; email: string }): Promise<{ outcome: ApplyVisitOutcome; applicationId: string; duplicate: boolean }> {
+  /**
+   * A first application gets its own AI interview once the résumé is read (20 Oct 2026). A repeat submission gets the same
+   * waiting room since then, naming no application, and is told to check its email; the detached conversation such a submission was given before is opened here directly
+   * (`startDetachedConversation`), so the ones still open keep their tests.
+   */
+  type Outcome = { kind: "conversation"; token: string } | { kind: "receipt"; reason: string };
+  async function applyNow(p: { first: string; email: string }): Promise<{ outcome: Outcome; applicationId: string; duplicate: boolean }> {
     const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
     const [company] = await container.db.select().from(companies).where(eq(companies.id, role.companyId));
     const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
     const eligibilityAnswers = Object.fromEntries(elig.map((r) => [r.key, "yes"]));
     const result = await withTenant(container.db, company.id, async (tx) => {
       const created = await createApplication(tx, container, { companyId: company.id, roleId, source: "careers_page", firstName: p.first, lastName: "Applicant", email: p.email, phone: null, smsConsent: false, consentSource: "careers_page_apply", noticeVersionsShown: ["ai_use@2026-10-08", "privacy@2026-09-01"], eligibilityAnswers, noResumeAnswers: { summary: "Registered dental hygienist for six years, active CA RDH license, perio maintenance in Dentrix." } }, { kind: "candidate", id: "applicant" });
-      const outcome = await startApplyConversation(tx, container, { ...created, role, company, packet: pv.packet as RolePacket, typedFirstName: p.first, eligibilityAnswers });
-      return { outcome, applicationId: created.application.id, duplicate: created.duplicate };
+      const next = await applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, packet: pv.packet as RolePacket, eligibilityAnswers });
+      const typedFacts = { cv: [], formAnswers: applicationAnswerSentences(pv.packet as RolePacket, { eligibility: eligibilityAnswers, quick: null }).map((s) => s.sentence) };
+      const detached = created.duplicate ? await startDetachedConversation(tx, container, { application: created.application, role, company, firstName: p.first, typedFacts }) : null;
+      return { next, detached, applicationId: created.application.id, duplicate: created.duplicate };
     });
     await container.kick();
     await container.drain();
-    return result;
+    if (result.duplicate) {
+      // the same waiting room as a first application, naming no application (Q14): it ends on "check your email"
+      expect(result.next).toEqual({ kind: "interview", applicationId: null });
+      return { outcome: result.detached ? { kind: "conversation", token: result.detached.token } : { kind: "receipt", reason: "conversation_by_email" }, applicationId: result.applicationId, duplicate: true };
+    }
+    const wait = await interviewWaitFor(container.db, result.applicationId);
+    if (wait.state !== "ready") throw new Error(`expected the AI interview, got ${wait.state}`);
+    return { outcome: { kind: "conversation", token: wait.token }, applicationId: result.applicationId, duplicate: false };
   }
-  const refOf = async (outcome: ApplyVisitOutcome): Promise<ConversationRef> => {
+  const refOf = async (outcome: Outcome): Promise<ConversationRef> => {
     if (outcome.kind !== "conversation") throw new Error("expected a conversation");
     return (await findConversation(container.db, outcome.token))!;
   };

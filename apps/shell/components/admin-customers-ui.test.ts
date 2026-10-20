@@ -266,8 +266,9 @@ describe("the customer drawer", () => {
     expect(words).toContain("Starter · Active Change plan");
     expect(words).toContain("122 of 150 screening chats this month, resets October 30");
     expect(words).toContain("80% of screening chats used (122 of 150)");
-    expect(words).toContain("How people apply Form now, conversation later Change");
-    expect(html).toContain('aria-label="Change how people apply"');
+    // the same for every company since 20 Oct 2026 (R20-12): a fact, with nothing to change
+    expect(words).toContain("How people apply The same for everyone: the form, then the AI interview");
+    expect(html).not.toContain('aria-label="Change how people apply"');
     expect(words).toContain("2 jobs · 3 applicants");
     expect(words).toContain("Job boards Not confirmed yet");
     expect(words).toContain("Messages held None");
@@ -291,10 +292,11 @@ describe("the customer drawer", () => {
     const plan = render(qc, Customers("open=co1&tab=plan"));
     expect(text(plan)).toContain("Pick a plan");
     expect(plan).toContain('<select id="plan-pick" class="select">');
+    // the ITS switch is gone (R20-12): the one way everyone applies, said once
     const apply = render(qc, Customers("open=co1&tab=apply"));
-    expect(text(apply)).toContain("The company's default");
-    expect(text(apply)).toContain("Each role");
-    expect(text(apply)).toContain("Dental Hygienist");
+    expect(text(apply)).toContain("Every applicant: a short form, then the AI interview once their résumé is read.");
+    expect(text(apply)).not.toContain("The company's default");
+    expect(text(apply)).not.toContain("Each role");
   });
 
   it("gives the administrator's view of a customer's report the same figures on its Report tab, and right-aligns the roles' counts", () => {

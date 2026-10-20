@@ -85,9 +85,9 @@ export async function createCompanyThroughTheForm(page: Page, name: string) {
 }
 
 /**
- * ITS switches the one-visit flow on for a company (plan Wave E, founder decision B1): a company without a setting takes
- * "form now, conversation later", and pilots are switched on by ITS. Done through the admin API, signed in as the e2e
- * administrator in a browser context of its own, so the owner's session is untouched.
+ * ITS switches the one-visit flow on for a company (plan Wave E, founder decision B1). Since 20 October 2026 (R20-12)
+ * nothing reads the setting: every applicant takes the same path, so this only writes it. Done through the admin API,
+ * signed in as the e2e administrator in a browser context of its own, so the owner's session is untouched.
  */
 export async function useOneVisitFlow(browser: Browser, base: string, companyId: string) {
   const staff = await browser.newContext();
@@ -133,13 +133,17 @@ export async function seedRoleAndApplicant(request: APIRequestContext, base: str
   for (const rule of role.currentPacket.packet.requirements.eligibility) multipart[`elig_${rule.key}`] = "yes";
   const applied = await request.post(`${base}/careers/${company.slug}/jobs/${roleId}/apply`, { multipart, maxRedirects: 0 });
   expect(applied.status()).toBe(302);
-  // On a role that applies and talks in one visit (plan E1; a pilot ITS switched on with `useOneVisitFlow`), passing the
-  // yes/no questions leads straight to the screening conversation's introduction; a role on the later path lands on the
-  // receipt. Either way the status link travels only by email (Wave 0 item 0.1), and the applicant here does not start
-  // the conversation, so on a one-visit role they are "Still applying".
+  // Since 20 Oct 2026 (R20-12) every applicant lands on the waiting room, which opens their own AI interview once it
+  // exists (the résumé read, usually within a minute): followed here as the page's script does. The status link travels
+  // only by email (Wave 0 item 0.1), and the applicant here does not start the interview, so they are "Still applying".
   const location = applied.headers().location ?? "";
-  expect(location === `/careers/${company.slug}/jobs/${roleId}/applied` || /^\/c\/screen\/[A-Za-z0-9_-]+$/.test(location), `the apply form sent the applicant to ${location}`).toBe(true);
-  const conversationPath = location.startsWith("/c/screen/") ? location : null;
+  expect(location, "the apply form sends the applicant to the waiting room").toBe(`/careers/${company.slug}/jobs/${roleId}/applied`);
+  let conversationPath: string | null = null;
+  await expect.poll(async () => {
+    const to = (await request.get(`${base}${location}`, { maxRedirects: 0 })).headers().location ?? "";
+    conversationPath = /^\/c\/screen\/[A-Za-z0-9_-]+$/.test(to) ? to : null;
+    return conversationPath;
+  }, { timeout: 90_000, message: "the waiting room opening the AI interview" }).not.toBeNull();
   const candidateEmail = multipart.email as string;
   const statusPath = await statusPathFromEmail(request, base, candidateEmail);
   return { roleId, slug: company.slug, statusPath, candidateEmail, conversationPath };
@@ -154,7 +158,7 @@ export async function statusPathFromEmail(request: APIRequestContext, base: stri
   let path = "";
   await expect.poll(async () => {
     const sent = (await (await request.get(`${base}/dev/outbox`)).json()) as Array<{ to: string; subject: string; text: string }>;
-    const ack = sent.find((m) => m.to.toLowerCase() === email.toLowerCase() && m.subject.startsWith("We received your application"));
+    const ack = sent.find((m) => m.to.toLowerCase() === email.toLowerCase() && m.subject.startsWith("Thank you for applying"));
     path = ack?.text.match(/\/c\/status\/[A-Za-z0-9_-]+/)?.[0] ?? "";
     return path;
   }, { timeout: 60_000, message: "the acknowledgment email with the status link" }).not.toBe("");

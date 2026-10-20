@@ -4,7 +4,8 @@ import type { Queryable } from "@ros/db";
 import { deliver, reminderClosingLine, type MessageInput } from "./coordinator";
 
 /**
- * The emails of the conversation offered with the application (plan Wave E). Templated, never written by the model,
+ * The emails of the conversation offered with the application (plan Wave E), called the AI interview in the candidate's
+ * words since 20 October 2026 (every applicant's; they give its length, never a count of questions). Templated, never written by the model,
  * sent to the address the company has on file, and queued through the outbox like every candidate email (so they wait
  * for the ITS company check like the rest, founder decision B7). One per screen and purpose, by idempotency key.
  */
@@ -29,12 +30,12 @@ export async function sendConversationForLater(q: Queryable, integrations: Integ
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-Here is the link to the short screening conversation for the ${packet.identity.title} position at ${company.name}: ${input.questions} questions, about ${input.minutes} minutes. Answer whenever it suits you; the page keeps your place if you stop part-way.
+Here is the link to your AI interview for the ${packet.identity.title} position at ${company.name}: a written chat of about ${input.minutes} minutes. Answer whenever it suits you; the page keeps your place if you stop part-way.
 
 ${conversationUrl(input)}
 
 ${signOff(input)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_later", subject: `Your screening conversation for ${packet.identity.title}, for when you are ready`, text, idempotencyKey: `screen_later:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_later", subject: `Your AI interview for ${packet.identity.title}, for when you are ready`, text, idempotencyKey: `screen_later:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**
@@ -45,14 +46,14 @@ export async function sendConversationIdleReminder(q: Queryable, integrations: I
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-You started the screening conversation for the ${packet.identity.title} position at ${company.name} and stopped part-way. Your answers so far are saved. You can pick up where you left off:
+You started your AI interview for the ${packet.identity.title} position at ${company.name} and stopped part-way. Your answers so far are saved. You can pick up where you left off:
 
 ${conversationUrl(input)}
 
-If you would rather not finish it, you do not need to do anything: in a couple of days the conversation closes and your application carries on without it. Answers you have not sent are not passed to the hiring team.
+If you would rather not finish it, you do not need to do anything: in a couple of days the interview closes and your application carries on without it. Answers you have not sent are not passed to the hiring team.
 
 ${signOff(input)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_idle_reminder", subject: `Pick up your screening conversation for ${packet.identity.title}`, text, idempotencyKey: `screen_idle_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_idle_reminder", subject: `Pick up your AI interview for ${packet.identity.title}`, text, idempotencyKey: `screen_idle_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**
@@ -63,7 +64,7 @@ export async function sendConversationUnfinishedNote(q: Queryable, integrations:
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-We have closed the screening conversation for the ${packet.identity.title} position at ${company.name}. Your application has gone to the hiring team without it: answers you did not send are not passed on. Nothing else is needed from you. People on the team review your application and decide on next steps; you will hear from them either way.
+We have closed your AI interview for the ${packet.identity.title} position at ${company.name}. Your application has gone to the hiring team without it: answers you did not send are not passed on. Nothing else is needed from you. People on the team review your application and decide on next steps; you will hear from them either way.
 
 If you would like to add something, reply to this email.
 
@@ -82,11 +83,11 @@ export async function sendConversationReviewReminder(q: Queryable, integrations:
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-You answered every question in the screening conversation for the ${packet.identity.title} position at ${company.name}, but you have not pressed Send yet. The hiring team sees your answers only once you send them. You can check them, change any of them, and press Send here:
+You answered every question in your AI interview for the ${packet.identity.title} position at ${company.name}, but you have not pressed Send yet. The hiring team sees your answers only once you send them. You can check them, change any of them, and press Send here:
 
 ${conversationUrl(input)}
 
-If you do not press Send by ${input.closesOn}, the conversation closes and your application goes to the hiring team without these answers. Answers you have not sent are not passed on.
+If you do not press Send by ${input.closesOn}, the interview closes and your application goes to the hiring team without these answers. Answers you have not sent are not passed on.
 
 ${signOff(input)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_review_reminder", subject: `Your answers for ${packet.identity.title} are ready to send`, text, idempotencyKey: `screen_review_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
@@ -100,14 +101,14 @@ export async function sendConversationNotStartedReminder(q: Queryable, integrati
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-Thanks for applying for the ${packet.identity.title} position at ${company.name}. The short written conversation that goes with your application is still waiting for you: ${input.questions} questions, about ${input.minutes} minutes, whenever it suits you:
+Thanks for applying for the ${packet.identity.title} position at ${company.name}. Your AI interview, the next step that goes with your application, is still waiting for you: a written chat of about ${input.minutes} minutes, whenever it suits you:
 
 ${conversationUrl(input)}
 
-If you would rather not do it, you do not need to do anything: in a few days your application goes to the hiring team without it. From that page you can also send it now without the conversation, or ask for a person instead.
+If you would rather not do it, you do not need to do anything: in a few days your application goes to the hiring team without it. From that page you can also send your application now without the interview, or ask for a person instead.
 
 ${signOff(input)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_not_started_reminder", subject: `Your application for ${packet.identity.title}: the short conversation is still open`, text, idempotencyKey: `screen_not_started_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_not_started_reminder", subject: `Your application for ${packet.identity.title}: your AI interview is still open`, text, idempotencyKey: `screen_not_started_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /** Never started, and the link has lapsed (E4): the application has gone to the team without it, and that is fine. */
@@ -115,7 +116,7 @@ export async function sendConversationNotStartedNote(q: Queryable, integrations:
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-Your application for the ${packet.identity.title} position at ${company.name} has gone to the hiring team without the short written conversation. That is fine, and nothing else is needed from you. People on the team review your application and decide on next steps; you will hear from them either way.
+Your application for the ${packet.identity.title} position at ${company.name} has gone to the hiring team without the AI interview. That is fine, and nothing else is needed from you. People on the team review your application and decide on next steps; you will hear from them either way.
 
 If you would like to add something, reply to this email.
 
@@ -133,7 +134,7 @@ export async function sendConversationNotOfferedNote(q: Queryable, integrations:
   const { candidate, company, packet, application } = input;
   const text = `Hi ${candidate.firstName},
 
-We said we would email you a link to a short written conversation for the ${packet.identity.title} position at ${company.name}. That conversation is not going ahead, and you do not need to do anything about it. Your application is with the hiring team as it is, and nothing else is needed from you. People on the team review it and decide on next steps; you will hear from them either way.
+We said we would email you the link to an AI interview for the ${packet.identity.title} position at ${company.name}. That interview is not going ahead, and you do not need to do anything about it. Your application is with the hiring team as it is, and nothing else is needed from you. People on the team review it and decide on next steps; you will hear from them either way.
 
 If you would like to add something, reply to this email.
 
@@ -149,7 +150,7 @@ export async function sendConversationHandedOver(q: Queryable, integrations: Int
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-Sorry about the trouble with the screening conversation for the ${packet.identity.title} position at ${company.name}. We have passed your application to a person working with the hiring team, who will contact you ${input.expectation} to go through the questions with you. The answers you started were not sent, so they are not passed on. Nothing else is needed from you.
+Sorry about the trouble with your AI interview for the ${packet.identity.title} position at ${company.name}. We have passed your application to a person working with the hiring team, who will contact you ${input.expectation} to go through the questions with you. The answers you started were not sent, so they are not passed on. Nothing else is needed from you.
 
 ${packet.communication.signature || `The hiring team at ${company.name}`}
 
@@ -162,14 +163,14 @@ export async function sendConversationResume(q: Queryable, integrations: Integra
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-Sorry about the trouble earlier with the screening conversation for the ${packet.identity.title} position at ${company.name}. It is working again, and your answers so far are saved. You can finish whenever it suits you:
+Sorry about the trouble earlier with your AI interview for the ${packet.identity.title} position at ${company.name}. It is working again, and your answers so far are saved. You can finish whenever it suits you:
 
 ${conversationUrl(input)}
 
 ${reminderClosingLine(candidate)}
 
 ${signOff(input)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_resume", subject: `You can finish your screening conversation for ${packet.identity.title} now`, text, idempotencyKey: `screen_resume:${input.screen.id}:${input.pausedAt}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_resume", subject: `You can finish your AI interview for ${packet.identity.title} now`, text, idempotencyKey: `screen_resume:${input.screen.id}:${input.pausedAt}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /** What the emails about a repeat submission's conversation say at the end: nothing is added without the address owner. */

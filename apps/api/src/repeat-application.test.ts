@@ -81,8 +81,7 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     companyId = co.id;
     slug = co.slug;
     await entitlements.applyPlan(container.db, companyId, "growth");
-    // The receipt is what the later path shows after the form (plan Wave E); the one-visit path's identical pages for a
-    // repeat are covered in apply-visit-pages.test.ts.
+    // The ITS switch is ignored since 20 October (R20-12): set to "later", every applicant still gets the AI interview.
     await useLaterApplyFlow(container, companyId);
     const first = await openRole("I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.");
     roleId = first.id;
@@ -102,7 +101,7 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     expect(maskEmail("@example.com")).toBe("the email address you gave");
   });
 
-  it("a repeat submission gets exactly the receipt a first one gets, changes nothing on the existing person, discards its upload, and the address on file gets its link once a day", async () => {
+  it("a repeat submission gets the same waiting room as a first application, naming none (Q14, R20-12), changes nothing on the existing person, discards its upload, and the address on file gets its link once a day", async () => {
     const role = { id: roleId, eligibility };
     const r1 = await applyTo(role, { phone: "(949) 555-0100", smsConsent: "yes" }, (fd) => fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist 2019 - present"], "maria.txt", { type: "text/plain" })));
     expect(r1.status).toBe(302);
@@ -110,20 +109,20 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     const maria = await person("maria.reyes@example.com");
     const mariaApp = await applicationOf(maria.id);
     expect(mariaApp.resumeDocumentId).toBeTruthy();
-    const first = await receiptOf(r1);
-    // the receipt cookie is sealed, short-lived, limited to the receipt page, and carries only the masked address
-    const receiptCookie = first.setCookie.slice(first.setCookie.indexOf(`${RECEIPT_COOKIE}=`));
+    // the receipt cookie is sealed, short-lived, limited to the receipt page, and carries only the masked address (and,
+    // sealed, the application its waiting room waits for)
+    const setCookie = r1.headers.get("set-cookie") ?? "";
+    const receiptCookie = setCookie.slice(setCookie.indexOf(`${RECEIPT_COOKIE}=`));
     expect(receiptCookie).toMatch(new RegExp(`^${RECEIPT_COOKIE}=v1\\.`));
     for (const part of ["Max-Age=1800", `Path=/careers/${slug}/jobs/${roleId}/applied`, "HttpOnly", "SameSite=Lax"]) expect(receiptCookie).toContain(part);
-    expect(first.setCookie).not.toContain("maria");
-    expect(first.html).toContain("Check your email.");
-    expect(first.html).toContain("m***@example.com");
-    // true for a repeat too, whose reminder goes at most once a day
-    expect(decodeEntities(first.html)).toContain("If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.");
-    expect(first.html).not.toMatch(/We sent a message to/);
-    expect(first.html).toContain('href="/c/link-request"');
-    // the link went by email, with the acknowledgment
-    const ack = outbox().find((m) => m.to === "maria.reyes@example.com" && /received your application/.test(m.subject))!;
+    expect(setCookie).not.toContain("maria");
+    expect(setCookie).not.toContain(mariaApp.id);
+    // a first application's waiting room opens her own AI interview (the inline worker made it already)
+    const room = await app.request(r1.headers.get("location")!, { headers: { cookie: setCookie.match(new RegExp(`${RECEIPT_COOKIE}=[^;,]+`))![0] } });
+    expect(room.status).toBe(302);
+    expect(room.headers.get("location")).toMatch(/^\/c\/screen\//);
+    // the status link went by email, in the one email with the interview's link
+    const ack = outbox().find((m) => m.to === "maria.reyes@example.com" && /^Thank you for applying: your next step/.test(m.subject))!;
     expect(ack.text).toContain(`https://jobs.example.test/c/status/${mariaApp.statusToken}`);
     const before = { candidate: maria, app: mariaApp, docs: (await container.db.select().from(documents).where(eq(documents.candidateId, maria.id))).length, consentEvents: (await container.db.select().from(events).where(eq(events.type, "consent.granted"))).length, sent: outbox().length };
 
@@ -137,8 +136,18 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     expect(r2.status).toBe(302);
     expect(r2.headers.get("location")).toBe(r1.headers.get("location"));
     const second = await receiptOf(r2);
-    // the same page, word for word, apart from the case of the masked letter the person typed
-    expect(stable(second.html).replace("M***@", "m***@")).toBe(stable(first.html));
+    // the same waiting room a first application gets (Q14), naming no application: never a link on the page, since anyone
+    // can type anyone's address; it ends on "check your email"
+    expect(decodeEntities(second.html)).toContain("We're preparing your AI interview…");
+    expect(second.html).toContain('<input type="hidden" name="grant" value="v1.');
+    expect(second.html).toContain("M***@example.com");
+    // true for a repeat, whose reminder goes at most once a day
+    expect(decodeEntities(second.html)).toContain("If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.");
+    expect(second.html).toContain('href="/c/link-request"');
+    expect(second.html).not.toContain("/c/screen/");
+    // a hidden-field bot with the same address lands on the very same page
+    const sealed = (html: string) => stable(html).replace(/name="grant" value="[^"]*"/g, "");
+    expect(sealed(second.html)).toBe(sealed((await receiptOf(await applyTo({ id: roleId, eligibility }, { website: "https://spam.example", email: "MARIA.REYES@example.com" }))).html));
     for (const text of [r2.headers.get("location") ?? "", second.setCookie, second.html]) expect(text).not.toContain(mariaApp.statusToken);
 
     // nothing about Maria changed, and nothing new was created

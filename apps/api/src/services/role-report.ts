@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { ApplicationStage as ApplicationStageEnum, CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
 import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, isSource, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
 import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
@@ -134,7 +134,8 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const approvals = await tx
     .select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId, createdAt: approvalRequests.createdAt })
     .from(approvalRequests)
-    .where(and(eq(approvalRequests.companyId, companyId), inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), ...(only ? [eq(approvalRequests.applicationId, only)] : [])));
+    // An "Invite to a screening chat?" from before 20 Oct 2026 waits on nobody (Home leaves it out; the daily check retires it).
+    .where(and(eq(approvalRequests.companyId, companyId), inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), ne(approvalRequests.actionType, "application.invite_screen"), ...(only ? [eq(approvalRequests.applicationId, only)] : [])));
   // The team's recruiter requests; ITS's own job-board posting tasks (plan D3) are not requests and are left out.
   const escalations = await tx
     .select({ status: recruiterEscalations.status, createdAt: recruiterEscalations.createdAt, firstResponseAt: recruiterEscalations.firstResponseAt, slaDueAt: recruiterEscalations.slaDueAt, resolvedAt: recruiterEscalations.resolvedAt })

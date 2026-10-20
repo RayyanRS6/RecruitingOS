@@ -394,9 +394,9 @@ describe("company preferences, audit history, sessions, re-authentication and th
   describe("re-authentication before sensitive changes (A12)", () => {
     it("a rule change is refused once the session is older than thirty minutes, and accepted again after confirming with the provider", async () => {
       // fresh session: the rule change goes through
-      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: [] })).status).toBe(200);
+      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "approval", approverRoles: [] })).status).toBe(200);
       setClock(31 * 60_000);
-      const refused = await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] });
+      const refused = await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "auto_notify", approverRoles: [] });
       expect(refused.status).toBe(403);
       expect(await errorCode(refused)).toBe("reauth_required");
       const notice = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { notices: { privacy: { text: "We keep what you give us only as long as the law requires, and a person handles every request about it." } } } });
@@ -428,10 +428,10 @@ describe("company preferences, audit history, sessions, re-authentication and th
       const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.reauthenticated"), eq(auditRecords.companyId, companyId)));
       expect(audited).toHaveLength(1);
       // now the change goes through, for ten minutes
-      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] })).status).toBe(200);
+      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "auto_notify", approverRoles: [] })).status).toBe(200);
       expect((await json(owner, "PATCH", "/api/v1/companies/current", { settings: { notices: { privacy: { text: "We keep what you give us only as long as the law requires, and a person handles every request about it." } } } })).status).toBe(200);
       setClock(31 * 60_000 + 11 * 60_000);
-      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: [] })).status).toBe(403);
+      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "approval", approverRoles: [] })).status).toBe(403);
       // the sessions list shows when it was confirmed
       const list = (await (await json(owner, "GET", "/api/v1/auth/sessions")).json()) as Array<{ current: boolean; reauthenticatedAt: string | null }>;
       expect(list.find((s) => s.current)!.reauthenticatedAt).toBeTruthy();
@@ -449,7 +449,7 @@ describe("company preferences, audit history, sessions, re-authentication and th
       const done = await app.request(`${cb.pathname}?${cb.searchParams.toString()}`, { headers: { cookie: `${owner}; ${pkce}; ${marker}` } });
       expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup?reauth=mismatch`);
       expect((await container.db.select().from(sessions).where(eq(sessions.userId, ownerId)))[0].reauthenticatedAt).toBe(before);
-      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: [] })).status).toBe(403);
+      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "approval", approverRoles: [] })).status).toBe(403);
       // a plain sign-in with the abandoned marker still in the cookie jar opens a session as usual
       const plain = await app.request("/api/v1/auth/start/google");
       const plainPkce = plain.headers.get("set-cookie")!.split(";")[0];

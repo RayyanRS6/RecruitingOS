@@ -202,7 +202,7 @@ describe("the role report and the ITS controls", () => {
     expect(text(render(client(hm), createElement(Home)))).not.toContain("screening chats used");
   });
 
-  it("shows ITS who is running low, and how each company's people apply", () => {
+  it("shows ITS who is running low, and that every company's people apply the same way", () => {
     const qc = client({ ...itsRecruiter, user: { ...itsRecruiter.user, platformRole: "platform_admin" }, staffAccess: null });
     qc.setQueryData(["admin", "customers"], [{ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 3, aiCostUsd: 0, lastActivityAt: daysAgo(0), escalations: 0, createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, jobBoardsConfirmedAt: null, applyFlowDefault: "form_then_screen", screeningConversations: { used: 122, limit: 150 } }]);
     qc.setQueryData(["admin", "alerts"], [{ id: "al1", kind: "billing.screens_warning", severity: "info", title: "", body: "", status: "open", companyId: "co1", target: null, details: { used: 122, limit: 150 }, createdAt: daysAgo(1) }]);
@@ -214,7 +214,7 @@ describe("the role report and the ITS controls", () => {
     expect(words).toContain("Bright Dental : 80% of screening chats used (122 of 150), since");
     // and on the drawer's Overview, beside its plan and this month's chats
     expect(words).toContain("Starter · Active Change plan 122 of 150 screening chats this month 80% of screening chats used (122 of 150)");
-    // how the company's people apply, with the way to change it on its own tab
-    expect(words).toContain("How people apply Form now, conversation later Change");
+    // how the company's people apply: the same for everyone since 20 Oct 2026 (R20-12), whatever the old switch says
+    expect(words).toContain("How people apply The same for everyone: the form, then the AI interview");
   });
 });

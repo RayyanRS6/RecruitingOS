@@ -201,7 +201,7 @@ export const ApplicationAction = z.object({
   action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway", "set_mark", "clear_mark", "send_decision", "told_in_person", "cancel_screen", "undo_decision"]),
   reason: RejectReason.optional(),
   note: z.string().max(2000).optional(),
-  /** invite_screen: preferred channel; defaults to SMS with consent, else web chat by email. */
+  /** invite_screen: "sms" when a person chooses texts (with the candidate's consent); otherwise the AI interview every applicant gets, on the web, by email. */
   channel: z.enum(["web", "sms"]).optional(),
   /** invite_screen: "unknowns" opens the screen with the résumé assessment's open questions before the packet's own. */
   focus: z.enum(["unknowns"]).optional(),

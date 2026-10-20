@@ -8,8 +8,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { applyFormProblem, statusDay } from "./pages/candidate";
 import { consentOf, createApplication, emailStatusLinks, insertCandidateOnce } from "./services/applications";
-import { findConversation } from "./services/apply-conversation";
-import { signInAdmin, statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
+import { followApply, signInAdmin, statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * Wave S5, slice C3 (candidates and applications), known-bugs rows 16, 17, 48, 68, 71, 72, 73, 74, 78, 80 and 120: what a
@@ -70,32 +69,40 @@ describe("candidates and applications (Wave S5, C3)", () => {
   });
   afterAll(async () => { await container.close(); });
 
-  it("row 17: a first application to another role from a known address gets the neutral, detached conversation; nothing joins the real record unconfirmed", async () => {
+  it("row 17 (20 Oct 2026, R20-12, Q14): a first application to another role from a known address gets the same waiting room, naming no application; the AI interview's link goes to the address on file, never on the page", async () => {
     const first = await applyForm(roleA, { first: "Rosa", email: "rosa.lind@gmail.com" });
     expect(first.status).toBe(302);
     await container.drain();
     const rosa = (await container.db.select().from(candidates).where(and(eq(candidates.companyId, companyId), eq(candidates.email, "rosa.lind@gmail.com"))))[0];
     const stranger = await applyForm(roleB, { first: "Mallory", email: "RosaLind+x@gmail.com" });
     expect(stranger.status).toBe(302);
-    const to = stranger.headers.get("location")!;
-    expect(to).toMatch(/^\/c\/screen\//);
-    const ref = (await findConversation(container.db, to.split("/").at(-1)!))!;
-    expect(ref.kind).toBe("detached");
-    const page = await (await app.request(to, { headers: { cookie: stranger.headers.get("set-cookie")?.split(";")[0] ?? "" } })).text();
-    expect(page).toContain("Mallory");
-    expect(page).not.toContain("Rosa");
-    // the new application is Rosa's (the form path's rule), but no conversation of hers was started from this visit
+    await container.drain();
+    // the waiting room a new address gets, but it never opens an interview for a known address: no link and nobody's name
+    const landed = await followApply(app, stranger);
+    expect(landed.token).toBeNull();
+    expect(landed.html).toContain("preparing your AI interview");
+    expect(landed.html).not.toContain("/c/screen/");
+    expect(landed.html).not.toContain("Rosa");
+    const grant = /name="grant" value="([^"]+)"/.exec(landed.html)?.[1] ?? "";
+    expect(grant).toBeTruthy();
+    for (const g of [grant, ""]) {
+      const start = await app.request(`/careers/${slug}/jobs/${roleB}/applied/start`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie: landed.cookie }, body: new URLSearchParams({ grant: g }) });
+      expect(start.status).toBe(200);
+      expect(await start.text()).not.toContain("/c/screen/");
+    }
+    // the new application is Rosa's (the form path's rule); nothing detached was opened for the visitor
     const [newApp] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleB), eq(applications.candidateId, rosa.id)));
     expect(newApp).toBeTruthy();
-    expect(await container.db.select().from(screens).where(and(eq(screens.applicationId, newApp.id), eq(screens.invitedVia, "apply")))).toHaveLength(0);
-    expect((await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, ref.id)))[0]).toMatchObject({ applicationId: newApp.id, firstName: "Mallory" });
+    expect(await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, newApp.id))).toHaveLength(0);
     // the person on file keeps their own name and details
     expect((await container.db.select().from(candidates).where(eq(candidates.id, rosa.id)))[0].firstName).toBe("Rosa");
-    // the acknowledgment to the address on file says it was sent using their address (Wave S5 review); her own first one did not
-    await container.drain();
-    const acks = mail().filter((m) => m.to === "rosa.lind@gmail.com" && /^We received your application/.test(m.subject));
+    // the one email goes to the address on file, with the link, and says it was sent using their address (Wave S5 review); her own first one did not
+    const [interview] = await container.db.select().from(screens).where(eq(screens.applicationId, newApp.id));
+    expect(interview).toMatchObject({ invitedVia: "with_application" });
+    const acks = mail().filter((m) => m.to === "rosa.lind@gmail.com" && /^Thank you for applying: your next step/.test(m.subject));
     expect(acks.length).toBeGreaterThanOrEqual(2);
     expect(acks[0]!.text).not.toContain("sent using your email address");
+    expect(acks.at(-1)!.text).toContain(`/c/screen/${interview.token}`);
     expect(acks.at(-1)!.text).toContain("This application was sent using your email address. If you did not send it, reply to this email and a person will look into it.");
   });
 
@@ -157,8 +164,10 @@ describe("candidates and applications (Wave S5, C3)", () => {
 
   it("row 74: withdrawing in the screening chat is recorded as a request and confirmed by email, like the status page", async () => {
     const res = await applyForm(roleA, { first: "Wren", email: "wren.lind@example.com" });
-    const to = res.headers.get("location")!;
-    expect(to).toMatch(/^\/c\/screen\//);
+    await container.drain();
+    const { token: interview } = await followApply(app, res);
+    expect(interview).toBeTruthy();
+    const to = `/c/screen/${interview}`;
     expect((await form(`${to}/start`, {})).status).toBe(302);
     expect((await form(to, { message: "WITHDRAW" })).status).toBe(302);
     expect((await form(`${to}/withdraw`, { confirm: "yes" })).status).toBe(302);
@@ -293,7 +302,9 @@ describe("candidates and applications (Wave S5, C3)", () => {
     const junoRun = await runOf(juno.application.id);
     expect(await aiRunsOf(junoRun.id)).toEqual([]);
     expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, juno.application.id))).toEqual([]);
-    expect((await container.db.select().from(applications).where(eq(applications.id, juno.application.id)))[0].stage).toBe("triaged");
+    // (her one email was made with her AI interview in the intake's first step, R20-5: the interview stays where it was)
+    expect((await container.db.select().from(applications).where(eq(applications.id, juno.application.id)))[0].stage).toBe("screen_invited");
+    expect((await container.db.select().from(screens).where(eq(screens.applicationId, juno.application.id)))[0]).toMatchObject({ invitedVia: "with_application" });
     expect((await container.db.select().from(notifications).where(eq(notifications.companyId, companyId))).some((n) => n.title === "Juno Lind's application was not read by AI")).toBe(true);
 
     // the email went: the reading follows; held for the ITS company check, the run waits at the notice and reads nothing

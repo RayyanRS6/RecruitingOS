@@ -296,7 +296,7 @@ describe("candidate pages: the look, page by page", () => {
     // "What to expect" at a glance: at most four lines, every step in full one click away
     const glance = html.slice(html.indexOf("<h2>What to expect</h2>"), html.indexOf('<details class="more"><summary>More about each step</summary>'));
     expect(glance.match(/<li>/g)?.length).toBeLessThanOrEqual(4);
-    expect(html).toMatch(/<details class="more"><summary>More about each step<\/summary><ol class="steps"><li>Apply in about \d+ minutes/);
+    expect(html).toMatch(/<details class="more"><summary>More about each step<\/summary><ol class="steps"><li>Send a short form, about \d+ minutes/);
     // the stylesheet holds the panel beside the description on a wide screen and at the bottom of a phone's screen
     expect(CSS).toMatch(/\.apply-panel \{ position: sticky; top: 24px;/);
     expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.apply-panel \{ top: auto; bottom: 12px; \}/);
@@ -338,14 +338,14 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Send request</button>');
     // one name for the chat on this page: the button says what the progress line says
-    expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) the screening chat<\/a>/);
-    expect(html).toMatch(/<span>Status<\/span><strong>Screening chat<\/strong>/);
+    expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) your AI interview<\/a>/);
+    expect(html).toMatch(/<span>Status<\/span><strong>AI interview<\/strong>/);
     // the page leads with the progress line (Wave S2, K4), then the line and the one thing to do now; withdrawing and the
     // privacy requests are one click away, closed until opened (founder brief, 14 October 2026)
     const main = html.slice(html.indexOf("<main>"));
     expect(main.slice(main.indexOf("</h1>") + "</h1>".length).startsWith('<ol class="track" aria-label="Where your application is">')).toBe(true);
-    // a circle per step joined by a line: Applied is behind her, ticked and said to be done; the screening chat is where she is
-    expect(main).toMatch(/<ol class="track" aria-label="Where your application is"><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Applied<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>Screening chat<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li>/);
+    // a circle per step joined by a line: Applied is behind her, ticked and said to be done; the AI interview is where she is
+    expect(main).toMatch(/<ol class="track" aria-label="Where your application is"><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Applied<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>AI interview<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li>/);
     expect(main.indexOf('<ol class="track"')).toBeLessThan(main.indexOf("<h2>What happens next</h2>"));
     expect(main.indexOf("<h2>What happens next</h2>")).toBeLessThan(main.indexOf('<a class="btn" href="/c/screen/'));
     expect(main.indexOf('<a class="btn" href="/c/screen/')).toBeLessThan(main.indexOf('<div class="card status">'));
