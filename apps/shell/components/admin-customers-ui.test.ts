@@ -176,8 +176,8 @@ describe("the customers list", () => {
     expect(all).toContain('aria-pressed="false">Quiet <span class="count">1</span></button>');
     // the low company is flagged on its row; the list of who runs low waits under its pill
     expect(text(all)).toContain("Running low");
-    expect(all).toContain('title="80% of screening chats used (122 of 150)"');
-    expect(text(all)).not.toContain("Screening chats running low");
+    expect(all).toContain('title="80% of AI interviews used (122 of 150)"');
+    expect(text(all)).not.toContain("AI interviews running low");
 
     const waiting = from(render(qc(), Customers("show=waiting")), '<section class="table-wrap"');
     expect(waiting).toContain("Cara Dental");
@@ -185,8 +185,8 @@ describe("the customers list", () => {
     expect(waiting).not.toContain("Avon Dental");
 
     const low = render(qc(), Customers("show=low"));
-    expect(text(low)).toContain("Screening chats running low");
-    expect(text(low)).toContain("Bright Dental : 80% of screening chats used (122 of 150), since");
+    expect(text(low)).toContain("AI interviews running low");
+    expect(text(low)).toContain("Bright Dental : 80% of AI interviews used (122 of 150), since");
     expect(text(low)).toContain("Talk with each about topping up. Nothing is refused:");
     expect(from(low, '<section class="table-wrap"')).not.toContain("Avon Dental");
 
@@ -264,10 +264,11 @@ describe("the customer drawer", () => {
     expect(words).toContain("Past its recruiter requests: talk about billing");
     // the plan, its screening chats with the reset date, the running-low chip, and the way to change it
     expect(words).toContain("Starter · Active Change plan");
-    expect(words).toContain("122 of 150 screening chats this month, resets October 30");
-    expect(words).toContain("80% of screening chats used (122 of 150)");
-    expect(words).toContain("How people apply Form now, conversation later Change");
-    expect(html).toContain('aria-label="Change how people apply"');
+    expect(words).toContain("122 of 150 AI interviews this month, resets October 30");
+    expect(words).toContain("80% of AI interviews used (122 of 150)");
+    // the same for every company since 20 Oct 2026 (R20-12): a fact, with nothing to change
+    expect(words).toContain("How people apply The same for everyone: the form, then the AI interview");
+    expect(html).not.toContain('aria-label="Change how people apply"');
     expect(words).toContain("2 jobs · 3 applicants");
     expect(words).toContain("Job boards Not confirmed yet");
     expect(words).toContain("Messages held None");
@@ -291,10 +292,11 @@ describe("the customer drawer", () => {
     const plan = render(qc, Customers("open=co1&tab=plan"));
     expect(text(plan)).toContain("Pick a plan");
     expect(plan).toContain('<select id="plan-pick" class="select">');
+    // the ITS switch is gone (R20-12): the one way everyone applies, said once
     const apply = render(qc, Customers("open=co1&tab=apply"));
-    expect(text(apply)).toContain("The company's default");
-    expect(text(apply)).toContain("Each role");
-    expect(text(apply)).toContain("Dental Hygienist");
+    expect(text(apply)).toContain("Every applicant: a short form, then the AI interview once their résumé is read.");
+    expect(text(apply)).not.toContain("The company's default");
+    expect(text(apply)).not.toContain("Each role");
   });
 
   it("gives the administrator's view of a customer's report the same figures on its Report tab, and right-aligns the roles' counts", () => {
@@ -365,10 +367,10 @@ describe("the hiring outcomes", () => {
 });
 
 describe("the plan and the recruiter requests on the console", () => {
-  it("says what a plan includes and when the screening chats start again", () => {
-    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, recruiter_asks: 10, seats: null })).toBe("3 active jobs · 300 screening chats a month · 10 recruiter requests a month · unlimited seats");
-    expect(screeningLine({ used: 25, limit: 25, resetsAt: "2026-10-30T12:00:00.000Z" })).toBe("25 of 25 screening chats this month, resets October 30");
-    expect(screeningLine({ used: 4, limit: null })).toBe("4 screening chats this month");
+  it("says what a plan includes and when the AI interviews start again", () => {
+    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, recruiter_asks: 10, seats: null })).toBe("3 active jobs · 300 AI interviews a month · 10 recruiter requests a month · unlimited seats");
+    expect(screeningLine({ used: 25, limit: 25, resetsAt: "2026-10-30T12:00:00.000Z" })).toBe("25 of 25 AI interviews this month, resets October 30");
+    expect(screeningLine({ used: 4, limit: null })).toBe("4 AI interviews this month");
     expect(planChangedToast("Bright Dental", "Design Partner")).toEqual({ title: "Bright Dental is on Design Partner now.", detail: "The new limits apply at once. This month's usage stays; the reset date does not move." });
   });
 
@@ -409,7 +411,7 @@ describe("the Trial plan on the console (founder decision L-02 B)", () => {
   it("the Plan tab offers Extend the trial only for a Trial customer whose 30 days have started", () => {
     const html = render(qc(), Customers("open=co7&tab=plan"));
     const words = text(html);
-    expect(words).toContain("Extend the trial The trial ended on October 15: new applications, new jobs and new screening chats are paused. An extension counts from the later of the end and today.");
+    expect(words).toContain("Extend the trial The trial ended on October 15: new applications, new jobs and new AI interviews are paused. An extension counts from the later of the end and today.");
     expect(html).toContain('<input id="trial-days" class="input" type="number" inputMode="numeric" min="1" max="90" step="1" value="14"/>');
     expect(html).toContain('<label for="trial-why">Why (required, kept with the change)</label>');
     // no reason yet: nothing to confirm

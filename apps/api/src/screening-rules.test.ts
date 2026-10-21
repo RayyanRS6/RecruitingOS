@@ -61,7 +61,7 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     cookie = consume.headers.get("set-cookie")!.split(";")[0];
     const co = (await (await json("POST", "/api/v1/companies", { name: "Rules Dental Group", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
-    // A pilot company: the conversation is offered in the same visit as the form (plan E1).
+    // The AI interview opens right after the form for every company since 20 Oct 2026 (R20-12); the switch is ignored.
     await useOneVisitApplyFlow(container, co.id);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
     await json("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Must-haves: active CA RDH license, perio experience. Deal-breakers: can't work Saturdays." });
@@ -79,9 +79,16 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
 
   it("Wave S7, the chat's follow-ups: a yes-or-no question takes its answer; an open one gets one push for specifics, then the chat moves on; the transcript shows all of it", async () => {
     const { application, token, screenId } = await apply({ first: "Maria", last: "Reyes", email: "maria.reyes@rules.test" });
+    // since 20 Oct 2026 the résumé is read before the chat starts, so what it could not confirm comes first ("About your
+    // experience"): answered here in plain words, by the fake's own handler
+    for (let i = 0; i < 8 && (await screenOf(application.id)).progress.chat?.section === "experience"; i++) {
+      expect((await form(`/c/screen/${token}`, { message: "Yes: five years of periodontal charting and perio maintenance at Smile Bright Dental, and I can work any day of the week." })).status).toBe(302);
+    }
     const opened = await screenOf(application.id);
     expect(opened.progress.currentQuestionKey).toBe(questions[0].key);
     expect(opened.progress.chat?.section).toBe("required");
+    const shown = opened.transcript.length;
+    const runsBefore = (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === screenId).length;
     // The model keeps asking for more every time. The fake's own screen handler would not, so the turns are scripted; each still has to satisfy the ScreenTurn schema.
     const say = async (message: string) => {
       container.fake!.scriptNext("screen.turn", followUp);
@@ -109,14 +116,15 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     // a second push is not asked: the chat moves on, with the candidate's own words as the answer
     scr = await say("Yes.");
     expect(scr.progress.currentQuestionKey).toBe(questions[2].key);
-    const assistant = scr.transcript.filter((t) => t.role === "assistant");
-    expect(assistant).toHaveLength(4); // the opening, the next question, one push, then the question after
-    expect(assistant[3]).toMatchObject({ content: questions[2].question, questionKey: questions[2].key });
-    expect(scr.transcript.filter((t) => t.role === "candidate").map((t) => t.content)).toEqual(["Yes", "Yes", "Yes."]);
+    const since = scr.transcript.slice(shown);
+    const assistant = since.filter((t) => t.role === "assistant");
+    expect(assistant).toHaveLength(3); // the next question, one push, then the question after
+    expect(assistant[2]).toMatchObject({ content: questions[2].question, questionKey: questions[2].key });
+    expect(since.filter((t) => t.role === "candidate").map((t) => t.content)).toEqual(["Yes", "Yes", "Yes."]);
     expect(scr.answers[questions[1].key]).toBe("Yes Yes.");
-    expect(scr.progress.askedKeys).toEqual([questions[0].key, questions[1].key, questions[2].key]);
+    expect(scr.progress.askedKeys.slice(-3)).toEqual([questions[0].key, questions[1].key, questions[2].key]);
     // every turn went through the model runner and was recorded
-    expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === screenId)).toHaveLength(3);
+    expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === screenId)).toHaveLength(runsBefore + 3);
     // the page counts both as done
     const html = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
     expect(html).toContain(`<p class="journey-count">2 of ${questions.length} required · Required questions</p>`);

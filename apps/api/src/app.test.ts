@@ -191,7 +191,7 @@ describe("Slice 1 API", () => {
     expect(html).toMatch(/\$45–\$55 an hour/);
   });
 
-  it("accepts a web application, acknowledges within the workflow, extracts the resume, passes eligibility, is assessed, and is invited to a screen under policy", async () => {
+  it("accepts a web application, extracts the resume, passes eligibility, is assessed, and gets the AI interview on the page and in one email (20 Oct 2026)", async () => {
     const form = new FormData();
     form.set("firstName", "Maria");
     form.set("lastName", "Reyes");
@@ -206,17 +206,33 @@ describe("Slice 1 API", () => {
     form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
-    // the receipt, never the status page: the link travels only by email (Wave 0 item 0.1)
+    // the waiting room, never the status page: the status link travels only by email (Wave 0 item 0.1)
     const location = r.headers.get("location")!;
     expect(location).toBe(`/careers/${companySlug}/jobs/${roleId}/applied`);
-    const receipt = await (await app.request(location, { headers: { cookie: r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } })).text();
-    expect(receipt).toContain("Check your email.");
-    expect(receipt).toContain("m***@example.com");
+    // 20 Oct 2026 (R20-12): the résumé is read and the AI interview exists (the inline worker ran); the page still says
+    // "preparing" for its first 40 to 90 seconds, as every waiting room does (Q14, 21 Oct), and then opens it
+    const receiptCookie = r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0];
+    expect((await app.request(location, { headers: { cookie: receiptCookie } })).status).toBe(200);
+    const engine = container.engine as unknown as { now: () => Date };
+    const real = engine.now;
+    const past = real().getTime() + 91_000;
+    engine.now = () => new Date(past);
+    let waiting: Response;
+    try {
+      waiting = await app.request(location, { headers: { cookie: receiptCookie } });
+    } finally {
+      engine.now = real;
+    }
+    expect(waiting.status).toBe(302);
+    expect(waiting.headers.get("location")).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
+    const intro = await (await app.request(waiting.headers.get("location")!, { headers: { cookie: waiting.headers.get("set-cookie")!.match(/ros_applied_to=[^;,]+/)![0] } })).text();
+    expect(intro).toContain("Your application is sent.");
+    expect(intro).toContain("m***@example.com");
 
     const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     expect(apps).toHaveLength(1);
     const a = apps[0];
-    // Slice 2: eligible → assessed (triaged) → policy application.invite_screen = auto_notify → invited by text (consented) and email
+    // 20 Oct 2026 (R20-4): eligible → read → the AI interview, by itself, on the web only (never by text, R20-6)
     expect(a.stage).toBe("screen_invited");
     expect(a.eligibility?.passed).toBe(true);
     const [asmt] = await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id));
@@ -226,16 +242,18 @@ describe("Slice 1 API", () => {
     for (const s of asmt.result.strengths) if (s.evidence.quote) expect(s.evidence.source).toBe("resume");
     const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
     expect(scr.status).toBe("invited");
-    expect(scr.channel).toBe("sms");
-    const sms = (container.integrations.sms as FakeSmsAdapter).sent;
-    expect(sms.find((m) => m.to === "+19495550100")?.body).toMatch(/AI assistant|AI-assisted/);
-    expect(sms.find((m) => m.to === "+19495550100")?.body).toMatch(/HUMAN/);
+    expect(scr.channel).toBe("web");
+    expect(scr.invitedVia).toBe("with_application");
+    expect(waiting.headers.get("location")).toBe(`/c/screen/${scr.token}`);
+    expect((container.integrations.sms as FakeSmsAdapter).sent.filter((m) => m.to === "+19495550100")).toHaveLength(0);
     expect(a.extraction?.licenses.map((l) => l.name)).toContain("RDH");
     expect(a.extraction?.positions.length).toBeGreaterThanOrEqual(1);
     const outbox = (container.integrations.email as FakeEmailAdapter).sent;
-    const ack = outbox.find((m) => m.to === "maria.reyes@example.com" && /received your application/.test(m.subject));
+    // one email: thank you, the AI interview's link and how it works
+    expect(outbox.filter((m) => m.to === "maria.reyes@example.com")).toHaveLength(1);
+    const ack = outbox.find((m) => m.to === "maria.reyes@example.com" && /^Thank you for applying: your next step for /.test(m.subject));
     expect(ack).toBeTruthy();
-    expect(outbox.find((m) => m.to === "maria.reyes@example.com" && /screening conversation/.test(m.subject))?.text).toMatch(/\/c\/screen\//);
+    expect(ack!.text).toContain(`/c/screen/${scr.token}`);
     expect(ack!.text).toMatch(/AI recruiting assistant/);
     expect(ack!.text).toMatch(/HUMAN/);
     const comms = await container.db.select().from(communications).where(eq(communications.applicationId, a.id));
@@ -245,7 +263,7 @@ describe("Slice 1 API", () => {
     expect(runs).toHaveLength(1);
     // the application is read TRIAGE_READINGS times side by side, and the middle answer kept (fairness, 14 Oct 2026)
     expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "triage.assess"))).toHaveLength(TRIAGE_READINGS);
-    expect(receipt).not.toContain(a.statusToken);
+    expect(`${waiting.headers.get("location")} ${intro}`).not.toContain(a.statusToken);
     expect(ack!.text).toContain(`/c/status/${a.statusToken}`);
     const status = await app.request(`/c/status/${a.statusToken}`);
     const statusHtml = await status.text();
@@ -273,22 +291,35 @@ describe("Slice 1 API", () => {
     expect(list).toHaveLength(2);
     const jon = list.find((x) => x.candidate.name.startsWith("Jon"))!;
     const ana = list.find((x) => x.candidate.name.startsWith("Ana"))!;
-    // the owner overrides one before the window ends
+    // R20-10: held on a must-have "No", both got the neutral thank-you, without the AI interview's link
+    for (const to of ["jon@example.com", "ana@example.com"]) {
+      const mine = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === to);
+      expect(mine.map((m) => m.subject)).toEqual([expect.stringMatching(/^Thank you for applying: Registered Dental Hygienist at /)]);
+      expect(mine[0].text).not.toContain("/c/screen/");
+    }
+    // the owner keeps one in before the window ends: "Keep them in" sends the link by itself, after the reading, with
+    // nothing more to approve (known bug 30 rule replaced on 20 Oct 2026)
     const ov = await json("POST", `/api/v1/applications/${jon.id}/actions`, { action: "override_eligibility", note: "She is sitting the exam next week." });
     expect(ov.status).toBe(200);
-    // overridden eligibility: assessed at once, not when the review timer is due, but the owner reviews (no automatic
-    // screen when a rule was overridden)
     await container.drain();
-    expect((await container.db.select().from(applications).where(eq(applications.id, jon.id)))[0].stage).toBe("triaged");
+    expect((await container.db.select().from(applications).where(eq(applications.id, jon.id)))[0].stage).toBe("screen_invited");
+    const [jonScreen] = await container.db.select().from(screens).where(eq(screens.applicationId, jon.id));
+    expect(jonScreen).toMatchObject({ invitedVia: "with_application", channel: "web", status: "invited" });
+    const jonMail = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "jon@example.com");
+    expect(jonMail).toHaveLength(2);
+    expect(jonMail[1].subject).toMatch(/^Your next step: a short AI interview for /);
+    expect(jonMail[1].text).toContain(`/c/screen/${jonScreen.token}`);
     // time passes: advance the engine clock by 25 hours and drain the timers
     setClock(25 * 3600_000);
     await container.drain();
     const after = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    expect(after.find((x) => x.id === jon.id)!.stage).toBe("triaged");
+    expect(after.find((x) => x.id === jon.id)!.stage).toBe("screen_invited");
     // Founder decision (correction 6): the timer is operational, never adverse action. Ana is still held and reminded; nothing was sent to her.
     expect(after.find((x) => x.id === ana.id)!.stage).toBe("ineligible");
     let outbox = (container.integrations.email as FakeEmailAdapter).sent;
     expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
+    expect(outbox.filter((m) => m.to === "ana@example.com")).toHaveLength(1);
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, ana.id))).toHaveLength(0);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "application.ineligible_review_due" && /Ana/.test(n.title))).toBe(true);
     // after three days without a decision an ITS recruiter is brought in; still nothing is sent to Ana
@@ -350,10 +381,11 @@ describe("Slice 1 API", () => {
     form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
-    // exactly what a first application gets: the receipt, never a status link
+    // exactly what a first application gets: the waiting room (Q14; it opens a detached interview, never hers), never a status link
     expect(r.headers.get("location")).toBe(`/careers/${companySlug}/jobs/${roleId}/applied`);
     const receipt = await (await app.request(r.headers.get("location")!, { headers: { cookie: r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } })).text();
-    expect(receipt).toContain("Check your email.");
+    expect(receipt).toContain("preparing your AI interview");
+    expect(receipt).not.toContain("/c/screen/");
     expect(receipt).toContain("M***@example.com");
     expect(`${r.headers.get("location")} ${r.headers.get("set-cookie")} ${receipt}`).not.toContain(mariaApp.statusToken);
     const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
@@ -408,7 +440,7 @@ describe("Slice 1 API", () => {
     expect(sent.status).toBe("sent");
     expect(sent.providerMessageId).toBeTruthy();
     const outbox = (container.integrations.email as FakeEmailAdapter).sent;
-    expect(outbox.filter((m) => m.to === "priya@example.com" && /received your application/.test(m.subject))).toHaveLength(1);
+    expect(outbox.filter((m) => m.to === "priya@example.com" && /^Thank you for applying: your next step/.test(m.subject))).toHaveLength(1);
   });
 
   it("escalates to a recruiter with full context and shows it in the brief", async () => {
@@ -428,7 +460,8 @@ describe("Slice 1 API", () => {
   });
 
   it("rejecting on judgment requires a human with a reason, and is audited", async () => {
-    const apps = (await (await json("GET", `/api/v1/roles/${roleId}/applications?stage=triaged`)).json()) as Array<{ id: string }>;
+    // everyone not held is invited to the AI interview by itself now (20 Oct 2026): a person declines from there
+    const apps = (await (await json("GET", `/api/v1/roles/${roleId}/applications?stage=screen_invited`)).json()) as Array<{ id: string }>;
     expect(apps.length).toBeGreaterThan(0);
     const bad = await json("POST", `/api/v1/applications/${apps[0].id}/actions`, { action: "reject" });
     expect(bad.status).toBe(400);

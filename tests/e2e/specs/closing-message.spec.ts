@@ -11,6 +11,8 @@ const run = Date.now().toString(36);
 
 test.describe("closing a role", () => {
   skipWithoutFakeSignIn();
+  // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
+  test.slow();
   test("the close card lists who is still in process, then one closing message tells them all with a single Send", async ({ page, baseURL }) => {
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@closing.test`, name: "Dana Whitfield", provider: "google" });

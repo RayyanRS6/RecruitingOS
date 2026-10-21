@@ -1,5 +1,6 @@
 import { IMPORTANCE_LABEL, MISSING_MUST_HAVE_CAP, type BoardPlacement, type Importance, type MatchCriterion, type MatchScore, type MustHaveSummary, type OwnerStage, type ReadingVersion } from "@ros/contracts";
 import type { ApplicationDetail } from "../../api/client";
+import { scoreBasis } from "../../talent-list";
 
 /**
  * The match score on the candidate panel (founder decision B2; docs/spec/22 section 5), kept free of React so it can be
@@ -108,16 +109,14 @@ export function matchCardState(a: ApplicationDetail): MatchCardState {
   return { kind: "scored", score: m.score, m };
 }
 
-const BASED_ON: Record<MatchScore["basedOn"], string> = {
-  resume: "from the AI review of the résumé",
-  screen: "from the screening chat",
-  resume_and_screen: "from the AI review of the résumé and the screening chat",
-};
-
-/** "Based on 5 of 7 requirements, from the résumé reading and the screening conversation." */
+/**
+ * "Based on 5 of 7 requirements. From the résumé and the AI interview." The coverage, then what the score rests on (its
+ * label, R20-9: "Résumé only: AI interview not done yet" until the AI interview is in it; `scoreBasis`).
+ */
 export function coverageLine(m: MatchScore): string {
   if (!m.coverage.known) return m.coverage.words;
-  return `${m.coverage.words}, ${BASED_ON[m.basedOn]}.`;
+  const basis = scoreBasis(m);
+  return basis ? `${m.coverage.words}. ${basis}.` : `${m.coverage.words}.`;
 }
 
 const CONFIDENCE_WORD: Record<string, string> = { high: "High", medium: "Medium", low: "Low" };
@@ -138,7 +137,7 @@ export function confidenceChip(c: MatchScore["confidence"]): { label: string; to
 /** One bar of the breakdown, in the panel's words. */
 export type MatchBar = { key: string; label: string; tag: string; mustHave: boolean; pctMet: number; pointsLost: number; finding: string; source: string; quote: string | null };
 
-const SOURCE_WORDS: Record<MatchCriterion["source"], string> = { resume: "from the AI review of the résumé", screen: "from the screening chat" };
+const SOURCE_WORDS: Record<MatchCriterion["source"], string> = { resume: "from the AI review of the résumé", screen: "from the AI interview" };
 
 /** The tag beside a requirement: "Must-have", or how much a skill counts (Essential, Important, Helpful). */
 export function criterionTag(c: { mustHave: boolean; importance: Importance | null }): string {
@@ -185,7 +184,7 @@ export function leftOut(m: MatchScore): { heading: string; items: Array<{ key: s
   return {
     heading: n === 1 ? "1 requirement not known yet" : `${n} requirements not known yet`,
     items: m.unknown.map((u) => ({ key: u.key, label: u.label, tag: criterionTag(u) })),
-    note: `Left out of the score, never counted against them. Ask about ${n === 1 ? "it" : "them"} in the screening chat or a call.`,
+    note: `Left out of the score, never counted against them. Ask about ${n === 1 ? "it" : "them"} in the AI interview or a call.`,
   };
 }
 

@@ -135,12 +135,12 @@ describe("the score a candidate sees", () => {
       { key: "infection", label: "ANOTHER PRIVATE SKILL", mustHave: false, importance: "helpful", weightPct: 15, pctMet: 100, pointsLost: 0, finding: "Shown", source: "resume", quote: "y", unquoted: false },
     ],
     unknown: [{ key: "dentrix", label: "Dentrix", mustHave: true, importance: null }, { key: "teamwork", label: "PRIVATE UNKNOWN", mustHave: false, importance: "important" }],
-    fullMarks: 2, missingMustHave: [], capped: false, confidence: "medium", basedOn: "resume_and_screen", packetVersion: 1,
+    fullMarks: 2, missingMustHave: [], capped: false, confidence: "medium", basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview", packetVersion: 1,
   };
 
   it("names only the job page's must-haves, in its order; folds every other requirement into one line; lists the must-haves not shown yet", () => {
     const view = candidateScoreView(score, packet)!;
-    expect(view).toMatchObject({ score: 72, band: "high", bandLabel: "High", coverage: "Based on 4 of 5 requirements", capped: false, notYetShown: ["Dentrix"] });
+    expect(view).toMatchObject({ score: 72, band: "high", bandLabel: "High", coverage: "Based on 4 of 5 requirements", basis: "From your résumé and your AI interview", capped: false, notYetShown: ["Dentrix"] });
     expect(view.rows).toEqual([
       { key: "licence", label: "An active CA RDH license", pctMet: 100, tone: "strong", words: "Shown" },
       { key: "perio", label: "Periodontal charting", pctMet: 50, tone: "partial", words: "Partly shown" },
@@ -155,6 +155,14 @@ describe("the score a candidate sees", () => {
     expect(candidateScoreView({ ...score, score: null, band: null, bandLabel: null }, packet)).toBeNull();
     expect(candidateScoreView({ ...score, breakdown: score.breakdown.filter((c) => c.mustHave) }, packet)?.other).toBeNull();
     expect(candidateScoreView({ ...score, breakdown: [{ ...score.breakdown[0], pctMet: 0, finding: "Not met" }] }, packet)?.rows[0].tone).toBe("short");
+  });
+
+  it("says whether their AI interview is in the number, in their words (R20-9); the number is the same either way", () => {
+    for (const interview of ["being_scored", "not_done_yet", "not_done", "none"] as const) {
+      const view = candidateScoreView({ ...score, interview }, packet)!;
+      expect(view.basis, interview).toBe("From your résumé only");
+      expect(view.score).toBe(72);
+    }
   });
 
   it("shows what the number counted for a partly shown requirement, so the bars and the number agree (review of Wave S7)", () => {

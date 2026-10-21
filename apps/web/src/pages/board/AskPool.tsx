@@ -6,6 +6,7 @@ import { Avatar, Button, Drawer, ErrorState, Icon, Skeleton } from "@ros/ui";
 import { api, type BoardCard, type BoardView, type PoolAnswer, type PoolQuestion } from "../../api/client";
 import { CompareTable } from "../compare/ComparePanel";
 import type { CompareView } from "../compare/compare-view";
+import { resumeOnlyChip } from "../../talent-list";
 import { ASK_INTRO, ASK_SOON, ASK_TITLE, COMPARE_MAX, answerPath, boardOrder, lookedAtLine, sourceWords, togglePick } from "./board-model";
 
 /**
@@ -77,6 +78,12 @@ export function AskPool(props: { roleId: string; board: BoardView; onClose: () =
   );
 }
 
+/** " · Résumé only" after a person's score whose AI interview is not in it (R20-9); nothing once it is, or on an older answer. */
+function personScoreNote(p: PoolAnswer["people"][number]) {
+  const chip = resumeOnlyChip(p);
+  return chip ? <span className="muted"> · {chip.label}</span> : null;
+}
+
 /** One answer: what was asked, the answer, the people (each opens their panel) with why and the quotes, and what was read. */
 export function AnswerView(props: { answer: PoolAnswer; onOpen: (applicationId: string) => void; onShow: (applicationIds: string[], label: string) => void; onCompareAgain: (() => void) | null }) {
   const { answer } = props;
@@ -93,7 +100,8 @@ export function AnswerView(props: { answer: PoolAnswer; onOpen: (applicationId: 
               <button type="button" className="person-chip" onClick={() => props.onOpen(p.applicationId)}>
                 <Avatar name={p.name} size="sm" />
                 <span>{p.name}</span>
-                {p.score !== null ? <span className="person-chip-score">{p.score}<span className="sr-only"> out of 100</span></span> : null}
+                {/* R20-9: a score with no AI interview in it says so, the full label on hover */}
+                {p.score !== null ? <span className="person-chip-score" title={p.basis ?? undefined}>{p.score}<span className="sr-only"> out of 100</span>{personScoreNote(p)}</span> : null}
               </button>
               <p className="small">{p.why}</p>
               {p.quotes.map((q) => (

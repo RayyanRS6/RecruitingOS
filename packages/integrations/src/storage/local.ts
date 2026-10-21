@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { DownloadGrant, StorageAdapter, StoredObjectInfo, UploadGrant } from "../types";
 import { GrantSigner } from "./grants";
+import { StorageError } from "./supabase";
 
 function safeJoin(dir: string, key: string): string {
   const path = resolve(dir, key);
@@ -79,13 +80,23 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 }
 
-/** Tests and CI: the same contract, in a Map. */
+/**
+ * Tests and CI: the same contract, in a Map. `allowTypes` (opt-in, off by default) refuses a write whose content type a
+ * real bucket would refuse, as Supabase does (`StorageError`, HTTP 415), so a test can hold the code to the bucket's
+ * allowed MIME types (docs/runbooks/resume-storage.md); `null` takes every type again.
+ */
 export class MemoryStorageAdapter implements StorageAdapter {
   readonly id = "memory";
   readonly status = "fake" as const;
   private files = new Map<string, { bytes: Uint8Array; contentType: string }>();
+  private allowed: ReadonlySet<string> | null = null;
   constructor(private signer: GrantSigner = new GrantSigner("dev-only-memory-storage", "http://localhost:3000")) {}
+  allowTypes(types: readonly string[] | null): this {
+    this.allowed = types ? new Set(types.map((t) => t.toLowerCase())) : null;
+    return this;
+  }
   async put(key: string, bytes: Uint8Array, contentType: string): Promise<{ key: string }> {
+    if (this.allowed && !this.allowed.has(contentType.split(";")[0].trim().toLowerCase())) throw new StorageError("put", 415);
     this.files.set(key, { bytes, contentType });
     return { key };
   }

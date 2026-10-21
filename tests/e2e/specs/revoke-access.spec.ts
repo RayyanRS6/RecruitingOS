@@ -10,6 +10,8 @@ const run = Date.now().toString(36);
 skipWithoutFakeSignIn();
 
 test("the owner sees who has access, must confirm with a reason, and the access ends at once", async ({ page, browser, baseURL }) => {
+  // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
+  test.slow();
   await signIn(page, { email: `owner+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
   await createCompanyThroughTheForm(page, `Brightline Dental ${run}`);
   const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");

@@ -38,17 +38,17 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       // an interviewer is offered nothing, and told why on each
       const interviewer = applicationActionState(facts({ role: "interviewer" }));
       expect(interviewer.allowed).toEqual([]);
-      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(20);
+      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(21);
       // every choice not allowed has a reason, for every role
       for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) {
         const s = applicationActionState(facts({ role }));
-        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(20);
+        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(21);
         for (const reason of Object.values(s.blockedReasons)) expect(reason, role).not.toMatch(/_|undefined/);
       }
     });
 
     it("explains the state when the role is not the reason", () => {
-      expect(applicationActionState(facts({ hasOpenScreen: true })).blockedReasons.invite_screen).toBe("A screening chat invitation is already open.");
+      expect(applicationActionState(facts({ hasOpenScreen: true })).blockedReasons.invite_screen).toBe("An AI interview link is already open.");
       expect(applicationActionState(facts({ hasActiveInterview: true })).blockedReasons.interview).toBe("An interview is already in motion.");
       expect(applicationActionState(facts({ stage: "rejected" })).blockedReasons.reject).toBe("Not available at this step (Not moving forward).");
       expect(applicationActionState(facts({ stage: "talent_pool" })).blockedReasons.hold).toBe("They are already in your talent pool.");
@@ -77,15 +77,17 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(applicationActionState(facts({ role: "hr", stage: "rejected" })).blockedReasons.reject).toMatch(/^Your role can't decline candidates/);
       // "Stop this screen invitation" (plan A7): only before they start, and only for those who may write to candidates about decisions
       expect(applicationActionState(facts({ stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).allowed).toContain("cancel_screen");
-      expect(applicationActionState(facts({ stage: "screening", hasOpenScreen: true })).blockedReasons.cancel_screen).toBe("They have started the screening chat, so it can't be stopped now.");
-      expect(applicationActionState(facts()).blockedReasons.cancel_screen).toBe("No screening chat invitation is waiting for them.");
-      expect(applicationActionState(facts({ role: "hr", stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).blockedReasons.cancel_screen).toBe("Your role can't stop a screening chat invitation; ask an owner, an admin, a hiring manager or a recruiter.");
+      expect(applicationActionState(facts({ stage: "screening", hasOpenScreen: true })).blockedReasons.cancel_screen).toBe("They have started the AI interview, so it can't be stopped now.");
+      expect(applicationActionState(facts()).blockedReasons.cancel_screen).toBe("No AI interview invitation is waiting for them.");
+      expect(applicationActionState(facts({ role: "hr", stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).blockedReasons.cancel_screen).toBe("Your role can't stop an AI interview invitation; ask an owner, an admin, a hiring manager or a recruiter.");
     });
 
     it("builds the stage button from the same rule: every stage, how it is reached, and why not", () => {
       const moves = (over: Partial<ApplicationFacts> = {}) => Object.fromEntries(stageMoves(facts(over)).map((m) => [m.to, m]));
       const owner = moves();
-      expect(Object.keys(owner)).toEqual(["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"]);
+      expect(Object.keys(owner)).toEqual(["no_ai_interview", "new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"]);
+      // nobody is moved into "No AI interview yet" by hand (R20-7): everyone who applies starts there
+      expect(owner.no_ai_interview).toMatchObject({ allowed: false, via: "none", label: "No AI interview yet", blockedReason: "Everyone who applies starts here and leaves when they finish the AI interview." });
       // nobody is moved into Cancelled by hand: never the decline the default would open
       expect(owner.cancelled).toMatchObject({ allowed: false, via: "none", label: "Cancelled", blockedReason: "Only the candidate's own cancellation, or an interview they missed, puts someone here." });
       expect(owner.new).toMatchObject({ current: true, allowed: false, via: "none" });
@@ -173,7 +175,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
 
       // the stage button: they are under Cancelled; Interviewing comes back by booking a time, never by hand
       const moves = Object.fromEntries(stageMoves(under()).map((m) => [m.to, m]));
-      expect(Object.keys(moves)).toHaveLength(9);
+      expect(Object.keys(moves)).toHaveLength(10);
       expect(moves.cancelled).toMatchObject({ current: true, allowed: false, via: "none" });
       expect(moves.interviewing).toMatchObject({ allowed: false, via: "none", blockedReason: "They move back to Interviewing when they book a time. Send them new times from their page." });
       // a hold takes them out of Cancelled; a decline is the private decline; the earlier steps keep their reasons
@@ -185,6 +187,39 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(moves.hired).toMatchObject({ allowed: true, via: "record_hire" });
       // an open follow-up outside the interview steps never shows as Cancelled (a resolve that was missed)
       expect(Object.fromEntries(stageMoves(under({ stage: "finalist" })).map((m) => [m.to, m])).interviewing).toMatchObject({ current: true });
+    });
+
+    it("under 'No AI interview yet' (R20-7): a reminder while the link is open (once a day), a new link once it closed, and the stage button", () => {
+      const view = (state: "invited" | "started" | "link_expired" | "didnt_finish" | "being_read", canRemind: boolean, remindBlocked: "recently" | "email_held" | "paused" | null = null) => ({ state, group: state === "invited" || state === "being_read" ? "not_started" as const : state === "started" ? "started" as const : "closed" as const, label: "x", since: null, linkOpenUntil: null, lastEmailAt: null, canRemind, canResend: state === "link_expired" || state === "didnt_finish", remindBlocked });
+      const inColumn = (over: Partial<ApplicationFacts> = {}) => facts({ stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true, aiInterview: view("invited", true), ...over });
+      expect(applicationActionState(inColumn()).allowed).toContain("remind_screen");
+      // a reminder or the link went less than a day ago: why not, in plain words
+      expect(applicationActionState(inColumn({ aiInterview: view("invited", false, "recently") })).blockedReasons.remind_screen).toBe("Their link or a reminder went less than a day ago. You can send a reminder a day after the last one.");
+      // the email carrying the link has not left yet (B7), or the interview is paused: said as it is, never "recently"
+      expect(applicationActionState(inColumn({ aiInterview: view("invited", false, "email_held") })).blockedReasons.remind_screen).toBe("Their AI interview link has not gone to them yet: the email waits for ITS to check your company. You can send a reminder a day after it goes.");
+      expect(applicationActionState(inColumn({ hasUnstartedScreen: false, aiInterview: view("started", false, "paused") })).blockedReasons.remind_screen).toBe("Their AI interview is paused while the assistant is not working; it carries on by itself, and they are emailed when it does.");
+      // sent and being scored while the stage catches up: nothing waits on them
+      expect(applicationActionState(inColumn({ hasUnstartedScreen: false, aiInterview: view("started", false) })).blockedReasons.remind_screen).toBe("Not needed now: their AI interview is no longer waiting on them.");
+      // the link closed: a new link instead (the person's own invitation), never a reminder
+      const lapsed = applicationActionState(inColumn({ hasOpenScreen: false, hasUnstartedScreen: false, aiInterview: view("link_expired", false) }));
+      expect(lapsed.blockedReasons.remind_screen).toBe("Their link has closed. Send them a new link instead.");
+      expect(lapsed.allowed).toEqual(expect.arrayContaining(["invite_screen", "reject"]));
+      expect(applicationActionState(facts()).blockedReasons.remind_screen).toBe("Only for someone whose AI interview link is open.");
+      // the same hands that send a new link (HR may; an interviewer may not)
+      expect(applicationActionState(inColumn({ role: "hr" })).allowed).toContain("remind_screen");
+      expect(applicationActionState(inColumn({ role: "interviewer" })).blockedReasons.remind_screen).toBe("Your role can't remind candidates about their AI interview; ask an owner, an admin, a hiring manager, HR or a recruiter.");
+      // the stage button: here now; New comes with the AI interview; sorting, interviewing and declining work as from New
+      const moves = Object.fromEntries(stageMoves(inColumn()).map((m) => [m.to, m]));
+      expect(moves.no_ai_interview).toMatchObject({ current: true, allowed: false });
+      expect(moves.new).toMatchObject({ allowed: false, via: "none", blockedReason: "They move to New when they finish the AI interview." });
+      expect(moves.shortlist).toMatchObject({ allowed: true, via: "set_mark", mark: "shortlist" });
+      expect(moves.on_hold).toMatchObject({ allowed: true, via: "set_mark", mark: "on_hold" });
+      expect(moves.interviewing).toMatchObject({ allowed: true, via: "interview" });
+      expect(moves.not_moving_forward).toMatchObject({ allowed: true, via: "decline" });
+      // marked on the Longlist from the column: choosing the column takes the mark off; nobody else is moved into it
+      expect(Object.fromEntries(stageMoves(inColumn({ mark: "longlist" })).map((m) => [m.to, m])).no_ai_interview).toMatchObject({ allowed: true, via: "clear_mark" });
+      expect(moves.no_ai_interview.via).toBe("none");
+      expect(Object.fromEntries(stageMoves(facts()).map((m) => [m.to, m])).no_ai_interview).toMatchObject({ allowed: false, blockedReason: "Everyone who applies starts here and leaves when they finish the AI interview." });
     });
 
     it("without a known role (a system caller) only the state counts", () => {

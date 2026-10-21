@@ -18,7 +18,7 @@ const DAY = 86_400_000;
 type Req = EvidenceAssessment["requirementFindings"][number];
 const f = (key: string, met: Req["met"], quote?: string): Req => ({ requirementKey: key, met, ...(quote ? { evidence: { source: "resume" as const, quote } } : {}) });
 
-function person(name: string, findings: Req[], over: { daysWaiting?: number; stillApplying?: boolean; chairside?: "evidenced" | "partially_evidenced" | "not_evidenced"; confidence?: "low" | "medium"; weak?: boolean; stage?: "triaged" | "hired"; packet?: Pick<RolePacket, "requirements" | "competencies"> } = {}): PoolPerson {
+function person(name: string, findings: Req[], over: { daysWaiting?: number; noAiInterview?: boolean; chairside?: "evidenced" | "partially_evidenced" | "not_evidenced"; confidence?: "low" | "medium"; weak?: boolean; stage?: "triaged" | "hired"; packet?: Pick<RolePacket, "requirements" | "competencies"> } = {}): PoolPerson {
   const readAgainst = over.packet ?? packet;
   const reading: ScoredReading = { kind: "triage", confidence: over.confidence ?? "medium", result: { requirementFindings: findings, competencyFindings: [{ competencyKey: "chairside", finding: over.chairside ?? "evidenced", evidence: { source: "resume", quote: "assisted chairside" } }], confidence: over.confidence ?? "medium" } };
   const pair = { resume: reading, screen: null };
@@ -28,8 +28,8 @@ function person(name: string, findings: Req[], over: { daysWaiting?: number; sti
   const overall = over.weak ? "weak" : "potential";
   const latest: AssessmentLike = { kind: "triage", overall, confidence: over.confidence ?? "medium", result: { overall, confidence: "medium", summary: "s", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: findings, anomalies: [], recommendation: over.weak ? "hold" : "screen", rationale: "r" } };
   const hired = over.stage === "hired";
-  const placement = boardPlacement({ stage: over.stage ?? "triaged", base: hired ? "hired" : "new", stageLabel: hired ? "Hired" : "Ready for your review", stillApplying: over.stillApplying, latest, evidence: { needsCloserLook: false, assessmentUnavailable: false, lowConfidence: over.confidence === "low", reason: null }, match, mustHaves });
-  return { applicationId: `app-${name.toLowerCase()}`, name, waitingSince: new Date(NOW.getTime() - (over.daysWaiting ?? 1) * DAY).toISOString(), stillApplying: !!over.stillApplying, placement, match, mustHaves };
+  const placement = boardPlacement({ stage: over.noAiInterview ? "screen_invited" : over.stage ?? "triaged", base: hired ? "hired" : over.noAiInterview ? "no_ai_interview" : "new", stageLabel: hired ? "Hired" : "Ready for your review", latest, evidence: { needsCloserLook: false, assessmentUnavailable: false, lowConfidence: over.confidence === "low", reason: null }, match, mustHaves });
+  return { applicationId: `app-${name.toLowerCase()}`, name, waitingSince: new Date(NOW.getTime() - (over.daysWaiting ?? 1) * DAY).toISOString(), noAiInterview: !!over.noAiInterview, placement, match, mustHaves };
 }
 
 const ada = person("Ada Moss", [f("license", "yes", "RDH license CA active"), f("perio", "yes", "Perio charting daily")], { daysWaiting: 2 });
@@ -37,7 +37,7 @@ const ben = person("Ben Ortiz", [f("license", "partially", "RDH license pending"
 const cy = person("Cy Park", [f("license", "no", "My RDH license lapsed in 2021"), f("perio", "yes", "perio")], { daysWaiting: 4, weak: true });
 const dee = person("Dee Lu", [f("license", "unknown"), f("perio", "unknown")], { daysWaiting: 3, chairside: "not_evidenced" });
 const eve = person("Eve Kim", [f("license", "yes", "licensed"), f("perio", "unknown")], { daysWaiting: 1 });
-const fay = person("Fay Ng", [f("license", "yes", "a")], { stillApplying: true });
+const fay = person("Fay Ng", [f("license", "yes", "a")], { noAiInterview: true });
 const people = [ada, ben, cy, dee, eve, fay];
 
 describe("poolSummary", () => {
@@ -46,7 +46,7 @@ describe("poolSummary", () => {
     expect(ada.placement.column).toBe("shortlist");
     expect(cy.placement.column).toBe("not_moving_forward");
     expect(s.counts).toEqual({ shortlist: 1, longlist: 3, not_moving_forward: 1 });
-    expect(s).toMatchObject({ total: 5, stillApplying: 1, toSort: 5, done: 0, showEveryMustHave: 1, longestWaiting: { name: "Ben Ortiz", days: 9 } });
+    expect(s).toMatchObject({ total: 5, noAiInterview: 1, stillApplying: 1, toSort: 5, done: 0, showEveryMustHave: 1, longestWaiting: { name: "Ben Ortiz", days: 9 } });
     expect(s.mustHaves).toEqual([
       { key: "license", label: "Active CA RDH license", shown: 2, partly: 1, notShown: 1, unknown: 1, total: 5 },
       { key: "perio", label: "Perio charting", shown: 2, partly: 1, notShown: 0, unknown: 2, total: 5 },
@@ -54,7 +54,7 @@ describe("poolSummary", () => {
     // ties go to the first must-have in the role's order
     expect(s.mostMissing).toEqual({ key: "license", label: "Active CA RDH license", notShowing: 2, of: 5 });
     expect(s.sentences).toEqual([
-      "5 people on the board. To sort: 1 for the shortlist, 3 for the longlist, 1 not moving forward. 1 more is still applying.",
+      "5 people on the board. To sort: 1 for the shortlist, 3 for the longlist, 1 not moving forward. 1 more is not on the board yet: no AI interview in their score.",
       "1 of 5 show every must-have.",
       'The must-have shown least often is "Active CA RDH license": 2 of 5 don\'t show it.',
       "Ben Ortiz has waited longest: 9 days.",
@@ -100,7 +100,10 @@ describe("poolSummary", () => {
   });
 
   it("says so when there is nobody to sort", () => {
-    expect(poolSummary([fay], packet, { roleId: "r", now: NOW }).sentences).toEqual(["Nobody to sort yet; 1 person is still applying."]);
+    expect(poolSummary([fay], packet, { roleId: "r", now: NOW }).sentences).toEqual(["Nobody to sort yet; 1 person is not on the board yet: no AI interview in their score."]);
+    // one neutral line for the whole lane: some there sent theirs and are being scored, so it never says they have none
+    const gus = person("Gus Ray", [f("license", "yes", "a")], { noAiInterview: true });
+    expect(poolSummary([fay, gus, ada], packet, { roleId: "r", now: NOW }).sentences[0]).toMatch(/ 2 more are not on the board yet: no AI interview in their score\.$/);
   });
 });
 
@@ -124,6 +127,8 @@ describe("one-click questions", () => {
     const a = answerPoolQuestion("strongest_evidence", people, packet, { mustHaveKey: "perio", now: NOW, open });
     expect(a.people.map((p) => p.name)).toEqual(["Ada Moss", "Cy Park", "Ben Ortiz"]);
     expect(a.people[0].quotes).toEqual([{ criterion: "Perio charting", quote: "Perio charting daily", source: "resume" }]);
+    // each person's score comes with whether their AI interview is in it, and the label (R20-9)
+    expect(a.people[0]).toMatchObject({ score: ada.match!.score, interview: "none", basis: "Résumé only: no AI interview" });
     expect(a.answer).toBe('2 people show "Perio charting" and 1 more shows it in part.');
     expect(() => answerPoolQuestion("strongest_evidence", people, packet, { mustHaveKey: "nope", now: NOW, open })).toThrow(PoolQuestionError);
   });

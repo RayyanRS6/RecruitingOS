@@ -35,7 +35,7 @@ export function screeningAllowanceWarning(usage: Record<string, UsageLine> | nul
       level,
       used: u.used,
       limit: u.limit,
-      title: "This month's screening chats are used up",
+      title: "This month's AI interviews are used up",
       body: planKey === "design_partner"
         ? `${counted} Your pilot keeps offering the chat to everyone, and anyone part-way through finishes. ITS has been told so the allowance can be reviewed.`
         : `${counted} Applications are still accepted, and anyone part-way through finishes. New applicants get the chat link by email as soon as more are added, so everyone for a role goes through the same steps. ITS has been told.`,
@@ -45,13 +45,13 @@ export function screeningAllowanceWarning(usage: Record<string, UsageLine> | nul
     level,
     used: u.used,
     limit: u.limit,
-    title: `${u.used} of this month's ${u.limit} screening chats used`,
+    title: `${u.used} of this month's ${u.limit} AI interviews used`,
     body: "Nothing has stopped. If they run out, applications are still accepted and new applicants get the chat link by email once more are added. ITS has been told and can add more before then.",
   };
 }
 
 /** What Today's card asks ITS, opened in the request form first (never sent in one click). */
-export const ALLOWANCE_ASK = { kind: "ask" as const, about: "all" as const, topic: "plan" as const, question: "We are running low on this month's screening chats. Can we add more?" };
+export const ALLOWANCE_ASK = { kind: "ask" as const, about: "all" as const, topic: "plan" as const, question: "We are running low on this month's AI interviews. Can we add more?" };
 
 /** An ITS alert about a company's allowance (GET /admin/alerts), as the admin console reads it. */
 export type AllowanceAlert = { companyId: string; level: AllowanceLevel; used: number | null; limit: number | null; since: string };
@@ -78,5 +78,5 @@ export function allowanceAlerts(alerts: ReadonlyArray<{ kind: string; companyId:
 /** The chip on a customer's row. */
 export function allowanceChip(a: Pick<AllowanceAlert, "level" | "used" | "limit">): string {
   const counted = a.used !== null && a.limit !== null ? ` (${a.used} of ${a.limit})` : "";
-  return a.level === "used_up" ? `Screening chats used up${counted}` : `80% of screening chats used${counted}`;
+  return a.level === "used_up" ? `AI interviews used up${counted}` : `80% of AI interviews used${counted}`;
 }

@@ -888,6 +888,7 @@ describe("a screening link that lapses", () => {
     expect(note.bodyText).toMatch(/reply to this email and someone on the team can send you a new link/);
     // the team can invite them again
     expect(((await (await json(owner, "GET", `/api/v1/applications/${id}`)).json()) as { allowedActions: string[] }).allowedActions).toContain("invite_screen");
-    expect(await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "screen.expired"), isNull(notifications.readAt)))).not.toHaveLength(0);
+    // no per-person alert for a link that lapsed (R20-8): the team hears once, when an interview is scored
+    expect(await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "screen.expired"), isNull(notifications.readAt)))).toHaveLength(0);
   });
 });

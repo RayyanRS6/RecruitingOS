@@ -441,7 +441,7 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
         <>
           <Choices legend={STEP_QUESTION.questions} name="qs-questions" multi options={suggested.map((q) => ({ value: q, label: q, ...(fromAi(q) ? { note: AI_NOTE } : {}) }))} checked={(v) => !a.questionsOff.some((x) => x.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ questionsOff: toggleItem(a.questionsOff, v) })} />
           {suggest.kind === "waiting" ? <Suggesting words={SUGGESTING_QUESTIONS} /> : null}
-          <AddOwn id="qs-question-own" label="Add a question for the screening chat" placeholder="Add your own question…" items={a.ownQuestions} max={OWN_QUESTIONS_MAX} onAdd={(t) => set({ ownQuestions: addItem(a.ownQuestions, t, OWN_QUESTIONS_MAX) })} onRemove={(t) => set({ ownQuestions: a.ownQuestions.filter((q) => q !== t) })} />
+          <AddOwn id="qs-question-own" label="Add a question for the AI interview" placeholder="Add your own question…" items={a.ownQuestions} max={OWN_QUESTIONS_MAX} onAdd={(t) => set({ ownQuestions: addItem(a.ownQuestions, t, OWN_QUESTIONS_MAX) })} onRemove={(t) => set({ ownQuestions: a.ownQuestions.filter((q) => q !== t) })} />
         </>
       );
     }

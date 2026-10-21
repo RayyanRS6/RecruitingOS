@@ -57,6 +57,26 @@ describe("memory adapter and same-origin grants", () => {
     const down = await s.createDownloadUrl("companyA/app1/q.pdf", { expiresSeconds: 120, filename: "résumé.pdf", contentType: "application/pdf" });
     expect(signer.verify(down.url.split("/files/get/")[1]!)).toMatchObject({ m: "GET", fn: "résumé.pdf" });
   });
+
+  it("refuses the types a real bucket would refuse once told its list (opt-in; off, every type is taken as before)", async () => {
+    // the résumé types of docs/runbooks/resume-storage.md
+    const resumeTypes = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain", "text/markdown"];
+    const open = new MemoryStorageAdapter();
+    await open.put("quarantine/co/role/u1.read.json", new Uint8Array([123, 125]), "application/json");
+    await open.put("co/logo/logo.png", new Uint8Array([1]), "image/png");
+    expect(open.has("quarantine/co/role/u1.read.json") && open.has("co/logo/logo.png")).toBe(true);
+    const s = new MemoryStorageAdapter().allowTypes(resumeTypes);
+    for (const t of [...resumeTypes, "text/plain; charset=utf-8", "Application/PDF"]) await s.put(`co/${t.length}.x`, new Uint8Array([1]), t);
+    for (const t of ["application/json", "image/png", "application/octet-stream", "application/msword"]) {
+      const err = (await s.put("co/refused", new Uint8Array([1]), t).then(() => null, (e: unknown) => e)) as StorageError | null;
+      expect(err?.httpStatus, t).toBe(415);
+      expect(err?.message).toBe("storage put failed with HTTP 415");
+    }
+    expect(s.has("co/refused")).toBe(false);
+    // the list can be lifted again
+    await s.allowTypes(null).put("co/refused", new Uint8Array([1]), "application/json");
+    expect(s.has("co/refused")).toBe(true);
+  });
 });
 
 describe("Supabase storage adapter (S3 protocol)", () => {

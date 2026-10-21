@@ -9,7 +9,7 @@ import { createContainer, type Container } from "./container";
 import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache } from "./pages/public-feeds";
 import { ASKED_OF_EVERYONE, questionHelp, withPlainQuestionHelp } from "./pages/question-help";
 import { jobUrls } from "./services/job-urls";
-import { statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
+import { pastTheWaitingRoom, statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * The candidate-facing job surfaces (docs/spec/20 section 2 items 1 to 8, 19 and 20; docs/readiness/20 section D):
@@ -168,8 +168,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(header).toContain(`<span class="fact-text">${({ onsite: "On site", hybrid: "Hybrid", remote: "Remote" } as Record<string, string>)[pv.packet.identity.remotePolicy]}</span>`);
     expect(header).toContain('<span class="fact-text">Full time</span>');
     expect(header).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
-    // how long it really takes (plan E8): the form and the written conversation that follows it in the same visit
-    expect(header).toMatch(/About \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\. First, this form; no cover letter needed\./);
+    // how long it really takes (plan E8): the form and the AI interview that follows it (20 Oct 2026)
+    expect(header).toMatch(/About \d+ minutes, including a short AI interview with Ledger Dental's AI assistant\. First, this form; no cover letter needed\./);
     // the pre-apply line: help, or a change to how to apply because of a disability, from a person (here the ITS inbox)
     expect(header).toContain(`Need help applying, or a change to how you apply because of a disability? Email <a href="mailto:${container.env.EMAIL_REPLY_TO}">`);
     // the four short questions instead of one box, behind a disclosure that works without script; closed until used
@@ -204,7 +204,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(why.map((m) => m[2])).toContain("The job needs someone for this schedule.");
     // the job page
     const job = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
-    expect(job).toMatch(/Apply in about \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\./);
+    expect(job).toMatch(/About \d+ minutes, including a short AI interview with Ledger Dental's AI assistant\./);
     expect(job).not.toContain("by text");
     expect(job).not.toContain("may be recorded");
     expect(job).toContain('href="/privacy"');
@@ -241,12 +241,17 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     // with the box ticked: the application is in, the acknowledgment recorded, and the notice versions are the server's, not the browser's claim
     const accepted = await apply(applyForm({ noticeVersionsShown: "made-up@1", smsConsent: "yes", phone: "(949) 555-0100" }), { "x-forwarded-for": "203.0.113.7" });
     expect(accepted.status).toBe(302);
-    // straight on to the conversation's introduction (plan E1), never the status page: the link travels by email only (Wave 0 item 0.1)
-    const screenPath = accepted.headers.get("location")!;
+    // the waiting room, which opens the AI interview's introduction once the résumé is read (20 Oct 2026, R20-12), never the
+    // status page: the status link travels by email only (Wave 0 item 0.1)
+    expect(accepted.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
+    await container.drain();
+    // after the 40 to 90 seconds every waiting room says "preparing" first (Q14, 21 Oct)
+    const room = await pastTheWaitingRoom(container, async () => app.request(accepted.headers.get("location")!, { headers: { cookie: setCookieOf(accepted).match(/ros_applied=[^;,]+/)![0] } }));
+    const screenPath = room.headers.get("location")!;
     expect(screenPath).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
-    expect(setCookieOf(accepted)).toMatch(new RegExp(`ros_applied_to=v1\\.[^;]+; Max-Age=1800; Path=${screenPath.replace(/[/]/g, "\\/")}; HttpOnly; SameSite=Lax`));
-    expect(setCookieOf(accepted)).not.toContain("ana.lopez");
-    const intro = decodeEntities(await (await app.request(screenPath, { headers: { cookie: setCookieOf(accepted).match(/ros_applied_to=[^;,]+/)![0] } })).text());
+    expect(setCookieOf(room)).toMatch(new RegExp(`ros_applied_to=v1\\.[^;]+; Max-Age=1800; Path=${screenPath.replace(/[/]/g, "\\/")}; HttpOnly; SameSite=Lax`));
+    expect(setCookieOf(room)).not.toContain("ana.lopez");
+    const intro = decodeEntities(await (await app.request(screenPath, { headers: { cookie: setCookieOf(room).match(/ros_applied_to=[^;,]+/)![0] } })).text());
     expect(intro).toContain("<strong>Your application is sent.</strong><p>Your own link to it is on its way to a***@example.com.");
     expect(intro).not.toContain("/c/status/");
     anaStatusToken = await statusTokenFor(container, { roleId, email: "ana.lopez@example.com" });
@@ -263,13 +268,13 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(cand.consent.sms).toBeUndefined();
     expect(await eventsOf("consent.granted")).toHaveLength(0);
     const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
-    expect(scr).toMatchObject({ channel: "web", invitedVia: "apply" });
+    expect(scr).toMatchObject({ channel: "web", invitedVia: "with_application" });
     expect(screenPath).toBe(`/c/screen/${scr.token}`);
-    // the acknowledgment says honestly what comes next, with the conversation's link to come back to (plans E1, E8)
-    const ack = emails().find((m) => m.to === "ana.lopez@example.com" && /received your application/.test(m.subject))!;
-    expect(ack.text).toMatch(/1\. A short written conversation with Ledger Dental's AI assistant: \d+ questions, about \d+ minutes\. It is not a test, and you can skip a question or ask for a person instead\. If you have not finished it, pick it up here: https:\/\/jobs\.example\.test\/c\/screen\//);
-    expect(ack.text).toContain(`https://jobs.example.test/c/screen/${scr.token}`);
-    expect(ack.text).not.toMatch(/by text|looks like a fit/);
+    // the one email says honestly what comes next, with the AI interview's link (R20-5, R20-6)
+    const ack = emails().find((m) => m.to === "ana.lopez@example.com" && /^Thank you for applying: your next step/.test(m.subject))!;
+    expect(ack.text).toMatch(/Your next step is a short interview with Ledger Dental's AI assistant\. Everyone who applies gets the same interview/);
+    expect(ack.text).toContain(`Start your AI interview: https://jobs.example.test/c/screen/${scr.token}`);
+    expect(ack.text).not.toMatch(/by text|looks like a fit|to qualify/);
     // the status page and the screen page: no text-message choice, no recording notice
     const status = decodeEntities(await (await app.request(`/c/status/${anaStatusToken}`)).text());
     expect(status).not.toContain("Text messages");
@@ -279,15 +284,15 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(screen).toContain("artificial intelligence");
   });
 
-  it("with texting on, the SMS checkbox is on the form, the consent is recorded, and on the later path the pages say by text or online", async () => {
+  it("with texting on, the SMS checkbox is on the form and the consent is recorded; the AI interview is on the web all the same (R20-6)", async () => {
     const c2 = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "true" } });
     try {
       const a2 = createApp(c2);
       const cookie = await signIn(a2, "owner@texting.test");
       const seeded = await seedRole(c2, a2, cookie, "Texting Dental");
-      // a conversation offered with the application is always on the web; texts belong to "form now, conversation later" (plan Wave E)
+      // the AI interview that comes with the application is always on the web, whatever ITS's old switch says (R20-6, R20-12)
       const sameVisit = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}`)).text());
-      expect(sameVisit).toContain("including a short written conversation with Texting Dental's AI assistant");
+      expect(sameVisit).toContain("including a short AI interview with Texting Dental's AI assistant");
       expect(sameVisit).not.toContain("by text");
       await useLaterApplyFlow(c2, seeded.companyId);
       const form = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`)).text());
@@ -298,7 +303,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(form.match(/name="noticeVersionsShown" value="([^"]*)"/)![1]).toContain("sms_consent@2026-09-01");
       expect(form).not.toContain("may be recorded");
       const job = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}`)).text());
-      expect(job).toContain("Possibly a short written conversation with Texting Dental's AI assistant (by text or online, about");
+      expect(job).toContain("including a short AI interview with Texting Dental's AI assistant");
+      expect(job).not.toContain("by text");
       const r = await apply(applyForm({ smsConsent: "yes", phone: "(949) 555-0100" }, seeded.eligibility), {}, a2, `/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`);
       expect(r.status).toBe(302);
       expect(r.headers.get("location")).toBe(`/careers/${seeded.slug}/jobs/${seeded.roleId}/applied`);
@@ -308,10 +314,13 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(cand.consent.sms).toMatchObject({ granted: true, source: "careers_page_apply" });
       expect(a.answers.noticeVersionsShown).toContain("sms_consent@2026-09-01");
       expect(await c2.db.select().from(events).where(eq(events.type, "consent.granted"))).toHaveLength(1);
-      const ack = (c2.integrations.email as FakeEmailAdapter).sent.find((m) => m.to === "ana.lopez@example.com" && /received your application/.test(m.subject))!;
-      expect(ack.text).toContain("1. Possibly a short written conversation with Texting Dental's AI assistant (by text or online, about");
-      expect(ack.text).toContain("If so, we email you the link.");
-      expect(ack.text).not.toMatch(/looks like a fit/);
+      const ack = (c2.integrations.email as FakeEmailAdapter).sent.find((m) => m.to === "ana.lopez@example.com" && /^Thank you for applying: your next step/.test(m.subject))!;
+      expect(ack.text).toContain("Start your AI interview: https://jobs.example.test/c/screen/");
+      expect(ack.text).not.toMatch(/looks like a fit|by text/);
+      // she agreed to texts, and still no text: the automatic AI interview is on the web only
+      expect((c2.integrations.sms as unknown as { sent: unknown[] }).sent).toHaveLength(0);
+      const [scr] = await c2.db.select().from(screens).where(eq(screens.applicationId, a.id));
+      expect(scr.channel).toBe("web");
       const status = decodeEntities(await (await a2.request(`/c/status/${await statusTokenFor(c2, { roleId: seeded.roleId, email: "ana.lopez@example.com" })}`)).text());
       expect(status).toContain("Text messages:");
       expect(status).toContain("on");
@@ -362,7 +371,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     const status = await app.request(`/c/status/${a.statusToken}`);
     expect(status.status).toBe(200);
     expect(await status.text()).not.toContain(link.token);
-    const ack = emails().find((m) => m.to === "ben.osei@example.com" && /received your application/.test(m.subject))!;
+    const ack = emails().find((m) => m.to === "ben.osei@example.com" && /^Thank you for applying/.test(m.subject))!;
     expect(`${ack.subject}\n${ack.text}`).not.toContain(link.token);
     expect((await eventsOf("application.received")).find((e) => e.subjectId === a.id)?.payload).toMatchObject({ source: "referral", linkId: link.id });
     // a board's own link works the same way and names the board

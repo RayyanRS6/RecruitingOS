@@ -1,9 +1,11 @@
-import type { ActiveMark, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CancelledView, CandidateNotice, ChatPlan, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, InterviewFollowUpRef, LegalCheck, MatchBand, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ScreenWriteup, ShareTarget, ShareView, StageMove, ToldState, WrittenQuestionView } from "@ros/contracts";
+import type { ActiveMark, AiInterviewGroup, AiInterviewView, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CancelledView, CandidateNotice, ChatPlan, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, InterviewFollowUpRef, InterviewInScore, LegalCheck, MatchBand, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ScreenWriteup, ShareTarget, ShareView, StageMove, ToldState, WrittenQuestionView } from "@ros/contracts";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
 // The Cancelled column (founder decisions 1A to 4A): who is there and why, where their new times stand, the team's
 // "Send new times" for one person or many, and the company's setting; the shapes live in @ros/contracts.
 export type { CancelledReason, CancelledView, InterviewFollowUpRef, NewTimesProgress, NewTimesSettingView, SendNewTimesBatchResult, SendNewTimesResult } from "@ros/contracts";
+// "No AI interview yet" (20 Oct 2026, R20-7): where someone stands with their AI interview, and its four groups.
+export type { AiInterviewGroup, AiInterviewState, AiInterviewView } from "@ros/contracts";
 // Telling candidates (plan Wave G; founder decisions B6, Q27, Q28, Q30) and interviews to hire (Wave H; Q24, Q29): the
 // shapes live in @ros/contracts (api/index.ts and api/hiring.ts), as the API answers them.
 export type { ClosingMessagePreview, ClosingMessageResult, DecisionMessagePreview, DecisionWording, DecisionWordingOption, HireFollowUp, InterviewDraft, NoteStarter, NoteView, NotesView, OfferMadeResult, SuggestedLine } from "@ros/contracts";
@@ -112,8 +114,10 @@ export type Eligibility = { passed: boolean; failedRules: Array<{ key: string; q
  * and why not; `toldState` says, for a decision, whether the candidate was told (B6), and is null while there is none.
  * `cancelled`: why they are under Cancelled and where their new times stand (founder decisions 1A to 4A); null for
  * everyone else. `ownerStageLabel` is then its sub-label ("Asked for new times", "No longer interested", "No-show").
+ * `aiInterview`: where they stand under "No AI interview yet" (R20-7; "Invited (not started)", "Link expired"…, the
+ * sub-label then), with whether a reminder or a new link is offered; null for everyone else, and on older answers.
  */
-type ApplicationCore = { id: string; stage: string; stageLabel: string; group: OwnerGroup | string; source: string; createdAt: string; eligibility: Eligibility | null; ownerStage: OwnerStage; ownerStageLabel: string; mark: ActiveMark | null; tags: string[]; stageMoves: StageMove[]; toldState: ToldState | null; cancelled: CancelledView | null };
+type ApplicationCore = { id: string; stage: string; stageLabel: string; group: OwnerGroup | string; source: string; createdAt: string; eligibility: Eligibility | null; ownerStage: OwnerStage; ownerStageLabel: string; mark: ActiveMark | null; tags: string[]; stageMoves: StageMove[]; toldState: ToldState | null; cancelled: CancelledView | null; aiInterview?: AiInterviewView | null };
 export type ApplicationSummary = ApplicationCore & {
   candidate: { id: string; name: string; email: string | null; phone: string | null; locationText: string | null } | null;
   extractionSummary: { positions: string[]; licenses: string[]; years: number | null; anomalies: Array<{ kind: string; detail: string }> } | null;
@@ -127,18 +131,21 @@ export type ApplicationSummary = ApplicationCore & {
   candidateToldAt: string | null;
   /** The decision message waits for someone to approve it. */
   decisionMessageWaiting: boolean;
-  /** "Still applying" (plan E6): offered the screening conversation with the application and not finished yet; older answers leave it out. */
+  /** Deprecated (one release): true under "No AI interview yet"; read `ownerStage` and `aiInterview` instead. */
   stillApplying?: boolean;
   /**
    * The match score (founder decision B2), worked out by code from the checked findings, never by the model: the number
    * (null when nothing could be judged yet), its band, what it rests on and the must-haves shown missing by a quote.
-   * `placement` and `nextStep` are where the pool board puts the person and the step it suggests. Older answers leave
-   * them all out.
+   * `interview` and `basis` (R20-9): whether the AI interview is in the score, and the label ("Résumé only: AI interview
+   * not done yet"); null without a score. `placement` and `nextStep` are where the pool board puts the person and the
+   * step it suggests. Older answers leave them all out.
    */
   score?: number | null;
   band?: MatchBand | null;
   bandLabel?: string | null;
   coverage?: { known: number; total: number; words: string } | null;
+  interview?: InterviewInScore | null;
+  basis?: string | null;
   missingMustHave?: Array<{ key: string; label: string; quote: string }>;
   mustHaves?: MustHaveSummary | null;
   placement?: BoardPlacement;
@@ -147,10 +154,11 @@ export type ApplicationSummary = ApplicationCore & {
 };
 /**
  * GET /roles/:id/applications?counts=1: the stage strip's counts cover every applicant the caller may see, whatever the
- * filters. `stillApplying` counts the people still in the visit that sent their application (plan E6). `cancelled`
- * splits the Cancelled column by what each person chose, or that they did not come; older answers leave it out.
+ * filters. `cancelled` splits the Cancelled column by what each person chose, or that they did not come; `aiInterview`
+ * splits "No AI interview yet" into its four groups (R20-7); older answers leave them out. `stillApplying` is deprecated
+ * (one release): the same people as `byOwnerStage.no_ai_interview`.
  */
-export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying?: number; cancelled?: CancelledCounts };
+export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying?: number; cancelled?: CancelledCounts; aiInterview?: Record<AiInterviewGroup, number> };
 /** Everyone under Cancelled, by reason: the three chips above the list while that column is shown. */
 export type CancelledCounts = { askedNewTimes: number; notInterested: number; noShow: number };
 export type ApplicationsWithCounts = { applications: ApplicationSummary[]; counts: StageStripCounts };
@@ -176,14 +184,15 @@ export type AssessmentResult = {
  */
 export type ScreenTranscriptLine = { role: string; content: string; at: string; questionKey?: string; channel?: string; source?: string; by?: string };
 /**
- * Wave E: `invitedVia` is "apply" when the conversation was offered in the visit that sent the application (older
- * answers leave it out; `progress.flow` says the same). `progress.declined` lists the questions the candidate chose not
+ * Wave E: `invitedVia` is "apply" when the conversation was offered in the visit that sent the application, and
+ * "with_application" for every applicant's AI interview since 20 October 2026 (older answers leave it out;
+ * `progress.flow` says the same). `progress.declined` lists the questions the candidate chose not
  * to answer, `progress.edits` the answers they changed before sending. `answersShared: false` (founder decision of
  * 9 October 2026, "hide them until they send"): the candidate has not sent their answers, or never did, so the API sends
  * none of them: no answer, no transcript line but a recruiter's call notes, and nothing about how far they got. Older
  * answers leave it out (everything was shown).
  */
-export type Screen = { id: string; channel: string; status: string; invitedAt: string | null; startedAt: string | null; completedAt: string | null; remindedAt: string | null; invitedVia?: string | null; transcript: ScreenTranscriptLine[]; answers: Record<string, string>; answersShared?: boolean; progress: { askedKeys: string[]; currentQuestionKey: string | null; /** "Ask about this in a screen": the open questions the screen started with, each with its answer once given. */ focusQuestions?: Array<{ key: string; question: string; whyItMatters?: string; answer?: string }>; flow?: string; phase?: string; declined?: string[]; edits?: Record<string, number>; submittedAt?: string; /** "recruiter_call": finished from a recruiter's notes, never sent by the candidate. */ completedBy?: string; /** Wave S8, "written": a chat without a plan asks the written questions (`packetLabels.written`); absent on one from before. */ asks?: string;/** Wave S7: the chat's sections and items (keys and states only), and the answers written up from the candidate's replies; both only once the chat is sent. */ chat?: ChatPlan; writeup?: ScreenWriteup }; assessmentId: string | null; /** The scorecard's state on the candidate page (apps/api/src/services/screen-scorecards.ts); `recruiterAsked` once ITS has the failed one. */ scorecard?: "ready" | "writing" | "unavailable" | "none"; recruiterAsked?: boolean };
+export type Screen = { id: string; channel: string; status: string; invitedAt: string | null; startedAt: string | null; completedAt: string | null; remindedAt: string | null; /** When the link closes (unstarted), and the reminder to someone who stopped part-way; older answers leave them out. */ expiresAt?: string | null; idleRemindedAt?: string | null; invitedVia?: string | null; transcript: ScreenTranscriptLine[]; answers: Record<string, string>; answersShared?: boolean; progress: { askedKeys: string[]; currentQuestionKey: string | null; /** "Ask about this in a screen": the open questions the screen started with, each with its answer once given. */ focusQuestions?: Array<{ key: string; question: string; whyItMatters?: string; answer?: string }>; flow?: string; phase?: string; declined?: string[]; edits?: Record<string, number>; submittedAt?: string; /** "recruiter_call": finished from a recruiter's notes, never sent by the candidate. */ completedBy?: string; /** Wave S8, "written": a chat without a plan asks the written questions (`packetLabels.written`); absent on one from before. */ asks?: string;/** Wave S7: the chat's sections and items (keys and states only), and the answers written up from the candidate's replies; both only once the chat is sent. */ chat?: ChatPlan; writeup?: ScreenWriteup }; assessmentId: string | null; /** The scorecard's state on the candidate page (apps/api/src/services/screen-scorecards.ts); `recruiterAsked` once ITS has the failed one. */ scorecard?: "ready" | "writing" | "unavailable" | "none"; recruiterAsked?: boolean };
 /** GET /roles/:id/screening (plan E13): how the conversation goes for one role, counts only. */
 export type { ScreeningFunnel } from "@ros/contracts";
 /** GET and PUT /roles/:id/apply-mode (ITS only): the role's own setting (null follows the company), the company's default, and what applies. */
@@ -206,7 +215,7 @@ export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; m
  * What may be done with the application right now; the API decides, the page only shows (see apps/api/src/services/application-actions.ts).
  * `send_new_times`: someone under Cancelled with no interview open; `stop_new_times`: their automatic set waits for its day.
  */
-export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision" | "send_new_times" | "stop_new_times";
+export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision" | "send_new_times" | "stop_new_times" | "remind_screen";
 /**
  * POST /roles/:id/decision-messages: one result per person, so one refusal never hides the others. `communicationId` and
  * `undoUntil` while that person's message waits out its Undo window (plan G9).

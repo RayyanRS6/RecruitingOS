@@ -167,7 +167,7 @@ export async function settleTrials(q: Queryable, now: Date): Promise<{ started: 
       companyId: co.id,
       target: { type: "company", id: co.id },
       title: `${co.name}'s trial has ended`,
-      body: "New applications, new jobs and new screening chats are paused until a plan is chosen. Everything already started carries on. Change the plan, or extend the trial, in the console under Customers, Plan.",
+      body: "New applications, new jobs and new AI interviews are paused until a plan is chosen. Everything already started carries on. Change the plan, or extend the trial, in the console under Customers, Plan.",
       details: { startedAt: term.startedAt, endsAt: term.endsAt, extensions },
     });
     await notify(q, { companyId: co.id, kind: "company.trial_ended", title: "Your trial has ended", body: TRIAL_ENDED_LINE, action: { label: "See your plan", href: "/setup" }, roles: ["owner", "admin"] });
@@ -206,7 +206,7 @@ async function warnTrialEnding(q: Queryable, co: { id: string; timezone: string 
   if (!stamped) return false;
   const date = trialDateWords(term.endsAt, co.timezone);
   const when = due === "last_day" ? (date === trialDateWords(now.toISOString(), co.timezone) ? "today" : "tomorrow") : `on ${date}`;
-  const body = `Your trial ends ${due === "last_day" ? `${when}, ${date}` : when}. After that, new applications, new jobs and new screening chats pause until a plan is chosen; everything already started carries on. To keep going, ask ITS to choose a plan from Settings.`;
+  const body = `Your trial ends ${due === "last_day" ? `${when}, ${date}` : when}. After that, new applications, new jobs and new AI interviews pause until a plan is chosen; everything already started carries on. To keep going, ask ITS to choose a plan from Settings.`;
   await notify(q, { companyId: co.id, kind: "company.trial_ending", title: `Your trial ends ${when}`, body, action: { label: "See your plan", href: "/setup" }, roles: ["owner", "admin"] });
   return true;
 }

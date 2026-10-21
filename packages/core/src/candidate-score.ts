@@ -1,4 +1,4 @@
-import { CANDIDATE_SCORE_OTHER_LABEL, type CandidateScoreRow, type CandidateScoreView, type MatchScore, type RolePacket } from "@ros/contracts";
+import { CANDIDATE_SCORE_BASIS, CANDIDATE_SCORE_OTHER_LABEL, type CandidateScoreRow, type CandidateScoreView, type MatchScore, type RolePacket } from "@ros/contracts";
 
 /**
  * The match score as the candidate sees it after sending (founder decision S7-1; the contract in
@@ -24,7 +24,9 @@ export function candidateScoreView(score: MatchScore | null | undefined, packet:
   const pct = weight > 0 ? Math.round(others.reduce((n, c) => n + counted(c) * c.weightPct, 0) / weight) : null;
   const other: CandidateScoreRow | null = pct === null ? null : { key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: pct, tone: toneOf(pct), words: `${pct}% shown` };
   const notYetShown = score.unknown.filter((u) => u.mustHave && publicKeys.includes(u.key)).map((u) => packet.requirements.mustHaves.find((m) => m.key === u.key)?.text ?? u.label);
-  return { score: score.score, band: score.band, bandLabel: score.bandLabel, rows, other, notYetShown, coverage: score.coverage.words, capped: score.capped };
+  // R20-9: whether their AI interview is in the number, as the team's label says it.
+  const basis = score.interview === "done" ? CANDIDATE_SCORE_BASIS.both : CANDIDATE_SCORE_BASIS.resumeOnly;
+  return { score: score.score, band: score.band, bandLabel: score.bandLabel, rows, other, notYetShown, coverage: score.coverage.words, basis, capped: score.capped };
 }
 
 /** The bar's colour band: green from 80, amber from 40, red below. */

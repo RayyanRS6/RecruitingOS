@@ -47,8 +47,8 @@ export function actorWords(actor: RoleEvent["actor"]): string {
 
 /** Mirrors STAGE_LABEL in packages/core, in the staff glossary's words (screening chat). */
 const STAGE_WORDS: Record<string, string> = {
-  applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to a screening chat",
-  screening: "In the screening chat", screen_complete: "Screening chat done", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done",
+  applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview",
+  screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done",
   debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out",
   negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool",
 };
@@ -124,9 +124,9 @@ export function describeRoleEvent(e: RoleEvent): string {
     "application.withdrawn": "A candidate withdrew",
     "application.moved_to_talent_pool": "A candidate was added to the talent pool",
     "candidate.recommended": "A candidate was recommended for interview",
-    "screen.invited": "A candidate was invited to a screening chat",
-    "screen.completed": "A candidate finished the screening chat",
-    "screen.cancelled": p.reason === "stopped_by_team" ? "A screening chat invitation was stopped by the team" : p.reason === "deletion_request" ? "A screening chat was closed: the candidate's information was deleted" : "A screening chat was closed: the candidate is no longer in the process",
+    "screen.invited": "A candidate was invited to an AI interview",
+    "screen.completed": "A candidate finished the AI interview",
+    "screen.cancelled": p.reason === "stopped_by_team" ? "An AI interview invitation was stopped by the team" : p.reason === "deletion_request" ? "An AI interview was closed: the candidate's information was deleted" : "An AI interview was closed: the candidate is no longer in the process",
     "interview.requested": "An interview was requested",
     "interview.scheduled": "An interview was booked",
     "interview.completed": "An interview took place",

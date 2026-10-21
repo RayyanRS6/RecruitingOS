@@ -65,7 +65,7 @@ describe("email failure handling", () => {
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     applicationId = a.id;
     candidateId = a.candidateId;
-    const ack = fake().sent.find((m) => m.to === "maria.reyes@example.com" && /received your application/.test(m.subject))!;
+    const ack = fake().sent.find((m) => m.to === "maria.reyes@example.com" && /^Thank you for applying/.test(m.subject))!;
     ackMessageId = ack.providerMessageId;
   });
   afterAll(async () => {
@@ -96,7 +96,7 @@ describe("email failure handling", () => {
     expect(retry).toBeTruthy();
     expect(retry.status).toBe("sent");
     expect(retry.retryAttempt).toBe(1);
-    expect(fake().sent.filter((m) => m.to === "maria.reyes@example.com" && /received your application/.test(m.subject))).toHaveLength(2);
+    expect(fake().sent.filter((m) => m.to === "maria.reyes@example.com" && /^Thank you for applying/.test(m.subject))).toHaveLength(2);
     expect((await container.db.select().from(events).where(eq(events.type, "message.retried"))).length).toBe(1);
     setClock(0);
   });

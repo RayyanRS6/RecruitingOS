@@ -11,7 +11,7 @@ Run on the staging deployment after the accounts in `docs/spec/13` exist and `do
 
 ## 1a. Résumé storage (decision 2; `docs/runbooks/resume-storage.md`)
 
-- [ ] `STORAGE_PROVIDER=supabase` on Vercel and Railway; bucket `resumes` is Private with an 8 MB limit and the four allowed types; `SUPABASE_SERVICE_ROLE_KEY` still absent everywhere.
+- [ ] `STORAGE_PROVIDER=supabase` on Vercel and Railway; bucket `resumes` is Private with an 8 MB limit and the allowed types: the four résumé types (PDF, Word `.docx`, `text/plain`, `text/markdown`) and the three logo types (`image/png`, `image/jpeg`, `image/webp`; logos share the bucket); the apply form's reading note is saved as `text/plain`, so no other type is needed; `SUPABASE_SERVICE_ROLE_KEY` still absent everywhere.
 - [ ] A browser apply with a PDF lands under `quarantine/` and then under the company prefix; the row goes `quarantined` → `clean`; the owner opens it from the candidate page and `document.read` is audited.
 - [ ] A renamed program is refused (`executable`), the EICAR file is refused (`infected`), both removed from the bucket; a fulfilled deletion removes the file and audits `document.deleted`.
 - [ ] No `connect-src` policy report names the storage origin; no public URL exists for any object.

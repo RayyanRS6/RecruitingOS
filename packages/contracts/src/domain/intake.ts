@@ -197,6 +197,20 @@ export const IntakeServerState = z.object({
   ad: z.object({ messageIndex: z.number().int(), chars: z.number().int(), extracted: z.boolean().default(false), takenFromAd: z.array(z.string()).default([]) }).optional(),
   openQuestions: z.array(IntakeQuestion).default([]),
   answeredRounds: z.number().int().default(0),
+  /**
+   * What is never asked on a card again in this draft (staging, 20 Oct 2026: pay, the interviewers and the company were
+   * asked twice): the field of every card already shown (answered, skipped or left), and of every fact the owner set on
+   * the panel. Server-kept; the assistant is told the list and the server drops any card that asks one of them.
+   */
+  settledFields: z.array(IntakeQuestionField).default([]),
+  /**
+   * The single-value facts the owner gave on a card (not skipped) or set or cleared on the panel, by name (locationText,
+   * reason…): the assistant never changes those on a turn that follows answers alone; a correction the owner types still
+   * goes through.
+   */
+  answeredFacts: z.array(z.string()).default([]),
+  /** The wording of every card shown in this draft (the latest 60): a card that asks one of them again under another field is dropped. */
+  askedPrompts: z.array(z.string()).default([]),
   draftRequestedAt: z.string().optional(),
   removed: z.array(z.object({ field: z.string(), value: z.string() })).default([]),
   /** Deal-breakers already offered back as must-haves (C17), so each is offered once. */

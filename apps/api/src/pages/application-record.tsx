@@ -6,7 +6,7 @@ import { z } from "zod";
 import { CandidatePrivacyRequest, CandidateSmsPreference, isCompanyVerified, type ApplicationStage, type CandidateScoreRow, type CandidateStep, type DecisionWording, type RolePacket } from "@ros/contracts";
 import { newTimesDayWords, sendPrivacyAcknowledgment } from "@ros/agents";
 import { DECISION_STAGES, audit, candidateNewTimesPromise, candidateStep, createDataRequest, decisionTold, emit, fulfilSmsOptOut, mayWithdraw, notify, openFollowUpOf, openHumanReview, transition, type NewTimesPromise } from "@ros/core";
-import { applications, candidates, communications, companies, dataRequests, events, interviewFollowups, interviews, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
+import { applications, candidates, communications, companies, dataRequests, events, interviewFollowups, interviews, rolePackets, roles, screens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
@@ -245,21 +245,38 @@ function cancelledLine(news: InterviewNews): string | null {
   return null;
 }
 
+/**
+ * Before the AI interview exists (20 Oct 2026, R20-5): `soon` while the résumé is being read (the link comes by email
+ * within about ten minutes), `later` while the month's AI interviews are used up (Q17: it follows by email). Never said
+ * for an application held on a must-have answer (E7).
+ */
+export type InterviewComing = "soon" | "later" | null;
+
+/** `InterviewComing` from the AI interview's run (`screen:<id>`) while it is on and no interview exists yet; nothing for a held application. */
+async function interviewComing(tx: Tx, app: { id: string; stage: string }): Promise<InterviewComing> {
+  if (!["applied", "received", "eligible"].includes(app.stage)) return null;
+  const [run] = await tx.select({ status: workflowRuns.status, state: workflowRuns.state, currentStep: workflowRuns.currentStep }).from(workflowRuns).where(eq(workflowRuns.idempotencyKey, `screen:${app.id}`)).limit(1);
+  if (!run || ["completed", "failed", "cancelled"].includes(run.status) || run.currentStep === "after_hold") return null;
+  return (run.state as { waitingForAllowance?: string }).waitingForAllowance ? "later" : "soon";
+}
+
 /** The line under the steps, in the candidate's words: what is happening now and what they can do. */
-function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string }): string {
+function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string; coming?: InterviewComing }): string {
   const { step, stage, poolOptOut } = input;
   const news = input.news ?? {};
-  if (step === "received") return stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.";
+  const coming = input.coming === "soon" ? "We are reading your application. Your AI interview link arrives by email within about 10 minutes." : input.coming === "later" ? "Your application is in. Your AI interview link follows by email as soon as it is ready." : null;
+  if (step === "received") return coming ?? (stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.");
   if (step === "under_review") {
-    // An interview they cancelled, or new times for it, is the newest thing that happened: it comes before a screening link.
+    // An interview they cancelled, or new times for it, is the newest thing that happened: it comes before an interview link.
     const cancelled = cancelledLine(news);
     if (cancelled) return cancelled;
     if (news.gettingReady) return "You asked for new times. We are getting them ready and will email them to you.";
     if (news.lapsed) return "The interview times we sent have passed. The hiring team will be in touch.";
-    // The page calls it the screening chat throughout, as the progress line above does (one name for one step).
-    if (input.screen?.status === "paused") return "Your screening chat is paused while we fix a problem on our end. Your answers so far are saved, and we will email you a link to finish.";
-    if (input.screen) return input.screen.status === "in_progress" ? "Finish the screening chat whenever you are ready. Your answers so far are saved." : "A short written screening chat with the hiring team's AI assistant is waiting for you, whenever suits you.";
-    if (stage === "screen_complete") return "Thanks for completing the screening chat. The team is reviewing your answers.";
+    // The page calls it the AI interview throughout, as the progress line above does (one name for one step).
+    if (input.screen?.status === "paused") return "Your AI interview is paused while we fix a problem on our end. Your answers so far are saved, and we will email you a link to finish.";
+    if (input.screen) return input.screen.status === "in_progress" ? "Finish your AI interview whenever you are ready. Your answers so far are saved." : "Your next step is a short AI interview with the hiring team's AI assistant. It is waiting for you, whenever suits you.";
+    if (coming) return coming;
+    if (stage === "screen_complete") return "Thanks for completing the AI interview. The team is reviewing your answers.";
     return "The hiring team is reviewing your application. You will hear from them either way.";
   }
   if (step === "interview") {
@@ -282,12 +299,12 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
 
 /** The steps of the progress line the status page leads with (Wave S2, slice K4), in the candidate's words. */
 export type ProgressStep = "applied" | "screening" | "review" | "interview" | "decision";
-export const PROGRESS_STEP_LABEL: Record<ProgressStep, string> = { applied: "Applied", screening: "Screening chat", review: "Review", interview: "Interview", decision: "Decision" };
+export const PROGRESS_STEP_LABEL: Record<ProgressStep, string> = { applied: "Applied", screening: "AI interview", review: "Review", interview: "Interview", decision: "Decision" };
 
 /**
- * The progress line (Kanvis-like): Applied, Screening chat, Review, Interview, Decision. It is read off the candidate's
- * step (`candidateStep`, which never shows a private decision): Received is Applied; Under review is the screening chat
- * while one is open or paused, else Review. The screening chat is a step only for an application that has, or had, one
+ * The progress line (Kanvis-like): Applied, AI interview, Review, Interview, Decision. It is read off the candidate's
+ * step (`candidateStep`, which never shows a private decision): Received is Applied; Under review is the AI interview
+ * while one is open or paused, else Review. The AI interview is a step only for an application that has, or had, one
  * (so an eligibility answer that did not match is never hinted at, E7); at the decision, the interview is a step only
  * when there was one. Every step before the current one is done.
  */
@@ -298,7 +315,7 @@ export function progressLine(input: { step: CandidateStep; hasChat: boolean; cha
 }
 
 /**
- * Whether the screening chat is a step on the progress line: while one is open or paused, or once one really happened
+ * Whether the AI interview is a step on the progress line: while one is open or paused, or once one really happened
  * (finished, or closed after the candidate started it). A chat they skipped ("send without the chat"), one that expired
  * unanswered, one cancelled before it started, or one handed to a person is never ticked as done (as with interviews:
  * nobody sees a tick for one that never happened).
@@ -388,7 +405,8 @@ function ScoreBar(props: { row: CandidateScoreRow }) {
 /**
  * The match score after sending (founder decision S7-1; DRAFT WORDING PENDING COUNSEL, register items 1 and 21: lawyer
  * review before real candidates in NYC, IL, CA or CO). While it is worked out: "Working out your match score…", with a
- * plain "Check again" link (never a timed reload: the page holds forms a candidate may be typing in, WCAG 2.2.1). Then the number, its band and the bars: only the
+ * plain "Check again" link (never a timed reload: the page holds forms a candidate may be typing in, WCAG 2.2.1). Then the number, its band, what it rests
+ * on ("From your résumé and your AI interview", or "From your résumé only" until the AI interview is in it; R20-9) and the bars: only the
  * job page's must-haves by name, every other requirement in one line; what nothing showed yet is listed as not shown,
  * never held against them. Nothing at all when ITS switched it off for the company.
  */
@@ -408,8 +426,8 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
     return (
       <section class="card" id="score" aria-labelledby="score-h">
         <p class="eyebrow">Your match score</p>
-        <h2 id="score-h">{score.state === "after_chat" ? "Shown once your screening chat is sent" : "Not ready yet"}</h2>
-        <p>{score.state === "after_chat" ? "Your match score is worked out from what you send, so it shows here after the screening chat." : "Your match score shows here once it is ready."} The hiring team reads every application themselves either way.</p>
+        <h2 id="score-h">{score.state === "after_chat" ? "Shown once your AI interview is sent" : "Not ready yet"}</h2>
+        <p>{score.state === "after_chat" ? "Your match score is worked out from what you send, so it shows here after your AI interview." : "Your match score shows here once it is ready."} The hiring team reads every application themselves either way.</p>
       </section>
     );
   }
@@ -418,7 +436,7 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
     <section class="card" id="score" aria-labelledby="score-h">
       <p class="eyebrow">Your match score is ready</p>
       <h2 id="score-h" class="score-head"><span class="score-num">{v.score}<small>/100</small></span><span>{v.bandLabel} match</span></h2>
-      <p class="meta">{v.coverage}. Anything the team could not see in what you sent is left out of the number, never held against you.</p>
+      <p class="meta">{v.basis ? `${v.basis}. ` : ""}{v.coverage}. Anything the team could not see in what you sent is left out of the number, never held against you.</p>
       {v.capped ? <p>What you sent shows a must-have from the job page as not met, so the score stays below 55 however much else is shown.</p> : null}
       <h3>How it breaks down</h3>
       <ul class="bars">
@@ -557,7 +575,7 @@ candidatePages.get("/c/status/:token", async (c) => {
   }));
   // Nothing about a private decision shows, and nothing it closed is offered (its screens and interviews were cancelled with it).
   // A conversation paused while the assistant is down (plan E5) is mentioned, without a link: an email brings it back.
-  // Whether there ever was one only decides whether the progress line has a screening chat step, the same before and after a private decision.
+  // Whether there ever was one only decides whether the progress line has an AI interview step, the same before and after a private decision.
   const lastScreen = (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1))[0];
   const latestScreen = view.hidden ? undefined : lastScreen;
   const openScreen_ = latestScreen && ["invited", "reminded", "in_progress"].includes(latestScreen.status) ? latestScreen : undefined;
@@ -583,6 +601,8 @@ candidatePages.get("/c/status/:token", async (c) => {
   // A private decision cancels an open chat: the line keeps its step as it was, so nothing hints at the decision.
   const chatStep = chatCounts(lastScreen, !!(openScreen_ ?? pausedScreen) || (view.hidden && lastScreen?.status === "cancelled"));
   const progress = progressLine({ step, hasChat: chatStep, chatOpen: !!(openScreen_ ?? pausedScreen), hadInterview: invitedToInterview });
+  // The AI interview still being prepared (20 Oct 2026): its run waits for the reading, or for more interviews (Q17).
+  const coming = !lastScreen && !view.hidden ? await withTenant(container.db, app.companyId, (tx) => interviewComing(tx, app)) : null;
   // "Don't keep me for future roles", from the decision message's link (#future-roles) or the button: it says it was saved.
   const pool = c.req.query("pool");
   const poolSaved = (pool === "out" && poolOptOut) || (pool === "in" && !poolOptOut);
@@ -622,10 +642,10 @@ candidatePages.get("/c/status/:token", async (c) => {
       <JumpLinks items={jump} />
       {/* Where things stand, then the one thing to do now (founder brief, 14 October 2026): the line, and the button or card. */}
       <h2>What happens next</h2>
-      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company" })}</p>
+      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming })}</p>
       {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
       {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
-      {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening chat" : "Start the screening chat"}</a> : null}
+      {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
       {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
       {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
       {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
@@ -633,7 +653,7 @@ candidatePages.get("/c/status/:token", async (c) => {
       <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application.</p>
       <details class="more">
         <summary>How AI is used</summary>
-        <p class="meta">An AI assistant reads applications and runs the screening chat for them; who is interviewed, hired or turned down is always a person's decision.</p>
+        <p class="meta">An AI assistant reads applications and runs the AI interview for them; who is interviewed, hired or turned down is always a person's decision.</p>
       </details>
       <div class="card status">
         {/* The same name for where they are as the progress line above: one vocabulary on the page. */}

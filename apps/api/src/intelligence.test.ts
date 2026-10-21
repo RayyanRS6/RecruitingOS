@@ -65,7 +65,7 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     cookie = consume.headers.get("set-cookie")!.split(";")[0];
     const co = (await (await json("POST", "/api/v1/companies", { name: "Closer Look Dental", vertical: "dental", sizeBand: "20-49", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
-    // The résumé reading decides what comes next here, so the role takes the later path (plan Wave E).
+    // The ITS switch is ignored since 20 Oct 2026 (R20-12): every applicant gets the AI interview whatever it says.
     await useLaterApplyFlow(container, co.id);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
     // The deal-breakers come before the must-haves so the fake intake keeps the must-have phrases clean (it reads a must-haves line to its end).
@@ -106,7 +106,7 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(row.evidence.unknowns).toEqual([unknown.question]);
     expect(row.evidence.confidenceReasons).toEqual(asmt.result.confidenceReasons);
     expect(row.evidence.needsCloserLook).toBe(false); // a screen is on its way; nobody is waiting on the owner
-    expect(row.stageLabel).toBe("Invited to a screening chat");
+    expect(row.stageLabel).toBe("Invited to an AI interview");
     // no must-have shown in full: a low-confidence reading. That alone holds nothing (plan A8); it asks the reader to read it themselves
     expect(asmt.confidence).toBe("low");
     expect(row.evidence).toMatchObject({ lowConfidence: true, inconsistent: false });
@@ -131,16 +131,22 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
   });
 
   let rileyId = "";
-  it("insufficient evidence is an explicit state: waiting on you, labelled 'Needs a closer look', and the notification says what is missing", async () => {
+  it("insufficient evidence is an explicit state: the AI interview still goes, and once a person takes it back the card waits on them, labelled 'Needs a closer look', saying what is missing", async () => {
     const a = await apply({ first: "Riley", last: "Quinn", email: "riley@example.com", resume: "Riley Quinn\nRetail associate at Bright Stores 2019 - present\nCustomer service and scheduling" });
     rileyId = a.id;
-    expect(a.stage).toBe("triaged"); // the fake's overall=unknown now recommends review_manually, as the prompt rule says
+    // the fake's overall=unknown recommends review_manually, as the prompt rule says; since 20 Oct 2026 every applicant
+    // still gets the AI interview (R20-4), and the team hears nothing about one person until it is scored (R20-8)
+    expect(a.stage).toBe("screen_invited");
     const [asmt] = await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id));
     expect(asmt.overall).toBe("unknown");
     expect(asmt.result.recommendation).toBe("review_manually");
     expect(asmt.result.unknowns).toHaveLength(2);
     expect(asmt.result.concerns).toHaveLength(2);
-    expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(0);
+    expect((await screenOf(a.id)).invitedVia).toBe("with_application");
+    expect((await notes()).some((n) => /Riley Quinn/.test(n.title))).toBe(false);
+    // a person takes the interview back to look closer first
+    expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "cancel_screen", note: "Looking closer first." })).status).toBe(200);
+    await container.drain();
     const row = (await list()).find((r) => r.id === a.id)!;
     expect(row.group).toBe("waiting_on_you");
     expect(row.stageLabel).toBe(CLOSER_LOOK_LABEL);
@@ -151,11 +157,6 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     // what the Talent page's filter chip counts: the rows that need a closer look, and only those
     expect((await list()).filter((r) => r.evidence.needsCloserLook).map((r) => r.id)).toEqual([a.id]);
     expect((await list("?group=waiting_on_you")).map((r) => r.id)).toContain(a.id);
-    // the notification says what is missing, in plain words, and what to do about it
-    const note = (await notes()).find((n) => n.kind === "application.needs_review" && /Riley Quinn/.test(n.title))!;
-    expect(note.title).toBe("Riley Quinn needs a closer look");
-    expect(note.body).toBe("Open questions: Can you tell me about your active CA RDH license? Can you tell me about your perio experience? Ask about it in a short screening chat, or review the application yourself.");
-    expect(note.action).toEqual({ label: "Take a closer look", href: `/roles/${roleId}/talent?open=${a.id}` });
     // the capability list gains the one-click follow-up wherever the facts are loaded from the database
     const { applicationFacts, allowedApplicationActions } = await import("./services/application-actions");
     const facts = await withTenant(container.db, a.companyId, (tx) => applicationFacts(tx, a, "owner"));
@@ -179,10 +180,10 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(scr.channel).toBe("web");
     expect(scr.progress.focusQuestions?.map((f) => f.key)).toEqual(["unknown_1", "unknown_2"]);
     expect(scr.progress.focusQuestions?.[0].question).toBe("Can you tell me about your active CA RDH license?");
-    const invite = emailOutbox().find((m) => m.to === "riley@example.com" && /screening conversation/.test(m.subject))!;
+    // "Send a new link" in an email of its own, which gives minutes rather than a number of questions
+    const invite = emailOutbox().find((m) => m.to === "riley@example.com" && /^Your next step: a short AI interview/.test(m.subject))!;
     expect(invite.text).toContain(`/c/screen/${scr.token}`);
     expect(invite.text).toContain("a few quick questions about your background");
-    expect(invite.text).toMatch(/8 questions/); // two open questions in front of the packet's six
     const invited = (await eventsOf("screen.invited")).find((e) => e.subjectId === scr.id)!;
     expect(invited.payload).toMatchObject({ focus: "unknowns", focusQuestions: 2, invitedBy: expect.any(String) });
     expect((await eventsOf("human.override")).some((e) => e.subjectId === rileyId && (e.payload as { action: string }).action === "ask_in_screen")).toBe(true);
@@ -217,11 +218,18 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect((await list()).find((r) => r.id === rileyId)!.evidence.needsCloserLook).toBe(false);
   });
 
-  it("refuses the follow-up when the assessment left nothing to ask, and a plain invitation may still carry the focus option", async () => {
-    // A refused policy change (for one, a sign-in older than the policy page accepts) would leave the invitation automatic and fail below as a wrong stage: assert it here, at the cause.
-    expect((await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "human_only", approverRoles: [] })).status).toBe(200);
+  it("refuses the follow-up while the AI interview is open and when the assessment left nothing to ask, and a plain invitation may still carry the focus option", async () => {
+    // the invitation is no longer a setting (R20-4): there is nothing to choose
+    const fixed = await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "human_only", approverRoles: [] });
+    expect(fixed.status).toBe(400);
+    expect(((await fixed.json()) as { error: { code: string } }).error.code).toBe("no_setting");
     const a = await apply({ first: "Noor", last: "Haddad", email: "noor@example.com", resume: "Noor Haddad, RDH\nRegistered Dental Hygienist at Lakeside Dental 2016 - present\nRDH license CA active\nPerio charting, Open Dental" });
-    expect(a.stage).toBe("triaged");
+    expect(a.stage).toBe("screen_invited");
+    const open = await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "ask_in_screen" });
+    expect(open.status).toBe(409);
+    expect(((await open.json()) as { error: { code: string } }).error.code).toBe("already_invited");
+    expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "cancel_screen" })).status).toBe(200);
+    await container.drain();
     const refused = await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "ask_in_screen" });
     expect(refused.status).toBe(409);
     expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("nothing_to_ask");
@@ -230,29 +238,29 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     await container.drain();
     const scr = await screenOf(a.id);
     expect(scr.progress.focusQuestions ?? []).toEqual([]);
-    expect(emailOutbox().find((m) => m.to === "noor@example.com" && /screening conversation/.test(m.subject))!.text).not.toContain("a few quick questions about your background");
-    expect((await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] })).status).toBe(200);
+    expect(emailOutbox().find((m) => m.to === "noor@example.com" && /^Your next step: a short AI interview/.test(m.subject))!.text).not.toContain("a few quick questions about your background");
   });
 
-  it("a clean résumé file with no text (a scan) is said on the card and in the notification, not only in the timeline", async () => {
+  it("a clean résumé file with no text (a scan) is said on the card, not only in the timeline, and the AI interview still goes", async () => {
     const a = await apply({ first: "Sam", last: "Okafor", email: "sam@example.com", resume: new File([fixtures("scanned.pdf")], "scan.pdf", { type: "application/pdf" }) });
     expect((await eventsOf("resume.extraction_failed")).some((e) => e.subjectId === a.id)).toBe(true);
     expect(a.extraction).toBeNull();
-    expect(a.stage).toBe("triaged");
+    expect(a.stage).toBe("screen_invited");
     const [asmt] = await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id));
     expect(asmt.overall).toBe("unknown");
     expect(asmt.result.recommendation).toBe("review_manually");
     expect(asmt.result.confidenceReasons).toContain("no résumé text and no written summary to assess");
+    // while the AI interview is open the card says the file had no text; nobody is alerted about one person (R20-8)
+    expect((await list()).find((r) => r.id === a.id)!.evidence).toMatchObject({ resumeUnreadable: true, needsCloserLook: false });
+    expect((await notes()).some((n) => /Sam Okafor/.test(n.title))).toBe(false);
+    // once a person takes the interview back, it waits on them with the reason in plain words
+    expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "cancel_screen" })).status).toBe(200);
+    await container.drain();
     const row = (await list()).find((r) => r.id === a.id)!;
     expect(row.evidence.resumeUnreadable).toBe(true);
     expect(row.evidence.needsCloserLook).toBe(true);
     expect(row.stageLabel).toBe(CLOSER_LOOK_LABEL);
     expect(row.evidence.reason).toContain(RESUME_UNREADABLE_TEXT);
-    const note = (await notes()).find((n) => n.kind === "application.needs_review" && /Sam Okafor/.test(n.title))!;
-    expect(note.title).toBe("Sam Okafor needs a closer look");
-    expect(note.body).toContain(RESUME_UNREADABLE_TEXT);
-    expect(note.body).toMatch(/Not enough to assess automatically/);
-    expect(note.body).toMatch(/Ask about it in a short screening chat, or review the application yourself\.$/);
     // the detail carries what the page derives the same sentence from: a clean résumé document without text
     const d = (await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { documents: Array<{ kind: string; status: string; hasText: boolean }>; extraction: unknown };
     expect(d.documents.find((x) => x.kind === "resume")).toMatchObject({ status: "clean", hasText: false });
@@ -263,10 +271,15 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     // every reading (TRIAGE_READINGS of them, each with the runner's one retry) unusable: one usable reading would do
     for (let i = 0; i < TRIAGE_READINGS * 2; i++) container.fake!.failNext("triage.assess", "invalid");
     const a = await apply({ first: "Casey", last: "Morgan", email: "casey@example.com", resume: "Casey Morgan, RDH\nRegistered Dental Hygienist at Coastal Dental 2018 - present\nRDH license CA active\nPerio charting, Eaglesoft" });
-    expect(a.stage).toBe("triaged");
+    // the AI interview still goes (R20-4); the "could not assess" notice is the one per-person alert kept
+    expect(a.stage).toBe("screen_invited");
     expect(a.latestAssessmentId).toBeNull();
     expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).toHaveLength(0);
     expect((await eventsOf("ai.output_invalid")).filter((e) => e.subjectId === a.id)).toHaveLength(1);
+    expect((await list()).find((r) => r.id === a.id)!.assessment).toBeNull();
+    // a person takes the interview back to review it themselves: the card says why
+    expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "cancel_screen" })).status).toBe(200);
+    await container.drain();
     const row = (await list()).find((r) => r.id === a.id)!;
     expect(row.assessment).toBeNull();
     expect(row.evidence.assessmentUnavailable).toBe(true);
@@ -290,10 +303,10 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
    * Plan A8 held a reading that disagreed with its own must-have findings. Since Wave S7 the résumé reading's overall
    * and recommendation are worked out in code from its settled findings (`settledOverall` in packages/agents), so the
    * readings can say "potential" and "screen" all they like: a must-have their own words show is not met makes the
-   * reading Weak, nothing is sent, and a person reviews it. (The A8 check still guards every stored reading and the
+   * reading Weak, and a person reviews it once the AI interview is scored. (The A8 check still guards every stored reading and the
    * screening scorecard: packages/core/src/evidence.test.ts.)
    */
-  it("a reading whose own finding shows a must-have is not met is Weak, whatever the model said overall, and nothing is sent (plan A8, Wave S7)", async () => {
+  it("a reading whose own finding shows a must-have is not met is Weak, whatever the model said overall, and the AI interview still goes (plan A8, Wave S7, R20-10)", async () => {
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
     const licence = role.currentPacket.packet.requirements.mustHaves.find((m) => /licen/i.test(m.text))!;
     // said plainly: under the licence rule (15 Oct 2026) only that is a "no"; a lapsed licence would be "not known yet"
@@ -303,19 +316,20 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     for (let i = 0; i < TRIAGE_READINGS; i++) container.fake!.scriptNext("triage.assess", { overall: "potential", confidence: "medium", confidenceReasons: [], summary: "Relevant hygiene work; no licence.", strengths: [{ claim: "Works as a dental hygienist", evidence: { source: "resume", quote: "Dental Hygienist at Harbor Dental 2016 - present" } }], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: licence.key, met: "no", evidence: { source: "resume", quote: lapsed } }], anomalies: [], recommendation: "screen", rationale: "Scripted for the consistency check." });
     const a = await apply({ first: "Uma", last: "Patel", email: "uma@example.com", resume: `Uma Patel\nDental Hygienist at Harbor Dental 2016 - present\n${lapsed}\nPeriodontal charting, Dentrix` });
     container.fake!.clearScripts();
-    expect(a.stage).toBe("triaged");
-    expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(0);
-    expect(emailOutbox().filter((m) => m.to === "uma@example.com" && /screening conversation/.test(m.subject))).toHaveLength(0);
     const [stored] = await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id));
     expect(stored).toMatchObject({ overall: "weak" });
     expect((stored?.result as { recommendation?: string } | undefined)?.recommendation).toBe("hold");
-    const note = (await notes()).find((n) => n.kind === "application.needs_review" && /Uma Patel/.test(n.title))!;
-    expect(note.title).toBe("Uma Patel needs your review");
-    expect(note.body).toContain("Relevant hygiene work; no licence.");
+    // a gap seen only in the résumé reading never holds the link back (R20-10): the one email carries it, and nobody is
+    // declined automatically or alerted about one person
+    expect(a.stage).toBe("screen_invited");
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(1);
+    const mail = emailOutbox().filter((m) => m.to === "uma@example.com");
+    expect(mail.map((m) => m.subject)).toEqual([expect.stringMatching(/^Thank you for applying: your next step/)]);
+    expect(mail[0].text).toContain("Start your AI interview: ");
+    expect((await notes()).some((n) => /Uma Patel/.test(n.title))).toBe(false);
     // the list reads the same assessment: it agrees with its findings, and the 'Missing a must-have' filter catches her
     // on the checked quote (plan A3)
     const row = (await list()).find((r) => r.id === a.id)!;
-    expect(row.group).toBe("waiting_on_you");
     expect(row.evidence).toMatchObject({ inconsistent: false, lowConfidence: false, hasProvenMiss: true });
     expect(row.stageLabel).not.toBe(CLOSER_LOOK_LABEL);
   });
@@ -333,20 +347,21 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     }));
     expect((await screenOf(rileyId)).status).toBe("in_progress");
     expect(JSON.stringify(open)).not.toContain("RDH55555");
-    expect((open.ctx.screens as Array<{ answersShared: boolean }>)[0].answersShared).toBe(false);
+    expect((open.ctx.screens as Array<{ answersShared: boolean }>).every((x) => !x.answersShared)).toBe(true);
     const d = await detail(rileyId);
     expect(JSON.stringify(d)).not.toContain("RDH55555");
     expect(d.screens[0].progress.focusQuestions?.map((f) => f.key)).toEqual(["unknown_1", "unknown_2"]);
-    // the conversation ends normally (set directly here; the flow itself is tested with the screening suites)
-    await container.db.update(screens).set({ status: "completed", completedAt: new Date().toISOString() }).where(eq(screens.applicationId, rileyId));
+    // the conversation ends normally (set directly here; the flow itself is tested with the screening suites). The AI
+    // interview that went with the application was taken back before it started, so it has no answers
+    await container.db.update(screens).set({ status: "completed", completedAt: new Date().toISOString() }).where(eq(screens.id, (await screenOf(rileyId)).id));
     // what a person reads: the recruiter's context and the interviewer's brief carry the answers, the brief with the questions in the words they were asked
     const ctx = await withTenant(container.db, a.companyId, (tx) => buildEscalationContext(tx, a.companyId, roleId, rileyId));
-    expect((ctx.screens as Array<{ answers: Record<string, string> }>)[0].answers.unknown_1).toMatch(/RDH55555/);
+    expect((ctx.screens as Array<{ answers: Record<string, string> }>).find((x) => x.answers.unknown_1)?.answers.unknown_1).toMatch(/RDH55555/);
     const brief = await withTenant(container.db, a.companyId, (tx) => composeInterviewerBrief(tx, { applicationId: rileyId, candidateFirstName: "Riley", packet, roundKey: packet.interviews.plan[0].key }));
     expect(brief?.screen?.answers.find((x) => x.question === licence)?.answer).toMatch(/RDH55555/);
     // what an access request exports: every answer, and the opening questions so the keys mean something
     const bundle = await withTenant(container.db, a.companyId, (tx) => exportCandidateData(tx, a.companyId, a.candidateId));
-    const exported = (bundle.screens as Array<{ answers: Record<string, string>; openingQuestions: Array<{ key: string; question: string }> }>)[0];
+    const exported = (bundle.screens as Array<{ answers: Record<string, string>; openingQuestions: Array<{ key: string; question: string }> }>).find((x) => x.answers.unknown_1)!;
     expect(exported.answers.unknown_1).toMatch(/RDH55555/);
     expect(exported.openingQuestions).toEqual([{ key: "unknown_1", question: licence }, { key: "unknown_2", question: "Can you tell me about your perio experience?" }]);
     // what an anonymization removes: the answers go with the transcript; the questions (the assistant's words) stay

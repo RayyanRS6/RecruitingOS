@@ -11,7 +11,7 @@ import { AskRecruiter } from "../../components/AskRecruiter";
 import { defaultInterviewers } from "../../interview-defaults";
 import { interviewDraftLine } from "../../hiring";
 import { canDecline, canReadNotes } from "../../roles";
-import { callNotesState } from "../../screen-view";
+import { callNotesState, declineReasonFor } from "../../screen-view";
 import { NOT_NOW_TOAST, declineConfirmText, declineSummary, decisionToast, holdDay, newTimesToast, outcomeNoticeText, outcomeToast, safetyNetAfterDecision, type InterviewRef, type PanelStep } from "../../talent-actions";
 import { CallNotesCard } from "./call-notes";
 import { DECLINE_REASONS, activeInterviews, eligibilityAnswerWords, firstSentence, holdDateBounds, whoDecides, type PanelTab } from "./helpers";
@@ -40,7 +40,9 @@ const MISSED_BY_US_LINE = "Our interviewer missed it. The new invitation says so
 export function NeedsYou(props: Props) {
   const { a, roleId, step, setStep } = props;
   const can = (x: ApplicationDetail["allowedActions"][number]) => a.allowedActions.includes(x);
-  const suggestions = a.pendingApprovals.filter((p) => p.actionType === "application.invite_screen" || p.actionType === "application.recommend_interview");
+  // The assistant's "Interview?" suggestion. No "Invite to a screening chat?" card any more (20 Oct 2026, R20-4): every
+  // applicant gets the AI interview by itself, and an old suggestion still waiting lapses on its own.
+  const suggestions = a.pendingApprovals.filter((p) => p.actionType === "application.recommend_interview");
   // a decision nobody has told the candidate about yet, or whose message is on its way
   const telling = DECIDED.includes(a.stage) && (a.toldState === "not_told" || a.toldState === "queued");
   const messagesWaiting = a.pendingApprovals.some((p) => p.actionType === "message.send_freeform");
@@ -144,7 +146,8 @@ function HoldStep({ a, roleId, cancelled, onClose }: { a: ApplicationDetail; rol
  * candidate is told at once (no reason given) that the interview is off; and how the candidate will hear the decision.
  */
 function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string; onClose: () => void }) {
-  const [reason, setReason] = useState(DECLINE_REASONS[0][0]);
+  // "Candidate did not respond" first once their AI interview link closed unused or unfinished (R20-7); a choice still.
+  const [reason, setReason] = useState<string>(declineReasonFor(a) ?? DECLINE_REASONS[0][0]);
   const [note, setNote] = useState("");
   useDraft("decline-note", note);
   const first = useFocusOnMount<HTMLSelectElement>();
@@ -362,13 +365,12 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /**
- * The assistant's suggestion (a screen, an interview): Yes, or Not now with an optional reason (plan A6). "Yes,
- * interview" goes straight on to the interview approval, filled in from the plan (plan H4): one more look, one click.
+ * The assistant's suggestion of an interview: Yes, or Not now with an optional reason (plan A6). "Yes, interview" goes
+ * straight on to the interview approval, filled in from the plan (plan H4): one more look, one click.
  */
 function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; roleId: string; p: ApplicationDetail["pendingApprovals"][number]; onInterview: (roundKey?: string) => void }) {
   const qc = useQueryClient();
   const refresh = useRefreshCandidate(a.id, roleId);
-  const screen = p.actionType === "application.invite_screen";
   const [declining, setDeclining] = useState(false);
   const [why, setWhy] = useState("");
   useDraft(`not-now-${p.id}`, why);
@@ -376,7 +378,6 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
     mutationFn: (input: { decision: "approve" | "reject"; note?: string }) => api.post<{ interviewDraft?: InterviewDraft | null }>(`/api/v1/approvals/${p.id}/decide`, input),
     onSuccess: async (r, input) => {
       if (input.decision === "reject") toast(NOT_NOW_TOAST.title, NOT_NOW_TOAST.detail);
-      else if (screen) toast("Invitation on its way.", "The screening chat goes to the candidate by email, or by text when they agreed to texts.");
       else {
         toast("Moved to Interviewing.", "Check the interview below and approve it; times go out to the candidate from there.");
         if (r.interviewDraft) qc.setQueryData(["interview-draft", a.id], r.interviewDraft);
@@ -388,7 +389,7 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
   });
   const rationale = firstSentence(p.rationale);
   return (
-    <Card needsYou lift title={screen ? "The assistant suggests a screening chat" : "The assistant suggests an interview"}>
+    <Card needsYou lift title="The assistant suggests an interview">
       {rationale.line ? <p className="small" style={{ color: "var(--ink-2)" }}>{rationale.line}</p> : null}
       {rationale.rest ? <Why>{rationale.rest}</Why> : null}
       {declining ? (
@@ -401,7 +402,7 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
         </div>
       ) : (
         <div className="row" style={{ marginTop: 10 }}>
-          <Button variant="primary" size="sm" loading={decide.isPending} onClick={() => decide.mutate({ decision: "approve" })}>{screen ? "Yes, invite to a screening chat" : "Yes, interview"}</Button>
+          <Button variant="primary" size="sm" loading={decide.isPending} onClick={() => decide.mutate({ decision: "approve" })}>Yes, interview</Button>
           <Button size="sm" onClick={() => setDeclining(true)}>Not now</Button>
           <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
         </div>

@@ -407,7 +407,11 @@ export async function scrubCandidateAiData(q: Queryable, input: { companyId: str
   const { companyId, candidateId } = input;
   const refs = await candidateRefs(q, companyId, candidateId);
   const { appIds, docIds, screenIds, unconfirmedIds } = refs;
-  const wfIds = (await workflowRunsAbout(q, companyId, candidateId, refs)).map((w) => w.id);
+  const wfRuns = await workflowRunsAbout(q, companyId, candidateId, refs);
+  const wfIds = wfRuns.map((w) => w.id);
+  // The apply form's reading of the upload they sent (20 Oct, R20-1), also one never tied to the application: it carries
+  // only the upload, which their intake run names.
+  const uploadIds = wfRuns.map((w) => w.formUploadId).filter((u): u is string => !!u);
 
   let assessmentCount = 0;
   const runIds: string[] = [];
@@ -431,6 +435,7 @@ export async function scrubCandidateAiData(q: Queryable, input: { companyId: str
     inArray(sql`${aiRuns.inputRef}->>'documentId'`, anyOf(docIds)),
     inArray(sql`${aiRuns.inputRef}->>'candidateId'`, [candidateId]),
     inArray(aiRuns.workflowRunId, anyOf(wfIds)),
+    inArray(sql`${aiRuns.inputRef}->>'uploadId'`, anyOf(uploadIds)),
   ];
   const runs = await q.select({ id: aiRuns.id, inputRef: aiRuns.inputRef, toolCalls: aiRuns.toolCalls, structuredOutput: aiRuns.structuredOutput, policyDecision: aiRuns.policyDecision, humanOverride: aiRuns.humanOverride, finalOutcome: aiRuns.finalOutcome, error: aiRuns.error }).from(aiRuns).where(and(eq(aiRuns.companyId, companyId), or(...about)));
   let runCount = 0;
@@ -488,9 +493,9 @@ async function candidateRefs(q: Queryable, companyId: string, candidateId: strin
  * candidate), and those whose state names one of them (a scheduling run is about an interview, and carries the
  * application; a new-times run carries both).
  */
-async function workflowRunsAbout(q: Queryable, companyId: string, candidateId: string, refs: CandidateRefs): Promise<Array<{ id: string; status: string }>> {
+async function workflowRunsAbout(q: Queryable, companyId: string, candidateId: string, refs: CandidateRefs): Promise<Array<{ id: string; status: string; formUploadId: string | null }>> {
   const subjects = [...refs.appIds, ...refs.screenIds, ...refs.unconfirmedIds, ...refs.interviewIds, candidateId];
-  return q.select({ id: workflowRuns.id, status: workflowRuns.status }).from(workflowRuns).where(and(eq(workflowRuns.companyId, companyId), or(
+  return q.select({ id: workflowRuns.id, status: workflowRuns.status, formUploadId: sql<string | null>`${workflowRuns.state}->>'formUploadId'` }).from(workflowRuns).where(and(eq(workflowRuns.companyId, companyId), or(
     inArray(sql`${workflowRuns.subject}->>'id'`, subjects),
     inArray(sql`${workflowRuns.state}->>'applicationId'`, anyOf(refs.appIds)),
     inArray(sql`${workflowRuns.state}->>'interviewId'`, anyOf(refs.interviewIds)),

@@ -67,6 +67,23 @@ export function cardsKey(questions: readonly Pick<IntakeQuestion, "id">[]): stri
   return questions.map((q) => q.id).join("|");
 }
 
+export type Deck = { key: string; state: CardState; closed: boolean };
+
+/**
+ * The deck for the cards showing now. New cards start afresh; when cards were only taken away (one answered on the draft
+ * panel), the picks on the others, the card being looked at and a closed deck stay as they were.
+ */
+export function deckFor(prev: Deck, cards: readonly Pick<IntakeQuestion, "id">[]): Deck {
+  const key = cardsKey(cards);
+  if (prev.key === key) return prev;
+  const before = prev.key ? prev.key.split("|") : [];
+  const onlyRemoved = cards.length > 0 && before.length > cards.length && cards.every((q) => before.includes(q.id));
+  if (!onlyRemoved) return { key, state: initialCards(), closed: false };
+  const answers = Object.fromEntries(Object.entries(prev.state.answers).filter(([id]) => cards.some((q) => q.id === id)));
+  const at = cards.findIndex((q) => q.id === before[prev.state.index]);
+  return { key, state: { index: at >= 0 ? at : Math.min(prev.state.index, cards.length - 1), answers }, closed: prev.closed };
+}
+
 export function answerOf(state: CardState, q: Pick<IntakeQuestion, "id">): CardAnswer {
   return state.answers[q.id] ?? EMPTY_ANSWER;
 }

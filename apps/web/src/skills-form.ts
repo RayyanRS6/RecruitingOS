@@ -21,9 +21,13 @@ export const IMPORTANCE_HINT: Record<Importance, string> = {
   helpful: "Counts a little.",
 };
 
+/**
+ * "Where we check it". The team's own interviews are named as theirs (R20-9), so "only in your own interviews" is never
+ * read as "the AI interview does not count": a skill set so is left out of the match score, which counts the AI interview.
+ */
 export const CHECKED_IN: ReadonlyArray<{ value: SkillRow["evaluatedIn"]; label: string }> = [
-  { value: "screen", label: "The screening chat" },
-  { value: "interview", label: "The interviews" },
+  { value: "screen", label: "The AI interview" },
+  { value: "interview", label: "Only in your own interviews" },
   { value: "both", label: "Both" },
 ];
 
@@ -148,5 +152,5 @@ export function importanceLabel(c: { weight: number; importance?: Importance | n
 
 /** Where a skill is checked, in words. */
 export function checkedInLabel(value: string): string {
-  return { screen: "screening chat", interview: "interviews", both: "screening chat and interviews" }[value] ?? value.replace(/_/g, " ");
+  return { screen: "AI interview", interview: "your interviews", both: "AI interview and your interviews" }[value] ?? value.replace(/_/g, " ");
 }

@@ -584,8 +584,9 @@ describe("the stage strip, private marks and private decisions", () => {
     });
 
     it("offer 'Not now' on Today, which turns the suggestion down and moves nobody", async () => {
+      // since 20 Oct 2026 there is no "Invite to a screen?" card (R20-4): the "Interview?" one is the suggestion left
       const id = await seed("Uma");
-      const req = await suggest(id, "application.invite_screen");
+      const req = await suggest(id, "application.recommend_interview");
       const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ approvalRequestId?: string; actions: Array<{ label: string; path: string; body?: Record<string, unknown> }> }> };
       const notNow = brief.cards.find((c) => c.approvalRequestId === req)!.actions.find((x) => x.label === "Not now")!;
       expect(notNow.body).toMatchObject({ decision: "reject" });
@@ -594,7 +595,7 @@ describe("the stage strip, private marks and private decisions", () => {
       expect((await application(id)).stage).toBe("triaged");
       // the candidate's History carries the answer, joined from the request (plan A10)
       const timeline = ((await (await json(owner, "GET", `/api/v1/applications/${id}`)).json()) as { timeline: Array<{ type: string; subjectId: string; payload: Record<string, unknown> }> }).timeline;
-      expect(timeline.find((e) => e.type === "approval.denied" && e.subjectId === req)?.payload).toMatchObject({ actionType: "application.invite_screen", applicationId: id, note: "Not now" });
+      expect(timeline.find((e) => e.type === "approval.denied" && e.subjectId === req)?.payload).toMatchObject({ actionType: "application.recommend_interview", applicationId: id, note: "Not now" });
     });
   });
 

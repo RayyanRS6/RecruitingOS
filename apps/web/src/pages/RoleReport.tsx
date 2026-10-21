@@ -43,10 +43,10 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /**
  * What an ITS recruiter whose access covers one candidate sees on the Report tab, in plain words: the figures count that
- * candidate alone, and figures about the job's whole group (the screening chat's) are for the hiring team.
+ * candidate alone, and figures about the job's whole group (the AI interview's) are for the hiring team.
  */
 export const ONE_CANDIDATE_REPORT = "Your recruiter access covers one candidate on this job, so these figures count that candidate only. Figures about everyone who applied are for the hiring team.";
-export const ONE_CANDIDATE_SCREENING = "Your recruiter access covers one candidate, so how the screening chat goes for everyone on this job is not shown here. That candidate's own chat is on their page.";
+export const ONE_CANDIDATE_SCREENING = "Your recruiter access covers one candidate, so how the AI interview goes for everyone on this job is not shown here. That candidate's own AI interview is on their page.";
 
 /** Whether a refusal is the one-candidate grant's limit (403 `staff_scope`), which is explained, never offered as a retry. */
 export function isOneCandidateLimit(err: unknown): boolean {
@@ -106,26 +106,26 @@ export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<
 }
 
 /**
- * How the screening chat goes for this role (plan E13): how many were offered it, started and finished, the
+ * How the AI interview goes for this role (plan E13): how many were offered it, started and finished, the
  * typical time to finish, how many chose a person instead, and the questions people chose not to answer in the answers
  * they sent. From each person's latest conversation; counts only, never a name or an answer, and nothing from a
  * conversation nobody sent, so not where anyone stopped (founder decision of 9 October 2026).
  */
 export function ScreeningCard({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role", roleId, "screening"], queryFn: () => api.get<ScreeningFunnel>(`/api/v1/roles/${roleId}/screening`) });
-  if (q.isLoading) return <Card title="The screening chat"><Skeleton lines={3} /></Card>;
-  if (isOneCandidateLimit(q.error)) return <Card title="The screening chat"><p className="small muted">{ONE_CANDIDATE_SCREENING}</p></Card>;
-  if (q.error || !q.data) return <Card title="The screening chat"><ErrorState message="Could not load how the screening chat is going." onRetry={() => q.refetch()} /></Card>;
+  if (q.isLoading) return <Card title="The AI interview"><Skeleton lines={3} /></Card>;
+  if (isOneCandidateLimit(q.error)) return <Card title="The AI interview"><p className="small muted">{ONE_CANDIDATE_SCREENING}</p></Card>;
+  if (q.error || !q.data) return <Card title="The AI interview"><ErrorState message="Could not load how the AI interview is going." onRetry={() => q.refetch()} /></Card>;
   const f = q.data;
   const lines = funnelLines(f);
   return (
-    <Card title="The screening chat">
-      {!lines.length ? <p className="small muted">Nobody has been offered the screening chat for this job yet.</p> : (
+    <Card title="The AI interview">
+      {!lines.length ? <p className="small muted">Nobody has been offered the AI interview for this job yet.</p> : (
         <>
           <div className="stat-row">
             <Stat n={f.offered} label={f.offered === 1 ? "person offered it" : "people offered it"} />
             <Stat n={f.finished} label="finished it" />
-            {f.stillApplying ? <Stat n={f.stillApplying} label="still applying now" /> : null}
+            {f.stillApplying ? <Stat n={f.stillApplying} label="with it open now" /> : null}
           </div>
           <dl className="kv" style={{ marginTop: 10 }}>
             {lines.map((l) => <Fragment key={l.label}><dt>{l.label}</dt><dd>{l.value}</dd></Fragment>)}
@@ -137,7 +137,7 @@ export function ScreeningCard({ roleId }: { roleId: string }) {
               </Table>
             </div>
           ) : null}
-          {f.stillApplying ? <div className="row" style={{ marginTop: 8 }}><Link to={`/roles/${roleId}/talent?applying=1`} className="btn quiet sm">See who is still applying</Link></div> : null}
+          {f.stillApplying ? <div className="row" style={{ marginTop: 8 }}><Link to={`/roles/${roleId}/talent?ownerStage=no_ai_interview`} className="btn quiet sm">See who has no AI interview yet</Link></div> : null}
           <p className="small muted" style={{ marginTop: 8 }}>"Typical" is the middle value, from the first answer to sending. Choosing a person or not answering a question is never held against anyone. Counts only; nobody is named here.</p>
         </>
       )}
@@ -253,7 +253,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
 
       <Card title="What the assistant suggested, and what you decided">
         {r.recommendationsVsDecisions.rows.length ? (
-          <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to a screening chat"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst>
+          <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to the AI interview"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst>
             {r.recommendationsVsDecisions.rows.map((x) => <tr key={x.recommendation}><td>{x.label}</td><td className="num">{x.total}</td><td className="num">{x.invited}</td><td className="num">{x.interviewed}</td><td className="num">{x.shortlisted ?? 0}</td><td className="num">{x.declined}</td><td className="num">{x.held}</td><td className="num">{x.noActionYet}</td></tr>)}
           </Table>
         ) : <p className="small muted">No assessments yet.</p>}

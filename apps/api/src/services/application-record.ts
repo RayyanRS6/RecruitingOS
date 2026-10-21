@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { candidateScoreShown, type ApplicationStage, type CandidateScoreView, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type WriteupAnswer } from "@ros/contracts";
-import { DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
+import { DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
 import { chatPacket } from "@ros/agents";
 import { applications, assessments, rolePackets, roles, screens, type Tx } from "@ros/db";
 
@@ -57,7 +57,8 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   const latest = own.find((r) => r.id === app.latestAssessmentId) ?? own[0] ?? null;
   const readAgainst = latest?.packetVersion ?? app.packetVersion;
   const packet = (await packetOf(tx, app.roleId, readAgainst)) ?? (readAgainst !== app.packetVersion ? await packetOf(tx, app.roleId, app.packetVersion) : null);
-  const match = packet && own.length ? matchScore(readingPair(own), packet, { packetVersion: readAgainst }) : null;
+  // Labelled with where their AI interview stands (R20-9): "From your résumé only" until its scorecard is in.
+  const match = packet && own.length ? matchScore(readingPair(own), packet, { packetVersion: readAgainst, interview: interviewInScore(input.screens, app.stage) }) : null;
   const view = packet ? candidateScoreView(match, packet) : null;
   // A chat sent a moment ago whose scorecard is not written yet: the score is about to change, so it waits for it.
   const sent = last && screenAnswersSent(last) ? last : null;

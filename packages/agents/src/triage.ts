@@ -937,7 +937,7 @@ export function applyEvidenceRules<T extends Readable>(a: T, inSource: (e: Evide
   // Dropping a claim lowers what the owner can rely on; say so where the card explains the confidence.
   const reasons = [...(a.confidenceReasons ?? [])];
   if (credentialsPlainlyNo) reasons.push(`${credentialsPlainlyNo === 1 ? "a licence or certificate is" : `${credentialsPlainlyNo} licences or certificates are`} not held, as the candidate says plainly in their own words`);
-  if (credentialsSettled) reasons.push(`${credentialsSettled === 1 ? "a licence or certificate is" : `${credentialsSettled} licences or certificates are`} lapsed, pending or unclear in the candidate's words, so not known yet: the screening chat can ask`);
+  if (credentialsSettled) reasons.push(`${credentialsSettled === 1 ? "a licence or certificate is" : `${credentialsSettled} licences or certificates are`} lapsed, pending or unclear in the candidate's words, so not known yet: the AI interview can ask`);
   if (dropped) reasons.push(`${dropped === 1 ? "one claim" : `${dropped} claims`} quoted text that is not in the source and ${dropped === 1 ? "was" : "were"} dropped`);
   if (mustHaveNoWithoutQuote) reasons.push(`${mustHaveNoWithoutQuote === 1 ? "one must-have was" : `${mustHaveNoWithoutQuote} must-haves were`} marked not met with nothing quoted to show it, so ${mustHaveNoWithoutQuote === 1 ? "it is" : "they are"} treated as unknown`);
   const stepDown = dropped > 0 || mustHaveNoWithoutQuote > 0;

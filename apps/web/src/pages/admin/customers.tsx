@@ -5,8 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, Drawer, ErrorState, Field, Menu, nextSort, Segmented, Skeleton, type SortDir, type SortKind, sortAnnouncement, sortRows, Table, type TableHead, TabPanel, Tabs } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { type AllowanceAlert, allowanceAlerts, allowanceChip } from "../../allowance";
-import { APPLY_MODE_HELP, APPLY_MODE_LABEL, APPLY_MODE_NOTE, REASON_MIN, companyFlowToast, reasonReady, type ApplyMode } from "../../apply-flow";
-import { RoleApplyMode } from "../../components/ApplyMode";
+import { EVERY_APPLICANT_LINE, REASON_MIN, reasonReady } from "../../apply-flow";
 import { useNavigate, useSearchParams } from "../../nav";
 import { RECRUITER_ASKS_OVER_CHIP } from "../../recruiter-requests";
 import { toast } from "../../toast";
@@ -238,7 +237,7 @@ export function Customers() {
         </Alert>
       ) : null}
       {filter === "low" && lowCompanies.length ? (
-        <Card needsYou title="Screening chats running low">
+        <Card needsYou title="AI interviews running low">
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {lowCompanies.map((c) => {
               const a = low.get(c.id);
@@ -372,7 +371,7 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
         </dd>
         <dt>How people apply</dt>
         <dd>
-          <Fact action={<Button size="sm" variant="quiet" ariaLabel="Change how people apply" onClick={() => onTab("apply")}>Change</Button>}>{APPLY_MODE_LABEL[c.applyFlowDefault ?? "form_then_screen"]}</Fact>
+          <Fact>The same for everyone: the form, then the AI interview</Fact>
         </dd>
         <dt>Applicants' match score</dt>
         <dd>
@@ -403,11 +402,11 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
 /** "122 of 150 screening chats this month, resets October 30" (the reset date when the API gives one). */
 export function screeningLine(u: { used: number; limit: number | null; resetsAt?: string | null }): string {
   const resets = u.resetsAt ? `, resets ${new Date(u.resetsAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}` : "";
-  return `${u.used}${u.limit !== null ? ` of ${u.limit}` : ""} screening chats this month${resets}`;
+  return `${u.used}${u.limit !== null ? ` of ${u.limit}` : ""} AI interviews this month${resets}`;
 }
 
 export type PlanOption = { key: string; name: string; limits: Record<string, number | null> };
-const LIMIT_WORDS: Array<[string, string]> = [["active_roles", "active jobs"], ["text_screens", "screening chats a month"], ["recruiter_asks", "recruiter requests a month"], ["seats", "seats"]];
+const LIMIT_WORDS: Array<[string, string]> = [["active_roles", "active jobs"], ["text_screens", "AI interviews a month"], ["recruiter_asks", "recruiter requests a month"], ["seats", "seats"]];
 
 /** What a plan includes, in one line: "3 active jobs · 300 screening chats a month · 10 recruiter requests a month · unlimited seats". */
 export function planLimitsLine(limits: Record<string, number | null>): string {
@@ -535,7 +534,7 @@ function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: T
   });
   return (
     <Card title="Extend the trial">
-      <p className="small muted">{trial.ended ? `The trial ended on ${trialDate(trial.endsAt ?? "", company.timezone)}: new applications, new jobs and new screening chats are paused.` : `The trial ends on ${trialDate(trial.endsAt ?? "", company.timezone)}.`} An extension counts from the later of the end and today. The owners are told, and they see your reason in their activity history.</p>
+      <p className="small muted">{trial.ended ? `The trial ended on ${trialDate(trial.endsAt ?? "", company.timezone)}: new applications, new jobs and new AI interviews are paused.` : `The trial ends on ${trialDate(trial.endsAt ?? "", company.timezone)}.`} An extension counts from the later of the end and today. The owners are told, and they see your reason in their activity history.</p>
       <div className="stack" style={{ gap: 8, marginTop: 8 }}>
         <Field label="Days to add" htmlFor="trial-days" hint={`From 1 to ${TRIAL_EXTENSION_MAX_DAYS}.`}><input id="trial-days" className="input" type="number" inputMode="numeric" min={1} max={TRIAL_EXTENSION_MAX_DAYS} step={1} value={days} onChange={(e) => { setDays(e.target.value); setConfirming(false); }} /></Field>
         <Field label="Why (required, kept with the change)" htmlFor="trial-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="trial-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
@@ -548,55 +547,15 @@ function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: T
 }
 
 /**
- * How a customer's applicants meet the screening conversation (plan E1; founder decision B1), ITS only: the company's
- * default ("form now, conversation later" until ITS switches the one-visit flow on for pilot roles or the whole company) and each role's own setting. Every change needs a reason, which is
- * audited and kept with who made it. Roles that already have their own setting keep it when the default changes.
+ * How a customer's applicants apply (plan E1). Since 20 October 2026 (R20-12) ITS's "apply and talk in one visit" switch
+ * is hidden and ignored: every applicant takes the same path, said here in one line. What ITS still sets on this tab is
+ * whether applicants see their match score (S7-1).
  */
 function ApplyFlowPanel({ company }: { company: CustomerRow }) {
-  const qc = useQueryClient();
-  const current: ApplyMode = company.applyFlowDefault ?? "form_then_screen";
-  const [flow, setFlow] = useState<ApplyMode>(current);
-  const [why, setWhy] = useState("");
-  const roles = useQuery({ queryKey: ["admin", "customer-report", company.id], queryFn: () => api.get<{ roles: Array<{ id: string; title: string; status: string }> }>(`/api/v1/admin/customers/${company.id}/report`, reason) });
-  const save = useMutation({
-    mutationFn: () => api.post<{ applyFlow: ApplyMode; changed: boolean }>(`/api/v1/admin/customers/${company.id}/apply-flow`, { applyFlow: flow, reason: why.trim() }, reason),
-    onSuccess: (r) => {
-      const t = companyFlowToast(company.name, r.applyFlow, r.changed);
-      toast(t.title, t.detail);
-      setWhy("");
-      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
-      // each role's "the company's default" now names the new one
-      qc.invalidateQueries({ queryKey: ["role"] });
-    },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save the default."),
-  });
-  const openRoles = (roles.data?.roles ?? []).filter((r) => r.status !== "closed");
   return (
     <div className="stack" style={{ gap: 14 }}>
-      <Card title="The company's default">
-        <p className="small muted">For every role of {company.name} without its own setting. {APPLY_MODE_NOTE}</p>
-        <div className="stack" style={{ gap: 8, marginTop: 8 }}>
-          <Segmented value={flow} onChange={setFlow} ariaLabel="The company's default" options={[{ value: "one_visit", label: APPLY_MODE_LABEL.one_visit }, { value: "form_then_screen", label: APPLY_MODE_LABEL.form_then_screen }]} />
-          <p className="small" style={{ margin: 0, color: "var(--ink-2)" }}>{APPLY_MODE_HELP[flow]}</p>
-          {flow !== current ? (
-            <>
-              <Field label="Why (required, kept with the change)" htmlFor="apply-flow-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="apply-flow-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
-              <div className="row"><Button variant="primary" disabled={!reasonReady(why)} loading={save.isPending} onClick={() => save.mutate()}>Save the default</Button><Button variant="quiet" onClick={() => { setFlow(current); setWhy(""); }}>Cancel</Button></div>
-            </>
-          ) : null}
-        </div>
-      </Card>
-      <Card title="Each role">
-        {roles.isLoading ? <Skeleton lines={3} /> : roles.error ? <ErrorState message="Could not load the roles." onRetry={() => roles.refetch()} /> : openRoles.length ? (
-          <div className="stack" style={{ gap: 12 }}>
-            {openRoles.map((r) => (
-              <div key={r.id} className="stack" style={{ gap: 6, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-                <strong>{r.title} <span className="small muted">({r.status.replace(/_/g, " ")})</span></strong>
-                <RoleApplyMode roleId={r.id} roleTitle={r.title} compact />
-              </div>
-            ))}
-          </div>
-        ) : <p className="small muted">No open or draft roles.</p>}
+      <Card title="How people apply">
+        <p className="small muted">{EVERY_APPLICANT_LINE}</p>
       </Card>
       <CandidateScorePanel company={company} />
     </div>

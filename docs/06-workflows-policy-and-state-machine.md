@@ -129,7 +129,7 @@ Resolution order: role policy → company policy → platform default. Takeover 
 | `application.triage` | auto (information) | |
 | `application.reject_ineligible` (owner-authored eligibility rules) | auto_notify with 24h review window | |
 | `application.reject_on_assessment` | human_only | |
-| `application.invite_screen` | auto_notify | |
+| `application.invite_screen` | auto, fixed (20 Oct 2026, R20-4: every applicant's AI interview goes by itself; a saved lower level is read as auto) | |
 | `screen.conduct` | auto (with consent) | |
 | `application.recommend_interview` | auto_notify (recommendation only) | |
 | `interview.request` (advance to interview) | approval | owner, hiring_manager, recruiter |
@@ -169,7 +169,7 @@ States: `applied`, `received`, `ineligible`, `eligible`, `triaged`, `screen_invi
 | `ineligible` → `rejected` | system after review window (policy `application.reject_ineligible`) or owner/recruiter | window elapsed with no override | `application.rejected` (reason `eligibility`) |
 | `ineligible` → `eligible` | owner, recruiter (override) | | `human.override` |
 | `eligible` → `triaged` | system (assessment created) | | `application.triaged` |
-| `triaged` → `screen_invited` | system (policy `application.invite_screen`) or owner/hiring_manager/recruiter | channel and consent | `screen.invited` |
+| `received`/`eligible`/`triaged` → `screen_invited` | system (every applicant's AI interview, R20-4: once the résumé is read, at the latest ten minutes after applying; no approval) or owner/hiring_manager/recruiter ("Send a new AI interview link") | web; texts only when a person chooses them and the candidate consented | `screen.invited` |
 | `screen_invited` → `screening` | system on first candidate reply | | `screen.started` |
 | `screen_invited` → `triaged` | owner, admin, hiring_manager, recruiter ("Stop this screen invitation", plan A7) | the candidate has not started; they get a short, polite note | `screen.cancelled` |
 | `screening` → `screen_complete` | system | | `screen.completed`, `screen.assessed` |

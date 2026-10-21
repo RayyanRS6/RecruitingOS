@@ -104,7 +104,8 @@ describe("what the AI may do: floors and ceilings", () => {
     expect(clampLevel("offer.send", "auto_notify")).toBe("approval");
     expect(clampLevel("offer.send", "human_only")).toBe("human_only");
     expect(clampLevel("interview.request", "auto")).toBe("approval");
-    expect(clampLevel("application.invite_screen", "auto")).toBe("auto");
-    expect(clampLevel("application.invite_screen", "human_only")).toBe("human_only");
+    // every applicant gets the AI interview by itself (20 Oct 2026, R20-4): any saved level reads as "Do it"
+    for (const level of ["auto", "auto_notify", "approval", "human_only"] as const) expect(clampLevel("application.invite_screen", level), level).toBe("auto");
+    expect(clampLevel("application.recommend_interview", "human_only")).toBe("human_only");
   });
 });

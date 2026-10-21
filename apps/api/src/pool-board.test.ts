@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { matchWeightOf, previewMatch, type BatchPreview, type BatchResult, type BoardView, type EvidenceAssessment, type MatchScore, type PoolAnswer, type RolePacket } from "@ros/contracts";
 import { anonymizeCandidate, entitlements, matchScore, readingPair } from "@ros/core";
 import { FAKE_SAMPLE_RESUMES } from "@ros/agents";
-import { applicationMarks, applications, assessments, candidates, communications, escalationMessages, events, randomToken, recruiterEscalations, withPlatform, withTenant } from "@ros/db";
+import { applicationMarks, applications, assessments, candidates, communications, escalationMessages, events, randomToken, recruiterEscalations, screens, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -132,11 +132,12 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect(b.summary).toMatchObject({ total: 4, counts: { shortlist: 1, longlist: 2, not_moving_forward: 1 }, toSort: 4, longestWaiting: { name: "Ben Pool", days: 9 } });
       expect(b.summary.sentences[0]).toBe("4 people on the board. To sort: 1 for the shortlist, 2 for the longlist, 1 not moving forward.");
       // the card carries what the page shows under the reason: the must-have line, what the score rests on, what happened
-      expect(b.columns.shortlist[0]).toMatchObject({ mustHaves: { words: "Must-haves: 2 of 2 shown" }, score: { basedOn: "resume" }, facts: { openScreen: false, suggestionWaiting: false } });
+      // (seeded with no AI interview, as before 20 October 2026: "none", so the board places them on their résumé; R20-9)
+      expect(b.columns.shortlist[0]).toMatchObject({ mustHaves: { words: "Must-haves: 2 of 2 shown" }, score: { basedOn: "resume", interview: "none", basis: "Résumé only: no AI interview" }, facts: { openScreen: false, suggestionWaiting: false } });
       expect(b.summary.nextSteps[0]).toMatchObject({ name: "Ada Pool" });
       // "Try different weights" (L-07 A) works each score out again in the browser from this answer's breakdown: with
       // the job's own weights it gives every real score back
-      const scored = [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward, ...b.stillApplying].filter((c) => c.score);
+      const scored = [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward, ...b.noAiInterview].filter((c) => c.score);
       expect(scored.length).toBe(3);
       for (const c of scored) {
         expect(previewMatch(c.score!, matchWeightOf).score, c.name).toBe(c.score!.score);
@@ -280,11 +281,15 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect(r.status).toBe(201);
       const { id } = (await r.json()) as { id: string };
       const [e] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id));
-      const board = (e.contextSnapshot as { board: { summary: { sentences: string[] }; people: Array<{ name: string; column: string | null; reason: string }> } }).board;
+      const board = (e.contextSnapshot as { board: { summary: { sentences: string[] }; people: Array<{ name: string; column: string | null; reason: string; score: number | null; interview?: string | null; basis?: string | null }> } }).board;
       expect(board.summary.sentences[0]).toMatch(/people on the board/);
       // Cy was filed as not moving forward in Review and apply: the board shows where she is now
       expect(board.people.find((p) => p.name === "Cy Pool")).toMatchObject({ column: "not_moving_forward", state: "done" });
       expect(board.people.find((p) => p.name === "Dee Pool")).toMatchObject({ column: "longlist", state: "suggested", needsYourEye: expect.stringMatching(/could not assess/) });
+      // each score comes with whether the AI interview is in it, and its label, so the recruiter reads it as the team does (R20-9)
+      const scored = board.people.filter((p) => p.score !== null);
+      expect(scored.length).toBeGreaterThan(0);
+      for (const p of scored) expect([p.interview, p.basis], p.name).toEqual([expect.any(String), expect.stringMatching(/^(From the|Résumé only)/)]);
     });
 
     it("a candidate's deletion reaches the board kept on a role review: their row, their next step and their name go", async () => {
@@ -392,6 +397,27 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const strong = await apply("Sol", FAKE_SAMPLE_RESUMES.strong);
       const possible = await apply("Pat", FAKE_SAMPLE_RESUMES.possible);
       const weak = await apply("Wes", FAKE_SAMPLE_RESUMES.weak);
+      // every applicant is invited to the AI interview (R20-4) and waits in the read-only lane "No AI interview yet" until it
+      // is done, never placed or suggested (R20-7), however their résumé reads
+      const waiting = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
+      expect(waiting.noAiInterview.map((c) => c.applicationId)).toEqual(expect.arrayContaining([strong, possible, weak]));
+      for (const c of waiting.noAiInterview.filter((x) => [strong, possible, weak].includes(x.applicationId))) expect(c.placement).toMatchObject({ column: null, state: "waiting", suggestedAction: null, doneLabel: "No AI interview yet" });
+      // a lapsed link keeps them there
+      await container.db.update(screens).set({ status: "expired" }).where(inArray(screens.applicationId, [strong, possible, weak]));
+      const lapsed = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
+      expect(lapsed.noAiInterview.filter((c) => [strong, possible, weak].includes(c.applicationId)).map((c) => c.aiInterview?.state)).toEqual(["link_expired", "link_expired", "link_expired"]);
+      // the team reviews them without it (as "Stop this AI interview invitation" does): in New, but their score is still the
+      // résumé's alone, so the board keeps them apart from interviewed people, never suggested (R20-9)
+      await container.db.update(applications).set({ stage: "triaged" }).where(inArray(applications.id, [strong, possible, weak]));
+      const apart = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
+      const kept = apart.noAiInterview.filter((c) => [strong, possible, weak].includes(c.applicationId));
+      expect(kept.map((c) => [c.placement.column, c.placement.state, c.placement.suggestedAction, c.placement.doneLabel, c.score?.basis])).toEqual([strong, possible, weak].map(() => [null, "waiting", null, "No AI interview", "Résumé only: no AI interview"]));
+      // once each AI interview is sent and scored (here its scorecard says what the résumé said), the board places them
+      for (const id of [strong, possible, weak]) {
+        const [read] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, id), eq(assessments.kind, "triage")));
+        const [scorecard] = await container.db.insert(assessments).values({ companyId, applicationId: id, kind: "screen", packetVersion: read.packetVersion, result: read.result, overall: read.overall, confidence: read.confidence }).returning();
+        await container.db.update(screens).set({ status: "completed", completedAt: new Date().toISOString(), assessmentId: scorecard.id }).where(eq(screens.applicationId, id));
+      }
       const b = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
       const where = (id: string) => [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward].find((c) => c.applicationId === id)!;
       expect(where(strong).placement.column).toBe("shortlist");
@@ -404,6 +430,7 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect(where(weak).placement.column).toBe("not_moving_forward");
       expect(where(weak).score?.missingMustHave.map((m) => m.quote)).toEqual(["I do not hold a CA RDH license"]);
       expect(where(weak).reading).toBe("Weak match");
+      for (const id of [strong, possible, weak]) expect(where(id).score).toMatchObject({ interview: "done", basis: "From the résumé and the AI interview" });
     });
   });
 
@@ -439,7 +466,7 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const leaks = (body: unknown) => others.filter((n) => JSON.stringify(body).includes(n));
       // the board: Uma alone, and a summary built from her alone
       const b = await get<BoardView>(`/api/v1/roles/${roleId}/board`, recruiter);
-      expect([...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward, ...b.stillApplying].map((c) => c.applicationId)).toEqual([uma]);
+      expect([...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward, ...b.noAiInterview].map((c) => c.applicationId)).toEqual([uma]);
       expect(b.summary.total).toBe(1);
       expect(leaks(b)).toEqual([]);
       // the questions answer over her alone, and Compare leaves out anyone else named
@@ -472,6 +499,113 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect(mail).toHaveLength(1);
       expect(mail[0].subject).toBe("[review] The customer added a note to a request you hold");
       expect(mail[0].text).not.toContain("clinic");
+    });
+  });
+
+  describe("the score after both the résumé and the AI interview: honest labels, like with like (20 October 2026, R20-9)", () => {
+    /** One screen of theirs and, with `scorecard`, its reading (kind "screen", as the AI interview's run writes it). */
+    const screenOf = (applicationId: string, status: string, scorecard?: EvidenceAssessment) =>
+      withTenant(container.db, companyId, async (tx) => {
+        const assessmentId = scorecard ? (await tx.insert(assessments).values({ companyId, applicationId, kind: "screen", packetVersion: 1, result: scorecard, overall: scorecard.overall, confidence: scorecard.confidence }).returning())[0].id : null;
+        await tx.insert(screens).values({ companyId, applicationId, channel: "web", status, token: `scr${randomToken(8)}`, invitedVia: "with_application", assessmentId, ...(status === "completed" ? { completedAt: new Date().toISOString() } : {}) });
+      });
+    type Scored = Row & { interview: string | null; basis: string | null };
+
+    it("labels each score by where the AI interview stands, keeps résumé-only scores off the columns and out of Review and apply, and sorts the interviewed first", async () => {
+      const both = [yes(0, "RDH license CA active"), yes(1, "Periodontal charting daily")];
+      // Ivo: his AI interview is sent and scored; in it one skill goes against him, so his number is below Wyn's
+      const against = resultOf(both, { competencyFindings: packet.competencies.map((c, i) => ({ competencyKey: c.key, finding: i === 0 ? "contradicted" : "evidenced", evidence: { source: "resume", quote: i === 0 ? "I prefer not to do this" : `${c.name} shown` } })) });
+      const ivo = await seed("Ivo", resultOf(both));
+      await screenOf(ivo, "completed", against);
+      // Wyn: a résumé that shows everything; invited, not started
+      const wyn = await seed("Wyn", resultOf(both, { overall: "strong" }));
+      await screenOf(wyn, "invited");
+      await container.db.update(applications).set({ stage: "screen_invited" }).where(eq(applications.id, wyn));
+      // Rae: sent a moment ago, the scorecard not written yet
+      const rae = await seed("Rae", resultOf(both, { overall: "strong" }));
+      await screenOf(rae, "completed");
+      await container.db.update(applications).set({ stage: "screen_complete" }).where(eq(applications.id, rae));
+      // Kit: the team stopped the invitation before she started, and reviews her without it (New)
+      const kit = await seed("Kit", resultOf(both, { overall: "strong" }));
+      await screenOf(kit, "cancelled");
+      // Ned: never offered one (as before 20 October 2026); Nil: nothing read at all
+      const ned = await seed("Ned", resultOf(both, { overall: "strong" }));
+      const nil = await seed("Nil", null);
+
+      // the list: the label beside each score, and the number exactly as the pure function gives it without one
+      const rows = await get<Scored[]>(`/api/v1/roles/${roleId}/applications`);
+      const row = (id: string) => rows.find((r) => r.id === id)!;
+      expect(row(ivo)).toMatchObject({ interview: "done", basis: "From the résumé and the AI interview" });
+      expect(row(wyn)).toMatchObject({ interview: "not_done_yet", basis: "Résumé only: AI interview not done yet" });
+      expect(row(rae)).toMatchObject({ interview: "being_scored", basis: "Résumé only for now: AI interview done, being scored" });
+      expect(row(kit)).toMatchObject({ interview: "not_done", basis: "Résumé only: no AI interview" });
+      expect(row(ned)).toMatchObject({ interview: "none", basis: "Résumé only: no AI interview" });
+      expect(row(nil)).toMatchObject({ score: null, interview: null, basis: null });
+      for (const id of [ivo, wyn, rae, kit]) {
+        const own = await container.db.select().from(assessments).where(eq(assessments.applicationId, id));
+        expect(row(id).score, id).toBe(matchScore(readingPair(own), packet)!.score);
+      }
+      expect(row(wyn).score).toBeGreaterThan(row(ivo).score!);
+
+      // Sort: Score: the interviewed first, then the résumé-only scores, each highest first; no score last
+      const mine = [ivo, wyn, rae, kit, ned, nil];
+      for (const q of ["order=score", "sort=score"]) {
+        const ordered = (await get<Scored[]>(`/api/v1/roles/${roleId}/applications?${q}`)).filter((r) => mine.includes(r.id)).map((r) => r.id);
+        expect(ordered[0], q).toBe(ivo);
+        expect(new Set(ordered.slice(1, 5)), q).toEqual(new Set([wyn, rae, kit, ned]));
+        expect(ordered[5], q).toBe(nil);
+      }
+
+      // the candidate's page and Compare carry the same label
+      expect((await get<{ matchScore: MatchScore }>(`/api/v1/applications/${wyn}`)).matchScore).toMatchObject({ interview: "not_done_yet", basis: "Résumé only: AI interview not done yet" });
+      const compared = await get<{ candidates: Array<{ applicationId: string; score: MatchScore | null }> }>(`/api/v1/roles/${roleId}/compare?ids=${ivo},${kit}`);
+      expect(compared.candidates.map((c) => c.score?.basis)).toEqual(["From the résumé and the AI interview", "Résumé only: no AI interview"]);
+
+      // the board: Ivo on a column; the others in the lane with the board's own words, never placed or suggested
+      const b = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
+      const onColumns = [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward];
+      expect(onColumns.find((c) => c.applicationId === ivo)?.placement.state).toBe("suggested");
+      for (const id of [wyn, rae, kit]) expect(onColumns.some((c) => c.applicationId === id), id).toBe(false);
+      const lane = (id: string) => b.noAiInterview.find((c) => c.applicationId === id)!;
+      expect(lane(wyn).placement).toMatchObject({ column: null, state: "waiting", suggestedAction: null, doneLabel: "No AI interview yet" });
+      expect(lane(rae).placement).toMatchObject({ column: null, state: "waiting", suggestedAction: null, doneLabel: "AI interview being scored" });
+      expect(lane(kit).placement).toMatchObject({ column: null, state: "waiting", suggestedAction: null, doneLabel: "No AI interview" });
+      expect([lane(rae).facts.noAiInterview, lane(kit).facts.noAiInterview]).toEqual([true, true]);
+
+      // Review and apply never reaches them, whatever is asked (B4 narrowed to match)
+      const p = (await (await json(owner, "POST", `/api/v1/roles/${roleId}/batch`, { dryRun: true, items: [{ applicationId: ivo, action: "longlist" }, { applicationId: rae, action: "shortlist" }, { applicationId: kit, action: "not_moving_forward", reason: "not_a_match_skills" }] })).json()) as BatchPreview;
+      expect(p.items.map((i) => i.allowed)).toEqual([true, false, false]);
+      expect(p.items[1].refusedReason).toBe("Their AI interview is being scored; they join the board when it is. Decide from their own page if you need to.");
+      // Kit's invitation was stopped: she cannot finish it, so the refusal never says she joins when she does
+      expect(p.items[2].refusedReason).toBe("They have no AI interview and none is open, so the board leaves them out. Decide from their own page, or send them a new AI interview link.");
+    });
+
+    it("keeps apart someone whose AI interview never came because the month's interviews stayed used up (Q17), unlike one never offered it", async () => {
+      // Lu: a low résumé score (her own words show the licence lapsed), and no screen: the screen run waited sixty days
+      // for more AI interviews, then moved her to New (as `waitForAllowance` does). Ola: the same, from before 20 October.
+      const low = resultOf([{ requirementKey: must(0).key, met: "no", evidence: { source: "resume", quote: "RDH license CA expired in 2021" } }, yes(1, "Periodontal charting")], { overall: "weak", recommendation: "hold" });
+      const lu = await seed("Lu", low);
+      const ola = await seed("Ola", low);
+      await container.db.insert(events).values({ companyId, type: "screen.allowance_lapsed", actor: { kind: "system", id: "workflow" }, subjectType: "application", subjectId: lu, payload: { waitingSince: new Date().toISOString(), days: 60, promised: true } });
+
+      const rows = await get<Scored[]>(`/api/v1/roles/${roleId}/applications`);
+      expect(rows.find((r) => r.id === lu)).toMatchObject({ interview: "not_done", basis: "Résumé only: no AI interview" });
+      expect(rows.find((r) => r.id === ola)).toMatchObject({ interview: "none", basis: "Résumé only: no AI interview" });
+      expect((await get<{ matchScore: MatchScore; placement: { column: string | null } }>(`/api/v1/applications/${lu}`))).toMatchObject({ matchScore: { interview: "not_done" }, placement: { column: null } });
+      const compared = await get<{ candidates: Array<{ score: MatchScore | null }> }>(`/api/v1/roles/${roleId}/compare?ids=${lu},${ola}`);
+      expect(compared.candidates.map((c) => c.score?.interview)).toEqual(["not_done", "none"]);
+
+      // the board: Lu in the lane, never suggested; Ola placed by today's rules, as before 20 October
+      const b = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
+      const onColumns = [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward];
+      expect(b.noAiInterview.find((c) => c.applicationId === lu)?.placement).toMatchObject({ column: null, state: "waiting", suggestedAction: null, doneLabel: "No AI interview" });
+      expect(onColumns.some((c) => c.applicationId === lu)).toBe(false);
+      expect(onColumns.find((c) => c.applicationId === ola)?.placement).toMatchObject({ state: "suggested", suggestedAction: expect.any(String) });
+
+      // Review and apply refuses Lu, with words that never promise an interview she cannot do; Ola may be applied
+      const p = (await (await json(owner, "POST", `/api/v1/roles/${roleId}/batch`, { dryRun: true, items: [{ applicationId: lu, action: "not_moving_forward", reason: "not_a_match_skills" }, { applicationId: ola, action: "not_moving_forward", reason: "not_a_match_skills" }] })).json()) as BatchPreview;
+      expect(p.items.map((i) => [i.name, i.allowed])).toEqual([["Lu Pool", false], ["Ola Pool", true]]);
+      expect(p.items[0].refusedReason).toBe("They have no AI interview and none is open, so the board leaves them out. Decide from their own page, or send them a new AI interview link.");
     });
   });
 });

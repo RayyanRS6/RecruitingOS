@@ -189,7 +189,7 @@ export async function transition(
   // they go under Cancelled (founder decision 1A), and no automatic times go to someone a person had paused. The cancel
   // itself ends the mark (`openFollowUp`), not this move.
   const leaves = LEAVES_PROCESS.includes(input.to);
-  const movedOn = isHuman(input.by) && baseOwnerStage(from) !== baseOwnerStage(input.to);
+  const movedOn = isHuman(input.by) && stripStep(from) !== stripStep(input.to);
   if (leaves || movedOn) await endMarkOnMove(q, { applicationId: input.applicationId, companyId: input.companyId, actor: input.actor, to: input.to, leaves, correlationId: input.correlationId });
   // The Cancelled column (founder decisions 1A-4A): booking a time, leaving the process, or a person's move ends it.
   // The system's own moves (the candidate's cancel, the interview closing) never do. A private decision taken back before
@@ -245,26 +245,48 @@ export function ownerGroup(stage: ApplicationStage): OwnerGroup {
 /** The part of a mark these views read; `remindAt` matters for a hold only. */
 export type MarkView = { mark: MarkKind; remindAt?: string | null } | null | undefined;
 
-const NEW_PHASE: readonly ApplicationStage[] = ["applied", "received", "ineligible", "eligible", "triaged", "screen_invited", "screening", "screen_complete"];
+/**
+ * "No AI interview yet" (20 October 2026, R20-7): from applying until the AI interview is sent, and when its link lapses
+ * or they stop part-way (they stay invited or in it). The stage alone says so, so every count agrees without a join.
+ */
+export const AI_INTERVIEW_PHASE: readonly ApplicationStage[] = ["applied", "received", "eligible", "screen_invited", "screening"];
+/** New: the AI interview done, the team reviewing without it (the reading failed, or "Stop this screening chat"), or held on an eligibility answer. */
+const NEW_PHASE: readonly ApplicationStage[] = ["ineligible", "triaged", "screen_complete"];
 // interview_recommended is the decision to interview (a person's, or the assistant's under the company's settings), so it sits with the interviews
 const INTERVIEW_PHASE: readonly ApplicationStage[] = ["interview_recommended", "interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check"];
 const OFFER_PHASE: readonly ApplicationStage[] = ["offer_draft", "offer_approval", "offer_sent", "negotiation", "accepted", "onboarding"];
 
-/** The owner stage of the internal stage alone, before any mark: new, interviewing, offer, hired or not moving forward. */
+/** The owner stage of the internal stage alone, before any mark: no AI interview yet, new, interviewing, offer, hired or not moving forward. */
 export function baseOwnerStage(stage: ApplicationStage): OwnerStage {
   if (stage === "hired") return "hired";
   if (OFFER_PHASE.includes(stage)) return "offer";
   if (INTERVIEW_PHASE.includes(stage)) return "interviewing";
+  if (AI_INTERVIEW_PHASE.includes(stage)) return "no_ai_interview";
   if (NEW_PHASE.includes(stage)) return "new";
   return "not_moving_forward";
+}
+
+/** The two first columns are one step of the process: before anyone interviews. Marks sort people in both. */
+function beforeInterview(base: OwnerStage): boolean {
+  return base === "new" || base === "no_ai_interview";
+}
+
+/**
+ * The step of the strip a move is measured by: "No AI interview yet" and New count as one, so a person stopping an
+ * invitation (screen_invited → triaged) is no move away from a Longlist or Shortlist mark (`endMarkOnMove`).
+ */
+function stripStep(stage: ApplicationStage): OwnerStage {
+  const base = baseOwnerStage(stage);
+  return base === "no_ai_interview" ? "new" : base;
 }
 
 /**
  * Where an application sits on the stage strip. Someone with an open follow-up (they cancelled a booked interview or did
  * not come to it) shows as Cancelled while recommended for interview or interview done. Marks overlay the internal stage
- * while the person is still in the process: On hold over any active step, Longlist and Shortlist over New only (someone
- * interviewing shows as Interviewing), Not a fit for now as Not moving forward. Out of the process (hired, declined,
- * withdrawn, talent pool) neither counts; both are cleared there anyway.
+ * while the person is still in the process: On hold over any active step, Longlist and Shortlist over "No AI interview
+ * yet" and New only (someone interviewing shows as Interviewing; a marked person leaves the column and their link stays
+ * open), Not a fit for now as Not moving forward. Out of the process (hired, declined, withdrawn, talent pool) neither
+ * counts; both are cleared there anyway.
  */
 export function ownerStage(app: { stage: ApplicationStage }, mark?: MarkView, followUp?: FollowUpStrip | null): OwnerStage {
   const base = baseOwnerStage(app.stage);
@@ -273,7 +295,7 @@ export function ownerStage(app: { stage: ApplicationStage }, mark?: MarkView, fo
   if (!mark) return base;
   if (mark.mark === "on_hold") return "on_hold";
   if (mark.mark === "not_a_fit_for_now") return "not_moving_forward";
-  return base === "new" ? mark.mark : base;
+  return beforeInterview(base) ? mark.mark : base;
 }
 
 /** A hold whose date has not come: nothing about this person waits on anyone until then. */
@@ -313,24 +335,26 @@ export function ownerTags(app: { stage: ApplicationStage }, mark?: MarkView, now
 }
 
 /**
- * The owner-stage label, with the mark's own words for a mark the strip has no column for, and under Cancelled why they
- * are there ("Asked for new times", "No longer interested", "No-show"), the sub-label on the stage button.
+ * The owner-stage label, with the mark's own words for a mark the strip has no column for, under Cancelled why they are
+ * there ("Asked for new times", "No longer interested", "No-show"), and under "No AI interview yet" where they stand
+ * with it (`aiInterview`, `aiInterviewOf`: "Invited (not started)", "Link expired"…), the sub-label on the stage button.
  */
-export function ownerStageLabel(stage: OwnerStage, mark?: MarkView, followUp?: FollowUpStrip | null): string {
+export function ownerStageLabel(stage: OwnerStage, mark?: MarkView, followUp?: FollowUpStrip | null, aiInterview?: { label: string } | null): string {
   if (stage === "cancelled" && followUp) return CANCELLED_REASON_LABEL[followUp.reason];
+  if (stage === "no_ai_interview" && aiInterview) return aiInterview.label;
   return mark?.mark === "not_a_fit_for_now" && stage === "not_moving_forward" ? MARK_LABEL.not_a_fit_for_now : OWNER_STAGE_LABEL[stage];
 }
 
 /**
  * Why a mark cannot be set at this step, or null when it can. A person held on an eligibility answer is decided first
- * (kept in or declined); Longlist, Shortlist and Not a fit for now sort the people not yet interviewing; a hold pauses
- * anyone still in the process.
+ * (kept in or declined); Longlist, Shortlist and Not a fit for now sort the people not yet interviewing (under "No AI
+ * interview yet" or New); a hold pauses anyone still in the process.
  */
 export function markBlockedReason(stage: ApplicationStage, mark: MarkKind): string | null {
   const base = baseOwnerStage(stage);
   if (base === "hired" || base === "not_moving_forward") return `Not available at this step (${STAGE_LABEL[stage]}).`;
   if (stage === "ineligible") return "Check their eligibility answer first: keep them in or decline.";
-  if (mark !== "on_hold" && base !== "new") return base === "interviewing" ? "They are interviewing already." : `Not available at this step (${STAGE_LABEL[stage]}).`;
+  if (mark !== "on_hold" && !beforeInterview(base)) return base === "interviewing" ? "They are interviewing already." : `Not available at this step (${STAGE_LABEL[stage]}).`;
   return null;
 }
 
@@ -365,16 +389,16 @@ export function mayWithdraw(stage: ApplicationStage, toldState: ToldState | stri
   return ACTIVE.includes(stage) || (DECISION_STAGES.includes(stage) && !decisionTold(toldState));
 }
 
-/** In the staff glossary's words (screening chat); apps/web mirrors it (candidate-panel/helpers.ts, role-words.ts). */
+/** In the staff glossary's words (the AI interview, since 20 Oct 2026); apps/web mirrors it (candidate-panel/helpers.ts, role-words.ts). */
 export const STAGE_LABEL: Record<ApplicationStage, string> = {
   applied: "Just applied",
   received: "Received",
   ineligible: "Doesn't meet eligibility",
   eligible: "Eligible",
   triaged: "Ready for your review",
-  screen_invited: "Invited to a screening chat",
-  screening: "In the screening chat",
-  screen_complete: "Screening chat done",
+  screen_invited: "Invited to an AI interview",
+  screening: "In the AI interview",
+  screen_complete: "AI interview done",
   interview_recommended: "Recommended for interview",
   interview_scheduled: "Interviewing",
   interview_complete: "Interview done: decision needed",

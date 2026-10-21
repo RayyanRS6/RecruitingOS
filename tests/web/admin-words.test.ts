@@ -17,7 +17,7 @@ describe("the console's plain words", () => {
     expect(planStatusWords("design_partner")).toBe("Design Partner pilot");
     expect(planStatusWords("trial")).toBe("Trial");
     expect(workflowWords("application_intake")).toBe("Reading a new application");
-    expect(workflowWords("screen")).toBe("Screening chat");
+    expect(workflowWords("screen")).toBe("AI interview");
     // a key nobody mapped yet reads as words, never with underscores
     expect(workflowWords("candidate_follow_up")).toBe("Candidate follow up");
     expect(runStatusWords("cancelled")).toBe("Cancelled");

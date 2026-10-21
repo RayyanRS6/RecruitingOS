@@ -41,7 +41,7 @@ const alertRow = (id: string, kind: string, severity: string, title: string, sta
 const alerts = [
   alertRow("al1", "credential.delete_failed", "critical", "Credential delete failed"),
   alertRow("al2", "worker.slow", "warning", "Worker is slow", "acknowledged"),
-  alertRow("al3", "billing.screens_warning", "warning", "Screening chats at 80%", "open", "co-bright", { used: 122, limit: 150 }),
+  alertRow("al3", "billing.screens_warning", "warning", "AI interviews at 80%", "open", "co-bright", { used: 122, limit: 150 }),
 ];
 const failures = { failedRuns: [{ id: "r1" }, { id: "r2" }, { id: "r3" }], failedJobs: [], failedAi: [], alerts: [], pendingDeletions: [] };
 const request = (id: string, companyName: string, slaDueAt: string, state = "received") => ({ id, companyId: "co-avon", companyName, candidateId: null, applicationId: null, kind: "access", details: null, requesterEmail: "p@x.test", channel: "email", verificationStatus: "pending", verificationNote: null, status: state, slaDueAt, assignedTo: null, notes: [], counselEscalatedAt: null, counselDecision: null, counselNote: null, resolution: null, resolvedAt: null, confirmationSentAt: null, escalationId: null, createdAt: daysAgo(10) });
@@ -112,7 +112,7 @@ describe("the console's Overview", () => {
       ["1 security report is not reviewed yet", "Open", "/admin/problems?view=security"],
       ["1 email application could not be imported", "Open", "/admin/problems?view=email"],
       ["1 recruiter request is overdue", "Open", "/recruiter/queue/e1"],
-      ["Bright Dental has used 80% of its screening chats", "Open", "/admin/customers?show=low&amp;open=co-bright"],
+      ["Bright Dental has used 80% of its AI interviews", "Open", "/admin/customers?show=low&amp;open=co-bright"],
     ];
     const html = render(client(ALL));
     const at = rows.map(([sentence]) => t.indexOf(sentence));
@@ -123,7 +123,7 @@ describe("the console's Overview", () => {
     expect(t).toContain("Zeta Dental (5 days), Cara Dental (3 days)");
     expect(t).not.toContain("Worker is slow");
     expect(t).not.toContain("Cara Dental (overdue)");
-    expect(t).toContain("80% of screening chats used (122 of 150)");
+    expect(t).toContain("80% of AI interviews used (122 of 150)");
   });
 
   it("says plainly when nothing needs a person", () => {
@@ -229,7 +229,7 @@ describe("Overview's rules", () => {
     expect(three.map((r) => r.action.href)).toEqual(["/admin/customers?show=low&open=co-a", "/admin/customers?show=low&open=co-b", "/admin/customers?show=low&open=co-c"]);
     const four = attentionRows({ customers: names as never, alerts: ["co-a", "co-b", "co-c", "co-d"].map(low) as never }, now);
     expect(four).toHaveLength(1);
-    expect(four[0].text).toBe("4 customers are running low on screening chats");
+    expect(four[0].text).toBe("4 customers are running low on AI interviews");
     expect(four[0].sub).toBe("A Dental, B Dental, C Dental and 1 more");
     expect(four[0].action.href).toBe("/admin/customers?show=low");
   });

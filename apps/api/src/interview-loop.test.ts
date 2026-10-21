@@ -594,21 +594,21 @@ describe("the loop after an interview", () => {
     const cand = await apply("Lia", "Moreau");
     const token = (await application(cand.id)).statusToken;
     let html = await statusPage(cand.id);
-    expect(statusWord(html)).toBe("Screening chat");
-    expect(html).toContain("Start the screening chat");
+    expect(statusWord(html)).toBe("AI interview");
+    expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">Start your AI interview<\/a>/);
     expect((await act(cand.id, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
     await container.drain();
     html = await statusPage(cand.id);
     // the chat closed with the decision, so the page says the team is reviewing, never what was decided
     expect(statusWord(html)).toBe("Review");
     expect(html).not.toMatch(/did not work out|not moving forward/i);
-    expect(html).not.toContain("Start the screening chat"); // the screen closed with the decision
+    expect(html).not.toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">/); // the screen closed with the decision (the first email's words in the thread still name it)
     expect(html).toContain(`/c/status/${token}/withdraw`);
     // a message still in the outbox is not shown as sent
     const { candidateId } = await application(cand.id);
     await withTenant(container.db, companyId, (tx) => tx.insert(communications).values({ companyId, candidateId, applicationId: cand.id, direction: "outbound", channel: "email", subject: "Still waiting to go", bodyText: "not sent yet", status: "queued", sentBy: { kind: "system", id: "test" } }));
     expect(await statusPage(cand.id)).not.toContain("Still waiting to go");
-    expect(html).toContain("We received your application");
+    expect(html).toContain("Thank you for applying");
     // she withdraws before anyone told her: allowed, and recorded as hers
     expect((await withdraw(cand.id)).status).toBe(302);
     expect((await application(cand.id)).stage).toBe("withdrawn");

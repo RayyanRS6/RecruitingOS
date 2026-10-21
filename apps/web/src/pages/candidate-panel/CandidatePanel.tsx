@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Drawer, ErrorState, IconButton, Menu, type MenuItem, ScoreBadge, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
+import { Alert, Avatar, Button, Chip, Drawer, ErrorState, IconButton, Menu, type MenuItem, ScoreBadge, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
 import { api, type ApplicationDetail } from "../../api/client";
 import { canSeeActivity } from "../../roles";
 import { isTextEntry } from "../../start-hire";
 import { stageBlocked, stageIntent, type PanelStep } from "../../talent-actions";
+import { resumeOnlyChip } from "../../talent-list";
 import { NO_COMPOSE, PANEL_TABS, composeFor, hasUnsent, latestByTab, markSeen, neighbours, unreadTabs, type PanelTab, type SeenTabs } from "./helpers";
 import { DraftContext, useCandidateAction, useViewer } from "./hooks";
 import { matchOf, type NextStepAction } from "./match-view";
@@ -147,7 +148,8 @@ export function CandidatePanel(props: PanelProps) {
   };
   const more: MenuItem[] = a
     ? [
-        { id: "invite_screen", label: "Invite to a screening chat", icon: "send", disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen },
+        // Every applicant gets the AI interview by itself (20 Oct 2026); a person's invitation is a new link.
+        { id: "invite_screen", label: "Send a new AI interview link", icon: "send", disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen },
         { id: "record_outcome", label: "Record an outcome", icon: "edit", disabled: !a.allowedActions.includes("record_outcome"), reason: a.blockedReasons.record_outcome },
       ]
     : [];
@@ -156,9 +158,12 @@ export function CandidatePanel(props: PanelProps) {
     if (choice === "record_outcome") props.onStep("outcome");
   };
   const applied = a ? `Applied ${new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}${props.roleTitle ? ` · ${props.roleTitle}` : ""}` : undefined;
-  // The match score stays in sight on every section (founder decision B2); its breakdown is on the Overview.
-  const score = a ? matchOf(a)?.score ?? null : null;
-  const sub = applied && score !== null ? <>{applied} · <ScoreBadge score={score} size="sm" /></> : applied;
+  // The match score stays in sight on every section (founder decision B2); its breakdown is on the Overview. A score
+  // with no AI interview in it says so beside it on every section too (R20-9), the full label on hover.
+  const scored = a ? matchOf(a) ?? null : null;
+  const score = scored?.score ?? null;
+  const resumeOnly = scored ? resumeOnlyChip(scored) : null;
+  const sub = applied && score !== null ? <>{applied} · <ScoreBadge score={score} size="sm" />{resumeOnly ? <> <span title={resumeOnly.title}><Chip tone="neutral">{resumeOnly.label}</Chip></span></> : null}</> : applied;
 
   return (
     <Drawer

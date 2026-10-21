@@ -1,5 +1,5 @@
 import { Card, numHead, Table } from "@ros/ui";
-import { headerCounts, snapshotPlace, type BoardSnapshot } from "./board-model";
+import { headerCounts, snapshotPlace, snapshotScore, type BoardSnapshot } from "./board-model";
 
 /**
  * "Have a recruiter check this" (plan F9), as the ITS recruiter reads it once they accept the request: the pool board
@@ -15,15 +15,19 @@ export function BoardSnapshotCard({ snapshot }: { snapshot: BoardSnapshot }) {
       {snapshot.people.length ? (
         <div style={{ marginTop: 10 }}>
           <Table head={["Candidate", "Where the board put them", numHead("Score"), "Why", "Suggested next step"]} label="The pool board when they asked">
-            {snapshot.people.map((p) => (
-              <tr key={p.applicationId}>
-                <td>{p.name}</td>
-                <td className="small">{snapshotPlace(p)}</td>
-                <td className="small num">{p.score === null ? "No score yet" : `${p.score}/100`}</td>
-                <td className="small">{p.needsYourEye ? `Needs a person's eye: ${p.needsYourEye}` : p.reason}</td>
-                <td className="small">{p.nextStep ?? ""}</td>
-              </tr>
-            ))}
+            {snapshot.people.map((p) => {
+              // R20-9: a résumé-only score says so, the full label on hover
+              const score = snapshotScore(p);
+              return (
+                <tr key={p.applicationId}>
+                  <td>{p.name}</td>
+                  <td className="small">{snapshotPlace(p)}</td>
+                  <td className="small num" title={score.title}>{score.text}</td>
+                  <td className="small">{p.needsYourEye ? `Needs a person's eye: ${p.needsYourEye}` : p.reason}</td>
+                  <td className="small">{p.nextStep ?? ""}</td>
+                </tr>
+              );
+            })}
           </Table>
         </div>
       ) : null}

@@ -30,7 +30,7 @@ export const HOME_ROWS = 5;
 /** How long a row's one visible line may be before it is cut (the whole text stays behind "Why"). */
 export const LINE_MAX = 120;
 
-/** Cards that only say what is happening (a recruiter has a request, people are answering the screening chat): listed last, never counted as needing you. */
+/** Cards that only say what is happening (a recruiter has a request, a job's line on "No AI interview yet", R20-7): listed last, never counted as needing you. */
 const FYI_KINDS: ReadonlySet<string> = new Set(["escalation", "screening"]);
 export const isFyi = (kind: string): boolean => FYI_KINDS.has(kind);
 

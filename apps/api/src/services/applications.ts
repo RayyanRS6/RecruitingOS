@@ -40,10 +40,12 @@ export type NewApplication = {
   /** Wave S7: the form fields the résumé filled in (or suggested) and the candidate kept. */
   fromCv?: string[];
   /**
-   * Wave S7: the form read this résumé before it was sent (services/apply-details.ts). The reading's AI run is tied to
-   * the new document so the intake workflow reuses it once the file is checked; only for the very upload it read.
+   * Wave S7: the form's upload, which it may have read before it was sent (services/apply-details.ts). The reading's AI
+   * run, found by the upload, is tied to the new document so the intake workflow reuses it once the file is checked; only
+   * for the very upload it read. None yet (20 Oct, R20-1): the intake looks for it by the upload, and waits a little for
+   * one still running (`readAskedAt`, epoch seconds, when the form asked for it).
    */
-  formReading?: { aiRunId: string; uploadId: string; storageKey: string } | null;
+  formReading?: { uploadId: string; storageKey: string; readAskedAt?: number | null } | null;
   resume?: ResumeInput | null;
   ip?: string;
   note?: string;
@@ -152,6 +154,8 @@ export async function createApplication(tx: Tx, container: Container, input: New
     return { application: raced, candidate, duplicate: true, knownPerson: true };
   }
   let application = inserted;
+  // The upload the form sent with its reading (Wave S7; 20 Oct, R20-1), for the intake to find that reading by.
+  let formUpload: { uploadId: string; readAskedAt?: number | null } | null = null;
 
   if (input.resume) {
     const r = input.resume;
@@ -181,7 +185,10 @@ export async function createApplication(tx: Tx, container: Container, input: New
       application = { ...application, resumeDocumentId: doc.id };
       // The form read this very file first (Wave S7): its reading belongs to the application from now on.
       const read = input.formReading;
-      if (read && r.kind === "stored" && r.storageKey === read.storageKey) await linkResumeReading(tx, { aiRunId: read.aiRunId, uploadId: read.uploadId, applicationId: application.id, documentId: doc.id });
+      if (read && r.kind === "stored" && r.storageKey === read.storageKey) {
+        await linkResumeReading(tx, { companyId: input.companyId, uploadId: read.uploadId, applicationId: application.id, documentId: doc.id });
+        formUpload = read;
+      }
       await emit(tx, { type: "document.uploaded", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { documentId: doc.id, via: r.via, sizeBytes: stored.sizeBytes, mime: stored.mime } });
       await audit(tx, { companyId: input.companyId, actor, action: "document.uploaded", target: { type: "document", id: doc.id }, ip: input.ip, details: { applicationId: application.id, via: r.via, sizeBytes: stored.sizeBytes, mime: stored.mime } });
     }
@@ -196,7 +203,11 @@ export async function createApplication(tx: Tx, container: Container, input: New
     workflowKey: "application_intake",
     companyId: input.companyId,
     subject: { type: "application", id: application.id },
-    state: { applicationId: application.id, roleId: role.id },
+    state: {
+      applicationId: application.id,
+      roleId: role.id,
+      ...(formUpload ? { formUploadId: formUpload.uploadId, ...(formUpload.readAskedAt ? { formReadAskedAt: new Date(formUpload.readAskedAt * 1000).toISOString() } : {}) } : {}),
+    },
     idempotencyKey: `application_intake:${application.id}`,
     actor,
   });
@@ -354,7 +365,7 @@ export async function rotateStatusLink(container: Container, applicationId: stri
 You asked for a new link to your application for ${roleTitle} at ${company.name}. Here it is:
 ${statusUrlFor(container.env.JOBS_BASE_URL, fresh)}
 
-The old link no longer works, so anyone you shared it with can no longer open your status page. The links in our earlier emails to your screening chat or your interview times have changed too: open them from your application page. Keep this email: there is no account or password.
+The old link no longer works, so anyone you shared it with can no longer open your status page. The links in our earlier emails to your AI interview or your interview times have changed too: open them from your application page. Keep this email: there is no account or password.
 
 If you did not ask for this, reply to this email and a person will look into it.
 
@@ -397,7 +408,7 @@ export async function recordWithdrawal(container: Container, app: { id: string; 
       applicationId: app.id,
       channel: "status_page",
       verified: true,
-      ...(via === "screening_chat" ? { details: "Withdrawn in the screening chat.", verificationNote: "the request came through the candidate's own screening chat link" } : {}),
+      ...(via === "screening_chat" ? { details: "Withdrawn in the AI interview.", verificationNote: "the request came through the candidate's own AI interview link" } : {}),
       actor,
       now: container.engine.clock(),
     });

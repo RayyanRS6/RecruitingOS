@@ -15,7 +15,8 @@ stateDiagram-v2
   ineligible --> rejected: human only, with a job-related reason (never the system)
   rejected --> eligible: human "review anyway" (eligibility reason only)
   eligible --> triaged: system, assessment created
-  triaged --> screen_invited: policy application.invite_screen or human
+  eligible --> screen_invited: system, every applicant's AI interview (20 Oct 2026, R20-4)
+  triaged --> screen_invited: human ("Send a new link")
   screen_invited --> screening: system, candidate started
   screening --> screen_invited: system, re-invite after hand-off
   screening --> screen_complete: system
@@ -66,11 +67,11 @@ Channel order: careers_page, google_jobs, email_in; then linkedin_basic, indeed,
 
 ### application_intake (existing, changed)
 
-acknowledge → extract (moved fully into the worker; S6) → eligibility → ineligible_review (hold: notify, review timer, reminders every 24 h, escalation to a recruiter after 72 h; never a decline) | ready (assess) → after_triage (gate `application.invite_screen`) → after_triage_decision.
+acknowledge (stage received; starts the `screen` run for every applicant, key `screen:<id>`; an emailed-in applicant's interview and one email are made here, 20 Oct 2026) → validate → ai_notice → extract (moved fully into the worker; S6) → eligibility → ineligible_review (hold: notify, review timer, reminders every 24 h, escalation to a recruiter after 72 h; never a decline) | ready (assess; every way out signals `<id>:reading.settled`; the stage is the interview run's to move) → after_triage (completes; since 20 Oct 2026 no gate) → after_triage_decision (kept so old "Invite to a screen?" approvals lapse).
 
-### screen (existing, unchanged)
+### screen (existing, changed 20 Oct 2026)
 
-invite → after_invite → remind → after_remind → expire; started/completed → assess → recommend (gate `application.recommend_interview`) → on_decision.
+await_reading (every applicant's run: waits for `<id>:reading.settled`, ten minutes at most) → invite (the interview and the one email; held on a must-have answer → after_hold, which waits for "Keep them in"; used up → waits for more interviews) → after_invite → remind → after_remind → expire; started/completed → assess → recommend (gate `application.recommend_interview`) → on_decision.
 
 ### schedule_interview (new)
 

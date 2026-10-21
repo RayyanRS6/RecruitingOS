@@ -408,7 +408,7 @@ export const screens = pgTable(
     lastCandidateMessageAt: ts("last_candidate_message_at"),
     assessmentId: uuid("assessment_id"),
     workflowRunId: uuid("workflow_run_id"),
-    /** "apply" (offered in the visit that sent the application), "confirmed_repeat", or null for an emailed invitation (migration 0033). */
+    /** "apply" (offered in the visit that sent the application), "confirmed_repeat", "with_application" (every applicant's AI interview, 20 Oct 2026), or null for an emailed invitation (migration 0033). */
     invitedVia: text("invited_via").$type<ScreenInvitedVia>(),
     /** The one reminder to someone who started and stopped part-way (plan E4). */
     idleRemindedAt: ts("idle_reminded_at"),

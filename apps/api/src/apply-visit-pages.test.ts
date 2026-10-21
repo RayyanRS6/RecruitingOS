@@ -9,7 +9,7 @@ import { CHAT_WRAP_QUESTION } from "@ros/agents";
 import { CHAT_WRAP_KEY } from "@ros/core";
 import { SCREEN_BUSY_JS } from "./pages/candidate";
 import { CHAT_BUSY_NOTE } from "./pages/conversation-frame";
-import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
+import { pastTheWaitingRoom, statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * Wave E's candidate pages over HTTP, the way a browser without JavaScript uses them (plan E1, E2, E3, E4, E5, E7, E8,
@@ -65,10 +65,19 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     await container.drain();
     return r;
   }
-  const tokenOf = (r: Response) => {
-    const to = r.headers.get("location") ?? "";
+  /** The cookie the introduction reads ("Your application is sent"), set when the waiting room opened each interview. */
+  const appliedTo = new Map<string, string>();
+  /** Runs `fn` with the engine's clock past the 40 to 90 seconds every waiting room says "preparing" first (Q14, 21 Oct). */
+  const pastTheWait = (fn: () => Response | Promise<Response>) => pastTheWaitingRoom(container, async () => fn());
+  /** The AI interview the waiting room opens (20 Oct 2026, R20-12): the POST's `…/applied`, then, once its wait is over, its 302 to the interview. */
+  const tokenOf = async (r: Response) => {
+    expect(r.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
+    const room = await pastTheWait(() => app.request(r.headers.get("location")!, { headers: { cookie: (r.headers.get("set-cookie") ?? "").match(/ros_applied=[^;,]+/)?.[0] ?? "" } }));
+    const to = room.headers.get("location") ?? "";
     expect(to).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
-    return to.slice("/c/screen/".length);
+    const token = to.slice("/c/screen/".length);
+    appliedTo.set(token, (room.headers.get("set-cookie") ?? "").match(/ros_applied_to=[^;,]+/)?.[0] ?? "");
+    return token;
   };
 
   /** Answers every question over HTTP: taps where the page offers them, a skip where asked, words otherwise; ends at the chat's end. */
@@ -118,9 +127,9 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     const turns = (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).length;
     const r = await apply({ first: "Maria", last: "Reyes", email: "maria.reyes@example.com" });
     expect(r.status).toBe(302);
-    mariaToken = tokenOf(r);
-    expect(await screenOf(mariaToken)).toMatchObject({ invitedVia: "apply", channel: "web", status: "invited" });
-    const applied = (r.headers.get("set-cookie") ?? "").match(/ros_applied_to=[^;,]+/)![0];
+    mariaToken = await tokenOf(r);
+    expect(await screenOf(mariaToken)).toMatchObject({ invitedVia: "with_application", channel: "web", status: "invited" });
+    const applied = appliedTo.get(mariaToken)!;
     const html = await page(`/c/screen/${mariaToken}`, { cookie: applied });
     expect(html.match(/<h1[\s>]/g)).toHaveLength(1);
     const main = html.slice(html.indexOf("<main>") + "<main>".length);
@@ -148,15 +157,15 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).length).toBe(turns);
     // without the cookie (opened later from the email) the page says nothing about where the link went
     expect(await page(`/c/screen/${mariaToken}`)).not.toContain("Your application is sent.");
-    // her status page leads with the progress line (Wave S2, K4): Applied ticked, the screening chat where she is, then the
+    // her status page leads with the progress line (Wave S2, K4): Applied ticked, the AI interview where she is, then the
     // rest; one line on what happens next, then the button
     const status = await page(`/c/status/${await statusTokenFor(container, { roleId, email: "maria.reyes@example.com" })}`);
     const track = status.slice(status.indexOf('<ol class="track" aria-label="Where your application is">'), status.indexOf("</ol>", status.indexOf('<ol class="track"')));
-    expect(track).toMatch(/^<ol class="track" aria-label="Where your application is"><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Applied<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>Screening chat<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Interview<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Decision<\/span><\/li>$/);
-    expect(status).toContain("<h2>What happens next</h2><p>A short written screening chat with the hiring team's AI assistant is waiting for you, whenever suits you.</p>");
-    expect(status).toContain(`<a class="btn" href="/c/screen/${mariaToken}">Start the screening chat</a>`);
+    expect(track).toMatch(/^<ol class="track" aria-label="Where your application is"><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Applied<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>AI interview<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Interview<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Decision<\/span><\/li>$/);
+    expect(status).toContain("<h2>What happens next</h2><p>Your next step is a short AI interview with the hiring team's AI assistant. It is waiting for you, whenever suits you.</p>");
+    expect(status).toContain(`<a class="btn" href="/c/screen/${mariaToken}">Start your AI interview</a>`);
     // the Status card names where she is as the line does
-    expect(status).toMatch(/<span>Status<\/span><strong>Screening chat<\/strong>/);
+    expect(status).toMatch(/<span>Status<\/span><strong>AI interview<\/strong>/);
   });
 
   it("E2, E12, E14, Wave S7: Start opens the chat at once: the steps with the counter, where the replies go, the first question word for word as the latest message, Yes and No to tap, the reply box named after the question, and the quiet skip; a tap is recorded word for word", async () => {
@@ -169,23 +178,32 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     const main = html.slice(html.indexOf("<main>") + "<main>".length);
     expect(main).toMatch(/^<p class="ai-line">.*?<\/p><nav class="journey" aria-label="Your application">/);
     expect(html).toMatch(/aria-current="step">Chat</);
-    expect(html).toContain(`>0 of ${total} required · Required questions<`);
     expect(html).toMatch(new RegExp(`<form method="post" action="/c/screen/${mariaToken}/later"[^>]*>(<span>Saved</span>)?<button class="link-action" type="submit">Finish later</button></form>`));
     expect(html).toContain(`<h1 class="chat-title">Your chat about the ${packet.identity.title} role</h1>`);
     expect(html).toContain("<span>Your replies go to Visit Dental only when you press Send my answers at the end.</span>");
     expect(html).not.toMatch(/Question \d of/);
-    // the opening, in code: her first name, then the first question word for word; it is the message to answer now
-    expect(nowLine(html)).toBe(`<span class="sr-only">The assistant said: </span>Hi Maria. Thanks for applying.\n\n${q1.question}`);
+    // the opening, in code: her first name. Her résumé came inside the form (no script), so only the intake read it, for
+    // the fit check and the score: the interview names only what the form's own reading gave, which a returning
+    // address's copy has too (21 Oct, Q14), so it thanks her; a résumé the form read is named (apply-details.test.ts).
+    // Then anything about the job's must-haves her own words do not show ("About your experience"), then the job's questions
+    expect(nowLine(html)).toMatch(/^<span class="sr-only">The assistant said: <\/span>Hi Maria\. Thanks for applying\./);
+    expect(html).toContain(`<p class="sending" id="sending" role="status" data-wait="${CHAT_BUSY_NOTE}"></p>`);
+    // a second press of Start changes nothing
+    await post(`/c/screen/${mariaToken}/start`);
+    expect((await screenOf(mariaToken)).transcript.filter((t) => t.role === "assistant")).toHaveLength(1);
+    for (let i = 0; i < 8 && !html.includes('<input type="hidden" name="tap" value="yes_no"/>'); i++) {
+      expect(html).toContain(" required · About your experience<");
+      expect((await post(`/c/screen/${mariaToken}`, { message: "At Smile Bright I see nine patients a day, chart everything in Dentrix and do perio maintenance." })).status).toBe(302);
+      html = await page(`/c/screen/${mariaToken}`);
+    }
+    // the first of the job's questions: a yes-or-no question to tap, the reply box named after it, and the quiet skip
+    expect(html).toContain(`>0 of ${total} required · Required questions<`);
+    expect(nowLine(html)).toContain(q1.question);
     expect(html).toContain(`<input type="hidden" name="tap" value="yes_no"/><fieldset class="actions" aria-label="Your answer to: ${q1.question}"><button class="btn secondary" type="submit" name="choice" value="yes">Yes</button><button class="btn secondary" type="submit" name="choice" value="no">No</button><button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button></fieldset>`);
     expect(html).toContain("<summary>Answer in your own words instead</summary>");
     expect(html).toContain(`<label for="message">Your reply<span class="sr-only"> to: ${q1.question}</span></label>`);
     expect(html).toContain(`<a class="link-action" href="/c/screen/${mariaToken}/person">I'd rather talk to a person</a>`);
     expect(html).toContain(`<form method="post" action="/c/screen/${mariaToken}/later"><button class="link-action" type="submit">Finish later: email me the link</button></form>`);
-    // while the assistant reads a reply the page says so (the script reads it from here)
-    expect(html).toContain(`<p class="sending" id="sending" role="status" data-wait="${CHAT_BUSY_NOTE}"></p>`);
-    // a second press of Start changes nothing
-    await post(`/c/screen/${mariaToken}/start`);
-    expect((await screenOf(mariaToken)).transcript.filter((t) => t.role === "assistant")).toHaveLength(1);
     // the tap: recorded as fixed words; the next question follows word for word, after one neutral line
     expect((await post(`/c/screen/${mariaToken}`, { tap: "yes_no", choice: "yes" })).headers.get("location")).toBe(`/c/screen/${mariaToken}`);
     const scr = await screenOf(mariaToken);
@@ -247,9 +265,9 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(html).not.toMatch(/href="\/c\/status\//);
     expect(html).not.toContain("<textarea");
     expect((await screenOf(mariaToken)).status).toBe("completed");
-    // on her status page the screening chat is behind her, ticked, and the team's review is where she is now
+    // on her status page the AI interview is behind her, ticked, and the team's review is where she is now
     const status = await page(`/c/status/${await statusTokenFor(container, { roleId, email: "maria.reyes@example.com" })}`);
-    expect(status).toMatch(/<li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Screening chat<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li>/);
+    expect(status).toMatch(/<li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>AI interview<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li>/);
     expect(status).not.toMatch(/<a class="btn" href="\/c\/screen\//);
     expect((await container.db.select().from(notifications).where(eq(notifications.companyId, companyId))).some((n) => n.title.includes("Maria") || n.body.includes("Maria"))).toBe(true);
     // a finished conversation is not changed any more
@@ -257,7 +275,7 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
   });
 
   it("E3, Q16: 'I'd rather talk to a person' offers two equal choices; sending without the conversation says so and closes it", async () => {
-    const token = tokenOf(await apply({ first: "Ana", last: "Silva", email: "ana.silva@example.com" }));
+    const token = await tokenOf(await apply({ first: "Ana", last: "Silva", email: "ana.silva@example.com" }));
     const html = await page(`/c/screen/${token}/person`);
     expect(html).toContain("<h1>Talk to a person instead</h1>");
     expect(html.match(/<button class="btn secondary" type="submit">/g)).toHaveLength(2);
@@ -277,7 +295,7 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
   let luisToken = "";
 
   it("E2: Do this later emails the link to the address on file, keeps the place, and says so", async () => {
-    luisToken = tokenOf(await apply({ first: "Luis", last: "Ortega", email: "luis.ortega@example.com" }));
+    luisToken = await tokenOf(await apply({ first: "Luis", last: "Ortega", email: "luis.ortega@example.com" }));
     const r = await post(`/c/screen/${luisToken}/later`);
     expect(r.headers.get("location")).toBe(`/c/screen/${luisToken}/later?sent=1`);
     await container.drain();
@@ -304,9 +322,9 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect((await app.request(`/c/screen/${luisToken}/person`)).status).toBe(200);
     // the status page says it too, without a link; the screening chat is still where they are on the progress line
     const status = await page(`/c/status/${await statusTokenFor(container, { roleId, email: "luis.ortega@example.com" })}`);
-    expect(status).toContain("<h2>What happens next</h2><p>Your screening chat is paused while we fix a problem on our end.");
+    expect(status).toContain("<h2>What happens next</h2><p>Your AI interview is paused while we fix a problem on our end.");
     expect(status).not.toMatch(/<a class="btn" href="\/c\/screen\//);
-    expect(status).toContain('<li class="current" aria-current="step"><span class="dot" aria-hidden="true"></span><span>Screening chat</span></li>');
+    expect(status).toContain('<li class="current" aria-current="step"><span class="dot" aria-hidden="true"></span><span>AI interview</span></li>');
     await container.db.update(screens).set({ status: "unfinished" }).where(eq(screens.id, scr.id));
     html = await page(`/c/screen/${luisToken}`);
     expect(html).toContain("<h1>This conversation has closed</h1>");
@@ -332,57 +350,59 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     const status = await page(`/c/status/${a.statusToken}`);
     const track = status.slice(status.indexOf('<ol class="track"'), status.indexOf("</ol>", status.indexOf('<ol class="track"')));
     expect(track).toContain('<li class="current" aria-current="step"><span class="dot" aria-hidden="true"></span><span>Review</span></li>');
-    expect(track).not.toContain("Screening chat");
+    expect(track).not.toContain("AI interview");
     expect(status).toMatch(/<span>Status<\/span><strong>Review<\/strong>/);
+    expect(status).not.toContain("Your AI interview link");
+    // R20-10: the one email is the neutral thank-you, without the AI interview's link
+    const toSam = mail().filter((m) => m.to === "sam.nguyen@example.com");
+    expect(toSam).toHaveLength(1);
+    expect(toSam[0].text).not.toContain("/c/screen/");
   });
 
-  it("Q17: with the month's conversations used up the receipt says the conversation's link comes by email", async () => {
+  it("Q17, R20-11: with the month's AI interviews used up the page says plainly that the link comes by email, with no loader", async () => {
     const [ent] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "text_screens")));
     await container.db.update(entitlements).set({ limit: 5, used: 5 }).where(eq(entitlements.id, ent.id));
     try {
       const r = await apply({ first: "Rosa", last: "Diaz", email: "rosa.diaz@example.com" });
       expect(r.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
       const receipt = await page(r.headers.get("location")!, { cookie: (r.headers.get("set-cookie") ?? "").match(/ros_applied=[^;,]+/)![0] });
-      expect(receipt).toContain(`<li>We email you a link to a short written conversation with Visit Dental's AI assistant (about ${packet.screening.maxMinutes} minutes). Answer it whenever suits you, or ask for a person instead.</li>`);
+      expect(receipt).toContain(`<li>Your next step is a short AI interview with Visit Dental's AI assistant, about ${packet.screening.maxMinutes} minutes. We email you its link as soon as it is ready. You can skip any question, or ask for a person instead.</li>`);
+      expect(receipt).not.toContain('class="loader"');
+      // her status page says the same while she waits
+      const status = await page(`/c/status/${await statusTokenFor(container, { roleId, email: "rosa.diaz@example.com" })}`);
+      expect(status).toContain("Your AI interview link follows by email as soon as it is ready.");
     } finally {
       await container.db.update(entitlements).set({ limit: ent.limit, used: ent.used }).where(eq(entitlements.id, ent.id));
     }
   });
 
-  it("Q14 x Q15: a repeat submission sees exactly the same pages as a first one, bound to a detached copy; the owner of the address confirms by email, and opening the link changes nothing", async () => {
-    const first = tokenOf(await apply({ first: "Kai", last: "Lee", email: "kai.lee@example.com" }));
+  it("Q14 kept in full (21 Oct 2026): a repeat submission gets the same waiting room, which opens a detached AI interview about as long as a reading takes later, never the application's own; the address on file hears by email", async () => {
+    const first = await tokenOf(await apply({ first: "Kai", last: "Lee", email: "kai.lee@example.com" }));
     const again = await apply({ first: "Kai", last: "Lee", email: "KAI.LEE@example.com" });
-    const copy = tokenOf(again);
-    expect(copy).not.toBe(first);
-    expect((await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.token, copy)))).toHaveLength(1);
-    const same = (html: string, token: string) => html.replaceAll(token, "TOKEN").replace(/nonce="[^"]*"/g, "");
-    expect(same(await page(`/c/screen/${copy}`), copy)).toBe(same(await page(`/c/screen/${first}`), first));
-    // Start on both: the same first question, the same page
-    await post(`/c/screen/${first}/start`);
-    await post(`/c/screen/${copy}/start`);
-    expect(same(await page(`/c/screen/${copy}`), copy)).toBe(same(await page(`/c/screen/${first}`), first));
-    // the copy is answered and sent; the address on file is asked to confirm
-    await answerAll(copy);
-    expect((await post(`/c/screen/${copy}/submit`)).headers.get("location")).toBe(`/c/screen/${copy}`);
-    await container.drain();
-    expect(await page(`/c/screen/${copy}`)).toContain("<h1>Thanks, your answers are sent</h1>");
-    const ask = mail().filter((m) => m.to === "kai.lee@example.com" && /^Please confirm/.test(m.subject)).at(-1)!;
-    const raw = ask.text.match(/\/c\/confirm-answers\/([A-Za-z0-9_-]+)/)![1];
-    const confirm = await page(`/c/confirm-answers/${raw}`);
-    expect(confirm).toContain("<h1>Add these answers to your application?</h1>");
-    expect(confirm).toContain(`answered ${packet.screening.questions.length} of the ${packet.screening.questions.length} screening questions`);
-    expect(confirm).toContain('<button class="btn" type="submit">Add these answers to my application</button>');
-    expect(confirm).toContain("If it was not you, you do not need to do anything");
-    expect((await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.token, copy)))[0].confirmation).toBe("sent");
-    // Kai's own conversation is under way, so nothing is added, and the page says so
-    expect((await post(`/c/confirm-answers/${raw}`)).headers.get("location")).toBe(`/c/confirm-answers/${raw}`);
-    expect(await page(`/c/confirm-answers/${raw}`)).toContain("<h1>Nothing was added</h1>");
-    expect((await screenOf(first)).status).toBe("in_progress");
-    expect((await app.request("/c/confirm-answers/not-a-real-link")).status).toBe(404);
+    expect(again.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
+    const receiptCookie = (again.headers.get("set-cookie") ?? "").match(/ros_applied=[^;,]+/)![0];
+    const receipt = await page(again.headers.get("location")!, { cookie: receiptCookie });
+    expect(receipt).toContain("preparing your AI interview…");
+    expect(receipt).toContain('name="grant"');
+    expect(receipt).not.toContain("/c/screen/");
+    expect(receipt).not.toContain(first);
+    const [kai] = await container.db.select().from(candidates).where(eq(candidates.email, "kai.lee@example.com"));
+    const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, kai.id)));
+    // a copy made for this visit, greeting the name typed; the application's own interview is untouched
+    const copies = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, a.id));
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatchObject({ firstName: "Kai", status: "invited", confirmation: null });
+    expect(copies[0].token).not.toBe(first);
+    const opened = await pastTheWait(() => app.request(again.headers.get("location")!, { headers: { cookie: receiptCookie } }));
+    expect(opened.status).toBe(302);
+    expect(opened.headers.get("location")).toBe(`/c/screen/${copies[0].token}`);
+    expect((await screenOf(first)).status).toBe("invited");
+    // the address on file gets its own link, as before (at most once a day)
+    expect(mail().filter((m) => m.to === "kai.lee@example.com" && /^Your application for /.test(m.subject))).toHaveLength(1);
   });
 
   it("polish list, Wave S7: the chat is one thread holding the candidate's own answers, typed or tapped, beside the assistant's lines, in order; email wording reads as the page's own way to a person", async () => {
-    const token = tokenOf(await apply({ first: "Ina", last: "Park", email: "ina.park@example.com" }));
+    const token = await tokenOf(await apply({ first: "Ina", last: "Park", email: "ina.park@example.com" }));
     await post(`/c/screen/${token}/start`);
     const typed = "At Smile Bright I see nine patients a day and chart every visit in Dentrix; 6 years so far.";
     // answer two questions: a tap where the page offers one, words otherwise
@@ -426,7 +446,7 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
   });
 
   it("the conversation pages need no script: every action is a plain form or link, and the one script only stops a second press", async () => {
-    const token = tokenOf(await apply({ first: "Wes", last: "Lund", email: "wes.lund@example.com" }));
+    const token = await tokenOf(await apply({ first: "Wes", last: "Lund", email: "wes.lund@example.com" }));
     for (const path of [`/c/screen/${token}`, `/c/screen/${token}/person`]) {
       const html = await page(path);
       expect(scriptsOf(html), path).toEqual([SCREEN_BUSY_JS]);

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { BoardCard, BoardPlacement, BoardView, MatchScore, PoolSummary } from "../../apps/web/src/api/client";
 import {
   ASK_INTRO, ASK_SOON, BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, NEEDS_EYE_WARNING, NO_DECLINE_HERE, POOL_CARD_NOTE, RECRUITER_CHECK, REVIEW_FOOT, REVIEW_SUB, SORT_TEXT,
-  answerPath, appliedNote, appliedToast, applyLabel, batchItems, boardOrder, boardPersonPath, boardSearch, cardChip, cardFacts, confidenceChip, countsLine, evidenceLines, headerCounts, extraWarnings, groupCount, initialReview, isTicked,
-  lookedAtLine, modeFrom, needsReason, poolCardView, previewByPerson, previewItems, readyCounts, readyLine, reasonLine, reviewFootNote, reviewRows, rowWarnings, scoreText, snapshotOf, snapshotPlace,
+  answerPath, appliedNote, appliedToast, applyLabel, batchItems, boardOrder, boardPersonPath, boardSearch, cardChip, cardFacts, confidenceChip, countsLine, evidenceLines, headerCounts, extraWarnings, groupCount, initialReview, isTicked, laneRow,
+  lookedAtLine, modeFrom, needsReason, poolCardView, previewByPerson, previewItems, readyCounts, readyLine, reasonLine, reviewFootNote, reviewRows, rowWarnings, scoreText, snapshotOf, snapshotPlace, snapshotScore,
   sortedText, summarySentences, tickable, togglePick, type ReviewState,
 } from "../../apps/web/src/pages/board/board-model";
 import { SAFETY_NET_NOTE } from "../../apps/web/src/talent-list";
@@ -16,7 +16,7 @@ import { SAFETY_NET_NOTE } from "../../apps/web/src/talent-list";
 let n = 0;
 function score(value: number | null, over: Partial<MatchScore> = {}): MatchScore {
   const band = value === null ? null : value >= 85 ? "very_high" : value >= 70 ? "high" : value >= 55 ? "medium" : "low";
-  return { score: value, band, bandLabel: null, coverage: { known: 3, total: 4, words: "Based on 3 of 4 requirements" }, breakdown: [], unknown: [], fullMarks: 3, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume", packetVersion: 1, ...over };
+  return { score: value, band, bandLabel: null, coverage: { known: 3, total: 4, words: "Based on 3 of 4 requirements" }, breakdown: [], unknown: [], fullMarks: 3, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume", interview: "none", basis: "Résumé only: no AI interview", packetVersion: 1, ...over };
 }
 function placed(column: BoardPlacement["column"], over: Partial<BoardPlacement> = {}): BoardPlacement {
   return { column, state: "suggested", doneLabel: null, confident: true, needsYourEye: null, reason: "Match score 91: every requirement judged so far is met.", nextStep: { kind: "interview", label: "Interview", reason: "Strong evidence on every must-have." }, suggestedAction: column, declineReason: null, ...over };
@@ -84,6 +84,8 @@ describe("the board", () => {
     expect(countsLine({})).toBe("0 shortlist · 0 longlist · 0 not moving forward");
     expect(headerCounts({ counts: { shortlist: 2, longlist: 1, not_moving_forward: 1 }, done: 3 })).toBe("To sort: 2 shortlist · 1 longlist · 1 not moving forward · 3 already sorted or decided");
     expect(headerCounts({ counts: { shortlist: 1 } })).toBe("To sort: 1 shortlist · 0 longlist · 0 not moving forward");
+    // the lane in one neutral count: some there are being scored, so it never says they have no AI interview
+    expect(headerCounts({ counts: { shortlist: 1 }, noAiInterview: 2 })).toBe("To sort: 1 shortlist · 0 longlist · 0 not moving forward · 2 not on the board yet");
   });
 
   it("shows the AI review's own confidence as a chip of its own, amber only when low", () => {
@@ -96,16 +98,30 @@ describe("the board", () => {
     const mustHaves = { total: 4, shown: 3, partly: 0, notShown: 0, unknown: 1, gaps: [], words: "Must-haves: 3 of 4 shown, 1 not yet known" };
     const readingVersion = { readAgainst: 1, current: 2, label: "Read against version 1 of the role; the role is now on version 2." };
     const facts = { openScreen: true, invitedAutomatically: true, suggestionWaiting: true, stillApplying: false, lowConfidence: false, needsCloserLook: false };
-    expect(cardFacts({ mustHaves, score: score(80, { basedOn: "resume_and_screen" }), readingVersion, facts })).toEqual([
+    expect(cardFacts({ mustHaves, score: score(80, { basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview" }), readingVersion, facts })).toEqual([
       "Must-haves: 3 of 4 shown, 1 not yet known",
-      "From the résumé and the screening chat",
+      "From the résumé and the AI interview",
       "Read against version 1 of the role; the role is now on version 2.",
-      "Invited to the screening chat automatically",
+      "Invited to the AI interview automatically",
       "A suggestion is waiting for you",
     ]);
-    expect(cardFacts({ mustHaves: null, score: score(80), readingVersion: null, facts: { ...facts, invitedAutomatically: false, suggestionWaiting: false } })).toEqual(["From the AI review of the résumé", "Screening chat open"]);
-    expect(cardFacts(ana)).toEqual(["From the AI review of the résumé"]);
-    expect(cardFacts({ mustHaves: null, score: score(80, { basedOn: "screen" }), readingVersion: null, facts: { ...facts, openScreen: false, invitedAutomatically: false, suggestionWaiting: false } })).toEqual(["From the screening chat"]);
+    // R20-9: a résumé-only score says so, and why (the label never says how far anyone got)
+    expect(cardFacts({ mustHaves: null, score: score(80, { interview: "not_done_yet", basis: "Résumé only: AI interview not done yet" }), readingVersion: null, facts: { ...facts, invitedAutomatically: false, suggestionWaiting: false } })).toEqual(["Résumé only: AI interview not done yet", "AI interview open"]);
+    expect(cardFacts(ana)).toEqual(["Résumé only: no AI interview"]);
+    // the AI interview in the score with no résumé reading at all
+    expect(cardFacts({ mustHaves: null, score: score(80, { basedOn: "screen", interview: "done", basis: "From the AI interview" }), readingVersion: null, facts: { ...facts, openScreen: false, invitedAutomatically: false, suggestionWaiting: false } })).toEqual(["From the AI interview"]);
+    // an older answer without the label: the reading it came from, as before
+    expect(cardFacts({ mustHaves: null, score: score(80, { basis: "" }), readingVersion: null, facts: { ...facts, openScreen: false, invitedAutomatically: false, suggestionWaiting: false } })).toEqual(["From the AI review of the résumé"]);
+  });
+
+  it("names where each person in the lane stands: the column's neutral words, else the board's own (R20-9)", () => {
+    const now = new Date("2026-10-02T10:00:00.000Z");
+    const inColumn = card("Sofia Lind", placed(null, { state: "waiting", doneLabel: "No AI interview yet" }), score(70), { ownerStage: "no_ai_interview", ownerStageLabel: "Invited (not started)", aiInterview: { state: "invited", group: "not_started", label: "Invited (not started)", since: null, linkOpenUntil: null, lastEmailAt: null, canRemind: false, canResend: false } });
+    expect(laneRow(inColumn, now).state).toBe("Invited (not started)");
+    const beingScored = card("Theo Park", placed(null, { state: "waiting", doneLabel: "AI interview being scored" }), score(70, { interview: "being_scored" }), { stage: "screen_complete", aiInterview: null });
+    expect(laneRow(beingScored, now).state).toBe("AI interview being scored");
+    const stopped = card("Uma Reed", placed(null, { state: "waiting", doneLabel: "No AI interview" }), score(70, { interview: "not_done" }), { aiInterview: null });
+    expect(laneRow(stopped, now)).toMatchObject({ name: "Uma Reed", state: "No AI interview" });
   });
 
   it("writes the score as the band's word and the number, coloured like the badge", () => {
@@ -137,7 +153,7 @@ describe("the board", () => {
   it("shows two strengths and the gap, each with where it came from, and says when nothing was quoted", () => {
     expect(evidenceLines(ana)).toEqual([
       { kind: "strength", text: "Active CA RDH license", source: "résumé", quoted: true },
-      { kind: "strength", text: "Periodontal charting", source: "screening chat", quoted: false },
+      { kind: "strength", text: "Periodontal charting", source: "AI interview", quoted: false },
       { kind: "gap", text: "Patient communication: partly shown", source: "résumé", quoted: true },
     ]);
     expect(evidenceLines({ strengths: [], gap: null })).toEqual([]);
@@ -301,7 +317,7 @@ describe("one-click questions", () => {
   });
 
   it("says what it looked at, and that nothing new was asked of the AI", () => {
-    expect(lookedAtLine({ people: 6, resumeReadings: 6, screenReadings: 2, requirements: ["A", "B"], words: "" })).toBe("Looked at: 6 people (6 résumé reviews and 2 screening chats), against 2 must-haves. Nothing new was asked of the AI.");
+    expect(lookedAtLine({ people: 6, resumeReadings: 6, screenReadings: 2, requirements: ["A", "B"], words: "" })).toBe("Looked at: 6 people (6 résumé reviews and 2 AI interviews), against 2 must-haves. Nothing new was asked of the AI.");
     expect(lookedAtLine({ people: 1, resumeReadings: 1, screenReadings: 0, requirements: ["Active CA RDH license"], words: "" })).toBe("Looked at: 1 person (1 résumé review), against \"Active CA RDH license\". Nothing new was asked of the AI.");
     expect(lookedAtLine({ people: 0, resumeReadings: 0, screenReadings: 0, requirements: [], words: "" })).toBe("Looked at: 0 people. Nothing new was asked of the AI.");
   });
@@ -336,11 +352,19 @@ describe("Today's pool card and the board a recruiter checks", () => {
     const read = snapshotOf({ company: {}, board: snap });
     expect(read?.people).toHaveLength(3);
     expect(snapshotPlace(read!.people[0])).toBe("Shortlist");
-    expect(snapshotPlace(read!.people[1])).toBe("Still applying");
+    expect(snapshotPlace(read!.people[1])).toBe("No AI interview yet");
     expect(snapshotPlace(read!.people[2])).toBe("Shortlist (already sorted)");
     expect(snapshotOf({ company: {} })).toBeNull();
     expect(snapshotOf(undefined)).toBeNull();
     expect(snapshotOf({ board: { capturedAt: 1, people: [] } })).toBeNull();
+  });
+
+  it("labels a snapshot's résumé-only score, as the list does (R20-9), and reads an older snapshot without the label", () => {
+    expect(snapshotScore({ score: 88, interview: "not_done", basis: "Résumé only: no AI interview" })).toEqual({ text: "88/100 · Résumé only", title: "Résumé only: no AI interview" });
+    expect(snapshotScore({ score: 88, interview: "being_scored", basis: "Résumé only for now: AI interview done, being scored" }).text).toBe("88/100 · Résumé only");
+    expect(snapshotScore({ score: 91, interview: "done", basis: "From the résumé and the AI interview" })).toEqual({ text: "91/100", title: "From the résumé and the AI interview" });
+    expect(snapshotScore({ score: 91 })).toEqual({ text: "91/100" });
+    expect(snapshotScore({ score: null, interview: "not_done_yet" })).toEqual({ text: "No score yet" });
   });
 });
 

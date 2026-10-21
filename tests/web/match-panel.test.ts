@@ -49,8 +49,14 @@ describe("the match card", () => {
   it("shows the number the API worked out, with what it rests on and where it came from", () => {
     const m = score(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], [skill("chairside", "partially_evidenced", "assisted"), skill("patients", "evidenced", "calm"), skill("software", "contradicted", "never used dental software")]), reading("screen", [must("perio", "partially", "I chart sometimes")], [], { createdAt: "2026-10-02T10:00:00Z" }));
     expect(matchCardState(detail({ matchScore: m }))).toMatchObject({ kind: "scored", score: m.score });
-    expect(coverageLine(m)).toBe("Based on all 5 requirements, from the AI review of the résumé and the screening chat.");
-    expect(coverageLine(score(reading("triage", [must("rdh_license", "yes", "RDH")])))).toBe("Based on 1 of 5 requirements, from the AI review of the résumé.");
+    expect(coverageLine(m)).toBe("Based on all 5 requirements. From the résumé and the AI interview.");
+    // R20-9: a résumé-only score says so, by where the AI interview stands
+    const resumeOnly = reading("triage", [must("rdh_license", "yes", "RDH")]);
+    expect(coverageLine(score(resumeOnly))).toBe("Based on 1 of 5 requirements. Résumé only: no AI interview.");
+    expect(coverageLine(matchScore({ resume: resumeOnly, screen: null }, packet, { interview: "not_done_yet" })!)).toBe("Based on 1 of 5 requirements. Résumé only: AI interview not done yet.");
+    expect(coverageLine(matchScore({ resume: resumeOnly, screen: null }, packet, { interview: "being_scored" })!)).toBe("Based on 1 of 5 requirements. Résumé only for now: AI interview done, being scored.");
+    // an older answer without the label: the reading it came from
+    expect(coverageLine({ ...score(resumeOnly), basis: "" })).toBe("Based on 1 of 5 requirements. From the AI review of the résumé.");
   });
 
   it("says the verdict in one line: the must-haves shown, partly shown, not met and not known yet (Wave S1)", () => {
@@ -208,8 +214,10 @@ describe("the panel's wiring", () => {
     expect(sections.indexOf("<MatchVerdict a={a}>")).toBeLessThan(sections.indexOf("<summary>Full breakdown</summary>"));
     expect(sections.indexOf("<summary>Full breakdown</summary>")).toBeLessThan(sections.indexOf("<ScoreBreakdown a={a} />"));
     const panel = read("../../apps/web/src/pages/candidate-panel/CandidatePanel.tsx");
-    expect(panel).toContain("const score = a ? matchOf(a)?.score ?? null : null;");
+    expect(panel).toContain("const scored = a ? matchOf(a) ?? null : null;");
     expect(panel).toContain('<ScoreBadge score={score} size="sm" />');
+    // with the résumé-only chip beside it on every section (R20-9)
+    expect(panel).toContain("const resumeOnly = scored ? resumeOnlyChip(scored) : null;");
   });
 
   it("shows the answers to the form's questions as sentences, marks the ones suggested from the résumé, and the summary they checked (Wave S7)", () => {

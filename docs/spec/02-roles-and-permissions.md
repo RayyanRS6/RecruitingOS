@@ -78,7 +78,7 @@ Levels: `auto`, `auto_notify`, `approval`, `human_only`. Resolution: role policy
 | application.triage | auto (information) | | no |
 | application.reject_ineligible | auto_notify, 24 h review window | | yes: window hours, or human_only |
 | application.reject_on_assessment | human_only | | locked |
-| application.invite_screen | auto_notify | | yes |
+| application.invite_screen | auto (fixed, 20 Oct 2026, R20-4: every applicant gets the AI interview by itself) | | no: Setup shows it as a fixed line; a saved "ask me first" or "only a person" is read as "do it" (`MAX_LEVELS`) |
 | screen.conduct | auto | | yes (human_only disables AI screening) |
 | application.recommend_interview | auto_notify (information) | | yes |
 | interview.request | approval | owner, hiring_manager, recruiter | approver list only; cannot become auto (new lock, AC10.1) |

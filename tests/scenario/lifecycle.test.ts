@@ -40,14 +40,14 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
   };
 
   beforeAll(async () => {
-    // Texting on for the scenario: step 5 consents to texts and step 7 runs the screen by SMS (decision M2 keeps texting off by default).
+    // Texting on for the scenario: step 5 consents to texts and step 10b sends a person's new link by SMS (decision M2 keeps texting off by default).
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
     app = createApp(container);
     setClock(0);
     await signIn();
     const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
-    // docs/13 tells the later path (the screen by text after the résumé is read): the company is on it, as ITS can set (plan Wave E).
+    // ITS's old switch, kept on the company's settings: since 20 Oct 2026 nothing reads it (every applicant gets the AI interview).
     await useLaterApplyFlow(container, co.id);
   });
   afterAll(async () => { await container.close(); });
@@ -151,7 +151,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(await page.text()).toContain("JobPosting");
   });
 
-  it("Step 5, Application and acknowledgment: candidate applies on a phone; confirmation with AI disclosure within the workflow; policy message.send_templated = auto", async () => {
+  it("Step 5, Application and the one email: candidate applies on a phone; once her résumé is read the AI interview is ready and one email carries it, with the AI disclosure; policy message.send_templated = auto", async () => {
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     const form = new FormData();
     form.set("firstName", "Maria"); form.set("lastName", "Reyes"); form.set("email", "maria.reyes@example.com"); form.set("phone", "949-555-0100"); form.set("smsConsent", "yes");
@@ -161,20 +161,24 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     const res = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(res.status).toBe(302);
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    // Slice 2 continues the pipeline: eligible → assessed → invited to a screen (policy auto_notify)
+    // 20 Oct 2026 (R20-4, R20-5): eligible → read → the AI interview, by itself, and the one email with its link
     expect(a.stage).toBe("screen_invited");
     const comms = await container.db.select().from(communications).where(eq(communications.applicationId, a.id));
     const ack = comms.find((m) => m.templateKey === "acknowledgment")!;
     expect(ack).toBeTruthy();
     expect(ack.disclosureIncluded).toBe(true);
+    expect(comms.filter((m) => m.direction === "outbound")).toHaveLength(1);
     const sent = (container.integrations.email as FakeEmailAdapter).sent.find((m) => m.to === "maria.reyes@example.com");
     expect(sent!.text).toMatch(/AI recruiting assistant/);
+    expect(sent!.text).toMatch(/\/c\/screen\//);
     expect(await eventsOf("application.received")).toHaveLength(1);
     expect(await eventsOf("application.acknowledged")).toHaveLength(1);
     expect(await eventsOf("consent.granted")).toHaveLength(1);
-    // the candidate's status page works without a login
+    // the candidate's status page works without a login, and says what is next
     const status = await app.request(`/c/status/${a.statusToken}`);
-    expect(await status.text()).toMatch(/screening conversation/);
+    const html = await status.text();
+    expect(html).toMatch(/AI interview/);
+    expect(html).toMatch(/\/c\/screen\//);
   });
 
   it("Step 6, Eligibility and triage: deterministic rules; resume extracted with verified quotes; AI never rejects; failure path retries extraction", async () => {
@@ -212,12 +216,11 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
   it("Step 7, The brief tells the owner what needs them", async () => {
     const brief = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string }> };
     expect(brief.cards.some((c) => c.kind === "new_applicants")).toBe(true);
-    expect(brief.cards.some((c) => c.kind === "screening")).toBe(true);
     // ITS posts the board (plan D3), so the owner is not told to post it from their own account
     expect(brief.cards.some((c) => c.kind === "posting_action")).toBe(false);
-    // "do it and tell me": the auto_notify invitations are in the owner's updates
+    // every applicant gets the AI interview by itself, and the team hears once it is scored (R20-8): no per-person invitation ping
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
-    expect(notes.some((n) => n.kind === "screen.invited")).toBe(true);
+    expect(notes.some((n) => n.kind === "screen.invited")).toBe(false);
   });
 
   it("Step 8, Ask a recruiter: the escalation carries the complete context and reaches the ITS queue", async () => {
@@ -246,17 +249,20 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect((await eventsOf("human.override")).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("Step 10, Screening: text screen with disclosure and a human alternative; ScreenAssessment with quotes; recommendation under policy (Slice 2)", async () => {
+  it("Step 10, The AI interview: on the web with the disclosure and a person instead; Send; ScreenAssessment with quotes; recommendation under policy (Slice 2; 20 Oct 2026)", async () => {
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId)); // Maria, consented to texts
     expect(a.stage).toBe("screen_invited");
     const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
-    expect(scr.channel).toBe("sms");
-    // candidate sees: a text with the disclosure and the first question, and an email with the web link
-    const sms = (container.integrations.sms as FakeSmsAdapter).sent.find((m) => m.to === "+19495550100")!;
-    expect(sms.body).toMatch(/AI assistant/);
-    expect(sms.body).toMatch(/HUMAN/);
-    expect((container.integrations.email as FakeEmailAdapter).sent.find((m) => m.to === "maria.reyes@example.com" && /screening conversation/.test(m.subject))!.text).toContain(`/c/screen/${scr.token}`);
-    // policy: application.invite_screen = auto_notify (owner told), screen.conduct = auto
+    // the AI interview that comes with the application is on the web, whatever she agreed to about texts (R20-6)
+    expect(scr).toMatchObject({ channel: "web", invitedVia: "with_application" });
+    expect((container.integrations.sms as FakeSmsAdapter).sent.filter((m) => m.to === "+19495550100")).toHaveLength(0);
+    // candidate sees: the one email with the web link, then the fixed introduction (who it is, a person instead)
+    expect((container.integrations.email as FakeEmailAdapter).sent.find((m) => m.to === "maria.reyes@example.com" && /^Thank you for applying: your next step/.test(m.subject))!.text).toContain(`/c/screen/${scr.token}`);
+    const post = (path: string, fields: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
+    const intro = await (await app.request(`/c/screen/${scr.token}`)).text();
+    expect(intro).toMatch(/AI assistant/);
+    expect(intro).toMatch(/talk to a person/);
+    // policy: application.invite_screen fixed at "Do it" (R20-4), screen.conduct = auto
     const answers: Record<string, string> = {
       license_confirm: "Yes, my RDH license is active in California.",
       experience: "At Smile Bright I see nine patients a day, do full perio charting and radiographs, and chart in Dentrix.",
@@ -265,21 +271,22 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
       pay: "I'm looking for $52 an hour.",
       why: "A steady office that respects hygienists.",
     };
-    const reply = (body: string) => app.request("/webhooks/twilio/inbound", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ From: "+19495550100", To: "+15550001111", Body: body, MessageSid: `SM${Math.random()}` }) });
-    for (let i = 0; i < 10; i++) {
+    expect((await post(`/c/screen/${scr.token}/start`)).status).toBe(302);
+    for (let i = 0; i < 30; i++) {
       const [s] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
       if (s.status === "completed") break;
-      expect((await reply(answers[s.progress.currentQuestionKey ?? ""] ?? "Yes, that works for me.")).status).toBe(200);
+      if (s.progress.phase === "review") {
+        expect((await post(`/c/screen/${scr.token}/review`)).status).toBe(302);
+        expect((await post(`/c/screen/${scr.token}/submit`)).status).toBe(302);
+        continue;
+      }
+      expect((await post(`/c/screen/${scr.token}`, { message: answers[s.progress.currentQuestionKey ?? ""] ?? "At Smile Bright I see nine patients a day, do full perio charting and chart in Dentrix." })).status).toBe(302);
     }
+    await container.drain();
     const [done] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
     expect(done.status).toBe("completed");
-    expect(Object.keys(done.answers)).toHaveLength(6);
-    const asked = done.transcript.filter((t) => t.role === "assistant" && t.questionKey).map((t) => t.questionKey);
-    expect(asked).toEqual(Object.keys(answers)); // one question per message, in the packet's order
-    // data stored: every candidate text is a communication; the scorecard quotes only what they said
-    const comms = await container.db.select().from(communications).where(eq(communications.applicationId, a.id));
-    expect(comms.filter((c) => c.direction === "inbound" && c.channel === "sms")).toHaveLength(6);
-    expect(comms.filter((c) => c.direction === "outbound" && c.channel === "sms").length).toBeGreaterThanOrEqual(7);
+    expect(done.progress.submittedAt).toBeTruthy();
+    // the scorecard quotes only what she said
     const asmt = (await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).find((x) => x.kind === "screen")!;
     const said = done.transcript.filter((t) => t.role === "candidate").map((t) => t.content).join("\n").toLowerCase();
     for (const f of (asmt.result as { questionFindings: Array<{ evidence?: { quote?: string } }> }).questionFindings) if (f.evidence?.quote) expect(said).toContain(f.evidence.quote.toLowerCase());
@@ -293,7 +300,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(await eventsOf("candidate.recommended")).toHaveLength(1);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "candidate.recommended" && /Maria/.test(n.title))).toBe(true);
-    expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).length).toBeGreaterThanOrEqual(7);
+    expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).length).toBeGreaterThanOrEqual(1);
   });
 
   it("Step 10b, Screening hand-off and failure paths: HUMAN reaches a person within 4 hours; an AI outage never strands the candidate", async () => {
@@ -307,7 +314,12 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     await container.drain();
     const sam = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).find((x) => x.source === "careers_page" && x.stage === "screen_invited")!;
     expect(sam).toBeTruthy();
-    const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, sam.id));
+    // his AI interview went on the web; he asks to do it by text, so the team takes it back and sends a new link by text
+    expect((await json("POST", `/api/v1/applications/${sam.id}/actions`, { action: "cancel_screen", note: "He asked for texts." })).status).toBe(200);
+    expect((await json("POST", `/api/v1/applications/${sam.id}/actions`, { action: "invite_screen", channel: "sms" })).status).toBe(200);
+    await container.drain();
+    const scr = (await container.db.select().from(screens).where(eq(screens.applicationId, sam.id))).find((x) => x.channel === "sms")!;
+    expect(scr.status).toBe("invited");
     const reply = (body: string) => app.request("/webhooks/twilio/inbound", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ From: "+19495550177", To: "+15550001111", Body: body, MessageSid: `SM${Math.random()}` }) });
     // the model is down for one turn: an honest holding message, nothing lost
     container.fake!.failNext("screen.turn", "throw");

@@ -13,6 +13,8 @@ const run = Date.now().toString(36);
 
 test.describe("decision after an interview", () => {
   skipWithoutFakeSignIn();
+  // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
+  test.slow();
   test("record the outcome on the interview sheet, then the decision on the candidate sheet through the deep link", async ({ page, baseURL }) => {
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });

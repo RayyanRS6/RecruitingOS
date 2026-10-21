@@ -1,11 +1,14 @@
 import type { Me, RoleApplyModeView } from "./api/client";
 
 /**
- * How applicants meet the screening conversation (plan E1; founder decision B1/Q15), in the words the ITS controls use,
- * kept free of React so they can be tested (tests/web/apply-flow.test.ts). Roles take "form now, conversation later"
- * until ITS, and only ITS, switches the one-visit flow on for a pilot role or a company's default (and back). The API is
- * the authority (PUT /roles/:id/apply-mode, POST /admin/customers/:id/apply-flow); these only decide what a page shows.
+ * How applicants meet the screening conversation (plan E1; founder decision B1/Q15), in the words the ITS controls used,
+ * kept free of React so they can be tested (tests/web/apply-flow.test.ts). Since 20 October 2026 (R20-12) ITS's switch
+ * is hidden and ignored: every applicant takes the same path (`EVERY_APPLICANT_LINE`). The saved setting stays readable
+ * in the API (GET /roles/:id/apply-mode); the words below are kept for it.
  */
+
+/** What the console says about how a customer's people apply, for every customer and role. */
+export const EVERY_APPLICANT_LINE = "Every applicant: a short form, then the AI interview once their résumé is read. It opens on the page right after the form, and its link comes by email too. Someone who answered No to a must-have question waits for the team's \"Keep them in\".";
 
 export type ApplyMode = RoleApplyModeView["effective"];
 

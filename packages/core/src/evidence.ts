@@ -63,9 +63,9 @@ export function lowConfidence(latest: AssessmentLike | null | undefined): boolea
 const OVERALL_WORDS: Record<string, string> = { strong: "Strong match", potential: "Potential match", weak: "Weak match", unknown: "Insufficient evidence" };
 
 /** The step the assistant suggests with this reading: a screening chat after the résumé, an interview after the chat. */
-function suggestedStep(latest: AssessmentLike): "a screening chat" | "an interview" | null {
+function suggestedStep(latest: AssessmentLike): "an AI interview" | "an interview" | null {
   const rec = (latest.result as { recommendation?: string }).recommendation;
-  if (latest.kind === "triage") return rec === "screen" ? "a screening chat" : null;
+  if (latest.kind === "triage") return rec === "screen" ? "an AI interview" : null;
   return rec === "strong_interview" || rec === "interview" ? "an interview" : null;
 }
 

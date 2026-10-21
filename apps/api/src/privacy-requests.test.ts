@@ -210,7 +210,11 @@ describe("candidate privacy requests", () => {
     const workflowRunsAboutHer = async () => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.companyId, companyId))).filter((r) => r.subject.id === applicationId || (r.state as { applicationId?: string }).applicationId === applicationId);
     const [intakeRun] = (await workflowRunsAboutHer()).filter((r) => r.workflowKey === "application_intake");
     expect(intakeRun).toBeTruthy();
-    await container.db.update(workflowRuns).set({ state: { ...intakeRun.state, candidateName: "Maria Reyes", contact: "maria.reyes@example.com, (949) 555-0100" } }).where(eq(workflowRuns.id, intakeRun.id));
+    // the apply form's reading of the upload she sent, never tied to the application (it finished after the intake read the
+    // file itself, 20 Oct): it carries only the upload, which her intake run names (`formUploadId`)
+    const formUploadId = randomUUID();
+    const [formRun] = await container.db.insert(aiRuns).values({ companyId, agent: "apply", task: "resume.extract", provider: "fake", model: "claude-haiku-5-5", promptKey: "resume.extract", promptVersion: 1, promptHash: "test", inputRef: { uploadId: formUploadId, roleId, purpose: "apply_form", chars: 120 }, structuredOutput: { fullName: "Maria Reyes", email: "maria.reyes@example.com", positions: [{ title: "Hygienist", employer: "Coastal Family Dentistry" }] }, status: "ok" }).returning({ id: aiRuns.id });
+    await container.db.update(workflowRuns).set({ state: { ...intakeRun.state, formUploadId, candidateName: "Maria Reyes", contact: "maria.reyes@example.com, (949) 555-0100" } }).where(eq(workflowRuns.id, intakeRun.id));
     await container.db.insert(workflowSteps).values({ runId: intakeRun.id, companyId, stepKey: "extract", seq: 99, status: "error", input: { wake: null }, output: { reading: { fullName: "Maria Reyes", phone: "(949) 555-0100", positions: ["Registered Dental Hygienist at Coastal Family Dentistry"], skills: ["Dentrix"] } }, error: "invalid JSON near 'Maria Reyes, RDH, Tustin'", finishedAt: new Date().toISOString() });
     const ivId = randomUUID();
     const [stillGoing] = await container.db.insert(workflowRuns).values({ companyId, workflowKey: "schedule_interview", subject: { type: "interview", id: ivId }, status: "waiting", currentStep: "await_pick", state: { interviewId: ivId, applicationId, roleId, roundKey: "first", attempt: 1, invitationNote: { text: "See you soon, Maria Reyes", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: ivId } }).returning();
@@ -260,6 +264,11 @@ describe("candidate privacy requests", () => {
       expect(JSON.stringify(r)).not.toMatch(words);
       expect({ task: r.task, model: r.model, costUsd: r.costUsd, latencyMs: r.latencyMs, inputTokens: r.inputTokens, status: r.status, workflowRunId: r.workflowRunId }).toEqual({ task: was.task, model: was.model, costUsd: was.costUsd, latencyMs: was.latencyMs, inputTokens: was.inputTokens, status: was.status, workflowRunId: was.workflowRunId });
     }
+    // the form's reading found by the upload her intake run names goes too, its upload kept as bookkeeping
+    const [formRunAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, formRun.id));
+    expect(formRunAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
+    expect(JSON.stringify(formRunAfter)).not.toMatch(words);
+    expect(formRunAfter.inputRef).toMatchObject({ uploadId: formUploadId, purpose: "apply_form" });
     // the workflow runs about her keep their ids, status, timings and step names, and lose every word; the one still
     // waiting was cancelled through the engine (by the administrator, with the deletion as its reason) before it was scrubbed
     const wfAfter = await workflowRunsAboutHer();

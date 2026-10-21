@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScreenProgress } from "@ros/contracts";
-import { APPLY_FLOW_FALLBACK, CHAT_GAP_LIMIT, CHAT_WRAP_KEY, buildChatPlan, chatItemSettled, chatMoveStays, chatNextMove, isStillApplying, oneVisitPolicyAllows, resolveApplyMode, saysNotDone, screeningFunnel, syncChatPlan, tapAnswerText, tapFormatFor, type FunnelScreen } from "./apply-flow";
+import { APPLY_FLOW_FALLBACK, CHAT_GAP_LIMIT, CHAT_WRAP_KEY, buildChatPlan, chatItemSettled, chatMoveStays, chatNextMove, isStillApplying, resolveApplyMode, saysNotDone, screeningFunnel, syncChatPlan, tapAnswerText, tapFormatFor, type FunnelScreen } from "./apply-flow";
 import { chatCounter } from "./apply-questions";
 import { canTransition } from "./stages";
 
@@ -78,8 +78,8 @@ describe("the chat's plan (founder decision S7-3: a counter and the section, nev
 
 /** Wave E's pure rules: which flow a role uses, who is still applying, tap answers, and the per-role figures. */
 describe("the flow a role uses (plan E1, the rollout decision)", () => {
-  it("a role's own setting wins, then the company's default, then 'form now, conversation later' (pilot roles first)", () => {
-    // nothing set anywhere: the later path; the one-visit flow is switched on by ITS, role by role or company by company
+  it("ITS's old switch still reads as it was saved (20 Oct 2026: no flow decision reads it any more)", () => {
+    // nothing set anywhere: the later path; the switch is kept readable only, every applicant now takes the same path
     expect(resolveApplyMode({ applyMode: null }, {})).toBe("form_then_screen");
     expect(resolveApplyMode({ applyMode: null }, null)).toBe("form_then_screen");
     expect(APPLY_FLOW_FALLBACK).toBe("form_then_screen");
@@ -93,17 +93,14 @@ describe("the flow a role uses (plan E1, the rollout decision)", () => {
     expect(resolveApplyMode({ applyMode: null }, { applyFlowDefault: "something" })).toBe("form_then_screen");
   });
 
-  it("'ask me first' and 'only a person' keep the later path; the automatic levels allow the one-visit flow", () => {
-    expect(oneVisitPolicyAllows("auto")).toBe(true);
-    expect(oneVisitPolicyAllows("auto_notify")).toBe(true);
-    expect(oneVisitPolicyAllows("approval")).toBe(false);
-    expect(oneVisitPolicyAllows("human_only")).toBe(false);
-  });
-
   it("still applying: offered with the application and not finished, sent without, handed over or closed", () => {
-    for (const status of ["invited", "reminded", "in_progress", "paused"]) expect(isStillApplying({ status, invitedVia: "apply" }), status).toBe(true);
-    for (const status of ["completed", "human_requested", "declined_by_candidate", "unfinished", "expired", "cancelled", "abandoned"]) expect(isStillApplying({ status, invitedVia: "apply" }), status).toBe(false);
+    for (const via of ["apply", "with_application"]) {
+      for (const status of ["invited", "reminded", "in_progress", "paused"]) expect(isStillApplying({ status, invitedVia: via }), `${via} ${status}`).toBe(true);
+      for (const status of ["completed", "human_requested", "declined_by_candidate", "unfinished", "expired", "cancelled", "abandoned"]) expect(isStillApplying({ status, invitedVia: via }), `${via} ${status}`).toBe(false);
+    }
+    // a link a person sent ("Send a new link"), or one after a confirmed repeat, is not the one that comes with the application
     expect(isStillApplying({ status: "in_progress", invitedVia: null })).toBe(false);
+    expect(isStillApplying({ status: "invited", invitedVia: "confirmed_repeat" })).toBe(false);
     expect(isStillApplying(null)).toBe(false);
   });
 

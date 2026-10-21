@@ -70,10 +70,10 @@ describe("what the page says after a choice", () => {
     const keptOut = actionToast("move_to_talent_pool", { candidateNotice: "not_told", talentPoolOptOut: true });
     expect(keptOut.title).toBe("Moved out of this role.");
     expect(keptOut.detail).toMatch(/They asked not to be kept for future roles, so they are not in your talent pool/);
-    expect(actionToast("invite_screen", {})).toEqual({ title: "Invitation on its way." });
+    expect(actionToast("invite_screen", {})).toEqual({ title: "A new AI interview link is on its way." });
     expect(actionToast("ask_in_screen", { next: "Invitation on its way. The screen starts with the open questions." }).title).toBe("Invitation on its way. The screen starts with the open questions.");
-    expect(actionToast("ask_in_screen", {}).title).toBe("Invitation on its way. The screening chat starts with these questions.");
-    expect(actionToast("cancel_screen", { candidateNotice: "queued" }).title).toBe("Screening chat invitation stopped.");
+    expect(actionToast("ask_in_screen", {}).title).toBe("Invitation on its way. The AI interview starts with these questions.");
+    expect(actionToast("cancel_screen", { candidateNotice: "queued" }).title).toBe("AI interview invitation stopped.");
     expect(actionToast("cancel_screen", {}).detail).toBe("Their link no longer works.");
     expect(actionToast("undo_decision", { ownerStage: "new" })).toEqual({ title: "Decision taken back: back in New.", detail: "They were never told, and nothing will be sent." });
     // never a bare "Done."
@@ -95,7 +95,7 @@ describe("what the page says after a choice", () => {
     expect(briefDecisionToast({ label: "Do not send", body: { decision: "reject" } }, {}).title).toBe("Not sent.");
     expect(briefDecisionToast({ label: "Yes, send it", body: { decision: "approve" } }, { candidateNotice: "queued" })).toEqual(sendDecisionToast("queued"));
     expect(briefDecisionToast({ label: "Yes, invite to a screen", body: { decision: "approve" } }, {}).title).toBe("Invitation on its way.");
-    expect(briefDecisionToast({ label: "Yes, invite to a screening chat", body: { decision: "approve" } }, {}).detail).toBe("The screening chat goes to the candidate by email, or by text when they agreed to texts.");
+    expect(briefDecisionToast({ label: "Yes, invite to an AI interview", body: { decision: "approve" } }, {}).detail).toBe("The AI interview link goes to the candidate by email, or by text when they agreed to texts.");
     expect(briefDecisionToast({ label: "Yes, interview", body: { decision: "approve" } }, {}).title).toBe("Moved to Interviewing.");
     expect(briefDecisionToast({ label: "Approve", body: { decision: "approve" } }, {}).title).toBe("Approved.");
   });
@@ -331,7 +331,7 @@ describe("evidence marks", () => {
     expect(closerLook(detail("triaged", [reading({}, { requirementFindings: [{ ...miss, evidence: { source: "resume", unquoted: true } }] })])).needsCloserLook).toBe(false);
     expect(closerLook(detail("triaged", [reading({ overall: "weak" }, { recommendation: "hold", requirementFindings: [miss] })])).needsCloserLook).toBe(false);
     // a step suggested for a weak reading; the screen's reading is checked once the screen is complete
-    expect(closerLook(detail("triaged", [reading({ overall: "weak" })])).reason).toMatch(/suggested a screening chat, but its AI review says Weak match/);
+    expect(closerLook(detail("triaged", [reading({ overall: "weak" })])).reason).toMatch(/suggested an AI interview, but its AI review says Weak match/);
     const screen = reading({ id: "s1", kind: "screen", overall: "unknown" }, { recommendation: "interview" });
     expect(closerLook(detail("screen_complete", [screen, reading({})]))).toMatchObject({ needsCloserLook: true, inconsistent: true, checkedId: "s1" });
     // past the step, nothing is held any more

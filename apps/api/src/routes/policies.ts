@@ -31,7 +31,7 @@ const GROUPS: Record<string, string[]> = {
  * another rule, add it here; a test checks that every rule here has a reader in the code.
  */
 export const SETTABLE: ReadonlySet<string> = new Set([
-  "role_packet.approve", "application.hold_ineligible", "application.invite_screen", "application.recommend_interview",
+  "role_packet.approve", "application.hold_ineligible", "application.recommend_interview",
   "message.send_freeform", "disposition.send", "message.still_reviewing", "intervention.nudge", "intervention.offer_recruiter",
 ]);
 
@@ -41,7 +41,9 @@ export const SETTABLE: ReadonlySet<string> = new Set([
  */
 export const FIXED: Readonly<Record<string, string>> = {
   "application.triage": "The assistant reads every applicant and writes an assessment for you to review. It never decides anything with it.",
-  "screen.conduct": "Once someone is invited to a screening chat, the chat runs with them in their own time; they can ask for a person at any point. Whether people are invited is the rule above.",
+  // 20 Oct 2026 (R20-4): no approval and no "likely fit" check; a saved level is read as this (policy.ts MAX_LEVELS).
+  "application.invite_screen": "Every applicant is invited to a short AI interview as soon as their résumé is read: it opens on the page they applied on, and the link is in the one email they get. Someone who answered \"No\" to a must-have question waits for you; \"Keep them in\" sends them the link. You hear about each person once, when their interview is scored. A person still makes every decision.",
+  "screen.conduct": "The AI interview runs with each applicant in their own time; they can skip any question or ask for a person at any point.",
   "message.send_templated": "Confirmations and reminders (that an application arrived, a screening reminder, an interview time) go out by themselves in the approved wording.",
   "interview.request": "An interview always waits for a person on your team to approve it on the candidate's page before any times go to the candidate.",
   "interview.schedule": "Once an interview is approved, times are offered from your team's calendars or declared hours, and the booking goes on the calendars by itself.",
@@ -78,6 +80,8 @@ policyRoutes.put("/", requireTenant, async (c) => {
   assertRecentAuth(c);
   const body = UpsertPolicy.parse(await c.req.json());
   if (HARD_HUMAN_ONLY.has(body.actionType) && body.level !== "human_only") throw new HttpError(400, "locked", "That decision always stays with a person.");
+  // Pinned to "Do it" (the AI interview every applicant gets): nothing to choose, said in the fixed line's own words.
+  if (MAX_LEVELS[body.actionType] === "auto" && !SETTABLE.has(body.actionType)) throw new HttpError(400, "no_setting", `There is nothing to choose here: ${FIXED[body.actionType] ?? "the product always does this."}`);
   const allowed = clampLevel(body.actionType, body.level);
   if (allowed !== body.level) {
     if (levelAtLeast(allowed, body.level)) throw new HttpError(400, "minimum_level", `A person approves this before anything happens, so it cannot be set below "${LEVEL_WORDS[allowed]}".`);

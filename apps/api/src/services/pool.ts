@@ -1,11 +1,12 @@
 import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
-import { BOARD_COLUMN_LABEL, BoardColumn, type ActiveMark, type BoardCard, type BoardPlacement, type BoardView, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
+import { BOARD_COLUMN_LABEL, BoardColumn, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
+import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, interviewInScore, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, documents, events, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
+import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
 import { INTERVIEW_ACTIVE_STATUSES, SCREEN_OPEN_STATUSES } from "./application-actions";
-import { stillApplyingFor } from "./screens";
+import { aiInterviewsFor } from "./screens";
 
 /**
  * The pool of one role as the board, Review and apply, the one-click questions and Today read it (plan Wave F): each
@@ -66,33 +67,44 @@ export async function shownLatestReadings(tx: Tx, input: { companyId: string; ro
   return out;
 }
 
-/** What the score, the must-have line and the placement of one person rest on, from rows already loaded. */
-export type ScoredPerson = { latest: AssessmentRow | null; evidence: EvidenceView; match: MatchScore | null; mustHaves: MustHaveSummary | null; placement: BoardPlacement; readingVersion: ReadingVersion | null };
+/**
+ * What the score, the must-have line and the placement of one person rest on, from rows already loaded. `interview`:
+ * where the AI interview stands for their score (R20-9), with or without a score.
+ */
+export type ScoredPerson = { latest: AssessmentRow | null; evidence: EvidenceView; match: MatchScore | null; mustHaves: MustHaveSummary | null; placement: BoardPlacement; readingVersion: ReadingVersion | null; interview: InterviewInScore };
 
 /**
  * One person's score, must-have line, placement and version label. The findings are read against the version of the
  * role the application was read against (plan F4); the label says when that is not the current version, and whether
  * the must-haves changed since (a decline resting on them then waits for a person). "Missing a must-have" on the list
- * reads the same merged findings as the score, so the filter, the score and the board agree.
+ * reads the same merged findings as the score, so the filter, the score and the board agree. `screens`: every screen of
+ * the application, in any order (R20-9): where the AI interview stands labels the score (`interview`, `basis`) and keeps
+ * a résumé-only score off the board's columns; it never changes the number. `allowanceLapsed`: the interview never came
+ * because the month's AI interviews stayed used up (Q17, `interviewsLapsedOnAllowance`), so it reads as not done.
  */
-export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessmentId" | "packetVersion">; assessments: readonly AssessmentRow[]; packets: Map<number, RolePacket>; currentVersion: number | null; mark: Pick<ActiveMark, "mark" | "remindAt"> | null; stillApplying: boolean; resumeUnreadable: boolean; openScreen: boolean }): ScoredPerson {
+export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessmentId" | "packetVersion">; assessments: readonly AssessmentRow[]; screens: ReadonlyArray<{ status: string }>; allowanceLapsed?: boolean; packets: Map<number, RolePacket>; currentVersion: number | null; mark: Pick<ActiveMark, "mark" | "remindAt"> | null; resumeUnreadable: boolean; openScreen: boolean }): ScoredPerson {
   const { app } = input;
   const latest = input.assessments.find((x) => x.id === app.latestAssessmentId) ?? null;
   const pair = readingPair(input.assessments);
   const readAgainst = latest?.packetVersion ?? app.packetVersion;
   const packet = input.packets.get(readAgainst) ?? input.packets.get(app.packetVersion) ?? (input.currentVersion ? input.packets.get(input.currentVersion) : undefined) ?? null;
-  const match = packet ? matchScore(pair, packet, { packetVersion: readAgainst }) : null;
+  const status = interviewInScore(input.screens, app.stage, { allowanceLapsed: input.allowanceLapsed });
+  const match = packet ? matchScore(pair, packet, { packetVersion: readAgainst, interview: status }) : null;
+  const interview: InterviewInScore = match?.interview ?? (pair.screen ? "done" : status);
   const evidence = evidenceView({ stage: app.stage, latest, resumeUnreadable: input.resumeUnreadable, packet });
   if (match) evidence.hasProvenMiss = match.missingMustHave.length > 0;
   const mustHaves = packet ? mustHaveSummary(pair, packet) : null;
   const version = latest ? readingVersion(readAgainst, input.currentVersion, { was: input.packets.get(readAgainst), now: input.currentVersion ? input.packets.get(input.currentVersion) : null }) : null;
-  const placement = boardPlacement({ stage: app.stage, base: baseOwnerStage(app.stage), stageLabel: STAGE_LABEL[app.stage], mark: input.mark, stillApplying: input.stillApplying, latest, evidence, match, mustHaves, openScreen: input.openScreen, readingVersion: version });
-  return { latest, evidence, match, mustHaves, placement, readingVersion: version };
+  const placement = boardPlacement({ stage: app.stage, base: baseOwnerStage(app.stage), stageLabel: STAGE_LABEL[app.stage], mark: input.mark, interview, latest, evidence, match, mustHaves, openScreen: input.openScreen, readingVersion: version });
+  return { latest, evidence, match, mustHaves, placement, readingVersion: version, interview };
 }
 
-/** The list rows' four score fields (founder decision B2): the number, its band, the coverage and the missing must-haves. */
+/**
+ * The list rows' score fields (founder decision B2): the number, its band, the coverage and the missing must-haves, and
+ * (R20-9) whether the AI interview is in it (`interview`) and the label (`basis`); null both without a score.
+ */
 export function scoreFields(match: MatchScore | null) {
-  return { score: match?.score ?? null, band: match?.band ?? null, bandLabel: match?.bandLabel ?? null, coverage: match?.coverage ?? null, missingMustHave: match?.missingMustHave ?? [] };
+  return { score: match?.score ?? null, band: match?.band ?? null, bandLabel: match?.bandLabel ?? null, coverage: match?.coverage ?? null, missingMustHave: match?.missingMustHave ?? [], interview: match?.interview ?? null, basis: match?.basis ?? null };
 }
 
 export type PoolRow = ScoredPerson & {
@@ -102,7 +114,13 @@ export type PoolRow = ScoredPerson & {
   mark: ActiveMark | null;
   /** Their open follow-up (the Cancelled column, founder decisions 1A to 4A): the card's stage label reads it. */
   followUp: FollowUpView | null;
-  stillApplying: boolean;
+  /**
+   * In the board's read-only lane, never placed or suggested: under "No AI interview yet" (R20-7), or (R20-9) out of that
+   * column with no AI interview in their score yet (being scored, closed unsent, or never came for want of allowance,
+   * Q17). `aiInterview`: where they stand with it, in the column.
+   */
+  noAiInterview: boolean;
+  aiInterview: AiInterviewView | null;
   openScreen: boolean;
   invitedAutomatically: boolean;
   suggestionWaiting: boolean;
@@ -119,7 +137,7 @@ export const isUuid = (s: string) => UUID.test(s);
  * candidate sees that candidate only (`tenant.staff`, or `scopeApplicationId` for Today's viewer). `onlyIds` narrows the
  * load to some applications (Review and apply).
  */
-export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Tenant, "staff"> | null; scopeApplicationId?: string | null; onlyIds?: readonly string[] }): Promise<Pool> {
+export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Tenant, "staff"> | null; scopeApplicationId?: string | null; onlyIds?: readonly string[]; now?: Date }): Promise<Pool> {
   const [role] = isUuid(input.roleId) ? await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1) : [];
   if (!role) throw new HttpError(404, "not_found", "Role not found.");
   const scope = input.scopeApplicationId ?? input.tenant?.staff?.scope.applicationId ?? null;
@@ -138,28 +156,32 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
   const followUps = await activeFollowUpsFor(tx, appIds);
   const scr = await tx.select({ id: screens.id, applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds)).orderBy(desc(screens.createdAt));
   const hidden = unsentScreenReadings(scr, asmts);
-  const applying = await stillApplyingFor(tx, appIds);
+  const interviewsNow = await aiInterviewsFor(tx, apps, input.now ?? new Date());
+  // Whose AI interview never came because the month's allowance stayed used up (Q17): kept apart like a closed link.
+  const lapsed = await interviewsLapsedOnAllowance(tx, apps.filter((a) => !scr.some((s) => s.applicationId === a.id)).map((a) => a.id));
   // Who sent the screening invitation: the assistant on its own ("invited automatically") or a person.
   const invites = scr.length ? await tx.select({ subjectId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.type, "screen.invited"), inArray(events.subjectId, scr.map((s) => s.id)))) : [];
   const automatic = new Set(invites.filter((e) => (e.payload as { invitedBy?: unknown }).invitedBy === "system").map((e) => e.subjectId));
   const ivs = await tx.select({ applicationId: interviews.applicationId, status: interviews.status }).from(interviews).where(inArray(interviews.applicationId, appIds));
-  const waiting = new Set((await tx.select({ applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["application.invite_screen", "application.recommend_interview"]), eq(approvalRequests.status, "pending")))).map((r) => r.applicationId));
+  const waiting = new Set((await tx.select({ applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), eq(approvalRequests.actionType, "application.recommend_interview"), eq(approvalRequests.status, "pending")))).map((r) => r.applicationId));
   const rows = apps.map((loaded): PoolRow => {
     const { app, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hidden);
     const doc = docs.find((d) => d.id === app.resumeDocumentId);
     const mark = marks.get(app.id) ?? null;
     const ownScreens = scr.filter((s) => s.applicationId === app.id);
     const openScreen = ownScreens.some((s) => SCREEN_OPEN_STATUSES.includes(s.status));
-    const stillApplying = applying.has(app.id);
-    const scored = scorePerson({ app, assessments: own, packets: byVersion, currentVersion, mark, stillApplying, resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !app.extraction, openScreen });
+    const followUp = followUps.get(app.id) ?? null;
+    const scored = scorePerson({ app, assessments: own, screens: ownScreens, allowanceLapsed: lapsed.has(app.id), packets: byVersion, currentVersion, mark, resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !app.extraction, openScreen });
     return {
       ...scored,
       app,
       name: names.get(app.candidateId) || "Unknown",
       assessments: own,
       mark,
-      followUp: followUps.get(app.id) ?? null,
-      stillApplying,
+      followUp,
+      // the column, and (R20-9) anyone else the board keeps in its lane because no AI interview is in their score yet
+      noAiInterview: ownerStage(app, mark, followUp) === "no_ai_interview" || !scored.placement.column,
+      aiInterview: interviewsNow.get(app.id) ?? null,
       openScreen,
       invitedAutomatically: !!ownScreens[0] && automatic.has(ownScreens[0].id),
       suggestionWaiting: waiting.has(app.id),
@@ -171,7 +193,7 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
 
 /** The person as the summary and the questions read them. */
 export function poolPersonOf(row: PoolRow): PoolPerson {
-  return { applicationId: row.app.id, name: row.name, waitingSince: new Date(row.app.stageChangedAt).toISOString(), stillApplying: row.stillApplying, placement: row.placement, match: row.match, mustHaves: row.mustHaves };
+  return { applicationId: row.app.id, name: row.name, waitingSince: new Date(row.app.stageChangedAt).toISOString(), noAiInterview: row.noAiInterview, placement: row.placement, match: row.match, mustHaves: row.mustHaves };
 }
 
 /** Where a person opens: their panel on the role's Talent page. */
@@ -195,7 +217,7 @@ export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
     stage: app.stage,
     stageLabel: row.evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[app.stage],
     ownerStage: strip,
-    ownerStageLabel: ownerStageLabel(strip, row.mark, row.followUp),
+    ownerStageLabel: ownerStageLabel(strip, row.mark, row.followUp, row.aiInterview),
     mark: row.mark,
     score: match,
     mustHaves: row.mustHaves,
@@ -205,21 +227,23 @@ export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
     gap,
     placement: row.placement,
     readingVersion: row.readingVersion,
-    facts: { openScreen: row.openScreen, invitedAutomatically: row.invitedAutomatically, suggestionWaiting: row.suggestionWaiting, stillApplying: row.stillApplying, lowConfidence: row.evidence.lowConfidence, needsCloserLook: row.evidence.needsCloserLook },
+    facts: { openScreen: row.openScreen, invitedAutomatically: row.invitedAutomatically, suggestionWaiting: row.suggestionWaiting, noAiInterview: row.noAiInterview, stillApplying: row.noAiInterview, lowConfidence: row.evidence.lowConfidence, needsCloserLook: row.evidence.needsCloserLook },
+    aiInterview: row.noAiInterview ? row.aiInterview : null,
     open: openPath(roleId, app.id),
   };
 }
 
 /**
- * The board (plan F6): the three columns, the people still applying apart, and the summary (plan F7). In each column
- * the people still to sort come first, highest score first, then those already done; ties go to the longest wait.
+ * The board (plan F6): the three columns, the read-only lane "No AI interview yet" apart (R20-7: newest first, never
+ * placed or suggested; R20-9: with everyone whose score has no AI interview in it yet), and the summary (plan F7). In each column the people still to sort come first, highest score
+ * first, then those already done; ties go to the longest wait.
  */
 export function boardView(pool: Pool, now: Date): BoardView {
   const columns = Object.fromEntries(BoardColumn.options.map((c) => [c, [] as BoardCard[]])) as BoardView["columns"];
-  const stillApplying: BoardCard[] = [];
+  const noAiInterview: BoardCard[] = [];
   for (const row of pool.rows) {
     const card = boardCard(row, pool.role.id, now);
-    if (!row.placement.column) stillApplying.push(card);
+    if (!row.placement.column) noAiInterview.push(card);
     else columns[row.placement.column].push(card);
   }
   const rank = (c: BoardCard) => (c.placement.state === "suggested" ? 0 : c.placement.state === "waiting" ? 1 : 2);
@@ -227,7 +251,8 @@ export function boardView(pool: Pool, now: Date): BoardView {
   return {
     role: { id: pool.role.id, title: pool.role.title, status: pool.role.status, currentPacketVersion: pool.currentVersion },
     columns,
-    stillApplying,
+    noAiInterview,
+    stillApplying: noAiInterview,
     summary: poolSummary(pool.rows.map(poolPersonOf), pool.packet, { roleId: pool.role.id, now }),
     generatedAt: now.toISOString(),
   };

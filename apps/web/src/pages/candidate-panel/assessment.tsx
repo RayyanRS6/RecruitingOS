@@ -96,11 +96,11 @@ function AskInScreen({ detail, roleId, unknowns }: { detail: ApplicationDetail; 
   });
   if (!unknowns) return null;
   const open = openScreenOf(detail);
-  if (open) return <p className="small muted" style={{ marginTop: 6 }}>{open.progress.focusQuestions?.length ? "A screening chat that starts with these questions is already open; the answers appear here once they finish it." : "A screening chat is already open; these questions are part of its follow-ups, so there is nothing more to send."}</p>;
+  if (open) return <p className="small muted" style={{ marginTop: 6 }}>{open.progress.focusQuestions?.length ? "An AI interview that starts with these questions is already open; the answers appear here once they finish it." : "An AI interview is already open; these questions are part of its follow-ups, so there is nothing more to send."}</p>;
   if (!detail.allowedActions.includes("invite_screen")) return null;
   return (
     <div className="row" style={{ marginTop: 8 }}>
-      <Button size="sm" variant="primary" loading={ask.isPending} onClick={() => ask.mutate()} title="Invites them to a short web chat that starts with these questions">Ask about this in a screening chat</Button>
+      <Button size="sm" variant="primary" loading={ask.isPending} onClick={() => ask.mutate()} title="Invites them to a short web chat that starts with these questions">Ask about this in an AI interview</Button>
       <span className="small muted">Sent by email; it starts with {unknowns === 1 ? "this question" : "these questions"}.</span>
     </div>
   );
@@ -133,11 +133,11 @@ export function ScorecardUnavailableCard({ detail, roleId }: { detail: Applicati
   const state = scorecardUnavailable(detail);
   if (!state.unavailable) return null;
   return (
-    <Card needsYou title="AI review of the screening chat" className="assessment">
+    <Card needsYou title="AI review of the AI interview" className="assessment">
       <div className="row"><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></div>
       <p style={{ marginTop: 8 }}>{SCORECARD_UNAVAILABLE_TEXT}</p>
       <div className="row" style={{ marginTop: 10 }}><AskRecruiter roleId={roleId} applicationId={detail.id} size="sm" /></div>
-      <Why>Nothing is hidden: the whole chat is on the Screening chat tab. {state.recruiterAsked ? "An ITS recruiter has been asked to look into it." : "ITS has the details."}</Why>
+      <Why>Nothing is hidden: the whole chat is on the AI interview tab. {state.recruiterAsked ? "An ITS recruiter has been asked to look into it." : "ITS has the details."}</Why>
     </Card>
   );
 }
@@ -205,7 +205,7 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
   const marked = look.checkedId === assessmentId;
   const reasons = result.confidenceReasons ?? [];
   return (
-    <Card title={title ?? (kind === "screen" ? "AI review of the screening chat" : "AI review of the résumé")} className="assessment" needsYou={marked} aside={<span className="row"><span className="small muted">{new Date(createdAt).toLocaleDateString()}</span><FlagAssessment applicationId={detail.id} assessmentId={assessmentId} /></span>}>
+    <Card title={title ?? (kind === "screen" ? "AI review of the AI interview" : "AI review of the résumé")} className="assessment" needsYou={marked} aside={<span className="row"><span className="small muted">{new Date(createdAt).toLocaleDateString()}</span><FlagAssessment applicationId={detail.id} assessmentId={assessmentId} /></span>}>
       <div className="row"><Chip tone={overall === "strong" ? "good" : overall === "weak" ? "caution" : "accent"}>{overallLabel(overall)}</Chip><Chip tone={result.recommendation === "decline_recommended" ? "caution" : "neutral"}>{REC_LABEL[result.recommendation] ?? result.recommendation}</Chip><Chip>{confidence} confidence</Chip>{marked ? <Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip> : null}</div>
       {marked && look.inconsistent && look.reason ? <Alert tone="caution">{look.reason}</Alert> : null}
       <p style={{ marginTop: 8 }}>{result.summary}</p>
@@ -285,7 +285,7 @@ export function ScreenCard({ screen, open, action, questions = [], mustHaves = [
   const notes = screen.transcript.filter(isRecruiterNote).map((t) => ({ text: t.content, by: t.by ?? null, question: t.questionKey ? questions.find((q) => q.key === t.questionKey)?.question ?? null : null }));
   const counts = screen.answersShared === false ? "" : ` · ${answered} answered${skipped ? `, ${skipped} not answered by choice` : ""}${asked > answered + skipped ? `, ${asked - answered - skipped} asked` : ""}`;
   return (
-    <Card title="Screening chat" aside={<div className="row">{origin ? <Chip tone={origin === APPLIED_IN_ONE_VISIT ? "good" : "neutral"}>{origin}</Chip> : null}<Chip>{screen.channel === "sms" ? "text + web" : "web chat"}</Chip><Chip tone={screen.status === "completed" ? "good" : screen.status === "human_requested" ? "needs" : screen.status === "expired" ? "caution" : "accent"}>{SCREEN_STATUS_LABEL[screen.status] ?? screen.status.replace(/_/g, " ")}</Chip></div>}>
+    <Card title="AI interview" aside={<div className="row">{origin ? <Chip tone={origin === APPLIED_IN_ONE_VISIT ? "good" : "neutral"}>{origin}</Chip> : null}<Chip>{screen.channel === "sms" ? "text + web" : "web chat"}</Chip><Chip tone={screen.status === "completed" ? "good" : screen.status === "human_requested" ? "needs" : screen.status === "expired" ? "caution" : "accent"}>{SCREEN_STATUS_LABEL[screen.status] ?? screen.status.replace(/_/g, " ")}</Chip></div>}>
       <p className="small muted">{screen.invitedAt ? `${origin ? "Offered" : "Invited"} ${new Date(screen.invitedAt).toLocaleDateString()}` : ""}{screen.remindedAt ? ` · reminded ${new Date(screen.remindedAt).toLocaleDateString()}` : ""}{screen.completedAt ? ` · ${screen.status === "completed" ? "completed" : "closed"} ${new Date(screen.completedAt).toLocaleDateString()}` : ""}{counts}</p>
       {hidden ? <p className="small" style={{ marginTop: 8 }}>{hidden}</p> : null}
       {action}

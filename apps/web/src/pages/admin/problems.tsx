@@ -37,9 +37,9 @@ export const PROBLEMS_EMPTY = "None. When something goes wrong, it shows here an
 export function ackIsForAnother(a: Pick<AlertRow, "kind" | "details" | "target">, myUserId: string | null | undefined): boolean {
   return !!myUserId && a.kind.startsWith("platform_role.") && (a.details?.actorId === myUserId || a.target?.id === myUserId);
 }
-/** Screening-chat notices: they belong to the customer (Customers › Running low), and Overview gives each its own row. */
+/** AI interview notices: they belong to the customer (Customers › Running low), and Overview gives each its own row. */
 export const SCREENING_ALERT_KINDS: ReadonlySet<string> = new Set(["billing.screens_warning", "billing.screens_used_up"]);
-/** An alert that waits for a person: open, and not a screening-chat notice. Overview and the Alerts tab count the same ones. */
+/** An alert that waits for a person: open, and not an AI interview notice. Overview and the Alerts tab count the same ones. */
 export function needsAPerson(a: Pick<AlertRow, "status" | "kind">): boolean {
   return a.status === "open" && !SCREENING_ALERT_KINDS.has(a.kind);
 }
@@ -109,7 +109,7 @@ function useRetryRun() {
 
 /**
  * How many things each part lists, for the counts on its tab; a part whose answers have not come yet has no count.
- * Alerts counts those that wait for a person (as Overview does; acknowledged ones and screening-chat notices are still
+ * Alerts counts those that wait for a person (as Overview does; acknowledged ones and AI interview notices are still
  * listed, folded). Security counts the reports nobody has reviewed yet (a reviewed one is not a problem).
  */
 export function problemCounts(d: { failures?: FailuresAnswer; suppressions?: Suppression[]; failedEmail?: FailedEmailRow[]; csp?: CspAnswer }): Record<string, number | undefined> {
@@ -171,7 +171,7 @@ function AlertsPart() {
   const retry = useRetryDeletion();
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error || !q.data) return <ErrorState message="Could not load the alerts." onRetry={() => q.refetch()} />;
-  // Those that wait for a person first (the tab's count, and Overview's); acknowledged ones and screening-chat notices
+  // Those that wait for a person first (the tab's count, and Overview's); acknowledged ones and AI interview notices
   // stay one click away, folded, with every button they had.
   const needing = q.data.alerts.filter(needsAPerson);
   const others = q.data.alerts.filter((a) => !needsAPerson(a));
@@ -197,7 +197,7 @@ function AlertsPart() {
       {needing.length ? <ul style={LIST}>{needing.map(row)}</ul> : <Empty />}
       {others.length ? (
         <details className="more">
-          <summary>{`Acknowledged and screening-chat notices (${others.length})`}</summary>
+          <summary>{`Acknowledged and AI interview notices (${others.length})`}</summary>
           <ul style={LIST}>{others.map(row)}</ul>
         </details>
       ) : null}

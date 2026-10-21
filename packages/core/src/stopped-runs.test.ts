@@ -19,7 +19,7 @@ describe("a stopped run's request, in plain words", () => {
   });
 
   it("handles one attempt, an error over several lines, and a workflow it has no words for", () => {
-    expect(plainRequestText('Workflow screen failed at step "assess" after 1 attempts: boom. Please take over.', "system")).toBe("The screening chat stopped after the first try and needs a person to take over.");
+    expect(plainRequestText('Workflow screen failed at step "assess" after 1 attempts: boom. Please take over.', "system")).toBe("The AI interview stopped after the first try and needs a person to take over.");
     expect(plainRequestText('Workflow schedule_interview failed at step "offer" after 2 attempts: Error: calendar said no\n    at offer (schedule.ts:10)\n    at run (engine.ts:20). Please take over.', "system")).toBe("Scheduling this interview stopped after 2 tries and needs a person to take over.");
     expect(plainRequestText('Workflow nightly_cleanup failed at step "sweep" after 3 attempts: timeout. Please take over.', "system")).toBe("An automatic step stopped after 3 tries and needs a person to take over.");
   });

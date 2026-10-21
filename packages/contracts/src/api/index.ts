@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Location } from "../domain/common";
 import { CompensationBasis, RolePacket } from "../domain/role-packet";
 import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX } from "../domain/intake";
-import { ApplicationStage, DecisionWording, MarkKind, OwnerStage, PERSONAL_LINE_MAX, RejectReason, ToldState, type CancelledView, type CandidateNotice } from "../domain/stages";
+import { AiInterviewGroup, ApplicationStage, DecisionWording, MarkKind, OwnerStage, PERSONAL_LINE_MAX, RejectReason, ToldState, type CancelledView, type CandidateNotice } from "../domain/stages";
 import { ActionType, PolicyLevel } from "../domain/policy";
 import { RequestInterview } from "../domain/interview";
 
@@ -196,12 +196,13 @@ export const ApplicationAction = z.object({
    * someone told the candidate themselves, so nothing more is sent. cancel_screen: "Stop this screen invitation" before
    * the candidate starts; they get a short, polite note and go back to waiting on the team. undo_decision: takes back a
    * decision (declined, or moved to the talent pool) the candidate was never told: they go back to the step they were at,
-   * and nothing was or will be sent (plan G1).
+   * and nothing was or will be sent (plan G1). remind_screen (20 Oct 2026, R20-7): "Send a reminder" about an open AI
+   * interview link, at most once a day; the link stays open at least 72 hours from then.
    */
-  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway", "set_mark", "clear_mark", "send_decision", "told_in_person", "cancel_screen", "undo_decision"]),
+  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway", "set_mark", "clear_mark", "send_decision", "told_in_person", "cancel_screen", "undo_decision", "remind_screen"]),
   reason: RejectReason.optional(),
   note: z.string().max(2000).optional(),
-  /** invite_screen: preferred channel; defaults to SMS with consent, else web chat by email. */
+  /** invite_screen: "sms" when a person chooses texts (with the candidate's consent); otherwise the AI interview every applicant gets, on the web, by email. */
   channel: z.enum(["web", "sms"]).optional(),
   /** invite_screen: "unknowns" opens the screen with the résumé assessment's open questions before the packet's own. */
   focus: z.enum(["unknowns"]).optional(),
@@ -347,6 +348,8 @@ export const OwnerGroupQuery = z.object({
   stage: ApplicationStage.optional(),
   ownerStage: OwnerStage.optional(),
   told: ToldState.optional(),
+  /** Under "No AI interview yet" (R20-7): not started, started, asked for a person, or link closed. */
+  aiInterview: AiInterviewGroup.optional(),
   order: z.enum(["newest", "waiting", "name", "score"]).optional(),
   counts: z.enum(["1", "true"]).optional(),
 });

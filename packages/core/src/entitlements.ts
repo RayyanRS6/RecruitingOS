@@ -251,7 +251,7 @@ export async function flagScreenAllowance(q: Queryable, input: { companyId: stri
     severity: usedUp ? "high" : "info",
     companyId: input.companyId,
     target: { type: "company", id: input.companyId },
-    title: usedUp ? `${input.companyName} has used all its screening chats this month` : `${input.companyName} has used 80% of its screening chats this month`,
+    title: usedUp ? `${input.companyName} has used all its AI interviews this month` : `${input.companyName} has used 80% of its AI interviews this month`,
     body: usedUp
       ? `${used} of ${limit} used. Applications are still accepted; new applicants get the chat link by email once the allowance is topped up or starts again next month, so everyone for a role has the same process. Talk with the customer about topping up.`
       : `${used} of ${limit} used. Nothing has stopped. Talk with the customer about topping up before it runs out.`,

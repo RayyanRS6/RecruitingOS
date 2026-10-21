@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings } from "@ros/core";
+import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, screens, withTenant, type Tx } from "@ros/db";
+import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { notesForApplications } from "../services/notes";
@@ -40,7 +41,7 @@ export type CompareCandidate = {
   resume: { overall: string; recommendation: string; summary: string } | null;
   /** Must-haves and competencies with no finding or an unknown one, plus the open questions the newest assessment left. */
   unknownCount: number;
-  /** The match score worked out from their findings, against the version of the role they were read against. */
+  /** The match score worked out from their findings, against the version of the role they were read against; `basis` says whether the AI interview is in it (R20-9). */
   score: MatchScore | null;
   /** Set when the reading was made against an earlier version of the role than the one shown. */
   readingVersion: ReadingVersion | null;
@@ -70,8 +71,12 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const cands = apps.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId))) : [];
   // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026).
   const all = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];
-  const hidden = unsentScreenReadings(apps.length ? await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id))) : [], all);
+  // Their screens, in any order: also where each one's AI interview stands, for the score's label (R20-9).
+  const scr = apps.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id))) : [];
+  const hidden = unsentScreenReadings(scr, all);
   const asmts = all.filter((x) => !hidden.has(x.id));
+  // An AI interview that never came for want of allowance (Q17) reads as not done, as on the list and the board.
+  const lapsed = await interviewsLapsedOnAllowance(tx, apps.filter((a) => !scr.some((s) => s.applicationId === a.id)).map((a) => a.id));
   const marks = await activeMarksFor(tx, apps.map((a) => a.id));
   // Under Cancelled (founder decisions 1A to 4A), as on the Talent list.
   const followUps = await activeFollowUpsFor(tx, apps.map((a) => a.id));
@@ -116,7 +121,7 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
       screen: screen ? { recommendation: screen.result.recommendation, summary: screen.result.summary } : null,
       resume: resume ? { overall: resume.overall, recommendation: resume.result.recommendation, summary: resume.result.summary } : null,
       unknownCount,
-      score: scorePacket ? matchScore(readingPair(own), scorePacket, { packetVersion: readAgainst }) : null,
+      score: scorePacket ? matchScore(readingPair(own), scorePacket, { packetVersion: readAgainst, interview: interviewInScore(scr.filter((s) => s.applicationId === a.id), a.stage, { allowanceLapsed: lapsed.has(a.id) }) }) : null,
       readingVersion: newest ? readingVersion(readAgainst, currentRow?.version ?? null, { was: byVersion.get(readAgainst), now: packet }) : null,
       notes: notes.get(a.id) ?? [],
       open: `/roles/${role.id}/talent?open=${a.id}`,

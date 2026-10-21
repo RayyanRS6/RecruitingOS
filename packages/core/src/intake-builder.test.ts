@@ -169,6 +169,24 @@ describe("tapped answers and panel edits (plan C6, C15)", () => {
     expect(applyAnswers(empty(), [kind], [{ questionId: "k", selected: ["ft"], own: [], skipped: false }], team).facts.employmentType).toBe("full_time");
   });
 
+  it("keeps a typed reason in the person's own words and never guesses from it (staging, 20 Oct 2026: \"named Growth Guild\" read as growing)", () => {
+    const why = q({ id: "w", field: "reason_for_hire", mode: "single", options: [{ label: "A new position", value: "new_position", origin: "assistant" }, { label: "We renew the team every spring", value: "renewal", origin: "assistant" }] });
+    const own = (text: string) => applyAnswers(empty(), [why], [{ questionId: "w", selected: [], own: [text], skipped: false }], team).facts;
+    for (const text of ["this is for a software engineering firm in lahore pakistan, named Growth Guild", "for growth guild in lahore", "We're growing fast"]) {
+      expect([own(text).reason, own(text).reasonDetail]).toEqual(["other", text]);
+    }
+    // a ticked option is still read for its reason, by whole words: "renew" is not "new"
+    expect(applyAnswers(empty(), [why], [{ questionId: "w", selected: ["renewal"], own: [], skipped: false }], team).facts.reason).toBe("other");
+    // an option in the owner's own words is kept like words typed
+    const theirs = q({ id: "t", field: "reason_for_hire", mode: "single", options: [{ label: "Growth Guild, a software engineering firm in Lahore, Pakistan", value: "Growth Guild", origin: "owner" }, { label: "The team is growing", value: "We are growing", origin: "assistant" }] });
+    const tick = (v: string) => applyAnswers(empty(), [theirs], [{ questionId: "t", selected: [v], own: [], skipped: false }], team).facts;
+    expect([tick("Growth Guild").reason, tick("Growth Guild").reasonDetail]).toEqual(["other", "Growth Guild"]);
+    expect(tick("We are growing").reason).toBe("growth");
+    // words about why set on the draft panel, with no reason chosen, are "Another reason" too
+    expect(applyFactsPatch(empty(), { set: { reasonDetail: "Maria left last week" } }, team).facts).toMatchObject({ reason: "other", reasonDetail: "Maria left last week" });
+    expect(applyFactsPatch({ ...empty(), reason: "replacement" }, { set: { reasonDetail: "Maria left last week" } }, team).facts.reason).toBe("replacement");
+  });
+
   it("refuses what a person typed when it fails the fairness check, with the reason, and records it as declined", () => {
     const edit = applyAnswers(empty(), [must], [{ questionId: "q1", selected: [], own: ["Recent graduates only"], skipped: false }], team);
     expect(edit.facts.mustHaves).toEqual([]);

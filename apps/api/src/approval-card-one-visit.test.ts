@@ -1,19 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { entitlements } from "@ros/core";
-import { roles } from "@ros/db";
+import { policies, roles } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { ONE_VISIT_LINE } from "./services/publishing";
-import { useOneVisitApplyFlow } from "./test-helpers";
+import { useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
- * The approval card's "Once it is live" line (signed-in polish): a role on the one-visit flow (founder decision B1) has
- * its applicants talk to the assistant as part of applying, so the line says that instead of describing a later
- * invitation. It follows the same rule as the apply page: the role's or the company's flow, and the owner's rule for
- * screen invitations ("Ask me first" keeps the later path, and the line says so again).
+ * The approval card's "Once it is live" line (signed-in polish). Since 20 October 2026 (R20-4, R20-12) every applicant
+ * has the AI interview as part of applying, with no approval and whatever ITS's old switch says, so the line is the same
+ * for every company and role: what the candidate does, that the team hears once it is scored, and that a person decides.
  */
-describe("the approval card's line about the screening conversation", () => {
+describe("the approval card's line about the AI interview", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let cookie = "";
@@ -21,7 +20,8 @@ describe("the approval card's line about the screening conversation", () => {
   let roleId = "";
   const json = (method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body === undefined ? undefined : JSON.stringify(body) });
   type Detail = { autoActionsOnOpen: { lines: Array<{ actionType: string; level: string; text: string }> } };
-  const inviteLine = async () => ((await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as Detail).autoActionsOnOpen.lines.find((l) => l.actionType === "application.invite_screen")!;
+  const lines = async () => ((await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as Detail).autoActionsOnOpen.lines;
+  const inviteLine = async () => (await lines()).find((l) => l.actionType === "application.invite_screen")!;
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
@@ -39,27 +39,27 @@ describe("the approval card's line about the screening conversation", () => {
     await container.close();
   });
 
-  it("describes the later invitation on the usual flow", async () => {
+  it("describes the AI interview every applicant has as part of applying, and the one email", async () => {
+    const all = await lines();
+    expect(all.map((l) => l.actionType)).toEqual(["message.send_templated", "application.invite_screen"]);
+    expect(all[0].text).toMatch(/one email.*AI interview/);
     const line = await inviteLine();
-    expect(line.text).toMatch(/^When the AI review of an application suggests a good fit/);
-    expect(line.text).not.toBe(ONE_VISIT_LINE);
-  });
-
-  it("describes the conversation as part of applying once the role is on the one-visit flow", async () => {
-    await useOneVisitApplyFlow(container, companyId);
-    const line = await inviteLine();
-    expect(line.text).toBe(ONE_VISIT_LINE);
-    expect(line.text).toMatch(/as part of applying/);
+    expect(line).toMatchObject({ level: "auto", text: ONE_VISIT_LINE });
+    expect(line.text).toMatch(/as soon as their résumé is read/);
     expect(line.text).toMatch(/ask for a person/);
+    expect(line.text).toMatch(/once, when their interview is scored/);
   });
 
-  it("follows the role's own setting over the company's, and the owner's 'Ask me first', like the apply page", async () => {
+  it("is the same whatever ITS's old switch or a rule saved before says (R20-12, R20-4)", async () => {
+    await useLaterApplyFlow(container, companyId);
+    expect((await inviteLine()).text).toBe(ONE_VISIT_LINE);
+    await useOneVisitApplyFlow(container, companyId);
     await container.db.update(roles).set({ applyMode: "form_then_screen" }).where(eq(roles.id, roleId));
-    expect((await inviteLine()).text).not.toBe(ONE_VISIT_LINE);
+    expect((await inviteLine()).text).toBe(ONE_VISIT_LINE);
     await container.db.update(roles).set({ applyMode: null }).where(eq(roles.id, roleId));
-    expect((await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"] })).status).toBe(200);
-    const line = await inviteLine();
-    expect(line.level).toBe("approval");
-    expect(line.text).toMatch(/waits for your approval/);
+    // a company that chose "Ask me first" before 20 October: nothing waits for approval now
+    await container.db.insert(policies).values({ companyId, roleId: null, actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"], createdBy: { kind: "system", id: "test" } });
+    expect((await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"] })).status).toBe(400);
+    expect(await inviteLine()).toMatchObject({ level: "auto", text: ONE_VISIT_LINE });
   });
 });

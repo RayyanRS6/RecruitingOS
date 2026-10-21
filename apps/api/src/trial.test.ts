@@ -9,7 +9,7 @@ import { createContainer, type Container } from "./container";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { otherRolesFor } from "./services/profile-facts";
 import { settleTrials } from "./services/trial";
-import { signInAdmin, useOneVisitApplyFlow } from "./test-helpers";
+import { followApply, signInAdmin, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * The Trial plan's 30 days (founder decision L-02 B, 16 October 2026), end to end with the ITS check on
@@ -152,7 +152,7 @@ describe("the Trial plan's 30 days", () => {
     const week = await ending();
     expect(week).toHaveLength(1);
     expect(week[0].title).toMatch(/^Your trial ends on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}$/);
-    expect(week[0].body).toContain("new applications, new jobs and new screening chats pause until a plan is chosen; everything already started carries on.");
+    expect(week[0].body).toContain("new applications, new jobs and new AI interviews pause until a plan is chosen; everything already started carries on.");
     // the last day: one more notice, "tomorrow", and nothing again within the day
     setClock(29.2);
     expect((await withPlatform(container.db, (tx) => settleTrials(tx, now()))).warned).toBe(1);
@@ -173,8 +173,9 @@ describe("the Trial plan's 30 days", () => {
     setClock(29.9);
     const applied = await applyForm({ first: "Maria", last: "Chat", email: "maria.chat@example.com" });
     await container.drain();
-    expect(applied.headers.get("location") ?? "").toMatch(/^\/c\/screen\//);
-    chatToken = (applied.headers.get("location") ?? "").slice("/c/screen/".length);
+    // the waiting room opens her AI interview once her résumé is read (20 Oct 2026)
+    chatToken = (await followApply(app, applied, container)).token ?? "";
+    expect(chatToken).not.toBe("");
     expect((await post(`/c/screen/${chatToken}/start`)).status).toBe(302);
     const form = await app.request(`/careers/${slug}/jobs/${roleA}/apply`);
     expect(form.status).toBe(200);
@@ -219,7 +220,18 @@ describe("the Trial plan's 30 days", () => {
     await container.drain();
     const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, "grace.window@example.com"));
     expect(cand).toBeTruthy();
-    expect(await container.db.select().from(applications).where(and(eq(applications.candidateId, cand.id), eq(applications.roleId, roleA)))).toHaveLength(1);
+    const taken = await container.db.select().from(applications).where(and(eq(applications.candidateId, cand.id), eq(applications.roleId, roleA)));
+    expect(taken).toHaveLength(1);
+    // R20-12: the page says plainly that the AI interview's link comes by email, with no loader and never the link
+    const landed = await followApply(app, r, container);
+    expect(landed.token).toBeNull();
+    expect(visible(landed.html)).toContain("We email you its link shortly");
+    expect(landed.html).not.toContain("preparing your AI interview");
+    expect(landed.html).not.toContain("/c/screen/");
+    // candidates are unaffected by the pause (L-02 B): her AI interview and its one email go as anyone's
+    const [interview] = await container.db.select().from(screens).where(eq(screens.applicationId, taken[0].id));
+    expect(interview).toMatchObject({ invitedVia: "with_application" });
+    expect((container.integrations.email as unknown as { sent: Array<{ to: string; text: string }> }).sent.find((m) => m.to === "grace.window@example.com")?.text).toContain(`/c/screen/${interview.token}`);
     // a form opened now gets no grace (it is not even shown), and a made-up value none either
     expect((await applyForm({ first: "Not", last: "Graced", email: "not.graced@example.com" }, { formOpened: "v1.made-up" })).status).toBe(404);
   });
@@ -294,6 +306,26 @@ describe("the Trial plan's 30 days", () => {
     expect(invite.status, await invite.clone().text()).toBe(402);
     expect(await errorOf(invite)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE });
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, dan.id))).toHaveLength(0);
+    // approving a waiting "Invite to a screen?" suggestion is the same new work: refused, and the suggestion keeps waiting
+    const suggest = (applicationId: string) => withTenant(container.db, companyId, async (tx) => (await tx.insert(approvalRequests).values({ companyId, roleId: roleA, applicationId, actionType: "application.invite_screen", subject: { type: "application", id: applicationId }, proposal: {}, requestedBy: { kind: "agent", id: "triage" }, requiredRoles: [] }).returning())[0].id);
+    const eve = await seedApplicant("Eve");
+    const waiting = await suggest(eve.id);
+    const approve = await json(owner, "POST", `/api/v1/approvals/${waiting}/decide`, { decision: "approve" });
+    expect(approve.status, await approve.clone().text()).toBe(402);
+    expect(await errorOf(approve)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE });
+    await container.drain();
+    expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.id, waiting)))[0]).toMatchObject({ status: "pending", decidedBy: null });
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, eve.id))).toHaveLength(0);
+    expect(await container.db.select().from(events).where(and(eq(events.type, "approval.granted"), eq(events.subjectId, waiting)))).toHaveLength(0);
+    // "Not now" is never refused
+    const notNow = await suggest(dan.id);
+    expect((await json(owner, "POST", `/api/v1/approvals/${notNow}/decide`, { decision: "reject" })).status).toBe(200);
+    // Review and apply says so in its preview, and the run refuses the invite while the rest goes ahead
+    const preview = await json(owner, "POST", `/api/v1/roles/${roleA}/batch`, { dryRun: true, items: [{ applicationId: eve.id, action: "invite_screen" }, { applicationId: dan.id, action: "on_hold" }] });
+    expect(preview.status, await preview.clone().text()).toBe(200);
+    const items = ((await preview.json()) as { items: Array<{ applicationId: string; allowed: boolean; refusedReason: string | null }> }).items;
+    expect(items.find((i) => i.applicationId === eve.id)).toMatchObject({ allowed: false, refusedReason: TRIAL_ENDED_LINE });
+    expect(items.find((i) => i.applicationId === dan.id)).toMatchObject({ allowed: true });
     const cara = await seedApplicant("Cara");
     expect((await act(cara.id, { action: "reject", reason: "not_a_match_experience", note: "Not this time." })).status).toBe(200);
     const sent = await act(cara.id, { action: "send_decision" });

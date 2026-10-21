@@ -64,7 +64,7 @@ const screen = {
 
 function detail(over: Record<string, unknown> = {}) {
   return {
-    id: "a2", stage: "screen_complete", stageLabel: "Screening chat done", group: "waiting_on_you", source: "careers_page", createdAt: at, eligibility: { passed: true, failedRules: [], unverifiable: [] },
+    id: "a2", stage: "screen_complete", stageLabel: "AI interview done", group: "waiting_on_you", source: "careers_page", createdAt: at, eligibility: { passed: true, failedRules: [], unverifiable: [] },
     ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [], stageMoves: moves, toldState: null, extractionSummary: null, assessment: null, evidence,
     appliedAt: at, stageChangedAt: at, daysInStage: 1, decisionMessageWaiting: false, stillApplying: false,
     roleId: "r1", candidateToldAt: null, rejectReason: null, rejectNote: null, declineMessage: "sends",
@@ -96,7 +96,7 @@ function panel(d: ReturnType<typeof detail>, tab: "overview" | "screen") {
   return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
 }
 
-describe("the company's questions on the Screening chat tab (Wave S7)", () => {
+describe("the company's questions on the AI interview tab (Wave S7)", () => {
   it("shows each question, numbered, with the drafted answer and where its words come from", () => {
     const html = panel(detail(), "screen");
     const words = text(html);
@@ -146,13 +146,13 @@ describe("the company's questions on the Screening chat tab (Wave S7)", () => {
 
   it("says it in one line on the Overview", () => {
     const words = text(panel(detail(), "overview"));
-    expect(words).toContain("Answers to your questions: 2 of 3 answered (1 partly), 1 with a note from the assistant. Read them on the Screening chat tab.");
+    expect(words).toContain("Answers to your questions: 2 of 3 answered (1 partly), 1 with a note from the assistant. Read them on the AI interview tab.");
   });
 
   it("shows none of it while the answers are hidden, and the old look for a chat without a write-up", () => {
     const hidden = detail({ stage: "screening", screens: [{ ...screen, status: "in_progress", completedAt: null, answersShared: false, answers: {}, transcript: [], progress: { askedKeys: [], currentQuestionKey: null } }] });
     const words = text(panel(hidden, "screen"));
-    expect(words).toContain("Still applying: their answers appear here once they send them.");
+    expect(words).toContain("AI interview not sent yet: their answers appear here once they send them.");
     expect(words).not.toContain("Answers to your questions");
     expect(text(panel(hidden, "overview"))).not.toContain("Answers to your questions");
     const older = detail({ packetLabels: { mustHaves: [], competencies: [], questions: [{ key: "q_start", question: "When could you start?" }] }, screens: [{ ...screen, progress: { ...screen.progress, chat: undefined, writeup: undefined } }] });

@@ -95,7 +95,7 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
     expect(d.boards[2].reason).toMatch(/own paid ZipRecruiter plan/);
     expect(d.whoPosts).toBe("its");
     expect(d.autoActionsOnOpen.lines.map((l) => l.actionType)).toEqual(["message.send_templated", "application.invite_screen"]);
-    expect(d.autoActionsOnOpen.lines[0].text).toMatch(/confirming their application/);
+    expect(d.autoActionsOnOpen.lines[0].text).toMatch(/one email.*thank you, and the link to their AI interview/);
     expect(d.autoActionsOnOpen.changeHref).toBe("/setup#setup-rules");
     expect(d.closingDate).toMatchObject({ closesOn: null, requiredByLaw: false });
     expect((await errorOf(await post(owner, `/api/v1/roles/${roleA}/channels`, { channels: ["ziprecruiter"] }))).code).toBe("ziprecruiter_needs_plan");
@@ -386,16 +386,16 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
     expect((await errorOf(await post(owner, `/api/v1/roles/${roleB}/postings/indeed/updated`, {}))).code).toBe("up_to_date");
   });
 
-  it("what starts on its own once the job is live follows the company's rules (D9)", async () => {
+  it("what starts on its own once the job is live is the same for every company (D9; 20 Oct 2026, R20-4): a rule saved before changes nothing", async () => {
     await withTenant(container.db, companyId, async (tx) => {
       const [u] = await tx.select({ id: users.id }).from(users).where(eq(users.email, "owner@publish.test"));
       await tx.insert(policies).values({ companyId, roleId: null, actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"], createdBy: { kind: "user", id: u.id } });
     });
     const d = await body<{ autoActionsOnOpen: { lines: Array<{ actionType: string; level: string; text: string }> } }>(await get(owner, `/api/v1/roles/${roleB}`));
-    expect(d.autoActionsOnOpen.lines[1]).toMatchObject({ actionType: "application.invite_screen", level: "approval" });
-    expect(d.autoActionsOnOpen.lines[1].text).toMatch(/waits for your approval/);
-    // the line says plainly that the assistant's reading of an application is what starts it (the AI is never hidden)
-    expect(d.autoActionsOnOpen.lines[1].text).toMatch(/^When the AI review of an application suggests a good fit/);
+    expect(d.autoActionsOnOpen.lines[1]).toMatchObject({ actionType: "application.invite_screen", level: "auto" });
+    // the line says plainly that the assistant runs an AI interview with every applicant (the AI is never hidden)
+    expect(d.autoActionsOnOpen.lines[1].text).toMatch(/^Every applicant has a short AI interview with the assistant/);
+    expect(d.autoActionsOnOpen.lines[1].text).not.toMatch(/approval/);
   });
 
   it("the legal check blocks approving a Colorado role until the benefits are described; the role then opens with a default closing date and its timer", async () => {

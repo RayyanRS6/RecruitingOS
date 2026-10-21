@@ -166,7 +166,7 @@ export function attentionRows(s: OverviewSources, now: number = Date.now()): Att
     rows.push({
       key: "low",
       urgent: false,
-      text: `${low.length} customers are running low on screening chats`,
+      text: `${low.length} customers are running low on AI interviews`,
       sub: someNames(low.map((a) => names.get(a.companyId) ?? "A customer")),
       action: { label: "Open", href: "/admin/customers?show=low" },
     });
@@ -176,7 +176,7 @@ export function attentionRows(s: OverviewSources, now: number = Date.now()): Att
       rows.push({
         key: `low-${a.companyId}`,
         urgent: false,
-        text: `${company} has used ${a.level === "used_up" ? "all its" : "80% of its"} screening chats`,
+        text: `${company} has used ${a.level === "used_up" ? "all its" : "80% of its"} AI interviews`,
         sub: allowanceChip(a),
         action: { label: "Open", href: `/admin/customers?show=low&open=${encodeURIComponent(a.companyId)}` },
       });

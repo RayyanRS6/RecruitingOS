@@ -7,7 +7,7 @@ import { aiRuns, applications, assessments, communications, companies, events, n
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
-import { conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, startApplyConversation, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
+import { applyVisitNext, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
 import { signInAdmin, signInAs, signInStaff, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -53,13 +53,16 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const eligibilityAnswers = Object.fromEntries(packet.requirements.eligibility.map((r) => [r.key, "yes"]));
     const out = await withTenant(container.db, company.id, async (tx) => {
       const created = await createApplication(tx, container, { companyId: company.id, roleId, source: "careers_page", firstName: p.first, lastName: p.last, email: p.email, phone: null, smsConsent: false, consentSource: "careers_page_apply", noticeVersionsShown: ["ai_use@2026-10-08", "privacy@2026-09-01"], eligibilityAnswers, resume: { kind: "bytes", filename: `${p.first.toLowerCase()}.txt`, mime: "text/plain", bytes: new TextEncoder().encode(RESUME(`${p.first} ${p.last}`)), via: "server" } }, { kind: "candidate", id: "applicant" });
-      const outcome: ApplyVisitOutcome = await startApplyConversation(tx, container, { ...created, role, company, packet: pv.packet as RolePacket, typedFirstName: p.first, eligibilityAnswers });
+      const outcome: ApplyVisitOutcome = await applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, role, packet: pv.packet as RolePacket, eligibilityAnswers, typedFirstName: p.first });
       return { applicationId: created.application.id, candidateId: created.application.candidateId, outcome };
     });
     await container.kick();
     await container.drain();
-    if (out.outcome.kind !== "conversation") throw new Error(`expected a conversation, got ${out.outcome.reason}`);
-    return { applicationId: out.applicationId, candidateId: out.candidateId, ref: (await findConversation(container.db, out.outcome.token))! };
+    // the AI interview that goes with the application, made once the résumé is read (20 Oct 2026)
+    if (out.outcome.kind !== "interview") throw new Error(`expected the AI interview, got ${out.outcome.reason}`);
+    const wait = await interviewWaitFor(container.db, out.applicationId);
+    if (wait.state !== "ready") throw new Error(`expected the AI interview to be ready, got ${wait.state}`);
+    return { applicationId: out.applicationId, candidateId: out.candidateId, ref: (await findConversation(container.db, wait.token))! };
   }
 
   /** The first question by tap, then one typed answer carrying `marker`, both in the transcript and recorded as the answer. */
@@ -82,7 +85,7 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
   }
 
   type DetailScreen = { id: string; status: string; answersShared?: boolean; answers: Record<string, string>; transcript: Array<{ role: string; content: string; source?: string }>; progress: { askedKeys: string[]; declined?: string[]; completedBy?: string }; assessmentId: string | null };
-  type Detail = { latestAssessmentId: string | null; screens: DetailScreen[]; assessments: Array<{ id: string; kind: string }>; communications: Array<{ direction: string; channel: string; bodyText: string | null }>; timeline: Array<{ type: string; subjectId: string; payload: Record<string, unknown> }>; matchScore: { score: number | null; basedOn: string } | null };
+  type Detail = { latestAssessmentId: string | null; screens: DetailScreen[]; assessments: Array<{ id: string; kind: string }>; communications: Array<{ direction: string; channel: string; bodyText: string | null }>; timeline: Array<{ type: string; subjectId: string; payload: Record<string, unknown> }>; matchScore: { score: number | null; basedOn: string; interview: string; basis: string } | null };
 
   /**
    * Every place the team reads a candidate, as the owner (or `as`) sees it, in one string to search, with the parts the
@@ -170,13 +173,15 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     expect(d.screens[0].progress.askedKeys).toEqual([]);
     expect(d.communications.some((m) => m.direction === "inbound" && m.channel === "web")).toBe(false);
     expect(d.timeline.some((e) => e.type.startsWith("screen.answer_") || e.type === "screen.question_skipped")).toBe(false);
-    // the reading and the score are the résumé's
+    // the reading and the score are the résumé's, and the score says so (R20-9): never how far she got
     expect(d.assessments.map((a) => a.kind)).toEqual(["triage"]);
-    if (d.matchScore) expect(d.matchScore.basedOn).toBe("resume");
-    // on the list and the board she is "still applying"
-    const list = seen.out.list.body as { applications: Array<{ id: string; stillApplying: boolean }> };
-    expect(list.applications.find((r) => r.id === maria.applicationId)?.stillApplying).toBe(true);
-    const board = seen.out.board.body as { stillApplying: Array<{ applicationId: string }> };
+    if (d.matchScore) expect(d.matchScore).toMatchObject({ basedOn: "resume", interview: "not_done_yet", basis: "Résumé only: AI interview not done yet" });
+    // on the list and the board she is under "No AI interview yet" (R20-7; `stillApplying` is its alias for one release)
+    const list = seen.out.list.body as { applications: Array<{ id: string; stillApplying: boolean; ownerStage: string; ownerStageLabel: string }> };
+    expect(list.applications.find((r) => r.id === maria.applicationId)).toMatchObject({ ownerStage: "no_ai_interview", ownerStageLabel: "Started (not finished)", stillApplying: true });
+    const board = seen.out.board.body as { noAiInterview: Array<{ applicationId: string; score: unknown; placement: { column: string | null } }>; stillApplying: Array<{ applicationId: string }> };
+    expect(board.noAiInterview.map((c) => c.applicationId)).toContain(maria.applicationId);
+    expect(board.noAiInterview.find((c) => c.applicationId === maria.applicationId)?.placement.column).toBeNull();
     expect(board.stillApplying.map((c) => c.applicationId)).toContain(maria.applicationId);
     const compare = seen.out.compare.body as { candidates: Array<{ applicationId: string; screen: unknown }> };
     expect(compare.candidates[0]).toMatchObject({ applicationId: maria.applicationId, screen: null });
@@ -262,6 +267,8 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     expect(d.screens[0].progress.completedBy).toBe("recruiter_call");
     expect(d.screens[0].transcript.map((t) => [t.role, t.source])).toEqual([["recruiter", "recruiter_call"], ["recruiter", "recruiter_call"]]);
     expect(d.assessments.some((a) => a.kind === "screen")).toBe(true);
+    // finished on a call, its scorecard is in his score (R20-9)
+    if (d.matchScore) expect(d.matchScore.interview).toBe("done");
     // the conversation page tells him it was finished on a call, never that his answers were sent
     const page = await (await app.request(`/c/screen/${luis.ref.token}`)).text();
     expect(page).toContain("went through the questions with you");
@@ -282,6 +289,9 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const seen = await teamSurfaces([ana.applicationId]);
     expect(seen.all).not.toContain("ZQXA");
     expect(seen.detail(ana.applicationId).screens[0]).toMatchObject({ status: "declined_by_candidate", answersShared: false, answers: {}, transcript: [] });
+    // her score is the résumé's, in the same words as a lapsed or unfinished one: nothing says she chose to send it without (R20-9)
+    const anaScore = seen.detail(ana.applicationId).matchScore;
+    if (anaScore) expect(anaScore).toMatchObject({ basedOn: "resume", interview: "not_done", basis: "Résumé only: no AI interview" });
     // the history says she sent it without the conversation, never how far she got
     const history = seen.out.history.body as Array<{ type: string; subjectId: string; payload: Record<string, unknown> }>;
     const declined = history.find((e) => e.type === "screen.declined_by_candidate" && e.subjectId === (seen.detail(ana.applicationId).screens[0].id));
@@ -311,11 +321,11 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const d = seen.detail(priya.applicationId);
     expect(d.screens[0]).toMatchObject({ status: "unfinished", answersShared: false, answers: {}, transcript: [], assessmentId: null });
     expect(d.assessments.map((a) => a.kind)).toEqual(["triage"]);
-    if (d.matchScore) expect(d.matchScore.basedOn).toBe("resume");
-    // one alert, that it happened; and the history says the same, with no count of what she answered
-    const told = seen.alerts.filter((n) => n.kind === "screen.unfinished");
-    expect(told.map((n) => n.title)).toEqual(["Priya Shah didn't finish the screening chat"]);
-    expect(told[0].body).toContain("their AI review and match score come from their application alone");
+    // résumé only, in one wording for every way a link closes unsent (R20-9)
+    if (d.matchScore) expect(d.matchScore).toMatchObject({ basedOn: "resume", interview: "not_done", basis: "Résumé only: no AI interview" });
+    // no alert (R20-7): she stays under "No AI interview yet" as "Didn't finish"; the history says it, with no count of what she answered
+    expect(seen.alerts.filter((n) => n.kind === "screen.unfinished")).toHaveLength(0);
+    expect((seen.out.list.body as { applications: Array<{ id: string; ownerStageLabel: string }> }).applications.find((r) => r.id === priya.applicationId)?.ownerStageLabel).toBe("Didn't finish");
     const unfinished = (seen.out.history.body as Array<{ type: string; subjectId: string; payload: Record<string, unknown> }>).find((e) => e.type === "screen.unfinished" && e.subjectId === scr.id)!;
     expect(unfinished.payload).not.toHaveProperty("answered");
     expect(unfinished.payload).not.toHaveProperty("stoppedAt");
@@ -327,7 +337,9 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
 
   it("a reading written of an unsent conversation before this rule is never shown or counted: everything reads as before it, history and Today included", async () => {
     const score = (body: unknown, id: string) => (body as { applications: Array<{ id: string; score: number | null; band: string | null }> }).applications.find((r) => r.id === id);
-    // her résumé reading is Strong: Today counts her among the strong candidates waiting on the team
+    // as an unfinished chat did before 20 October 2026 (R20-7 keeps her under "No AI interview yet" now), she waits on the
+    // team; her résumé reading is Strong: Today counts her among the strong candidates waiting on the team
+    await container.db.update(applications).set({ stage: "triaged" }).where(eq(applications.id, priya.applicationId));
     const baseline = await teamSurfaces([priya.applicationId]);
     const [app0] = await container.db.select().from(applications).where(eq(applications.id, priya.applicationId));
     await container.db.update(assessments).set({ overall: "strong" }).where(eq(assessments.id, app0.latestAssessmentId!));

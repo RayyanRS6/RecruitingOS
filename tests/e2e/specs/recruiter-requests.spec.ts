@@ -11,6 +11,8 @@ const run = Date.now().toString(36);
 skipWithoutFakeSignIn();
 
 test("ask, read the full answer on Today, and reopen it when it did not solve the problem", async ({ page, browser, baseURL }) => {
+  // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
+  test.slow();
   await signIn(page, { email: `owner+${run}@loop.test`, name: "Dana Whitfield", provider: "google" });
   await createCompanyThroughTheForm(page, `Loop Dental ${run}`);
   const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
@@ -82,24 +84,30 @@ test("loosening an AI rule asks first; the planned rules fold under Coming later
   await createCompanyThroughTheForm(page, `Rules Dental ${run}`);
   await page.goto("/setup?tab=rules"); // the Settings page's Hiring rules tab
   const rules = page.locator(".card", { has: page.getByRole("heading", { name: "What the AI may do on its own" }) });
-  const invite = rules.getByRole("group", { name: "Invite an applicant to the screening chat" });
-  await expect(invite).toBeVisible({ timeout: 30_000 });
-  await invite.getByRole("button", { name: "Do it", exact: true }).click();
+  // a rule a setting still changes ("Do it and tell me" by default); the AI interview's invitation is no longer one (R20-4)
+  const recommend = rules.getByRole("group", { name: "Recommend who to interview" });
+  await expect(recommend).toBeVisible({ timeout: 30_000 });
+  await recommend.getByRole("button", { name: "Do it", exact: true }).click();
   await expect(rules.getByText(/From now on it goes ahead without waiting for a person to approve it, and you are not told each time/)).toBeVisible();
   await expectAccessible(page, "loosening confirmation");
   await rules.getByRole("button", { name: "Keep it as it is" }).click();
   await expect(rules.getByRole("button", { name: "Yes, change it" })).toHaveCount(0);
-  await expect(invite.getByRole("button", { name: "Do it and tell me" })).toHaveAttribute("aria-pressed", "true");
+  await expect(recommend.getByRole("button", { name: "Do it and tell me" })).toHaveAttribute("aria-pressed", "true");
   // tightening saves at once
-  await invite.getByRole("button", { name: "Ask me first" }).click();
+  await recommend.getByRole("button", { name: "Ask me first" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Saved." })).toBeVisible();
   // planned rules are listed, not offered; "always a person" rows stay in view
   await expect(rules.getByText(/^Coming later \(\d+\)$/)).toBeVisible();
   await expect(rules.getByRole("group", { name: "Send an offer" })).toHaveCount(0);
   await expect(rules.getByText("Negotiate an offer")).toBeVisible();
-  // work the product does the same way for everyone says what it does, with no choice that would change nothing
-  await expect(rules.getByRole("group", { name: "Run the screening chat" })).toHaveCount(0);
+  // work the product does the same way for everyone says what it does, with no choice that would change nothing: the AI
+  // interview every applicant gets, and how it runs, among them
+  await expect(rules.getByRole("group", { name: "Invite every applicant to the AI interview" })).toHaveCount(0);
+  await expect(rules.getByRole("group", { name: "Invite an applicant to the screening chat" })).toHaveCount(0);
+  await expect(rules.getByRole("group", { name: "Run the AI interview" })).toHaveCount(0);
   await rules.getByText(/^What it always does the same way \(\d+\)$/).click();
-  await expect(rules.getByText(/the chat runs with them in their own time/)).toBeVisible();
+  await expect(rules.getByText("Invite every applicant to the AI interview")).toBeVisible();
+  await expect(rules.getByText(/Every applicant is invited to a short AI interview as soon as their résumé is read/)).toBeVisible();
+  await expect(rules.getByText(/The AI interview runs with each applicant in their own time/)).toBeVisible();
   await expect(rules.getByText("Book interviews on calendars")).toBeVisible();
 });

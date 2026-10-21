@@ -1,7 +1,7 @@
-import { BATCH_MAX, BOARD_COLUMN_LABEL, BoardColumn, DECLINE_REASON_LABEL, RejectReason } from "@ros/contracts";
+import { BATCH_MAX, BOARD_COLUMN_LABEL, BoardColumn, DECLINE_REASON_LABEL, RESUME_ONLY_CHIP, RejectReason } from "@ros/contracts";
 import { scoreBand, type Tone } from "@ros/ui";
 import type { BatchPreview, BatchResult, BoardCard, BoardView, PoolAnswer, PoolQuestion, PoolSummary, RoleBatchItem } from "../../api/client";
-import { SAFETY_NET_NOTE } from "../../talent-list";
+import { SAFETY_NET_NOTE, appliedWhen, scoreBasis } from "../../talent-list";
 
 /**
  * The pool board on the Candidates page (plan F6-F10; founder decisions B2, B4, B5, B6), kept free of React so it can be
@@ -70,11 +70,26 @@ export function countsLine(counts: Partial<Record<BoardColumn, number>>): string
 
 /**
  * The board's header line: the people still to sort by the column the board suggests, then everyone already sorted,
- * decided or past this step (they are never counted as "on the shortlist"). "To sort: 2 shortlist · 1 longlist · 0 not
- * moving forward · 3 already sorted or decided".
+ * decided or past this step (they are never counted as "on the shortlist"), and the lane's people (R20-7, R20-9) in one
+ * neutral count: some are being scored and some have a closed link, so it never says what they lack. "To sort: 2
+ * shortlist · 1 longlist · 0 not moving forward · 3 already sorted or decided · 2 not on the board yet".
  */
-export function headerCounts(summary: { counts: Partial<Record<BoardColumn, number>>; done?: number }): string {
-  return `To sort: ${countsLine(summary.counts)}${summary.done ? ` · ${summary.done} already sorted or decided` : ""}`;
+export function headerCounts(summary: { counts: Partial<Record<BoardColumn, number>>; done?: number; noAiInterview?: number }): string {
+  return `To sort: ${countsLine(summary.counts)}${summary.done ? ` · ${summary.done} already sorted or decided` : ""}${summary.noAiInterview ? ` · ${summary.noAiInterview} not on the board yet` : ""}`;
+}
+
+/**
+ * The read-only lane under the columns (20 Oct 2026, R20-7): who has no AI interview yet, never placed or suggested; and
+ * (R20-9) anyone else whose score has no AI interview in it yet, so résumé-only scores are never ranked beside it.
+ */
+export const NO_AI_INTERVIEW_LANE = { title: "No AI interview yet", sub: "Scored after the AI interview: they join the board when they send it, and Review and apply never includes them." } as const;
+
+/**
+ * One person in that lane: the name, where they stand with the AI interview (its neutral words; out of the column, the
+ * board's own: "AI interview being scored", "No AI interview"), and when they applied.
+ */
+export function laneRow(card: Pick<BoardCard, "applicationId" | "name" | "appliedAt" | "aiInterview" | "ownerStageLabel"> & { placement?: Pick<BoardCard["placement"], "doneLabel"> }, now: Date = new Date()): { id: string; name: string; state: string; applied: string } {
+  return { id: card.applicationId, name: card.name, state: card.aiInterview?.label ?? card.placement?.doneLabel ?? card.ownerStageLabel, applied: appliedWhen(card.appliedAt, now) };
 }
 
 /**
@@ -90,7 +105,7 @@ export function scoreText(score: number | null | undefined): { text: string; ton
 export type CardChip = { label: string; tone: "good" | "caution" | "critical" | "neutral"; title?: string; done?: boolean };
 
 /**
- * The card's state chip: "Done" once a person has sorted or decided, "Being read" while the reading is on its way, then
+ * The card's state chip: "Done" once a person has sorted or decided, the lane's words while they wait to join the board, then
  * red "Missing must-have: <name>" (a must-have their own words show is not met; red is used for nothing else), "Needs
  * your eye" when the board is not sure, and "Ready to apply" when Review and apply starts with them ticked. It says
  * what the board will do, not how good they are, so it is never green; the reading's own confidence is a chip of its own.
@@ -114,19 +129,19 @@ export function confidenceChip(card: Pick<BoardCard, "confidence">): CardChip | 
   return { label: CONFIDENCE_WORDS[c], tone: c === "low" ? "caution" : "neutral", title: "How sure the AI was about its review. It is not part of the score." };
 }
 
-const BASED_ON_WORDS: Record<string, string> = { resume: "From the AI review of the résumé", screen: "From the screening chat", resume_and_screen: "From the résumé and the screening chat" };
-
 /**
- * The small facts under a card (plan F1, F4, F6): the must-have line, what the score rests on, a reading made against
- * an earlier version of the role, and what already happened or is waiting.
+ * The small facts under a card (plan F1, F4, F6): the must-have line, what the score rests on (its label, R20-9: "From
+ * the résumé and the AI interview", or "Résumé only: …" until the AI interview is in it), a reading made against an
+ * earlier version of the role, and what already happened or is waiting.
  */
 export function cardFacts(card: Pick<BoardCard, "mustHaves" | "score" | "readingVersion" | "facts">): string[] {
   const out: string[] = [];
   if (card.mustHaves?.total) out.push(card.mustHaves.words);
-  if (card.score && BASED_ON_WORDS[card.score.basedOn]) out.push(BASED_ON_WORDS[card.score.basedOn]);
+  const basis = scoreBasis(card.score);
+  if (basis) out.push(basis);
   if (card.readingVersion) out.push(card.readingVersion.label);
-  if (card.facts.invitedAutomatically) out.push("Invited to the screening chat automatically");
-  else if (card.facts.openScreen) out.push("Screening chat open");
+  if (card.facts.invitedAutomatically) out.push("Invited to the AI interview automatically");
+  else if (card.facts.openScreen) out.push("AI interview open");
   if (card.facts.suggestionWaiting) out.push("A suggestion is waiting for you");
   return out;
 }
@@ -137,7 +152,7 @@ export function reasonLine(card: Pick<BoardCard, "placement">): string {
   return p.state === "suggested" && p.needsYourEye ? p.needsYourEye : p.reason;
 }
 
-const SOURCE_WORDS: Record<string, string> = { resume: "résumé", application: "application", screen: "screening chat", interview: "interview", recruiter_note: "recruiter's call notes", eligibility: "eligibility answers" };
+const SOURCE_WORDS: Record<string, string> = { resume: "résumé", application: "application", screen: "AI interview", interview: "interview", recruiter_note: "recruiter's call notes", eligibility: "eligibility answers" };
 
 /** Where a finding came from, in plain words. */
 export function sourceWords(source: string): string {
@@ -391,7 +406,7 @@ export function answerPath(roleId: string, q: Pick<PoolQuestion, "kind" | "mustH
 
 /** "Looked at: 6 people (6 résumé reviews and 2 screening chats), against 2 must-haves. Nothing new was asked of the AI." */
 export function lookedAtLine(l: PoolAnswer["lookedAt"]): string {
-  const reads = [l.resumeReadings ? plural(l.resumeReadings, "résumé review", "résumé reviews") : "", l.screenReadings ? plural(l.screenReadings, "screening chat", "screening chats") : ""].filter(Boolean);
+  const reads = [l.resumeReadings ? plural(l.resumeReadings, "résumé review", "résumé reviews") : "", l.screenReadings ? plural(l.screenReadings, "AI interview", "AI interviews") : ""].filter(Boolean);
   const against = l.requirements.length ? `, against ${l.requirements.length === 1 ? `"${l.requirements[0]}"` : `${l.requirements.length} must-haves`}` : "";
   return `Looked at: ${plural(l.people, "person", "people")}${reads.length ? ` (${reads.join(" and ")})` : ""}${against}. Nothing new was asked of the AI.`;
 }
@@ -423,8 +438,19 @@ export function boardPersonPath(roleId: string, applicationId: string): string {
 export type BoardSnapshot = {
   capturedAt: string;
   summary: Pick<PoolSummary, "sentences" | "counts"> & Partial<Pick<PoolSummary, "done">>;
-  people: Array<{ applicationId: string; name: string; column: BoardColumn | null; state: string; score: number | null; reason: string; needsYourEye: string | null; nextStep: string | null }>;
+  /** `interview` and `basis` (R20-9): whether their AI interview is in the score, and its label; older snapshots have neither. */
+  people: Array<{ applicationId: string; name: string; column: BoardColumn | null; state: string; score: number | null; interview?: string | null; basis?: string | null; reason: string; needsYourEye: string | null; nextStep: string | null }>;
 };
+
+/**
+ * A snapshot row's score: "88/100", with "Résumé only" beside a score whose AI interview is not in it (R20-9) and the
+ * full label on hover, as on the list; "No score yet" without one.
+ */
+export function snapshotScore(p: Pick<BoardSnapshot["people"][number], "score" | "interview" | "basis">): { text: string; title?: string } {
+  if (p.score === null) return { text: "No score yet" };
+  const resumeOnly = !!p.interview && p.interview !== "done";
+  return resumeOnly ? { text: `${p.score}/100 · ${RESUME_ONLY_CHIP}`, title: p.basis ?? RESUME_ONLY_CHIP } : { text: `${p.score}/100`, ...(p.basis ? { title: p.basis } : {}) };
+}
 
 /** The snapshot from a request's context, or null when it has none (or not in the shape the board wrote). */
 export function snapshotOf(context: unknown): BoardSnapshot | null {
@@ -433,8 +459,8 @@ export function snapshotOf(context: unknown): BoardSnapshot | null {
   return board as BoardSnapshot;
 }
 
-/** A snapshot row's place in words: its column, or "Still applying" for someone not placed. */
+/** A snapshot row's place in words: its column, or "No AI interview yet" for someone not placed (R20-7). */
 export function snapshotPlace(p: BoardSnapshot["people"][number]): string {
-  if (!p.column) return "Still applying";
+  if (!p.column) return NO_AI_INTERVIEW_LANE.title;
   return `${BOARD_COLUMN_LABEL[p.column]}${p.state === "done" ? " (already sorted)" : ""}`;
 }

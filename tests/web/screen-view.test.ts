@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Screen, ScreeningFunnel, TimelineEvent } from "../../apps/web/src/api/client";
-import { APPLIED_IN_ONE_VISIT, DIDNT_FINISH_LINE, SCREEN_STATUS_LABEL, STILL_APPLYING_LINE, answerLines, callNotesBody, callNotesMayStayOpen, callNotesQuestions, callNotesState, callNotesToast, funnelLines, generalNotes, hiddenAnswersLine, isRecruiterNote, minutesWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
+import { APPLIED_IN_ONE_VISIT, DIDNT_FINISH_LINE, NOT_SENT_YET, SCREEN_STATUS_LABEL, STILL_APPLYING_LINE, aiInterviewCard, aiInterviewLine, answerLines, declineReasonFor, callNotesBody, callNotesMayStayOpen, callNotesQuestions, callNotesState, callNotesToast, funnelLines, generalNotes, hiddenAnswersLine, isRecruiterNote, minutesWords, noScreenWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
 
 /**
  * The screening conversation as the team reads it (plan Wave E): "Applied and talked in one visit", questions the
@@ -41,9 +41,10 @@ describe("how the conversation reached them", () => {
   it("says 'Applied and talked in one visit' once it is complete, and what happened otherwise", () => {
     expect(screenOrigin(screen({ invitedVia: "apply" }))).toBe(APPLIED_IN_ONE_VISIT);
     expect(APPLIED_IN_ONE_VISIT).toBe("Applied and talked in one visit");
-    expect(screenOrigin(screen({ invitedVia: "apply", status: "in_progress" }))).toBe("Still applying");
-    expect(screenOrigin(screen({ invitedVia: "apply", status: "paused" }))).toBe("Still applying");
-    expect(screenOrigin(screen({ invitedVia: "apply", status: "declined_by_candidate" }))).toBe("Sent the application without the conversation");
+    expect(screenOrigin(screen({ invitedVia: "apply", status: "in_progress" }))).toBe(NOT_SENT_YET);
+    expect(screenOrigin(screen({ invitedVia: "with_application", status: "invited" }))).toBe("AI interview not sent yet");
+    expect(screenOrigin(screen({ invitedVia: "apply", status: "paused" }))).toBe(NOT_SENT_YET);
+    expect(screenOrigin(screen({ invitedVia: "apply", status: "declined_by_candidate" }))).toBe("Sent the application without the AI interview");
     expect(screenOrigin(screen({ invitedVia: "apply", status: "human_requested" }))).toBe("Asked for a person while applying");
     expect(screenOrigin(screen({ invitedVia: "apply", status: "unfinished" }))).toBe("Didn't finish while applying");
     expect(screenOrigin(screen({ invitedVia: "apply", transcript: [{ role: "recruiter", content: "Can do Saturdays.", at, source: "recruiter_call", by: "Rae" }] }))).toBe("Finished on a call with a recruiter");
@@ -55,15 +56,15 @@ describe("how the conversation reached them", () => {
   it("puts one plain sentence on the Overview", () => {
     const a = (s: Screen) => ({ screens: [s], timeline: [], candidate: { firstName: "Sofia" } });
     expect(overviewScreenLine(a(screen({ invitedVia: "apply" })))).toMatch(/^Applied and talked in one visit/);
-    expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "invited" })))).toBe("Still applying: their answers appear here once they send them. Nothing about Sofia waits on you until then.");
+    expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "invited" })))).toBe("AI interview not sent yet: their answers appear here once they send them. Nothing about Sofia waits on you until then.");
     expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "paused" })))).toContain("paused while the assistant is not working");
     expect(overviewScreenLine(a(screen({ status: "declined_by_candidate" })))).toContain("never held against them");
     expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("A recruiter contacts them");
     expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("was not sent, so you won't see it");
     // closed unfinished: that it happened, never what they said nor how far they got (founder decision of 9 October 2026)
-    expect(overviewScreenLine(a(screen({ status: "unfinished" })))).toBe("Didn't finish the conversation: they did not send their answers, even after one reminder, so you won't see them. The AI review and match score use their application only.");
+    expect(overviewScreenLine(a(screen({ status: "unfinished" })))).toBe("Didn't finish the AI interview: they did not send their answers, even after one reminder, so you won't see them. The AI review and match score use their application only.");
     // closed part-way when they withdrew or were declined while still applying
-    expect(overviewScreenLine(a(screen({ status: "cancelled", answersShared: false })))).toBe("The screening chat closed before they sent their answers, so you won't see them. The AI review and match score use their application only.");
+    expect(overviewScreenLine(a(screen({ status: "cancelled", answersShared: false })))).toBe("The AI interview closed before they sent their answers, so you won't see them. The AI review and match score use their application only.");
     expect(overviewScreenLine(a(screen({ status: "cancelled", answersShared: false, startedAt: null })))).toBeNull();
     expect(overviewScreenLine(a(screen({ invitedVia: null })))).toBeNull();
     expect(overviewScreenLine({ screens: [], timeline: [], candidate: { firstName: "Sofia" } })).toBeNull();
@@ -80,7 +81,7 @@ describe("answers the candidate has not sent (founder decision of 9 October 2026
   const hidden = (over: Partial<Screen>) => screen({ answersShared: false, completedAt: null, ...over });
 
   it("says calmly why there is nothing to read while they are still applying", () => {
-    expect(STILL_APPLYING_LINE).toBe("Still applying: their answers appear here once they send them.");
+    expect(STILL_APPLYING_LINE).toBe("AI interview not sent yet: their answers appear here once they send them.");
     for (const status of ["invited", "reminded", "in_progress", "paused"]) expect(hiddenAnswersLine(hidden({ invitedVia: "apply", status })), status).toBe(STILL_APPLYING_LINE);
     // a conversation from an emailed invitation: shown once it ends normally
     expect(hiddenAnswersLine(hidden({ invitedVia: null, status: "in_progress" }))).toBe("Still answering: their answers appear here once they finish the conversation.");
@@ -91,7 +92,7 @@ describe("answers the candidate has not sent (founder decision of 9 October 2026
 
   it("says what happened when it closed without being sent, never what they said", () => {
     expect(hiddenAnswersLine(hidden({ status: "unfinished" }))).toBe(DIDNT_FINISH_LINE);
-    expect(DIDNT_FINISH_LINE).toMatch(/^Didn't finish the conversation/);
+    expect(DIDNT_FINISH_LINE).toMatch(/^Didn't finish the AI interview/);
     expect(hiddenAnswersLine(hidden({ status: "declined_by_candidate" }))).toBe("They sent their application without the conversation, so there are no answers to show.");
     expect(hiddenAnswersLine(hidden({ status: "human_requested" }))).toContain("a recruiter adds notes from the call");
     expect(hiddenAnswersLine(hidden({ status: "completed", progress: { askedKeys: [], currentQuestionKey: null, completedBy: "recruiter_call" } }))).toContain("only the recruiter's notes are shown");
@@ -104,7 +105,7 @@ describe("answers the candidate has not sent (founder decision of 9 October 2026
   });
 
   it("says the same whether they stopped at the first question or answered everything and never pressed Send", () => {
-    expect(DIDNT_FINISH_LINE).toBe("Didn't finish the conversation: they did not send their answers, even after one reminder, so you won't see them.");
+    expect(DIDNT_FINISH_LINE).toBe("Didn't finish the AI interview: they did not send their answers, even after one reminder, so you won't see them.");
     expect(DIDNT_FINISH_LINE).not.toMatch(/part-way|every question|answered/);
   });
 
@@ -216,6 +217,50 @@ describe("a recruiter's notes from a call (plan E3)", () => {
   });
 });
 
+describe("the Overview's 'AI interview' card under 'No AI interview yet' (R20-7)", () => {
+  const view = (state: "invited" | "started" | "link_expired" | "didnt_finish" | "asked_person", over: Record<string, unknown> = {}) => ({ state, group: state === "invited" ? "not_started" as const : state === "started" ? "started" as const : state === "asked_person" ? "asked_person" as const : "closed" as const, label: "x", since: null, linkOpenUntil: null, lastEmailAt: null, canRemind: false, canResend: state === "link_expired" || state === "didnt_finish", ...over });
+  const detail = (over: Record<string, unknown> = {}) => ({ ownerStage: "no_ai_interview", aiInterview: view("invited"), allowedActions: ["remind_screen", "invite_screen", "reject"], blockedReasons: {}, ...over }) as Parameters<typeof aiInterviewCard>[0];
+
+  it("says where they stand in one neutral sentence, never how far they got", () => {
+    expect(aiInterviewLine(view("invited", { since: "2026-10-20T12:00:00.000Z", linkOpenUntil: "2026-10-25T12:00:00.000Z" }))).toBe("Invited on October 20, not started yet. The link is open until October 25.");
+    expect(aiInterviewLine(view("link_expired", { since: "2026-10-25T12:00:00.000Z" }))).toBe("The link expired on October 25 without being started.");
+    expect(aiInterviewLine(view("didnt_finish"))).toBe("Didn't finish: they did not send their answers, even after a reminder, so you won't see them.");
+    for (const s of ["invited", "started", "link_expired", "didnt_finish", "asked_person"] as const) expect(aiInterviewLine(view(s))).not.toMatch(/\d+ (of|questions?)|answered/);
+  });
+
+  it("offers a reminder while the link is open, a new link once it closed, and the private decline; nothing for anyone else", () => {
+    expect(aiInterviewCard(detail())).toEqual({ line: "Invited, not started yet. Nothing here waits on you.", remind: { allowed: true, reason: undefined }, resend: null, decline: true });
+    const recent = aiInterviewCard(detail({ allowedActions: ["invite_screen", "reject"], blockedReasons: { remind_screen: "Their link or a reminder went less than a day ago. You can send a reminder a day after the last one." } }));
+    expect(recent?.remind).toEqual({ allowed: false, reason: "Their link or a reminder went less than a day ago. You can send a reminder a day after the last one." });
+    const lapsed = aiInterviewCard(detail({ aiInterview: view("link_expired") }));
+    expect(lapsed).toMatchObject({ remind: null, resend: { allowed: true }, decline: true });
+    expect(aiInterviewCard(detail({ ownerStage: "new" }))).toBeNull();
+    expect(aiInterviewCard(detail({ aiInterview: null }))).toBeNull();
+  });
+
+  it("chooses 'Candidate did not respond' first for the decline for everyone under 'No AI interview yet', never a judgement about experience; nothing elsewhere", () => {
+    for (const s of ["invited", "started", "asked_person", "link_expired", "didnt_finish"] as const) expect(declineReasonFor({ ownerStage: "no_ai_interview", aiInterview: view(s) }), s).toBe("candidate_unresponsive");
+    expect(declineReasonFor({ ownerStage: "no_ai_interview", aiInterview: null })).toBe("candidate_unresponsive");
+    expect(declineReasonFor({ ownerStage: "new", aiInterview: null })).toBeNull();
+  });
+
+  it("the AI interview tab with no interview yet: under the column the link goes by itself; 'Invite them from More' only where a link can be sent", () => {
+    const preparing = { ...view("invited"), state: "being_read" as const, group: "not_started" as const };
+    const inColumn = noScreenWords({ ownerStage: "no_ai_interview", allowedActions: ["reject"], candidate: { firstName: "Ana" }, aiInterview: preparing });
+    expect(inColumn.line).toBe("Getting the AI interview ready: their application is being read, and the link goes to them by email by itself.");
+    expect(inColumn.why).toContain("Every applicant gets one by email, by itself");
+    expect(inColumn.why).not.toContain("Invite them");
+    expect(noScreenWords({ ownerStage: "new", allowedActions: ["invite_screen"], candidate: { firstName: "Ana" }, aiInterview: null })).toEqual({ line: "Ana has not been invited to an AI interview yet.", why: "A short chat with the questions you approved for this job. Invite them from More at the top." });
+    expect(noScreenWords({ ownerStage: "new", allowedActions: [], candidate: { firstName: "Ana" }, aiInterview: null }).why).not.toContain("Invite them");
+  });
+
+  it("says when the link only waits for more AI interviews this month, not that a reading runs (Q17)", () => {
+    const preparing = { ...view("invited"), state: "being_read" as const, group: "not_started" as const };
+    expect(aiInterviewLine(preparing)).toBe("Getting the AI interview ready: their application is being read, and the link goes to them by email by itself.");
+    expect(aiInterviewLine({ ...preparing, waitingForMore: true })).toBe("Waiting for more AI interviews this month: the link goes to them by email once more are added.");
+  });
+});
+
 describe("how the conversation goes for a role (plan E13)", () => {
   const funnel: ScreeningFunnel = { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 1, medianMinutes: 6.4, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] };
 
@@ -225,7 +270,7 @@ describe("how the conversation goes for a role (plan E13)", () => {
       { label: "Started it", value: "8 of 10 (80%)" },
       { label: "Finished it", value: "6 of 8 (75%)" },
       { label: "Typical time to finish", value: "about 6 minutes" },
-      { label: "Still applying now", value: "1" },
+      { label: "AI interview open now", value: "1" },
       { label: "Didn't finish the conversation", value: "1" },
       { label: "Chose a person instead", value: "2: 1 asked to be contacted, 1 sent their application without it" },
     ]);

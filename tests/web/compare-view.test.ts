@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { EvidenceAssessment, RolePacket } from "@ros/contracts";
-import { COMPARE_MAX, cellFigures, criterionCell, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView } from "../../apps/web/src/pages/compare/compare-view";
+import type { EvidenceAssessment, MatchScore, RolePacket } from "@ros/contracts";
+import { COMPARE_MAX, cellFigures, criterionCell, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView } from "../../apps/web/src/pages/compare/compare-view";
 import { matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -53,10 +53,40 @@ describe("the comparison view", () => {
   });
 
   it("tops each column with the score, its band, what it rests on and any missing must-have", () => {
-    expect(scoreSummary(ana)).toMatchObject({ score: ana.score!.score, band: ana.score!.bandLabel, coverage: "Based on 4 of 5 requirements" });
+    expect(scoreSummary(ana)).toMatchObject({ score: ana.score!.score, band: ana.score!.bandLabel, coverage: "Based on 4 of 5 requirements", basis: "Résumé only: no AI interview" });
     // two must-haves judged, one shown missing by their own words: half the points, already under the cap of 54
     expect(scoreSummary(ben)).toMatchObject({ score: 50, missing: ["Missing must-have: Active CA RDH license"] });
-    expect(scoreSummary(cy)).toEqual({ score: null, band: null, coverage: "No AI review yet", missing: [] });
+    expect(scoreSummary(cy)).toEqual({ score: null, band: null, coverage: "No AI review yet", basis: null, missing: [] });
+  });
+
+  it("says beside each score whether the AI interview is in it, so a résumé-only number is never read as an interviewed one (R20-9)", () => {
+    const resume = reading([must("rdh", "yes", "RDH"), must("perio", "partially", "some perio")]);
+    const waiting = person("d", "Dee", null, { score: matchScore({ resume, screen: null }, packet, { interview: "not_done_yet" }) });
+    const interviewed = person("e", "Eli", null, { score: matchScore({ resume, screen: { ...resume, kind: "screen", createdAt: "2026-10-02T10:00:00Z" } }, packet) });
+    expect(scoreSummary(waiting).basis).toBe("Résumé only: AI interview not done yet");
+    expect(scoreSummary(interviewed).basis).toBe("From the résumé and the AI interview");
+    // the same number either way: only the label differs
+    expect(waiting.score!.score).toBe(matchScore({ resume, screen: null }, packet)!.score);
+  });
+
+  it("puts interviewed people first under 'Highest score first', like with like as Sort: Score (R20-9)", () => {
+    // Kit: a résumé that shows everything, her AI interview not done; Ivo: interviewed, one skill against him
+    const all = reading([must("rdh", "yes", "RDH"), must("perio", "yes", "daily perio")], [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "x"), skill("software", "evidenced", "x")]);
+    const kit = person("k", "Kit", null, { score: matchScore({ resume: all, screen: null }, packet, { interview: "not_done" }) });
+    const scorecard: ScoredReading = { ...all, kind: "screen", createdAt: "2026-10-02T10:00:00Z", result: { requirementFindings: all.result.requirementFindings, competencyFindings: [skill("chairside", "contradicted", "I rush"), skill("patients", "evidenced", "x"), skill("software", "evidenced", "x")] } };
+    const ivo = person("i", "Ivo", null, { score: matchScore({ resume: all, screen: scorecard }, packet) });
+    expect(kit.score!.score).toBeGreaterThan(ivo.score!.score!);
+    expect(ivo.score!.interview).toBe("done");
+    expect(orderCandidates([kit, cy, ivo], "score").map((c) => c.name)).toEqual(["Ivo", "Kit", "Cy"]);
+    // within each kind, the highest first; an older answer that does not say counts with the interviewed
+    const { interview: _left, basis: _out, ...olderScore } = ivo.score!;
+    const older = person("o", "Ola", null, { score: { ...olderScore, score: 70 } as MatchScore });
+    expect(orderCandidates([kit, older, ivo], "score").map((c) => c.name)).toEqual(["Ivo", "Ola", "Kit"]);
+    expect(orderCandidates([ben, ana], "score").map((c) => c.name)).toEqual(["Ana", "Ben"]);
+    // the line says why a lower number can come first, only when both kinds are compared
+    expect(mixedScores([kit, ivo])).toBe(true);
+    expect(mixedScores([ana, ben, cy])).toBe(false);
+    expect(orderLine("score", 2, true)).toBe("2 people, the highest match score first, scores with the AI interview in them before résumé-only ones. A score helps you read; it never decides.");
   });
 
   it("shows, per requirement, what was found, how much was met and the points it cost", () => {

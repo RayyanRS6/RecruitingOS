@@ -25,6 +25,9 @@ const score = (n: number | null, over: Partial<MatchScore> = {}): MatchScore => 
   capped: false,
   confidence: "medium",
   basedOn: "resume",
+  // never offered an AI interview (as before 20 October 2026): today's rules (R20-9's cases are their own test below)
+  interview: "none",
+  basis: "Résumé only: no AI interview",
   packetVersion: 1,
   ...over,
 });
@@ -85,7 +88,7 @@ describe("boardPlacement", () => {
 
   it("asks a person to look when the reading and the score disagree, either way", () => {
     const forward = place({ latest: triage, match: score(40) });
-    expect(forward).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The assistant suggested a screening chat, but the score puts them lower. Read before deciding.", nextStep: { kind: "read_yourself", reason: "The AI review and the score disagree; your own read decides." } });
+    expect(forward).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The assistant suggested an AI interview, but the score puts them lower. Read before deciding.", nextStep: { kind: "read_yourself", reason: "The AI review and the score disagree; your own read decides." } });
     expect(place({ latest: { ...screen, overall: "potential" }, match: score(40) }).needsYourEye).toContain("suggested an interview");
     const back = place({ latest: holding, match: score(90) });
     expect(back).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The assistant suggested holding back, but the score puts them higher. Read before deciding." });
@@ -97,7 +100,7 @@ describe("boardPlacement", () => {
 
   it("never starts a decline ticked while the screening conversation is still open, whose answers count most", () => {
     const open = place({ latest: holding, match: score(40), openScreen: true });
-    expect(open).toMatchObject({ column: "longlist", confident: false, needsYourEye: "Their screening chat is still open, and its answers count most. Wait for it, or read it yourself before deciding.", nextStep: { kind: "ask_more" } });
+    expect(open).toMatchObject({ column: "longlist", confident: false, needsYourEye: "Their AI interview is still open, and its answers count most. Wait for it, or read it yourself before deciding.", nextStep: { kind: "ask_more" } });
     // once the scorecard is the reading, the open-screen rule no longer applies
     const card = { ...screen, overall: "weak", result: { ...result, recommendation: "decline_recommended" } as unknown as EvidenceAssessment };
     expect(place({ latest: card, match: score(40), openScreen: true }).column).toBe("not_moving_forward");
@@ -135,13 +138,42 @@ describe("boardPlacement", () => {
     expect(place({ stage: "ineligible" })).toMatchObject({ column: "longlist", confident: false, suggestedAction: null, nextStep: { kind: "check_eligibility", label: "Check eligibility" } });
   });
 
-  it("with no reading: being read, or unavailable (Longlist, unticked)", () => {
-    expect(place({ stage: "received", latest: null, match: null, mustHaves: null })).toMatchObject({ state: "waiting", suggestedAction: null });
+  it("with no reading: still being read is under 'No AI interview yet'; unavailable goes to the Longlist, unticked", () => {
+    expect(place({ stage: "received", base: "no_ai_interview", latest: null, match: null, mustHaves: null })).toMatchObject({ column: null, state: "waiting", suggestedAction: null });
     expect(place({ latest: null, match: null, mustHaves: null, evidence: { ...quiet, assessmentUnavailable: true } })).toMatchObject({ column: "longlist", state: "suggested", confident: false, suggestedAction: "longlist", nextStep: { kind: "read_yourself" } });
   });
 
-  it("shows people still applying, already decided, already marked or past this step where they are, as done", () => {
-    expect(place({ stillApplying: true })).toMatchObject({ column: null, state: "waiting", doneLabel: "Still applying", suggestedAction: null });
+  it("keeps everyone without an AI interview yet off the board, never suggested, whatever their résumé score (R20-7)", () => {
+    for (const stage of ["applied", "received", "eligible", "screen_invited", "screening"] as const) {
+      for (const s of [95, 50, 10]) expect(place({ stage, base: "no_ai_interview", match: score(s) }), `${stage} ${s}`).toMatchObject({ column: null, state: "waiting", doneLabel: "No AI interview yet", reason: "Scored after the AI interview: they join the board when they finish it.", suggestedAction: null, declineReason: null, nextStep: null });
+    }
+    // a person's mark still sorts them, as done
+    expect(place({ stage: "screen_invited", base: "no_ai_interview", mark: { mark: "longlist" } })).toMatchObject({ column: "longlist", state: "done", doneLabel: "Longlist" });
+  });
+
+  it("keeps anyone whose score has no AI interview in it apart, like with like, never suggested (R20-9)", () => {
+    const apart = { column: null, state: "waiting", suggestedAction: null, declineReason: null, nextStep: null, confident: false };
+    // out of the column (New) with the AI interview not done yet, sent and being scored, or closed unsent ("Stop this AI interview")
+    for (const s of [95, 50, 10]) {
+      expect(place({ interview: "not_done_yet", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview not done yet", reason: "Scored after the AI interview: they join the board when they finish it." });
+      expect(place({ stage: "screen_complete", interview: "being_scored", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview being scored", reason: "Their AI interview is in and being scored: they join the board when it is." });
+      expect(place({ interview: "not_done", latest: holding, match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "No AI interview" });
+    }
+    expect(place({ interview: "not_done" }).reason).toBe("Their score is from the résumé only, so the board keeps them apart from interviewed people and suggests nothing. Decide from their own page.");
+    // the score's own label says it when the caller passes none
+    expect(place({ match: score(90, { interview: "not_done_yet" }) })).toMatchObject({ ...apart, doneLabel: "AI interview not done yet" });
+    // marks and decisions still show where they are; an eligibility hold still waits for a person
+    expect(place({ interview: "not_done", mark: { mark: "shortlist" } })).toMatchObject({ column: "shortlist", state: "done", doneLabel: "Shortlist" });
+    expect(place({ stage: "rejected", base: "not_moving_forward", stageLabel: "Not moving forward", interview: "not_done" })).toMatchObject({ column: "not_moving_forward", state: "done" });
+    expect(place({ stage: "interview_scheduled", base: "interviewing", interview: "not_done" })).toMatchObject({ column: "shortlist", state: "done", doneLabel: "Interviewing" });
+    expect(place({ stage: "ineligible", interview: "none" })).toMatchObject({ column: "longlist", nextStep: { kind: "check_eligibility" } });
+    // the AI interview in the score, or never offered one: today's rules
+    expect(place({ latest: screen, interview: "done", match: score(90, { interview: "done", basis: "From the résumé and the AI interview" }) })).toMatchObject({ column: "shortlist", state: "suggested" });
+    expect(place({ interview: "none", match: score(80) })).toMatchObject({ column: "shortlist", state: "suggested" });
+    expect(place({ match: score(80) })).toEqual(place({ interview: "none", match: score(80) }));
+  });
+
+  it("shows people already decided, already marked or past this step where they are, as done", () => {
     expect(place({ stage: "rejected", base: "not_moving_forward", stageLabel: "Not moving forward" })).toMatchObject({ column: "not_moving_forward", state: "done", doneLabel: "Not moving forward", suggestedAction: null });
     expect(place({ stage: "interview_scheduled", base: "interviewing" })).toMatchObject({ column: "shortlist", state: "done", doneLabel: "Interviewing" });
     expect(place({ stage: "hired", base: "hired" })).toMatchObject({ column: "shortlist", state: "done", doneLabel: "Hired" });

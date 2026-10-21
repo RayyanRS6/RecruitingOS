@@ -56,7 +56,7 @@ describe("readingConsistency", () => {
   });
 
   it("fails a step suggested for a Weak or Insufficient reading, after the résumé and after the screen", () => {
-    expect(readingConsistency(triage({ overall: "weak", recommendation: "screen" }), packet).reason).toBe("The assistant suggested a screening chat, but its AI review says Weak match. Read it yourself before anything else happens.");
+    expect(readingConsistency(triage({ overall: "weak", recommendation: "screen" }), packet).reason).toBe("The assistant suggested an AI interview, but its AI review says Weak match. Read it yourself before anything else happens.");
     expect(readingConsistency(triage({ overall: "unknown", recommendation: "screen" }), packet).reason).toContain("its AI review says Insufficient evidence");
     expect(readingConsistency(scorecard({ overall: "weak", recommendation: "strong_interview" }), packet).reason).toContain("suggested an interview, but its AI review says Weak match");
     expect(readingConsistency(scorecard({ overall: "potential", recommendation: "interview" }), packet).consistent).toBe(true);

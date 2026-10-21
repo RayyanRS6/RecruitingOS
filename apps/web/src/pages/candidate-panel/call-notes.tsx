@@ -66,9 +66,9 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
         {mayStayOpen ? (
           <label className="row small" style={{ gap: 8 }}>
             <input type="checkbox" checked={complete} onChange={(e) => setComplete(e.target.checked)} />
-            Finish the screening with these notes, so the AI review is written from them
+            Finish the AI interview with these notes, so the AI review is written from them
           </label>
-        ) : <p className="small muted" style={{ margin: 0 }}>{first} has no screening chat, so these notes are the screening: the AI review is written from them.</p>}
+        ) : <p className="small muted" style={{ margin: 0 }}>{first} has no AI interview, so these notes are their AI interview: the AI review is written from them.</p>}
         {mayStayOpen && !complete ? <p className="small muted" style={{ margin: 0 }}>The chat stays open, and you can add more notes later.</p> : null}
         <div className="row">
           <Button variant="primary" size="sm" disabled={!body} loading={save.isPending} onClick={() => save.mutate()}>Add the notes</Button>

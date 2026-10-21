@@ -17,9 +17,9 @@ const INTERNAL = /\b(packet|Role Packet|intake conversation|screening conversati
 describe("server words and their web copies", () => {
   it("the stage labels are the same on both sides, in the glossary's words", () => {
     expect(WEB_STAGE_LABEL).toEqual({ ...CORE_STAGE_LABEL });
-    expect(CORE_STAGE_LABEL.screen_invited).toBe("Invited to a screening chat");
-    expect(CORE_STAGE_LABEL.screening).toBe("In the screening chat");
-    expect(CORE_STAGE_LABEL.screen_complete).toBe("Screening chat done");
+    expect(CORE_STAGE_LABEL.screen_invited).toBe("Invited to an AI interview");
+    expect(CORE_STAGE_LABEL.screening).toBe("In the AI interview");
+    expect(CORE_STAGE_LABEL.screen_complete).toBe("AI interview done");
     for (const label of Object.values(CORE_STAGE_LABEL)) expect(label).not.toMatch(INTERNAL);
   });
 
@@ -27,7 +27,7 @@ describe("server words and their web copies", () => {
     expect(WEB_LOW_CONFIDENCE).toBe(CORE_LOW_CONFIDENCE);
     const reading = { kind: "triage", overall: "weak", result: { summary: "s", strengths: [], concerns: [], unknowns: [], rationale: "r", recommendation: "screen", requirementFindings: [], competencyFindings: [] } };
     const server = coreConsistency(reading as never).reason;
-    expect(server).toBe("The assistant suggested a screening chat, but its AI review says Weak match. Read it yourself before anything else happens.");
+    expect(server).toBe("The assistant suggested an AI interview, but its AI review says Weak match. Read it yourself before anything else happens.");
     expect(webConsistency(reading as never).reason).toBe(server);
   });
 
