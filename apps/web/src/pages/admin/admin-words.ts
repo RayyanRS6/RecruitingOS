@@ -65,7 +65,7 @@ export const planStatusWords = (code: string) => wordFor(PLAN_STATUS_WORDS, code
 /** What each workflow does, by its key (packages/workflows/src/definitions). */
 export const WORKFLOW_WORDS: Readonly<Record<string, string>> = {
   application_intake: "Reading a new application",
-  screen: "Screening chat",
+  screen: "AI interview",
   role_approval: "Job approval",
   publish_role: "Publishing a job",
   schedule_interview: "Scheduling an interview",

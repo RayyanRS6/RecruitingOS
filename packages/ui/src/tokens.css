@@ -622,8 +622,8 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 /* an open menu sits over the rows below it (two rules: a browser without :has() still keeps the first) */
 .talent-row .menu-wrap:focus-within { z-index: 3; }
 .talent-row .menu-wrap:has(.menu) { z-index: 3; }
-/* The match score badge (founder decision B2), in a column of its own so the rows line up. */
-.score-slot { display: inline-flex; justify-content: flex-end; min-width: 64px; }
+/* The match score badge (founder decision B2), in a column of its own so the rows line up; "Résumé only" sits before it (R20-9). */
+.score-slot { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 64px; }
 @media (max-width: 640px) {
   /* On a phone the score moves to the second line, under the stage button, beside the chips. */
   .talent-row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "avatar main  stage" ".      chips score"; gap: 8px 12px; padding: 12px 14px; }

@@ -228,6 +228,8 @@ export type KeptFact = z.infer<typeof KeptFact>;
 
 /** The one line every requirement not on the job page folds into (founder decision S7-1). */
 export const CANDIDATE_SCORE_OTHER_LABEL = "Other things the team looks for";
+/** What the candidate's score rests on (R20-9), in their words: the team's label (`SCORE_BASIS_WORDS`) said to them. */
+export const CANDIDATE_SCORE_BASIS = { both: "From your résumé and your AI interview", resumeOnly: "From your résumé only" } as const;
 
 /** One bar of the breakdown: the requirement's public name (or the folded line), how much of it was met, its colour band. */
 export type CandidateScoreRow = { key: string; label: string; pctMet: number; tone: "strong" | "partial" | "short"; words: string };
@@ -237,7 +239,7 @@ export type CandidateScoreRow = { key: string; label: string; pctMet: number; to
  * (core/match-score.ts) and its breakdown, never a new scoring. Only the job page's own must-haves are named; every
  * other requirement the score counted (the skills the team looks for, which are not on the job page) is folded into
  * one line, `other`. A must-have nothing showed either way is listed as not shown yet: missing information is never
- * held against anyone.
+ * held against anyone. `basis` (R20-9): whether their AI interview is in the number (`CANDIDATE_SCORE_BASIS`).
  */
 export type CandidateScoreView = {
   score: number;
@@ -247,6 +249,7 @@ export type CandidateScoreView = {
   other: CandidateScoreRow | null;
   notYetShown: string[];
   coverage: string;
+  basis: string;
   capped: boolean;
 };
 

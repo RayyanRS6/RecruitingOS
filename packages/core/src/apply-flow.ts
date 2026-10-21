@@ -26,7 +26,8 @@ const WITH_APPLICATION: readonly string[] = ["apply", "with_application"];
 /**
  * "Still applying" (E6): the conversation that comes with the application, not yet finished, sent without it, handed to
  * a person or closed. Until then nothing about them reaches the owner's alerts. Since 20 October 2026 (R20-4) that is
- * every applicant's AI interview.
+ * every applicant's AI interview, and since Step 3 (R20-7) it is a part of "No AI interview yet" (`aiInterviewOf`, the
+ * invited and started states), kept for the role's figures and one release of the `stillApplying` alias.
  */
 export function isStillApplying(screen: { status: string; invitedVia?: string | null } | null | undefined): boolean {
   return !!screen && WITH_APPLICATION.includes(screen.invitedVia ?? "") && ["invited", "reminded", "in_progress", "paused"].includes(screen.status);

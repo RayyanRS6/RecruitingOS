@@ -79,10 +79,10 @@ describe("the Report under a recruiter grant for one candidate (Wave S5)", () =>
     expect(own).not.toContain("Your recruiter access covers one candidate");
   });
 
-  it("explains the screening chat's refusal (403 staff_scope) in words, never 'Could not load' with a retry", async () => {
+  it("explains the AI interview's refusal (403 staff_scope) in words, never 'Could not load' with a retry", async () => {
     const { ApiError } = await import("@ros/web/src/api/client");
     const { ScreeningCard: Card, ONE_CANDIDATE_SCREENING, isOneCandidateLimit } = await import("@ros/web/src/pages/RoleReport");
-    const refusal = new ApiError(403, "staff_scope", "Your access covers one candidate, so you can't see how the screening chat goes for the role's whole group.");
+    const refusal = new ApiError(403, "staff_scope", "Your access covers one candidate, so you can't see how the AI interview goes for the role's whole group.");
     expect(isOneCandidateLimit(refusal)).toBe(true);
     expect(isOneCandidateLimit(new ApiError(500, "internal", "Something went wrong."))).toBe(false);
     expect(isOneCandidateLimit(new Error("network"))).toBe(false);
@@ -114,7 +114,7 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     const qc = client([[["role", "r1", "screening"], { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 2, medianMinutes: 6.4, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] }]]);
     const html = render(qc, createElement(ScreeningCard, { roleId: "r1" }));
     expect(html).toContain('<div class="stat-row"><div class="stat"><span class="stat-n">10</span><span class="stat-label">people offered it</span></div>');
-    expect(html).toContain('<div class="stat"><span class="stat-n">2</span><span class="stat-label">still applying now</span></div></div>');
+    expect(html).toContain('<div class="stat"><span class="stat-n">2</span><span class="stat-label">with it open now</span></div></div>');
     expect(html).toContain('<th scope="col" class="num">Chose not to answer</th>');
     expect(html).toContain('<td>What pay are you looking for?</td><td class="num">3</td>');
     // the old inline 28px figure is gone: the look comes from the stylesheet

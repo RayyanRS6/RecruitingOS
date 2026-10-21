@@ -5,7 +5,7 @@
  */
 export const STOPPED_WORK: Readonly<Record<string, string>> = {
   application_intake: "Processing this application",
-  screen: "The screening chat",
+  screen: "The AI interview",
   schedule_interview: "Scheduling this interview",
   role_approval: "Approving this role",
   publish_role: "Publishing this role",

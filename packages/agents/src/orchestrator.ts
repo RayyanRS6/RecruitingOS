@@ -100,12 +100,13 @@ const HOURS = 3_600_000;
  * Whether a conversation offered with the application is still open a day past the moment it should have closed by
  * itself (plan E4, E5): never started, a day past its link's lapse; started and idle, a day past the reminder and the
  * close (72 hours after the last answer); paused, a day past the hand-over to a person (24 hours). Its run stalled, and
- * someone is left "Still applying" with nobody told.
+ * someone is left under "No AI interview yet" looking open, with nobody told.
  */
 export function conversationOverdue(s: Pick<typeof screens.$inferSelect, "status" | "expiresAt" | "startedAt" | "lastCandidateMessageAt" | "progress">, now: Date): boolean {
   const since = (at: string | null | undefined) => (at ? now.getTime() - Date.parse(at) : 0);
   if (s.status === "paused") return since(s.progress.pausedAt ?? s.lastCandidateMessageAt) > (24 + 24) * HOURS;
-  if (s.status === "in_progress") return since(s.lastCandidateMessageAt ?? s.startedAt) > (24 + 48 + 24) * HOURS;
+  // A person's "Send a reminder" (R20-7) keeps a started one open until `keptOpenUntil`: overdue only a day past that too.
+  if (s.status === "in_progress") return since(s.lastCandidateMessageAt ?? s.startedAt) > (24 + 48 + 24) * HOURS && (!s.progress.keptOpenUntil || since(s.progress.keptOpenUntil) > 24 * HOURS);
   return ["invited", "reminded"].includes(s.status) && since(s.expiresAt) > 24 * HOURS;
 }
 
@@ -183,7 +184,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       const finalists = waiting.filter((a) => a.stage === "finalist").length;
       const body = finalists === waiting.length
         ? `${finalists === 1 ? "A finalist is" : `${finalists} finalists are`} waiting to hear what comes next: record an offer made, the next step, or not moving forward. Finalists who wait more than a week often take another job.`
-        : "They are ready for a decision: invite to a screening chat, interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.";
+        : "They are ready for a decision: invite to an AI interview, interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.";
       // the people, longest waiting first, so Today can name the first and open them (plan G10)
       const longestFirst = [...waiting].sort((a, b) => Date.parse(a.stageChangedAt) - Date.parse(b.stageChangedAt)).map((a) => a.id);
       if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, applicationIds: longestFirst, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body, action: { label: "Review them", href: `/roles/${role.id}/talent` } });
@@ -211,7 +212,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     const stale = invites.filter((s) => s.invitedAt && now.getTime() - Date.parse(s.invitedAt) >= 3 * DAYS && !parked({ id: s.applicationId }) && !isStillApplying(s) && !isOneVisitFlow(s.progress));
     if (stale.length && publicNow) {
       const days = Math.floor((now.getTime() - Math.min(...stale.map((s) => Date.parse(s.invitedAt!)))) / DAYS);
-      out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} screening chat ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
+      out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} AI interview ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
     }
     // The conversation that goes with the application closes by itself (E4, E5). One still open well past that point
     // leaves the person "Still applying", unseen by the team and maybe waiting: they are named, for the team to open.
@@ -222,7 +223,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       const names = await candidateNames(q, stuckApps.map((a) => a.candidateId));
       const who = stuckApps.slice(0, 5).map((a) => names.get(a.candidateId) ?? "A candidate").join(", ");
       const days = Math.floor((now.getTime() - Math.min(...stuckApps.map((a) => Date.parse(a.createdAt)))) / DAYS);
-      out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the screening chat (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their screening chat should have closed by itself and did not, so their application has not reached you as ready and they may be waiting. Their answers appear only once they send them; a recruiter can contact them.`, action: { label: "See who", href: `/roles/${role.id}/talent` } });
+      out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the AI interview (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their AI interview should have closed by itself and did not, so they may be waiting. Their answers appear only once they send them; a recruiter can contact them.`, action: { label: "See who", href: `/roles/${role.id}/talent?ownerStage=no_ai_interview` } });
     }
     const pending = await q.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     // An "Invite to a screening chat?" from before 20 Oct 2026 is no decision any more (the daily check retires it).

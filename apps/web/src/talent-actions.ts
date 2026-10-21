@@ -103,9 +103,12 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
         ? { title: "Moved out of this role.", detail: `They asked not to be kept for future roles, so they are not in your talent pool and nobody will contact them about other openings. The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now)}` }
         : { title: "Added to your talent pool.", detail: `The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now)}` };
     case "invite_screen":
-      return { title: r.next ?? "Invitation on its way." };
+      return { title: r.next ?? "A new AI interview link is on its way." };
     case "ask_in_screen":
-      return { title: r.next ?? "Invitation on its way. The screening chat starts with these questions." };
+      return { title: r.next ?? "Invitation on its way. The AI interview starts with these questions." };
+    case "remind_screen":
+      // "Send a reminder" (R20-7): the API's sentence says until when the link stays open, and whether it waits for the ITS check.
+      return r.candidateNotice === "held" ? { title: "Reminder saved.", detail: r.next?.replace(/^Reminder saved:\s*/, "") ?? noticeText("held") } : { title: "Reminder on its way.", detail: r.next?.replace(/^Reminder on its way\.\s*/, "") || undefined };
     case "override_eligibility":
       return { title: "Kept in.", detail: "Your reason is recorded." };
     case "review_anyway":
@@ -115,7 +118,7 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
     case "told_in_person":
       return { title: "Recorded that you told them yourself.", detail: "Nothing more will be sent." };
     case "cancel_screen":
-      return { title: "Screening chat invitation stopped.", detail: r.next ?? (r.candidateNotice ? noticeText(r.candidateNotice) : "Their link no longer works.") };
+      return { title: "AI interview invitation stopped.", detail: r.next ?? (r.candidateNotice ? noticeText(r.candidateNotice) : "Their link no longer works.") };
     case "undo_decision":
       // Back under Cancelled (founder decisions 1A-4A): the API's sentence says whether their new times still go on the
       // day they were promised, so "nothing will be sent" is never said about a set that will.
@@ -198,7 +201,7 @@ export function briefDecisionToast(action: { label: string; body?: Record<string
     return { title: "Turned down.", detail: "Recorded with your name." };
   }
   if (notice) return sendDecisionToast(notice);
-  if (/invite to a (screen|screening chat)/i.test(action.label)) return { title: "Invitation on its way.", detail: "The screening chat goes to the candidate by email, or by text when they agreed to texts." };
+  if (/invite to (a screen|an AI interview)/i.test(action.label)) return { title: "Invitation on its way.", detail: "The AI interview link goes to the candidate by email, or by text when they agreed to texts." };
   if (/^Yes, interview/i.test(action.label)) {
     // The answer carries the interview approval filled in (plan H4): the page opens it on the candidate's panel.
     const filled = !!(response as { interviewDraft?: unknown } | null)?.interviewDraft;

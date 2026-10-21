@@ -2,7 +2,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, scoredSkill, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
-import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
+import { aiRuns, applications, assessments, candidates, companies, documents, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
 import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, unfairQuestion, unplannedChatPacket, withFocusAnswer, type FocusQuestion } from "./screen-focus";
@@ -150,8 +150,42 @@ export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [screen] = await q.select().from(screens).where(eq(screens.id, screenId)).limit(1);
   if (!screen) return null;
   const b = await loadApplicationBundle(q, screen.applicationId);
+  if (!b) return null;
+  // The AI interview made with an application sent from the apply form reads only what that visit gave (`visitChatFacts`).
+  const visit = screen.invitedVia === "with_application" && fromApplyForm(b.app) ? { chatFacts: await visitChatFacts(q, b.packet, b.app), triageMet: null, triageUnknowns: [] as string[] } : {};
   // A screen that opens with the assessment's open questions sees them as its first questions everywhere the packet is read.
-  return b ? { ...b, packet: chatPacket(b.packet, screen.progress), rolePacket: b.packet, screen } : null;
+  return { ...b, ...visit, packet: chatPacket(b.packet, screen.progress), rolePacket: b.packet, screen };
+}
+
+/** Sent from the apply form (its own acknowledgment of the notices, `answers.acknowledgment`): a waiting room may open its interview. */
+function fromApplyForm(app: Pick<ApplicationRow, "answers">): boolean {
+  return !!(app.answers as { acknowledgment?: unknown } | null)?.acknowledgment;
+}
+
+/**
+ * 21 October 2026 (Q14, founder: "same page, confirm by email"): the AI interview made with an application sent from the
+ * apply form is made from what that visit gave, the same inputs a returning address's detached interview has
+ * (apps/api services/apply-conversation.ts, `openDetached`), so that, given the same typing, both open with the same
+ * words, questions and counter, and nothing tells whether an address applied before: the CV's lines from the form's own
+ * reading of the résumé sent (`formReadExtraction`), the form's words, and the must-haves those lines do not show by the
+ * CV-word rule (`chatGaps` with no reading), never the fit check's findings or open questions, which only an application
+ * of its own has. The fit check still decides fit and the score (R20-2). An emailed-in or added application keeps the
+ * reading of its own (no waiting room opens it).
+ */
+export async function visitChatFacts(q: Queryable, packet: RolePacket, app: Pick<ApplicationRow, "extraction" | "answers" | "resumeDocumentId">): Promise<ChatFacts> {
+  return chatFactsOf(packet, { answers: app.answers, extraction: await formReadExtraction(q, app) });
+}
+
+/**
+ * The résumé reading the visit's interview may name: the application's, only when it is the apply form's own reading of
+ * the file sent (tied to the document, `purpose` "apply_form"), the only reading a repeat's upload ever gets; none when
+ * the intake had to read the file itself (sent inside the form without script, or a form reading that failed).
+ */
+async function formReadExtraction(q: Queryable, app: Pick<ApplicationRow, "extraction" | "resumeDocumentId">): Promise<ApplicationRow["extraction"]> {
+  if (!app.extraction || !app.resumeDocumentId) return null;
+  const [doc] = await q.select({ runId: documents.extractedByAiRunId }).from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1);
+  const [run] = doc?.runId ? await q.select({ inputRef: aiRuns.inputRef }).from(aiRuns).where(eq(aiRuns.id, doc.runId)).limit(1) : [];
+  return (run?.inputRef as { purpose?: unknown } | null | undefined)?.purpose === "apply_form" ? app.extraction : null;
 }
 export type ScreenBundle = NonNullable<Awaited<ReturnType<typeof loadScreenBundle>>>;
 
@@ -802,8 +836,9 @@ export async function startScreenConversation(q: Queryable, deps: ScreenDeps, in
   const opened = screen.transcript.find((t) => t.role === "assistant");
   if (opened) return { ok: true, message: opened.content };
   const now = nowOf(deps).toISOString();
-  // Wave S7: the chat offered with the application gets its plan now. Its gaps come from the CV the visit typed, read in
-  // code, as a repeat submission's do (`chatFactsFor`); one whose link was emailed later reads the résumé reading.
+  // Wave S7: the chat offered with the application gets its plan now. Its gaps come from the CV the visit gave, read in
+  // code, as a repeat submission's do (`chatFactsFor`; since 21 Oct every form applicant's AI interview too,
+  // `visitChatFacts`, which leaves `triageMet` out); one whose link a person sent reads the résumé reading.
   const facts = chatFactsFor(b.chatFacts, screen.progress, screen.invitedVia);
   const triageMet = screen.invitedVia === "apply" ? null : b.triageMet;
   const planned = withChatPlan(b.rolePacket, screen.progress, { channel: screen.channel, at: now, gaps: chatGaps({ packet: b.rolePacket, progress: screen.progress, triageMet, facts, written: writtenQuestionsOf(b.rolePacket).map((w) => w.key) }) });
@@ -865,9 +900,9 @@ export async function countConversation(q: Queryable, input: { companyId: string
     await notify(q, {
       companyId: input.companyId,
       kind: "entitlement.text_screens",
-      title: usedUp ? "This month's screening chats are used up" : "80% of this month's screening chats used",
+      title: usedUp ? "This month's AI interviews are used up" : "80% of this month's AI interviews used",
       body: usedUp
-        ? `${crossing.used} of ${crossing.limit} used. Applications are still accepted and anyone part-way through finishes. New applicants get the chat link by email once more are added, so everyone for a role has the same process. ITS has been told.`
+        ? `${crossing.used} of ${crossing.limit} used. Applications are still accepted and anyone part-way through finishes. New applicants get the AI interview link by email once more are added, so everyone for a role has the same process. ITS has been told.`
         : `${crossing.used} of ${crossing.limit} used. Nothing has stopped. ITS has been told and can add more before they run out.`,
       action: { label: "See usage", href: "/setup" },
     });
@@ -1127,7 +1162,7 @@ export async function answerWithdrawPrompt(q: Queryable, deps: ScreenDeps, input
   await transition(q, { applicationId: app.id, companyId: company.id, to: "withdrawn", by: "candidate", actor: candidateActor, reason: "candidate withdrew during screening", correlationId: screen.workflowRunId });
   await emit(q, { type: "application.withdrawn", companyId: company.id, actor: candidateActor, subject: { type: "application", id: app.id }, payload: { during: "screen", channel: input.channel }, correlationId: screen.workflowRunId });
   await deps.onWithdrawn?.(q, { companyId: company.id, applicationId: app.id, actor: candidateActor });
-  await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the screening chat, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the AI interview, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdrawn:${screen.id}`, templateKey: "screen_withdrawn", disclosureIncluded: false });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { withdrawn: true } });
   return msg;
@@ -1276,8 +1311,8 @@ export async function declineConversation(q: Queryable, deps: ScreenDeps, input:
   await emit(q, { type: "screen.declined_by_candidate", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { applicationId: app.id, answered, questions: packet.screening.questions.length }, correlationId: screen.workflowRunId });
   await entitlements.record(q, company.id, entitlements.PERSON_REQUESTS, 1, "request", { screenId: screen.id, choice: "send_without" });
   const [cur] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, app.id)).limit(1);
-  if (cur && ["screen_invited", "screening"].includes(cur.stage)) await transition(q, { applicationId: app.id, companyId: company.id, to: "triaged", by: "system", actor: input.actor, reason: "sent without the screening chat", correlationId: screen.workflowRunId });
-  await notify(q, { companyId: company.id, kind: "screen.declined_by_candidate", title: `${candidate.firstName} ${candidate.lastName} sent their application without the conversation`, body: `They chose not to go through the screening questions for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  if (cur && ["screen_invited", "screening"].includes(cur.stage)) await transition(q, { applicationId: app.id, companyId: company.id, to: "triaged", by: "system", actor: input.actor, reason: "sent without the AI interview", correlationId: screen.workflowRunId });
+  await notify(q, { companyId: company.id, kind: "screen.declined_by_candidate", title: `${candidate.firstName} ${candidate.lastName} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { declined: true } });
   return { message: msg };
 }
@@ -1640,7 +1675,7 @@ type ScorecardPacket = Pick<RolePacket, "requirements" | "competencies"> & Parti
  */
 export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAssessment>>, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: ScorecardPacket | null, opts: { incomplete?: boolean } = {}): RunOutcome<ScreenAssessment> {
   const checked = readings.map((r) => (r.ok ? { ...r, output: scorecardOutcome(r.output, view, screen, packet) } : r));
-  const out = combineRunOutcomes(checked, (r) => r, "this screening chat", SCORECARD_READINGS);
+  const out = combineRunOutcomes(checked, (r) => r, "this AI interview", SCORECARD_READINGS);
   if (!out.ok || !packet) return out;
   return { ...out, output: withSettledRecommendation(out.output, checked.flatMap((r) => (r.ok ? [r.output] : [])), packet, opts) };
 }

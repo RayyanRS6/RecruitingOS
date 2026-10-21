@@ -273,7 +273,7 @@ export function RoleDetail() {
                   <p className="small muted" style={{ marginTop: 8 }}>{MUST_HAVES_SCORE_LINE}</p>
                   <details className="more" style={{ marginTop: 6 }}>
                     <summary>Where each one is checked</summary>
-                    <p className="small muted" style={{ margin: 0 }}>The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the screening chat.</p>
+                    <p className="small muted" style={{ margin: 0 }}>The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the AI interview.</p>
                   </details>
                   {editPacket ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" icon="edit" onClick={() => openEditor("must-haves")}>Change the must-haves</Button></div> : null}
                 </Card>

@@ -3,7 +3,7 @@ import type { EvidenceAssessment, MatchScore } from "@ros/contracts";
 import type { BoardCard, BoardView, RolePacket } from "../../apps/web/src/api/client";
 import { canTryWeights } from "../../apps/web/src/roles";
 import { READ_FROM_NOW_ON } from "../../apps/web/src/skills-form";
-import { INTERVIEW_ONLY_LINE, LEVEL_WEIGHT, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows } from "../../apps/web/src/weights-preview";
+import { INTERVIEW_ONLY_LINE, LEAVE_OUT_HINT, LEVEL_WEIGHT, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows } from "../../apps/web/src/weights-preview";
 import { matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -46,13 +46,13 @@ const cy = scoreOf(reading([must("rdh_license", "no", "My RDH license lapsed in 
 const ben = scoreOf(reading([must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], [skill("chairside", "contradicted", "I never work chairside"), skill("patients", "contradicted", "I avoid patients"), skill("software", "contradicted", "never used dental software")]));
 
 const card = (applicationId: string, name: string, score: MatchScore | null, over: Record<string, unknown> = {}): BoardCard => ({ applicationId, name, ownerStage: "new", ownerStageLabel: "New", score, readingVersion: null, ...over }) as unknown as BoardCard;
-const boardOf = (cards: BoardCard[], stillApplying: BoardCard[] = []): Pick<BoardView, "columns" | "stillApplying"> => ({ columns: { shortlist: cards.slice(0, 1), longlist: cards.slice(1, 3), not_moving_forward: cards.slice(3) }, stillApplying });
+const boardOf = (cards: BoardCard[], noAiInterview: BoardCard[] = []): Pick<BoardView, "columns" | "noAiInterview"> => ({ columns: { shortlist: cards.slice(0, 1), longlist: cards.slice(1, 3), not_moving_forward: cards.slice(3) }, noAiInterview });
 const pool = boardOf([card("a1", "Ada Pool", ada), card("a2", "Fay Pool", fay), card("a3", "Gus Pool", gus), card("a4", "Cy Pool", cy), card("a5", "Ben Pool", ben)]);
 const rows = weightRows(packet);
 const at = (changes: Record<string, string>) => ({ ...jobLevels(rows), ...changes }) as ReturnType<typeof jobLevels>;
 
 describe("the rows to weigh", () => {
-  it("lists the must-haves first with two choices, then the scored skills with four; a skill checked in the interviews only is left out", () => {
+  it("lists the must-haves first with two choices, then the scored skills with four; a skill checked only in your own interviews is left out", () => {
     expect(rows.map((r) => [r.id, r.label, r.level, r.choices.length])).toEqual([
       ["m:rdh_license", "Active CA RDH license", "must_have", 2],
       ["m:perio", "Perio charting experience", "must_have", 2],
@@ -63,7 +63,9 @@ describe("the rows to weigh", () => {
     expect(rows[0].choices.map((c) => WEIGHT_LEVEL_LABEL[c])).toEqual(["Must-have", "Leave out of the score"]);
     expect(rows[2].choices.map((c) => WEIGHT_LEVEL_LABEL[c])).toEqual(["Essential", "Important", "Helpful", "Leave out of the score"]);
     expect(rows.map((r) => r.key)).not.toContain("manner");
-    expect(INTERVIEW_ONLY_LINE).toMatch(/only in the interviews/);
+    // "your own" interviews (R20-9), so it is never read as "the AI interview does not count"
+    expect(INTERVIEW_ONLY_LINE).toMatch(/only in your own interviews/);
+    expect(LEAVE_OUT_HINT).toMatch(/only in your own interviews/);
     // the real score's own weights; left out counts nothing
     expect(LEVEL_WEIGHT).toEqual({ must_have: 4, essential: 3, important: 2, helpful: 1, off: 0 });
   });
@@ -83,7 +85,7 @@ describe("the order the weights give", () => {
     const order = previewOrder(pool, rows, jobLevels(rows));
     expect(order.rows.map((p) => [p.name, p.rank, p.now, p.preview, p.moved])).toEqual([["Ada Pool", 1, 100, 100, 0], ["Gus Pool", 2, 86, 86, 0], ["Fay Pool", 3, 79, 79, 0], ["Cy Pool", 4, 54, 54, 0], ["Ben Pool", 5, 43, 43, 0]]);
     expect(order).toMatchObject({ moved: 0, unscored: 0 });
-    expect(order.rows[0]).toMatchObject({ applicationId: "a1", place: "New", readAgainst: null });
+    expect(order.rows[0]).toMatchObject({ applicationId: "a1", place: "New", readAgainst: null, resumeOnly: true });
     expect(previewStatus(changedRows(rows, jobLevels(rows)).length, order)).toBe("These are the job's own weights: this is the order today.");
   });
 
@@ -123,7 +125,7 @@ describe("the order the weights give", () => {
     expect(hal(at({ "s:chairside": "off" }))).toMatchObject({ preview: 100 });
   });
 
-  it("counts the people with no score apart, takes in those still applying, and breaks a tie by name", () => {
+  it("counts the people with no score apart, takes in those without an AI interview yet, and breaks a tie by name", () => {
     const nothing = scoreOf(reading([must("rdh_license", "unknown")]));
     expect(nothing.score).toBeNull();
     const board = boardOf([card("z1", "Zed Pool", gus), card("b1", "Abe Pool", gus), card("n1", "Nia Pool", null), card("n2", "Noa Pool", nothing)], [card("s1", "Sam Pool", ada)]);
@@ -133,6 +135,22 @@ describe("the order the weights give", () => {
     expect(unscoredWords(order.unscored)).toBe("2 people have no match score yet, so they are not in this order.");
     expect(unscoredWords(1)).toBe("1 person has no match score yet, so they are not in this order.");
     expect(unscoredWords(0)).toBe("");
+  });
+
+  it("marks a score with no AI interview in it yet 'résumé only' on its row; the number and the order are unchanged (R20-9)", () => {
+    const resume = reading(yes, [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")]);
+    const waiting = matchScore({ resume, screen: null }, packet as unknown as Parameters<typeof matchScore>[1], { interview: "not_done_yet" })!;
+    const interviewed = matchScore({ resume, screen: { ...resume, kind: "screen", createdAt: "2026-10-02T10:00:00Z" } }, packet as unknown as Parameters<typeof matchScore>[1])!;
+    const board = boardOf([card("i1", "Ivy Pool", interviewed), card("w1", "Wes Pool", waiting, { ownerStageLabel: "Invited (not started)" })]);
+    const order = previewOrder(board, rows, jobLevels(rows));
+    const of = (name: string) => order.rows.find((p) => p.name === name)!;
+    expect(of("Ivy Pool")).toMatchObject({ resumeOnly: false, now: 100 });
+    expect(of("Wes Pool")).toMatchObject({ resumeOnly: true, now: 100, preview: 100 });
+    expect(placeWords(of("Wes Pool"))).toBe("Invited (not started) · résumé only");
+    expect(placeWords(of("Ivy Pool"))).toBe("New");
+    expect(placeWords({ place: "New", resumeOnly: true, readAgainst: 1 })).toBe("New · résumé only · Read against version 1");
+    // an older answer without the label is not marked
+    expect(previewOrder(boardOf([card("o1", "Oz Pool", { ...ada, interview: undefined } as unknown as MatchScore)]), rows, jobLevels(rows)).rows[0]!.resumeOnly).toBe(false);
   });
 
   it("puts a person whose every judged requirement is left out last, with no preview number", () => {

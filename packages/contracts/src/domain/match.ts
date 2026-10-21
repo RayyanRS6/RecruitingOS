@@ -75,6 +75,35 @@ export type MatchCriterion = {
 };
 
 /**
+ * Whether the AI interview is in the score (20 October 2026, R20-9): every applicant gets one, and the score counts both
+ * readings once it is scored. Until then the number is the résumé's alone, and says so. `done`: the interview's scorecard
+ * is in the score. `being_scored`: sent, its scorecard not written yet. `not_done_yet`: being prepared, or its link is
+ * open (not started, started, paused, or they asked for a person). `not_done`: it closed without being sent (the link
+ * lapsed, they stopped part-way or said no, or it was stopped), or it never came because the month's AI interviews
+ * stayed used up for the whole sixty-day wait (Q17); one wording for all of these, so the label never says how far
+ * anyone got (the 9 October "hide until Send" rule) or hints at a private decision that closed it (B6). `none`: never
+ * offered one (an application from before 20 October 2026, or one held on an eligibility answer, which the board
+ * places as held).
+ */
+export const InterviewInScore = z.enum(["done", "being_scored", "not_done_yet", "not_done", "none"]);
+export type InterviewInScore = z.infer<typeof InterviewInScore>;
+/**
+ * The label beside the score wherever it shows (the board card, the list's tooltip, the candidate panel, Compare), so a
+ * résumé-only number is never read as one that counts the AI interview. `SCORE_BASIS_INTERVIEW_ONLY` when the interview
+ * is in and there is no résumé reading at all.
+ */
+export const SCORE_BASIS_WORDS: Record<InterviewInScore, string> = {
+  done: "From the résumé and the AI interview",
+  being_scored: "Résumé only for now: AI interview done, being scored",
+  not_done_yet: "Résumé only: AI interview not done yet",
+  not_done: "Résumé only: no AI interview",
+  none: "Résumé only: no AI interview",
+};
+export const SCORE_BASIS_INTERVIEW_ONLY = "From the AI interview";
+/** The small grey chip beside a résumé-only score on the list (any status but `done`). */
+export const RESUME_ONLY_CHIP = "Résumé only";
+
+/**
  * A requirement the evidence says nothing about either way: left out of the score, and an open question instead.
  * `unquotedNo` is set when a reading said it is not met (or goes against it) without quoting the candidate's own words:
  * still left out, but the board asks a person to look (plan F6).
@@ -86,6 +115,7 @@ export type MatchUnknown = { key: string; label: string; mustHave: boolean; impo
  * `score` is null when nothing could be judged yet. `breakdown` lists the requirements that were judged, the ones that
  * cost the most points first; `unknown` the ones left out ("based on 5 of 7 requirements"). `missingMustHave` holds the
  * must-haves the candidate's own words show are not met (a verified quote only); one of them holds the score at 54.
+ * `interview` and `basis` (R20-9) say whether the AI interview is in it, and in which words; they never change the number.
  */
 export type MatchScore = {
   score: number | null;
@@ -101,7 +131,12 @@ export type MatchScore = {
   capped: boolean;
   /** The confidence of the latest reading, shown as its own chip. */
   confidence: Confidence | null;
+  /** Which reading supplied the findings the score counted (not whether the AI interview happened: `interview` says that). */
   basedOn: "resume" | "screen" | "resume_and_screen";
+  /** Where the AI interview stands for the score (`InterviewInScore`): `done` only once its scorecard is in. */
+  interview: InterviewInScore;
+  /** The label in words (`SCORE_BASIS_WORDS`): "From the résumé and the AI interview", "Résumé only: AI interview not done yet"… */
+  basis: string;
   /** The role version the findings were read against. */
   packetVersion: number | null;
 };

@@ -57,7 +57,7 @@ describe("Review & send", () => {
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": `198.51.100.${ip}` } });
     await container.drain();
     // the waiting room opens the AI interview once the résumé is read (20 Oct 2026, R20-12)
-    const { token } = await followApply(app, r);
+    const { token } = await followApply(app, r, container);
     expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
     return token!;
   }
@@ -257,7 +257,7 @@ describe("Review & send", () => {
     expect(await page(`/c/screen/${t}`)).toContain("<h1>Check what you're sending</h1>");
   });
 
-  /** A repeat submission's detached copy, as the apply page opened one before 20 Oct 2026 (it now only says "check your email"). */
+  /** A repeat submission's detached copy, as the apply page's waiting room opens one (Q14, kept in full on 21 Oct 2026). */
   async function detachedCopy(email: string, firstName: string): Promise<string> {
     const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
     const [company] = await container.db.select().from(companies).where(eq(companies.id, role.companyId));
@@ -268,7 +268,7 @@ describe("Review & send", () => {
     return made!.token;
   }
 
-  it("a repeat submission's conversation (opened before 20 Oct 2026) reads the same: written up on its own copy, with nothing of the person on file", async () => {
+  it("a repeat submission's conversation reads the same: written up on its own copy, with nothing of the person on file", async () => {
     const t = await detachedCopy("maria.reyes@example.com", "Mia");
     const [row] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.token, t));
     expect(row).toBeTruthy();

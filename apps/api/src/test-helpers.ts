@@ -72,15 +72,33 @@ export async function statusTokenFor(container: Container, input: { roleId: stri
 }
 
 /**
- * Follows the apply POST as a browser does (20 Oct 2026, R20-12): its 302 to the waiting room `…/applied`, which opens
- * the application's own AI interview once it exists (with the inline worker, by the time the POST answered). `token`:
- * the interview the waiting room opened, else null; `html`: the page shown instead (the receipt, or the waiting room).
+ * Runs `fn` with the engine's clock moved past the 40 to 90 seconds every waiting room says "preparing" first (Q14,
+ * founder 21 Oct: the same timing for a new address and a known one), then puts the clock back.
  */
-export async function followApply(app: ReturnType<typeof createApp>, res: Response): Promise<{ token: string | null; html: string; status: number; cookie: string }> {
+export async function pastTheWaitingRoom<T>(container: Container, fn: () => Promise<T>): Promise<T> {
+  const engine = container.engine as unknown as { now: () => Date };
+  const real = engine.now;
+  const past = real().getTime() + 91_000;
+  engine.now = () => new Date(past);
+  try {
+    return await fn();
+  } finally {
+    engine.now = real;
+  }
+}
+
+/**
+ * Follows the apply POST as a browser does (20 Oct 2026, R20-12): its 302 to the waiting room `…/applied`, which opens
+ * the application's own AI interview once it exists (with the inline worker, by the time the POST answered) and the 40
+ * to 90 seconds every waiting room says "preparing" first have passed (Q14, 21 Oct): `container`'s clock is moved past
+ * them for that one look. `token`: the interview the waiting room opened, else null; `html`: the page shown instead (the
+ * receipt, or the waiting room).
+ */
+export async function followApply(app: ReturnType<typeof createApp>, res: Response, container: Container): Promise<{ token: string | null; html: string; status: number; cookie: string }> {
   const location = res.headers.get("location") ?? "";
   const cookie = res.headers.get("set-cookie")?.match(/ros_applied=[^;,]+/)?.[0] ?? "";
   if (!location.endsWith("/applied")) return { token: null, html: await res.text(), status: res.status, cookie };
-  const room = await app.request(location, { headers: { cookie } });
+  const room = await pastTheWaitingRoom(container, async () => app.request(location, { headers: { cookie } }));
   const to = room.headers.get("location") ?? "";
   const token = /^\/c\/screen\/([A-Za-z0-9_-]+)$/.exec(to)?.[1] ?? null;
   return { token, html: token ? "" : await room.text(), status: room.status, cookie };

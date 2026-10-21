@@ -201,6 +201,19 @@ describe("the Candidates page", () => {
     expect(html).toMatch(new RegExp(`<span title="${label.replace(/[.;]/g, "\\$&")}">Read against version (<!-- -->)?1</span>`));
   });
 
+  it("marks a score with no AI interview in it yet 'Résumé only' beside the badge, the full label on hover (R20-9)", () => {
+    nav.search = "";
+    const qc = client([]);
+    const coverage = { known: 3, total: 4, words: "Based on 3 of 4 requirements" };
+    const ivy = { ...maria, id: "a3", candidate: { id: "c3", name: "Ivy Chen", email: "ivy@example.com", phone: null, locationText: null }, score: 77, coverage, interview: "done", basis: "From the résumé and the AI interview" };
+    qc.setQueryData(["applications", "r1"], { applications: [{ ...maria, coverage, interview: "not_done_yet", basis: "Résumé only: AI interview not done yet" }, ivy, luis], counts });
+    const html = render(qc, createElement(People));
+    expect(html).toContain('<span class="score-slot" title="Based on 3 of 4 requirements. Résumé only: AI interview not done yet"><span class="chip neutral" title="Résumé only: AI interview not done yet">Résumé only</span><span class="score');
+    // once the AI interview is in the score, no mark: the label says so on hover
+    expect(html).toContain('<span class="score-slot" title="Based on 3 of 4 requirements. From the résumé and the AI interview"><span class="score');
+    expect(html.match(/>Résumé only</g)).toHaveLength(1);
+  });
+
   it("follows a link to the people not told yet, with the way to send them the decision message", () => {
     nav.search = "ownerStage=not_moving_forward&told=not_told";
     const html = render(client([]), createElement(People));
@@ -273,7 +286,7 @@ describe("the Candidates page", () => {
   it("keeps who did what, and that a decision was private, on the History tab (the Overview links to it)", () => {
     nav.search = "open=a2&tab=history";
     const html = text(render(client([detail(luis)]), createElement(People)));
-    expect(html).toContain("AI review of the résumé: Worth a screening chat");
+    expect(html).toContain("AI review of the résumé: Worth an AI interview");
     expect(html).toContain("Private: the candidate was not told.");
     expect(html).toContain("Dana Whitfield");
   });

@@ -1,4 +1,4 @@
-import { MATCH_WEIGHT, importanceOf, matchBand, weighRequirements, type Confidence, type EvidenceAssessment, type Importance, type MatchCriterion, type MatchScore, type MatchUnknown, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
+import { MATCH_WEIGHT, SCORE_BASIS_INTERVIEW_ONLY, SCORE_BASIS_WORDS, importanceOf, matchBand, weighRequirements, type Confidence, type EvidenceAssessment, type Importance, type InterviewInScore, type MatchCriterion, type MatchScore, type MatchUnknown, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
 
 /**
  * The match score (founder decision B2; plan-adjustments section 1): a 0-100 number worked out by code from the stored,
@@ -22,11 +22,15 @@ import { MATCH_WEIGHT, importanceOf, matchBand, weighRequirements, type Confiden
  *   show anything) counts as partly met, never on its own in full, and the breakdown says "no quote" (Wave S5, 15 Oct
  *   2026): it never raises the score above what the checked evidence shows.
  * - A must-have shown not met holds the score at 54 at most and is named ("Missing must-have: ...").
- * - A skill the role checks in the interviews only (`evaluatedIn: "interview"`) is not part of the score: the owner
- *   was told it is judged there, so no reading of a résumé or a screening chat moves the number with it.
- * - Per requirement the screening conversation's finding wins where it has one with a checked quote (the candidate
- *   spoke to it directly); then the résumé reading's checked one; a finding with nothing quoted counts only when neither
- *   reading has a checked one (the screen's first).
+ * - A skill the role checks only in the team's own interviews (`evaluatedIn: "interview"`; the editor says "Only in your
+ *   own interviews", so it is never read as "the AI interview does not count") is not part of the score: the owner was
+ *   told it is judged there, so no reading of a résumé or an AI interview moves the number with it.
+ * - Per requirement the AI interview's finding wins where it has one with a checked quote (the candidate spoke to it
+ *   directly); then the résumé reading's checked one; a finding with nothing quoted counts only when neither reading has
+ *   a checked one (the AI interview's first).
+ * - The score counts both once the AI interview is scored (20 October 2026, R20-9). Before that the number is the
+ *   résumé's alone and its label says so (`interview`, `basis`: "Résumé only: AI interview not done yet"); the label never
+ *   changes the number, and nothing here asks the AI anything.
  * - The sums themselves (`weighRequirements`) live in packages/contracts, so the weights preview on the job's page
  *   (founder decision L-07 A), which cannot import this package, runs the same code over the same findings.
  */
@@ -101,8 +105,8 @@ const SKILL_WORDS: Record<Exclude<Status, "unknown">, string> = { yes: "Shown", 
 type Requirement = { key: string; label: string; mustHave: boolean; importance: Importance | null; weight: number; found: Resolved };
 
 /**
- * Whether a skill is read from a résumé or a screening chat at all: one the role checks in the interviews only is not
- * (the résumé reading and the scorecard are not asked about it, and the match score leaves it out).
+ * Whether a skill is read from a résumé or an AI interview at all: one the role checks only in the team's own interviews
+ * is not (the résumé reading and the scorecard are not asked about it, and the match score leaves it out).
  */
 export function scoredSkill(c: { evaluatedIn?: string | null }): boolean {
   return c.evaluatedIn !== "interview";
@@ -133,10 +137,21 @@ const confidenceOf = (r: ScoredReading | null): Confidence | null => {
 };
 
 /**
- * The match score of one application from its readings, against the version of the role they were read against.
- * Null when there is no reading at all; `score` null when no requirement could be judged yet.
+ * Where the AI interview stands for the score: `done` whenever its scorecard is among the readings; otherwise the status
+ * the caller read from the application's screens (`interviewInScore` in ai-interview.ts), `none` when not given (the
+ * evals, and any reader without screens). A caller's `done` without a scorecard reads as `being_scored`.
  */
-export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirements" | "competencies">, opts: { packetVersion?: number | null } = {}): MatchScore | null {
+function interviewFor(pair: ReadingPair, given: InterviewInScore | null | undefined): InterviewInScore {
+  if (pair.screen) return "done";
+  return given === "done" ? "being_scored" : given ?? "none";
+}
+
+/**
+ * The match score of one application from its readings, against the version of the role they were read against.
+ * Null when there is no reading at all; `score` null when no requirement could be judged yet. `interview` only labels
+ * it (`interview`, `basis`): the number, the breakdown and `basedOn` are the same with or without it.
+ */
+export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirements" | "competencies">, opts: { packetVersion?: number | null; interview?: InterviewInScore | null } = {}): MatchScore | null {
   if (!pair.resume && !pair.screen) return null;
   const all = requirementsOf(pair, packet);
   const known = all.filter((r) => r.found.status !== "unknown");
@@ -155,6 +170,7 @@ export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirem
   const sources = new Set(known.map((r) => r.found.source));
   const basedOn = sources.size === 2 || (!sources.size && pair.resume && pair.screen) ? "resume_and_screen" : sources.has("screen") || (!sources.size && pair.screen) ? "screen" : "resume";
   const latest = latestOf(pair);
+  const interview = interviewFor(pair, opts.interview);
   return {
     score,
     band: band?.band ?? null,
@@ -167,6 +183,8 @@ export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirem
     capped,
     confidence: confidenceOf(latest),
     basedOn,
+    interview,
+    basis: interview === "done" && !pair.resume ? SCORE_BASIS_INTERVIEW_ONLY : SCORE_BASIS_WORDS[interview],
     packetVersion: opts.packetVersion ?? latest?.packetVersion ?? null,
   };
 }

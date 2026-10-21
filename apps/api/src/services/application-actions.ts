@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
+import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
 import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, type PersonalLine } from "@ros/agents";
@@ -9,7 +9,7 @@ import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
 import { exitCleanup } from "./exit-cleanup";
 import { OFFER_FROM, offerBlockedReason } from "./offers";
-import { UNSTARTED_SCREEN_STATUSES, stopScreenInvitation } from "./screens";
+import { AI_INTERVIEW_PAUSED_REASON, LINK_EMAIL_HELD_REASON, REMINDED_RECENTLY_REASON, UNSTARTED_SCREEN_STATUSES, aiInterviewsFor, remindScreen, stopScreenInvitation } from "./screens";
 import { keepInTalentPool } from "./talent-pool";
 import { assertNoNewWork } from "./trial";
 
@@ -26,7 +26,7 @@ export const INTERVIEW_DONE_STATUSES: readonly string[] = ["completed", "no_show
 /** The assistant's suggestions that wait on a person (plan A6): a person acting on the candidate directly settles them. */
 const SUGGESTIONS = ["application.invite_screen", "application.recommend_interview"];
 
-export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision" | "send_new_times" | "stop_new_times";
+export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision" | "send_new_times" | "stop_new_times" | "remind_screen";
 
 /**
  * `role` is the viewer's tenant role when known: every capability is then limited to roles that hold its permission, so a person never sees a button the route would refuse.
@@ -40,16 +40,18 @@ export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "intervi
  * stage button offers it on that row.
  * `interviewPreparing`: every applicant's AI interview is still being prepared (`interviewsBeingPrepared`: its run waits
  * for the reading or for more interviews), so "Send a new AI interview link" waits too: it would race it.
+ * `aiInterview`: where they stand under "No AI interview yet" (R20-7, `aiInterviewOf`), null outside it: "Send a
+ * reminder" (`remind_screen`) follows its `canRemind`.
  */
-export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean };
+export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean; aiInterview?: AiInterviewView | null };
 
 /** Why a choice is not available right now, in the reader's words; the page puts it on the disabled button. */
 export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
 
 /** The permission each choice needs, and how the refusal names it. */
 const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: string }> = {
-  invite_screen: { permission: "application.act", what: "invite candidates to a screening chat" },
-  ask_in_screen: { permission: "application.act", what: "invite candidates to a screening chat" },
+  invite_screen: { permission: "application.act", what: "send candidates an AI interview link" },
+  ask_in_screen: { permission: "application.act", what: "send candidates an AI interview link" },
   interview: { permission: "interview.request", what: "approve interviews" },
   advance_to_interview: { permission: "application.act", what: "move candidates forward" },
   hold: { permission: "application.act", what: "hold candidates" },
@@ -66,12 +68,14 @@ const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: 
   send_decision: { permission: "application.reject", what: "tell candidates about a decision" },
   told_in_person: { permission: "application.reject", what: "tell candidates about a decision" },
   // The candidate is sent a note, so it sits with those who tell candidates decisions: owner, admin, hiring manager, recruiter.
-  cancel_screen: { permission: "application.reject", what: "stop a screening chat invitation" },
+  cancel_screen: { permission: "application.reject", what: "stop an AI interview invitation" },
   // Taking back a decision sits with those who make it.
   undo_decision: { permission: "application.reject", what: "take back a decision" },
   // New times for someone under Cancelled reopen an interview a person already approved, so they sit with those who manage interviews.
   send_new_times: { permission: "interview.manage", what: "send new interview times" },
   stop_new_times: { permission: "interview.manage", what: "stop automatic new interview times" },
+  // A reminder about their own AI interview link (R20-7): the same hands that send them a new link.
+  remind_screen: { permission: "application.act", what: "remind candidates about their AI interview" },
 };
 const CAPABILITIES = Object.keys(CAPABILITY) as ApplicationCapability[];
 
@@ -79,6 +83,20 @@ const TEAM_ROLES: MembershipRole[] = ["owner", "admin", "hiring_manager", "hr", 
 const ROLE_WORDS: Record<MembershipRole, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "HR", recruiter: "a recruiter", interviewer: "an interviewer" };
 const CHECK_ELIGIBILITY_FIRST = "Check their eligibility answer first: keep them in or decline.";
 const INTERVIEW_PREPARING = "Their AI interview is being prepared, and its link goes to them by itself.";
+
+/**
+ * Why "Send a reminder" is not offered, with the code the action's refusal carries, from what actually blocks it
+ * (`AiInterviewView.remindBlocked`): the day between reminders only when that is what holds it; a paused interview, or a
+ * link whose email has not left yet, says so; anything else is a link that is not open (or not waiting on them).
+ */
+function remindRefusal(v: AiInterviewView): { code: string; reason: string } {
+  if (v.remindBlocked === "recently") return { code: "reminded_recently", reason: REMINDED_RECENTLY_REASON };
+  if (v.remindBlocked === "email_held") return { code: "link_email_held", reason: LINK_EMAIL_HELD_REASON };
+  if (v.remindBlocked === "paused") return { code: "interview_paused", reason: AI_INTERVIEW_PAUSED_REASON };
+  if (v.canResend) return { code: "no_open_link", reason: "Their link has closed. Send them a new link instead." };
+  if (v.state === "started") return { code: "no_open_link", reason: "Not needed now: their AI interview is no longer waiting on them." };
+  return { code: "no_open_link", reason: "Their AI interview link is not open." };
+}
 
 /** "an owner, an admin or a hiring manager": who holds a permission, read off the matrix so the words never drift from it. */
 function whoMay(permission: Permission): string {
@@ -125,6 +143,8 @@ function allowedByState(f: ApplicationFacts): ApplicationCapability[] {
   // an automatic set still waiting for its day. Whether ITS has confirmed the company is checked by the send itself.
   if (f.followUp && !terminal && CANCEL_STAGES.includes(f.stage as ApplicationStage) && !f.followUp.interviewOpen) out.push("send_new_times");
   if (f.followUp && followUpParked(f.followUp)) out.push("stop_new_times");
+  // "Send a reminder" under "No AI interview yet" (R20-7): an open link, nothing sent about it in the last day.
+  if (!terminal && f.aiInterview?.canRemind) out.push("remind_screen");
   return out;
 }
 
@@ -142,9 +162,9 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
   const step = `Not available at this step (${(STAGE_LABEL as Record<string, string>)[f.stage] ?? f.stage.replace(/_/g, " ")}).`;
   switch (cap) {
     case "invite_screen":
-      return f.hasOpenScreen ? "A screening chat invitation is already open." : f.interviewPreparing ? INTERVIEW_PREPARING : step;
+      return f.hasOpenScreen ? "An AI interview link is already open." : f.interviewPreparing ? INTERVIEW_PREPARING : step;
     case "ask_in_screen":
-      return f.hasOpenScreen ? "A screening chat invitation is already open." : f.interviewPreparing ? INTERVIEW_PREPARING : !(f.openUnknowns ?? 0) ? "The AI review left no open questions to ask about." : step;
+      return f.hasOpenScreen ? "An AI interview link is already open." : f.interviewPreparing ? INTERVIEW_PREPARING : !(f.openUnknowns ?? 0) ? "The AI review left no open questions to ask about." : step;
     case "interview":
       return f.hasActiveInterview ? "An interview is already in motion." : step;
     case "hold":
@@ -165,7 +185,7 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
     case "told_in_person":
       return tellingReason(f);
     case "cancel_screen":
-      return TERMINAL_STAGES.includes(f.stage) || f.stage === "talent_pool" ? step : f.hasOpenScreen ? "They have started the screening chat, so it can't be stopped now." : "No screening chat invitation is waiting for them.";
+      return TERMINAL_STAGES.includes(f.stage) || f.stage === "talent_pool" ? step : f.hasOpenScreen ? "They have started the AI interview, so it can't be stopped now." : "No AI interview invitation is waiting for them.";
     case "undo_decision":
       return !decided(f) ? "Only for a decision not to move forward."
         : !untold(f) ? "They have been told, or the message is on its way, so the decision can't be taken back here."
@@ -177,6 +197,8 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
       return f.followUp?.interviewOpen && CANCEL_STAGES.includes(f.stage as ApplicationStage) ? "New times are already being prepared or are out to them." : "Only for someone under Cancelled.";
     case "stop_new_times":
       return "Nothing is due to go to them automatically.";
+    case "remind_screen":
+      return !f.aiInterview ? "Only for someone whose AI interview link is open." : remindRefusal(f.aiInterview).reason;
     default:
       return step;
   }
@@ -208,7 +230,10 @@ export function allowedApplicationActions(f: ApplicationFacts): ApplicationCapab
  * mark takes the mark off; Interviewing opens the interview approval; Offer opens the record-only "Offer made" for a
  * finalist (plan H2); Hired opens the hire sheet; Not moving forward opens the private decline. Nobody is moved into
  * Cancelled (only the candidate's own cancel or a missed interview puts them there), and from Cancelled they go back to
- * Interviewing by booking a time. Built from `applicationActionState`, so it never offers what the action route refuses.
+ * Interviewing by booking a time. Nobody is moved into "No AI interview yet" either (everyone who applies starts there,
+ * R20-7), nor from it to New (they move there when they finish the AI interview); Longlist, Shortlist, On hold,
+ * Interviewing and Not moving forward are offered from it as from New. Built from `applicationActionState`, so it never
+ * offers what the action route refuses.
  */
 export function stageMoves(f: ApplicationFacts): StageMove[] {
   const { allowed, blockedReasons } = applicationActionState(f);
@@ -237,14 +262,16 @@ export function stageMoves(f: ApplicationFacts): StageMove[] {
       case "shortlist":
       case "on_hold":
         return move(to, "set_mark", "set_mark", { mark: to, reason: allowed.includes("set_mark") ? markBlockedReason(stage, to) : null });
+      case "no_ai_interview":
+        return move(to, "none", null, { reason: "Everyone who applies starts here and leaves when they finish the AI interview." });
       case "new":
-        return move(to, "none", null, { reason: base === "new" ? null : "They are past this step." });
+        return move(to, "none", null, { reason: base === "new" ? null : base === "no_ai_interview" ? "They move to New when they finish the AI interview." : "They are past this step." });
       // Without this case the default branch below would open the decline.
       case "cancelled":
         return move(to, "none", null, { reason: "Only the candidate's own cancellation, or an interview they missed, puts someone here." });
       case "interviewing":
         if (current === "cancelled") return move(to, "none", null, { reason: "They move back to Interviewing when they book a time. Send them new times from their page." });
-        return base === "new" ? move(to, "interview", "interview") : move(to, "none", null, { reason: base === "interviewing" ? null : past });
+        return base === "new" || base === "no_ai_interview" ? move(to, "interview", "interview") : move(to, "none", null, { reason: base === "interviewing" ? null : past });
       case "offer":
         return base === "hired" || base === "not_moving_forward" ? move(to, "offer", null, { reason: past }) : move(to, "offer", "record_offer");
       case "hired":
@@ -264,12 +291,13 @@ export function applicationFactsFrom(
   interviewRows: Array<{ status: string; decision: string | null }>,
   role?: MembershipRole | null,
   triage?: { result: { unknowns: unknown[] } } | null,
-  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean } = {},
+  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean; aiInterview?: AiInterviewView | null } = {},
 ): ApplicationFacts {
   return {
     ...(extra.decidedFrom !== undefined ? { decidedFrom: extra.decidedFrom } : {}),
     ...(extra.undoToCancelled ? { undoToCancelled: true } : {}),
     ...(extra.interviewPreparing ? { interviewPreparing: true } : {}),
+    ...(extra.aiInterview ? { aiInterview: extra.aiInterview } : {}),
     roleClosed: !!extra.roleClosed,
     followUp: extra.followUp ?? null,
     stage: app.stage,
@@ -309,7 +337,8 @@ export async function undoFacts(tx: Tx, app: Pick<typeof applications.$inferSele
   return { decidedFrom, roleClosed: role?.status === "closed", ...(newest?.resolvedHow === "left_process" ? { undoToCancelled: true } : {}) };
 }
 
-export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason" | "toldState" | "roleId" | "candidateId">, role?: MembershipRole | null): Promise<ApplicationFacts> {
+/** `now`: the moment "Send a reminder" is judged at (the engine's clock when a container is at hand). */
+export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason" | "toldState" | "roleId" | "candidateId">, role?: MembershipRole | null, now: Date = new Date()): Promise<ApplicationFacts> {
   const scr = await tx.select({ status: screens.status }).from(screens).where(eq(screens.applicationId, app.id));
   const ivs = await tx.select({ status: interviews.status, decision: interviews.decision }).from(interviews).where(eq(interviews.applicationId, app.id));
   const [triage] = await tx.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt)).limit(1);
@@ -317,7 +346,8 @@ export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$in
   const pending = await pendingDecisionMessages(tx, [app.id]);
   const followUp = (await activeFollowUpsFor(tx, [app.id])).get(app.id) ?? null;
   const interviewPreparing = (await interviewsBeingPrepared(tx, [app.id])).has(app.id);
-  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id), followUp, interviewPreparing, ...(await undoFacts(tx, app)) });
+  const aiInterview = (await aiInterviewsFor(tx, [app], now)).get(app.id) ?? null;
+  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id), followUp, interviewPreparing, aiInterview, ...(await undoFacts(tx, app)) });
 }
 
 /** Whether the message is out or on its way (held for the ITS check counts: it goes on its own): what `dispositionSent` has always meant. */
@@ -518,11 +548,11 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
   const by = t.role;
   // Who may comes first: a role without the permission is refused (403) whatever the application's state.
   assertCan(t.role, CAPABILITY[body.action].permission);
-  const facts = await applicationFacts(tx, app, t.role);
+  const facts = await applicationFacts(tx, app, t.role, container.engine.clock());
   if (!allowedApplicationActions(facts).includes(body.action)) {
-    if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open screening chat invitation.");
+    if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open AI interview link.");
     if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.interviewPreparing) throw new HttpError(409, "interview_preparing", INTERVIEW_PREPARING);
-    if (body.action === "ask_in_screen" && !(facts.openUnknowns ?? 0)) throw new HttpError(409, "nothing_to_ask", "The AI review left no open questions to ask about; invite them to the usual screening chat instead.");
+    if (body.action === "ask_in_screen" && !(facts.openUnknowns ?? 0)) throw new HttpError(409, "nothing_to_ask", "The AI review left no open questions to ask about; send them the usual AI interview link instead.");
     if (body.action === "override_eligibility") throw new HttpError(409, "invalid", "Only ineligible applications can be overridden.");
     if (body.action === "review_anyway") throw new HttpError(409, "invalid", "Only applications declined on an eligibility answer can be reopened here.");
     if (body.action === "clear_mark" && !facts.mark && !TERMINAL_STAGES.includes(app.stage)) throw new HttpError(409, "no_mark", "There is no mark to take off.");
@@ -530,6 +560,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
     if (body.action === "send_decision" || body.action === "told_in_person") throw new HttpError(409, !decided(facts) ? "not_decided" : untold(facts) && facts.decisionMessagePending ? "waiting_approval" : "already_told", tellingReason(facts));
     if (body.action === "cancel_screen") throw new HttpError(409, facts.hasOpenScreen ? "screen_started" : "no_screen_invitation", stateReason("cancel_screen", facts));
     if (body.action === "undo_decision") throw new HttpError(409, !decided(facts) ? "not_decided" : !untold(facts) ? "already_told" : facts.decisionMessagePending ? "waiting_approval" : "not_allowed", stateReason("undo_decision", facts));
+    if (body.action === "remind_screen") throw new HttpError(409, facts.aiInterview ? remindRefusal(facts.aiInterview).code : "no_open_link", stateReason("remind_screen", facts));
     throw new HttpError(409, "invalid", `Cannot ${body.action.replace(/_/g, " ")} someone who is ${STAGE_LABEL[app.stage].toLowerCase()}.`);
   }
   if (settlesSuggestions(body)) await settleSuggestions(tx, container, { app, tenant: t, actor, action: body.action, note: body.note });
@@ -558,7 +589,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       // follows by itself; when that run ended already (the sixty days were up, or it came before 20 Oct 2026), it starts again.
       await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
       await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now });
-      return { ok: true, stage: "eligible", ownerStage: "new" };
+      return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null) };
     }
     case "review_anyway": {
       // The exclusion view's "review anyway" (docs/FOUNDER-CONTEXT.md §10): reopen an application that an owner-authored eligibility rule declined.
@@ -572,7 +603,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       // (it saw the decline) starts again.
       await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
       await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now });
-      return { ok: true, stage: "eligible", ownerStage: "new", workflowRunId: runId };
+      return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null), workflowRunId: runId };
     }
     case "move_to_talent_pool": {
       assertCan(t.role, "application.act");
@@ -633,7 +664,16 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       const same = body.channel === "sms" || focus ? { channel: body.channel } : { channel: "web" as const, flow: "one_visit" as const };
       const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, ...same, invitedBy: t.userId, ...(focus ? { focus } : {}) }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: body.action, channel: body.channel ?? "auto", focus: focus ?? null, note: body.note ?? null, workflowRunId: runId, ...provenance } });
-      return { ok: true, stage: app.stage, workflowRunId: runId, next: focus ? "Invitation on its way. The screening chat starts with the open questions from the AI review; the answers land on the candidate's page." : undefined };
+      return { ok: true, stage: app.stage, workflowRunId: runId, next: focus ? "Invitation on its way. The AI interview starts with the open questions from the AI review; the answers land on the candidate's page." : undefined };
+    }
+    case "remind_screen": {
+      // "Send a reminder" under "No AI interview yet" (R20-7): once a day at most; the link stays open 72 hours from now.
+      assertCan(t.role, "application.act");
+      const r = await remindScreen(tx, container, { app, actor });
+      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "remind_screen", screenId: r.screenId, linkOpenUntil: r.linkOpenUntil, note: body.note ?? null } });
+      const until = new Date(r.linkOpenUntil).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+      const open = r.started ? `Their AI interview stays open until at least ${until}.` : `Their link stays open until ${until}.`;
+      return { ok: true, stage: app.stage, ownerStage: ownerStage(app, facts.mark ? { mark: facts.mark, remindAt: facts.markRemindAt } : null), candidateNotice: r.held ? "held" : "queued", next: r.held ? `Reminder saved: it goes to them by itself once ITS confirms your company. ${open}` : `Reminder on its way. ${open}` };
     }
     case "cancel_screen": {
       // "Stop this screen invitation" (plan A7): before they start, the invitation is taken back with a short, polite note.

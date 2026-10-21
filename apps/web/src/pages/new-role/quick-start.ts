@@ -53,7 +53,7 @@ export const STEP_HINT: Readonly<Record<QuickStepId, string>> = {
   closing: "You can change it later.",
   musts: "Every applicant is checked against these.",
   dealbreakers: "Each one passes a fairness check first.",
-  questions: "Yes/no questions on the form. Ones you add are asked in the screening chat. Each passes a fairness check first.",
+  questions: "Yes/no questions on the form. Ones you add are asked in the AI interview. Each passes a fairness check first.",
   review: "The assistant writes the job post from these.",
 };
 
@@ -334,7 +334,7 @@ export function experienceWords(a: Pick<QuickAnswers, "experience" | "below">): 
 export function reviewRows(a: QuickAnswers, vertical: string | null | undefined): Array<{ step: number; label: string; value: string }> {
   const onForm = chosenQuestions(a, vertical).length;
   const inChat = a.ownQuestions.length;
-  const questions = [...(onForm ? [`${onForm} on the form`] : []), ...(inChat ? [`${inChat} in the screening chat`] : [])].join(" · ");
+  const questions = [...(onForm ? [`${onForm} on the form`] : []), ...(inChat ? [`${inChat} in the AI interview`] : [])].join(" · ");
   const open = openDealBreakers(a);
   const deal = a.dealBreakers.map((d) => (open.some((o) => same(o, d)) || a.mustHaves.some((m) => same(m, d)) ? `${d} (must-have)` : `${d} (not used to judge)`));
   const musts = allMustHaves(a);

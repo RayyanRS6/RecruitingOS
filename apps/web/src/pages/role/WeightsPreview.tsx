@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Chip, Drawer, EmptyState, ErrorState, Skeleton } from "@ros/ui";
 import { api, type BoardView, type RolePacket } from "../../api/client";
 import type { EditorFocus } from "../../skills-form";
-import { INTERVIEW_ONLY_LINE, INTRO, LEAVE_OUT_HINT, NOBODY_SCORED, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows, type WeightLevel, type WeightRow } from "../../weights-preview";
+import { INTERVIEW_ONLY_LINE, INTRO, LEAVE_OUT_HINT, NOBODY_SCORED, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows, type WeightLevel, type WeightRow } from "../../weights-preview";
 
 /**
  * "Try different weights" (founder decision L-07 A, preview only), opened from the job's Scoring tab and the More menu
@@ -66,7 +66,7 @@ export function WeightsPreview(props: { roleId: string; packet: RolePacket; onCl
                     <span className="weights-rank">{p.rank}</span>
                     <span className="weights-who">
                       <strong>{p.name}</strong>
-                      <span className="weights-meta">{p.place}{p.readAgainst ? ` · Read against version ${p.readAgainst}` : ""}</span>
+                      <span className="weights-meta">{placeWords(p)}</span>
                     </span>
                     <span className="weights-score">
                       {scoreWords(p)}

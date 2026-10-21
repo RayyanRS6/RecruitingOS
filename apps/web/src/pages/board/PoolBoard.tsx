@@ -4,7 +4,7 @@ import { Avatar, Button, Chip, cx, EmptyState, Eyebrow, Icon, Segmented } from "
 import type { BoardCard, BoardView } from "../../api/client";
 import { Link } from "../../nav";
 import { AskRecruiter } from "../../components/AskRecruiter";
-import { BOARD_COLUMNS, RECRUITER_CHECK, SORT_TEXT, SORT_TITLE, cardChip, cardFacts, confidenceChip, evidenceLines, headerCounts, reasonLine, scoreText, sortedText, summarySentences, type TalentMode } from "./board-model";
+import { BOARD_COLUMNS, NO_AI_INTERVIEW_LANE, RECRUITER_CHECK, SORT_TEXT, SORT_TITLE, cardChip, cardFacts, confidenceChip, evidenceLines, headerCounts, laneRow, reasonLine, scoreText, sortedText, summarySentences, type TalentMode } from "./board-model";
 
 /**
  * The strip above the Candidates list and board (plan F6; Wave S1): what "Sort the pool" does, in one line, its button
@@ -32,7 +32,8 @@ export function SortStrip(props: { mode: TalentMode; onMode: (mode: TalentMode) 
  * questions and Review and apply), the summary in plain words with up to three next steps naming people, then three
  * columns, Shortlist, Longlist and Not moving forward, one card per person with the match score, a chip, the reason,
  * two strengths and the gap with where each came from, and the step the board suggests. It suggests only: a person
- * applies it in Review and apply, privately. On a phone the columns stack.
+ * applies it in Review and apply, privately. Below them, the read-only lane "No AI interview yet" (R20-7): name, where
+ * they stand, when they applied, no score until the AI interview, never in Review and apply. On a phone the columns stack.
  */
 export function PoolBoard(props: { roleId: string; board: BoardView; only: { ids: string[]; label: string } | null; onClearOnly: () => void; onOpen: (applicationId: string) => void; onReview: () => void; onAsk: () => void; mayApply: boolean }) {
   const { board } = props;
@@ -40,7 +41,9 @@ export function PoolBoard(props: { roleId: string; board: BoardView; only: { ids
   const only = props.only ? new Set(props.only.ids) : null;
   const cardsOf = (column: (typeof BOARD_COLUMNS)[number]["id"]) => board.columns[column].filter((c) => !only || only.has(c.applicationId));
   const sentences = summarySentences(s);
-  const anyone = s.total > 0 || board.stillApplying.length > 0;
+  // The read-only lane (R20-7): an older answer without `noAiInterview` still has the same people as `stillApplying`.
+  const lane = (board.noAiInterview ?? board.stillApplying).filter((c) => !only || only.has(c.applicationId)).map((c) => laneRow(c));
+  const anyone = s.total > 0 || lane.length > 0;
   return (
     <div className="pool-board">
       <div className="board-head">
@@ -57,7 +60,7 @@ export function PoolBoard(props: { roleId: string; board: BoardView; only: { ids
         </div>
       </div>
       {!anyone ? (
-        <EmptyState icon="talent" title="Nobody to sort yet" body="People appear on the board once they have finished applying. Nothing is sorted or sent until then." />
+        <EmptyState icon="talent" title="Nobody to sort yet" body="People appear on the board once they have sent their AI interview. Nothing is sorted or sent until then." />
       ) : (
         <>
           <section className="pool-summary" aria-label="Summary of the pool">
@@ -105,10 +108,27 @@ export function PoolBoard(props: { roleId: string; board: BoardView; only: { ids
               );
             })}
           </div>
-          {board.stillApplying.length ? (
-            <p className="small muted">
-              {board.stillApplying.length === 1 ? "1 more person is" : `${board.stillApplying.length} more people are`} still applying: {board.stillApplying.map((c) => c.name).join(", ")}. They join the board when they finish.
-            </p>
+          {lane.length ? (
+            <section className="board-col" data-column="no_ai_interview" aria-labelledby="board-col-no-ai-interview">
+              <header className="board-col-head">
+                <h3 id="board-col-no-ai-interview">{NO_AI_INTERVIEW_LANE.title} <span className="count">{lane.length}</span></h3>
+                <p className="board-col-sub">{NO_AI_INTERVIEW_LANE.sub}</p>
+              </header>
+              <ul className="board-cards">
+                {lane.map((row) => (
+                  <li key={row.id} className="board-card" data-state="waiting">
+                    <div className="board-card-top">
+                      <Avatar name={row.name} />
+                      <div className="board-card-who">
+                        <button type="button" className="board-card-name" onClick={() => props.onOpen(row.id)}>{row.name}</button>
+                        <span className="small muted">{row.applied}</span>
+                      </div>
+                    </div>
+                    <p className="small" style={{ margin: "6px 0 0" }}>{row.state}</p>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ) : null}
         </>
       )}

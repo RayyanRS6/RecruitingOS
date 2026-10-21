@@ -409,11 +409,11 @@ function EscalationDetail({ id }: { id: string }) {
         <Alert tone="neutral">{isPostingTaskKind(e.kind) ? POSTING_TASK_BEFORE_ACCEPT : e.why === "claim it to open the full context" ? BEFORE_ACCEPT : e.why}</Alert>
       ) : (
         <>
-          {/* A candidate who chose a person over the assistant (plan E3, Q16): the call, then the notes on their Screen tab. */}
+          {/* A candidate who chose a person over the assistant (plan E3, Q16): the call, then the notes on their AI interview tab. */}
           {e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId && e.status !== "resolved" ? (
             <Card needsYou title="After you talk with them">
               <p className="small" style={{ color: "var(--ink-2)" }}>{CALL_NOTES_HINT}</p>
-              {e.grant ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open the candidate's Screen tab</Button></div> : null}
+              {e.grant ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open the candidate's AI interview tab</Button></div> : null}
             </Card>
           ) : null}
           {aboutCount ? (

@@ -11,7 +11,7 @@ import { InlineUndo } from "../../components/InlineUndo";
 import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { openScreenOf } from "../../evidence";
 import { offerMadeOn, plainDayWords } from "../../hiring";
-import { callNotesState, overviewScreenLine } from "../../screen-view";
+import { aiInterviewCard, callNotesState, noScreenWords, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
 import { sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft } from "../../telling";
 import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard, StrengthsAndConcerns } from "./assessment";
@@ -37,6 +37,7 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
   const latest = a.assessments[0] ?? null;
   return (
     <div className="stack" style={{ gap: 14 }}>
+      <AiInterviewCard a={a} roleId={roleId} onDecline={() => onNext?.({ kind: "move", to: "not_moving_forward", label: "Not moving forward" })} />
       <NoAssessmentCard detail={a} />
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
       <MatchVerdict a={a}>
@@ -49,7 +50,7 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
         <div className="stack" style={{ gap: 14 }}>
           <ScoreBreakdown a={a} />
           {/* Without an AI review yet, the verdict above already says why (`notReadYetWords`, or the card that says it could not be made). */}
-          {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "AI review: the screening chat" : "AI review: the résumé"} /> : null}
+          {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "AI review: the AI interview" : "AI review: the résumé"} /> : null}
           <EligibilityAnswers a={a} />
           <FormAnswers a={a} />
         </div>
@@ -60,6 +61,29 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
         <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
       </div>
     </div>
+  );
+}
+
+/**
+ * "AI interview" (20 Oct 2026, R20-7), at the top of the Overview for someone under "No AI interview yet", like the
+ * Cancelled card: where they stand in neutral words, and "Send a reminder" (an open link, once a day), "Send a new link"
+ * (the link closed) and "Not moving forward" (the private decline, "Candidate did not respond" chosen first once the
+ * link closed). Nothing on it waits on the team (`aiInterviewCard`).
+ */
+function AiInterviewCard({ a, roleId, onDecline }: { a: ApplicationDetail; roleId: string; onDecline: () => void }) {
+  const act = useCandidateAction(a.id, roleId);
+  const card = aiInterviewCard(a);
+  if (!card) return null;
+  return (
+    <Card title="AI interview">
+      <p className="small" style={{ margin: "0 0 8px", color: "var(--ink-2)" }}>{card.line}</p>
+      <div className="row">
+        {card.remind ? <Button size="sm" variant="primary" icon="send" disabled={!card.remind.allowed} title={card.remind.allowed ? undefined : card.remind.reason} loading={act.isPending && act.variables?.action === "remind_screen"} onClick={() => act.mutate({ action: "remind_screen" })}>Send a reminder</Button> : null}
+        {card.resend ? <Button size="sm" variant="primary" icon="send" disabled={!card.resend.allowed} title={card.resend.allowed ? undefined : card.resend.reason} loading={act.isPending && act.variables?.action === "invite_screen"} onClick={() => act.mutate({ action: "invite_screen" })}>Send a new link</Button> : null}
+        {card.decline ? <Button size="sm" variant="quiet" onClick={onDecline}>Not moving forward</Button> : null}
+      </div>
+      {card.remind && !card.remind.allowed && card.remind.reason ? <p className="small muted" style={{ margin: "6px 0 0" }}>{card.remind.reason}</p> : null}
+    </Card>
   );
 }
 
@@ -198,7 +222,7 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
   if (!confirming) {
     return (
       <div className="row" style={{ marginTop: 8 }}>
-        <Button size="sm" disabled={!allowed} title={allowed ? "Calls off the invitation before they start" : a.blockedReasons.cancel_screen} onClick={() => setConfirming(true)}>Stop this screening chat</Button>
+        <Button size="sm" disabled={!allowed} title={allowed ? "Calls off the invitation before they start" : a.blockedReasons.cancel_screen} onClick={() => setConfirming(true)}>Stop this AI interview</Button>
         {!allowed && a.blockedReasons.cancel_screen ? <span className="small muted">{a.blockedReasons.cancel_screen}</span> : null}
       </div>
     );
@@ -206,7 +230,7 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
   return (
     <Alert tone="caution">
       <div className="stack" style={{ gap: 8 }}>
-        <span>Stop {a.candidate.firstName}'s screening chat invitation? Their link stops working, and they get a short, polite note saying it is no longer needed. Nothing is decided about them.</span>
+        <span>Stop {a.candidate.firstName}'s AI interview invitation? Their link stops working, and they get a short, polite note saying it is no longer needed. Nothing is decided about them.</span>
         <div className="row"><Button size="sm" variant="primary" loading={act.isPending} onClick={() => act.mutate({ action: "cancel_screen" })}>Yes, stop it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>Keep it open</Button></div>
       </div>
     </Alert>
@@ -223,11 +247,12 @@ export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; 
   const notes = callNotesState(a, myRole);
   const notesCard = notes.show && !notes.prominent ? <CallNotesCard a={a} roleId={roleId} prominent={false} /> : null;
   if (!a.screens.length) {
+    const none = noScreenWords(a);
     return (
       <div className="stack" style={{ gap: 14 }}>
-        <Card title="Screening chat">
-          <p className="small muted" style={{ margin: 0 }}>{a.candidate.firstName} has not been invited to a screening chat yet.</p>
-          <Why label="What is a screening chat?">A short chat, by web or text, with the questions you approved for this job. Invite them from More at the top.</Why>
+        <Card title="AI interview">
+          <p className="small muted" style={{ margin: 0 }}>{none.line}</p>
+          <Why label="What is an AI interview?">{none.why}</Why>
         </Card>
         {notesCard}
       </div>
@@ -496,7 +521,7 @@ export function HistoryTab({ a, mayReadActivity }: { a: ApplicationDetail; mayRe
             The assistant suggested <strong>{both.suggested}</strong>.{" "}
             {both.decided ? <>{both.decidedBy === "A team member" ? "Your team" : both.decidedBy} decided <strong>{both.decided}</strong>.</> : "Nobody has decided yet."}
           </p>
-          <Why label="Who decides?">People make the hiring decisions. The assistant reads applications and suggests next steps, and under your settings it can invite people to its screening chat on its own.</Why>
+          <Why label="Who decides?">People make the hiring decisions. The assistant reads applications and suggests next steps, and it invites every applicant to its AI interview on its own.</Why>
         </Card>
       ) : null}
       <Card title="What happened">

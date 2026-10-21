@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, type Actor, type RolePacket } from "@ros/contracts";
 import { createScreen, sendAcknowledgment, sendScreenInvite, type AcknowledgedInterview } from "@ros/agents";
 import { emit, entitlements, evaluateEligibility, notify, transition } from "@ros/core";
-import { applications, assessments, communications, screens, workflowRuns, type Tx, type candidates, type companies, type roles } from "@ros/db";
+import { applications, assessments, communications, events, screens, workflowRuns, type Tx, type candidates, type companies, type roles } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
 import type { WorkflowEngine } from "./engine";
 
@@ -118,7 +118,7 @@ async function acknowledgeOnce(q: Tx, deps: Deps, b: Bundle, interview: Acknowle
 /** Founder decision F8: a Design Partner's allowance never interrupts a candidate; the owner and ITS are told. */
 export async function overDesignPartnerAllowance(q: Tx, input: { companyId: string; applicationId: string; name: string; ent: { used: number; limit: number | null }; planKey: string; actor: Actor; correlationId: string | null }): Promise<void> {
   await emit(q, { type: "entitlement.exceeded", companyId: input.companyId, actor: input.actor, subject: { type: "application", id: input.applicationId }, payload: { key: entitlements.TEXT_SCREENS, limit: input.ent.limit, used: input.ent.used, plan: input.planKey }, correlationId: input.correlationId });
-  await notify(q, { companyId: input.companyId, kind: "entitlement.text_screens", title: "Over the pilot's included screening chats", body: `${input.name} gets the screening chat anyway: the Design Partner pilot never interrupts a candidate in progress. ITS has been told so the allowance can be reviewed.`, action: { label: "See usage", href: "/setup" } });
+  await notify(q, { companyId: input.companyId, kind: "entitlement.text_screens", title: "Over the pilot's included AI interviews", body: `${input.name} gets the AI interview anyway: the Design Partner pilot never interrupts a candidate in progress. ITS has been told so the allowance can be reviewed.`, action: { label: "See usage", href: "/setup" } });
 }
 
 /**
@@ -160,6 +160,27 @@ export async function interviewRunOn(q: Tx, applicationId: string): Promise<bool
 export async function interviewsBeingPrepared(q: Tx, applicationIds: string[]): Promise<Set<string>> {
   if (!applicationIds.length) return new Set();
   const rows = await q.select({ applicationId: sql<string>`${workflowRuns.subject}->>'id'` }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, "screen"), notInArray(workflowRuns.status, [...ENDED_RUN]), inArray(sql`${workflowRuns.subject}->>'id'`, applicationIds), sql`${workflowRuns.state}->>'mode' = 'with_application'`, sql`${workflowRuns.state}->>'screenId' is null`));
+  return new Set(rows.map((r) => r.applicationId));
+}
+
+/**
+ * Of these applications, the ones whose AI interview waits only for more AI interviews this month (Q17, R20-11: its run
+ * is on and records since when it waits), so "Getting the AI interview ready" can say that, not that a reading runs.
+ */
+export async function interviewsWaitingForMore(q: Tx, applicationIds: string[]): Promise<Set<string>> {
+  if (!applicationIds.length) return new Set();
+  const rows = await q.select({ applicationId: sql<string>`${workflowRuns.subject}->>'id'` }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, "screen"), notInArray(workflowRuns.status, [...ENDED_RUN]), inArray(sql`${workflowRuns.subject}->>'id'`, applicationIds), sql`${workflowRuns.state}->>'waitingForAllowance' is not null`));
+  return new Set(rows.map((r) => r.applicationId));
+}
+
+/**
+ * Of these applications, the ones whose AI interview never came because the month's AI interviews stayed used up for
+ * the whole wait (Q17: the run's `screen.allowance_lapsed`). Offered, unlike an application from before 20 October
+ * 2026, so their résumé-only score is kept apart like one whose link closed (`interviewInScore`, R20-9).
+ */
+export async function interviewsLapsedOnAllowance(q: Tx, applicationIds: readonly string[]): Promise<Set<string>> {
+  if (!applicationIds.length) return new Set();
+  const rows = await q.select({ applicationId: events.subjectId }).from(events).where(and(eq(events.subjectType, "application"), inArray(events.subjectId, [...applicationIds]), eq(events.type, "screen.allowance_lapsed")));
   return new Set(rows.map((r) => r.applicationId));
 }
 

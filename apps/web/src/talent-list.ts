@@ -1,6 +1,6 @@
-import { OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum } from "@ros/contracts";
+import { AI_INTERVIEW_GROUP_LABEL, AiInterviewGroup as AiInterviewGroupEnum, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, RESUME_ONLY_CHIP } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
-import type { ApplicationSummary, CancelledReason, OwnerStage, RoleSummary, StageStripCounts, ToldState } from "./api/client";
+import type { AiInterviewGroup, AiInterviewView, ApplicationSummary, CancelledReason, OwnerStage, RoleSummary, StageStripCounts, ToldState } from "./api/client";
 import { cancelledReasonFrom } from "./cancelled";
 import { SAFETY_NET_WORKING_DAYS } from "./telling";
 
@@ -60,7 +60,10 @@ export const READING_FILTERS: ReadonlyArray<{ id: ReadingFilter; label: string }
   { id: "closer_look", label: "Needs a closer look" },
 ];
 
-/** `score`: the match score, highest first; people with no score yet last, newest first among equals. */
+/**
+ * `score`: the match score, people whose score counts the AI interview first, then résumé-only scores (R20-9), each
+ * highest first; people with no score yet last, newest first among equals.
+ */
 export type Order = "score" | "newest" | "waiting" | "name";
 export const ORDERS: ReadonlyArray<{ id: Order; label: string }> = [
   { id: "score", label: "Score" },
@@ -71,65 +74,128 @@ export const ORDERS: ReadonlyArray<{ id: Order; label: string }> = [
 
 /**
  * What the list shows. `stage` is a column of the strip (or everyone); `waiting` keeps the people waiting on you;
- * `applying` keeps the people still applying (plan E6); `internalStage` and `told` come from links (Today's "held on an
- * eligibility answer", "not told yet") and show as removable chips. `cancelledReason` narrows the Cancelled column to
- * one reason (asked for new times, no longer interested, no-show; founder decision 2A), from its chips or `?cancelled=`.
+ * `internalStage` and `told` come from links (Today's "held on an eligibility answer", "not told yet") and show as
+ * removable chips. `cancelledReason` narrows the Cancelled column to one reason (asked for new times, no longer
+ * interested, no-show; founder decision 2A), from its chips or `?cancelled=`; `aiInterview` narrows "No AI interview
+ * yet" to one group (not started, started, asked for a person, link closed; R20-7), from its chips or `?aiInterview=`.
  */
-export type TalentView = { stage: OwnerStage | "all"; waiting: boolean; applying: boolean; reading: ReadingFilter; query: string; order: Order; internalStage: string | null; told: ToldState | null; cancelledReason: CancelledReason | null };
+export type TalentView = { stage: OwnerStage | "all"; waiting: boolean; reading: ReadingFilter; query: string; order: Order; internalStage: string | null; told: ToldState | null; cancelledReason: CancelledReason | null; aiInterview: AiInterviewGroup | null };
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* Still applying (plan E6)                                                                                       */
+/* No AI interview yet (20 Oct 2026, R20-7; it replaces plan E6's "Still applying" toggle)                         */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-export const STILL_APPLYING_LABEL = "Still applying";
-/** Said above the list while it shows the people still applying. */
-export const STILL_APPLYING_TEXT = "They sent the form and are still on the screening questions. Nothing about them waits on you until they send their answers; you are told then.";
+const AI_GROUPS = AiInterviewGroupEnum.options as readonly AiInterviewGroup[];
+
+/** The column's chips, in order: not started, started, asked for a person, link closed. */
+export const AI_INTERVIEW_CHIPS: ReadonlyArray<{ id: AiInterviewGroup; label: string }> = AI_GROUPS.map((id) => ({ id, label: AI_INTERVIEW_GROUP_LABEL[id] }));
+
+/** `?aiInterview=` read safely: one of the four groups, or nothing. */
+export function aiInterviewGroupFrom(raw: string | null | undefined): AiInterviewGroup | null {
+  return raw && (AI_GROUPS as readonly string[]).includes(raw) ? (raw as AiInterviewGroup) : null;
+}
+
+/** Each group's count: the API's, or the rows' when an older answer has none. */
+export function aiInterviewCounts(counts: Pick<StageStripCounts, "aiInterview"> | null | undefined, rows: ReadonlyArray<Pick<ApplicationSummary, "aiInterview">>): Record<AiInterviewGroup, number> {
+  if (counts?.aiInterview) return counts.aiInterview;
+  const out = Object.fromEntries(AI_GROUPS.map((g) => [g, 0])) as Record<AiInterviewGroup, number>;
+  for (const a of rows) if (a.aiInterview) out[a.aiInterview.group] += 1;
+  return out;
+}
 
 /**
- * Someone still in the visit that sent their application: offered the screening chat with it and not finished,
- * sent without it, handed to a person or closed. They sit in their stage like anyone else, are counted apart beside the
- * strip, and are never shown as waiting on you.
+ * The info line above the column (R20-7), in neutral words: how many in each group and what the team may do. Nothing
+ * here waits on them; never how far anyone got.
  */
-export function isStillApplying(a: Pick<ApplicationSummary, "stillApplying">): boolean {
-  return a.stillApplying === true;
+export function aiInterviewAlert(counts: Record<AiInterviewGroup, number>): string {
+  const parts = AI_GROUPS.filter((g) => counts[g]).map((g) => `${counts[g]} ${AI_INTERVIEW_GROUP_LABEL[g].toLowerCase()}`);
+  const head = parts.length ? `${parts.join(" · ")}. ` : "";
+  return `${head}Everyone who applies gets the AI interview by email and moves to New once they send it. Nothing here waits on you; from a person's page you can send a reminder, a new link, or decline privately.`;
 }
 
-/** How many people are still applying: the API's count, or the rows' when an older answer has none. */
-export function stillApplyingCount(counts: Pick<StageStripCounts, "stillApplying"> | null | undefined, rows: ReadonlyArray<Pick<ApplicationSummary, "stillApplying">>): number {
-  return counts?.stillApplying ?? rows.filter(isStillApplying).length;
+const shortDay = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+/** The row's chip under "No AI interview yet": "Invited Oct 20 · link open until Oct 25", "Link expired Oct 25"… */
+export function aiInterviewChipLabel(v: AiInterviewView): string {
+  if (v.state === "invited" && v.since) return `Invited ${shortDay(v.since)}${v.linkOpenUntil ? ` · link open until ${shortDay(v.linkOpenUntil)}` : ""}`;
+  if (v.state === "link_expired" && v.since) return `Link expired ${shortDay(v.since)}`;
+  return v.label;
 }
 
-/** How many people wait on you: never anyone still applying, whatever their group says (a hold that ended mid-visit). */
-export function waitingOnYouCount(counts: Pick<StageStripCounts, "byGroup"> | null | undefined, rows: ReadonlyArray<Pick<ApplicationSummary, "stillApplying" | "group">>): number {
-  const applying = rows.filter((a) => isStillApplying(a) && a.group === "waiting_on_you").length;
-  return Math.max(0, (counts?.byGroup.waiting_on_you ?? 0) - applying);
+/** How many people wait on you: never anyone under "No AI interview yet", whatever their group says. */
+export function waitingOnYouCount(counts: Pick<StageStripCounts, "byGroup"> | null | undefined, rows: ReadonlyArray<Pick<ApplicationSummary, "ownerStage" | "group">>): number {
+  const inColumn = rows.filter((a) => a.ownerStage === "no_ai_interview" && a.group === "waiting_on_you").length;
+  return Math.max(0, (counts?.byGroup.waiting_on_you ?? 0) - inColumn);
+}
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* The score's label and "Sort: Score" (20 Oct 2026, R20-9: like with like)                                       */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/** An older answer has no `basis`: which reading the counted findings came from, in the words the board used then. */
+const OLDER_BASIS: Record<string, string> = { resume: "From the AI review of the résumé", screen: "From the AI interview", resume_and_screen: "From the résumé and the AI interview" };
+
+/**
+ * What a score rests on, in words, wherever it shows (the board card, the panel, Compare): its own label (`basis`:
+ * "From the résumé and the AI interview", "Résumé only: AI interview not done yet"…), or on an older answer without
+ * one, the reading it came from. Null without a score.
+ */
+export function scoreBasis(score: { basis?: string | null; basedOn?: string | null } | null | undefined): string | null {
+  if (!score) return null;
+  return score.basis || (score.basedOn ? OLDER_BASIS[score.basedOn] ?? null : null);
+}
+
+/** The list row's score tooltip: the coverage, then the label. */
+export function scoreTitle(a: Pick<ApplicationSummary, "coverage" | "basis">): string | undefined {
+  const parts = [a.coverage?.words, a.basis].filter((s): s is string => !!s);
+  return parts.length ? parts.join(". ") : undefined;
+}
+
+/**
+ * The small grey chip beside a résumé-only score on the list: a score whose AI interview is not in it (any `interview`
+ * but `done`), with the full label on hover. Null without a score, once the interview is in, and on older answers.
+ */
+export function resumeOnlyChip(a: Pick<ApplicationSummary, "score" | "interview" | "basis">): { label: string; title: string } | null {
+  if (a.score === null || a.score === undefined || !a.interview || a.interview === "done") return null;
+  return { label: RESUME_ONLY_CHIP, title: a.basis ?? RESUME_ONLY_CHIP };
+}
+
+/**
+ * "Sort: Score" groups like with like: 0 a score that counts the AI interview (or an older answer that does not say),
+ * 1 a résumé-only score, 2 no score yet. The API's `order=score` uses the same rule (apps/api/src/routes/roles.ts).
+ */
+export function scoreRank(a: Pick<ApplicationSummary, "score" | "interview">): number {
+  if (a.score === null || a.score === undefined) return 2;
+  return !a.interview || a.interview === "done" ? 0 : 1;
 }
 
 const OWNER_STAGES = OwnerStageEnum.options as readonly OwnerStage[];
 const TOLD = ["not_told", "queued", "sent", "told_in_person"] as const;
 
 /**
- * The view the page opens on: what the link asks for (`?ownerStage=`, `?stage=`, `?told=`, `?applying=1`, `?order=`,
- * and `?cancelled=` for one reason under Cancelled), otherwise "Waiting on you", longest wait first, when anyone waits on
- * you (plan A3), and everyone, newest first, when nobody does. `counts` are the ones the page shows (people still
- * applying never wait on you).
+ * The view the page opens on: what the link asks for (`?ownerStage=`, `?stage=`, `?told=`, `?order=`, `?cancelled=` for
+ * one reason under Cancelled, and `?aiInterview=` for one group under "No AI interview yet"; an older `?applying=1`
+ * opens that column), otherwise "Waiting on you", longest wait first, when anyone waits on you (plan A3), and everyone,
+ * newest first, when nobody does. `counts` are the ones the page shows.
  */
 export function defaultView(params: { get: (k: string) => string | null }, counts: Pick<StageStripCounts, "byGroup"> | null | undefined): TalentView {
   const stageParam = params.get("ownerStage");
-  const asked = stageParam && (OWNER_STAGES as readonly string[]).includes(stageParam) ? (stageParam as OwnerStage) : "all";
+  const asked = stageParam && (OWNER_STAGES as readonly string[]).includes(stageParam) ? (stageParam as OwnerStage) : params.get("applying") === "1" ? "no_ai_interview" : "all";
   // a reason belongs to the Cancelled column: on its own it opens that column, beside another column it means nothing
   const reason = cancelledReasonFrom(params.get("cancelled"));
   const cancelledReason = reason && (asked === "all" || asked === "cancelled") ? reason : null;
-  const stage = cancelledReason ? "cancelled" : asked;
+  // a group belongs to "No AI interview yet" the same way
+  const group = aiInterviewGroupFrom(params.get("aiInterview"));
+  const aiInterview = group && !cancelledReason && (asked === "all" || asked === "no_ai_interview") ? group : null;
+  const stage = cancelledReason ? "cancelled" : aiInterview ? "no_ai_interview" : asked;
   const toldParam = params.get("told");
   const told = toldParam && (TOLD as readonly string[]).includes(toldParam) ? (toldParam as ToldState) : null;
   const internalStage = params.get("stage") || null;
-  const applying = params.get("applying") === "1";
-  const linked = stage !== "all" || !!told || !!internalStage || applying;
+  const linked = stage !== "all" || !!told || !!internalStage;
   const waiting = !linked && (counts?.byGroup.waiting_on_you ?? 0) > 0;
   const orderParam = params.get("order");
   const order: Order = ORDERS.some((o) => o.id === orderParam) ? (orderParam as Order) : waiting ? "waiting" : "newest";
-  return { stage, waiting, applying, reading: "any", query: "", order, internalStage, told, cancelledReason };
+  return { stage, waiting, reading: "any", query: "", order, internalStage, told, cancelledReason, aiInterview };
 }
 
 /** Lower case without accents, so "José" is found by "jose". */
@@ -149,11 +215,11 @@ export function applyView(rows: readonly ApplicationSummary[], view: TalentView)
   const shown = rows.filter((a) =>
     (view.stage === "all" || a.ownerStage === view.stage) &&
     (!view.waiting || waitsOnYou(a)) &&
-    (!view.applying || isStillApplying(a)) &&
     (view.reading === "any" || readingOf(a) === view.reading) &&
     (!view.internalStage || a.stage === view.internalStage) &&
     (!view.told || a.toldState === view.told) &&
     (!view.cancelledReason || a.cancelled?.reason === view.cancelledReason) &&
+    (!view.aiInterview || a.aiInterview?.group === view.aiInterview) &&
     matchesQuery(a, view.query),
   );
   return orderRows(shown, view.order);
@@ -166,7 +232,7 @@ export function orderRows(rows: readonly ApplicationSummary[], order: Order): Ap
   const out = [...rows];
   if (order === "waiting") out.sort((x, y) => when(x.stageChangedAt) - when(y.stageChangedAt));
   else if (order === "name") out.sort((x, y) => name(x).localeCompare(name(y), undefined, { sensitivity: "base" }));
-  else if (order === "score") out.sort((x, y) => (y.score ?? -1) - (x.score ?? -1) || newest(x, y));
+  else if (order === "score") out.sort((x, y) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1) || newest(x, y));
   else out.sort(newest);
   return out;
 }
@@ -176,11 +242,11 @@ export function stripItems(counts: Pick<StageStripCounts, "total" | "byOwnerStag
   return [{ id: "all" as const, label: "All", count: counts?.total ?? 0 }, ...OWNER_STAGES.map((s) => ({ id: s, label: OWNER_STAGE_LABEL[s], count: counts?.byOwnerStage[s] ?? 0 }))];
 }
 
-/** The columns the strip always shows, whatever their counts (Wave S1). */
-const ALWAYS_ON_STRIP: ReadonlyArray<OwnerStage | "all"> = ["all", "new", "shortlist", "interviewing", "hired", "not_moving_forward"];
+/** The columns the strip always shows, whatever their counts (Wave S1; "No AI interview yet" since R20-7). */
+const ALWAYS_ON_STRIP: ReadonlyArray<OwnerStage | "all"> = ["all", "no_ai_interview", "new", "shortlist", "interviewing", "hired", "not_moving_forward"];
 
 /**
- * The strip split in two (Wave S1): `shown` are All, New, Shortlist, Interviewing, Hired, Not moving forward, every other
+ * The strip split in two (Wave S1): `shown` are All, No AI interview yet, New, Shortlist, Interviewing, Hired, Not moving forward, every other
  * stage someone is at, and the column being shown; `more` are the other stages nobody is at, in strip order, kept one
  * click away under "More stages" with their counts.
  */
@@ -196,15 +262,16 @@ export type RowChip = { key: string; label: string; tone: Tone; title?: string; 
 export const ROW_CHIP_LIMIT = 2;
 
 /**
- * Everything a row could say in a chip, most pressing first: still applying, where new times stand under Cancelled, a
- * tag ("Check eligibility", "Hold ended"), whether the decision was told, the AI review's word for the match, and a
- * low-confidence review ("Check", its full words as the title). The page shows the first ROW_CHIP_LIMIT. "Not told yet"
- * carries the day-5 safety net as its title (founder decision D-03).
+ * Everything a row could say in a chip, most pressing first: where they stand with the AI interview under "No AI
+ * interview yet" (R20-7), where new times stand under Cancelled, a tag ("Check eligibility", "Hold ended"), whether the
+ * decision was told, the AI review's word for the match, and a low-confidence review ("Check", its full words as the
+ * title). The page shows the first ROW_CHIP_LIMIT. "Not told yet" carries the day-5 safety net as its title (founder
+ * decision D-03).
  */
-export function rowChips(a: Pick<ApplicationSummary, "stillApplying" | "ownerStage" | "cancelled" | "tags" | "toldState" | "decisionMessageWaiting" | "assessment" | "evidence">, words: { stillApplying: string; onItsWay: string; lowConfidence: string; notToldTitle?: string }): RowChip[] {
+export function rowChips(a: Pick<ApplicationSummary, "aiInterview" | "ownerStage" | "cancelled" | "tags" | "toldState" | "decisionMessageWaiting" | "assessment" | "evidence">, words: { onItsWay: string; lowConfidence: string; notToldTitle?: string }): RowChip[] {
   const out: RowChip[] = [];
   const reading = readingOf(a);
-  if (isStillApplying(a)) out.push({ key: "applying", label: STILL_APPLYING_LABEL, tone: "neutral", title: words.stillApplying, kind: "pill" });
+  if (a.ownerStage === "no_ai_interview" && a.aiInterview) out.push({ key: "ai-interview", label: aiInterviewChipLabel(a.aiInterview), tone: "neutral", title: a.aiInterview.label, kind: "pill" });
   if (a.ownerStage === "cancelled" && a.cancelled) out.push({ key: "cancelled", label: a.cancelled.status, tone: "neutral", kind: "chip" });
   for (const t of a.tags) out.push({ key: `tag-${t}`, label: t, tone: "caution", kind: "chip" });
   if (a.toldState === "not_told") out.push({ key: "told", label: a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet", tone: "neutral", title: a.decisionMessageWaiting ? undefined : words.notToldTitle ?? SAFETY_NET_NOTE, kind: "chip" });
@@ -233,16 +300,16 @@ export function stageSummary(counts: Partial<Record<OwnerStage, number>> | null 
   return OWNER_STAGES.map((s) => ({ id: s, label: OWNER_STAGE_LABEL[s], count: counts?.[s] ?? 0 })).filter((s) => s.count > 0);
 }
 
-/** Waits on you: in the "waiting on you" group and not still applying. */
-function waitsOnYou(a: Pick<ApplicationSummary, "group" | "stillApplying">): boolean {
-  return a.group === "waiting_on_you" && !isStillApplying(a);
+/** Waits on you: in the "waiting on you" group and not under "No AI interview yet". */
+function waitsOnYou(a: Pick<ApplicationSummary, "group" | "ownerStage">): boolean {
+  return a.group === "waiting_on_you" && a.ownerStage !== "no_ai_interview";
 }
 
-/** How many people each reading filter would show, within the strip column, a Cancelled reason and the waiting and still-applying toggles. */
-export function readingCounts(rows: readonly ApplicationSummary[], view: Pick<TalentView, "stage" | "waiting"> & { applying?: boolean; cancelledReason?: CancelledReason | null }): Record<ReadingFilter, number> {
+/** How many people each reading filter would show, within the strip column, a Cancelled reason or an AI interview group, and the waiting toggle. */
+export function readingCounts(rows: readonly ApplicationSummary[], view: Pick<TalentView, "stage" | "waiting"> & { cancelledReason?: CancelledReason | null; aiInterview?: AiInterviewGroup | null }): Record<ReadingFilter, number> {
   const out: Record<ReadingFilter, number> = { any: 0, strong: 0, potential: 0, missing_must_have: 0, closer_look: 0 };
   for (const a of rows) {
-    if ((view.stage !== "all" && a.ownerStage !== view.stage) || (view.waiting && !waitsOnYou(a)) || (view.applying && !isStillApplying(a)) || (view.cancelledReason && a.cancelled?.reason !== view.cancelledReason)) continue;
+    if ((view.stage !== "all" && a.ownerStage !== view.stage) || (view.waiting && !waitsOnYou(a)) || (view.cancelledReason && a.cancelled?.reason !== view.cancelledReason) || (view.aiInterview && a.aiInterview?.group !== view.aiInterview)) continue;
     out.any += 1;
     const r = readingOf(a);
     if (r in out) out[r as ReadingFilter] += 1;
@@ -265,8 +332,8 @@ export function appliedWhen(iso: string, now: Date = new Date()): string {
   return `Applied ${at.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) })}`;
 }
 
-/** How long someone has waited on you, for the people who do; null for everyone else, and for anyone still applying. */
-export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage"> & { stillApplying?: boolean }): string | null {
+/** How long someone has waited on you, for the people who do; null for everyone else, and for anyone without an AI interview yet. */
+export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage" | "ownerStage">): string | null {
   if (!waitsOnYou(a)) return null;
   if (a.daysInStage <= 0) return "Waiting on you since today";
   return `Waiting on you ${a.daysInStage} ${a.daysInStage === 1 ? "day" : "days"}`;
@@ -276,7 +343,7 @@ export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage">
 export function emptyText(view: TalentView, total: number): { title: string; body: string } {
   if (total === 0) return { title: "Nobody has applied yet", body: "Applicants appear here as soon as they apply. The Share tab has the job's links once it is live." };
   if (view.query.trim()) return { title: "Nobody matches", body: `Nobody here matches "${view.query.trim()}". Search looks at names, email addresses and where people came from.` };
-  if (view.applying) return { title: "Nobody is still applying", body: "Everyone has sent their answers, asked for a person or stopped. Turn off \"Still applying\" to see everyone." };
+  if (view.stage === "no_ai_interview" && !view.aiInterview && !view.waiting && view.reading === "any") return { title: "Nobody here", body: "Nobody is waiting on an AI interview right now. People move to New once they send it, or if the team reviews them without it." };
   if (view.stage === "cancelled" && !view.cancelledReason && !view.waiting && view.reading === "any") return { title: "Nobody is under Cancelled", body: "Candidates who cancel an interview, or do not come to one, show here with what they chose." };
   if (view.waiting && view.stage === "all" && view.reading === "any") return { title: "Nobody is waiting on you", body: "Everyone has a next step under way. Choose All to see them." };
   return { title: "Nobody here", body: "Nobody fits these filters right now. Clear one to see more people." };

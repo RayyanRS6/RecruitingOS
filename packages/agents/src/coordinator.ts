@@ -300,7 +300,8 @@ export async function deliver(
 }
 
 /** Everything the screening messages need beyond MessageInput. */
-export type ScreenMessageInput = MessageInput & { appBaseUrl: string; screen: { id: string; token: string; channel: "web" | "sms" }; opening?: string | null };
+/** `sendKey`: a reminder of its own (a person's "Send a reminder", R20-7, once a day), in place of the one automatic reminder's key. */
+export type ScreenMessageInput = MessageInput & { appBaseUrl: string; screen: { id: string; token: string; channel: "web" | "sms" }; opening?: string | null; sendKey?: string };
 
 function screenUrl(input: ScreenMessageInput): string {
   return `${input.appBaseUrl}/c/screen/${input.screen.token}`;
@@ -361,10 +362,10 @@ ${packet.communication.humanAlternativeText}
 ${signature(packet, company)}
 
 ${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  const email = await deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_reminder", subject: `Reminder: your AI interview for ${packet.identity.title}`, text, idempotencyKey: `screen_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  const email = await deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_reminder", subject: `Reminder: your AI interview for ${packet.identity.title}`, text, idempotencyKey: input.sendKey ?? `screen_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
   let sms: SendResult | null = null;
   if (input.screen.channel === "sms") {
-    sms = await deliverSms(q, integrations, { ...input, text: `${company.name} hiring team (AI-assisted): your AI interview for ${packet.identity.title} is waiting: ${url} Reply HUMAN for a person, STOP to opt out.`, idempotencyKey: `screen_reminder_sms:${input.screen.id}`, templateKey: "screen_reminder", disclosureIncluded: true });
+    sms = await deliverSms(q, integrations, { ...input, text: `${company.name} hiring team (AI-assisted): your AI interview for ${packet.identity.title} is waiting: ${url} Reply HUMAN for a person, STOP to opt out.`, idempotencyKey: input.sendKey ? `${input.sendKey}:sms` : `screen_reminder_sms:${input.screen.id}`, templateKey: "screen_reminder", disclosureIncluded: true });
   }
   return { email, sms };
 }

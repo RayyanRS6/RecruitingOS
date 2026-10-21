@@ -10,7 +10,8 @@ import { deliver, reminderClosingLine, type MessageInput } from "./coordinator";
  * for the ITS company check like the rest, founder decision B7). One per screen and purpose, by idempotency key.
  */
 
-export type ConversationLinkInput = MessageInput & { appBaseUrl: string; screen: { id: string; token: string }; questions: number; minutes: number };
+/** `sendKey`: a reminder of its own (a person's "Send a reminder", R20-7, once a day), in place of the one automatic reminder's key. */
+export type ConversationLinkInput = MessageInput & { appBaseUrl: string; screen: { id: string; token: string }; questions: number; minutes: number; sendKey?: string };
 
 function conversationUrl(input: { appBaseUrl: string; screen: { token: string } }): string {
   return `${input.appBaseUrl}/c/screen/${input.screen.token}`;
@@ -53,7 +54,7 @@ ${conversationUrl(input)}
 If you would rather not finish it, you do not need to do anything: in a couple of days the interview closes and your application carries on without it. Answers you have not sent are not passed to the hiring team.
 
 ${signOff(input)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_idle_reminder", subject: `Pick up your AI interview for ${packet.identity.title}`, text, idempotencyKey: `screen_idle_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_idle_reminder", subject: `Pick up your AI interview for ${packet.identity.title}`, text, idempotencyKey: input.sendKey ?? `screen_idle_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**
@@ -90,7 +91,7 @@ ${conversationUrl(input)}
 If you do not press Send by ${input.closesOn}, the interview closes and your application goes to the hiring team without these answers. Answers you have not sent are not passed on.
 
 ${signOff(input)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_review_reminder", subject: `Your answers for ${packet.identity.title} are ready to send`, text, idempotencyKey: `screen_review_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_review_reminder", subject: `Your answers for ${packet.identity.title} are ready to send`, text, idempotencyKey: input.sendKey ?? `screen_review_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**
@@ -108,7 +109,7 @@ ${conversationUrl(input)}
 If you would rather not do it, you do not need to do anything: in a few days your application goes to the hiring team without it. From that page you can also send your application now without the interview, or ask for a person instead.
 
 ${signOff(input)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_not_started_reminder", subject: `Your application for ${packet.identity.title}: your AI interview is still open`, text, idempotencyKey: `screen_not_started_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_not_started_reminder", subject: `Your application for ${packet.identity.title}: your AI interview is still open`, text, idempotencyKey: input.sendKey ?? `screen_not_started_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /** Never started, and the link has lapsed (E4): the application has gone to the team without it, and that is fine. */

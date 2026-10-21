@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationSummary } from "../../apps/web/src/api/client";
-import { ORDERS, READING, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, appliedWhen, applyView, defaultView, emptyText, fold, isStillApplying, jobCardFacts, matchesQuery, orderRows, readingCounts, readingOf, rowChips, stageSummary, stillApplyingCount, stripItems, stripParts, waitingOnYouCount, waitingText, type TalentView } from "../../apps/web/src/talent-list";
+import { AI_INTERVIEW_CHIPS, ORDERS, READING, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, aiInterviewAlert, aiInterviewChipLabel, aiInterviewCounts, aiInterviewGroupFrom, appliedWhen, applyView, defaultView, emptyText, fold, jobCardFacts, matchesQuery, orderRows, readingCounts, readingOf, resumeOnlyChip, rowChips, scoreBasis, scoreRank, scoreTitle, stageSummary, stripItems, stripParts, waitingOnYouCount, waitingText, type TalentView } from "../../apps/web/src/talent-list";
 
 /**
  * The Candidates list (plan A3; founder decisions B2, B3 and B6; Wave S1): the stage strip and its "More stages", the
@@ -22,7 +22,7 @@ function row(over: Partial<ApplicationSummary> & { name?: string; overall?: stri
     ...rest,
   };
 }
-const view = (over: Partial<TalentView> = {}): TalentView => ({ stage: "all", waiting: false, applying: false, reading: "any", query: "", order: "newest", internalStage: null, told: null, cancelledReason: null, ...over });
+const view = (over: Partial<TalentView> = {}): TalentView => ({ stage: "all", waiting: false, reading: "any", query: "", order: "newest", internalStage: null, told: null, cancelledReason: null, aiInterview: null, ...over });
 const params = (q: string) => new URLSearchParams(q);
 
 describe("the reading chip", () => {
@@ -108,6 +108,39 @@ describe("filters, search and order", () => {
     expect(applyView([none, high], view({ order: "score" })).map((a) => a.candidate?.name)).toEqual(["High", "None"]);
   });
 
+  it("orders like with like (R20-9): scores that count the AI interview first, then résumé-only ones, each highest first, no score last", () => {
+    const interviewed = row({ name: "Interviewed 86", score: 86, interview: "done", basis: "From the résumé and the AI interview" });
+    const interviewedLow = row({ name: "Interviewed 58", score: 58, interview: "done", basis: "From the résumé and the AI interview" });
+    // a résumé that speaks to 2 of 7 requirements can score 100: it still comes after anyone interviewed
+    const thin = row({ name: "Résumé 100", score: 100, interview: "not_done_yet", basis: "Résumé only: AI interview not done yet" });
+    const closed = row({ name: "Résumé 70", score: 70, interview: "not_done", basis: "Résumé only: no AI interview" });
+    const scoring = row({ name: "Résumé 90", score: 90, interview: "being_scored", basis: "Résumé only for now: AI interview done, being scored" });
+    const none = row({ name: "No score", score: null, interview: null, basis: null });
+    expect(orderRows([none, closed, interviewedLow, thin, scoring, interviewed], "score").map((a) => a.candidate?.name)).toEqual(["Interviewed 86", "Interviewed 58", "Résumé 100", "Résumé 90", "Résumé 70", "No score"]);
+    // an older answer that does not say ranks with the interviewed, as before
+    const older = row({ name: "Older 80", score: 80 });
+    expect(orderRows([thin, older], "score").map((a) => a.candidate?.name)).toEqual(["Older 80", "Résumé 100"]);
+    expect(scoreRank(interviewed)).toBe(0);
+    expect(scoreRank(closed)).toBe(1);
+    expect(scoreRank(none)).toBe(2);
+  });
+
+  it("marks a résumé-only score beside the badge, and says what it rests on on hover (R20-9)", () => {
+    const coverage = { known: 3, total: 4, words: "Based on 3 of 4 requirements" };
+    expect(resumeOnlyChip(row({ score: 72, interview: "not_done_yet", basis: "Résumé only: AI interview not done yet" }))).toEqual({ label: "Résumé only", title: "Résumé only: AI interview not done yet" });
+    expect(resumeOnlyChip(row({ score: 72, interview: "none", basis: "Résumé only: no AI interview" }))).toMatchObject({ label: "Résumé only" });
+    expect(resumeOnlyChip(row({ score: 72, interview: "done", basis: "From the résumé and the AI interview" }))).toBeNull();
+    expect(resumeOnlyChip(row({ score: null, interview: "not_done_yet" }))).toBeNull();
+    expect(resumeOnlyChip(row({ score: 72 }))).toBeNull();
+    expect(scoreTitle(row({ coverage, basis: "Résumé only: AI interview not done yet" }))).toBe("Based on 3 of 4 requirements. Résumé only: AI interview not done yet");
+    expect(scoreTitle(row({ coverage }))).toBe("Based on 3 of 4 requirements");
+    expect(scoreTitle(row({}))).toBeUndefined();
+    // the same label wherever the score shows; an older answer says which reading it came from
+    expect(scoreBasis({ basis: "Résumé only: no AI interview", basedOn: "resume" })).toBe("Résumé only: no AI interview");
+    expect(scoreBasis({ basedOn: "resume_and_screen" })).toBe("From the résumé and the AI interview");
+    expect(scoreBasis(null)).toBeNull();
+  });
+
   it("offers Score, Newest, Waiting longest and Name, and opens on the score from a link", () => {
     expect(ORDERS.map((o) => o.label)).toEqual(["Score", "Newest first", "Waiting longest", "Name"]);
     expect(defaultView(params("order=score"), null)).toEqual(view({ order: "score" }));
@@ -121,8 +154,9 @@ describe("filters, search and order", () => {
 
 describe("the strip and the row's words", () => {
   it("lists everyone, then every stage in order, with its count: Cancelled right after Interviewing (founder decision 1A)", () => {
-    const items = stripItems({ total: 8, byOwnerStage: { new: 2, longlist: 0, shortlist: 1, interviewing: 1, cancelled: 2, on_hold: 1, offer: 0, hired: 0, not_moving_forward: 1 } });
-    expect(items.map((i) => `${i.label} ${i.count}`)).toEqual(["All 8", "New 2", "Longlist 0", "Shortlist 1", "Interviewing 1", "Cancelled 2", "On hold 1", "Offer 0", "Hired 0", "Not moving forward 1"]);
+    const items = stripItems({ total: 9, byOwnerStage: { no_ai_interview: 1, new: 2, longlist: 0, shortlist: 1, interviewing: 1, cancelled: 2, on_hold: 1, offer: 0, hired: 0, not_moving_forward: 1 } });
+    // "No AI interview yet" first (R20-7): everyone starts there
+    expect(items.map((i) => `${i.label} ${i.count}`)).toEqual(["All 9", "No AI interview yet 1", "New 2", "Longlist 0", "Shortlist 1", "Interviewing 1", "Cancelled 2", "On hold 1", "Offer 0", "Hired 0", "Not moving forward 1"]);
     expect(stripItems(null).every((i) => i.count === 0)).toBe(true);
     expect(stageSummary({ new: 2, shortlist: 1, hired: 0 }).map((s) => `${s.count} ${s.label}`)).toEqual(["2 New", "1 Shortlist"]);
     expect(stageSummary(undefined)).toEqual([]);
@@ -145,10 +179,10 @@ describe("the strip and the row's words", () => {
     expect(waitingText({ group: "in_process", daysInStage: 9 })).toBeNull();
   });
 
-  it("shows All, New, Shortlist, Interviewing, Hired and Not moving forward, and any stage someone is at; the rest wait under More stages (Wave S1)", () => {
-    const counts = { total: 6, byOwnerStage: { new: 2, longlist: 0, shortlist: 1, interviewing: 0, cancelled: 2, on_hold: 0, offer: 1, hired: 0, not_moving_forward: 0 } };
+  it("shows All, No AI interview yet, New, Shortlist, Interviewing, Hired and Not moving forward, and any stage someone is at; the rest wait under More stages (Wave S1)", () => {
+    const counts = { total: 6, byOwnerStage: { no_ai_interview: 0, new: 2, longlist: 0, shortlist: 1, interviewing: 0, cancelled: 2, on_hold: 0, offer: 1, hired: 0, not_moving_forward: 0 } };
     const parts = stripParts(counts, "all");
-    expect(parts.shown.map((i) => `${i.label} ${i.count}`)).toEqual(["All 6", "New 2", "Shortlist 1", "Interviewing 0", "Cancelled 2", "Offer 1", "Hired 0", "Not moving forward 0"]);
+    expect(parts.shown.map((i) => `${i.label} ${i.count}`)).toEqual(["All 6", "No AI interview yet 0", "New 2", "Shortlist 1", "Interviewing 0", "Cancelled 2", "Offer 1", "Hired 0", "Not moving forward 0"]);
     // still clickable from the menu, with their counts, in strip order
     expect(parts.more.map((i) => `${i.label} ${i.count}`)).toEqual(["Longlist 0", "On hold 0"]);
     // the column being shown stays on the strip even when nobody is in it (a link opened it, or someone just left it)
@@ -156,10 +190,10 @@ describe("the strip and the row's words", () => {
     expect(stripParts(counts, "on_hold").more.map((i) => i.id)).toEqual(["longlist"]);
     // nothing is lost: the two parts together are the whole strip
     expect([...parts.shown, ...parts.more].map((i) => i.id).sort()).toEqual(stripItems(counts).map((i) => i.id).sort());
-    expect(stripParts(null, "all").shown.map((i) => i.id)).toEqual(["all", "new", "shortlist", "interviewing", "hired", "not_moving_forward"]);
+    expect(stripParts(null, "all").shown.map((i) => i.id)).toEqual(["all", "no_ai_interview", "new", "shortlist", "interviewing", "hired", "not_moving_forward"]);
   });
 
-  const words = { stillApplying: "Sent the form and answering now", onItsWay: "Message on its way", lowConfidence: "Low confidence: read it yourself" };
+  const words = { onItsWay: "Message on its way", lowConfidence: "Low confidence: read it yourself" };
   it("lists a row's chips most pressing first; the page shows two and counts the rest", () => {
     expect(ROW_CHIP_LIMIT).toBe(2);
     const busy = row({ overall: "strong", tags: ["Check eligibility"], toldState: "not_told", evidence: { ...row().evidence!, lowConfidence: true } });
@@ -170,7 +204,11 @@ describe("the strip and the row's words", () => {
     expect(rowChips(busy, words).find((c) => c.key === "told")?.title).toBe(SAFETY_NET_NOTE);
     expect(rowChips(row({ toldState: "not_told", decisionMessageWaiting: true }), words).map((c) => [c.label, c.title])).toEqual([["Message waiting for approval", undefined]]);
     expect(rowChips(row({ toldState: "queued" }), words).map((c) => c.label)).toEqual(["Message on its way"]);
-    expect(rowChips(row({ stillApplying: true, overall: "potential" }), words).map((c) => c.label)).toEqual(["Still applying", "Potential match"]);
+    // under "No AI interview yet" (R20-7): where they stand with it comes first, its plain label as the title
+    const invited = { state: "invited" as const, group: "not_started" as const, label: "Invited (not started)", since: "2026-10-20T12:00:00.000Z", linkOpenUntil: "2026-10-25T12:00:00.000Z", lastEmailAt: "2026-10-20T12:00:00.000Z", canRemind: false, canResend: false };
+    expect(rowChips(row({ ownerStage: "no_ai_interview", aiInterview: invited, overall: "potential" }), words).map((c) => [c.label, c.title])).toEqual([["Invited Oct 20 · link open until Oct 25", "Invited (not started)"], ["Potential match", undefined]]);
+    // an AI interview view on anyone else (an older answer) says nothing
+    expect(rowChips(row({ aiInterview: invited }), words)).toEqual([]);
     // a closer look already says it: no second "Check"
     const closer = row({ overall: "strong" });
     closer.evidence = { ...closer.evidence!, needsCloserLook: true, lowConfidence: true };
@@ -205,52 +243,68 @@ describe("the strip and the row's words", () => {
     expect(emptyText(view({ query: "zed" }), 3).body).toMatch(/Nobody here matches "zed"/);
     expect(emptyText(view({ waiting: true }), 3).title).toBe("Nobody is waiting on you");
     expect(emptyText(view({ stage: "offer" }), 3).title).toBe("Nobody here");
-    expect(emptyText(view({ applying: true }), 3)).toMatchObject({ title: "Nobody is still applying", body: expect.stringContaining('Turn off "Still applying"') });
+    expect(emptyText(view({ stage: "no_ai_interview" }), 3)).toEqual({ title: "Nobody here", body: "Nobody is waiting on an AI interview right now. People move to New once they send it, or if the team reviews them without it." });
+    expect(emptyText(view({ stage: "no_ai_interview", aiInterview: "closed" }), 3).title).toBe("Nobody here");
   });
 });
 
-describe("still applying (plan E6)", () => {
-  // Sofia sent the form and is answering the screening questions in the same visit; her hold ended meanwhile, so the
-  // API puts her in "waiting on you", which the page never shows while she is still applying.
-  const sofia = row({ name: "Sofia Lind", stage: "screen_invited", group: "in_process", stillApplying: true });
-  const theo = row({ name: "Theo Park", stage: "screening", group: "waiting_on_you", stillApplying: true, daysInStage: 2 });
+describe("No AI interview yet (R20-7; it replaced plan E6's 'Still applying' toggle)", () => {
+  const ai = (state: "being_read" | "invited" | "started" | "asked_person" | "link_expired" | "didnt_finish", over: Record<string, unknown> = {}) => {
+    const group = state === "being_read" || state === "invited" ? "not_started" : state === "started" ? "started" : state === "asked_person" ? "asked_person" : "closed";
+    const label = { being_read: "Getting the AI interview ready", invited: "Invited (not started)", started: "Started (not finished)", asked_person: "Asked for a person", link_expired: "Link expired", didnt_finish: "Didn't finish" }[state];
+    return { state, group, label, since: null, linkOpenUntil: null, lastEmailAt: null, canRemind: false, canResend: group === "closed", ...over } as NonNullable<ApplicationSummary["aiInterview"]>;
+  };
+  // Sofia is invited; Theo started, and a hold that ended meanwhile put him in "waiting on you", which the page never shows here
+  const sofia = row({ name: "Sofia Lind", stage: "screen_invited", ownerStage: "no_ai_interview", group: "in_process", aiInterview: ai("invited") });
+  const theo = row({ name: "Theo Park", stage: "screening", ownerStage: "no_ai_interview", group: "waiting_on_you", daysInStage: 2, aiInterview: ai("started") });
+  const uma = row({ name: "Uma Rao", stage: "screen_invited", ownerStage: "no_ai_interview", group: "in_process", aiInterview: ai("link_expired", { since: "2026-10-25T12:00:00.000Z" }) });
   const maria = row({ name: "Maria Reyes", overall: "strong", group: "waiting_on_you", daysInStage: 3 });
-  const older = row({ name: "Old Answer" }); // an answer from before Wave E has no stillApplying at all
-  const all = [sofia, theo, maria, older];
-  const counts = { total: 4, byOwnerStage: { new: 4, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 3, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 };
+  const all = [sofia, theo, uma, maria];
+  const counts = { total: 4, byOwnerStage: { no_ai_interview: 3, new: 1, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 2, in_process: 2, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 };
 
-  it("is read from the row, and an older answer without it is not still applying", () => {
-    expect(isStillApplying(sofia)).toBe(true);
-    expect(isStillApplying(older)).toBe(false);
+  it("splits the column into four chips, counted by the API or, for an older answer, from the rows", () => {
+    expect(AI_INTERVIEW_CHIPS.map((c) => c.label)).toEqual(["Not started", "Started", "Asked for a person", "Link closed"]);
+    expect(aiInterviewCounts({ aiInterview: { not_started: 4, started: 1, asked_person: 0, closed: 2 } }, all)).toEqual({ not_started: 4, started: 1, asked_person: 0, closed: 2 });
+    expect(aiInterviewCounts(null, all)).toEqual({ not_started: 1, started: 1, asked_person: 0, closed: 1 });
   });
 
-  it("counts them beside the strip: the API's count, or the rows' when an older answer has none", () => {
-    expect(stillApplyingCount({ ...counts, stillApplying: 2 }, all)).toBe(2);
-    expect(stillApplyingCount({ ...counts, stillApplying: undefined }, all)).toBe(2);
-    expect(stillApplyingCount(null, [])).toBe(0);
+  it("says where each stands in the row's chip, never how far anyone got", () => {
+    expect(aiInterviewChipLabel(ai("invited", { since: "2026-10-20T12:00:00.000Z", linkOpenUntil: "2026-10-25T12:00:00.000Z" }))).toBe("Invited Oct 20 · link open until Oct 25");
+    expect(aiInterviewChipLabel(ai("link_expired", { since: "2026-10-25T12:00:00.000Z" }))).toBe("Link expired Oct 25");
+    expect(aiInterviewChipLabel(ai("started"))).toBe("Started (not finished)");
+    expect(aiInterviewChipLabel(ai("didnt_finish"))).toBe("Didn't finish");
+    expect(aiInterviewChipLabel(ai("asked_person"))).toBe("Asked for a person");
+    expect(aiInterviewChipLabel(ai("being_read"))).toBe("Getting the AI interview ready");
+  });
+
+  it("filters the column by a chip, and says above it, in counts and plain words, that nothing there waits on you", () => {
+    expect(applyView(all, view({ stage: "no_ai_interview" })).map((a) => a.id).sort()).toEqual([sofia.id, theo.id, uma.id].sort());
+    expect(applyView(all, view({ stage: "no_ai_interview", aiInterview: "closed" })).map((a) => a.id)).toEqual([uma.id]);
+    expect(readingCounts(all, { stage: "no_ai_interview", waiting: false, aiInterview: "started" }).any).toBe(1);
+    const alert = aiInterviewAlert({ not_started: 1, started: 1, asked_person: 0, closed: 1 });
+    expect(alert).toBe("1 not started · 1 started · 1 link closed. Everyone who applies gets the AI interview by email and moves to New once they send it. Nothing here waits on you; from a person's page you can send a reminder, a new link, or decline privately.");
+    expect(alert).not.toMatch(/question|answered/);
   });
 
   it("never counts or shows them as waiting on you, whatever their group says", () => {
-    expect(waitingOnYouCount(counts, all)).toBe(2); // Maria and the older answer; never Theo
+    expect(waitingOnYouCount(counts, all)).toBe(1); // Maria; never Theo
     expect(waitingOnYouCount(null, all)).toBe(0);
-    expect(applyView(all, view({ waiting: true })).map((a) => a.id).sort()).toEqual([maria.id, older.id].sort());
+    expect(applyView(all, view({ waiting: true })).map((a) => a.id)).toEqual([maria.id]);
     expect(waitingText(theo)).toBeNull();
     expect(waitingText(maria)).toBe("Waiting on you 3 days");
-    expect(readingCounts(all, { stage: "all", waiting: true }).any).toBe(2);
   });
 
-  it("keeps them in their stage column, and shows only them when the count beside the strip is pressed", () => {
-    expect(applyView(all, view({ stage: "new" }))).toHaveLength(4);
-    expect(applyView(all, view({ applying: true })).map((a) => a.id).sort()).toEqual([sofia.id, theo.id].sort());
-    expect(readingCounts(all, { stage: "all", waiting: false, applying: true }).any).toBe(2);
-  });
-
-  it("opens on them from a link (the role report's 'See who is still applying'), never on 'waiting on you'", () => {
-    expect(defaultView(params("applying=1"), { byGroup: { waiting_on_you: 2, in_process: 0, not_moving_forward: 0, hired: 0 } })).toEqual(view({ applying: true }));
-    expect(defaultView(params(""), { byGroup: { waiting_on_you: 0, in_process: 2, not_moving_forward: 0, hired: 0 } }).applying).toBe(false);
+  it("opens on the column, or one chip of it, from a link (Home's line, an older 'still applying' link), never on 'waiting on you'", () => {
+    const waiting = { byGroup: { waiting_on_you: 2, in_process: 0, not_moving_forward: 0, hired: 0 } };
+    expect(defaultView(params("ownerStage=no_ai_interview&aiInterview=closed"), waiting)).toEqual(view({ stage: "no_ai_interview", aiInterview: "closed" }));
+    expect(defaultView(params("aiInterview=started"), null)).toEqual(view({ stage: "no_ai_interview", aiInterview: "started" }));
+    expect(defaultView(params("applying=1"), waiting)).toEqual(view({ stage: "no_ai_interview" }));
+    // a chip belongs to that column: beside another it means nothing, and an unknown one is ignored
+    expect(defaultView(params("ownerStage=new&aiInterview=closed"), null)).toEqual(view({ stage: "new" }));
+    expect(aiInterviewGroupFrom("maybe")).toBeNull();
+    expect(defaultView(params("ownerStage=no_ai_interview&aiInterview=maybe"), null)).toEqual(view({ stage: "no_ai_interview" }));
   });
 });
-
 describe("the Cancelled column (founder decisions 1A to 4A)", () => {
   const under = (reason: "asked_new_times" | "not_interested" | "no_show", over: Partial<ApplicationSummary> = {}) => row({
     stage: "interview_recommended", ownerStage: "cancelled", ownerStageLabel: reason === "no_show" ? "No-show" : reason === "not_interested" ? "No longer interested" : "Asked for new times", group: "waiting_on_you",

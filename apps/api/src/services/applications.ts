@@ -365,7 +365,7 @@ export async function rotateStatusLink(container: Container, applicationId: stri
 You asked for a new link to your application for ${roleTitle} at ${company.name}. Here it is:
 ${statusUrlFor(container.env.JOBS_BASE_URL, fresh)}
 
-The old link no longer works, so anyone you shared it with can no longer open your status page. The links in our earlier emails to your screening chat or your interview times have changed too: open them from your application page. Keep this email: there is no account or password.
+The old link no longer works, so anyone you shared it with can no longer open your status page. The links in our earlier emails to your AI interview or your interview times have changed too: open them from your application page. Keep this email: there is no account or password.
 
 If you did not ask for this, reply to this email and a person will look into it.
 
@@ -408,7 +408,7 @@ export async function recordWithdrawal(container: Container, app: { id: string; 
       applicationId: app.id,
       channel: "status_page",
       verified: true,
-      ...(via === "screening_chat" ? { details: "Withdrawn in the screening chat.", verificationNote: "the request came through the candidate's own screening chat link" } : {}),
+      ...(via === "screening_chat" ? { details: "Withdrawn in the AI interview.", verificationNote: "the request came through the candidate's own AI interview link" } : {}),
       actor,
       now: container.engine.clock(),
     });

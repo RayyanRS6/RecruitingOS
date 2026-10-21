@@ -192,10 +192,10 @@ export async function roleReport(tx: Tx, input: { companyId: string; roleId: str
   if (!data.roles.length) return null;
   const report = composeRoleReport(data, input.now);
   // How the pool meets each must-have (plan F7), from the same findings as the board, with its gentle "stricter than needed?" note.
-  const pool = await loadPool(tx, { roleId: input.roleId, scopeApplicationId: input.onlyApplicationId ?? null });
+  const pool = await loadPool(tx, { roleId: input.roleId, scopeApplicationId: input.onlyApplicationId ?? null, now: input.now });
   const summary = boardView(pool, input.now).summary;
   // Everyone on the board with a reading; each must-have's own total counts only those read against a version that had it.
-  const people = pool.rows.filter((r) => !r.stillApplying && r.placement.column && r.match).length;
+  const people = pool.rows.filter((r) => !r.noAiInterview && r.placement.column && r.match).length;
   return { ...report, mustHaves: { people, showEveryMustHave: summary.showEveryMustHave, byMustHave: summary.mustHaves, stricter: summary.stricter } };
 }
 
@@ -247,7 +247,7 @@ function decisionOf(payload: Record<string, unknown>): Decision | null {
 
 // The assistant's "hold" reading means thin evidence, not the On hold mark a person sets: it is named so the two never mix (plan A4).
 const RECOMMENDATION_LABEL: Record<string, string> = {
-  screen: "Screening chat suggested",
+  screen: "AI interview suggested",
   strong_interview: "Interview strongly suggested",
   interview: "Interview suggested",
   hold: "Thin evidence: your call",
@@ -274,7 +274,7 @@ const REJECT_REASON_LABEL: Record<string, string> = {
 /** Plain words for every approval a person may be asked for; the brief's decision cards use the same labels. */
 export const APPROVAL_LABEL: Record<string, string> = {
   "role_packet.approve": "Approve the job",
-  "application.invite_screen": "Invite to a screening chat?",
+  "application.invite_screen": "Invite to an AI interview?",
   "application.recommend_interview": "Interview this candidate?",
   "application.hold_ineligible": "Decide on an eligibility hold",
   "disposition.send": "Send the decision message?",
@@ -519,7 +519,7 @@ export type ApplicantRow = Record<(typeof APPLICANT_COLUMNS)[number], string | n
 
 /** The latest thing a person did with the application, in plain words. */
 const ACTION_LABEL: Record<string, string> = {
-  invite_screen: "Invited to a screening chat",
+  invite_screen: "Invited to an AI interview",
   advance_to_interview: "Moved to interview",
   "interview.request": "Interview requested",
   "interview.decision": "Interview decision recorded",
@@ -668,7 +668,7 @@ export function summaryRows(r: RoleReport): Array<[string, string, string | numb
   add("Pending decisions", "Oldest (days)", r.pendingDecisions.oldestDays);
   for (const row of r.recommendationsVsDecisions.rows) {
     add("Suggestions vs decisions", `${row.label}: total`, row.total);
-    add("Suggestions vs decisions", `${row.label}: invited to a screening chat`, row.invited);
+    add("Suggestions vs decisions", `${row.label}: invited to an AI interview`, row.invited);
     add("Suggestions vs decisions", `${row.label}: moved to interview`, row.interviewed);
     add("Suggestions vs decisions", `${row.label}: put on the longlist or shortlist`, row.shortlisted);
     add("Suggestions vs decisions", `${row.label}: declined`, row.declined);

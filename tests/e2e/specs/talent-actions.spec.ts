@@ -11,6 +11,8 @@ const run = Date.now().toString(36);
 
 test.describe("the candidate panel's choices", () => {
   skipWithoutFakeSignIn();
+  // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
+  test.slow();
   test("hold with a date, a private decline, the decision message sent after a preview, and the eligibility 'Decline now'", async ({ page, baseURL }) => {
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@talentactions.test`, name: "Dana Whitfield", provider: "google" });
@@ -112,7 +114,7 @@ test.describe("the candidate panel's choices", () => {
     await expect(ana.getByRole("heading", { name: "Ana has not been told yet" })).toBeVisible();
   });
 
-  test("'Stop this screening chat' takes back a screening invitation the candidate has not started, after a confirmation (plan A7)", async ({ page, baseURL }) => {
+  test("'Stop this AI interview' takes back an invitation the candidate has not started, after a confirmation (plan A7)", async ({ page, baseURL }) => {
     await page.goto("/login");
     await signIn(page, { email: `dana+stop${run}@talentactions.test`, name: "Dana Whitfield", provider: "google" });
     await createCompanyThroughTheForm(page, `Stop Screen Dental ${run}`);
@@ -122,14 +124,14 @@ test.describe("the candidate panel's choices", () => {
     await expect(page.getByRole("button", { name: "Sofia Lind" })).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: "Sofia Lind" }).click();
     const sofia = page.getByRole("dialog", { name: "Sofia Lind" });
-    await sofia.getByRole("tab", { name: "Screening chat" }).click();
-    await expect(sofia.getByRole("button", { name: "Stop this screening chat" })).toBeVisible({ timeout: 30_000 });
-    await sofia.getByRole("button", { name: "Stop this screening chat" }).click();
+    await sofia.getByRole("tab", { name: "AI interview" }).click();
+    await expect(sofia.getByRole("button", { name: "Stop this AI interview" })).toBeVisible({ timeout: 30_000 });
+    await sofia.getByRole("button", { name: "Stop this AI interview" }).click();
     // nothing happens on the first click: the confirmation says what the candidate gets
     await expect(sofia.getByText(/they get a short, polite note saying it is no longer needed/)).toBeVisible();
     await expectAccessible(page, "candidate panel with the stop-screen confirmation");
     await sofia.getByRole("button", { name: "Yes, stop it" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Screening chat invitation stopped\./ })).toBeVisible();
-    await expect(sofia.getByRole("button", { name: "Stop this screening chat" })).toHaveCount(0, { timeout: 30_000 });
+    await expect(page.getByRole("status").filter({ hasText: /AI interview invitation stopped\./ })).toBeVisible();
+    await expect(sofia.getByRole("button", { name: "Stop this AI interview" })).toHaveCount(0, { timeout: 30_000 });
   });
 });

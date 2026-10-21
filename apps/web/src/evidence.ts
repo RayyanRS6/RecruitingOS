@@ -53,7 +53,7 @@ export function readingConsistency(reading: Pick<Reading, "kind" | "overall" | "
     if (against) return { consistent: false, reason: `The AI review says ${words}, but the candidate's own words go against an essential skill (${essential.get(against.competencyKey)}): "${against.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }
   const rec = reading.result.recommendation;
-  const step = reading.kind === "triage" ? (rec === "screen" ? "a screening chat" : null) : rec === "strong_interview" || rec === "interview" ? "an interview" : null;
+  const step = reading.kind === "triage" ? (rec === "screen" ? "an AI interview" : null) : rec === "strong_interview" || rec === "interview" ? "an interview" : null;
   if (step && (reading.overall === "weak" || reading.overall === "unknown")) return { consistent: false, reason: `The assistant suggested ${step}, but its AI review says ${words}. Read it yourself before anything else happens.` };
   return { consistent: true, reason: null };
 }
@@ -125,7 +125,7 @@ export function competencyUnquoted(c: { finding: string; evidence?: EvidenceRef 
   return c.finding !== "not_evidenced" && !c.evidence?.quote?.trim();
 }
 
-export const SCORECARD_UNAVAILABLE_TEXT = "The screening chat is finished, but its AI review could not be written. Read the chat and decide yourself.";
+export const SCORECARD_UNAVAILABLE_TEXT = "The AI interview is finished, but its AI review could not be written. Read the chat and decide yourself.";
 
 /**
  * The latest screen finished but its scorecard could not be written (the run gave up after two unusable answers; the

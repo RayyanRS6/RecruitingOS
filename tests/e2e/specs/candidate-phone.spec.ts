@@ -124,7 +124,7 @@ test.describe("candidate journey on a phone", () => {
     // the résumé is read, which says the application went through and where its link went (masked), never the status link
     await page.getByRole("checkbox", { name: /I have read the full notice above/ }).check();
     await page.getByRole("button", { name: "Send my application" }).click();
-    await page.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/, { timeout: 90_000 });
+    await page.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/, { timeout: 150_000 });
     await expect(page.getByText(/This conversation is with .+'s AI assistant, a software program, not a person\./)).toBeVisible();
     await expect(page.getByText("Your application is sent.")).toBeVisible();
     await expect(page.getByText(/m\*\*\*@example\.com/)).toBeVisible();

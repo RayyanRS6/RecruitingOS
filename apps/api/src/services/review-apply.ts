@@ -26,10 +26,23 @@ const PRIVACY = "Private: nobody is told about a shortlist, longlist, hold or no
 const MARK_OF: Partial<Record<BatchAction, MarkKind>> = { shortlist: "shortlist", longlist: "longlist", on_hold: "on_hold" };
 const CAPABILITY_OF: Record<Exclude<BatchAction, "escalate">, ApplicationCapability> = { shortlist: "set_mark", longlist: "set_mark", on_hold: "set_mark", not_moving_forward: "reject", invite_screen: "invite_screen" };
 
+/**
+ * Why someone the board keeps apart (R20-7, R20-9) is never applied from it, by where their AI interview stands: being
+ * scored, still to come, or closed (a link that lapsed or was stopped, one left part-way, or one that never came for
+ * want of allowance, Q17), which they cannot finish without a new link. Neutral, like the lane: never how far they got.
+ */
+const APART_REFUSAL = {
+  being_scored: "Their AI interview is being scored; they join the board when it is. Decide from their own page if you need to.",
+  not_done_yet: "They have no AI interview yet; they join the board when they finish it. Decide from their own page if you need to.",
+  not_done: "They have no AI interview and none is open, so the board leaves them out. Decide from their own page, or send them a new AI interview link.",
+} as const;
+
 /** The batch-only reasons a person cannot be included, before the usual rules of their page. */
 function batchRefusal(row: PoolRow | undefined, item: RoleBatchItem, tenant: Tenant): string | null {
   if (!row) return "Not a candidate of this role.";
-  if (row.stillApplying) return "They are still applying; they join the board when they finish the conversation.";
+  // Never suggested or applied from the board before their AI interview is in their score (R20-7, R20-9): decide from
+  // their own page if needed.
+  if (row.noAiInterview) return row.interview === "being_scored" ? APART_REFUSAL.being_scored : row.interview === "not_done" ? APART_REFUSAL.not_done : APART_REFUSAL.not_done_yet;
   if (item.action === "not_moving_forward" && row.activeInterview) return "They have an interview in motion. Decide from their page, so the interview is called off properly.";
   if (item.action === "escalate") {
     if (tenant.staff) return "You are the recruiter on this; add a note to the request instead.";
@@ -74,8 +87,8 @@ function warningsFor(row: PoolRow, item: RoleBatchItem, escalating: number): str
   if (row.placement.needsYourEye) out.push(row.placement.needsYourEye);
   if (row.evidence.lowConfidence && !row.placement.needsYourEye?.includes("confident")) out.push("The assistant was not confident about this AI review.");
   if (row.match?.missingMustHave.length && item.action !== "not_moving_forward") out.push(`Missing must-have: ${row.match.missingMustHave.map((m) => m.label).join(", ")}.`);
-  if (item.action === "not_moving_forward" && row.openScreen) out.push("Their open screening chat is closed; they are not told why.");
-  if (item.action === "invite_screen") out.push("They get an email with a link to the screening chat.");
+  if (item.action === "not_moving_forward" && row.openScreen) out.push("Their open AI interview is closed; they are not told why.");
+  if (item.action === "invite_screen") out.push("They get an email with a link to the AI interview.");
   if (item.action === "escalate") out.push(`An ITS recruiter is asked to look at them. ${escalationAccessWords(escalating)}`);
   return out;
 }
@@ -122,7 +135,7 @@ export async function previewBatch(container: Container, input: { roleId: string
     const ready = items.filter((i) => i.allowed).length;
     // Screening conversations are counted when someone starts one, never refused once started (Q17): the preview says where the plan stands.
     const allowance = counts.invite_screen ? await entitlements.check(tx, t.companyId, entitlements.TEXT_SCREENS, counts.invite_screen) : null;
-    const screenWords = allowance && allowance.limit !== null ? `Your plan includes ${allowance.limit} screening chats this month and ${allowance.used} ${allowance.used === 1 ? "has" : "have"} been used.${allowance.ok ? "" : " Inviting these may go past it; nobody who starts is cut off, and ITS will talk with you about the extra."}` : null;
+    const screenWords = allowance && allowance.limit !== null ? `Your plan includes ${allowance.limit} AI interviews this month and ${allowance.used} ${allowance.used === 1 ? "has" : "have"} been used.${allowance.ok ? "" : " Inviting these may go past it; nobody who starts is cut off, and ITS will talk with you about the extra."}` : null;
     return { dryRun: true, items, counts, ready, words: readyWords(counts, ready), screenAllowance: { limit: allowance?.limit ?? null, used: allowance?.used ?? 0, inThisBatch: counts.invite_screen, words: screenWords }, privacy: PRIVACY };
   });
 }
@@ -168,7 +181,7 @@ export async function applyBatch(container: Container, input: { roleId: string; 
         out.ok = true;
         out.ownerStage = r.ownerStage ?? null;
         out.candidateNotice = r.candidateNotice ?? null;
-        out.message = item.action === "invite_screen" ? "Invitation to the screening chat on its way." : item.action === "not_moving_forward" ? "Filed as not moving forward, privately. They were not told." : `${MARK_LABEL[MARK_OF[item.action]!]}, privately. They were not told.`;
+        out.message = item.action === "invite_screen" ? "Invitation to the AI interview on its way." : item.action === "not_moving_forward" ? "Filed as not moving forward, privately. They were not told." : `${MARK_LABEL[MARK_OF[item.action]!]}, privately. They were not told.`;
       });
     } catch (e) {
       if (e instanceof HttpError) {
@@ -219,7 +232,7 @@ export async function applyBatch(container: Container, input: { roleId: string; 
   const counts = emptyCounts();
   for (const r of applied) counts[r.action] += 1;
   const sorted = columnWords({ shortlist: counts.shortlist, longlist: counts.longlist, not_moving_forward: counts.not_moving_forward });
-  const extra = [counts.on_hold ? `${counts.on_hold} on hold` : "", counts.invite_screen ? `${counts.invite_screen} invited to the screening chat` : "", counts.escalate ? `${counts.escalate} sent to a recruiter` : ""].filter(Boolean);
+  const extra = [counts.on_hold ? `${counts.on_hold} on hold` : "", counts.invite_screen ? `${counts.invite_screen} invited to the AI interview` : "", counts.escalate ? `${counts.escalate} sent to a recruiter` : ""].filter(Boolean);
   const words = applied.length
     ? `Applied ${applied.length} ${applied.length === 1 ? "decision" : "decisions"}${sorted || extra.length ? `: ${[sorted, ...extra].filter(Boolean).join(", ")}` : ""}.${results.length > applied.length ? ` ${results.length - applied.length} could not be applied; each says why.` : ""}`
     : "Nothing was applied; each person says why.";

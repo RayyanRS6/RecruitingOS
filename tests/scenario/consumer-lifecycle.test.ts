@@ -83,9 +83,11 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     form.set("acknowledged", "yes");
     const applied = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(applied.status).toBe(302);
-    // the waiting room (20 Oct 2026, R20-12): it opens the AI interview by itself once the résumé is read
+    // the waiting room (20 Oct 2026, R20-12): it opens the AI interview by itself once the résumé is read, after the 40 to
+    // 90 seconds every waiting room says "preparing" first (Q14, 21 Oct)
     expect(applied.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
     await container.drain();
+    setClock(91_000);
     const room = await app.request(applied.headers.get("location")!, { headers: { cookie: applied.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } });
     expect(room.status).toBe(302);
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));

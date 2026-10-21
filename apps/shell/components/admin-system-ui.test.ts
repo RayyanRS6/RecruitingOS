@@ -81,7 +81,7 @@ describe("System and settings: Workflows", () => {
     const html = render(client([[["admin", "runs", ""], rows]]), createElement(Runs));
     const words = text(html);
     expect(words).toContain("Reading a new application");
-    expect(words).toContain("Screening chat");
+    expect(words).toContain("AI interview");
     // an unknown workflow reads as words, never with underscores
     expect(words).toContain("Brand new flow");
     expect(html).not.toContain("brand_new_flow");

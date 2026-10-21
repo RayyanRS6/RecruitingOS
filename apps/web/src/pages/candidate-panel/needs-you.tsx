@@ -11,7 +11,7 @@ import { AskRecruiter } from "../../components/AskRecruiter";
 import { defaultInterviewers } from "../../interview-defaults";
 import { interviewDraftLine } from "../../hiring";
 import { canDecline, canReadNotes } from "../../roles";
-import { callNotesState } from "../../screen-view";
+import { callNotesState, declineReasonFor } from "../../screen-view";
 import { NOT_NOW_TOAST, declineConfirmText, declineSummary, decisionToast, holdDay, newTimesToast, outcomeNoticeText, outcomeToast, safetyNetAfterDecision, type InterviewRef, type PanelStep } from "../../talent-actions";
 import { CallNotesCard } from "./call-notes";
 import { DECLINE_REASONS, activeInterviews, eligibilityAnswerWords, firstSentence, holdDateBounds, whoDecides, type PanelTab } from "./helpers";
@@ -146,7 +146,8 @@ function HoldStep({ a, roleId, cancelled, onClose }: { a: ApplicationDetail; rol
  * candidate is told at once (no reason given) that the interview is off; and how the candidate will hear the decision.
  */
 function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string; onClose: () => void }) {
-  const [reason, setReason] = useState(DECLINE_REASONS[0][0]);
+  // "Candidate did not respond" first once their AI interview link closed unused or unfinished (R20-7); a choice still.
+  const [reason, setReason] = useState<string>(declineReasonFor(a) ?? DECLINE_REASONS[0][0]);
   const [note, setNote] = useState("");
   useDraft("decline-note", note);
   const first = useFocusOnMount<HTMLSelectElement>();

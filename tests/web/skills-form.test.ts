@@ -91,8 +91,8 @@ describe("the skills in the role editor", () => {
     expect(importanceLabel({ weight: 5 })).toBe("Essential");
     expect(importanceLabel({ weight: 4 })).toBe("Important");
     expect(importanceLabel({ weight: 5, importance: "helpful" })).toBe("Helpful");
-    expect(checkedInLabel("both")).toBe("screening chat and interviews");
-    expect(checkedInLabel("screen")).toBe("screening chat");
+    expect(checkedInLabel("both")).toBe("AI interview and your interviews");
+    expect(checkedInLabel("screen")).toBe("AI interview");
     expect(MUST_HAVES_SCORE_LINE).toMatch(/holds the score at 54 at most/);
   });
 

@@ -106,7 +106,7 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(row.evidence.unknowns).toEqual([unknown.question]);
     expect(row.evidence.confidenceReasons).toEqual(asmt.result.confidenceReasons);
     expect(row.evidence.needsCloserLook).toBe(false); // a screen is on its way; nobody is waiting on the owner
-    expect(row.stageLabel).toBe("Invited to a screening chat");
+    expect(row.stageLabel).toBe("Invited to an AI interview");
     // no must-have shown in full: a low-confidence reading. That alone holds nothing (plan A8); it asks the reader to read it themselves
     expect(asmt.confidence).toBe("low");
     expect(row.evidence).toMatchObject({ lowConfidence: true, inconsistent: false });

@@ -55,6 +55,8 @@ export const EventType = z.enum([
   // notes, and how a role's applicants meet the conversation (set by ITS).
   "screen.declined_by_candidate", "screen.unfinished", "screen.idle_reminded", "screen.paused", "screen.resumed", "screen.question_skipped", "screen.answer_tapped", "screen.answer_edited", "screen.recruiter_notes_added",
   "screen.repeat_started", "screen.repeat_confirmation_sent", "screen.repeat_confirmed", "screen.repeat_discarded",
+  // A person's "Send a reminder" about an open AI interview link (20 Oct 2026, R20-7), once a day at most.
+  "screen.reminded",
   // A conversation reached the most model calls it may make and ended in code (to "check your answers", or closed).
   "screen.turn_cap_reached",
   // The plan's screening conversations stayed used up for the whole wait (Q17): the link never went; the candidate and the team are told.

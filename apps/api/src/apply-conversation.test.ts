@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import type { RolePacket, TapAnswer } from "@ros/contracts";
+import type { BoardView, RolePacket, TapAnswer } from "@ros/contracts";
 import { CHAT_CAP_CLOSING, CHAT_WRAP_QUESTION, MOVED_ON_MESSAGE, REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, answerWithdrawPrompt, chatClosingMessage, chatNextLine, conversationOverdue, detectStuckRoles, modelTurnCap } from "@ros/agents";
 import { CHAT_WRAP_KEY, entitlements as allowance, chatCounter, grantStaffAccess } from "@ros/core";
 import { adminAlerts, aiRuns, applications, assessments, companies, entitlements, events, notifications, recruiterEscalations, rolePackets, roles, screens, usageEvents, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
@@ -53,7 +53,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     const eligibilityAnswers = Object.fromEntries(elig.map((r) => [r.key, p.answers?.[r.key] ?? "yes"]));
     const result = await withTenant(container.db, company.id, async (tx) => {
       const created = await createApplication(tx, container, { companyId: company.id, roleId, source: "careers_page", firstName: p.first, lastName: p.last, email: p.email, phone: null, smsConsent: false, consentSource: "careers_page_apply", noticeVersionsShown: ["ai_use@2026-10-08", "privacy@2026-09-01"], eligibilityAnswers, resume: { kind: "bytes", filename: `${p.first.toLowerCase()}.txt`, mime: "text/plain", bytes: new TextEncoder().encode(RESUME(`${p.first} ${p.last}`)), via: "server" } }, { kind: "candidate", id: "applicant" });
-      const next = await applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, packet: pv.packet as RolePacket, eligibilityAnswers });
+      const next = await applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, role, packet: pv.packet as RolePacket, eligibilityAnswers, typedFirstName: p.first });
       return { next, applicationId: created.application.id };
     });
     await container.kick();
@@ -139,14 +139,21 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(asmts.map((x) => x.kind)).toEqual(["triage"]);
     expect(a.latestAssessmentId).toBe(asmts[0].id);
     expect((await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "screen"))).filter((r) => (r.state as { applicationId?: string }).applicationId === applicationId)).toHaveLength(1);
-    // still applying (E6): nothing about Maria reaches the team's alerts yet, and the list shows her apart
+    // under "No AI interview yet" (R20-7): nothing about Maria reaches the team's alerts, and the list shows where she stands
     expect(await notesAbout("Maria")).toHaveLength(0);
-    const list = (await (await json("GET", `/api/v1/roles/${roleId}/applications?counts=1`)).json()) as { applications: Array<{ id: string; stillApplying: boolean }>; counts: { stillApplying: number } };
-    expect(list.applications.find((r) => r.id === applicationId)?.stillApplying).toBe(true);
+    const list = (await (await json("GET", `/api/v1/roles/${roleId}/applications?counts=1`)).json()) as { applications: Array<{ id: string; stillApplying: boolean; ownerStage: string; ownerStageLabel: string; group: string; aiInterview: { state: string } | null }>; counts: { stillApplying: number; byOwnerStage: Record<string, number>; aiInterview: Record<string, number> } };
+    const row = list.applications.find((r) => r.id === applicationId)!;
+    expect(row).toMatchObject({ ownerStage: "no_ai_interview", ownerStageLabel: "Invited (not started)", group: "in_process", aiInterview: { state: "invited" } });
+    expect(list.counts.byOwnerStage.no_ai_interview).toBe(1);
+    expect(list.counts.aiInterview).toEqual({ not_started: 1, started: 0, asked_person: 0, closed: 0 });
+    // the alias older pages read, kept one release
+    expect(row.stillApplying).toBe(true);
     expect(list.counts.stillApplying).toBe(1);
-    // nor Today: nobody invited her, so its screening card does not count her as "invited" or "answering now"
-    const today = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; roleId?: string; title: string }> };
-    expect(today.cards.some((c) => c.kind === "screening" && c.roleId === roleId)).toBe(false);
+    // Today: one line for the job, in neutral words, never a "needs you"
+    const today = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; roleId?: string; title: string; actions?: Array<{ path: string }> }> };
+    const line = today.cards.find((c) => c.kind === "screening" && c.roleId === roleId)!;
+    expect(line.title).toBe("AI interviews for Registered Dental Hygienist: 1 not started");
+    expect(line.actions?.[0].path).toBe(`/roles/${roleId}/talent?ownerStage=no_ai_interview`);
   });
 
   it("E2: a fixed introduction, then Start shows the first question in the packet's own words, with no model call", async () => {
@@ -260,11 +267,12 @@ describe("Wave E: applying and the conversation in one visit", () => {
     for (const f of (asmt.result as { questionFindings: Array<{ evidence?: { quote?: string } }> }).questionFindings) if (f.evidence?.quote) expect(said + Object.values(done.answers).join("\n").toLowerCase()).toContain(f.evidence.quote.toLowerCase());
     expect(["screen_complete", "interview_recommended"]).toContain((await reload(mariaId)).stage);
     expect((await notesAbout("Maria")).length).toBeGreaterThan(0);
-    const list = (await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; stillApplying: boolean }>;
-    expect(list.find((r) => r.id === mariaId)?.stillApplying).toBe(false);
-    // Today hears about her now that she has finished
+    const list = (await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; stillApplying: boolean; ownerStage: string; aiInterview: unknown }>;
+    expect(list.find((r) => r.id === mariaId)).toMatchObject({ stillApplying: false, aiInterview: null });
+    expect(list.find((r) => r.id === mariaId)?.ownerStage).not.toBe("no_ai_interview");
+    // Today's line for the job says she is done
     const today = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; roleId?: string; title: string }> };
-    expect(today.cards.find((c) => c.kind === "screening" && c.roleId === roleId)?.title).toMatch(/: 1 completed since yesterday$/);
+    expect(today.cards.find((c) => c.kind === "screening" && c.roleId === roleId)?.title).toMatch(/: 1 done since yesterday$/);
   });
 
   it("E3: 'Send without the conversation' sends the application on to the team and is counted; what was answered before is never read or shown", async () => {
@@ -286,7 +294,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(await assessRuns()).toBe(before);
     expect(scr.assessmentId).toBeNull();
     const notes = await notesAbout("Ana Silva");
-    expect(notes.filter((n) => n.kind === "screen.declined_by_candidate").map((n) => n.title)).toEqual(["Ana Silva sent their application without the conversation"]);
+    expect(notes.filter((n) => n.kind === "screen.declined_by_candidate").map((n) => n.title)).toEqual(["Ana Silva sent their application without the AI interview"]);
     expect(notes.some((n) => n.kind === "candidate.recommended")).toBe(false);
     // never invited a second time
     expect(mail().filter((m) => m.to === "ana@onevisit.test" && /screening conversation/i.test(m.subject))).toHaveLength(0);
@@ -406,7 +414,10 @@ describe("Wave E: applying and the conversation in one visit", () => {
     await advance(49 * HOUR);
     scr = await screenOf(applicationId);
     expect(scr.status).toBe("unfinished");
-    expect((await reload(applicationId)).stage).toBe("triaged");
+    // R20-7: she stays under "No AI interview yet", as "Didn't finish", with no per-person alert
+    expect((await reload(applicationId)).stage).toBe("screening");
+    const list = (await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; ownerStage: string; ownerStageLabel: string; aiInterview: { state: string; canResend: boolean } | null }>;
+    expect(list.find((r) => r.id === applicationId)).toMatchObject({ ownerStage: "no_ai_interview", ownerStageLabel: "Didn't finish", aiInterview: { state: "didnt_finish", canResend: true } });
     const closing = mail().filter((m) => m.to === "priya@onevisit.test" && /^Your application for/.test(m.subject));
     expect(closing).toHaveLength(1);
     expect(closing[0].text).toContain("answers you did not send are not passed on");
@@ -414,9 +425,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen")))).toHaveLength(0);
     const [latest] = await container.db.select().from(assessments).where(eq(assessments.id, (await reload(applicationId)).latestAssessmentId!));
     expect(latest.kind).toBe("triage");
-    const told = (await notesAbout("Priya Shah")).filter((n) => n.kind === "screen.unfinished");
-    expect(told.map((n) => n.title)).toEqual(["Priya Shah didn't finish the screening chat"]);
-    expect(told[0].body).toContain("They did not send their answers, even after a reminder, so you won't see them");
+    expect((await notesAbout("Priya Shah")).filter((n) => n.kind === "screen.unfinished")).toHaveLength(0);
     // the run is over: no wait repeated for ever
     const run = (await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, scr.workflowRunId!)))[0];
     expect(run.status).toBe("completed");
@@ -625,14 +634,16 @@ describe("Wave E: applying and the conversation in one visit", () => {
     // never read: no scorecard, no model run
     expect(await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen")))).toHaveLength(0);
     expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.assess"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === scr.id)).toHaveLength(0);
-    expect((await reload(applicationId)).stage).toBe("triaged");
+    // she stays under "No AI interview yet" (R20-7)
+    expect((await reload(applicationId)).stage).toBe("screening");
     // she is told it closed, and that what she did not send was not passed on
     expect(toTess().filter((m) => /^Your application for/.test(m.subject) && m.text.includes("answers you did not send are not passed on"))).toHaveLength(1);
     expect(await (await app.request(`/c/screen/${ref.token}`)).text()).toContain("It closed before you sent your answers.");
-    // the team hears it in the same words as for anyone who stopped part-way: nothing says she answered everything
-    const told = (await notesAbout("Tess Moore")).filter((n) => n.kind === "screen.unfinished");
-    expect(told.map((n) => n.title)).toEqual(["Tess Moore didn't finish the screening chat"]);
-    expect(told[0].body).not.toMatch(/every question|answered/);
+    // the team sees it in the same words as for anyone who stopped part-way, on the list, with no alert: nothing says she answered everything
+    expect((await notesAbout("Tess Moore")).filter((n) => n.kind === "screen.unfinished")).toHaveLength(0);
+    const row = ((await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; ownerStageLabel: string; aiInterview: Record<string, unknown> | null }>).find((r) => r.id === applicationId)!;
+    expect(row.ownerStageLabel).toBe("Didn't finish");
+    expect(JSON.stringify(row.aiInterview)).not.toMatch(/every question|answered|review/);
     await signIn();
     const closedView = (await (await json("GET", `/api/v1/applications/${applicationId}`)).json()) as Detail;
     expect(closedView.screens.find((s) => s.id === tessScreen.id)).toMatchObject({ status: "unfinished", answersShared: false, answers: {}, transcript: [] });
@@ -640,7 +651,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(closedView.communications.some((m) => /are ready to send/.test(m.subject ?? ""))).toBe(false);
   });
 
-  it("E4: someone who never starts the conversation that goes with the application is reminded once; then the application goes to the team without it, and they are told nothing else is needed", async () => {
+  it("E4, R20-7: someone who never starts the AI interview is reminded once; then the link expires, they stay under 'No AI interview yet', and they are told nothing else is needed", async () => {
     const { outcome, applicationId } = await applyNow({ first: "Ola", last: "Berg", email: "ola@onevisit.test" });
     const ref = await refOf(outcome);
     await advance(49 * HOUR);
@@ -650,10 +661,12 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(toOla().filter((m) => /^Reminder: your AI interview/.test(m.subject))).toHaveLength(0);
     await advance(73 * HOUR);
     expect((await screenOf(applicationId)).status).toBe("expired");
-    expect((await reload(applicationId)).stage).toBe("triaged");
+    expect((await reload(applicationId)).stage).toBe("screen_invited");
     expect(toOla().filter((m) => /^Your application for/.test(m.subject) && m.text.includes("has gone to the hiring team without the AI interview"))).toHaveLength(1);
-    expect((await notesAbout("Ola Berg")).some((n) => /applied without the screening chat/.test(n.title))).toBe(true);
-    expect((await notesAbout("Ola Berg")).some((n) => /did not answer the screening chat invitation/.test(n.title))).toBe(false);
+    // no per-person alert: the column and Home's one line per job say it
+    expect(await notesAbout("Ola Berg")).toHaveLength(0);
+    const row = ((await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; ownerStage: string; ownerStageLabel: string; aiInterview: { state: string; canResend: boolean; canRemind: boolean } | null }>).find((r) => r.id === applicationId)!;
+    expect(row).toMatchObject({ ownerStage: "no_ai_interview", ownerStageLabel: "Link expired", aiInterview: { state: "link_expired", canResend: true, canRemind: false } });
     expect((await conversationView(container.db, ref))!).toMatchObject({ phase: "closed", status: "expired", oneVisit: true });
   });
 
@@ -686,7 +699,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     await container.db.update(screens).set({ lastCandidateMessageAt: new Date(now.getTime() - 5 * 24 * HOUR).toISOString() }).where(eq(screens.id, scr.id));
     const stuck = (await withTenant(container.db, companyId, (tx) => detectStuckRoles(tx, companyId, now))).find((d) => d.detector === "conversations_stuck");
     expect(stuck?.applicationIds).toContain(applicationId);
-    expect(stuck?.title).toMatch(/stuck in the screening chat/);
+    expect(stuck?.title).toMatch(/stuck in the AI interview/);
     expect(stuck?.body).toContain("Quinn Hale");
     // never sends the team looking for answers that stay hidden until they are sent (founder decision of 9 October 2026)
     expect(stuck?.body).toContain("Their answers appear only once they send them; a recruiter can contact them.");
@@ -754,8 +767,15 @@ describe("Wave E: applying and the conversation in one visit", () => {
     const toInes = mail().filter((m) => m.to === "ines@onevisit.test");
     expect(toInes.filter((m) => /That interview is not going ahead, and you do not need to do anything about it/.test(m.text))).toHaveLength(1);
     expect(toInes.filter((m) => /short AI interview/i.test(m.subject))).toHaveLength(0);
-    expect((await notesAbout("Ines Lowe")).some((n) => /never got the screening chat/.test(n.title) && n.action?.href.includes(late.applicationId))).toBe(true);
+    expect((await notesAbout("Ines Lowe")).some((n) => /never got the AI interview/.test(n.title) && n.action?.href.includes(late.applicationId))).toBe(true);
+    // nobody stays "Getting the AI interview ready" for ever (R20-7): they move to New, ready for review as they are
+    expect((await reload(late.applicationId)).stage).toBe("triaged");
     expect((await container.db.select().from(events).where(and(eq(events.type, "screen.allowance_lapsed"), eq(events.subjectId, late.applicationId))))).toMatchObject([{ payload: { promised: true } }]);
+    // offered and never come, unlike an application from before 20 October (R20-9): her score reads as having no AI
+    // interview, and the board keeps her apart, never suggested in Sort the pool or Review and apply
+    const owner = await signInAs(container, app, { companyId, role: "owner" });
+    const board = (await (await json("GET", `/api/v1/roles/${roleId}/board`, undefined, owner)).json()) as BoardView;
+    expect(board.noAiInterview.find((c) => c.applicationId === late.applicationId)?.placement).toMatchObject({ column: null, state: "waiting", suggestedAction: null, doneLabel: "No AI interview" });
     await container.db.update(entitlements).set({ limit: ent.limit, used: ent.used }).where(eq(entitlements.id, ent.id));
   });
 });

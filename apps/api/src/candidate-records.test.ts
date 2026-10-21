@@ -69,7 +69,7 @@ describe("candidates and applications (Wave S5, C3)", () => {
   });
   afterAll(async () => { await container.close(); });
 
-  it("row 17 (20 Oct 2026, R20-12, Q14): a first application to another role from a known address gets the same waiting room, naming no application; the AI interview's link goes to the address on file, never on the page", async () => {
+  it("row 17 (Q14 kept in full, founder 21 Oct 2026): a first application to another role from a known address (Gmail dots and +suffix) gets the same waiting room, which opens a detached AI interview greeting the name typed; the application's own link goes to the address on file, never on the page", async () => {
     const first = await applyForm(roleA, { first: "Rosa", email: "rosa.lind@gmail.com" });
     expect(first.status).toBe(302);
     await container.drain();
@@ -77,9 +77,11 @@ describe("candidates and applications (Wave S5, C3)", () => {
     const stranger = await applyForm(roleB, { first: "Mallory", email: "RosaLind+x@gmail.com" });
     expect(stranger.status).toBe(302);
     await container.drain();
-    // the waiting room a new address gets, but it never opens an interview for a known address: no link and nobody's name
-    const landed = await followApply(app, stranger);
-    expect(landed.token).toBeNull();
+    // the waiting room a new address gets: "preparing" for about as long as a reading takes, no link and nobody's name
+    const cookie = stranger.headers.get("set-cookie")?.match(/ros_applied=[^;,]+/)?.[0] ?? "";
+    const room = await app.request(stranger.headers.get("location")!, { headers: { cookie } });
+    expect(room.status).toBe(200);
+    const landed = { html: await room.text(), cookie };
     expect(landed.html).toContain("preparing your AI interview");
     expect(landed.html).not.toContain("/c/screen/");
     expect(landed.html).not.toContain("Rosa");
@@ -90,10 +92,25 @@ describe("candidates and applications (Wave S5, C3)", () => {
       expect(start.status).toBe(200);
       expect(await start.text()).not.toContain("/c/screen/");
     }
-    // the new application is Rosa's (the form path's rule); nothing detached was opened for the visitor
+    // the new application is Rosa's (the form path's rule); the visitor's interview is a detached copy that greets the
+    // name typed and opens once "preparing" is over, never Rosa's own
     const [newApp] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleB), eq(applications.candidateId, rosa.id)));
     expect(newApp).toBeTruthy();
-    expect(await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, newApp.id))).toHaveLength(0);
+    const [copy] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, newApp.id));
+    expect(copy).toMatchObject({ firstName: "Mallory", status: "invited" });
+    const engine = container.engine as unknown as { now: () => Date };
+    const real = engine.now;
+    engine.now = () => new Date(Date.now() + 91_000);
+    try {
+      const opened = await app.request(`/careers/${slug}/jobs/${roleB}/applied/start`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie: landed.cookie }, body: new URLSearchParams({ grant }) });
+      expect(opened.status).toBe(302);
+      expect(opened.headers.get("location")).toBe(`/c/screen/${copy.token}`);
+      const intro = await (await app.request(`/c/screen/${copy.token}`)).text();
+      expect(intro).toContain("Mallory");
+      expect(intro).not.toContain("Rosa");
+    } finally {
+      engine.now = real;
+    }
     // the person on file keeps their own name and details
     expect((await container.db.select().from(candidates).where(eq(candidates.id, rosa.id)))[0].firstName).toBe("Rosa");
     // the one email goes to the address on file, with the link, and says it was sent using their address (Wave S5 review); her own first one did not
@@ -165,7 +182,7 @@ describe("candidates and applications (Wave S5, C3)", () => {
   it("row 74: withdrawing in the screening chat is recorded as a request and confirmed by email, like the status page", async () => {
     const res = await applyForm(roleA, { first: "Wren", email: "wren.lind@example.com" });
     await container.drain();
-    const { token: interview } = await followApply(app, res);
+    const { token: interview } = await followApply(app, res, container);
     expect(interview).toBeTruthy();
     const to = `/c/screen/${interview}`;
     expect((await form(`${to}/start`, {})).status).toBe(302);
@@ -177,7 +194,7 @@ describe("candidates and applications (Wave S5, C3)", () => {
     expect(wren.stage).toBe("withdrawn");
     const reqs = await withPlatform(container.db, (tx) => tx.select().from(dataRequests).where(eq(dataRequests.applicationId, wren.id)));
     expect(reqs).toHaveLength(1);
-    expect(reqs[0]).toMatchObject({ kind: "withdrawal", status: "fulfilled", details: "Withdrawn in the screening chat." });
+    expect(reqs[0]).toMatchObject({ kind: "withdrawal", status: "fulfilled", details: "Withdrawn in the AI interview." });
     expect(reqs[0].confirmationSentAt).toBeTruthy();
     expect(await container.db.select().from(communications).where(eq(communications.idempotencyKey, `privacy_done:${reqs[0].id}`))).toHaveLength(1);
   });

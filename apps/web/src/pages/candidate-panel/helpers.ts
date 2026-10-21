@@ -14,7 +14,7 @@ import { abbreviationBefore } from "../../today";
 export type PanelTab = "overview" | "screen" | "resume" | "messages" | "notes" | "history";
 export const PANEL_TABS: ReadonlyArray<{ id: PanelTab; label: string }> = [
   { id: "overview", label: "Overview" },
-  { id: "screen", label: "Screening chat" },
+  { id: "screen", label: "AI interview" },
   { id: "resume", label: "Résumé" },
   { id: "messages", label: "Messages" },
   { id: "notes", label: "Notes" },
@@ -304,7 +304,7 @@ export function writeupSummary(lines: readonly Pick<WriteupLine, "status">[]): s
 /** The Overview's one line about the write-up: how many were answered, how many carry the assistant's note, and where to read them. */
 export function writeupOverviewLine(lines: readonly Pick<WriteupLine, "status" | "note">[]): string {
   const noted = lines.filter((l) => l.note).length;
-  return `Answers to your questions: ${writeupSummary(lines)}${noted ? `, ${noted} with a note from the assistant` : ""}. Read them on the Screening chat tab.`;
+  return `Answers to your questions: ${writeupSummary(lines)}${noted ? `, ${noted} with a note from the assistant` : ""}. Read them on the AI interview tab.`;
 }
 
 type ChatItemView = NonNullable<Screen["progress"]["chat"]>["items"][number];
@@ -349,10 +349,10 @@ export const REJECT_REASON_LABEL: Record<string, string> = {
 export const DECLINE_REASONS: ReadonlyArray<[string, string]> = ["not_a_match_experience", "not_a_match_skills", "compensation_mismatch", "location_or_schedule", "position_filled", "candidate_unresponsive", "other"].map((k) => [k, REJECT_REASON_LABEL[k]]);
 
 /** The assistant's suggestion after reading the résumé or the screen. Its "hold" means thin evidence, never the On hold mark. */
-export const REC_LABEL: Record<string, string> = { screen: "Worth a screening chat", hold: "Thin evidence: your call", review_manually: "Needs a closer look", strong_interview: "Strong: interview", interview: "Interview", decline_recommended: "Concern raised" };
+export const REC_LABEL: Record<string, string> = { screen: "Worth an AI interview", hold: "Thin evidence: your call", review_manually: "Needs a closer look", strong_interview: "Strong: interview", interview: "Interview", decline_recommended: "Concern raised" };
 
 /** Owner Mode never shows raw stage names (docs/07); mirrors STAGE_LABEL in packages/core, in the staff glossary's words (screening chat). */
-export const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to a screening chat", screening: "In the screening chat", screen_complete: "Screening chat done", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
+export const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview", screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
 
 const MARK_DONE: Record<MarkKind, string> = { longlist: "Put on the longlist", shortlist: "Put on the shortlist", on_hold: "Put on hold", not_a_fit_for_now: "Set aside: not a fit for now" };
 
@@ -400,10 +400,10 @@ export type HistoryItem = { key: string; when: string; what: string; who: string
 
 /** The assistant's suggestions a person answers with Yes or Not now (plan A6). */
 const SUGGESTIONS = new Set(["application.invite_screen", "application.recommend_interview"]);
-const SUGGESTED: Record<string, string> = { "application.invite_screen": "a screening chat", "application.recommend_interview": "an interview", "disposition.send": "sending the decision message", "message.send_freeform": "a team member's message" };
-const SCREEN_CANCELLED: Record<string, string> = { stopped_by_team: "Screening chat invitation stopped by the team", left_process: "Screening chat closed: no longer in the process", deletion_request: "Screening chat closed: their information was deleted" };
+const SUGGESTED: Record<string, string> = { "application.invite_screen": "an AI interview", "application.recommend_interview": "an interview", "disposition.send": "sending the decision message", "message.send_freeform": "a team member's message" };
+const SCREEN_CANCELLED: Record<string, string> = { stopped_by_team: "AI interview invitation stopped by the team", left_process: "AI interview closed: no longer in the process", deletion_request: "AI interview closed: their information was deleted" };
 /** Why a suggestion or approval was closed without an answer. */
-const CLOSED_BY: Record<string, string> = { left_process: "they left the process", deletion_request: "their information was deleted", told_in_person: "they were told in person", reject: "a person declined them", move_to_talent_pool: "a person moved them to the talent pool", hold: "a person put them on hold", set_mark: "a person set them aside", invite_screen: "a person invited them to a screening chat", ask_in_screen: "a person invited them to a screening chat", advance_to_interview: "a person moved them to interview" };
+const CLOSED_BY: Record<string, string> = { left_process: "they left the process", deletion_request: "their information was deleted", told_in_person: "they were told in person", reject: "a person declined them", move_to_talent_pool: "a person moved them to the talent pool", hold: "a person put them on hold", set_mark: "a person set them aside", invite_screen: "a person invited them to an AI interview", ask_in_screen: "a person invited them to an AI interview", advance_to_interview: "a person moved them to interview" };
 
 /**
  * An approval about this candidate in words: the assistant's suggestion (a screen, an interview) asked, approved by a
@@ -455,7 +455,7 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
     case "application.triaged":
       return { ...base, what: `AI review of the résumé: ${REC_LABEL[String(p.recommendation ?? "")] ?? "done"}` };
     case "assessment.created":
-      return { ...base, what: p.kind === "screen" ? "AI review of the screening chat written" : "AI review of the résumé written" };
+      return { ...base, what: p.kind === "screen" ? "AI review of the AI interview written" : "AI review of the résumé written" };
     case "application.stage_changed":
       return { ...base, what: `Now "${STAGE_LABEL[String(p.to ?? "")] ?? String(p.to ?? "").replace(/_/g, " ")}"`, ...(str(p.reason) && !REJECT_REASON_LABEL[String(p.reason)] ? { why: String(p.reason) } : {}) };
     case "application.rejected":
@@ -531,14 +531,14 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       const words: Record<string, string> = {
         override_eligibility: "Kept them in after the eligibility answer",
         review_anyway: "Reopened after an eligibility decline",
-        invite_screen: "Invited to a screening chat",
-        ask_in_screen: "Invited to a screening chat that starts with the open questions",
+        invite_screen: "Invited to an AI interview",
+        ask_in_screen: "Invited to an AI interview that starts with the open questions",
         "interview.request": "Approved an interview; times go out to the candidate",
         flag_assessment: "Flagged the AI review as wrong",
         outcome: `Recorded an outcome${str(p.outcome) ? `: ${String(p.outcome).replace(/_/g, " ")}` : ""}`,
         outcome_corrected: "An ITS administrator corrected the recorded outcome",
         move_to_talent_pool: "Moved to the talent pool",
-        cancel_screen: "Stopped the screening chat invitation",
+        cancel_screen: "Stopped the AI interview invitation",
         undo_decision: "Took back the decision before they were told; nothing was sent",
         "interview.new_times": "Sent new times",
         "interview.new_times_stop": "Stopped the automatic new times",
@@ -561,50 +561,50 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return approvalWords("expired", p, base);
     // Their screens (recorded on the screen).
     case "screen.invited":
-      if (p.invitedVia === "apply") return { ...base, what: "Offered the screening chat right after the application form" };
+      if (p.invitedVia === "apply") return { ...base, what: "Offered the AI interview right after the application form" };
       if (p.invitedVia === "with_application") return { ...base, what: "AI interview offered with the application (on the page and by email)" };
-      return { ...base, what: p.focus === "unknowns" ? "Screening chat invitation sent, starting with the open questions" : "Screening chat invitation sent" };
+      return { ...base, what: p.focus === "unknowns" ? "AI interview invitation sent, starting with the open questions" : "AI interview invitation sent" };
     case "screen.started":
-      return { ...base, what: "Started the screening chat" };
+      return { ...base, what: "Started the AI interview" };
     case "screen.completed":
       // Before 9 October 2026 only: answers nobody pressed Send on are no longer sent for the candidate ("hide them until they send").
       if (p.via === "review_timeout") return { ...base, what: "Their screening answers were sent as they were", who: "The system", why: "They answered every question but did not press Send; a reminder said the answers would go two days later." };
-      return { ...base, what: p.via === "recruiter_call" ? "Screening finished with a recruiter's notes from a call" : "Finished the screening chat" };
+      return { ...base, what: p.via === "recruiter_call" ? "Screening finished with a recruiter's notes from a call" : "Finished the AI interview" };
     // Wave E: the conversation in the same visit as applying.
     case "screen.declined_by_candidate":
-      return { ...base, what: "Sent the application without the screening chat", why: "Their own choice; it is never held against them." };
+      return { ...base, what: "Sent the application without the AI interview", why: "Their own choice; it is never held against them." };
     case "screen.idle_reminded":
-      return { ...base, what: "Reminded once to finish the screening chat", who: "The system" };
+      return { ...base, what: "Reminded once to finish the AI interview", who: "The system" };
     case "screen.unfinished":
       // They never sent their answers, so the history says nothing about how far they got (9 October 2026).
-      return { ...base, what: "Didn't finish the screening chat; it closed after one reminder", who: "The system", why: "They never sent their answers, so they are not shown." };
+      return { ...base, what: "Didn't finish the AI interview; it closed after one reminder", who: "The system", why: "They never sent their answers, so they are not shown." };
     case "screen.paused":
-      return { ...base, what: "The screening chat paused: the assistant was not working", who: "The system", told: "They are emailed a link to finish once it is back." };
+      return { ...base, what: "The AI interview paused: the assistant was not working", who: "The system", told: "They are emailed a link to finish once it is back." };
     case "screen.resumed":
-      return { ...base, what: "The screening chat is back on", who: "The system" };
+      return { ...base, what: "The AI interview is back on", who: "The system" };
     case "screen.question_skipped":
       return { ...base, what: p.answerKept ? "Moved on from a follow-up question, keeping the answer already given" : "Chose not to answer a screening question" };
     case "screen.answer_edited":
       return { ...base, what: "Changed an answer before sending" };
     case "screen.answer_tapped":
-      return null; // the answer itself is on the Screen tab
+      return null; // the answer itself is on the AI interview tab
     case "screen.recruiter_notes_added":
       return { ...base, what: "Added notes from a call with the candidate", why: "Kept as the recruiter's notes, never as the candidate's own words." };
     case "screen.turn_cap_reached":
-      return { ...base, what: "The screening chat reached its length limit", who: "The system", why: p.ending === "review" ? "They were taken to check their answers, where they can answer any question still open, and send them." : "It closed with what they had said so far, and the AI review reads only that." };
+      return { ...base, what: "The AI interview reached its length limit", who: "The system", why: p.ending === "review" ? "They were taken to check their answers, where they can answer any question still open, and send them." : "It closed with what they had said so far, and the AI review reads only that." };
     case "screen.repeat_confirmed":
       return { ...base, what: p.intent === "person" ? "Confirmed by email: asked for a person after applying again" : p.intent === "outage" ? "Confirmed by email: a person to finish the chat the assistant could not, after applying again" : p.added ? "Confirmed by email: answers given when applying again were added" : "Confirmed by email after applying again; nothing was added" };
     case "screen.human_requested":
       return { ...base, what: "Asked to talk to a person instead of the assistant" };
     case "screen.allowance_lapsed":
-      return { ...base, what: "Never got the screening chat: the plan's screening chats stayed used up", who: "The system", ...(p.promised ? { told: "They were told it is not going ahead and that nothing else is needed." } : {}) };
+      return { ...base, what: "Never got the AI interview: the plan's AI interviews stayed used up", who: "The system", ...(p.promised ? { told: "They were told it is not going ahead and that nothing else is needed." } : {}) };
     case "screen.expired":
-      if (p.oneVisit) return { ...base, what: "Did not start the screening chat that goes with the application", who: "The system", why: "Reminded once; the application came to the team without it, and they were told nothing else is needed." };
-      return { ...base, what: "The screening chat invitation lapsed without an answer" };
+      if (p.oneVisit) return { ...base, what: "Did not start the AI interview that goes with the application", who: "The system", why: "Reminded once; the application came to the team without it, and they were told nothing else is needed." };
+      return { ...base, what: "The AI interview invitation lapsed without an answer" };
     case "screen.abandoned":
-      return p.reason === "withdrawn" ? null : { ...base, what: "Left the screening chat" };
+      return p.reason === "withdrawn" ? null : { ...base, what: "Left the AI interview" };
     case "screen.cancelled":
-      return { ...base, what: SCREEN_CANCELLED[String(p.reason ?? "")] ?? "Screening chat closed", ...(note ? { why: note } : {}) };
+      return { ...base, what: SCREEN_CANCELLED[String(p.reason ?? "")] ?? "AI interview closed", ...(note ? { why: note } : {}) };
     // recruiter help, from the second query (events about the escalation, not the application)
     case "recruiter.requested":
       return { ...base, what: "Asked an ITS recruiter for help" };
@@ -662,7 +662,7 @@ export function suggestionAndDecision(timeline: readonly TimelineEvent[]): { sug
     else if (e.type === "application.rejected") decided = "Not moving forward";
     else if (e.type === "candidate.recommended") decided = "Interview";
     else if (e.type === "application.moved_to_talent_pool") decided = "Talent pool";
-    else if (e.type === "human.override" && (p.action === "invite_screen" || p.action === "ask_in_screen")) decided = "Invite to a screening chat";
+    else if (e.type === "human.override" && (p.action === "invite_screen" || p.action === "ask_in_screen")) decided = "Invite to an AI interview";
     else if (e.type === "human.override" && p.action === "override_eligibility") decided = "Keep them in";
     if (decided) return { suggested, decided, decidedBy: whoDid(e.actor) };
   }

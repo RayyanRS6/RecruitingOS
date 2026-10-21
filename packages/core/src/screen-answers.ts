@@ -207,7 +207,7 @@ export function withoutSentimentWords(text: string): string {
 }
 
 /** What the ITS operations console shows instead of an AI run's output about a conversation the candidate has not sent. */
-export const WITHHELD_RUN_OUTPUT: Readonly<Record<string, string>> = { withheld: "This AI run is about a screening chat the candidate has not sent, so what it read and wrote is not shown here." };
+export const WITHHELD_RUN_OUTPUT: Readonly<Record<string, string>> = { withheld: "This AI run is about an AI interview the candidate has not sent, so what it read and wrote is not shown here." };
 
 /**
  * An AI run as the ITS operations console shows it (founder decision of 9 October 2026: the console is not the hiring

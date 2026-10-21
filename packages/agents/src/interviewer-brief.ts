@@ -157,7 +157,7 @@ export function renderInterviewerBriefText(brief: InterviewerBrief): string {
   else lines.push("- Nothing flagged yet.");
   if (brief.screen?.answers.length) {
     lines.push("");
-    lines.push("What they said in the screening chat:");
+    lines.push("What they said in the AI interview:");
     for (const a of brief.screen.answers) {
       lines.push(`- ${a.question}`);
       lines.push(`  ${a.answer}`);

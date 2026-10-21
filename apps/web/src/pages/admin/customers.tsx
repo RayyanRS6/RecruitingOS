@@ -237,7 +237,7 @@ export function Customers() {
         </Alert>
       ) : null}
       {filter === "low" && lowCompanies.length ? (
-        <Card needsYou title="Screening chats running low">
+        <Card needsYou title="AI interviews running low">
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {lowCompanies.map((c) => {
               const a = low.get(c.id);
@@ -402,11 +402,11 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
 /** "122 of 150 screening chats this month, resets October 30" (the reset date when the API gives one). */
 export function screeningLine(u: { used: number; limit: number | null; resetsAt?: string | null }): string {
   const resets = u.resetsAt ? `, resets ${new Date(u.resetsAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}` : "";
-  return `${u.used}${u.limit !== null ? ` of ${u.limit}` : ""} screening chats this month${resets}`;
+  return `${u.used}${u.limit !== null ? ` of ${u.limit}` : ""} AI interviews this month${resets}`;
 }
 
 export type PlanOption = { key: string; name: string; limits: Record<string, number | null> };
-const LIMIT_WORDS: Array<[string, string]> = [["active_roles", "active jobs"], ["text_screens", "screening chats a month"], ["recruiter_asks", "recruiter requests a month"], ["seats", "seats"]];
+const LIMIT_WORDS: Array<[string, string]> = [["active_roles", "active jobs"], ["text_screens", "AI interviews a month"], ["recruiter_asks", "recruiter requests a month"], ["seats", "seats"]];
 
 /** What a plan includes, in one line: "3 active jobs · 300 screening chats a month · 10 recruiter requests a month · unlimited seats". */
 export function planLimitsLine(limits: Record<string, number | null>): string {
@@ -534,7 +534,7 @@ function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: T
   });
   return (
     <Card title="Extend the trial">
-      <p className="small muted">{trial.ended ? `The trial ended on ${trialDate(trial.endsAt ?? "", company.timezone)}: new applications, new jobs and new screening chats are paused.` : `The trial ends on ${trialDate(trial.endsAt ?? "", company.timezone)}.`} An extension counts from the later of the end and today. The owners are told, and they see your reason in their activity history.</p>
+      <p className="small muted">{trial.ended ? `The trial ended on ${trialDate(trial.endsAt ?? "", company.timezone)}: new applications, new jobs and new AI interviews are paused.` : `The trial ends on ${trialDate(trial.endsAt ?? "", company.timezone)}.`} An extension counts from the later of the end and today. The owners are told, and they see your reason in their activity history.</p>
       <div className="stack" style={{ gap: 8, marginTop: 8 }}>
         <Field label="Days to add" htmlFor="trial-days" hint={`From 1 to ${TRIAL_EXTENSION_MAX_DAYS}.`}><input id="trial-days" className="input" type="number" inputMode="numeric" min={1} max={TRIAL_EXTENSION_MAX_DAYS} step={1} value={days} onChange={(e) => { setDays(e.target.value); setConfirming(false); }} /></Field>
         <Field label="Why (required, kept with the change)" htmlFor="trial-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="trial-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>

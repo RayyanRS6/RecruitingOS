@@ -134,8 +134,8 @@ export async function seedRoleAndApplicant(request: APIRequestContext, base: str
   const applied = await request.post(`${base}/careers/${company.slug}/jobs/${roleId}/apply`, { multipart, maxRedirects: 0 });
   expect(applied.status()).toBe(302);
   // Since 20 Oct 2026 (R20-12) every applicant lands on the waiting room, which opens their own AI interview once it
-  // exists (the résumé read, usually within a minute): followed here as the page's script does. The status link travels
-  // only by email (Wave 0 item 0.1), and the applicant here does not start the interview, so they are "Still applying".
+  // exists (the résumé read, and at least 40 to 90 seconds for every address alike, Q14): followed here as the page's script does. The status link travels
+  // only by email (Wave 0 item 0.1), and the applicant here does not start the interview, so they are under "No AI interview yet" (R20-7).
   const location = applied.headers().location ?? "";
   expect(location, "the apply form sends the applicant to the waiting room").toBe(`/careers/${company.slug}/jobs/${roleId}/applied`);
   let conversationPath: string | null = null;
@@ -143,7 +143,7 @@ export async function seedRoleAndApplicant(request: APIRequestContext, base: str
     const to = (await request.get(`${base}${location}`, { maxRedirects: 0 })).headers().location ?? "";
     conversationPath = /^\/c\/screen\/[A-Za-z0-9_-]+$/.test(to) ? to : null;
     return conversationPath;
-  }, { timeout: 90_000, message: "the waiting room opening the AI interview" }).not.toBeNull();
+  }, { timeout: 150_000, message: "the waiting room opening the AI interview" }).not.toBeNull();
   const candidateEmail = multipart.email as string;
   const statusPath = await statusPathFromEmail(request, base, candidateEmail);
   return { roleId, slug: company.slug, statusPath, candidateEmail, conversationPath };

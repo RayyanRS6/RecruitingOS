@@ -56,15 +56,16 @@ export function scoreBand(score: number | null | undefined): { score: number; ba
   return { score: s, band: b.band, label: b.label, tone: b.tone };
 }
 
-export type OwnerStage = "new" | "longlist" | "shortlist" | "interviewing" | "cancelled" | "on_hold" | "offer" | "hired" | "not_moving_forward";
+export type OwnerStage = "no_ai_interview" | "new" | "longlist" | "shortlist" | "interviewing" | "cancelled" | "on_hold" | "offer" | "hired" | "not_moving_forward";
 
 /**
  * The stages an owner sees for a candidate (plan adjustments §2), in the order the stage strip and the stage button list
  * them, each with the colour of its dot: green for good news, amber for cancelled and on hold, ink for work under way,
- * grey for new and for not moving forward (never red: a decision is not an error, and neither is a cancelled interview).
- * A view over the internal stages, which stay.
+ * grey for "No AI interview yet" (20 Oct 2026, R20-7: everyone starts there), new and not moving forward (never red: a
+ * decision is not an error, and neither is a cancelled interview). A view over the internal stages, which stay.
  */
 export const OWNER_STAGES: ReadonlyArray<{ id: OwnerStage; label: string; tone: Tone }> = [
+  { id: "no_ai_interview", label: "No AI interview yet", tone: "neutral" },
   { id: "new", label: "New", tone: "neutral" },
   { id: "longlist", label: "Longlist", tone: "accent" },
   { id: "shortlist", label: "Shortlist", tone: "good" },
@@ -78,7 +79,7 @@ export const OWNER_STAGES: ReadonlyArray<{ id: OwnerStage; label: string; tone: 
 
 /** One stage's word and colour; an unknown one reads as New rather than showing a raw name. */
 export function ownerStage(id: string): { id: OwnerStage; label: string; tone: Tone } {
-  return OWNER_STAGES.find((s) => s.id === id) ?? OWNER_STAGES[0];
+  return OWNER_STAGES.find((s) => s.id === id) ?? OWNER_STAGES.find((s) => s.id === "new")!;
 }
 
 /** One line of the stage button's menu. */

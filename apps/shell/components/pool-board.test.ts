@@ -35,7 +35,8 @@ const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfie
 
 function score(value: number, over: Record<string, unknown> = {}) {
   const band = value >= 85 ? "very_high" : value >= 70 ? "high" : value >= 55 ? "medium" : "low";
-  return { score: value, band, bandLabel: null, coverage: { known: 2, total: 2, words: "Based on 2 of 2 requirements" }, breakdown: [], unknown: [], fullMarks: 2, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume", packetVersion: 1, ...over };
+  // on the board's columns everyone's score counts the AI interview (R20-9); résumé-only scores wait in the lane
+  return { score: value, band, bandLabel: null, coverage: { known: 2, total: 2, words: "Based on 2 of 2 requirements" }, breakdown: [], unknown: [], fullMarks: 2, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview", packetVersion: 1, ...over };
 }
 function placed(column: string, over: Record<string, unknown> = {}) {
   return { column, state: "suggested", doneLabel: null, confident: true, needsYourEye: null, reason: "Match score 91: every requirement judged so far is met.", nextStep: { kind: "interview", label: "Interview", reason: "Strong evidence on every must-have." }, suggestedAction: column, declineReason: null, ...over };
@@ -52,16 +53,16 @@ const maria = card("a1", "Maria Reyes", placed("shortlist"), score(91), { mustHa
 const ben = card("a2", "Ben Ortiz", placed("longlist", { confident: false, needsYourEye: "The assistant was not confident about this reading; read it yourself.", nextStep: { kind: "read_yourself", label: "Read it yourself", reason: "Your own read counts most here." } }), score(76));
 const eve = card("a3", "Eve Lund", placed("shortlist", { state: "done", doneLabel: "Shortlist", confident: false, reason: "Already sorted by a person: Shortlist.", nextStep: null, suggestedAction: null }), score(88));
 const luis = card("a4", "Luis Ortega", placed("not_moving_forward", { reason: "Missing must-have: Active CA RDH license.", nextStep: { kind: "not_moving_forward", label: "Not moving forward", reason: "Their own words show they do not meet Active CA RDH license." }, declineReason: { reason: "not_a_match_skills", note: "Missing must-have: Active CA RDH license. Their own words: \"RDH license CA expired in 2021\"" } }), score(40, { missingMustHave: [{ key: "mh_1", label: "Active CA RDH license", quote: "RDH license CA expired in 2021" }], capped: true }));
-const sofia = card("a5", "Sofia Lind", placed("shortlist", { column: null, state: "waiting", doneLabel: "Still applying", suggestedAction: null, nextStep: null }), null);
+const sofia = card("a5", "Sofia Lind", placed("shortlist", { column: null, state: "waiting", doneLabel: "No AI interview yet", reason: "Scored after the AI interview: they join the board when they finish it.", suggestedAction: null, nextStep: null }), null, { appliedAt: daysAgo(1), stage: "screen_invited", ownerStage: "no_ai_interview", ownerStageLabel: "Invited (not started)", aiInterview: { state: "invited", group: "not_started", label: "Invited (not started)", since: daysAgo(1), linkOpenUntil: null, lastEmailAt: daysAgo(1), canRemind: false, canResend: false } });
 const summary = {
-  total: 4, counts: { shortlist: 1, longlist: 1, not_moving_forward: 1 }, toSort: 3, done: 1, stillApplying: 1, showEveryMustHave: 2, mostMissing: { key: "mh_2", label: "Periodontal charting", notShowing: 1, of: 4 }, longestWaiting: { applicationId: "a2", name: "Ben Ortiz", days: 3 },
+  total: 4, counts: { shortlist: 1, longlist: 1, not_moving_forward: 1 }, toSort: 3, done: 1, noAiInterview: 1, stillApplying: 1, showEveryMustHave: 2, mostMissing: { key: "mh_2", label: "Periodontal charting", notShowing: 1, of: 4 }, longestWaiting: { applicationId: "a2", name: "Ben Ortiz", days: 3 },
   nextSteps: [{ applicationId: "a1", name: "Maria Reyes", kind: "interview", label: "Interview", reason: "Strong evidence on every must-have." }, { applicationId: "a2", name: "Ben Ortiz", kind: "read_yourself", label: "Read it yourself", reason: "Your own read counts most here." }],
   mustHaves: [], stricter: null,
-  sentences: ["4 people on the board: 2 on the shortlist, 1 on the longlist, 1 not moving forward. 1 more is still applying.", "2 of 4 show every must-have.", "The must-have shown least often is \"Periodontal charting\": 1 of 4 don't show it.", "Ben Ortiz has waited longest: 3 days."],
+  sentences: ["4 people on the board: 2 on the shortlist, 1 on the longlist, 1 not moving forward. 1 more is not on the board yet: no AI interview in their score.", "2 of 4 show every must-have.", "The must-have shown least often is \"Periodontal charting\": 1 of 4 don't show it.", "Ben Ortiz has waited longest: 3 days."],
 };
-const board = { role: { id: "r1", title: "Dental Hygienist", status: "open", currentPacketVersion: 1 }, columns: { shortlist: [maria, eve], longlist: [ben], not_moving_forward: [luis] }, stillApplying: [sofia], summary, generatedAt: "2026-10-09T10:42:00.000Z" };
+const board = { role: { id: "r1", title: "Dental Hygienist", status: "open", currentPacketVersion: 1 }, columns: { shortlist: [maria, eve], longlist: [ben], not_moving_forward: [luis] }, noAiInterview: [sofia], stillApplying: [sofia], summary, generatedAt: "2026-10-09T10:42:00.000Z" };
 
-const counts = { total: 5, byOwnerStage: { new: 4, longlist: 0, shortlist: 1, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 3, in_process: 2, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 1 };
+const counts = { total: 5, byOwnerStage: { no_ai_interview: 1, new: 3, longlist: 0, shortlist: 1, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 3, in_process: 2, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 1 };
 function client() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
   qc.setQueryData(["me"], owner);
@@ -100,7 +101,7 @@ describe("the pool board on the Candidates page", () => {
     // the header: eyebrow, role, counts, the ways in
     expect(html).toContain('<p class="eyebrow">Board</p>');
     expect(html).toContain('<h2 id="board-title" tabindex="-1">Dental Hygienist</h2>');
-    expect(words).toContain("To sort: 1 shortlist · 1 longlist · 1 not moving forward · 1 already sorted or decided");
+    expect(words).toContain("To sort: 1 shortlist · 1 longlist · 1 not moving forward · 1 already sorted or decided · 1 not on the board yet");
     expect(words).toContain("Ask about this pool");
     expect(words).toContain("Have a recruiter check this");
     expect(html).toMatch(/<button type="button" class="btn primary">Review and apply (<!-- -->)?3<\/button>/);
@@ -121,16 +122,18 @@ describe("the pool board on the Candidates page", () => {
     expect(html).toContain('<span class="chip neutral">Ready to apply</span>');
     expect(html).toContain('<span class="chip neutral">High confidence</span>');
     expect(html).not.toContain('<span class="chip good">');
-    expect(html).toContain('<ul class="board-card-facts"><li>Must-haves: 2 of 2 shown</li><li>From the AI review of the résumé</li><li>Invited to the screening chat automatically</li></ul>');
+    expect(html).toContain('<ul class="board-card-facts"><li>Must-haves: 2 of 2 shown</li><li>From the résumé and the AI interview</li><li>Invited to the AI interview automatically</li></ul>');
     expect(words).toContain("Strength: Active CA RDH license · résumé");
-    expect(words).toContain("Gap: Patient communication: partly shown · screening chat, no quote");
+    expect(words).toContain("Gap: Patient communication: partly shown · AI interview, no quote");
     expect(words).toContain("Interview Strong evidence on every must-have.");
     // Ben needs your eye, Luis is missing a must-have (the only red), Eve is done
     expect(html).toContain('<span class="chip caution">Needs your eye</span>');
     expect(html).toContain('<span class="chip critical">Missing must-have: Active CA RDH license</span>');
     expect(words).toContain("Done Shortlist");
-    // the people still applying are apart, never placed
-    expect(words).toContain("1 more person is still applying: Sofia Lind. They join the board when they finish.");
+    // the read-only lane "No AI interview yet" (R20-7): name, where they stand, when they applied; no score, never placed
+    expect(html).toContain('<section class="board-col" data-column="no_ai_interview" aria-labelledby="board-col-no-ai-interview">');
+    expect(words).toContain("No AI interview yet 1 Scored after the AI interview: they join the board when they send it, and Review and apply never includes them. SL Sofia Lind Applied yesterday Invited (not started)");
+    expect(words).not.toContain("still applying");
   });
 
   it("opens Review and apply from the address: three groups, ticks, reasons, warnings and the private footer", () => {
@@ -182,17 +185,25 @@ describe("Ask about this pool", () => {
   it("answers with the people as chips that open their panel, why, the quotes, and what it looked at", () => {
     const answer = {
       kind: "missing_must_have", question: "Who is missing a must-have, and why?", answer: "1 person shows, in their own words, that they do not meet a must-have.",
-      people: [{ applicationId: "a4", name: "Luis Ortega", score: 40, band: "low", placement: "not_moving_forward", why: "Missing must-have: Active CA RDH license.", quotes: [{ criterion: "Active CA RDH license", quote: "RDH license CA expired in 2021", source: "resume" }], open: "/roles/r1/talent?open=a4" }],
-      applicationIds: ["a4"], lookedAt: { people: 4, resumeReadings: 4, screenReadings: 1, requirements: ["Active CA RDH license", "Periodontal charting"], words: "" },
+      people: [
+        { applicationId: "a4", name: "Luis Ortega", score: 40, band: "low", interview: "done", basis: "From the résumé and the AI interview", placement: "not_moving_forward", why: "Missing must-have: Active CA RDH license.", quotes: [{ criterion: "Active CA RDH license", quote: "RDH license CA expired in 2021", source: "resume" }], open: "/roles/r1/talent?open=a4" },
+        // never offered an AI interview (as before 20 October 2026): on the board, her number from the résumé alone
+        { applicationId: "a6", name: "Ana Cruz", score: 88, band: "very_high", interview: "none", basis: "Résumé only: no AI interview", placement: "shortlist", why: "Shown in the résumé.", quotes: [], open: "/roles/r1/talent?open=a6" },
+      ],
+      applicationIds: ["a4", "a6"], lookedAt: { people: 4, resumeReadings: 4, screenReadings: 1, requirements: ["Active CA RDH license", "Periodontal charting"], words: "" },
     };
     const qc = client();
     const html = render(qc, createElement(AnswerView, { answer: answer as never, onOpen: () => undefined, onShow: () => undefined, onCompareAgain: null }));
     const words = text(html);
     expect(html).toContain('<button type="button" class="person-chip"><span class="avatar sm" aria-hidden="true">LO</span><span>Luis Ortega</span>');
+    // a résumé-only score says so beside it, the full label on hover (R20-9); an interviewed one does not
+    expect(html).toContain('<span class="person-chip-score" title="Résumé only: no AI interview">88');
+    expect(words).toContain("Ana Cruz 88 out of 100 · Résumé only");
+    expect(words.match(/Résumé only/g)).toHaveLength(1);
     expect(words).toContain("Missing must-have: Active CA RDH license.");
     expect(words).toContain("“RDH license CA expired in 2021” Active CA RDH license · résumé");
-    expect(words).toContain("Looked at: 4 people (4 résumé reviews and 1 screening chat), against 2 must-haves. Nothing new was asked of the AI.");
-    expect(words).toContain("Show this person on the board");
+    expect(words).toContain("Looked at: 4 people (4 résumé reviews and 1 AI interview), against 2 must-haves. Nothing new was asked of the AI.");
+    expect(words).toContain("Show these 2 on the board");
   });
 });
 
@@ -247,7 +258,7 @@ describe("the board a recruiter is asked to check (F9)", () => {
     expect(words).toContain("To sort: 1 shortlist · 1 longlist · 1 not moving forward");
     expect(words).toContain("Maria Reyes Shortlist 91/100 Match score 91. Interview");
     expect(words).toContain("Ben Ortiz Longlist 76/100 Needs a person's eye: The assistant was not confident. Read it yourself");
-    expect(words).toContain("Sofia Lind Still applying No score yet");
+    expect(words).toContain("Sofia Lind No AI interview yet No score yet");
     expect(words).toContain("The board only suggests. The team applies it themselves, privately, in Review and apply.");
   });
 });

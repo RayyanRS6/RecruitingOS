@@ -209,8 +209,20 @@ describe("Slice 1 API", () => {
     // the waiting room, never the status page: the status link travels only by email (Wave 0 item 0.1)
     const location = r.headers.get("location")!;
     expect(location).toBe(`/careers/${companySlug}/jobs/${roleId}/applied`);
-    // 20 Oct 2026 (R20-12): the résumé is read and the AI interview exists (the inline worker ran), so the page opens it
-    const waiting = await app.request(location, { headers: { cookie: r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } });
+    // 20 Oct 2026 (R20-12): the résumé is read and the AI interview exists (the inline worker ran); the page still says
+    // "preparing" for its first 40 to 90 seconds, as every waiting room does (Q14, 21 Oct), and then opens it
+    const receiptCookie = r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0];
+    expect((await app.request(location, { headers: { cookie: receiptCookie } })).status).toBe(200);
+    const engine = container.engine as unknown as { now: () => Date };
+    const real = engine.now;
+    const past = real().getTime() + 91_000;
+    engine.now = () => new Date(past);
+    let waiting: Response;
+    try {
+      waiting = await app.request(location, { headers: { cookie: receiptCookie } });
+    } finally {
+      engine.now = real;
+    }
     expect(waiting.status).toBe(302);
     expect(waiting.headers.get("location")).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
     const intro = await (await app.request(waiting.headers.get("location")!, { headers: { cookie: waiting.headers.get("set-cookie")!.match(/ros_applied_to=[^;,]+/)![0] } })).text();
@@ -369,7 +381,7 @@ describe("Slice 1 API", () => {
     form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
-    // exactly what a first application gets: the waiting room (naming no application, Q14), never a status link
+    // exactly what a first application gets: the waiting room (Q14; it opens a detached interview, never hers), never a status link
     expect(r.headers.get("location")).toBe(`/careers/${companySlug}/jobs/${roleId}/applied`);
     const receipt = await (await app.request(r.headers.get("location")!, { headers: { cookie: r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } })).text();
     expect(receipt).toContain("preparing your AI interview");

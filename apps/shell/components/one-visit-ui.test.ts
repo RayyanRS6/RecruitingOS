@@ -47,10 +47,11 @@ const row = (id: string, name: string, over: Record<string, unknown> = {}) => ({
   appliedAt: daysAgo(2), stageChangedAt: daysAgo(2), daysInStage: 2, candidateToldAt: null, decisionMessageWaiting: false, stillApplying: false, ...over,
 });
 const maria = row("a1", "Maria Reyes");
-const sofia = row("a2", "Sofia Lind", { stage: "screen_invited", stageLabel: "Invited to a screen", group: "in_process", stillApplying: true, daysInStage: 0 });
-// Theo's hold ended while he was still answering: the API says "waiting on you"; the page never does while he applies
-const theo = row("a3", "Theo Park", { stage: "screening", stageLabel: "Being screened", group: "waiting_on_you", stillApplying: true });
-const counts = { total: 3, byOwnerStage: { new: 3, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 2, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 2 };
+const ai = (state: "invited" | "started", label: string) => ({ state, group: state === "invited" ? "not_started" : "started", label, since: daysAgo(0), linkOpenUntil: null, lastEmailAt: daysAgo(0), canRemind: false, canResend: false });
+const sofia = row("a2", "Sofia Lind", { stage: "screen_invited", stageLabel: "Invited to the AI interview", ownerStage: "no_ai_interview", ownerStageLabel: "Invited (not started)", group: "in_process", stillApplying: true, daysInStage: 0, aiInterview: ai("invited", "Invited (not started)") });
+// Theo's hold ended while he was still answering: the API says "waiting on you"; the page never does while he is in the column
+const theo = row("a3", "Theo Park", { stage: "screening", stageLabel: "In the AI interview", ownerStage: "no_ai_interview", ownerStageLabel: "Started (not finished)", group: "waiting_on_you", stillApplying: true, aiInterview: ai("started", "Started (not finished)") });
+const counts = { total: 3, byOwnerStage: { no_ai_interview: 2, new: 1, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 2, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 2, aiInterview: { not_started: 1, started: 1, asked_person: 0, closed: 0 } };
 
 const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
 const itsRecruiter = { user: { id: "s1", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" }, auth: { provider: "azure", aal: "aal2", mfaVerifiedAt: daysAgo(0) }, memberships: [], activeCompanyId: "co1", staffAccess: { grantId: "g1", kind: "escalation", purpose: "candidate asked for a person", expiresAt: daysAgo(-1), companyName: "Bright Dental", scope: { escalationId: "e1", roleId: "r1", applicationId: "a2" } }, ai: { provider: "fake" } };
@@ -64,40 +65,52 @@ function client(me: unknown = owner) {
   return qc;
 }
 
-describe("Still applying beside the stage strip (plan E6)", () => {
-  it("counts them beside the strip and in the header, keeps them in their stage, and never as waiting on you", () => {
+describe("No AI interview yet, the strip's first column (20 Oct 2026, R20-7; it replaced plan E6's 'Still applying' toggle)", () => {
+  it("counts them in their own column and in the header, never as waiting on you, with no 'Still applying' toggle", () => {
     nav.search = "";
     const html = render(client(), createElement(People));
-    expect(html).toContain("3 applicants · 1 waiting on you · 2 still applying");
+    expect(html).toContain("3 applicants · 1 waiting on you · 2 without an AI interview yet");
     expect(html).toMatch(/<div class="talent-strip"><div role="tablist" aria-label="Stages"/);
-    expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="false" title="Sent the form and answering the screening questions now">Still applying <span class="count">2<\/span><\/button>/);
-    // the strip still counts all three as New
-    expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">3</span>');
+    expect(html).toContain('<span class="tab-label" data-label="No AI interview yet">No AI interview yet</span> <span class="count">2</span>');
+    expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">1</span>');
+    expect(text(html)).not.toContain("Still applying");
     // the page opens on "waiting on you": Maria only; never Theo, whose group says so
     expect(text(html)).toContain("Waiting on you 1");
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
     expect(html).not.toContain('class="talent-name">Theo Park</button>');
   });
 
-  it("shows only them when pressed (or from the report's link), each row saying so", () => {
-    nav.search = "applying=1";
+  it("shows the column with its chips and one calm line, each row saying where they stand (also from an older 'still applying' link)", () => {
+    for (const search of ["ownerStage=no_ai_interview", "applying=1"]) {
+      nav.search = search;
+      const html = render(client(), createElement(People));
+      const words = text(html);
+      expect(html).toContain('class="talent-name">Sofia Lind</button>');
+      expect(html).toContain('class="talent-name">Theo Park</button>');
+      expect(html).not.toContain('class="talent-name">Maria Reyes</button>');
+      expect(words).toContain("Not started 1");
+      expect(words).toContain("Started 1");
+      expect(words).toContain("Link closed 0");
+      expect(words).toContain("1 not started · 1 started. Everyone who applies gets the AI interview by email and moves to New once they send it. Nothing here waits on you");
+      expect(html).toMatch(/<span class="pill neutral sm" title="Invited \(not started\)"><span class="dot" aria-hidden="true"><\/span>Invited /);
+      expect(html).toContain('<span class="pill neutral sm" title="Started (not finished)"><span class="dot" aria-hidden="true"></span>Started (not finished)</span>');
+      expect(words).not.toContain("Waiting on you 2 days");
+    }
+  });
+
+  it("filters the column by a chip from a link (Home's line)", () => {
+    nav.search = "ownerStage=no_ai_interview&aiInterview=started";
     const html = render(client(), createElement(People));
-    expect(html).toMatch(/class="toggle-chip" aria-pressed="true"[^>]*>Still applying/);
-    expect(html).toContain('class="talent-name">Sofia Lind</button>');
     expect(html).toContain('class="talent-name">Theo Park</button>');
-    expect(html).not.toContain('class="talent-name">Maria Reyes</button>');
-    expect(text(html)).toContain("Nothing about them waits on you until they send their answers");
-    expect(html.match(/<span class="pill neutral sm" title="Sent the form and answering the screening questions now"><span class="dot" aria-hidden="true"><\/span>Still applying<\/span>/g)).toHaveLength(2);
-    expect(html.match(/class="dot pulse"/g)).toHaveLength(1); // only the page's own Live pill pulses
-    expect(text(html)).not.toContain("Waiting on you 2 days");
+    expect(html).not.toContain('class="talent-name">Sofia Lind</button>');
+    expect(html).toMatch(/class="toggle-chip" aria-pressed="true">Started <span class="count">1<\/span>/);
   });
 });
-
 const at = daysAgo(1);
 const screenBase = { id: "s1", channel: "web", invitedAt: at, startedAt: at, remindedAt: null, assessmentId: null, scorecard: "writing", recruiterAsked: false };
 function detail(over: Record<string, unknown> = {}) {
   return {
-    ...sofia, roleId: "r1", stage: "screen_complete", candidateToldAt: null, rejectReason: null, rejectNote: null, declineMessage: "sends",
+    ...sofia, roleId: "r1", stage: "screen_complete", ownerStage: "new", ownerStageLabel: "New", aiInterview: null, candidateToldAt: null, rejectReason: null, rejectNote: null, declineMessage: "sends",
     allowedActions: ["interview", "hold", "reject", "set_mark"], blockedReasons: {}, interviews: [], interviewPlan: [],
     candidate: { firstName: "Sofia", lastName: "Lind", email: "a2@example.com", phone: null, locationText: null, consent: {}, preferences: {} },
     documents: [], communications: [], extraction: null, answers: {}, assessments: [], pendingApprovals: [],
@@ -124,7 +137,7 @@ const panel = (qc: QueryClient, d: ReturnType<typeof detail>, tab: "overview" | 
 
 describe("the candidate panel (plan E3, E10, E11)", () => {
   it("says 'Applied and talked in one visit' on the Overview and the Screen tab", () => {
-    expect(text(panel(client(), detail(), "overview"))).toContain("Applied and talked in one visit: the screening questions were answered right after the form.");
+    expect(text(panel(client(), detail(), "overview"))).toContain("Applied and talked in one visit: the AI interview was answered after the form.");
     expect(panel(client(), detail(), "screen")).toContain('<span class="chip good">Applied and talked in one visit</span>');
   });
 
@@ -155,7 +168,7 @@ describe("the candidate panel (plan E3, E10, E11)", () => {
     expect(text(recruiter)).toContain("never shown or quoted as Sofia's own words");
     expect(recruiter).toContain('<label for="call-note-q_sat">Can you work Saturdays?</label>');
     expect(recruiter).toContain('id="call-note-other"');
-    expect(recruiter).toMatch(/<input type="checkbox" checked=""\/>Finish the screening with these notes/);
+    expect(recruiter).toMatch(/<input type="checkbox" checked=""\/>Finish the AI interview with these notes/);
     expect(text(recruiter)).toContain("Add the notes");
     const ownerView = panel(client(), asked, "overview");
     expect(text(ownerView)).not.toContain("asked to talk to a person");
@@ -169,14 +182,14 @@ describe("the role report and the ITS controls", () => {
     const qc = client();
     qc.setQueryData(["role", "r1", "screening"], { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 2, medianMinutes: 6.4, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] });
     const words = text(render(qc, createElement(ScreeningCard, { roleId: "r1" })));
-    expect(words).toContain("The screening chat");
+    expect(words).toContain("The AI interview");
     expect(words).toContain("Started it 8 of 10 (80%)");
     expect(words).toContain("Typical time to finish about 6 minutes");
     // never where anyone stopped: a conversation that stopped was never sent (founder decision of 9 October 2026)
     expect(words).not.toContain("Most people who stopped");
     expect(words).toContain("Chose a person instead 2: 1 asked to be contacted, 1 sent their application without it");
     expect(words).toContain("What pay are you looking for? 3");
-    expect(render(qc, createElement(ScreeningCard, { roleId: "r1" }))).toContain('href="/roles/r1/talent?applying=1"');
+    expect(render(qc, createElement(ScreeningCard, { roleId: "r1" }))).toContain('href="/roles/r1/talent?ownerStage=no_ai_interview"');
   });
 
   it("lets ITS switch a role between one visit and the later path, with the company's default named", () => {
@@ -193,13 +206,13 @@ describe("the role report and the ITS controls", () => {
   it("warns an owner on Today at 80% of the month's screening conversations, with a way to ask ITS", () => {
     nav.search = "";
     const words = text(render(client(), createElement(Home)));
-    expect(words).toContain("122 of this month's 150 screening chats used");
+    expect(words).toContain("122 of this month's 150 AI interviews used");
     expect(words).toContain("80% used");
     expect(words).toContain("Nothing has stopped.");
     expect(words).toContain("Ask ITS about adding more");
     // nobody else sees it
     const hm = { ...owner, memberships: [{ ...owner.memberships[0], role: "hiring_manager" }] };
-    expect(text(render(client(hm), createElement(Home)))).not.toContain("screening chats used");
+    expect(text(render(client(hm), createElement(Home)))).not.toContain("AI interviews used");
   });
 
   it("shows ITS who is running low, and that every company's people apply the same way", () => {
@@ -210,10 +223,10 @@ describe("the role report and the ITS controls", () => {
     nav.search = "show=low&open=co1";
     const words = text(render(qc, createElement(CustomersSection, { view: null, onView: () => undefined })));
     nav.search = "";
-    expect(words).toContain("Screening chats running low");
-    expect(words).toContain("Bright Dental : 80% of screening chats used (122 of 150), since");
+    expect(words).toContain("AI interviews running low");
+    expect(words).toContain("Bright Dental : 80% of AI interviews used (122 of 150), since");
     // and on the drawer's Overview, beside its plan and this month's chats
-    expect(words).toContain("Starter · Active Change plan 122 of 150 screening chats this month 80% of screening chats used (122 of 150)");
+    expect(words).toContain("Starter · Active Change plan 122 of 150 AI interviews this month 80% of AI interviews used (122 of 150)");
     // how the company's people apply: the same for everyone since 20 Oct 2026 (R20-12), whatever the old switch says
     expect(words).toContain("How people apply The same for everyone: the form, then the AI interview");
   });

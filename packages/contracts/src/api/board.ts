@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Confidence } from "../domain/common";
-import type { BoardColumn, BoardPlacement, MatchBand, MatchScore, MustHaveSummary, NextStep, ReadingVersion } from "../domain/match";
-import { RejectReason, type ActiveMark, type ApplicationStage, type OwnerStage } from "../domain/stages";
+import type { BoardColumn, BoardPlacement, InterviewInScore, MatchBand, MatchScore, MustHaveSummary, NextStep, ReadingVersion } from "../domain/match";
+import { RejectReason, type ActiveMark, type AiInterviewView, type ApplicationStage, type OwnerStage } from "../domain/stages";
 
 /**
  * The pool board, Review and apply, and the one-click questions (plan Wave F; plan-adjustments sections 1 and 3).
@@ -40,7 +40,10 @@ export type BoardCard = {
   gap: BoardQuote | null;
   placement: BoardPlacement;
   readingVersion: ReadingVersion | null;
-  facts: { openScreen: boolean; invitedAutomatically: boolean; suggestionWaiting: boolean; stillApplying: boolean; lowConfidence: boolean; needsCloserLook: boolean };
+  /** `noAiInterview`: under "No AI interview yet" (R20-7); `stillApplying` says the same, kept one release for older pages. */
+  facts: { openScreen: boolean; invitedAutomatically: boolean; suggestionWaiting: boolean; noAiInterview: boolean; stillApplying: boolean; lowConfidence: boolean; needsCloserLook: boolean };
+  /** Where they stand with the AI interview while under "No AI interview yet" (`aiInterviewOf`), else null. */
+  aiInterview: AiInterviewView | null;
   open: string;
 };
 
@@ -60,6 +63,12 @@ export type PoolSummary = {
   counts: Record<BoardColumn, number>;
   toSort: number;
   done: number;
+  /**
+   * The people in the lane apart (R20-7, R20-9: under "No AI interview yet", or no AI interview in their score: being
+   * scored, or closed unsent), never on the board, said as "not on the board yet"; `stillApplying` says the same, kept
+   * one release.
+   */
+  noAiInterview: number;
   stillApplying: number;
   showEveryMustHave: number;
   mostMissing: { key: string; label: string; notShowing: number; of: number } | null;
@@ -73,7 +82,12 @@ export type PoolSummary = {
 export type BoardView = {
   role: { id: string; title: string; status: string; currentPacketVersion: number | null };
   columns: Record<BoardColumn, BoardCard[]>;
-  /** Offered the conversation with their application and not finished yet (plan E6): shown apart, never placed. */
+  /**
+   * The read-only lane "No AI interview yet" (20 Oct 2026, R20-7): everyone whose AI interview is not done, shown apart,
+   * never placed and never suggested in Review and apply; scored after the AI interview. `stillApplying`: the same list,
+   * kept one release for older pages.
+   */
+  noAiInterview: BoardCard[];
   stillApplying: BoardCard[];
   summary: PoolSummary;
   generatedAt: string;
@@ -93,7 +107,7 @@ export const BATCH_MAX = 50;
  */
 export const BatchAction = z.enum(["shortlist", "longlist", "not_moving_forward", "on_hold", "invite_screen", "escalate"]);
 export type BatchAction = z.infer<typeof BatchAction>;
-export const BATCH_ACTION_LABEL: Record<BatchAction, string> = { shortlist: "Shortlist", longlist: "Longlist", not_moving_forward: "Not moving forward", on_hold: "On hold", invite_screen: "Invite to the screening chat", escalate: "Ask a recruiter to look" };
+export const BATCH_ACTION_LABEL: Record<BatchAction, string> = { shortlist: "Shortlist", longlist: "Longlist", not_moving_forward: "Not moving forward", on_hold: "On hold", invite_screen: "Invite to the AI interview", escalate: "Ask a recruiter to look" };
 
 export const RoleBatchItem = z.object({
   applicationId: z.string().min(1).max(64),
@@ -184,8 +198,11 @@ export const PoolQuestionQuery = z.object({
 /** A question the page offers, ready to ask. */
 export type PoolQuestion = { id: string; kind: PoolQuestionKind; label: string; mustHaveKey: string | null };
 
-/** One person in an answer: why they are in it, with the quotes it rests on. */
-export type PoolAnswerPerson = { applicationId: string; name: string; score: number | null; band: MatchBand | null; placement: BoardColumn | null; why: string; quotes: Array<{ criterion: string; quote: string; source: string }>; open: string };
+/**
+ * One person in an answer: why they are in it, with the quotes it rests on. `interview` and `basis` (R20-9): whether
+ * their AI interview is in the score and the label that says so (`SCORE_BASIS_WORDS`); an older answer has neither.
+ */
+export type PoolAnswerPerson = { applicationId: string; name: string; score: number | null; band: MatchBand | null; interview?: InterviewInScore | null; basis?: string | null; placement: BoardColumn | null; why: string; quotes: Array<{ criterion: string; quote: string; source: string }>; open: string };
 
 /**
  * An answer, worked out from the stored findings (no new AI): the people, the quotes, and what it looked at. `people`

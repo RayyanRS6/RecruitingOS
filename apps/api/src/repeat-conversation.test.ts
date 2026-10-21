@@ -7,8 +7,7 @@ import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
-import { applicationAnswerSentences } from "@ros/core";
-import { CONVERSATIONS_PER_APPLICATION_PER_DAY, DETACHED_EMAILS_PER_DAY, applyVisitNext, confirmRepeat, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, interviewWaitFor, repeatConfirmationView, startDetachedConversation, type ConversationRef } from "./services/apply-conversation";
+import { CONVERSATIONS_PER_APPLICATION_PER_DAY, DETACHED_EMAILS_PER_DAY, applyVisitNext, confirmRepeat, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, interviewWaitFor, repeatConfirmationView, type ConversationRef } from "./services/apply-conversation";
 import { useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -38,8 +37,8 @@ describe("a repeat submission's conversation is detached until the address owner
 
   /**
    * A first application gets its own AI interview once the résumé is read (20 Oct 2026). A repeat submission gets the same
-   * waiting room since then, naming no application, and is told to check its email; the detached conversation such a submission was given before is opened here directly
-   * (`startDetachedConversation`), so the ones still open keep their tests.
+   * waiting room, which opens a detached AI interview made for that visit (Q14 kept in full, founder 21 Oct); past the
+   * day's conversations for the application it names nothing and ends on "check your email".
    */
   type Outcome = { kind: "conversation"; token: string } | { kind: "receipt"; reason: string };
   async function applyNow(p: { first: string; email: string }): Promise<{ outcome: Outcome; applicationId: string; duplicate: boolean }> {
@@ -49,17 +48,19 @@ describe("a repeat submission's conversation is detached until the address owner
     const eligibilityAnswers = Object.fromEntries(elig.map((r) => [r.key, "yes"]));
     const result = await withTenant(container.db, company.id, async (tx) => {
       const created = await createApplication(tx, container, { companyId: company.id, roleId, source: "careers_page", firstName: p.first, lastName: "Applicant", email: p.email, phone: null, smsConsent: false, consentSource: "careers_page_apply", noticeVersionsShown: ["ai_use@2026-10-08", "privacy@2026-09-01"], eligibilityAnswers, noResumeAnswers: { summary: "Registered dental hygienist for six years, active CA RDH license, perio maintenance in Dentrix." } }, { kind: "candidate", id: "applicant" });
-      const next = await applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, packet: pv.packet as RolePacket, eligibilityAnswers });
-      const typedFacts = { cv: [], formAnswers: applicationAnswerSentences(pv.packet as RolePacket, { eligibility: eligibilityAnswers, quick: null }).map((s) => s.sentence) };
-      const detached = created.duplicate ? await startDetachedConversation(tx, container, { application: created.application, role, company, firstName: p.first, typedFacts }) : null;
-      return { next, detached, applicationId: created.application.id, duplicate: created.duplicate };
+      const next = await applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, role, packet: pv.packet as RolePacket, eligibilityAnswers, typedFirstName: p.first });
+      return { next, applicationId: created.application.id, duplicate: created.duplicate };
     });
     await container.kick();
     await container.drain();
+    if (result.next.kind !== "interview") throw new Error(`expected the waiting room, got ${result.next.reason}`);
     if (result.duplicate) {
-      // the same waiting room as a first application, naming no application (Q14): it ends on "check your email"
-      expect(result.next).toEqual({ kind: "interview", applicationId: null });
-      return { outcome: result.detached ? { kind: "conversation", token: result.detached.token } : { kind: "receipt", reason: "conversation_by_email" }, applicationId: result.applicationId, duplicate: true };
+      // the same waiting room as a first application, waiting for a detached interview instead of the application's own
+      expect(result.next.applicationId).toBeNull();
+      if (!result.next.conversationId) return { outcome: { kind: "receipt", reason: "conversation_by_email" }, applicationId: result.applicationId, duplicate: true };
+      const wait = await interviewWaitFor(container.db, result.next.conversationId);
+      if (wait.state !== "ready") throw new Error(`expected the detached interview, got ${wait.state}`);
+      return { outcome: { kind: "conversation", token: wait.token }, applicationId: result.applicationId, duplicate: true };
     }
     const wait = await interviewWaitFor(container.db, result.applicationId);
     if (wait.state !== "ready") throw new Error(`expected the AI interview, got ${wait.state}`);
@@ -297,19 +298,21 @@ describe("a repeat submission's conversation is detached until the address owner
     expect(comms.every((c) => c.direction === "outbound")).toBe(true);
   });
 
-  it("one application opens a few conversations a day, its own and repeat submissions' together; past that a repeat gets the receipt, after as many submissions whether or not the address applied before", async () => {
+  it("one application opens a few conversations a day, its own and repeat submissions' together; past that a repeat's waiting room opens nothing and ends on 'check your email', after as many submissions whether or not the address applied before", async () => {
     const first = await applyNow({ first: "Noa", email: "noa@repeat.test" });
     expect(first.outcome.kind).toBe("conversation");
     const copies = () => container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, first.applicationId));
     for (let i = 1; i < CONVERSATIONS_PER_APPLICATION_PER_DAY; i++) expect((await applyNow({ first: "Someone", email: "noa@repeat.test" })).outcome.kind).toBe("conversation");
     expect(await copies()).toHaveLength(CONVERSATIONS_PER_APPLICATION_PER_DAY - 1);
-    // the same receipt as when the month's conversations are used up; no copy, no link, nothing for the model
+    // its waiting room names nothing and ends on "check your email": no copy, no link, nothing for the model
     expect((await applyNow({ first: "Someone", email: "noa@repeat.test" })).outcome).toEqual({ kind: "receipt", reason: "conversation_by_email" });
     expect(await copies()).toHaveLength(CONVERSATIONS_PER_APPLICATION_PER_DAY - 1);
     // more than a day on, an address that applied before opens as many as a new one did
     const dayAgo = new Date(Date.now() - 25 * 3600_000).toISOString();
     await container.db.update(unconfirmedScreens).set({ createdAt: dayAgo }).where(eq(unconfirmedScreens.applicationId, first.applicationId));
     await container.db.update(screens).set({ createdAt: dayAgo }).where(eq(screens.applicationId, first.applicationId));
+    // the application's own interview counts from when the application was made (21 Oct), so it is older than a day too
+    await container.db.update(applications).set({ createdAt: dayAgo }).where(eq(applications.id, first.applicationId));
     for (let i = 0; i < CONVERSATIONS_PER_APPLICATION_PER_DAY; i++) expect((await applyNow({ first: "Someone", email: "noa@repeat.test" })).outcome.kind).toBe("conversation");
     expect((await applyNow({ first: "Someone", email: "noa@repeat.test" })).outcome).toEqual({ kind: "receipt", reason: "conversation_by_email" });
   });

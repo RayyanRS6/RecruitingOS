@@ -84,18 +84,25 @@ describe("the stage strip (founder decision B3)", () => {
   const now = new Date("2026-10-08T12:00:00Z");
   const later = "2026-10-20T15:00:00.000Z";
   const earlier = "2026-10-01T15:00:00.000Z";
-  it("maps every internal stage to one owner stage", () => {
+  it("maps every internal stage to one owner stage: from applying until the AI interview is sent, 'No AI interview yet' (R20-7)", () => {
     const expected: Record<ApplicationStage, OwnerStage> = {
-      applied: "new", received: "new", ineligible: "new", eligible: "new", triaged: "new", screen_invited: "new", screening: "new", screen_complete: "new",
+      applied: "no_ai_interview", received: "no_ai_interview", eligible: "no_ai_interview", screen_invited: "no_ai_interview", screening: "no_ai_interview",
+      ineligible: "new", triaged: "new", screen_complete: "new",
       interview_recommended: "interviewing", interview_scheduled: "interviewing", interview_complete: "interviewing", debrief: "interviewing", finalist: "interviewing", reference_check: "interviewing",
       offer_draft: "offer", offer_approval: "offer", offer_sent: "offer", negotiation: "offer", accepted: "offer", onboarding: "offer",
       hired: "hired", rejected: "not_moving_forward", withdrawn: "not_moving_forward", declined: "not_moving_forward", talent_pool: "not_moving_forward",
     };
     for (const s of ApplicationStageEnum.options) expect(ownerStage({ stage: s }), s).toBe(expected[s]);
   });
-  it("lets marks overlay the step underneath: holds anywhere in the process, longlist and shortlist only on New", () => {
+  it("lets marks overlay the step underneath: holds anywhere in the process, longlist and shortlist only on 'No AI interview yet' and New", () => {
     expect(ownerStage({ stage: "triaged" }, { mark: "shortlist" })).toBe("shortlist");
     expect(ownerStage({ stage: "screening" }, { mark: "longlist" })).toBe("longlist");
+    expect(ownerStage({ stage: "screen_invited" }, { mark: "on_hold", remindAt: later })).toBe("on_hold");
+    expect(markBlockedReason("screen_invited", "shortlist")).toBeNull();
+    expect(markBlockedReason("eligible", "longlist")).toBeNull();
+    // the sub-label under "No AI interview yet" is where they stand with it
+    expect(ownerStageLabel("no_ai_interview", null, null, { label: "Link expired" })).toBe("Link expired");
+    expect(ownerStageLabel("no_ai_interview")).toBe("No AI interview yet");
     expect(ownerStage({ stage: "interview_scheduled" }, { mark: "shortlist" })).toBe("interviewing");
     expect(ownerStage({ stage: "interview_scheduled" }, { mark: "on_hold", remindAt: later })).toBe("on_hold");
     expect(ownerStage({ stage: "triaged" }, { mark: "not_a_fit_for_now" })).toBe("not_moving_forward");

@@ -19,8 +19,8 @@ export const LEVEL_WEIGHT: Record<WeightLevel, number> = { must_have: MATCH_WEIG
 
 export const PREVIEW_LABEL = "Preview — nothing is saved; candidates and the team never see these numbers.";
 export const INTRO = "Change how much each requirement counts and watch the order change. The scores come from what each application already showed; nothing is read again.";
-export const INTERVIEW_ONLY_LINE = "Skills checked only in the interviews are not part of the match score, so they are not listed here.";
-export const LEAVE_OUT_HINT = "To leave something out for real, remove it in the editor. A skill can also be checked in the interviews only.";
+export const INTERVIEW_ONLY_LINE = "Skills checked only in your own interviews are not part of the match score, so they are not listed here.";
+export const LEAVE_OUT_HINT = "To leave something out for real, remove it in the editor. A skill can also be checked only in your own interviews.";
 export const USE_WEIGHTS_LINE = `"Use these weights" opens the job's editor; saving there makes a new version of the job. ${READ_FROM_NOW_ON}`;
 export const NOBODY_SCORED = { title: "Nobody has a match score yet", body: "Scores come once applications are read. Come back when someone has one." } as const;
 
@@ -34,7 +34,7 @@ const SKILL_CHOICES: WeightLevel[] = ["essential", "important", "helpful", "off"
 
 /**
  * The rows to weigh, from the version the job runs on: its must-haves first (a must-have, or left out), then the skills
- * the score counts (Essential, Important, Helpful, or left out). A skill checked in the interviews only is not in the
+ * the score counts (Essential, Important, Helpful, or left out). A skill checked only in your own interviews is not in the
  * score, so it is not here (INTERVIEW_ONLY_LINE says so).
  */
 export function weightRows(packet: Pick<RolePacket, "requirements" | "competencies">): WeightRow[] {
@@ -58,8 +58,12 @@ export function changedRows(rows: readonly WeightRow[], levels: WeightLevels): W
   return rows.filter((r) => levelOf(r, levels) !== r.level);
 }
 
-/** One scored person in the preview's order: the real score now, the preview's, their place in it and how far they moved. */
-export type PreviewRow = { applicationId: string; name: string; place: string; now: number; preview: number | null; rank: number; moved: number; readAgainst: number | null };
+/**
+ * One scored person in the preview's order: the real score now, the preview's, their place in it and how far they moved.
+ * `resumeOnly` (R20-9): their score does not count an AI interview yet (any `interview` but `done`; an older answer
+ * without it reads as not résumé only), marked "résumé only" on the row.
+ */
+export type PreviewRow = { applicationId: string; name: string; place: string; now: number; preview: number | null; rank: number; moved: number; readAgainst: number | null; resumeOnly: boolean };
 export type PreviewOrder = { rows: PreviewRow[]; unscored: number; moved: number };
 
 type Person = Omit<PreviewRow, "rank" | "moved">;
@@ -80,12 +84,12 @@ type Scored = BoardCard & { score: NonNullable<BoardCard["score"]> & { score: nu
 const hasScore = (c: BoardCard): c is Scored => typeof c.score?.score === "number";
 
 /**
- * Everyone on the board with a match score (the three columns and the people still applying), in the order the preview
+ * Everyone on the board with a match score (the three columns and the lane "No AI interview yet"), in the order the preview
  * gives them, beside the order their real scores give them today. A level applies only where it was changed: a reading
  * made against an earlier version of the job keeps that version's weights for everything left as it is (so with the job's
  * own levels, every preview equals the real score), and a requirement the job no longer has keeps its own weight.
  */
-export function previewOrder(board: Pick<BoardView, "columns" | "stillApplying">, rows: readonly WeightRow[], levels: WeightLevels): PreviewOrder {
+export function previewOrder(board: Pick<BoardView, "columns"> & Partial<Pick<BoardView, "noAiInterview" | "stillApplying">>, rows: readonly WeightRow[], levels: WeightLevels): PreviewOrder {
   const changed = new Map(changedRows(rows, levels).map((r) => [r.id, levelOf(r, levels)]));
   const weightOf = (c: MatchCriterion): number => {
     const level = changed.get(`${c.mustHave ? "m" : "s"}:${c.key}`);
@@ -93,13 +97,13 @@ export function previewOrder(board: Pick<BoardView, "columns" | "stillApplying">
   };
   const seen = new Set<string>();
   const cards: BoardCard[] = [];
-  for (const c of [...board.columns.shortlist, ...board.columns.longlist, ...board.columns.not_moving_forward, ...board.stillApplying]) {
+  for (const c of [...board.columns.shortlist, ...board.columns.longlist, ...board.columns.not_moving_forward, ...(board.noAiInterview ?? board.stillApplying ?? [])]) {
     if (seen.has(c.applicationId)) continue;
     seen.add(c.applicationId);
     cards.push(c);
   }
   const scored = cards.filter(hasScore);
-  const people = scored.map((c): Person => ({ applicationId: c.applicationId, name: c.name, place: c.ownerStageLabel, now: c.score.score, preview: previewMatch(c.score, weightOf).score, readAgainst: c.readingVersion?.readAgainst ?? null }));
+  const people = scored.map((c): Person => ({ applicationId: c.applicationId, name: c.name, place: c.ownerStageLabel, now: c.score.score, preview: previewMatch(c.score, weightOf).score, readAgainst: c.readingVersion?.readAgainst ?? null, resumeOnly: !!c.score.interview && c.score.interview !== "done" }));
   const today = new Map([...people].sort(byScore((p) => p.now)).map((p, i) => [p.applicationId, i + 1]));
   const ordered = [...people].sort(byScore((p) => p.preview)).map((p, i): PreviewRow => ({ ...p, rank: i + 1, moved: (today.get(p.applicationId) ?? i + 1) - (i + 1) }));
   return { rows: ordered, unscored: cards.length - scored.length, moved: ordered.filter((p) => p.moved !== 0).length };
@@ -133,6 +137,11 @@ export function changeWords(rows: readonly WeightRow[], levels: WeightLevels): s
  */
 export function focusFor(rows: readonly WeightRow[], levels: WeightLevels): EditorFocus {
   return changedRows(rows, levels).some((r) => !r.mustHave) ? "skills" : "must-haves";
+}
+
+/** The small line under a name: where they are, "résumé only" when no AI interview is in their score (R20-9), and an earlier version of the job. */
+export function placeWords(row: Pick<PreviewRow, "place" | "readAgainst" | "resumeOnly">): string {
+  return `${row.place}${row.resumeOnly ? " · résumé only" : ""}${row.readAgainst ? ` · Read against version ${row.readAgainst}` : ""}`;
 }
 
 /** "Preview 88 · now 91": plain numbers, never the score badge, so they never pass for real scores. */

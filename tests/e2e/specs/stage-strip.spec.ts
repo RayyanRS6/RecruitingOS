@@ -21,7 +21,7 @@ test.describe("the stage strip and the candidate panel", () => {
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@strip.test`, name: "Dana Whitfield", provider: "google" });
     await createCompanyThroughTheForm(page, `Strip Dental ${run}`);
-    // a pilot company: the conversation follows the form in the same visit, so the applicants below are "Still applying"
+    // every applicant gets the AI interview, so the applicants below are under "No AI interview yet" (R20-7)
     const companyId = ((await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json()) as { id: string }).id;
     await useOneVisitFlow(browser, baseURL!, companyId);
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
@@ -44,22 +44,19 @@ test.describe("the stage strip and the candidate panel", () => {
     await expect(page.getByRole("button", { name: "Luis Ortega" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "talent with the stage strip");
 
-    // Both were offered the screening conversation with their application and have not answered (plan E6): they stay
-    // in New, are counted apart beside the strip, and never as waiting on you
+    // Both were invited to the AI interview and have not sent it (R20-7): they sit in the strip's first column, "No AI
+    // interview yet", with its chips and one calm line, and never as waiting on you
     await expect(page.getByRole("navigation", { name: "Job sections" }).getByRole("link", { name: /^Candidates 2$/ })).toBeVisible();
-    const applying = page.getByRole("button", { name: /^Still applying 2$/ });
-    await expect(applying).toHaveAttribute("aria-pressed", "false");
     await expect(page.getByRole("button", { name: /^Waiting on you/ })).toHaveCount(0);
-    await applying.click();
-    await expect(applying).toHaveAttribute("aria-pressed", "true");
+    await strip.getByRole("tab", { name: /^No AI interview yet 2$/ }).click();
     await expect(page.locator(".talent-row")).toHaveCount(2);
-    await expect(page.locator(".talent-row").first().getByText("Still applying", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Nothing about them waits on you until they send their answers/)).toBeVisible();
-    await expectAccessible(page, "talent showing the people still applying");
-    await applying.click();
+    await expect(page.getByRole("button", { name: /^Not started \d$/ })).toBeVisible();
+    await expect(page.getByText(/Nothing here waits on you/)).toBeVisible();
+    await expectAccessible(page, "talent showing the column No AI interview yet");
+    await strip.getByRole("tab", { name: /^All/ }).click();
 
     // Shortlist from the row: one click, private
-    await page.getByRole("button", { name: "Stage: New. Move to another stage" }).first().click();
+    await page.getByRole("button", { name: /^Stage: .+\. Move to another stage$/ }).first().click();
     await expect(page.getByRole("menuitemradio", { name: /^Offer/ })).toHaveAttribute("aria-disabled", "true");
     await expectAccessible(page, "the stage button's menu");
     await page.getByRole("menuitemradio", { name: /^Shortlist/ }).click();

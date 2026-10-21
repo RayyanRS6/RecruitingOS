@@ -24,7 +24,7 @@ import { InlineUndo } from "../components/InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "../components/use-undo";
 import { waitingOnCandidateRow } from "../hiring";
 import { WORDING_HINT, bulkUndoMillis, undoable } from "../telling";
-import { ORDERS, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, STILL_APPLYING_LABEL, STILL_APPLYING_TEXT, appliedWhen, applyView, defaultView, emptyText, readingCounts, rowChips, stillApplyingCount, stripParts, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type RowChip, type TalentView } from "../talent-list";
+import { AI_INTERVIEW_CHIPS, ORDERS, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, aiInterviewAlert, aiInterviewCounts, appliedWhen, applyView, defaultView, emptyText, readingCounts, resumeOnlyChip, rowChips, scoreTitle, stripParts, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type RowChip, type TalentView } from "../talent-list";
 import { CandidatePanel } from "./candidate-panel/CandidatePanel";
 import { STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
 import type { ActionBody } from "./candidate-panel/hooks";
@@ -43,8 +43,8 @@ import { useStartDraft } from "./new-role/use-start-draft";
 /** Where the candidate panel stands: who, which section, a step a stage choice opened, and the list it was opened from. */
 type PanelState = { id: string; tab: PanelTab; step: PanelStep | null; roundKey?: string; ids: string[] | null; compose: boolean };
 
-/** The filters a link can set: `?ownerStage=`, `?stage=`, `?told=`, `?applying=`, `?cancelled=`. */
-const LINK_FILTERS = ["ownerStage", "stage", "told", "applying", "cancelled"] as const;
+/** The filters a link can set: `?ownerStage=`, `?stage=`, `?told=`, `?applying=` (older links), `?cancelled=`, `?aiInterview=`. */
+const LINK_FILTERS = ["ownerStage", "stage", "told", "applying", "cancelled", "aiInterview"] as const;
 /** The link filters as one key: when a link changes them, the view starts again from it. */
 const linkKey = (p: URLSearchParams) => LINK_FILTERS.map((k) => p.get(k) ?? "").join("|");
 
@@ -57,9 +57,6 @@ const readingLabel = (id: ReadingFilter) => READING_FILTERS.find((f) => f.id ===
 /** What an empty list says when the filters in force leave nobody (Wave S6); "Clear filters" sits under it. */
 const NO_MATCH = { title: "Nothing matches these filters", body: "Nobody here fits every filter that is on. Remove one above, or clear them all." };
 
-/** What a row's "Still applying" chip and toggle say on hover. */
-const STILL_APPLYING_TITLE = "Sent the form and answering the screening questions now";
-
 /**
  * Candidates (plan A3; founder decisions B3 and B6; Wave S1): one job's applicants as a calm list, under the job's own
  * header and tab strip (shared with the job page). The stage strip counts everyone at each stage and filters by a
@@ -71,9 +68,10 @@ const STILL_APPLYING_TITLE = "Sent the form and answering the screening question
  * force ticked; every filter in force shows as a chip that removes it, with "Clear all"; a list the filters leave empty
  * says "Nothing matches these filters" with one "Clear filters".
  *
- * Beside the strip, "Still applying" (plan E6) counts the people still in the visit that sent their application (the
- * screening chat offered with it, not finished yet) and shows only them on a click. They are never counted or shown as
- * waiting on you.
+ * "No AI interview yet" (20 Oct 2026, R20-7; it replaced plan E6's "Still applying" toggle) is the strip's first column:
+ * everyone from applying until they send the AI interview, also when its link lapsed or they stopped part-way. Its chips
+ * split it into not started, started, asked for a person and link closed (`?aiInterview=`), each row says where they
+ * stand, and an info line says nothing there waits on you. They are never counted or shown as waiting on you.
  *
  * Cancelled (founder decisions 1A to 4A) holds the candidates who cancelled a booked interview and the ones who did not
  * come to one. Its chips split it by what each person chose ("Asked for new times", "No longer interested", "No-show"),
@@ -112,9 +110,10 @@ export function People() {
   const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`), enabled: !!roleId && !interviewer });
   const rows = apps.data?.applications ?? [];
   const counts = apps.data?.counts;
-  // Nobody still applying waits on you (plan E6), whatever their group says.
+  // Nobody under "No AI interview yet" waits on you (R20-7), whatever their group says.
   const waitingCount = waitingOnYouCount(counts, rows);
-  const applyingCount = stillApplyingCount(counts, rows);
+  const noInterviewCount = counts?.byOwnerStage.no_ai_interview ?? rows.filter((a) => a.ownerStage === "no_ai_interview").length;
+  const aiCounts = aiInterviewCounts(counts, rows);
 
   // The view: what a link asked for, otherwise "waiting on you" when anyone does; changed by the strip and the filters.
   const key = linkKey(search);
@@ -228,16 +227,16 @@ export function People() {
   };
 
   const total = counts?.total ?? rows.length;
-  const headline = [`${total} ${total === 1 ? "applicant" : "applicants"}`, waitingCount ? `${waitingCount} waiting on you` : "", applyingCount ? `${applyingCount} still applying` : ""].filter(Boolean).join(" · ");
+  const headline = [`${total} ${total === 1 ? "applicant" : "applicants"}`, waitingCount ? `${waitingCount} waiting on you` : "", noInterviewCount ? `${noInterviewCount} without an AI interview yet` : ""].filter(Boolean).join(" · ");
   const strip = stripParts(counts, view.stage);
-  const pickStage = (stage: TalentView["stage"]) => setView({ stage, waiting: false, cancelledReason: null });
+  const pickStage = (stage: TalentView["stage"]) => setView({ stage, waiting: false, cancelledReason: null, aiInterview: null });
   // Every filter that narrows the list, as a removable chip above it (Wave S6, as on Kanvis), so a short list always
   // says why. The order is not a filter and stays.
   const activeFilters: ActiveFilter[] = [];
-  if (view.stage !== "all") activeFilters.push({ id: "stage", label: `Stage: ${[...strip.shown, ...strip.more].find((s) => s.id === view.stage)?.label ?? view.stage}`, remove: () => setView({ stage: "all", cancelledReason: null }) });
+  if (view.stage !== "all") activeFilters.push({ id: "stage", label: `Stage: ${[...strip.shown, ...strip.more].find((s) => s.id === view.stage)?.label ?? view.stage}`, remove: () => setView({ stage: "all", cancelledReason: null, aiInterview: null }) });
   if (view.cancelledReason) activeFilters.push({ id: "cancelled", label: cancelledChips(counts?.cancelled, rows).find((c) => c.id === view.cancelledReason)?.label ?? view.cancelledReason, remove: () => setView({ cancelledReason: null }) });
   if (view.waiting) activeFilters.push({ id: "waiting", label: "Waiting on you", remove: () => setView({ waiting: false }) });
-  if (view.applying) activeFilters.push({ id: "applying", label: STILL_APPLYING_LABEL, remove: () => setView({ applying: false }) });
+  if (view.aiInterview) activeFilters.push({ id: "ai-interview", label: AI_INTERVIEW_CHIPS.find((c) => c.id === view.aiInterview)?.label ?? view.aiInterview, remove: () => setView({ aiInterview: null }) });
   if (view.told) activeFilters.push({ id: "told", label: "Not told yet", remove: () => setView({ told: null }) });
   if (view.internalStage) activeFilters.push({ id: "internal-stage", label: `Only: ${STAGE_LABEL[view.internalStage] ?? view.internalStage.replace(/_/g, " ")}`, remove: clearStageLink });
   if (view.reading !== "any") activeFilters.push({ id: "reading", label: readingLabel(view.reading), remove: () => setView({ reading: "any" }) });
@@ -258,7 +257,7 @@ export function People() {
   const job = detail.data ?? null;
   const status = job?.status ?? role?.status ?? null;
   // The shared header's one line (place · type · pay), as on the job's other tabs; the counts are also on the Candidates
-  // tab, "Waiting on you" and "Still applying". Until the job's details are read (or when it has none), the counts stand
+  // tab, "Waiting on you" and the "No AI interview yet" column. Until the job's details are read (or when it has none), the counts stand
   // in, so the line is never empty and nothing jumps when the details arrive.
   const facts = job ? jobFactsFor(job) : null;
   const sub = !roleId ? undefined : facts ?? (apps.data ? headline : undefined);
@@ -344,12 +343,13 @@ export function People() {
             {/* A stage picked here moves onto the strip (and "More stages" may go): focus follows it to its tab. */}
             {strip.more.length ? <Menu label="More stages" ariaLabel="More stages" heading="Stages with nobody in them" items={strip.more.map((s) => ({ id: s.id, label: s.label, hint: String(s.count) }))} onSelect={(id) => { pickStage(id as TalentView["stage"]); requestAnimationFrame(() => document.getElementById(`talent-strip-tab-${id}`)?.focus()); }} /> : null}
             {/* Beside the strip, not in it (plan E6): the people still in the visit that sent their application. */}
-            {applyingCount || view.applying ? <button type="button" className="toggle-chip" aria-pressed={view.applying} title={STILL_APPLYING_TITLE} onClick={() => setView({ applying: !view.applying, waiting: false })}>{STILL_APPLYING_LABEL} <span className="count">{applyingCount}</span></button> : null}
           </div>
           <div className="talent-toolbar">
-            {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, applying: false, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
-            {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false, applying: false, cancelledReason: null })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
+            {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
+            {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false, cancelledReason: null, aiInterview: null })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
             {/* under Cancelled: what each person chose, or that they did not come (founder decision 2A) */}
+            {/* under "No AI interview yet": where people stand with it (R20-7), never how far anyone got */}
+            {view.stage === "no_ai_interview" ? AI_INTERVIEW_CHIPS.map((c) => <button key={c.id} type="button" className="toggle-chip" aria-pressed={view.aiInterview === c.id} onClick={() => setView({ aiInterview: view.aiInterview === c.id ? null : c.id })}>{c.label} <span className="count">{aiCounts[c.id]}</span></button>) : null}
             {view.stage === "cancelled" ? cancelledChips(counts?.cancelled, rows).map((c) => <button key={c.id} type="button" className="toggle-chip" aria-pressed={view.cancelledReason === c.id} onClick={() => setView({ cancelledReason: view.cancelledReason === c.id ? null : c.id })}>{c.label} <span className="count">{c.count}</span></button>) : null}
             <input className="input talent-search" type="search" value={view.query} onChange={(e) => setView({ query: e.target.value })} placeholder="Search name, email or source" aria-label="Search candidates" />
             {/* Match and the order as dropdown chips (Wave S6): the choice in force is written on the chip and ticked in its list. */}
@@ -390,7 +390,7 @@ export function People() {
               <Button size="sm" variant="ghost" onClick={clearFilters}>Clear all</Button>
             </div>
           ) : null}
-          {view.applying ? <Alert tone="info">{STILL_APPLYING_TEXT}</Alert> : null}
+          {view.stage === "no_ai_interview" && noInterviewCount > 0 ? <Alert tone="info">{aiInterviewAlert(aiCounts)}</Alert> : null}
           {mayTell && notTold.length && (view.told === "not_told" || view.stage === "not_moving_forward") ? (
             <Alert tone="info">
               <div className="row" style={{ justifyContent: "space-between" }}>
@@ -411,7 +411,7 @@ export function People() {
           {compareOpen ? (
             <div className="stack" style={{ gap: 8 }}>
               <div className="row"><Button size="sm" onClick={() => setCompareOpen(false)}>Done comparing</Button></div>
-              <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel, score: a.score }))} />
+              <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel, score: a.score, interview: a.interview, basis: a.basis }))} />
             </div>
           ) : null}
           <div ref={listArea}>
@@ -482,10 +482,11 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
   // A decision message in the outbox of a company ITS has not confirmed yet waits for the check (founder decision B7).
   const check = useCompanyCheck();
   // Most pressing first; past two, the rest are counted in "+N" and said in full to a screen reader and on hover.
-  const chips = rowChips(a, { stillApplying: STILL_APPLYING_TITLE, onItsWay: messageOnItsWayChip(check), lowConfidence: LOW_CONFIDENCE_LABEL });
+  const chips = rowChips(a, { onItsWay: messageOnItsWayChip(check), lowConfidence: LOW_CONFIDENCE_LABEL });
   const seen = chips.slice(0, ROW_CHIP_LIMIT);
   const rest = chips.slice(ROW_CHIP_LIMIT);
   const restWords = rest.map((c) => c.title ?? c.label).join("; ");
+  const resumeOnly = resumeOnlyChip(a);
   return (
     <div className="talent-row" data-application={a.id}>
       <Avatar name={name} />
@@ -504,8 +505,9 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
         {seen.map((c) => <RowChipView key={c.key} c={c} />)}
         {rest.length ? <span className="chip neutral" title={restWords}><span aria-hidden="true">+{rest.length}</span><span className="sr-only">Also: {restWords}</span></span> : null}
       </div>
-      {/* the match score, worked out by code from the checked findings (founder decision B2); an older answer has none */}
-      <span className="score-slot" title={a.coverage?.words}>{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" /> : null}</span>
+      {/* the match score, worked out by code from the checked findings (founder decision B2); an older answer has none.
+          A score with no AI interview in it yet says so beside the badge (R20-9), the full label on hover. */}
+      <span className="score-slot" title={scoreTitle(a)}>{resumeOnly ? <span className="chip neutral" title={resumeOnly.title}>{resumeOnly.label}</span> : null}{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" /> : null}</span>
       <StageButton stage={a.ownerStage} label={a.ownerStageLabel} blocked={stageBlocked(a.stageMoves)} disabled={busy} onMove={onMove} align="end" />
     </div>
   );

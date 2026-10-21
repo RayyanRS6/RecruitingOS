@@ -782,7 +782,7 @@ describe("the apply form: résumé first, check your details, questions from the
       await container.drain();
       // the waiting room opens the AI interview once the reading is done (20 Oct 2026); the chat reads the application's
       // own facts: the CV's lines from the form's one reading, and every form answer as a sentence
-      const token = (await followApply(app, sent)).token ?? "";
+      const token = (await followApply(app, sent, container)).token ?? "";
       const [scr] = await container.db.select().from(screens).where(eq(screens.token, token));
       expect(scr).toMatchObject({ invitedVia: "with_application" });
       expect(scr.progress.typedFacts).toBeUndefined();

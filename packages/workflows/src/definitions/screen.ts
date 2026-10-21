@@ -1,11 +1,11 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { ScreenAssessment, ScreenChannel, ScreenTurn } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
 import { runPromptDetached, screenTurnPrompt } from "@ros/ai";
 import { audit, emit, entitlements, evaluateEligibility, gate, humanResponseExpectation, isOneVisitFlow, loadBusinessCalendar, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
-import { applications, assessments, candidates, communications, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
+import { applications, assessments, candidates, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
-  HELD_REASON, answersOf, applyScreenOpening, assessScreen, chatFactsFor, createScreen, finishScreenTurn, focusQuestionsFrom, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
+  HELD_REASON, answersOf, applyScreenOpening, assessScreen, chatFactsFor, createScreen, finishScreenTurn, focusQuestionsFrom, linkEmailWaiting, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
   sendConversationNotOfferedNote, sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, type FocusQuestion, type ScreenDeps,
 } from "@ros/agents";
 import type { SendResult } from "@ros/integrations";
@@ -72,6 +72,9 @@ function depsOf(ctx: { services: StepContext["services"] }): ScreenDeps {
  * 20 October 2026 (R20-4, R20-5): the intake starts one for every applicant (`mode` "with_application"). It waits for the
  * résumé reading (`await_reading`, at most ten minutes), then `invite` offers the AI interview and queues the one email
  * (`offerInterview`); a must-have "No" waits for "Keep them in" (`after_hold`). Every other run starts at `invite` as before.
+ * Step 3 (R20-7): a link that lapses or a chat closed unfinished leaves them where they are, under "No AI interview yet"
+ * ("Link expired", "Didn't finish"), with the candidate's closing note (G10) and no per-person alert; a person's "Send a
+ * reminder" (`remindScreen`) can keep the link open longer, so `after_remind` and `expire` read `expiresAt` again.
  */
 export const screen: WorkflowDefinition<State> = {
   key: "screen",
@@ -226,15 +229,18 @@ export const screen: WorkflowDefinition<State> = {
       if (scr.status === "in_progress") {
         // E4: no longer a 72-hour wait repeated for ever. A day without an answer brings one reminder; two more days close it.
         const lastActive = Math.max(Date.parse(scr.lastCandidateMessageAt ?? scr.startedAt ?? ctx.now.toISOString()), scr.idleRemindedAt ? Date.parse(scr.idleRemindedAt) : 0);
-        const due = lastActive + (scr.idleRemindedAt ? IDLE_CLOSE_HOURS : IDLE_REMIND_HOURS) * HOUR;
+        // A person's "Send a reminder" (R20-7) keeps it open at least until `keptOpenUntil` too.
+        const kept = scr.idleRemindedAt && scr.progress.keptOpenUntil ? Date.parse(scr.progress.keptOpenUntil) : 0;
+        const due = Math.max(lastActive + (scr.idleRemindedAt ? IDLE_CLOSE_HOURS : IDLE_REMIND_HOURS) * HOUR, kept);
         if (ctx.now.getTime() >= due) return { kind: "next", step: scr.idleRemindedAt ? "close_unfinished" : "idle_remind" };
         return { kind: "wait", wait: { kind: "event", eventTypes: ["completed", "human", "paused"], subjectId: `screen:${scr.id}`, until: new Date(due).toISOString(), reason: "conversation under way" }, resumeStep: "after_invite" };
       }
-      // B7: the one email with the link was held for the ITS company check. The link's five days and the 48-hour reminder
-      // count from when it leaves (the outbox signals it), never from when the interview was made.
-      if (scr.invitedVia === "with_application" && scr.status === "invited") {
+      // B7: the one email with the link was held for the ITS company check. The link's five days, the 48-hour reminder and
+      // the day between a person's reminders count from when it leaves (the outbox signals it; `invitedAt` then says when),
+      // never from when the interview was made. A person's reminder sent while it waited (before 21 Oct) left it reminded.
+      if (scr.invitedVia === "with_application" && (scr.status === "invited" || scr.status === "reminded")) {
         if (ctx.wake?.kind === "event" && ctx.wake.key === aiNoticeSentSignal(scr.applicationId)) {
-          await ctx.q.update(screens).set({ expiresAt: new Date(ctx.now.getTime() + INTERVIEW_LINK_HOURS * HOUR).toISOString() }).where(eq(screens.id, scr.id));
+          await ctx.q.update(screens).set({ invitedAt: ctx.now.toISOString(), expiresAt: new Date(ctx.now.getTime() + INTERVIEW_LINK_HOURS * HOUR).toISOString() }).where(eq(screens.id, scr.id));
           return waitForStart(scr, new Date(ctx.now.getTime() + INVITE_WAIT_HOURS * HOUR), {}, false);
         }
         if (ctx.wake?.kind === "timer" && (await linkEmailWaiting(ctx.q, scr))) return waitForStart(scr, new Date(ctx.now.getTime() + HELD_RECHECK_HOURS * HOUR), {}, true);
@@ -270,7 +276,12 @@ export const screen: WorkflowDefinition<State> = {
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
       if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
       if (scr.status !== "reminded") return { kind: "next", step: "after_invite" };
-      if (ctx.wake?.kind !== "timer") return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until: scr.expiresAt ?? new Date(ctx.now.getTime() + REMIND_WAIT_HOURS * HOUR).toISOString() }, resumeStep: "after_remind" };
+      // B7: the email carrying the link still waits for the ITS check, so the link's clock has not started: it waits for
+      // that email to leave (`after_invite` then starts the clock), never closing a link nobody received.
+      if (scr.invitedVia === "with_application" && (await linkEmailWaiting(ctx.q, scr))) return waitForStart(scr, new Date(ctx.now.getTime() + HELD_RECHECK_HOURS * HOUR), {}, true);
+      // A person's "Send a reminder" (R20-7) may have kept the link open longer: the wait is read again from the screen.
+      const open = scr.expiresAt && Date.parse(scr.expiresAt) > ctx.now.getTime();
+      if (ctx.wake?.kind !== "timer" || open) return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until: scr.expiresAt ?? new Date(ctx.now.getTime() + REMIND_WAIT_HOURS * HOUR).toISOString() }, resumeStep: "after_remind" };
       return { kind: "next", step: "expire" };
     },
 
@@ -279,22 +290,23 @@ export const screen: WorkflowDefinition<State> = {
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
       if (!scr || !b) return { kind: "fail", error: "screen missing", retryable: false };
       if (scr.status !== "invited" && scr.status !== "reminded") return { kind: "next", step: "after_invite" };
+      // B7: a link whose email still waits for the ITS check never closes; it waits for the email (`after_invite`).
+      if (scr.invitedVia === "with_application" && (await linkEmailWaiting(ctx.q, scr))) return waitForStart(scr, new Date(ctx.now.getTime() + HELD_RECHECK_HOURS * HOUR), {}, true);
+      // A person's "Send a reminder" (R20-7) keeps the link open at least 72 hours from then: until that passes, it waits again.
+      if (scr.expiresAt && Date.parse(scr.expiresAt) > ctx.now.getTime()) return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until: scr.expiresAt, reason: "a person sent a reminder; the link stays open until then" }, resumeStep: "after_remind" };
       // A person's new link that lapses is told as a link that closed (below), never as an application without the chat.
       const oneVisit = isOneVisitFlow(scr.progress) && !byPerson(ctx.state);
       await ctx.q.update(screens).set({ status: "expired" }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.expired", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, remindedAt: scr.remindedAt, ...(oneVisit ? { oneVisit: true } : {}) }, correlationId: ctx.run.id });
-      const name = `${b.candidate.firstName} ${b.candidate.lastName}`;
+      // Since Step 3 (R20-7) they stay where they are, under "No AI interview yet" as "Link expired": the column and the
+      // one line per job on Home replace the per-person alerts, and the team can remind, send a new link or decline there.
       if (oneVisit) {
-        // E4: never started, and nothing is lost by it. The application goes to the team ("ready for your review"), the
-        // candidate is told nothing else is needed, and the team hears it as an application, not a missed invitation.
-        if (b.app.stage === "screen_invited") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "did not start the screening chat offered with the application", correlationId: ctx.run.id });
+        // E4 and G10: never started, and nothing is lost by it; the candidate is told nothing else is needed.
         await sendConversationNotStartedNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} applied without the screening chat`, body: "They did not start the short screening chat that goes with the application, after one reminder. Their application is ready for your review as it is; you can also ask a recruiter to call them.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
         return { kind: "complete" };
       }
       // No silent expiry (plan G10): the candidate is told the link closed, that the application is still with the team,
-      // and that a reply brings a new link from a person. The team's per-person alert went with 20 Oct 2026 (R20-8): every
-      // applicant gets a link now, and the team hears once, when an interview is scored.
+      // and that a reply brings a new link from a person.
       await sendScreenExpiredNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
       return { kind: "complete" };
     },
@@ -319,13 +331,13 @@ export const screen: WorkflowDefinition<State> = {
     },
 
     /**
-     * E4: still nothing two days after the reminder. The conversation closes as unfinished, the application goes on to
-     * the team ("ready for your review"), and the candidate gets a short note that nothing else is needed. They never
-     * sent their answers, so nothing they said is shown to the team or read for it (founder decision of 9 October 2026,
-     * "hide them until they send"): the team sees "Didn't finish the conversation", and the reading and the match score
-     * stay the résumé's. Someone who answered everything and only did not press Send closes the same way: only the
-     * candidate sends their answers, never the software on their behalf, and the reminder told them so. The team's
-     * alert, history and page use the same words whatever they answered, so nothing says how far they got.
+     * E4: still nothing two days after the reminder. The conversation closes as unfinished and the candidate gets a short
+     * note that nothing else is needed (G10). They never sent their answers, so nothing they said is shown to the team
+     * or read for it (founder decision of 9 October 2026, "hide them until they send"), and the reading and the match
+     * score stay the résumé's. Someone who answered everything and only did not press Send closes the same way: only the
+     * candidate sends their answers, never the software on their behalf, and the reminder told them so. Since Step 3
+     * (R20-7) they stay under "No AI interview yet" as "Didn't finish", with no per-person alert: the column and Home's
+     * one line per job say it, in the same words whatever they answered, so nothing says how far they got.
      */
     async close_unfinished(ctx) {
       const b = await load(ctx.q, ctx.state.applicationId);
@@ -336,9 +348,7 @@ export const screen: WorkflowDefinition<State> = {
       const answered = Object.keys(answersOf(scr)).length;
       await ctx.q.update(screens).set({ status: "unfinished", completedAt: ctx.now.toISOString() }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.unfinished", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, answered, questions: b.packet.screening.questions.length, stoppedAt: scr.progress.currentQuestionKey ?? null }, correlationId: ctx.run.id });
-      if (["screen_invited", "screening"].includes(b.app.stage)) await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "did not finish the screening chat", correlationId: ctx.run.id });
       await sendConversationUnfinishedNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
-      await notifyUnfinished(ctx, b);
       return { kind: "complete" };
     },
 
@@ -379,7 +389,7 @@ export const screen: WorkflowDefinition<State> = {
         };
         if (!prepared || prepared.screenId !== scr.id || !prepared.out.ok) {
           if (ctx.now.getTime() - Date.parse(pausedAt) >= PAUSE_GIVE_UP_HOURS * HOUR) {
-            await requestHuman(ctx.q, deps, { screenId: scr.id, reason: "assistant failed for a day after pausing the screening chat", actor: ctx.actor, reply: null, replyChannel: "web" });
+            await requestHuman(ctx.q, deps, { screenId: scr.id, reason: "assistant failed for a day after pausing the AI interview", actor: ctx.actor, reply: null, replyChannel: "web" });
             await handedOver();
             return { kind: "complete" };
           }
@@ -414,10 +424,10 @@ export const screen: WorkflowDefinition<State> = {
         if (scr.assessmentId) return { kind: "next", step: "recommend" };
         if (scr.status !== "completed") {
           // A run that reached this step for a conversation closed without being sent (one under way when this rule
-          // came in, 9 October 2026): nothing is read, and the team hears it happened, as it now does at the close.
-          const b = PARTIAL.includes(scr.status) ? await load(ctx.q, ctx.state.applicationId) : null;
-          if (b && scr.status === "unfinished") await notifyUnfinished(ctx, b);
-          if (b && scr.status === "declined_by_candidate") await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.declined_by_candidate", title: `${b.candidate.firstName} ${b.candidate.lastName} sent their application without the conversation`, body: `They chose not to go through the screening questions for ${b.packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+          // came in, 9 October 2026): nothing is read. Unfinished, it stays under "No AI interview yet" (R20-7, no alert);
+          // sent without the conversation, the team hears it as Q16's choice does.
+          const b = scr.status === "declined_by_candidate" ? await load(ctx.q, ctx.state.applicationId) : null;
+          if (b) await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.declined_by_candidate", title: `${b.candidate.firstName} ${b.candidate.lastName} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${b.packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
           return { kind: "complete" };
         }
         if (!prepared || prepared.screenId !== scr.id) return { kind: "fail", error: "the screen changed after the read phase; assessing again", retryable: true };
@@ -458,29 +468,29 @@ export const screen: WorkflowDefinition<State> = {
       // They left the process while the scorecard was being written: nothing to suggest or announce.
       if (["hired", "withdrawn", "rejected", "declined", "talent_pool"].includes(app.stage)) return { kind: "complete" };
       if (PARTIAL.includes(scr.status)) {
-        if (scr.status === "unfinished") await notifyUnfinished(ctx, b);
-        else await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.declined_by_candidate", title: `${name} sent their application without the conversation`, body: `They chose not to go through the screening questions for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        // Unfinished: under "No AI interview yet", with no per-person alert (R20-7).
+        if (scr.status === "declined_by_candidate") await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.declined_by_candidate", title: `${name} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       const check = readingConsistency(asmt, packet);
       if (!check.consistent) {
         await audit(ctx.q, { companyId: ctx.companyId, actor: ctx.actor, action: "assessment.flagged", target: { type: "application", id: app.id }, reason: check.reason ?? "the scorecard disagrees with its must-have findings", details: { assessmentId: asmt.id, held: "application.recommend_interview" } });
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body: `${name} finished the screening chat. ${check.reason}`, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body: `${name} finished the AI interview. ${check.reason}`, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       if (rec === "strong_interview" || rec === "interview") {
-        const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.recommend_interview", subject: { type: "application", id: app.id }, proposal: { recommendation: rec, assessmentId: asmt.id }, rationale: `${name} finished the screening chat: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: SUGGESTION_WINDOW_HOURS });
+        const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.recommend_interview", subject: { type: "application", id: app.id }, proposal: { recommendation: rec, assessmentId: asmt.id }, rationale: `${name} finished the AI interview: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: SUGGESTION_WINDOW_HOURS });
         if (g.outcome === "execute") {
           if (app.stage === "screen_complete") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "interview_recommended", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
           await emit(ctx.q, { type: "candidate.recommended", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, subject: { type: "application", id: app.id }, payload: { recommendation: rec, assessmentId: asmt.id }, correlationId: ctx.run.id });
-          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong screening chat. " : ""}${asmt.result.summary}`, action: { label: "Approve an interview", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
+          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong AI interview. " : ""}${asmt.result.summary}`, action: { label: "Approve an interview", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
         } else if (g.outcome === "wait_for_approval") {
           return waitForSuggestion(ctx, g.approvalRequestId, "on_decision");
         }
         return { kind: "complete" };
       }
       // hold / decline_recommended: nothing moves; the owner sees the scorecard and decides.
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.completed", title: `${name} finished the screening chat`, body: `${rec === "hold" ? "Worth a look before deciding. " : "The screening chat raised a concern; your call. "}${asmt.result.summary}`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.completed", title: `${name} finished the AI interview`, body: `${rec === "hold" ? "Worth a look before deciding. " : "The AI interview raised a concern; your call. "}${asmt.result.summary}`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
       return { kind: "complete" };
     },
 
@@ -491,16 +501,6 @@ export const screen: WorkflowDefinition<State> = {
     },
   },
 };
-
-/**
- * The team's one alert for a conversation closed unfinished: that it happened, never how far they got or what they
- * said, since they never sent it (founder decision of 9 October 2026). The same words for someone who stopped at the
- * first question and someone who answered everything and never pressed Send.
- */
-async function notifyUnfinished(ctx: { q: Tx; companyId: string }, b: NonNullable<Awaited<ReturnType<typeof load>>>): Promise<void> {
-  const name = `${b.candidate.firstName} ${b.candidate.lastName}`;
-  await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.unfinished", title: `${name} didn't finish the screening chat`, body: "They did not send their answers, even after a reminder, so you won't see them, and their AI review and match score come from their application alone. Their application is ready for your review.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
-}
 
 /**
  * A person's own new link ("Send a new AI interview link": `invitedBy` names them), not the interview every applicant
@@ -530,14 +530,6 @@ function emailHeld(email: SendResult): boolean {
   return email.status === "pending" && email.reason === HELD_REASON;
 }
 
-/** B7: the email that carries this interview's link (its own, or the one email) has not left yet: held for the ITS check, or still queued. */
-async function linkEmailWaiting(q: Tx, scr: { id: string; applicationId: string }): Promise<boolean> {
-  const own = `screen_invite:${scr.id}`;
-  const rows = await q.select({ key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, [own, `ack:${scr.applicationId}`]));
-  const carrier = rows.find((r) => r.key === own) ?? rows[0];
-  return !!carrier && ["queued", "held", "sending"].includes(carrier.status);
-}
-
 /**
  * Q17 (kept on 20 Oct 2026, R20-11): the month's AI interviews are used up. The application stays, and the link goes out
  * by email once more are added, so everyone for the role has the same process. The owner is told once per person and ITS
@@ -548,19 +540,21 @@ async function waitForAllowance(ctx: StepContext<State>, b: NonNullable<Awaited<
   const since = ctx.state.waitingForAllowance ?? ctx.now.toISOString();
   if (!ctx.state.waitingForAllowance) {
     await emit(ctx.q, { type: "entitlement.exceeded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { key: entitlements.TEXT_SCREENS, limit: ent.limit, used: ent.used, plan: company.planKey }, correlationId: ctx.run.id });
-    await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Screening chats used up for this month", body: `Your plan includes ${ent.limit} screening chats this month. ${candidate.firstName} ${candidate.lastName} is waiting for one and gets the link by email as soon as more are added, so everyone for ${role.title} has the same process. ITS has been told. You can also review them yourself.`, action: { label: "See usage", href: "/setup" } });
+    await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "AI interviews used up for this month", body: `Your plan includes ${ent.limit} AI interviews this month. ${candidate.firstName} ${candidate.lastName} is waiting for one and gets the link by email as soon as more are added, so everyone for ${role.title} has the same process. ITS has been told. You can also review them yourself.`, action: { label: "See usage", href: "/setup" } });
   }
   if (ctx.now.getTime() - Date.parse(since) > ALLOWANCE_WAIT_DAYS * 24 * HOUR) {
     // Still used up after the whole wait: no silent lapse (plan G10). Someone whose email promised the link (the
     // interview that goes with the application) is told it is not going ahead and that nothing is needed; the team is
-    // told the person never got it, whoever started the run.
+    // told the person never got it, whoever started the run. Nobody stays "Getting the AI interview ready" for ever
+    // (R20-7): they move to New, ready for review as they are.
     const promised = ctx.state.flow === "one_visit" && !byPerson(ctx.state);
     await emit(ctx.q, { type: "screen.allowance_lapsed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { waitingSince: since, days: ALLOWANCE_WAIT_DAYS, promised }, correlationId: ctx.run.id });
+    if (app.stage === "eligible" || app.stage === "received") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: `the plan's AI interviews stayed used up for ${ALLOWANCE_WAIT_DAYS} days`, correlationId: ctx.run.id });
     if (promised) await sendConversationNotOfferedNote(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id });
-    await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the screening chat`, body: `Your plan's screening chats stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review; you can also ask a recruiter to call them.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+    await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the AI interview`, body: `Your plan's AI interviews stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review; you can also ask a recruiter to call them.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
     return { kind: "complete" };
   }
-  return { kind: "wait", wait: { kind: "timer", until: new Date(ctx.now.getTime() + ALLOWANCE_RECHECK_HOURS * HOUR).toISOString(), reason: "the plan's screening chats are used up; waiting for more" }, state: { waitingForAllowance: since }, resumeStep: "invite" };
+  return { kind: "wait", wait: { kind: "timer", until: new Date(ctx.now.getTime() + ALLOWANCE_RECHECK_HOURS * HOUR).toISOString(), reason: "the plan's AI interviews are used up; waiting for more" }, state: { waitingForAllowance: since }, resumeStep: "invite" };
 }
 
 /** The open questions of the latest résumé assessment, as the first questions of a focused screen. */

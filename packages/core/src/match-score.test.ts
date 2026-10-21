@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, matchWeightOf, previewMatch, type EvidenceAssessment, type MatchCriterion, type MatchScore, type RolePacket } from "@ros/contracts";
+import { interviewInScore } from "./ai-interview";
 import { coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, scoredSkill, type ScoredReading } from "./match-score";
 
 /**
@@ -216,6 +217,71 @@ describe("matchScore", () => {
     const a = reading("triage", [must("rdh_license", "partially", "a"), must("perio", "yes", "b")], [skill("software", "partially_evidenced", "c"), skill("chairside", "evidenced", "d"), skill("patients", "partially_evidenced", "e")]);
     const b = reading("triage", [must("perio", "yes", "b"), must("rdh_license", "partially", "a")], [skill("patients", "partially_evidenced", "e"), skill("chairside", "evidenced", "d"), skill("software", "partially_evidenced", "c")]);
     expect(matchScore(pair(a), packet)).toEqual(matchScore(pair(b), packet));
+  });
+});
+
+describe("whether the AI interview is in the score (20 October 2026, R20-9)", () => {
+  const resume = reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "unknown")], [skill("chairside", "partially_evidenced", "assisted")]);
+  const scorecard = reading("screen", [must("perio", "yes", "I chart perio every day")], [], { createdAt: "2026-10-02T10:00:00Z" });
+  const words = (s: MatchScore) => [s.interview, s.basis];
+
+  it("labels a résumé-only score by where the AI interview stands, in one neutral wording for every way it closed unsent", () => {
+    expect(words(matchScore(pair(resume), packet)!)).toEqual(["none", "Résumé only: no AI interview"]);
+    expect(words(matchScore(pair(resume), packet, { interview: "not_done_yet" })!)).toEqual(["not_done_yet", "Résumé only: AI interview not done yet"]);
+    expect(words(matchScore(pair(resume), packet, { interview: "being_scored" })!)).toEqual(["being_scored", "Résumé only for now: AI interview done, being scored"]);
+    expect(words(matchScore(pair(resume), packet, { interview: "not_done" })!)).toEqual(["not_done", "Résumé only: no AI interview"]);
+    // a caller's "done" with no scorecard among the readings is still being scored
+    expect(matchScore(pair(resume), packet, { interview: "done" })!.interview).toBe("being_scored");
+  });
+
+  it("says both once the scorecard is in, whatever the caller read from the screens", () => {
+    for (const given of [undefined, "not_done_yet", "being_scored", "not_done", "none"] as const) {
+      expect(words(matchScore(pair(resume, scorecard), packet, { interview: given })!), String(given)).toEqual(["done", "From the résumé and the AI interview"]);
+    }
+    expect(words(matchScore(pair(null, scorecard), packet)!)).toEqual(["done", "From the AI interview"]);
+    // done even when every counted finding came from the résumé: the label says what was read, `basedOn` which reading counted
+    const silent = reading("screen", [], [], { createdAt: "2026-10-02T10:00:00Z" });
+    expect(matchScore(pair(resume, silent), packet)).toMatchObject({ interview: "done", basedOn: "resume" });
+  });
+
+  it("never changes the number, the breakdown or what it rests on: only the label", () => {
+    const bare = matchScore(pair(resume), packet)!;
+    for (const interview of ["not_done_yet", "being_scored", "not_done", "none", "done"] as const) {
+      const { interview: _i, basis: _b, ...rest } = matchScore(pair(resume), packet, { interview })!;
+      const { interview: _bi, basis: _bb, ...bareRest } = bare;
+      expect(rest, interview).toEqual(bareRest);
+    }
+    const both = matchScore(pair(resume, scorecard), packet)!;
+    expect(matchScore(pair(resume, scorecard), packet, { interview: "not_done" })).toEqual(both);
+  });
+});
+
+describe("interviewInScore: where the AI interview stands, from the screens in any order", () => {
+  it("reads a sent one first, then an open one, then a closed one, and the stage when there is none yet", () => {
+    expect(interviewInScore([{ status: "expired" }, { status: "completed" }, { status: "invited" }])).toBe("being_scored");
+    expect(interviewInScore([{ status: "invited" }, { status: "completed" }])).toBe("being_scored");
+    for (const open of ["invited", "reminded", "in_progress", "paused", "human_requested"]) expect(interviewInScore([{ status: "expired" }, { status: open }]), open).toBe("not_done_yet");
+    for (const closed of ["expired", "unfinished", "declined_by_candidate", "abandoned", "cancelled"]) expect(interviewInScore([{ status: closed }]), closed).toBe("not_done");
+    expect(interviewInScore([], "eligible")).toBe("not_done_yet");
+    expect(interviewInScore([], "received")).toBe("not_done_yet");
+    expect(interviewInScore([], "triaged")).toBe("none");
+    expect(interviewInScore([], "ineligible")).toBe("none");
+    expect(interviewInScore([])).toBe("none");
+  });
+
+  it("reads an AI interview that never came because the month's allowance stayed used up (Q17) as not done, never as 'never offered'", () => {
+    // the screen run moved them from Getting the AI interview ready to New after sixty days, with no screen made
+    expect(interviewInScore([], "triaged", { allowanceLapsed: true })).toBe("not_done");
+    expect(interviewInScore([], "triaged", { allowanceLapsed: false })).toBe("none");
+    // a later link a person sent wins: its own status says where it stands
+    expect(interviewInScore([{ status: "invited" }], "screen_invited", { allowanceLapsed: true })).toBe("not_done_yet");
+    expect(interviewInScore([{ status: "completed" }], "screen_complete", { allowanceLapsed: true })).toBe("being_scored");
+  });
+
+  it("gives the same answer whatever order the screens come in (the list loads them unordered)", () => {
+    const screens = [{ status: "cancelled" }, { status: "reminded" }, { status: "expired" }];
+    expect(interviewInScore([...screens].reverse())).toBe(interviewInScore(screens));
+    expect(interviewInScore([screens[1]!, screens[0]!, screens[2]!])).toBe("not_done_yet");
   });
 });
 

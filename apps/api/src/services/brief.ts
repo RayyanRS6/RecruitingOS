@@ -1,14 +1,15 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, isStillApplying, mayDecideApproval, openFlagsMessage, ownerGroup, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, mayDecideApproval, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags, withoutSentimentWords, type FollowUpView } from "@ros/core";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
-import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
+import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
 import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
 import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
 import { boardView, loadPool, shownLatestReadings } from "./pool";
+import { aiInterviewsFor } from "./screens";
 import { backupsWarmCards } from "./hire-sheet";
 
 /**
@@ -201,7 +202,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     // Candidates whose interview is over, and those held on an eligibility answer, get cards of their own below, so they
     // are not counted here a second time; a running hold waits on nobody, and an ended one has its own card (stuck detector).
     const parked = (id: string) => { const m = marks.get(id); return m?.mark === "on_hold" || m?.mark === "not_a_fit_for_now"; };
-    const waiting = apps.filter((a) => !parked(a.id) && !underCancelled(a) && ((ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete" && a.stage !== "ineligible") || a.stage === "eligible"));
+    // Someone still being read is under "No AI interview yet" (R20-7) and waits on nobody: never "needs your review".
+    const waiting = apps.filter((a) => !parked(a.id) && !underCancelled(a) && ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete" && a.stage !== "ineligible");
     const ineligible = apps.filter((a) => a.stage === "ineligible");
     const decidedNotTold = tells ? apps.filter((a) => DECISION_STAGES.includes(a.stage) && a.toldState === "not_told") : [];
     // someone whose details were deleted at their request is never written to, so nobody is asked to tell them
@@ -215,7 +217,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     const cancelledCard = afterInterview.decides || afterInterview.requests ? await cancelledColumnCard(tx, role, apps.flatMap((a) => { const f = followUps.get(a.id); return f && inCancelled(a.stage, f) ? [{ candidateId: a.candidateId, followUp: f }] : []; })) : null;
     if (cancelledCard) cards.push(cancelledCard);
     if (fresh.length) {
-      cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "They are being acknowledged and checked for eligibility.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
+      cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "Each gets the AI interview link by email once their résumé is read.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
     if (waiting.length) {
       const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, waiting.slice(0, 5).map((a) => a.candidateId)));
@@ -235,15 +237,16 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     }
     const pool = sortsPools && apps.length >= POOL_READY_MIN ? await poolReadyCard(tx, role, scope) : null;
     if (pool) cards.push(pool);
-    const scr = apps.length ? await tx.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.applicationId, apps.map((a) => a.id)))) : [];
-    // Someone still applying (offered the conversation with the application, plan E6) was invited by nobody, and the team
-    // hears about them once they finish ("completed" below), as the Talent page and the reminders treat them.
-    const invited = scr.filter((s) => !isStillApplying(s) && (s.status === "invited" || s.status === "reminded")).length;
-    const talking = scr.filter((s) => !isStillApplying(s) && s.status === "in_progress").length;
-    const doneToday = scr.filter((s) => s.status === "completed" && (s.completedAt ?? "") >= since).length;
-    if (invited + talking + doneToday > 0) {
-      const parts = [invited ? `${invited} invited` : "", talking ? `${talking} answering now` : "", doneToday ? `${doneToday} completed since yesterday` : ""].filter(Boolean);
-      cards.push({ kind: "screening", title: `Screening chats for ${role.title}: ${parts.join(", ")}`, body: doneToday ? "Finished screening chats are in \"Waiting on you\" with the scorecard." : "Candidates answer in their own time; you will see the scorecard when they finish.", roleId: role.id, actions: [{ label: "See people", method: "GET", path: `/roles/${role.id}/talent` }] });
+    // "No AI interview yet" (R20-7): one FYI line per job, never "needs you", in neutral words (never how far anyone got),
+    // from the same column as the Talent page and the Jobs list; it replaces the per-person "didn't finish" alerts.
+    const inColumn = apps.filter((a) => ownerStage(a, marks.get(a.id) ?? null, followUps.get(a.id)) === "no_ai_interview");
+    const groups = [...(await aiInterviewsFor(tx, inColumn, now)).values()].map((v) => v.group);
+    const tally = (g: AiInterviewGroup) => groups.filter((x) => x === g).length;
+    const doneToday = apps.length ? (await tx.select({ id: screens.id }).from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.applicationId, apps.map((a) => a.id)), eq(screens.status, "completed"), gte(screens.completedAt, since)))).length : 0;
+    if (groups.length + doneToday > 0) {
+      const closed = tally("closed");
+      const parts = [tally("not_started") ? `${tally("not_started")} not started` : "", tally("started") ? `${tally("started")} started` : "", tally("asked_person") ? `${tally("asked_person")} asked for a person` : "", closed ? `${closed} link closed` : "", doneToday ? `${doneToday} done since yesterday` : ""].filter(Boolean);
+      cards.push({ kind: "screening", title: `AI interviews for ${role.title}: ${parts.join(", ")}`, body: closed ? "Nothing here waits on you. From the column you can remind someone, send a new link or decline privately." : "Nothing here waits on you: people answer in their own time, and each moves to New with their scorecard once they send it.", roleId: role.id, actions: [{ label: "See people", method: "GET", path: `/roles/${role.id}/talent?ownerStage=no_ai_interview${closed ? "&aiInterview=closed" : ""}` }] });
     }
   }
   // Closing a role moves its people to the talent pool privately: a closed role keeps its card until they are told,

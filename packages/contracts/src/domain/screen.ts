@@ -85,6 +85,11 @@ export const ScreenProgress = z.object({
   pausedAt: z.string().optional(),
   retriedAt: z.string().optional(),
   /**
+   * A person's "Send a reminder" (20 Oct 2026, R20-7) about an interview already started: it stays open at least until
+   * then, beside the idle close after the reminder (the `screen` run's `after_invite`). Unstarted, `expiresAt` says it.
+   */
+  keptOpenUntil: z.string().optional(),
+  /**
    * "Ask about this in a screen": the résumé assessment's open questions, asked before the packet's own questions
    * (keys `unknown_1`, `unknown_2`, ...). Fixed when the screen is created so a later assessment never changes a
    * conversation under way; each answer is recorded beside its question (not in `answers`, which holds the packet's
@@ -106,6 +111,14 @@ export const ScreenProgress = z.object({
    * names neither, exactly like a repeat submission's chat without them.
    */
   ownFacts: z.boolean().optional(),
+  /**
+   * 21 Oct 2026 (Q14, founder: "same page, confirm by email"): a detached interview's visit, so it is made from what a new
+   * address's own AI interview is made from. `newApplication`: the visit made the application it belongs to (an address
+   * the company knew, applying to another job), whose reading, interview plan and readiness are this visit's own.
+   * `uploadId`, `readAskedAt`: a repeat's résumé, whose reading by the form had not finished at Send; its CV lines are
+   * taken from that reading (found by its upload) when the interview starts, as the intake takes them.
+   */
+  visit: z.object({ newApplication: z.boolean().optional(), uploadId: z.string().max(100).optional(), readAskedAt: z.string().optional() }).optional(),
   /**
    * Wave S7: the written-up answers shown on Review & send. Hidden from the team until Send with the rest of the chat
    * (`teamScreenView`), erased with the candidate's words (`withoutCandidateWords` in @ros/core).

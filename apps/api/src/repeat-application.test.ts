@@ -8,7 +8,7 @@ import { createContainer, type Container } from "./container";
 import { RECEIPT_COOKIE, maskEmail } from "./pages/candidate";
 import { LINK_REQUEST_JOB_KIND, createApplication } from "./services/applications";
 import { noThanksRequested } from "./services/replies";
-import { useLaterApplyFlow } from "./test-helpers";
+import { pastTheWaitingRoom, useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Wave 0 items 0.1 and 0.11, over HTTP. A repeat application looks exactly like a new one and changes nothing on the
@@ -101,7 +101,7 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     expect(maskEmail("@example.com")).toBe("the email address you gave");
   });
 
-  it("a repeat submission gets the same waiting room as a first application, naming none (Q14, R20-12), changes nothing on the existing person, discards its upload, and the address on file gets its link once a day", async () => {
+  it("a repeat submission gets the same waiting room as a first application (Q14, kept in full on 21 Oct), changes nothing on the existing person, discards its upload, and the address on file gets its link once a day", async () => {
     const role = { id: roleId, eligibility };
     const r1 = await applyTo(role, { phone: "(949) 555-0100", smsConsent: "yes" }, (fd) => fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist 2019 - present"], "maria.txt", { type: "text/plain" })));
     expect(r1.status).toBe(302);
@@ -117,8 +117,9 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     for (const part of ["Max-Age=1800", `Path=/careers/${slug}/jobs/${roleId}/applied`, "HttpOnly", "SameSite=Lax"]) expect(receiptCookie).toContain(part);
     expect(setCookie).not.toContain("maria");
     expect(setCookie).not.toContain(mariaApp.id);
-    // a first application's waiting room opens her own AI interview (the inline worker made it already)
-    const room = await app.request(r1.headers.get("location")!, { headers: { cookie: setCookie.match(new RegExp(`${RECEIPT_COOKIE}=[^;,]+`))![0] } });
+    // a first application's waiting room opens her own AI interview (the inline worker made it already) once its first
+    // 40 to 90 seconds are over, as every waiting room's are (Q14, 21 Oct)
+    const room = await pastTheWaitingRoom(container, async () => app.request(r1.headers.get("location")!, { headers: { cookie: setCookie.match(new RegExp(`${RECEIPT_COOKIE}=[^;,]+`))![0] } }));
     expect(room.status).toBe(302);
     expect(room.headers.get("location")).toMatch(/^\/c\/screen\//);
     // the status link went by email, in the one email with the interview's link
@@ -136,8 +137,8 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     expect(r2.status).toBe(302);
     expect(r2.headers.get("location")).toBe(r1.headers.get("location"));
     const second = await receiptOf(r2);
-    // the same waiting room a first application gets (Q14), naming no application: never a link on the page, since anyone
-    // can type anyone's address; it ends on "check your email"
+    // the same waiting room a first application gets (Q14): never Maria's link on the page, since anyone can type anyone's
+    // address; what it opens later is a detached interview whose answers wait for Maria to confirm (repeat-conversation.test.ts)
     expect(decodeEntities(second.html)).toContain("We're preparing your AI interview…");
     expect(second.html).toContain('<input type="hidden" name="grant" value="v1.');
     expect(second.html).toContain("M***@example.com");

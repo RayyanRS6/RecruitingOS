@@ -124,11 +124,12 @@ export async function emailHolderAboutNote(container: Container, n: HeldNote): P
 
 /**
  * The pool board as it stood, added to a role review's context (plan F9): the summary, and for each person the column,
- * the score, the reason and what needs a person's eye. It opens only under the recruiter's grant, like the rest.
+ * the score with whether their AI interview is in it and its label (R20-9: `interview`, `basis`), the reason and what
+ * needs a person's eye. It opens only under the recruiter's grant, like the rest.
  */
 export async function attachBoardSnapshot(tx: Tx, input: { escalationId: string; roleId: string; tenant: Pick<Tenant, "staff">; now: Date }): Promise<void> {
-  const view = boardView(await loadPool(tx, { roleId: input.roleId, tenant: input.tenant }), input.now);
-  const people = [...Object.values(view.columns).flat(), ...view.stillApplying].map((c) => ({ applicationId: c.applicationId, name: c.name, column: c.placement.column, state: c.placement.state, score: c.score?.score ?? null, reason: c.placement.reason, needsYourEye: c.placement.needsYourEye, nextStep: c.placement.nextStep?.label ?? null }));
+  const view = boardView(await loadPool(tx, { roleId: input.roleId, tenant: input.tenant, now: input.now }), input.now);
+  const people = [...Object.values(view.columns).flat(), ...view.noAiInterview].map((c) => ({ applicationId: c.applicationId, name: c.name, column: c.placement.column, state: c.placement.state, score: c.score?.score ?? null, interview: c.score?.interview ?? null, basis: c.score?.basis ?? null, reason: c.placement.reason, needsYourEye: c.placement.needsYourEye, nextStep: c.placement.nextStep?.label ?? null }));
   const [row] = await tx.select({ contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(eq(recruiterEscalations.id, input.escalationId)).limit(1);
   await tx.update(recruiterEscalations).set({ contextSnapshot: { ...(row?.contextSnapshot ?? {}), board: { capturedAt: view.generatedAt, summary: view.summary, people } } }).where(eq(recruiterEscalations.id, input.escalationId));
 }

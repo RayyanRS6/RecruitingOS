@@ -4,7 +4,8 @@ import { randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
-import { candidateNotices, emit, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
+import { answerCvLines, chatFactsWithKept } from "@ros/agents";
+import { applicationAnswerSentences, candidateNotices, emit, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey, type UploadGrantPayload } from "../uploads";
@@ -832,11 +833,12 @@ const RECEIPT_TTL_MS = 30 * 60_000;
 /**
  * `next` is what the receipt says comes next (20 Oct 2026, R20-12): `interview` (the waiting room), `check_email` (the
  * plain receipt: also the neutral words for a must-have answer, E7), `held`, `used_up` (Q17: the link follows by email)
- * or `paused` (the company's trial ended: the link comes by email). `wait`: the application the waiting room waits for,
- * sealed in the cookie, or, for a repeat, an address the company had or a bot (Q14), an id that names none; `until`: the
- * waiting room says "preparing" until then whatever is stored (the moment of Send for a real one; about as long as a
- * reading takes for one that names none). Both have the same shape, so the sealed value tells nothing either. Cookies
- * from before 20 October say "review" or "conversation_by_email" and read as `check_email` and `used_up`.
+ * or `paused` (the company's trial ended: the link comes by email). `wait`: what the waiting room waits for, sealed in the
+ * cookie: a new address's application, a repeat's or a known address's detached interview (Q14, 21 Oct), or for a bot
+ * an id that names nothing; `until`: the waiting room says "preparing" until then whatever is stored, the same short
+ * random wait for every one of them (about as long as a reading takes; founder 21 Oct: "same timing"). All have the same
+ * shape, so the sealed value tells nothing either. Cookies from before 20 October say "review" or
+ * "conversation_by_email" and read as `check_email` and `used_up`.
  */
 type ReceiptNext = "interview" | "check_email" | "held" | "used_up" | "paused";
 type ReceiptPayload = { v: 1; roleId: string; to: string; exp: number; next?: ReceiptNext | "review" | "conversation_by_email"; wait?: string; until?: number };
@@ -846,14 +848,17 @@ function receiptPath(slug: string, roleId: string): string {
 }
 
 /**
- * Sends the browser to the receipt or the waiting room, with the masked address it shows. `wait` null: the waiting room
- * for a submission whose interview is never opened on the page (Q14), with an id of no application and a short random wait.
+ * Sends the browser to the receipt or the waiting room, with the masked address it shows. `wait`, for the waiting room:
+ * what it waits for (an application, or a detached interview; null for a bot or a repeat past the day's conversations:
+ * an id of nothing). Every one says "preparing" for a short random wait first (40 to 90 seconds), and then waits for
+ * what it names, so a new address and a known one open alike (Q14): never sooner than that, and a detached interview
+ * waits for what a new address's own waits for (services/apply-conversation.ts, `interviewWaitFor`).
  */
 function toReceipt(c: Context<Vars>, job: { company: { slug: string }; role: { id: string } }, typedEmail: string, next: ReceiptNext = "check_email", wait?: string | null) {
   const container = c.get("container");
   const path = receiptPath(job.company.slug, job.role.id);
   const now = container.engine.clock().getTime();
-  const waiting = next === "interview" ? { wait: wait ?? uuidv7(), until: wait ? now : now + LOOK_ALIKE_MIN_MS + randomInt(LOOK_ALIKE_SPREAD_MS) } : {};
+  const waiting = next === "interview" ? { wait: wait ?? uuidv7(), until: now + LOOK_ALIKE_MIN_MS + randomInt(LOOK_ALIKE_SPREAD_MS) } : {};
   const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: now + RECEIPT_TTL_MS, next, ...waiting };
   setCookie(c, RECEIPT_COOKIE, sealPayload(RECEIPT_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
   return c.redirect(path);
@@ -871,16 +876,16 @@ function toInterview(c: Context<Vars>, token: string, maskedTo: string | null) {
 }
 
 /**
- * The waiting room's grant (20 Oct 2026, R20-12): the application it waits for, its role, until when it says "preparing"
+ * The waiting room's grant (20 Oct 2026, R20-12): what it waits for (`a`), its role, until when it says "preparing"
  * whatever is stored (`u`, as the cookie's `until`) and when it stops working (the receipt's half hour), sealed with the
  * session secret like the upload grant and the receipt, and carried in the page. Only a first application from a new
- * address names its own: a repeat, an address the company had or a bot gets the same page with an id of no application
- * (Q14), so it says "preparing" for a while and then "check your email", and nobody can open another person's interview
- * by typing their email.
+ * address names its own; a repeat or an address the company had (Q14, founder 21 Oct) names a detached interview made
+ * for this visit, which opens the same way after the same wait, so nobody can open another person's interview by typing
+ * their email, and nothing tells the two apart; a bot's names nothing.
  */
 const WAIT_PURPOSE = "interview-wait";
 type WaitGrant = { v: 1; a: string; r: string; exp: number; u: number };
-/** How long the waiting room of a submission naming no application says "preparing": 40 to 90 seconds, as a reading takes. */
+/** How long every waiting room says "preparing" at least, whatever it waits for: 40 to 90 seconds, as a reading takes (Q14). */
 const LOOK_ALIKE_MIN_MS = 40_000;
 const LOOK_ALIKE_SPREAD_MS = 50_000;
 
@@ -889,9 +894,9 @@ function openWaitGrant(container: Container, grant: unknown, roleId: string): Wa
   return g?.v === 1 && g.r === roleId && typeof g.a === "string" ? { ...g, u: typeof g.u === "number" ? g.u : 0 } : null;
 }
 
-/** Where the waiting room stands: "preparing" until the grant's `u`, then as the application it names stands (none: "email"). */
+/** Where the waiting room stands: "preparing" until the grant's `u`, then as what it names stands (nothing: "email"). */
 async function waitStateOf(container: Container, grant: WaitGrant): Promise<InterviewWait> {
-  return grant.u > container.engine.clock().getTime() ? { state: "preparing" } : interviewWaitFor(container.db, grant.a);
+  return grant.u > container.engine.clock().getTime() ? { state: "preparing" } : interviewWaitFor(container.db, grant.a, { storage: container.integrations.storage, now: container.engine.clock() });
 }
 
 /** Without JavaScript the résumé travels inside the form itself, which the platform refuses above a few megabytes; this cap gives that case a plain answer (D14). */
@@ -1188,8 +1193,8 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   if (earlier) c.header("Cache-Control", "no-store");
   const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume, marks: { fromResume: marked.fromResume, suggested: marked.suggested }, reading: resume.resume ? readView : null, earlier });
   const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={state(missing, resume)} />, 400);
-  // Honeypot: a filled hidden field gets the waiting room a person gets (naming no application), and nothing is recorded.
-  if (posted.website) return toReceipt(c, job, values.email, "interview", null);
+  // Honeypot: a filled hidden field gets the waiting room a person gets (naming nothing), and nothing is recorded.
+  if (posted.website) return toReceipt(c, job, values.email, "interview");
   const fromCv = [...marked.fromResume, ...marked.suggested];
   const workSummary = values.workSummary.trim();
   const parsed = ApplyRequest.safeParse({
@@ -1248,6 +1253,17 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   // upload, also with no note yet (20 Oct, R20-1): a reading still running, or one whose note never came, is tied at
   // Send when it is there, else by the intake, which waits a little for one still running.
   const formReading = held && usedUploadId === held.uploadId ? { uploadId: held.uploadId, storageKey: held.key, readAskedAt: held.readAskedAt ?? null } : null;
+  // What this visit typed, for a repeat's or a known address's detached interview to name (Wave S7, spec steps 4 to 6;
+  // Q14, 21 Oct): the CV's lines from the form's own reading of this very upload, the summary they checked and the
+  // no-résumé answers, and every form answer as a sentence; never anything on file.
+  const readCv = held && usedUploadId === held.uploadId && reading?.outcome === "read" ? reading.cvLines ?? [] : [];
+  // A reading the form asked for that had not finished at Send ("Fill it in myself", the page moving on, a quick Send):
+  // a repeat's detached interview waits for it and reads its CV lines by the upload, as the intake does (21 Oct, Q14).
+  const pendingReading = formReading && !reading && held?.readAskedAt ? { uploadId: formReading.uploadId, readAskedAt: new Date(held.readAskedAt * 1000).toISOString() } : null;
+  const typedFacts = {
+    cv: [...readCv, ...answerCvLines({ workSummary: parsed.data.workSummary ?? null, noResume: parsed.data.noResumeAnswers ?? null })].slice(0, 20),
+    formAnswers: applicationAnswerSentences(packet, { eligibility: eligibilityAnswers, quick: parsed.data.quickAnswers ?? null }).map((s) => s.sentence).slice(0, 20),
+  };
   // The earlier facts still ticked on a form opened from the reuse link (Wave S8): the link is opened again, the address
   // typed must be the one on file, and only ids come from the form (services/profile-facts.ts). Without a link, nothing.
   const keeping = await factsToKeep(container, { companyId: company.id, roleId: role.id, token: posted.reuse, typedEmail: parsed.data.email, ids: posted.keep });
@@ -1258,8 +1274,8 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   const origin = resolveApplicationSource(c, role.id);
   // The page never shows or links to an existing application (Wave 0 item 0.1), so typing someone else's address changes
   // nothing on their record. A first application waits on the page for its own AI interview (20 Oct 2026, R20-12); a
-  // repeat or an address the company already had gets the same waiting room, naming no application, which ends on "check
-  // your email", where the link goes to the address on file (Q14; services/apply-conversation.ts `applyVisitNext`).
+  // repeat or an address the company already had gets the same waiting room, which opens a detached AI interview whose
+  // answers join only when the address owner confirms them by email (Q14, founder 21 Oct; `applyVisitNext`).
   const next = await withTenant(container.db, company.id, async (tx) => {
     if (usedUploadId) await markUploadUsed(tx, { companyId: company.id, roleId: role.id, uploadId: usedUploadId });
     const created = await createApplication(tx, container, {
@@ -1291,12 +1307,12 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
     const kept = keeping && !created.duplicate && created.candidate.id === keeping.candidateId ? keptFactsOf(keeping.facts, container.engine.clock().toISOString()) : [];
     await keepFactsOn(tx, { applicationId: created.application.id, facts: kept });
     // The waiting room or a plain receipt: decided in this transaction, from what was typed.
-    return applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, packet, eligibilityAnswers, trialPaused: admitted.trialGrace });
+    return applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, role, packet, eligibilityAnswers, quickAnswers: parsed.data.quickAnswers ?? null, typedFirstName: parsed.data.firstName, typedFacts: chatFactsWithKept(typedFacts, kept), pendingReading, trialPaused: admitted.trialGrace });
   });
   await container.kick();
   clearApplicationSource(c);
   // An answer that did not match an eligibility question gets the neutral receipt (E7): nothing said about why.
-  return next.kind === "interview" ? toReceipt(c, job, parsed.data.email, "interview", next.applicationId) : toReceipt(c, job, parsed.data.email, next.reason);
+  return next.kind === "interview" ? toReceipt(c, job, parsed.data.email, "interview", next.applicationId ?? next.conversationId) : toReceipt(c, job, parsed.data.email, next.reason);
 }
 
 candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), (c) => sendApplication(c));
@@ -1375,7 +1391,8 @@ const WAIT_CSS = `.wait{display:flex;gap:14px;align-items:flex-start}.loader{fle
  * later. With script it asks `…/applied/status` every two seconds, then every five, and stops after about twelve
  * minutes with "check your email", its loader stopped. Without script there is no loader and no promise that the page
  * moves: "Start my interview" opens it when it is ready, or shows this page again. The grant names this application
- * only (`WaitGrant`), or none at all for a repeat, a known address or a bot (Q14), whose page reads the same.
+ * only (`WaitGrant`), or for a repeat or a known address a detached interview (Q14), or for a bot nothing; the page is
+ * the same, byte for byte apart from the grant, and so is what follows (a detached interview opens the same way).
  */
 function WaitingRoom(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null; grant: string; again?: boolean }) {
   const base = receiptPath(props.company.slug, props.role.id);

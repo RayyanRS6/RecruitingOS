@@ -608,10 +608,10 @@ describe("role report arithmetic on hand-made rows", () => {
     // a2 is in process, so the approval about a2 counts; a1 waits on the owner and counts once
     expect(r.pendingDecisions).toMatchObject({ count: 2, approvals: 1, candidates: 1, oldestDays: 6 });
     expect(r.pendingDecisions.list.map((p) => p.kind)).toEqual(["approval", "candidate"]);
-    expect(r.pendingDecisions.list[0]).toMatchObject({ label: "Invite to a screening chat?", days: 6, approvalRequestId: "p1" });
+    expect(r.pendingDecisions.list[0]).toMatchObject({ label: "Invite to an AI interview?", days: 6, approvalRequestId: "p1" });
     // the assistant's "hold" reading is named apart from the On hold mark a person sets
     expect(r.recommendationsVsDecisions.rows).toEqual([
-      { recommendation: "screen", label: "Screening chat suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 },
+      { recommendation: "screen", label: "AI interview suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 },
       { recommendation: "hold", label: "Thin evidence: your call", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 1 },
     ]);
     expect(r.overrides).toEqual({ eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, flaggedAssessments: 0, byAction: { reject: 1 } });
@@ -640,7 +640,8 @@ describe("role report arithmetic on hand-made rows", () => {
     // a1 (ready for review) on hold until next week: nothing waits on you, and the strip says On hold
     const running = withMarks([mark("a1", "on_hold", d(7)), mark("a1", "shortlist", null, d(-2))]);
     expect(running.stages.byGroup).toEqual({ waiting_on_you: 0, waiting_on_candidate: 0, in_process: 2, not_moving_forward: 1, hired: 0 });
-    expect(running.stages.byOwnerStage).toMatchObject({ new: 1, on_hold: 1, not_moving_forward: 1 });
+    // a2 (invited to the AI interview) is under "No AI interview yet" (R20-7)
+    expect(running.stages.byOwnerStage).toMatchObject({ no_ai_interview: 1, new: 0, on_hold: 1, not_moving_forward: 1 });
     expect(running.stages.marks).toEqual({ longlist: 0, shortlist: 0, onHold: 1, holdsEnded: 0, notAFitForNow: 0, holdsEverSet: 1 });
     expect(running.timeInStage.waitingOnYou.count).toBe(0);
     expect(running.pendingDecisions.candidates).toBe(0);
@@ -659,6 +660,8 @@ describe("role report arithmetic on hand-made rows", () => {
     expect(decided.recommendationsVsDecisions.rows[0]).toMatchObject({ shortlisted: 1, noActionYet: 0 });
     const rows = summaryRows(running);
     expect(rows).toContainEqual(["Pipeline stages", "On hold", 1]);
+    expect(rows).toContainEqual(["Pipeline stages", "No AI interview yet", 1]);
+    expect(rows.filter((r) => r[0] === "Pipeline stages")).toHaveLength(10);
     expect(rows).toContainEqual(["Marks", "On hold now", 1]);
     expect(rows).toContainEqual(["Decisions told", "Not told yet", 1]);
   });

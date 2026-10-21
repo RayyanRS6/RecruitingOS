@@ -55,7 +55,7 @@ const roles = [
   { id: "r3", title: "Front Desk Lead", status: "draft", openedAt: null, createdAt: "2026-10-10T00:00:00Z", counts: { total: 0 }, needsYou: 0, daysOpen: null },
   { id: "r4", title: "Office Manager", status: "closed", openedAt: "2026-08-01T00:00:00Z", createdAt: "2026-07-30T00:00:00Z", counts: { total: 9 }, needsYou: 0, daysOpen: null },
 ];
-const updates = [{ id: "n1", kind: "screen.assessed", title: "Maria finished the screening chat", body: "Her answers are on her page.", action: { label: "Open", href: "/roles/r1/talent?open=a1" }, readAt: null, createdAt: "2026-10-14T09:00:00Z" }];
+const updates = [{ id: "n1", kind: "screen.assessed", title: "Maria finished the AI interview", body: "Her answers are on her page.", action: { label: "Open", href: "/roles/r1/talent?open=a1" }, readAt: null, createdAt: "2026-10-14T09:00:00Z" }];
 
 function render(seed: { role?: string; cards?: unknown[] | null; summary?: string; notifications?: unknown[]; roles?: unknown[]; usage?: unknown; trial?: unknown } = {}): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
@@ -130,20 +130,20 @@ describe("Needs you", () => {
     expect(html.indexOf("Dental Hygienist is live. Share it now")).toBeLessThan(fold);
     expect(html.indexOf("Office Manager stops taking applications tonight")).toBeGreaterThan(fold);
     expect(html.indexOf("Screening for Dental Hygienist")).toBeGreaterThan(html.indexOf("Office Manager stops taking applications tonight"));
-    expect(html).toContain(">Screening chat</span>");
+    expect(html).toContain(">AI interview</span>");
   });
 
-  it("leads with the plan's screening chats at 80% for an owner, without waiting for the brief, and counts it", () => {
+  it("leads with the plan's AI interviews at 80% for an owner, without waiting for the brief, and counts it", () => {
     const usage = { text_screens: { used: 122, limit: 150 } };
     const waiting = text(render({ cards: null, usage }));
-    expect(waiting).toContain("Needs you 122 of this month's 150 screening chats used 80% used Nothing has stopped.");
+    expect(waiting).toContain("Needs you 122 of this month's 150 AI interviews used 80% used Nothing has stopped.");
     expect(waiting).toContain("Ask ITS about adding more");
     expect(waiting).toContain("See usage");
     // the rest of what it says is one click away
     expect(waiting).toContain("ITS has been told and can add more before then.");
     expect(render({ cards: [], usage })).toContain('<p class="page-header-sub">1 thing needs you</p>');
     // only owners and admins, who can talk to ITS about the plan, see it
-    expect(text(render({ role: "hiring_manager", cards: [], usage }))).not.toContain("screening chats used");
+    expect(text(render({ role: "hiring_manager", cards: [], usage }))).not.toContain("AI interviews used");
   });
 
   it("asks before a draft is discarded and keeps Continue on the row", () => {
@@ -236,7 +236,7 @@ describe("the rest of Home", () => {
   it("folds what the assistant did under Recent activity, with Mark all read, the day in numbers and every earlier update", () => {
     const html = render();
     expect(html).toContain("<summary>Recent activity (1)</summary>");
-    expect(text(html)).toContain("Maria finished the screening chat");
+    expect(text(html)).toContain("Maria finished the AI interview");
     expect(html).toContain(">Mark all read</button>");
     expect(text(html)).toContain("12 handled for you since yesterday.");
     expect(html).toContain('<a href="/updates">See earlier updates</a>');

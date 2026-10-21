@@ -291,7 +291,7 @@ function BriefCard({ brief }: { brief: InterviewerBrief }) {
         </div>
         {brief.screen?.answers.length ? (
           <details>
-            <summary className="small">What they said in the screening chat ({brief.screen.answers.length} answers)</summary>
+            <summary className="small">What they said in the AI interview ({brief.screen.answers.length} answers)</summary>
             <dl className="kv small" style={{ marginTop: 6 }}>{brief.screen.answers.map((a, i) => <div key={i}><dt>{a.question}</dt><dd>{a.answer}</dd></div>)}</dl>
           </details>
         ) : null}

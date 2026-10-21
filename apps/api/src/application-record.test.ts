@@ -101,7 +101,7 @@ describe("the application record (status page) after sending", () => {
   }
 
   /** A résumé reading as the triage writes one: the first must-have shown with a quote, the first skill evidenced, the rest unknown. */
-  async function readingFor(a: typeof applications.$inferSelect, createdAt = at(60)) {
+  async function readingFor(a: typeof applications.$inferSelect, createdAt = at(60), kind: "triage" | "screen" = "triage") {
     const [must, ...rest] = packet.requirements.mustHaves;
     const skill = packet.competencies[0];
     const result = {
@@ -109,7 +109,7 @@ describe("the application record (status page) after sending", () => {
       requirementFindings: [{ requirementKey: must.key, met: "yes", evidence: { quote: "Registered Dental Hygienist at Coastal Family Dentistry", source: "resume" } }, ...rest.map((m) => ({ requirementKey: m.key, met: "unknown" }))],
       competencyFindings: skill ? [{ competencyKey: skill.key, finding: "partially_evidenced", evidence: { quote: "Registered Dental Hygienist", source: "resume" }, note: "PRIVATE NOTE" }] : [],
     };
-    const [row] = await withTenant(container.db, companyId, (tx) => tx.insert(assessments).values({ companyId, applicationId: a.id, kind: "triage", packetVersion: a.packetVersion, result: result as never, overall: "strong", confidence: "high", createdAt }).returning());
+    const [row] = await withTenant(container.db, companyId, (tx) => tx.insert(assessments).values({ companyId, applicationId: a.id, kind, packetVersion: a.packetVersion, result: result as never, overall: "strong", confidence: "high", createdAt }).returning());
     await container.db.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, a.id));
     return row;
   }
@@ -172,6 +172,8 @@ describe("the application record (status page) after sending", () => {
     if (packet.requirements.mustHaves.length > 1) expect(score).toContain("Not shown yet:");
     for (const m of packet.requirements.mustHaves.slice(1)) expect(score).toContain(m.text);
     expect(score).toMatch(/Based on \d+ of \d+ requirements\. Anything the team could not see in what you sent is left out of the number, never held against you\./);
+    // she sent it without the AI interview: the number is her résumé's alone, and says so (R20-9)
+    expect(score).toContain('<p class="meta">From your résumé only. Based on ');
     expect(score).toContain("The team sees what you sent; their private notes are never shared with you.");
     expect(score).toContain("A person makes every decision");
     expect(html).not.toMatch(/PRIVATE RATIONALE|PRIVATE NOTE/);
@@ -233,7 +235,7 @@ describe("the application record (status page) after sending", () => {
     expect(answers).toMatch(/<li>[^<]+ Yes\.<\/li>/);
     expect(answers).not.toContain("From your chat");
     // sent: the answers, the write-up's note apart, and the chat word for word one click away
-    await container.db.update(screens).set({ status: "completed", completedAt: at(-30 * 60), assessmentId: (await readingFor(a, at(90))).id, answers: { [q1.key]: "I love perio work." }, progress: progressOf({ submittedAt: at(-30 * 60), declined: q2 ? [q2.key] : [], writeup: { v: 1, writtenAt: at(-30 * 60), aiRunId: null, promptVersion: 1, answers: [{ questionKey: q1.key, answer: "I love perio work and live nearby.", status: "answered", quotes: ["I love perio work."], note: null, by: "writeup" }, ...(q2 ? [{ questionKey: q2.key, answer: "", status: "skipped" as const, quotes: [], note: "No example was given.", by: "writeup" as const }] : [])] } }), transcript: [{ role: "assistant", content: "First question. Reply HUMAN at any time to reach a person.", at: at(-40 * 60) }, { role: "candidate", content: "I love perio work.", at: at(-39 * 60) }, { role: "system", content: "SYSTEM LINE", at: at(-38 * 60) }, { role: "recruiter", content: "RECRUITER NOTE", at: at(-37 * 60) }] }).where(eq(screens.id, open.id));
+    await container.db.update(screens).set({ status: "completed", completedAt: at(-30 * 60), assessmentId: (await readingFor(a, at(90), "screen")).id, answers: { [q1.key]: "I love perio work." }, progress: progressOf({ submittedAt: at(-30 * 60), declined: q2 ? [q2.key] : [], writeup: { v: 1, writtenAt: at(-30 * 60), aiRunId: null, promptVersion: 1, answers: [{ questionKey: q1.key, answer: "I love perio work and live nearby.", status: "answered", quotes: ["I love perio work."], note: null, by: "writeup" }, ...(q2 ? [{ questionKey: q2.key, answer: "", status: "skipped" as const, quotes: [], note: "No example was given.", by: "writeup" as const }] : [])] } }), transcript: [{ role: "assistant", content: "First question. Reply HUMAN at any time to reach a person.", at: at(-40 * 60) }, { role: "candidate", content: "I love perio work.", at: at(-39 * 60) }, { role: "system", content: "SYSTEM LINE", at: at(-38 * 60) }, { role: "recruiter", content: "RECRUITER NOTE", at: at(-37 * 60) }] }).where(eq(screens.id, open.id));
     ({ html } = await page(`/c/status/${a.statusToken}`));
     const chat = html.slice(html.indexOf("<h3>From your chat</h3>"), html.indexOf("</section>", html.indexOf("<h3>From your chat</h3>")));
     expect(chat).toContain(`<p class="said-q">1. ${q1.question}</p><p class="pre">I love perio work and live nearby.</p>`);
@@ -246,6 +248,8 @@ describe("the application record (status page) after sending", () => {
     expect(chat).not.toMatch(/SYSTEM LINE|RECRUITER NOTE|Reply HUMAN/);
     expect(html).toContain("Your match score is ready");
     expect(html).toContain("sees this score with your application and your chat.");
+    // what the number rests on, in their words (R20-9): their AI interview's scorecard is in it
+    expect(html).toMatch(/<p class="meta">From your résumé and your AI interview\. Based on \d+ of \d+ requirements\./);
   });
 
   it("the ITS switch (on by default): ITS turns the score off for a company with a reason, recorded; the customer cannot; the record then says nothing about a score", async () => {

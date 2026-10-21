@@ -9,7 +9,7 @@ import { createContainer, type Container } from "./container";
 import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache } from "./pages/public-feeds";
 import { ASKED_OF_EVERYONE, questionHelp, withPlainQuestionHelp } from "./pages/question-help";
 import { jobUrls } from "./services/job-urls";
-import { statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
+import { pastTheWaitingRoom, statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * The candidate-facing job surfaces (docs/spec/20 section 2 items 1 to 8, 19 and 20; docs/readiness/20 section D):
@@ -245,7 +245,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     // status page: the status link travels by email only (Wave 0 item 0.1)
     expect(accepted.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
     await container.drain();
-    const room = await app.request(accepted.headers.get("location")!, { headers: { cookie: setCookieOf(accepted).match(/ros_applied=[^;,]+/)![0] } });
+    // after the 40 to 90 seconds every waiting room says "preparing" first (Q14, 21 Oct)
+    const room = await pastTheWaitingRoom(container, async () => app.request(accepted.headers.get("location")!, { headers: { cookie: setCookieOf(accepted).match(/ros_applied=[^;,]+/)![0] } }));
     const screenPath = room.headers.get("location")!;
     expect(screenPath).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
     expect(setCookieOf(room)).toMatch(new RegExp(`ros_applied_to=v1\\.[^;]+; Max-Age=1800; Path=${screenPath.replace(/[/]/g, "\\/")}; HttpOnly; SameSite=Lax`));

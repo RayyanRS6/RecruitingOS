@@ -1,5 +1,6 @@
 import { IMPORTANCE_LABEL, type MatchScore, type ReadingVersion } from "@ros/contracts";
 import type { CompareCandidate, CompareResponse } from "../../api/client";
+import { scoreBasis, scoreRank } from "../../talent-list";
 
 /**
  * The comparison view (docs/spec/21 F10; founder decision B2): up to five people side by side, each one's match score
@@ -19,18 +20,27 @@ export const COMPARE_ORDERS: ReadonlyArray<{ value: CompareOrder; label: string 
   { value: "score", label: "Highest score first" },
 ];
 
-/** The columns: as chosen, or the highest score first (no score yet last, the chosen order among equals). */
+/**
+ * The columns: as chosen, or the highest score first, like with like as "Sort: Score" on the list (R20-9, `scoreRank`):
+ * scores that count the AI interview (or an older answer that does not say) first, then résumé-only scores, then no
+ * score yet; within each, the highest first, the chosen order among equals.
+ */
 export function orderCandidates<T extends { score?: MatchScore | null }>(cands: readonly T[], order: CompareOrder): T[] {
   if (order === "chosen") return [...cands];
+  const rank = (c: T) => scoreRank({ score: c.score?.score ?? null, interview: c.score?.interview ?? null });
   const value = (c: T) => c.score?.score ?? -1;
-  return cands.map((c, i) => ({ c, i })).sort((x, y) => value(y.c) - value(x.c) || x.i - y.i).map((x) => x.c);
+  return cands.map((c, i) => ({ c, i })).sort((x, y) => rank(x.c) - rank(y.c) || value(y.c) - value(x.c) || x.i - y.i).map((x) => x.c);
 }
 
-/** What the top line of a column says: the number and its band, what it rests on, and any missing must-have. */
-export function scoreSummary(c: CompareCandidateView): { score: number | null; band: string | null; coverage: string | null; missing: string[] } {
+/**
+ * What the top line of a column says: the number and its band, what it rests on (the coverage, and the label, R20-9:
+ * "Résumé only: AI interview not done yet" beside an interviewed person's "From the résumé and the AI interview"), and
+ * any missing must-have.
+ */
+export function scoreSummary(c: CompareCandidateView): { score: number | null; band: string | null; coverage: string | null; basis: string | null; missing: string[] } {
   const m = c.score;
-  if (!m) return { score: null, band: null, coverage: "No AI review yet", missing: [] };
-  return { score: m.score, band: m.bandLabel, coverage: m.coverage.words, missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`) };
+  if (!m) return { score: null, band: null, coverage: "No AI review yet", basis: null, missing: [] };
+  return { score: m.score, band: m.bandLabel, coverage: m.coverage.words, basis: scoreBasis(m), missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`) };
 }
 
 /**
@@ -85,10 +95,20 @@ export function hasTeamNotes(cands: ReadonlyArray<Pick<CompareCandidateView, "no
   return cands.some((c) => Array.isArray(c.notes) && c.notes.length > 0);
 }
 
-/** The line under the table: how the columns are ordered, and that people decide. */
-export function orderLine(order: CompareOrder, count: number): string {
+/**
+ * The line under the table: how the columns are ordered, and that people decide. `mixed`: some scores count the AI
+ * interview and some are résumé-only (`mixedScores`), so the line says why a lower number can come first (R20-9).
+ */
+export function orderLine(order: CompareOrder, count: number, mixed = false): string {
   const who = count === 1 ? "1 person" : `${count} people`;
-  return order === "score" ? `${who}, the highest match score first. A score helps you read; it never decides.` : `${who}, in the order you chose them.`;
+  if (order !== "score") return `${who}, in the order you chose them.`;
+  return `${who}, the highest match score first${mixed ? ", scores with the AI interview in them before résumé-only ones" : ""}. A score helps you read; it never decides.`;
+}
+
+/** Whether the people compared have both kinds of score: one that counts the AI interview and one from the résumé only. */
+export function mixedScores(cands: ReadonlyArray<{ score?: MatchScore | null }>): boolean {
+  const ranks = new Set(cands.filter((c) => c.score?.score !== null && c.score?.score !== undefined).map((c) => scoreRank({ score: c.score!.score, interview: c.score!.interview ?? null })));
+  return ranks.size > 1;
 }
 
 /** The picker: tick up to five; once five are ticked the rest wait until one is unticked. */

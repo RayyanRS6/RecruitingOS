@@ -110,9 +110,9 @@ describe("each card says one line, the rest one click away", () => {
     const words = text(html);
     expect(words).toContain("Name Bright Dental ITS check Confirmed Careers page /careers/bright-dental");
     expect(words).toContain("Type, size, hours and notices Business type Dental practice or group");
-    expect(words).toContain("active jobs: 1 of 3 · screening chats this month: 4 of 50");
+    expect(words).toContain("active jobs: 1 of 3 · AI interviews this month: 4 of 50");
     // and when the monthly ones start again from zero (Wave S2 F1); roles never reset
-    expect(words).toContain("screening chats this month: 4 of 50 Monthly allowances reset on October 30.");
+    expect(words).toContain("AI interviews this month: 4 of 50 Monthly allowances reset on October 30.");
     // the usage is on the card's first view, not inside the fold
     const card = html.slice(html.indexOf('<div id="setup-company"'), html.indexOf('<div id="setup-profile"'));
     expect(card.indexOf("Usage")).toBeGreaterThan(-1);
@@ -140,6 +140,7 @@ describe("each card says one line, the rest one click away", () => {
     const html = page();
     const words = text(html);
     expect(words).toContain("Choose how much the AI does without asking you. How this works What the product does today");
+    // the rule group removed on 20 Oct (R20-4) does not come back under its old name
     expect(html).not.toContain('aria-label="Invite an applicant to the screening chat"');
     expect(html).not.toContain('aria-label="Invite every applicant to the AI interview"');
     expect(words).toContain("Decline a candidate on judgment always a person");

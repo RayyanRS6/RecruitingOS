@@ -24,7 +24,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 const { SendDecisionStep } = await import("@ros/web/src/pages/candidate-panel/telling");
 const { ClosingMessageCard, CloseRoleCard } = await import("@ros/web/src/components/ClosingMessage");
-const { CompareTable } = await import("@ros/web/src/pages/compare/ComparePanel");
+const { CompareTable, ComparePanel } = await import("@ros/web/src/pages/compare/ComparePanel");
 const { QuestionCard } = await import("@ros/web/src/pages/new-role/QuestionCard");
 const { Interviews } = await import("@ros/web/src/pages/Interviews");
 
@@ -64,7 +64,7 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
         { key: "c1", label: "Perio charting", mustHave: false, importance: "essential", weightPct: 40, pctMet: 50, pointsLost: 18, finding: "Partly shown", source: "resume", quote: "some perio charting", unquoted: false },
         { key: "mh_1", label: "Active CA RDH license", mustHave: true, importance: null, weightPct: 60, pctMet: 100, pointsLost: 0, finding: "Shown", source: "resume", quote: "RDH since 2019", unquoted: false },
       ],
-      unknown: [{ key: "mh_2", label: "Saturday availability", mustHave: true, importance: null }], fullMarks: 1, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume", packetVersion: 2,
+      unknown: [{ key: "mh_2", label: "Saturday availability", mustHave: true, importance: null }], fullMarks: 1, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume", interview: "not_done_yet", basis: "Résumé only: AI interview not done yet", packetVersion: 2,
     },
     mustHaves: { total: 2, shown: 1, partly: 0, notShown: 0, unknown: 1, gaps: [], words: "Must-haves: 1 of 2 shown, 1 not yet known" },
     placement: { column: "shortlist", state: "suggested", doneLabel: null, confident: true, needsYourEye: null, reason: "Strong match", nextStep: { kind: "interview", label: "Interview them", reason: "Strong on every must-have shown. Ask about Saturdays." }, suggestedAction: "shortlist", declineReason: null },
@@ -91,6 +91,8 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
     expect(at("<summary>Full breakdown</summary>")).toBeLessThan(at("Contact: "));
     // the verdict: the score, how sure the AI was, and one line on the must-haves
     expect(t).toContain("High confidence");
+    // a score with no AI interview in it yet says so beside the number, the full label on hover (R20-9)
+    expect(html).toMatch(/<span title="Résumé only: AI interview not done yet"><span class="chip[^"]*"[^>]*>(<[^>]+>)*Résumé only/);
     expect(t).toContain("1 of 2 must-haves shown · 1 not known yet");
     // the next step: one line, its one button (the stage button's own step), the rest under "Why"
     expect(t).toContain("Interview them · Strong on every must-have shown.");
@@ -103,12 +105,23 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
     expect(t).toContain("Little perio charting");
   });
 
+  it("keeps the résumé-only label beside the header's score on every section, not only on the Overview (R20-9)", () => {
+    const chip = /<span title="Résumé only: AI interview not done yet"><span class="chip[^"]*"[^>]*>(<[^>]+>)*Résumé only/g;
+    for (const tab of ["history", "messages", "resume"]) expect(panel(client([scored]), { tab }).match(chip), tab).toHaveLength(1);
+    // on the Overview the verdict card says it too: twice in all
+    expect(panel(client([scored])).match(chip)).toHaveLength(2);
+    const { matchScore } = scored as unknown as { matchScore: Record<string, unknown> };
+    const interviewed = detail({ ...scored, matchScore: { ...matchScore, interview: "done", basis: "From the résumé and the AI interview" } });
+    expect(text(panel(client([interviewed]), { tab: "history" }))).not.toContain("Résumé only");
+  });
+
   it("keeps everything else under Full breakdown: the bars, what is not known yet, the AI review with its flag, and the eligibility answers", () => {
     const html = panel(client([scored]));
     const more = html.slice(html.indexOf("<summary>Full breakdown</summary>"));
     const t = text(more);
     expect(t).toContain("How the score was worked out");
-    expect(t).toContain("Based on 2 of 3 requirements, from the AI review of the résumé.");
+    // R20-9: what the score rests on, so a résumé-only number is never read as one that counts the AI interview
+    expect(t).toContain("Based on 2 of 3 requirements. Résumé only: AI interview not done yet.");
     expect(t).toContain("What cost points");
     expect(t).toContain("1 requirement not known yet");
     expect(t).toContain("How sure the AI is");
@@ -131,7 +144,7 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
     expect(t).not.toContain("Recent activity");
     expect(t).toContain("Bring in a recruiter");
     // the whole record stays on the History tab, in the glossary's words
-    expect(text(panel(client([scored]), { tab: "history" }))).toContain("AI review of the résumé: Worth a screening chat");
+    expect(text(panel(client([scored]), { tab: "history" }))).toContain("AI review of the résumé: Worth an AI interview");
   });
 
   it("never promises a review in a minute when none could be made", () => {
@@ -364,6 +377,15 @@ describe("the team's notes in Compare (plan H3)", () => {
     expect(html).toContain('<th scope="row" class="small muted">Their panel</th>');
     // every body row starts with its header: no row is left with a plain first cell
     expect(html).not.toMatch(/<tr><td/);
+  });
+
+  it("labels a résumé-only score in the picker too, as on the list (R20-9)", () => {
+    const html = render(client([]), createElement(ComparePanel, { roleId: "r1", candidates: [
+      { id: "a1", name: "Maria Reyes", stageLabel: "New", score: 85, interview: "done", basis: "From the résumé and the AI interview" },
+      { id: "a2", name: "Kit Lane", stageLabel: "New", score: 90, interview: "not_done", basis: "Résumé only: no AI interview" },
+    ] }));
+    expect(html).toContain('<span class="chip neutral" title="Résumé only: no AI interview">Résumé only</span>');
+    expect(html.match(/Résumé only<\/span>/g)).toHaveLength(1);
   });
 });
 

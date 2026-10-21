@@ -242,7 +242,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   });
 
   let priyaId = "";
-  it("reminds once and then closes an AI interview nobody starts: the application goes on to the team without it", async () => {
+  it("reminds once and then closes an AI interview nobody starts: she stays under 'No AI interview yet' (R20-7), told nothing else is needed", async () => {
     const a = await apply({ first: "Priya", last: "Shah", email: "priya@example.com", noResume: "Registered dental hygienist for six years with perio charting and Dentrix experience, active CA RDH license." });
     priyaId = a.id;
     expect(a.stage).toBe("screen_invited");
@@ -259,8 +259,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const expired = await screenOf(a.id);
     expect(expired.status).toBe("expired");
     expect((await eventsOf("screen.expired")).filter((e) => e.subjectId === expired.id)).toHaveLength(1);
-    // the interview that comes with the application lapses into the team's review, and she is told nothing else is needed
-    expect((await reload(a.id)).stage).toBe("triaged");
+    // the link lapses: she stays where she is, "Link expired" under "No AI interview yet", and is told nothing else is needed
+    expect((await reload(a.id)).stage).toBe("screen_invited");
     expect(emailOutbox().find((m) => m.to === "priya@example.com" && /has gone to the hiring team without the AI interview/.test(m.text))).toBeTruthy();
     expect(emailOutbox().filter((m) => m.to === "priya@example.com" && reminder.test(m.subject))).toHaveLength(1);
   });
@@ -340,9 +340,10 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     await advance(49 * 3600_000); // already escalated: no fifth rung
     expect((await level("candidates_waiting")).length).toBe(4);
     // the owner acts on everyone who was waiting; the next daily run closes the interventions
-    // (an AI interview nobody started lapses into the team's review after five days, so by now Priya, Ana and Sam wait too)
+    // (an AI interview nobody started keeps them under "No AI interview yet", waiting on nobody: Priya is not among them, R20-7)
     const waitingNow = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).filter((x) => ["triaged", "screen_complete", "interview_recommended"].includes(x.stage)).map((x) => x.id);
-    expect(waitingNow).toEqual(expect.arrayContaining([mariaId, omarId, priyaId]));
+    expect(waitingNow).toEqual(expect.arrayContaining([mariaId, omarId]));
+    expect(waitingNow).not.toContain(priyaId);
     for (const id of waitingNow) expect((await json("POST", `/api/v1/applications/${id}/actions`, { action: "reject", reason: "position_filled", note: "Hired internally." })).status).toBe(200);
     await advance(25 * 3600_000);
     expect(await level("candidates_waiting")).toEqual(["brief:resolved", "message:resolved", "offer_recruiter:resolved", "escalation:resolved"]);
@@ -465,7 +466,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(started.status).toBe(409);
     expect(((await started.json()) as { error: { code: string } }).error.code).toBe("screen_started");
     const blocked = (await (await json("GET", `/api/v1/applications/${b.id}`)).json()) as { blockedReasons: Record<string, string> };
-    expect(blocked.blockedReasons.cancel_screen).toBe("They have started the screening chat, so it can't be stopped now.");
+    expect(blocked.blockedReasons.cancel_screen).toBe("They have started the AI interview, so it can't be stopped now.");
   });
 
   it("the assistant's 'Interview?' suggestion lapses after a week with nothing sent (plan A6); there is no 'Invite to a screen?' any more (R20-4)", async () => {

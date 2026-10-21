@@ -388,7 +388,7 @@ describe("the scorecard is read three times, like the résumé (known bugs 20 an
     const outage: RunOutcome<ScreenAssessment> = { ok: false, runId: "r9", model: "m", reason: "error", error: "provider error: 529" };
     const one = scorecardReadings([invalid, ok(card("unknown", "evidenced"), "r2"), invalid], view, screen, packet);
     expect(one).toMatchObject({ ok: true, runId: "r2" });
-    if (one.ok) expect(one.output.confidenceReasons).toContain(`the assistant could read this screening chat once instead of ${SCORECARD_READINGS}`);
+    if (one.ok) expect(one.output.confidenceReasons).toContain(`the assistant could read this AI interview once instead of ${SCORECARD_READINGS}`);
     expect(scorecardReadings([invalid, outage, invalid], view, screen, packet)).toBe(outage);
   });
 });

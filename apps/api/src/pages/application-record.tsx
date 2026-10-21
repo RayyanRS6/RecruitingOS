@@ -405,7 +405,8 @@ function ScoreBar(props: { row: CandidateScoreRow }) {
 /**
  * The match score after sending (founder decision S7-1; DRAFT WORDING PENDING COUNSEL, register items 1 and 21: lawyer
  * review before real candidates in NYC, IL, CA or CO). While it is worked out: "Working out your match score…", with a
- * plain "Check again" link (never a timed reload: the page holds forms a candidate may be typing in, WCAG 2.2.1). Then the number, its band and the bars: only the
+ * plain "Check again" link (never a timed reload: the page holds forms a candidate may be typing in, WCAG 2.2.1). Then the number, its band, what it rests
+ * on ("From your résumé and your AI interview", or "From your résumé only" until the AI interview is in it; R20-9) and the bars: only the
  * job page's must-haves by name, every other requirement in one line; what nothing showed yet is listed as not shown,
  * never held against them. Nothing at all when ITS switched it off for the company.
  */
@@ -435,7 +436,7 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
     <section class="card" id="score" aria-labelledby="score-h">
       <p class="eyebrow">Your match score is ready</p>
       <h2 id="score-h" class="score-head"><span class="score-num">{v.score}<small>/100</small></span><span>{v.bandLabel} match</span></h2>
-      <p class="meta">{v.coverage}. Anything the team could not see in what you sent is left out of the number, never held against you.</p>
+      <p class="meta">{v.basis ? `${v.basis}. ` : ""}{v.coverage}. Anything the team could not see in what you sent is left out of the number, never held against you.</p>
       {v.capped ? <p>What you sent shows a must-have from the job page as not met, so the score stays below 55 however much else is shown.</p> : null}
       <h3>How it breaks down</h3>
       <ul class="bars">

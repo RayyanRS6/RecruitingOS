@@ -2,12 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import type { FakeHandler, StructuredRequest } from "@ros/ai";
 import { entitlements as plans } from "@ros/core";
-import { applications, approvalRequests, assessments, candidates, communications, entitlements, events, notifications, postings, screens, withTenant, workflowRuns } from "@ros/db";
+import { applications, approvalRequests, assessments, candidates, communications, entitlements, events, notifications, postings, screens, unconfirmedScreens, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { READING_WAIT_MINUTES, readingSettledSignal } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { RECEIPT_COOKIE } from "./pages/candidate";
+import { conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation } from "./services/apply-conversation";
 
 /**
  * 20 October 2026, Step 2 (docs/workflow-decisions.md R20-4, R20-5, R20-10 to R20-12): every applicant is invited to the
@@ -86,6 +87,13 @@ describe("every applicant's AI interview, in one email", () => {
   const grantIn = (html: string) => /<input type="hidden" name="grant" value="([^"]+)"/.exec(html)?.[1] ?? null;
   const status = (to: Role, grant: string) => app.request(`/careers/${slug}/jobs/${to.id}/applied/status`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.7" }, body: JSON.stringify({ grant }) });
   const start = (to: Role, grant: string) => app.request(`/careers/${slug}/jobs/${to.id}/applied/start`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant }).toString() });
+  /** Start pressed on an AI interview's page (its own or a detached copy): what the candidate sees, to compare two of them. */
+  const startedAs = async (token: string) => {
+    const ref = (await findConversation(container.db, token))!;
+    expect(await conversationStart(container, ref)).toBe(true);
+    const v = (await conversationView(container.db, ref))!;
+    return { first: v.transcript[0]?.content ?? null, counter: v.counter, total: v.total, current: v.current?.question ?? null, transcript: v.transcript.length };
+  };
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "false", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", JOBS_BASE_URL: "https://jobs.example.test" } });
@@ -227,7 +235,12 @@ describe("every applicant's AI interview, in one email", () => {
     expect(held.body).toContain("They get a thank-you without the AI interview link");
     expect(held.body).toContain('"Keep them in" sends them the link');
     // Keep them in: the link follows by itself, in an email of its own
-    expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "override_eligibility", note: "She has her licence; she misread the question." })).status).toBe(200);
+    const kept0 = await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "override_eligibility", note: "She has her licence; she misread the question." });
+    expect(kept0.status).toBe(200);
+    // the answer names the column the list and the board show her in: her AI interview is being prepared
+    expect(await kept0.json()).toMatchObject({ stage: "eligible", ownerStage: "no_ai_interview" });
+    const listed = (await (await json("GET", `/api/v1/roles/${role.id}/applications`)).json()) as Array<{ id: string; ownerStage: string }>;
+    expect(listed.find((x) => x.id === a.id)?.ownerStage).toBe("no_ai_interview");
     await container.drain();
     const kept = await appOf(email);
     expect(kept.stage).toBe("screen_invited");
@@ -255,7 +268,10 @@ describe("every applicant's AI interview, in one email", () => {
       expect((await json("POST", `/api/v1/roles/${closing.id}/outcome`, { outcome: "role_cancelled", confirm: true, reason: "Budget pulled." })).status).toBe(200);
       await later(0);
       expect(mailTo(email)).toHaveLength(0);
-      // the page stops waiting and says it in plain words, with no loader
+      // once its first 40 to 90 seconds have passed (every waiting room's), the page stops waiting and says it in plain
+      // words, with no loader
+      expect((await (await status(closing, grant)).json()) as { state: string }).toEqual({ state: "preparing" });
+      await later(91_000);
       expect((await (await status(closing, grant)).json()) as { state: string }).toEqual({ state: "closed" });
       const after = await (await landing(r)).text();
       expect(after).toContain("Check your email.");
@@ -385,8 +401,9 @@ describe("every applicant's AI interview, in one email", () => {
       } finally {
         providerBack();
       }
-      // the reading is tried again and done: the interview exists, the page hears "ready" (never the link itself)
-      await later(5_000);
+      // the reading is tried again and done, and the 40 to 90 seconds every waiting room waits have passed: the interview
+      // exists, the page hears "ready" (never the link itself)
+      await later(91_000);
       const a = await appOf(email);
       const [scr] = await screensOf(a.id);
       expect(scr.invitedVia).toBe("with_application");
@@ -407,37 +424,128 @@ describe("every applicant's AI interview, in one email", () => {
       expect(linkIn(mailTo(email)[0].text)).toBe(scr.token);
     });
 
-    it("a repeat or an address the company knows gets the same waiting room, naming no application: 'preparing' for a while, then 'check your email', never the link (Q14)", async () => {
-      // a repeat for the same job
+    it("Q14 kept in full (founder, 21 Oct): a new address and a known one get the same waiting room byte for byte apart from the sealed grant, both reach an AI interview, and the known one's answers join only once the address owner confirms by email", async () => {
+      /** The page with what differs per response taken out: the sealed grant and the script's nonce, nothing else. */
+      const bare = (html: string) => html.replace(/name="grant" value="[^"]*"/g, 'name="grant" value=""').replace(/ nonce="[^"]*"/g, "");
+      // the same first name and masked address (a***@example.com), all sent before anything ran: per job, a new address
+      // beside a repeat (Ana applied for `role` in test 1), and beside a first application to another job from an address
+      // the company knows (her own, with a +suffix)
+      const fresh = await applyAs({ first: "Ana", email: "amy.new@example.com" });
       const repeat = await applyAs({ first: "Ana", email: "ana.first@example.com" });
+      const freshOther = await applyAs({ first: "Ana", email: "abe.new@example.com", to: other });
+      const known = await applyAs({ first: "Ana", email: "ana.first+jobs@example.com", to: other });
+      const rooms = await Promise.all([fresh, repeat, freshOther, known].map(async (r) => words(await landing(r))));
+      for (const html of rooms) expect(html).toContain("We're preparing your AI interview…");
+      expect(bare(rooms[1])).toBe(bare(rooms[0]));
+      expect(bare(rooms[3])).toBe(bare(rooms[2]));
+      expect(rooms.join("")).not.toContain("/c/screen/");
+      // the grants have the same shape, and the page's question gets the same answer
+      const grants = rooms.map((html) => grantIn(html)!);
+      expect(new Set(grants.map((g) => g.length)).size).toBe(1);
+      const jobOf = [role, role, other, other];
+      for (let i = 0; i < 4; i++) expect(await (await status(jobOf[i], grants[i])).json()).toEqual({ state: "preparing" });
+      // a repeat or a known address never opens the application's own interview: a detached copy is made for the visit
+      const ana = await appOf("ana.first@example.com");
+      const anaKnown = await appOf("ana.first@example.com", other);
+      const copyOf = async (applicationId: string) => (await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, applicationId)))[0];
+      const [copy, knownCopy] = [await copyOf(ana.id), await copyOf(anaKnown.id)];
+      for (const c of [copy, knownCopy]) expect(c).toMatchObject({ firstName: "Ana", status: "invited" });
+      // the same timing (founder, 21 Oct): every waiting room says "preparing" for its first 40 to 90 seconds, a new
+      // address's too, even once its interview exists; and a known address's copy waits as long as its new application's
+      // own interview, which is what a new address's waits for
       await later(0);
-      const html = await words(await landing(repeat));
-      expect(html).toContain("We're preparing your AI interview…");
-      expect(html).not.toContain("/c/screen/");
-      const grant = grantIn(html)!;
-      expect(grant).toBeTruthy();
-      expect(await (await status(role, grant)).json()).toEqual({ state: "preparing" });
-      expect(await (await start(role, grant)).text()).toContain("It is not ready yet.");
-      // a first application to another job from an address the company knows: its interview is made and emailed only
-      const known = await applyAs({ first: "Ana", email: "ana.first@example.com", to: other });
-      await later(0);
-      const page = await words(await landing(known));
-      expect(page).toContain("We're preparing your AI interview…");
-      const knownGrant = grantIn(page)!;
-      const a = await appOf("ana.first@example.com", other);
-      const [scr] = await screensOf(a.id);
-      expect(scr.invitedVia).toBe("with_application");
-      expect(mailTo("ana.first@example.com").filter((m) => linkIn(m.text) === scr.token)).toHaveLength(1);
-      expect(await acksOf(a.id)).toHaveLength(1);
-      expect(await (await status(other, knownGrant)).json()).toEqual({ state: "preparing" });
-      // about as long as a reading takes, then "check your email": never "ready", never the link
+      const amyScreen = (await screensOf((await appOf("amy.new@example.com")).id))[0];
+      expect(amyScreen).toBeTruthy();
+      for (let i = 0; i < 4; i++) expect(await (await status(jobOf[i], grants[i])).json()).toEqual({ state: "preparing" });
+      expect(await (await start(role, grants[0])).text()).toContain("It is not ready yet.");
+      const known0 = await words(await start(other, grants[3]));
+      expect(known0).toContain("It is not ready yet.");
       await later(91_000);
-      expect(await (await status(role, grant)).json()).toEqual({ state: "email" });
-      expect(await (await status(other, knownGrant)).json()).toEqual({ state: "email" });
-      const after = await (await landing(known)).text();
-      expect(after).toContain("Check your email.");
-      expect(after).not.toContain("/c/screen/");
-      expect((await start(other, knownGrant)).status).toBe(200);
+      for (let i = 0; i < 4; i++) expect(await (await status(jobOf[i], grants[i])).json()).toEqual({ state: "ready" });
+      const openedFresh = await start(role, grants[0]);
+      expect(openedFresh.status).toBe(302);
+      expect(openedFresh.headers.get("location")).toBe(`/c/screen/${amyScreen.token}`);
+      const openedCopy = await start(role, grants[1]);
+      expect(openedCopy.status).toBe(302);
+      expect(openedCopy.headers.get("location")).toBe(`/c/screen/${copy.token}`);
+      const abeScreen = (await screensOf((await appOf("abe.new@example.com", other)).id))[0];
+      expect((await start(other, grants[2])).headers.get("location")).toBe(`/c/screen/${abeScreen.token}`);
+      expect((await start(other, grants[3])).headers.get("location")).toBe(`/c/screen/${knownCopy.token}`);
+      // the known application's own interview went by email only, to the address on file
+      const [anaKnownScreen] = await screensOf(anaKnown.id);
+      expect(anaKnownScreen.invitedVia).toBe("with_application");
+      expect(mailTo("ana.first@example.com").filter((m) => linkIn(m.text) === anaKnownScreen.token)).toHaveLength(1);
+      // both interview pages open on the same introduction
+      const intro = async (token: string) => (await words(await app.request(`/c/screen/${token}`))).replaceAll(token, "TOKEN").replace(/ nonce="[^"]*"/g, "");
+      expect(await intro(copy.token)).toBe(await intro(amyScreen.token));
+      expect(await intro(knownCopy.token)).toBe(await intro(abeScreen.token));
+      // and after Start, the same first message, counter and questions: both are planned from what the visit gave
+      expect(await startedAs(knownCopy.token)).toEqual(await startedAs(abeScreen.token));
+      expect(await startedAs(copy.token)).toEqual(await startedAs(amyScreen.token));
+      // the repeat's answers: sent on the page, they wait for the address owner, who confirms by email
+      const ref = (await findConversation(container.db, copy.token))!;
+      expect(ref.kind).toBe("detached");
+      expect(await conversationStart(container, ref)).toBe(true);
+      for (let i = 0; i < 20 && (await conversationView(container.db, ref))!.phase === "conversation"; i++) await conversationTurn(container, ref, { message: "At Harbor Dental I see nine patients a day, chart perio in Dentrix and hold an active CA RDH license." });
+      expect((await conversationView(container.db, ref))!.phase).toBe("review");
+      expect(await conversationSubmit(container, ref)).toBe(true);
+      await later(0);
+      const own = async () => (await screensOf(ana.id)).sort((x, y) => (x.createdAt < y.createdAt ? 1 : -1))[0];
+      const before = await own();
+      expect(Object.keys(before.answers)).toHaveLength(0);
+      expect(before.status).toBe("invited");
+      const confirm = mailTo("ana.first@example.com").filter((m) => /^Please confirm/.test(m.subject)).at(-1)!;
+      const confirmToken = /\/c\/confirm-answers\/([A-Za-z0-9_-]+)/.exec(confirm.text)![1];
+      // opening the link changes nothing; the button adds them to the application's own interview
+      expect((await app.request(`/c/confirm-answers/${confirmToken}`)).status).toBe(200);
+      expect((await own()).status).toBe("invited");
+      expect((await app.request(`/c/confirm-answers/${confirmToken}`, { method: "POST" })).status).toBe(302);
+      await later(0);
+      const merged = await own();
+      expect(merged.id).toBe(before.id);
+      expect(merged.status).toBe("completed");
+      expect(merged.transcript.filter((t) => t.role === "candidate").length).toBeGreaterThan(0);
+      const [wiped] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, copy.id));
+      expect(wiped).toMatchObject({ confirmation: "confirmed", transcript: [], answers: {} });
+    });
+
+    it("Q14 with a résumé sent inside the form (no script): a new address and a repeat open with the same words, counter and questions", async () => {
+      const cv = "Cal Tester\nRegistered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nDentrix, perio maintenance";
+      const fresh = await applyAs({ first: "Cal", email: "cal.new@example.com", resume: cv });
+      const repeat = await applyAs({ first: "Cal", email: "ana.first@example.com", resume: cv });
+      const [freshGrant, repeatGrant] = await Promise.all([fresh, repeat].map(async (r) => grantIn(await words(await landing(r)))!));
+      await later(91_000);
+      const cal = await appOf("cal.new@example.com");
+      // the new address's résumé was read by the intake (for the fit check and the score)
+      expect(cal.extraction).toBeTruthy();
+      expect(await triageOf(cal.id)).toHaveLength(1);
+      const own = (await start(role, freshGrant)).headers.get("location")!;
+      const copy = (await start(role, repeatGrant)).headers.get("location")!;
+      const [ownToken, copyToken] = [own, copy].map((l) => /^\/c\/screen\/([A-Za-z0-9_-]+)$/.exec(l)![1]);
+      expect(ownToken).toBe((await screensOf(cal.id))[0].token);
+      const [opened, copied] = [await startedAs(ownToken), await startedAs(copyToken)];
+      expect(copied).toEqual(opened);
+      // neither names a résumé only the intake read: a repeat's file is never read, and nothing tells the two apart
+      expect(opened.first).toMatch(/^Hi Cal\. Thanks for applying\./);
+    });
+
+    it("the day's cap ends on 'check your email' after the same number of quick sends for a new address and one that applied more than a day ago", async () => {
+      // an address whose application is older than a day (its interview too)
+      const old = await appOf("fay.retry@example.com");
+      await container.db.execute(sql`update applications set created_at = now() - interval '2 days' where id = ${old.id}`);
+      await container.db.execute(sql`update screens set created_at = now() - interval '2 days' where application_id = ${old.id}`);
+      const sends = async (first: string, email: string) => {
+        const grants: string[] = [];
+        for (let i = 0; i < 5; i++) grants.push(grantIn(await words(await landing(await applyAs({ first, email }))))!);
+        return grants;
+      };
+      // five quick sends each, nothing run in between
+      const fresh = await sends("Gil", "gil.cap@example.com");
+      const known = await sends("Gil", "fay.retry@example.com");
+      await later(91_000);
+      const stateOf = async (grants: string[]) => Promise.all(grants.map(async (g) => ((await (await status(role, g)).json()) as { state: string }).state));
+      expect(await stateOf(fresh)).toEqual(["ready", "ready", "ready", "ready", "email"]);
+      expect(await stateOf(known)).toEqual(["ready", "ready", "ready", "ready", "email"]);
     });
 
     // Held and closed read plainly above (4, 5); a trial's pause does too, with its own words, in trial.test.ts.
@@ -566,7 +674,9 @@ describe("every applicant's AI interview, in one email", () => {
       expect((await act(a.id, { action: "reject", reason: "eligibility" })).status).toBe(200);
       await later(2 * DAY);
       expect((await interviewRun(a.id)).status).toBe("completed");
-      expect((await act(a.id, { action: "review_anyway" })).status).toBe(200);
+      const reopened = await act(a.id, { action: "review_anyway" });
+      expect(reopened.status).toBe(200);
+      expect(await reopened.json()).toMatchObject({ stage: "eligible", ownerStage: "no_ai_interview" });
       await later(0);
       expect((await appOf(email)).stage).toBe("screen_invited");
       expect(await triageOf(a.id)).toHaveLength(1);
@@ -584,7 +694,8 @@ describe("every applicant's AI interview, in one email", () => {
       const a = await appOf(email);
       await later(INVITE_HOURS * HOUR + 1000);
       await later(REMIND_HOURS * HOUR + 1000);
-      expect((await appOf(email)).stage).toBe("triaged");
+      // the link lapsed: they stay under "No AI interview yet" (R20-7), where "Send a new link" is offered
+      expect((await appOf(email)).stage).toBe("screen_invited");
       expect((await detailOf(a.id)).allowedActions).toContain("invite_screen");
       expect((await act(a.id, { action: "invite_screen" })).status).toBe(200);
       await later(0);

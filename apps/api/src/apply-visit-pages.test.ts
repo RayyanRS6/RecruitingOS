@@ -9,7 +9,7 @@ import { CHAT_WRAP_QUESTION } from "@ros/agents";
 import { CHAT_WRAP_KEY } from "@ros/core";
 import { SCREEN_BUSY_JS } from "./pages/candidate";
 import { CHAT_BUSY_NOTE } from "./pages/conversation-frame";
-import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
+import { pastTheWaitingRoom, statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * Wave E's candidate pages over HTTP, the way a browser without JavaScript uses them (plan E1, E2, E3, E4, E5, E7, E8,
@@ -67,10 +67,12 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
   }
   /** The cookie the introduction reads ("Your application is sent"), set when the waiting room opened each interview. */
   const appliedTo = new Map<string, string>();
-  /** The AI interview the waiting room opens (20 Oct 2026, R20-12): the POST's `…/applied`, then its 302 to the interview. */
+  /** Runs `fn` with the engine's clock past the 40 to 90 seconds every waiting room says "preparing" first (Q14, 21 Oct). */
+  const pastTheWait = (fn: () => Response | Promise<Response>) => pastTheWaitingRoom(container, async () => fn());
+  /** The AI interview the waiting room opens (20 Oct 2026, R20-12): the POST's `…/applied`, then, once its wait is over, its 302 to the interview. */
   const tokenOf = async (r: Response) => {
     expect(r.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
-    const room = await app.request(r.headers.get("location")!, { headers: { cookie: (r.headers.get("set-cookie") ?? "").match(/ros_applied=[^;,]+/)?.[0] ?? "" } });
+    const room = await pastTheWait(() => app.request(r.headers.get("location")!, { headers: { cookie: (r.headers.get("set-cookie") ?? "").match(/ros_applied=[^;,]+/)?.[0] ?? "" } }));
     const to = room.headers.get("location") ?? "";
     expect(to).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
     const token = to.slice("/c/screen/".length);
@@ -180,9 +182,11 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(html).toContain(`<h1 class="chat-title">Your chat about the ${packet.identity.title} role</h1>`);
     expect(html).toContain("<span>Your replies go to Visit Dental only when you press Send my answers at the end.</span>");
     expect(html).not.toMatch(/Question \d of/);
-    // the opening, in code: her first name and her CV (the résumé was read before the interview was ready, 20 Oct 2026);
-    // what the reading could not confirm comes first ("About your experience"), then the job's own questions
-    expect(nowLine(html)).toMatch(/^<span class="sr-only">The assistant said: <\/span>Hi Maria\. Your resume shows your work as Registered Dental Hygienist at Smile Bright Dental \(2019 to now\)\./);
+    // the opening, in code: her first name. Her résumé came inside the form (no script), so only the intake read it, for
+    // the fit check and the score: the interview names only what the form's own reading gave, which a returning
+    // address's copy has too (21 Oct, Q14), so it thanks her; a résumé the form read is named (apply-details.test.ts).
+    // Then anything about the job's must-haves her own words do not show ("About your experience"), then the job's questions
+    expect(nowLine(html)).toMatch(/^<span class="sr-only">The assistant said: <\/span>Hi Maria\. Thanks for applying\./);
     expect(html).toContain(`<p class="sending" id="sending" role="status" data-wait="${CHAT_BUSY_NOTE}"></p>`);
     // a second press of Start changes nothing
     await post(`/c/screen/${mariaToken}/start`);
@@ -372,18 +376,27 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     }
   });
 
-  it("R20-12, Q14: a repeat submission gets the same waiting room, naming no application: no link and no copy of a conversation; the address on file hears by email", async () => {
+  it("Q14 kept in full (21 Oct 2026): a repeat submission gets the same waiting room, which opens a detached AI interview about as long as a reading takes later, never the application's own; the address on file hears by email", async () => {
     const first = await tokenOf(await apply({ first: "Kai", last: "Lee", email: "kai.lee@example.com" }));
     const again = await apply({ first: "Kai", last: "Lee", email: "KAI.LEE@example.com" });
     expect(again.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
-    const receipt = await page(again.headers.get("location")!, { cookie: (again.headers.get("set-cookie") ?? "").match(/ros_applied=[^;,]+/)![0] });
+    const receiptCookie = (again.headers.get("set-cookie") ?? "").match(/ros_applied=[^;,]+/)![0];
+    const receipt = await page(again.headers.get("location")!, { cookie: receiptCookie });
     expect(receipt).toContain("preparing your AI interview…");
     expect(receipt).toContain('name="grant"');
     expect(receipt).not.toContain("/c/screen/");
     expect(receipt).not.toContain(first);
     const [kai] = await container.db.select().from(candidates).where(eq(candidates.email, "kai.lee@example.com"));
     const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, kai.id)));
-    expect(await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, a.id))).toHaveLength(0);
+    // a copy made for this visit, greeting the name typed; the application's own interview is untouched
+    const copies = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, a.id));
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatchObject({ firstName: "Kai", status: "invited", confirmation: null });
+    expect(copies[0].token).not.toBe(first);
+    const opened = await pastTheWait(() => app.request(again.headers.get("location")!, { headers: { cookie: receiptCookie } }));
+    expect(opened.status).toBe(302);
+    expect(opened.headers.get("location")).toBe(`/c/screen/${copies[0].token}`);
+    expect((await screenOf(first)).status).toBe("invited");
     // the address on file gets its own link, as before (at most once a day)
     expect(mail().filter((m) => m.to === "kai.lee@example.com" && /^Your application for /.test(m.subject))).toHaveLength(1);
   });

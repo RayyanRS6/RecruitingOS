@@ -87,8 +87,8 @@ describe("the Problems section's parts", () => {
     expect(text(section("security"))).toContain("Content-security reports (0 not reviewed yet)");
   });
 
-  it("counts the alerts that wait for a person, as Overview does, and folds the acknowledged ones and screening-chat notices", () => {
-    const list = [alert("al1", "worker.stale", "The worker stopped"), { ...alert("al2", "queue.stale", "Queue is slow"), status: "acknowledged" }, { ...alert("al3", "billing.screens_warning", "Screening chats at 80%"), severity: "warning" }];
+  it("counts the alerts that wait for a person, as Overview does, and folds the acknowledged ones and AI interview notices", () => {
+    const list = [alert("al1", "worker.stale", "The worker stopped"), { ...alert("al2", "queue.stale", "Queue is slow"), status: "acknowledged" }, { ...alert("al3", "billing.screens_warning", "AI interviews at 80%"), severity: "warning" }];
     expect(problemCounts({ failures: { ...noFailures, alerts: list } as never }).alerts).toBe(1);
     expect(needsAPerson(list[0])).toBe(true);
     expect(needsAPerson(list[1])).toBe(false);
@@ -98,10 +98,10 @@ describe("the Problems section's parts", () => {
     expect(words).toContain("Alerts 1");
     expect(words).toContain("Alerts that need a person (1)");
     // still listed, every button kept, one click away
-    expect(words).toContain("Acknowledged and screening-chat notices (2)");
+    expect(words).toContain("Acknowledged and AI interview notices (2)");
     expect(html.indexOf("<details")).toBeLessThan(html.indexOf("Queue is slow"));
     expect(html.indexOf("The worker stopped")).toBeLessThan(html.indexOf("<details"));
-    expect(html.slice(html.indexOf("Screening chats at 80%"))).toContain(">Acknowledge</button>");
+    expect(html.slice(html.indexOf("AI interviews at 80%"))).toContain(">Acknowledge</button>");
   });
 });
 
@@ -132,9 +132,9 @@ describe("the admin console's alerts", () => {
   });
 
   it("names each severity in plain words and offers Retry deletion on a credential that could not be deleted", () => {
-    const words = text(alerts([{ ...alert("al5", "secret.delete_failed", "Credential delete failed"), target: { type: "integration", id: "i1" } }, { ...alert("al6", "allowance.warning", "Screening chats at 80%"), severity: "warning" }, { ...alert("al7", "note", "Heads up"), severity: "info" }]));
+    const words = text(alerts([{ ...alert("al5", "secret.delete_failed", "Credential delete failed"), target: { type: "integration", id: "i1" } }, { ...alert("al6", "allowance.warning", "AI interviews at 80%"), severity: "warning" }, { ...alert("al7", "note", "Heads up"), severity: "info" }]));
     expect(words).toContain("Urgent Credential delete failed");
-    expect(words).toContain("Check soon Screening chats at 80%");
+    expect(words).toContain("Check soon AI interviews at 80%");
     expect(words).toContain("For your information Heads up");
     expect(words).not.toMatch(/\bcritical\b|\bwarning\b/);
     expect(words).toContain("Retry deletion");

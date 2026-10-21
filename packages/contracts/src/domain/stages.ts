@@ -44,10 +44,14 @@ export type OwnerGroup = z.infer<typeof OwnerGroup>;
  * (`application_marks`), never internal stages. Cancelled (founder decisions 1A to 4A) is a view over a stored follow-up
  * (`interview_followups`), not a mark: someone who cancelled a booked interview or did not come to it, while still
  * recommended for interview or interview done. The candidate sees none of them (`ownerStage` in packages/core).
+ * "No AI interview yet" (20 October 2026, R20-7), first because everyone starts there: from applying until the AI
+ * interview is sent, also when its link lapses or they stop part-way; New is then "AI interview done, reviewed without
+ * it, or held on an eligibility answer". Nobody is moved into it by hand.
  */
-export const OwnerStage = z.enum(["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"]);
+export const OwnerStage = z.enum(["no_ai_interview", "new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"]);
 export type OwnerStage = z.infer<typeof OwnerStage>;
 export const OWNER_STAGE_LABEL: Record<OwnerStage, string> = {
+  no_ai_interview: "No AI interview yet",
   new: "New",
   longlist: "Longlist",
   shortlist: "Shortlist",
@@ -79,6 +83,40 @@ export type CancelledView = {
 };
 /** The follow-up an interview summary carries: enough for the Interviews page to offer "Send new times". */
 export type InterviewFollowUpRef = { id: string; reason: CancelledReason; times: NewTimesProgress };
+
+/**
+ * Where someone under "No AI interview yet" stands with it (R20-7), in neutral words: never a count, an answer or where
+ * they stopped (the 9 October "hide until Send" rule). `being_read`: the résumé is being read and the interview prepared
+ * (or the month's interviews are used up and its link follows); `invited`: the link is open and not started;
+ * `started`: begun and not sent (or paused while the assistant is down); `asked_person`: they asked for a person;
+ * `link_expired`: the link lapsed unstarted (or the team stopped it); `didnt_finish`: closed part-way, unsent.
+ */
+export const AiInterviewState = z.enum(["being_read", "invited", "started", "asked_person", "link_expired", "didnt_finish"]);
+export type AiInterviewState = z.infer<typeof AiInterviewState>;
+export const AI_INTERVIEW_STATE_LABEL: Record<AiInterviewState, string> = {
+  being_read: "Getting the AI interview ready",
+  invited: "Invited (not started)",
+  started: "Started (not finished)",
+  asked_person: "Asked for a person",
+  link_expired: "Link expired",
+  didnt_finish: "Didn't finish",
+};
+/** The column's chips and the list's `?aiInterview=` filter: the states in four plain groups. */
+export const AiInterviewGroup = z.enum(["not_started", "started", "asked_person", "closed"]);
+export type AiInterviewGroup = z.infer<typeof AiInterviewGroup>;
+export const AI_INTERVIEW_GROUP_OF: Record<AiInterviewState, AiInterviewGroup> = { being_read: "not_started", invited: "not_started", started: "started", asked_person: "asked_person", link_expired: "closed", didnt_finish: "closed" };
+export const AI_INTERVIEW_GROUP_LABEL: Record<AiInterviewGroup, string> = { not_started: "Not started", started: "Started", asked_person: "Asked for a person", closed: "Link closed" };
+/**
+ * The row's and the panel's view of it (team-only, like `CancelledView`). `since`: when this state began (null while
+ * being prepared); `linkOpenUntil`: while the link is open and unstarted; `lastEmailAt`: the latest email about it (the
+ * link or a reminder); `canRemind`: "Send a reminder" (an open link, nothing sent about it in the last 24 hours);
+ * `canResend`: "Send a new link" (the link closed). `waitingForMore`: being prepared only because the month's AI
+ * interviews are used up (Q17): its link follows once more are added, the reading done or not. `remindBlocked`: why an
+ * open link cannot be reminded about now: `recently` (the link or a reminder went in the last day), `email_held` (the
+ * email carrying the link has not left yet: it waits for the ITS company check, B7), `paused` (the assistant is not
+ * working; the interview carries on by itself); null otherwise. Both left out by older answers.
+ */
+export type AiInterviewView = { state: AiInterviewState; group: AiInterviewGroup; label: string; since: string | null; linkOpenUntil: string | null; lastEmailAt: string | null; canRemind: boolean; canResend: boolean; waitingForMore?: boolean; remindBlocked?: "recently" | "email_held" | "paused" | null };
 
 /**
  * A person's private mark on an application (plan A4 and plan-adjustments section 2). At most one is active at a time;

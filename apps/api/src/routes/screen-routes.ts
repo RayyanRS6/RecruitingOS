@@ -21,7 +21,7 @@ screenRoleRoutes.use("/:id/*", roleScopeGuard);
 screenRoleRoutes.get("/:id/screening", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "application.read");
-  if (t.staff?.scope.applicationId) throw new HttpError(403, "staff_scope", "Your access covers one candidate, so you can't see how the screening chat goes for the role's whole group.");
+  if (t.staff?.scope.applicationId) throw new HttpError(403, "staff_scope", "Your access covers one candidate, so you can't see how the AI interview goes for the role's whole group.");
   const funnel = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [role] = await tx.select({ id: roles.id }).from(roles).where(eq(roles.id, c.req.param("id") ?? "")).limit(1);
     return role ? roleScreeningFunnel(tx, role.id) : null;

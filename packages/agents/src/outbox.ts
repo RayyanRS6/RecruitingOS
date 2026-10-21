@@ -81,6 +81,28 @@ export const HELD_STATUS = "held";
 /** What a caller hears about such a message. */
 export const HELD_REASON = "held until ITS confirms the company";
 
+/** Statuses of a message that has not left yet: waiting for the ITS company check, queued, or being sent. */
+const NOT_LEFT: readonly string[] = ["queued", HELD_STATUS, "sending"];
+
+/**
+ * B7: of these screens, the ones whose link email has not left yet. The email that carries a screen's link is its own
+ * invitation (`screen_invite:<screen>`), else the application's one email (`ack:<application>`, R20-5). The interview's
+ * run starts the link's clock only when it leaves, and "Send a reminder" waits for it too: a reminder would only queue
+ * behind it (20 Oct 2026, R20-7).
+ */
+export async function linkEmailsWaiting(q: Queryable, scrs: ReadonlyArray<{ id: string; applicationId: string }>): Promise<Set<string>> {
+  if (!scrs.length) return new Set();
+  const keys = [...new Set(scrs.flatMap((s) => [`screen_invite:${s.id}`, `ack:${s.applicationId}`]))];
+  const rows = await q.select({ key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, keys));
+  const status = new Map(rows.map((r) => [r.key, r.status]));
+  return new Set(scrs.filter((s) => NOT_LEFT.includes(status.get(`screen_invite:${s.id}`) ?? status.get(`ack:${s.applicationId}`) ?? "")).map((s) => s.id));
+}
+
+/** Whether one screen's link email has not left yet (`linkEmailsWaiting`). */
+export async function linkEmailWaiting(q: Queryable, scr: { id: string; applicationId: string }): Promise<boolean> {
+  return (await linkEmailsWaiting(q, [scr])).has(scr.id);
+}
+
 /** What a caller learns about a message that already has a row. */
 export function sendResultOf(row: Pick<CommunicationRow, "status" | "providerMessageId" | "error">): SendResult {
   if (row.status === "sent" || row.status === "delivered") return { status: "sent", providerMessageId: row.providerMessageId ?? "" };

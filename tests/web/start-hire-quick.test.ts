@@ -156,7 +156,7 @@ describe("the review", () => {
     expect(rows.find((r) => r.label === "Pay")?.value).toBe("$45–$55 an hour");
     expect(rows.find((r) => r.label === "Closing date")?.value).toBe("November 30, 2026");
     // where each question is asked: the suggested ones on the form, the person's own in the screening chat
-    expect(rows.find((r) => r.label === "Screening questions")?.value).toBe(`${suggestedQuestions("dental", "Dental Hygienist").length} on the form · 1 in the screening chat`);
+    expect(rows.find((r) => r.label === "Screening questions")?.value).toBe(`${suggestedQuestions("dental", "Dental Hygienist").length} on the form · 1 in the AI interview`);
     expect(reviewRows(filled({ noClosingDate: true, noDealBreakers: true, dealBreakers: [] }), "dental").find((r) => r.label === "Deal-breakers")?.value).toBe("None");
     // a deal-breaker left ticked shows among the must-haves, and says which way it counts
     expect(rows.find((r) => r.label === "Must-have skills")?.value).toBe("Digital radiography and intraoral scanning; At least 3 years of relevant experience; Cannot work Saturdays");

@@ -44,7 +44,15 @@ async function seedPool(request: APIRequestContext, base: string) {
     for (const rule of role.currentPacket.packet.requirements.eligibility) multipart[`elig_${rule.key}`] = "yes";
     expect((await request.post(`${base}/careers/${company.slug}/jobs/${roleId}/apply`, { multipart, maxRedirects: 0 })).status()).toBe(302);
   }
-  // Every one of them read before the board is opened (the worker runs the readings).
+  // Every one of them read and invited to the AI interview (the worker runs the readings). Until they send it they wait
+  // in the board's read-only lane "No AI interview yet" (R20-7); here the team reviews them without it (it stops each
+  // invitation), so the board places them on their résumé readings.
+  type Row = { id: string; aiInterview: { state: string } | null };
+  await expect.poll(async () => ((await (await request.get(`${base}/api/v1/roles/${roleId}/applications`)).json()) as Row[]).filter((r) => r.aiInterview?.state === "invited").length, { timeout: 90_000 }).toBe(3);
+  const lane = (await (await request.get(`${base}/api/v1/roles/${roleId}/board`)).json()) as { noAiInterview: unknown[]; summary: { toSort: number } };
+  expect(lane.noAiInterview).toHaveLength(3);
+  expect(lane.summary.toSort).toBe(0);
+  for (const r of (await (await request.get(`${base}/api/v1/roles/${roleId}/applications`)).json()) as Row[]) expect((await request.post(`${base}/api/v1/applications/${r.id}/actions`, { data: { action: "cancel_screen" } })).ok()).toBeTruthy();
   await expect.poll(async () => ((await (await request.get(`${base}/api/v1/roles/${roleId}/board`)).json()) as { summary: { toSort: number } }).summary.toSort, { timeout: 90_000 }).toBeGreaterThanOrEqual(3);
   return { roleId, emails };
 }

@@ -152,7 +152,7 @@ describe("the Trial plan's 30 days", () => {
     const week = await ending();
     expect(week).toHaveLength(1);
     expect(week[0].title).toMatch(/^Your trial ends on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}$/);
-    expect(week[0].body).toContain("new applications, new jobs and new screening chats pause until a plan is chosen; everything already started carries on.");
+    expect(week[0].body).toContain("new applications, new jobs and new AI interviews pause until a plan is chosen; everything already started carries on.");
     // the last day: one more notice, "tomorrow", and nothing again within the day
     setClock(29.2);
     expect((await withPlatform(container.db, (tx) => settleTrials(tx, now()))).warned).toBe(1);
@@ -174,7 +174,7 @@ describe("the Trial plan's 30 days", () => {
     const applied = await applyForm({ first: "Maria", last: "Chat", email: "maria.chat@example.com" });
     await container.drain();
     // the waiting room opens her AI interview once her résumé is read (20 Oct 2026)
-    chatToken = (await followApply(app, applied)).token ?? "";
+    chatToken = (await followApply(app, applied, container)).token ?? "";
     expect(chatToken).not.toBe("");
     expect((await post(`/c/screen/${chatToken}/start`)).status).toBe(302);
     const form = await app.request(`/careers/${slug}/jobs/${roleA}/apply`);
@@ -223,7 +223,7 @@ describe("the Trial plan's 30 days", () => {
     const taken = await container.db.select().from(applications).where(and(eq(applications.candidateId, cand.id), eq(applications.roleId, roleA)));
     expect(taken).toHaveLength(1);
     // R20-12: the page says plainly that the AI interview's link comes by email, with no loader and never the link
-    const landed = await followApply(app, r);
+    const landed = await followApply(app, r, container);
     expect(landed.token).toBeNull();
     expect(visible(landed.html)).toContain("We email you its link shortly");
     expect(landed.html).not.toContain("preparing your AI interview");

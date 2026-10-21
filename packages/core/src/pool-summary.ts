@@ -11,7 +11,11 @@ export type PoolPerson = {
   name: string;
   /** When they reached the step they are at: how long they have waited. */
   waitingSince: string;
-  stillApplying: boolean;
+  /**
+   * In the board's lane apart (20 Oct 2026, R20-7, R20-9): under "No AI interview yet", or with no AI interview in their
+   * score (being scored, or closed unsent); never on the board, counted apart.
+   */
+  noAiInterview: boolean;
   placement: BoardPlacement;
   match: MatchScore | null;
   mustHaves: MustHaveSummary | null;
@@ -41,7 +45,7 @@ export function mustHaveEditPath(roleId: string): string {
 }
 
 export function poolSummary(people: readonly PoolPerson[], packet: Pick<RolePacket, "requirements"> | null, ctx: { roleId: string; now: Date }): PoolSummary {
-  const onBoard = people.filter((p) => !p.stillApplying && p.placement.column);
+  const onBoard = people.filter((p) => !p.noAiInterview && p.placement.column);
   const read = onBoard.filter((p) => !!p.match);
   // The counts are of the people still to sort, by the column the board suggests; anyone already sorted, decided or
   // past this step (interviewing, offer, hired) is counted once in `done`, never as "on the shortlist".
@@ -77,20 +81,23 @@ export function poolSummary(people: readonly PoolPerson[], packet: Pick<RolePack
   const share = (m: PoolMustHaveCount) => (m.total ? (m.notShown + m.unknown) / m.total : 0);
   const strict = mustHaves.filter((m) => m.total >= STRICTER_MIN_PEOPLE && share(m) >= STRICTER_SHARE).sort((a, b) => share(b) - share(a))[0];
   const stricter = strict ? { key: strict.key, label: strict.label, notShowing: strict.notShown + strict.unknown, of: strict.total, words: `"${strict.label}" is not shown by ${strict.notShown + strict.unknown} of ${strict.total} people. If it is stricter than the job needs, you could make it a nice-to-have in a new version of the role. Nobody is turned down because of this note.`, editPath: mustHaveEditPath(ctx.roleId) } : null;
-  const stillApplying = people.filter((p) => p.stillApplying).length;
+  // The lane holds people with no AI interview yet, ones being scored and ones whose link closed (R20-7, R20-9): one
+  // neutral line for all of them, so it never says an interview is missing that was sent, or will come that cannot.
+  const noAiInterview = people.filter((p) => p.noAiInterview).length;
+  const apart = " not on the board yet: no AI interview in their score.";
   const sentences: string[] = [];
-  if (!onBoard.length) sentences.push(stillApplying ? `Nobody to sort yet; ${plural(stillApplying, "person is", "people are")} still applying.` : "Nobody to sort yet.");
+  if (!onBoard.length) sentences.push(noAiInterview ? `Nobody to sort yet; ${plural(noAiInterview, "person is", "people are")}${apart}` : "Nobody to sort yet.");
   else {
     const sortWords = toSortPeople.length ? `To sort: ${counts.shortlist} for the shortlist, ${counts.longlist} for the longlist, ${counts.not_moving_forward} not moving forward.` : "Nobody is waiting to be sorted.";
     const doneWords = done ? ` ${done} already sorted, moving forward or decided.` : "";
     const readWords = beingRead ? ` ${beingRead} still being read.` : "";
-    sentences.push(`${plural(onBoard.length, "person", "people")} on the board. ${sortWords}${doneWords}${readWords}${stillApplying ? ` ${plural(stillApplying, "more is", "more are")} still applying.` : ""}`);
+    sentences.push(`${plural(onBoard.length, "person", "people")} on the board. ${sortWords}${doneWords}${readWords}${noAiInterview ? ` ${plural(noAiInterview, "more is", "more are")}${apart}` : ""}`);
     if (mustHaves.length && read.length) sentences.push(`${showEveryMustHave} of ${read.length} show every must-have.`);
     if (mostMissing) sentences.push(`The must-have shown least often is "${mostMissing.label}": ${mostMissing.notShowing} of ${mostMissing.of} don't show it.`);
     if (longestWaiting) sentences.push(`${longestWaiting.name} has waited longest: ${plural(longestWaiting.days, "day", "days")}.`);
     if (stricter) sentences.push(stricter.words);
   }
-  return { total: onBoard.length, counts, toSort: toSortPeople.filter((p) => !!p.placement.suggestedAction).length, done, stillApplying, showEveryMustHave, mostMissing, longestWaiting, nextSteps, mustHaves, stricter, sentences };
+  return { total: onBoard.length, counts, toSort: toSortPeople.filter((p) => !!p.placement.suggestedAction).length, done, noAiInterview, stillApplying: noAiInterview, showEveryMustHave, mostMissing, longestWaiting, nextSteps, mustHaves, stricter, sentences };
 }
 
 /**
@@ -125,14 +132,14 @@ export class PoolQuestionError extends Error {
   }
 }
 
-const personOf = (p: PoolPerson, why: string, quotes: PoolAnswerPerson["quotes"], open: (id: string) => string): PoolAnswerPerson => ({ applicationId: p.applicationId, name: p.name, score: p.match?.score ?? null, band: p.match?.band ?? null, placement: p.placement.column, why, quotes, open: open(p.applicationId) });
+const personOf = (p: PoolPerson, why: string, quotes: PoolAnswerPerson["quotes"], open: (id: string) => string): PoolAnswerPerson => ({ applicationId: p.applicationId, name: p.name, score: p.match?.score ?? null, band: p.match?.band ?? null, interview: p.match?.interview ?? null, basis: p.match?.basis ?? null, placement: p.placement.column, why, quotes, open: open(p.applicationId) });
 
 /**
- * The answer to one question over the people on the board (still applying left out): who, why, the quotes it rests
+ * The answer to one question over the people on the board (anyone without an AI interview yet left out): who, why, the quotes it rests
  * on, and what it looked at. `compare` is answered by the comparison view instead.
  */
 export function answerPoolQuestion(kind: Exclude<PoolQuestionKind, "compare">, people: readonly PoolPerson[], packet: Pick<RolePacket, "requirements"> | null, opts: { mustHaveKey?: string | null; now: Date; open: (applicationId: string) => string }): PoolAnswer {
-  const onBoard = people.filter((p) => !p.stillApplying && p.placement.column);
+  const onBoard = people.filter((p) => !p.noAiInterview && p.placement.column);
   const read = onBoard.filter((p) => !!p.match);
   const must = packet?.requirements.mustHaves ?? [];
   const lookedAt = (requirements: string[]) => ({
@@ -158,7 +165,7 @@ export function answerPoolQuestion(kind: Exclude<PoolQuestionKind, "compare">, p
     // Shown before partly shown, a quote before none, then the higher score, then by name.
     scored.sort((a, b) => b.c!.pctMet - a.c!.pctMet || Number(!!b.c!.quote) - Number(!!a.c!.quote) || (b.p.match!.score ?? -1) - (a.p.match!.score ?? -1) || byName(a.p, b.p));
     const top = scored.slice(0, 10);
-    const list = top.map(({ p, c }) => personOf(p, `${c!.finding} ${c!.source === "screen" ? "in the screening chat" : "in the résumé or application"}.`, c!.quote ? [{ criterion: m.text, quote: c!.quote, source: c!.source }] : [], opts.open));
+    const list = top.map(({ p, c }) => personOf(p, `${c!.finding} ${c!.source === "screen" ? "in the AI interview" : "in the résumé or application"}.`, c!.quote ? [{ criterion: m.text, quote: c!.quote, source: c!.source }] : [], opts.open));
     const shown = scored.filter((x) => x.c!.pctMet === 100).length;
     const answer = scored.length ? `${plural(shown, "person shows", "people show")} "${m.text}"${scored.length > shown ? ` and ${plural(scored.length - shown, "more shows", "more show")} it in part` : ""}.${scored.length > top.length ? ` The first ${top.length} are listed.` : ""}` : `Nobody's evidence shows "${m.text}" yet.`;
     return { kind, question: `Strongest evidence for "${m.text}"`, answer, people: list, applicationIds: list.map((p) => p.applicationId), lookedAt: lookedAt([m.text]) };
