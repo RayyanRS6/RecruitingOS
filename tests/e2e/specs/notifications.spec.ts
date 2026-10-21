@@ -10,6 +10,8 @@ const run = Date.now().toString(36);
 
 test.describe("email alerts and earlier updates", () => {
   skipWithoutFakeSignIn();
+  // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
+  test.slow();
   test("an owner chooses which updates are emailed, and finds every earlier update from Today", async ({ page, baseURL }) => {
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@alerts.test`, name: "Dana Whitfield", provider: "google" });

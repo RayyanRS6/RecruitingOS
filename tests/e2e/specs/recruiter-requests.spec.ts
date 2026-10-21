@@ -11,6 +11,8 @@ const run = Date.now().toString(36);
 skipWithoutFakeSignIn();
 
 test("ask, read the full answer on Today, and reopen it when it did not solve the problem", async ({ page, browser, baseURL }) => {
+  // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
+  test.slow();
   await signIn(page, { email: `owner+${run}@loop.test`, name: "Dana Whitfield", provider: "google" });
   await createCompanyThroughTheForm(page, `Loop Dental ${run}`);
   const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");

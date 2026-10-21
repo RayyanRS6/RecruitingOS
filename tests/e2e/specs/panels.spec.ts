@@ -10,6 +10,8 @@ const run = Date.now().toString(36);
 
 test.describe("a sheet opened from a candidate's drawer", () => {
   skipWithoutFakeSignIn();
+  // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
+  test.slow();
   test("Escape closes the top panel first, and the page scrolls again once both are gone, Back included", async ({ page, baseURL }) => {
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@panels.test`, name: "Dana Whitfield", provider: "google" });
