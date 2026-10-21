@@ -337,7 +337,9 @@ const dedupe = (xs: string[]) => xs.filter((x, i) => xs.findIndex((y) => same(x,
 
 const EMPLOYMENT_WORDS: Array<[RegExp, string]> = [[/full/i, "full_time"], [/part/i, "part_time"], [/contract/i, "contract"], [/temp/i, "temporary"], [/per[\s_-]?diem/i, "per_diem"], [/intern/i, "internship"]];
 const REMOTE_WORDS: Array<[RegExp, string]> = [[/hybrid/i, "hybrid"], [/remote/i, "remote"], [/on[\s_-]?site|in[\s_-]?(?:office|person)/i, "onsite"]];
-const REASON_WORDS: Array<[RegExp, string]> = [[/replac|left|quit|backfill|resign|retir/i, "replacement"], [/new|first|dedicated|creat/i, "new_position"], [/grow|busier|capacity|expand|adding/i, "growth"], [/season/i, "seasonal"], [/other/i, "other"]];
+// Whole words only ("renew" is not new). Used for an option the person ticked; words a person typed are never read
+// for a reason at all (staging, 20 Oct 2026: "named Growth Guild" was stored as "The team is growing").
+const REASON_WORDS: Array<[RegExp, string]> = [[/\b(?:replac\w*|left|quit\w*|backfill\w*|resign\w*|retir\w*)\b/i, "replacement"], [/\b(?:new|first|dedicated|creat\w*)\b/i, "new_position"], [/\b(?:grow\w*|busier|capacity|expand\w*|adding)\b/i, "growth"], [/\bseason\w*/i, "seasonal"], [/\bother\b/i, "other"]];
 
 /**
  * A card's answer as the role keeps it. The model is asked to make an option's value the words to store, but it sometimes
@@ -494,7 +496,8 @@ export function applyAnswers(facts: IntakeFacts, questions: IntakeQuestion[], an
     const first = picked.map((v) => offered.get(v)!).find((o) => screened(edit, q.field, [storedAnswer(o)]).length > 0);
     const value = first?.value ?? own[0];
     if (value === undefined) continue;
-    setText(edit, q.field, value, now, first ? storedAnswer(first) : undefined);
+    // An option in the owner's own words is kept as their words, like words typed: never guessed from.
+    setText(edit, q.field, value, now, first ? storedAnswer(first) : undefined, first?.origin !== "owner");
     edit.summary.push(`${FIELD_LABEL[q.field]}: ${first?.label ?? value}`);
   }
   return edit;
@@ -504,9 +507,10 @@ export function applyAnswers(facts: IntakeFacts, questions: IntakeQuestion[], an
  * Sets one fact from an answer. `value` is what was sent (an option's value, or words typed); `words`, for an offered
  * option, is what the person read and ticked (`storedAnswer`). A fact kept as one of a few codes tries the value, then the
  * words; a fact kept as text stores the words; a start becomes a date by `startDateFor` from the words ("Within 1 month"),
- * or from the value ("asap", "within_30_days") when the words name no time.
+ * or from the value ("asap", "within_30_days") when the words name no time. `guess` false (an option in the owner's own
+ * words) keeps a reason as their words, under "Another reason".
  */
-function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string, now: Date, words?: string): void {
+function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string, now: Date, words?: string, guess = true): void {
   const f = edit.facts;
   const text = words ?? value;
   const pick = (allowed: readonly string[], list: Array<[RegExp, string]>, what: string): string => {
@@ -523,7 +527,10 @@ function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string,
     case "remote_policy": f.remotePolicy = pick(RemotePolicy.options, REMOTE_WORDS, "work model"); break;
     case "reason_for_hire":
       if (HireReason.options.includes(value as never)) f.reason = value;
-      else { f.reason = REASON_WORDS.find(([re]) => re.test(value))?.[1] ?? (words ? REASON_WORDS.find(([re]) => re.test(words))?.[1] : undefined) ?? "other"; f.reasonDetail = text; }
+      // A ticked option is read for its reason (its code, then its words); words the person typed, or an option in their
+      // own words, are kept as they are, under "Another reason", never guessed from (a company name such as "Growth Guild"
+      // is not growth).
+      else { f.reason = words === undefined || !guess ? "other" : REASON_WORDS.find(([re]) => re.test(value))?.[1] ?? REASON_WORDS.find(([re]) => re.test(words))?.[1] ?? "other"; f.reasonDetail = text; }
       break;
     case "compensation_basis": f.compensationBasis = pick(["hourly", "salary"], [[/hour/i, "hourly"], [/salar|year|annual/i, "salary"]], "pay basis"); break;
     case "timeline": {
@@ -601,6 +608,8 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
     else if (k === "targetStartDate") Object.assign(f, startDateFor(ok, now));
     else if (k === "decisionMaker") { f.decisionMaker = ok; f.decisionMakerUserId = undefined; }
     else (f as Record<string, unknown>)[k] = ok;
+    // Words about why, with no reason chosen: "Another reason", as for words typed on a card.
+    if (k === "reasonDetail" && !f.reason && set.reason === undefined) f.reason = "other";
     const stored = (f as Record<string, unknown>)[k];
     edit.summary.push(`${FACT_LABEL[k] ?? "An answer"}: ${plainFact(k, typeof stored === "string" ? stored : ok)}`);
   }

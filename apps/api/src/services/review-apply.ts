@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { BATCH_ACTION_LABEL, BatchAction, DECLINE_REASON_LABEL, MARK_LABEL, type Actor, type ApplicationAction, type BatchPreview, type BatchPreviewItem, type BatchResult, type BatchResultItem, type MarkKind, type RejectReason, type RoleBatchItem, type RoleBatchRequest } from "@ros/contracts";
+import { BATCH_ACTION_LABEL, BatchAction, DECLINE_REASON_LABEL, MARK_LABEL, TRIAL_ENDED_LINE, type Actor, type ApplicationAction, type BatchPreview, type BatchPreviewItem, type BatchResult, type BatchResultItem, type MarkKind, type RejectReason, type RoleBatchItem, type RoleBatchRequest } from "@ros/contracts";
 import { ESCALATION_ACCESS_DAYS, PermissionError, assertCan, can, createEscalation, emit, entitlements, markBlockedReason, randomToken } from "@ros/core";
 import { applications, companies, roles, withPlatform, withTenant, type Tx } from "@ros/db";
 import { HttpError, PERMISSION_MESSAGE } from "../middleware/errors";
@@ -10,6 +10,7 @@ import { applicationActionState, applicationFacts, performApplicationAction, typ
 import { columnWords, isUuid, loadPool, type PoolRow } from "./pool";
 import { staffMayAsk, staffScopeOf } from "./staff-scope";
 import { attachBoardSnapshot, emailItsQueue, queueNoticeOf, type QueueNotice } from "./escalation-queue";
+import { companyTrialStanding } from "./trial";
 
 /**
  * Review and apply (plan F8; plan-adjustments section 3; founder decision B4): the pool board's suggestions applied by a
@@ -110,9 +111,13 @@ export async function previewBatch(container: Container, input: { roleId: string
     const items: BatchPreviewItem[] = [];
     const counts = emptyCounts();
     const escalating = body.items.filter((i) => i.action === "escalate").length;
+    // A new screening chat waits for a plan once a trial has ended (founder decision L-02 B): the preview says so up front,
+    // as the run refuses it (402 trial_ended per person).
+    const paused = body.items.some((i) => i.action === "invite_screen") && (await companyTrialStanding(tx, t.companyId, container.engine.clock()))?.ended === true;
     for (const item of body.items) {
       const row = pool.rows.find((r) => r.app.id === item.applicationId);
       let refusedReason = batchRefusal(row, item, t);
+      if (!refusedReason && row && paused && item.action === "invite_screen") refusedReason = TRIAL_ENDED_LINE;
       if (!refusedReason && row) refusedReason = await pageRefusal(tx, row, item, t);
       const decline = row && item.action === "not_moving_forward" ? declineFor(row, item) : null;
       if (!refusedReason && item.action === "not_moving_forward" && !decline) refusedReason = "Choose a reason from the list.";

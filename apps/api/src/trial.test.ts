@@ -306,6 +306,26 @@ describe("the Trial plan's 30 days", () => {
     expect(invite.status, await invite.clone().text()).toBe(402);
     expect(await errorOf(invite)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE });
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, dan.id))).toHaveLength(0);
+    // approving a waiting "Invite to a screen?" suggestion is the same new work: refused, and the suggestion keeps waiting
+    const suggest = (applicationId: string) => withTenant(container.db, companyId, async (tx) => (await tx.insert(approvalRequests).values({ companyId, roleId: roleA, applicationId, actionType: "application.invite_screen", subject: { type: "application", id: applicationId }, proposal: {}, requestedBy: { kind: "agent", id: "triage" }, requiredRoles: [] }).returning())[0].id);
+    const eve = await seedApplicant("Eve");
+    const waiting = await suggest(eve.id);
+    const approve = await json(owner, "POST", `/api/v1/approvals/${waiting}/decide`, { decision: "approve" });
+    expect(approve.status, await approve.clone().text()).toBe(402);
+    expect(await errorOf(approve)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE });
+    await container.drain();
+    expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.id, waiting)))[0]).toMatchObject({ status: "pending", decidedBy: null });
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, eve.id))).toHaveLength(0);
+    expect(await container.db.select().from(events).where(and(eq(events.type, "approval.granted"), eq(events.subjectId, waiting)))).toHaveLength(0);
+    // "Not now" is never refused
+    const notNow = await suggest(dan.id);
+    expect((await json(owner, "POST", `/api/v1/approvals/${notNow}/decide`, { decision: "reject" })).status).toBe(200);
+    // Review and apply says so in its preview, and the run refuses the invite while the rest goes ahead
+    const preview = await json(owner, "POST", `/api/v1/roles/${roleA}/batch`, { dryRun: true, items: [{ applicationId: eve.id, action: "invite_screen" }, { applicationId: dan.id, action: "on_hold" }] });
+    expect(preview.status, await preview.clone().text()).toBe(200);
+    const items = ((await preview.json()) as { items: Array<{ applicationId: string; allowed: boolean; refusedReason: string | null }> }).items;
+    expect(items.find((i) => i.applicationId === eve.id)).toMatchObject({ allowed: false, refusedReason: TRIAL_ENDED_LINE });
+    expect(items.find((i) => i.applicationId === dan.id)).toMatchObject({ allowed: true });
     const cara = await seedApplicant("Cara");
     expect((await act(cara.id, { action: "reject", reason: "not_a_match_experience", note: "Not this time." })).status).toBe(200);
     const sent = await act(cara.id, { action: "send_decision" });

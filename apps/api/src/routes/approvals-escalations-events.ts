@@ -17,6 +17,7 @@ import { sendApprovedClosingMessages } from "../services/closing-messages";
 import { approverRolesOf, mayDecideByRole } from "../services/approvers";
 import { attachBoardSnapshot, emailItsQueue, sendToIts } from "../services/escalation-queue";
 import { interviewDraftFor } from "./interviews";
+import { assertNoNewWork } from "../services/trial";
 
 export const approvalRoutes = new Hono<Vars>();
 
@@ -83,6 +84,10 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
         await emit(tx, { type: "role.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { version: proposedVersion } });
       }
     } else if (!mayDecideByRole(req.requiredRoles, t.role)) throw new HttpError(403, "forbidden", `This decision needs one of: ${approverRolesOf(req.requiredRoles).join(", ")}.`);
+    // Approving "Invite to a screen?" starts a new screening chat: new work, which waits for a plan once a trial has ended
+    // (founder decision L-02 B), as the invite button does. Refused before anything is written, so the suggestion stays
+    // waiting and can be approved once a plan is chosen; "Not now" is never refused.
+    if (status === "approved" && req.actionType === "application.invite_screen") await assertNoNewWork(tx, t.companyId, container.engine.clock());
     await tx.update(approvalRequests).set({ status, decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null, decisionEdits: body.edits ?? null }).where(eq(approvalRequests.id, req.id));
     await emit(tx, { type: body.decision === "approve" ? "approval.granted" : "approval.denied", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: req.roleId, applicationId: req.applicationId ?? null, version: Number.isFinite(proposedVersion) ? proposedVersion : null, note: body.note ?? null }, correlationId: req.workflowRunId });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: status } });

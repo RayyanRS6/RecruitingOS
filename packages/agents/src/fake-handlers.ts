@@ -1,5 +1,5 @@
 import type { DraftRolePacket, EvidenceAssessment, IntakeExtraction, IntakeFacts, IntakeQuestion, IntakeTurn, PacketRevision, ResumeExtraction, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
-import type { FakeProvider, IntakeContext, StructuredRequest } from "@ros/ai";
+import { ASKED_WORDS, type FakeProvider, type IntakeContext, type StructuredRequest } from "@ros/ai";
 import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
 import { fakeScreenWriteup } from "./fake-writeup";
@@ -296,7 +296,13 @@ function fakeIntakeTurn(c: FakeIntakeContext): IntakeTurn {
   const pb = playbookRoleFrom(c.req);
   const fromAd = !!c.ad && facts.compensationMin !== undefined && !c.ownerMessages.slice(firstTurn ? 1 : 0).some((m) => /\$\s?\d/.test(m));
   const questions: IntakeQuestion[] = [];
-  const ask = (q: Omit<IntakeQuestion, "id">) => { if (questions.length < 3) questions.push({ id: `fake_${questions.length + 1}`, ...q }); };
+  // intake.turn v5: what the notes list as already asked or answered is never asked again, as the model is told.
+  const askedLine = c.req.system.map((b) => b.text).find((t) => t.startsWith("Already asked or answered in this draft")) ?? "";
+  const asked = new Set(Object.entries(ASKED_WORDS).filter(([, words]) => askedLine.includes(words)).map(([field]) => field));
+  const ask = (q: Omit<IntakeQuestion, "id">) => {
+    if (asked.has(q.mode === "pay" ? "compensation" : q.field)) return;
+    if (questions.length < 3) questions.push({ id: `fake_${questions.length + 1}`, ...q });
+  };
   if (fromAd) ask({ field: "compensation", prompt: `Your ad says ${money(facts.compensationMin!)}–${money(facts.compensationMax ?? facts.compensationMin!)} ${per(facts.compensationBasis ?? "hourly")}. Is that still right?`, mode: "pay", options: [], allowOwn: true, why: "Pay is always shown on the job ad, so it has to be current." });
   else if (facts.compensationMin === undefined) ask({ field: "compensation", prompt: "What will you pay?", mode: "pay", options: [], allowOwn: true, why: "Pay is always shown on the job ad, and checked against the market." });
   if (!facts.reason) ask({ field: "reason_for_hire", prompt: "Why are you hiring?", mode: "single", options: [{ label: "A new position", value: "new_position", origin: "assistant" }, { label: "Replacing someone who left", value: "replacement", origin: "assistant" }, { label: "The team is growing", value: "growth", origin: "assistant" }, { label: "Seasonal help", value: "seasonal", origin: "assistant" }], allowOwn: true, why: "A replacement and a new position call for different questions." });

@@ -162,6 +162,55 @@ describe("the job builder API", () => {
     expect((await read<{ error: { code: string } }>(stale)).error.code).toBe("unknown_question");
   });
 
+  it("nothing is asked twice: a card answered or skipped, a fact set on the panel, or what the owner already said never comes back (staging, 20 Oct 2026)", async () => {
+    const fieldOf = (q: IntakeQuestion) => (q.mode === "pay" ? "compensation" : q.field);
+    const started = await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine." }));
+    const id = started.session.id;
+    const first = started.session.questions;
+    expect(first.length).toBeGreaterThan(0);
+    // the owner skips every card: the next cards ask about other things
+    const r2 = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { answers: first.map((q) => ({ questionId: q.id, skipped: true })) }));
+    const second = r2.session.questions;
+    expect(second.length).toBeGreaterThan(0);
+    expect(second.filter((q) => first.map(fieldOf).includes(fieldOf(q)))).toEqual([]);
+    // the owner names who decides on the panel, then types a message instead of answering the cards
+    const panel = await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch: { set: { decisionMakerUserId: ownerId } }, reply: false });
+    expect(panel.status).toBe(200);
+    // an open card about what was just set on the panel goes; the others stay
+    expect((await read<{ session: IntakeSessionView }>(panel)).session.questions.map((q) => q.id)).toEqual(second.filter((q) => fieldOf(q) !== "decision_maker").map((q) => q.id));
+    const r3 = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/messages`, { message: "It's full time, Monday to Friday." }));
+    const seen = new Set([...first.map(fieldOf), ...second.map(fieldOf), "decision_maker"]);
+    expect(r3.session.questions.filter((q) => seen.has(fieldOf(q)))).toEqual([]);
+    const [row] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, id));
+    const kept = row.serverState as { settledFields?: string[]; askedPrompts?: string[] };
+    expect(kept.settledFields).toEqual(expect.arrayContaining([...seen]));
+    // the wording of every card shown is kept, so a repeat under another label is caught too
+    expect(kept.askedPrompts).toEqual(expect.arrayContaining([...first, ...second].map((q) => q.prompt)));
+    // the assistant is told what was already asked
+    const lastRun = (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "intake.turn"))).at(-1);
+    expect(lastRun?.promptVersion).toBe(5);
+    await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
+  });
+
+  it("the deal-breaker card stays through a panel edit, and the must-haves are still asked once after it (review, 20 Oct 2026)", async () => {
+    const start = () => json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, CA, $45 to $55 an hour.\nDeal-breakers: Cannot work Saturdays" });
+    const isDeal = (q: IntakeQuestion) => q.prompt.startsWith("You named these as deal-breakers");
+    // a must-have added on the panel leaves the deal-breaker card in place
+    const a = await read<{ session: IntakeSessionView }>(await start());
+    const deal = a.session.questions.find(isDeal);
+    expect(deal).toBeDefined();
+    const patched = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${a.session.id}/answers`, { patch: { add: [{ field: "mustHaves", value: "Active CA RDH license" }] }, reply: false }));
+    expect(patched.session.questions.map((q) => q.id)).toContain(deal!.id);
+    await json(owner, "POST", `/api/v1/intake/sessions/${a.session.id}/abandon`);
+    // skipped, the deal card does not count as the must-haves card: that one comes next
+    const b = await read<{ session: IntakeSessionView }>(await start());
+    expect(b.session.questions.some(isDeal)).toBe(true);
+    expect(b.session.questions.filter((q) => q.field === "must_haves" && !isDeal(q))).toEqual([]);
+    const next = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${b.session.id}/answers`, { answers: b.session.questions.map((q) => ({ questionId: q.id, skipped: true })) }));
+    expect(next.session.questions.filter((q) => q.field === "must_haves" && !isDeal(q))).toHaveLength(1);
+    await json(owner, "POST", `/api/v1/intake/sessions/${b.session.id}/abandon`);
+  });
+
   it("a panel edit names the decision maker from the team, quietly, and 'draft it' writes the draft beside the conversation without creating a role (C7, C15)", async () => {
     const quiet = await json(owner, "POST", `/api/v1/intake/sessions/${hygienist}/answers`, { patch: { set: { decisionMakerUserId: ownerId } }, reply: false });
     expect(quiet.status).toBe(200);
