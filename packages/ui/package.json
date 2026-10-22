@@ -7,8 +7,6 @@
   "types": "./src/index.tsx",
   "exports": {
     ".": "./src/index.tsx",
-    "./tokens.css": "./src/tokens.css",
-    "./board.css": "./src/board.css",
     "./styles.css": "./src/styles.css"
   },
   "scripts": {

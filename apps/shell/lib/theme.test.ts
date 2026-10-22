@@ -19,12 +19,15 @@ describe("the light/dark theme choice", () => {
     expect(themeCookie("light", false)).toBe(`${THEME_COOKIE}=light; Path=/; Max-Age=31536000; SameSite=Lax`);
   });
 
-  it("is drawn by the server on <html>, the attribute tokens.css switches on", () => {
+  it("is drawn by the server on <html>, the attribute the application's stylesheet (styles.css) switches on", () => {
     const layout = readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8");
     expect(layout).toContain("cookies()).get(THEME_COOKIE)");
     expect(layout).toContain('<html lang="en" data-theme={theme}>');
-    const tokens = readFileSync(new URL("../../../packages/ui/src/tokens.css", import.meta.url), "utf8");
-    expect(tokens).toContain(':root[data-theme="dark"] {');
-    expect(tokens).toContain(':root:not([data-theme="light"]) {');
+    const styles = readFileSync(new URL("../../../packages/ui/src/styles.css", import.meta.url), "utf8");
+    // dark when the switch says so; with no choice, dark when the device prefers it and light was not picked
+    expect(styles).toContain(':root[data-theme="dark"] {');
+    expect(styles).toContain(':root:not([data-theme="light"]) {');
+    // the dark: classes follow the same switch
+    expect(styles).toMatch(/@custom-variant dark[\s\S]*?\[data-theme="dark"\]/);
   });
 });

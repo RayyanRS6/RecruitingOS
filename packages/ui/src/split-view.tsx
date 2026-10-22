@@ -35,7 +35,8 @@ export function SplitView(props: { primary: ReactNode; secondary: ReactNode; pri
       <section id={`${base}-primary`} className="split-pane split-primary" aria-label={props.primaryLabel}>
         {props.primary}
       </section>
-      <section id={`${base}-secondary`} className={cx("split-pane", "split-secondary", props.stickySecondary && "sticky")} aria-label={props.secondaryLabel}>
+      {/* keep-in-view, not "sticky": Tailwind's sticky utility would override the phone layout's static pane */}
+      <section id={`${base}-secondary`} className={cx("split-pane", "split-secondary", props.stickySecondary && "keep-in-view")} aria-label={props.secondaryLabel}>
         {props.secondary}
       </section>
     </div>

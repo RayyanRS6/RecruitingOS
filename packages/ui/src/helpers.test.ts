@@ -214,6 +214,8 @@ describe("class names", () => {
 describe("icon set", () => {
   it("has every icon the pages ask for", () => {
     const wanted = ["home", "today", "briefcase", "roles", "people", "talent", "calendar", "interviews", "settings", "plus", "search", "chevron-right", "chevron-down", "check", "x", "sparkle", "assistant", "mail", "send", "upload", "paperclip", "mic", "eye", "edit", "pencil", "clock", "alert", "lock", "link", "share", "filter", "sort", "more", "arrow-left", "arrow-right", "user", "building", "star", "flag", "refresh", "external"];
+    // the October 2026 redesign's shapes: the logo's bars, the rail's and the screens' new icons
+    wanted.push("bars", "shield", "life-buoy", "activity", "user-plus", "sliders", "arrow-up-right", "message-circle", "file-text", "sparkles", "inbox", "chart");
     for (const name of wanted) expect(ICON_NAMES).toContain(name);
   });
   it("draws every name, aliases included, with at least one path on the 24-pixel grid", () => {

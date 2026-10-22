@@ -3,23 +3,28 @@ import { cx, initials, type StepState, STEP_STATE_TEXT, scoreBand, scoreLabel, t
 import { Icon, type IconName } from "./icons";
 
 /**
- * Design system components (docs/07). Styling lives in tokens.css; these are semantic wrappers. Nothing in this file uses
- * a React hook, because server components import it (the shell's loading screen does). Components that need state or
- * document listeners live in their own "use client" modules and are re-exported at the bottom.
+ * Design system components (docs/07). The look lives in styles.css (its component layer styles every class these
+ * render); these are semantic wrappers. Nothing in this file uses a React hook, because server components import it (the
+ * shell's loading screen does). Components that need state or document listeners live in their own "use client"
+ * modules and are re-exported at the bottom.
  */
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "quiet" | "destructive";
 
+/** The tints an IconChip or a StatCell's icon can sit on. */
+export type ChipTone = "lavender" | "peach" | "plum" | "good" | "caution" | "neutral";
+
 /**
- * A button. Primary is near-black, secondary is outlined, ghost has no box, danger is for the few actions that cannot be
- * taken back ("quiet" and "destructive" are the earlier names for ghost and danger). `kbd` shows a keyboard hint and
- * announces it as the shortcut. `ariaPressed` makes it a toggle a screen reader hears as pressed or not, for a choice
- * shown only by its fill (left out, the button is a plain button).
+ * A button, a pill in every size. Primary is plum, secondary is outlined, ghost has no box, danger is for the few
+ * actions that cannot be taken back ("quiet" and "destructive" are the earlier names for ghost and danger). `kbd` shows a
+ * keyboard hint and announces it as the shortcut. `ariaPressed` makes it a toggle a screen reader hears as pressed or
+ * not, for a choice shown only by its fill (left out, the button is a plain button). `block` fills the width (its class
+ * is `wide`: Tailwind's `block` utility would turn the button into a plain block).
  */
 export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; ariaLabel?: string; ariaPressed?: boolean; block?: boolean }) {
   const { variant = "secondary", size = "md" } = props;
   return (
-    <button type={props.type ?? "button"} className={cx("btn", variant, size === "sm" && "sm", props.block && "block")} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.kbd}>
+    <button type={props.type ?? "button"} className={cx("btn", variant, size === "sm" && "sm", props.block && "wide")} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.kbd}>
       {props.loading ? (
         <>
           <span className="spinner" aria-hidden="true" />
@@ -65,7 +70,7 @@ export function Card(props: { children: ReactNode; needsYou?: boolean; lift?: bo
   );
 }
 
-export function Chip(props: { children: ReactNode; tone?: "neutral" | "accent" | "needs" | "good" | "caution" | "critical" | "source"; icon?: IconName }) {
+export function Chip(props: { children: ReactNode; tone?: "neutral" | "accent" | "needs" | "good" | "caution" | "critical" | "source" | "info" | "warm"; icon?: IconName }) {
   return (
     <span className={`chip ${props.tone ?? "neutral"}`}>
       {props.icon ? <Icon name={props.icon} size={14} /> : null}
@@ -77,9 +82,9 @@ export function Chip(props: { children: ReactNode; tone?: "neutral" | "accent" |
 /**
  * A status pill: a dot and a word ("Live", "Draft", "On hold"). The word carries the meaning; the colour only helps a
  * glance. `solid` is for a finished state (Hired); `pulse` is for the one Live pill at the top of a page: a ring grows
- * from the dot and fades.
+ * from the dot and fades. Besides the five tones, `info` (lavender) and `warm` (peach, "Ready for your review").
  */
-export function Pill(props: { children: ReactNode; tone?: Tone; dot?: boolean; solid?: boolean; pulse?: boolean; icon?: IconName; size?: "sm" | "md"; title?: string }) {
+export function Pill(props: { children: ReactNode; tone?: Tone | "info" | "warm"; dot?: boolean; solid?: boolean; pulse?: boolean; icon?: IconName; size?: "sm" | "md"; title?: string }) {
   const tone = props.tone ?? "neutral";
   const mark = props.icon ? <Icon name={props.icon} size={14} /> : props.dot === false ? null : <span className={cx("dot", props.pulse && "pulse")} aria-hidden="true" />;
   return (
@@ -206,7 +211,7 @@ export function EmptyState(props: { title: string; body?: string; action?: React
       ) : null}
       <h2>{props.title}</h2>
       {props.body ? <p>{props.body}</p> : null}
-      {props.action ? <div style={{ marginTop: 10 }}>{props.action}</div> : null}
+      {props.action ? <div className="empty-action">{props.action}</div> : null}
     </div>
   );
 }
@@ -232,10 +237,11 @@ export function ProgressSteps(props: { steps: Array<{ label: string; state: Step
   return props.live ? <div role="status">{list}</div> : list;
 }
 
+/** Lines on their way: soft bars that fade (their widths vary by place, in styles.css). */
 export function Skeleton(props: { lines?: number }) {
   return (
     <div className="stack" role="status" aria-busy="true" aria-label="Loading">
-      {Array.from({ length: props.lines ?? 3 }).map((_, i) => <div key={i} className="skeleton" style={{ width: `${90 - i * 12}%`, height: 14 }} />)}
+      {Array.from({ length: props.lines ?? 3 }).map((_, i) => <div key={i} className="skeleton" />)}
     </div>
   );
 }
@@ -243,7 +249,7 @@ export function Skeleton(props: { lines?: number }) {
 export function ErrorState(props: { message: string; onRetry?: () => void }) {
   return (
     <Alert tone="critical">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="row error-state">
         <span>{props.message}</span>
         {props.onRetry ? <Button size="sm" onClick={props.onRetry}>Try again</Button> : null}
       </div>
@@ -355,6 +361,89 @@ export function Stat(props: { n: number | string; label: string }) {
   );
 }
 
+/**
+ * An icon on a soft rounded square (the briefcase beside a job, the sparkle in a message cell): lavender by default,
+ * peach, plum or a signal tint; 32, 40 or 48 pixels. Decorative: the words beside it say what it stands for.
+ */
+export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "sm" | "md" | "lg" }) {
+  const size = props.size ?? "md";
+  return (
+    <span className={cx("icon-chip", props.tone ?? "lavender", size)} aria-hidden="true">
+      <Icon name={props.icon} size={size === "sm" ? 16 : size === "lg" ? 22 : 18} />
+    </span>
+  );
+}
+
+/**
+ * One card split into cells of figures (screenshots 1 and 4): put StatCells inside. `label` names the group for screen
+ * readers. Only for numbers the page already shows; Today has none (founder decision Q4).
+ */
+export function StatStrip(props: { children: ReactNode; label?: string }) {
+  return (
+    <div className="stat-strip" role="group" aria-label={props.label}>
+      {props.children}
+    </div>
+  );
+}
+
+/**
+ * Draws a link with the app's own router Link instead of a plain <a>, so following it is no full page load (the page's
+ * data stays): `(cell) => <Link to={cell.href} className={cell.className}>{cell.children}</Link>`.
+ */
+export type LinkRender = (cell: { href: string; className: string; children: ReactNode }) => ReactNode;
+
+/**
+ * One cell of a StatStrip: what it counts (small) over the figure (large, tabular), an optional icon chip on the left
+ * and a line under the figure (`note`). `highlight` is the tinted cell for a message at the end of the strip. With
+ * `href` the cell is a link with an arrow on the right: a plain <a>, or, for an address inside the app, the app's own
+ * Link drawn by `link` (a LinkRender), so following it does not load the whole app again.
+ */
+export function StatCell(props: { label: ReactNode; value: ReactNode; icon?: IconName; tone?: "lavender" | "peach" | "plum"; note?: ReactNode; highlight?: boolean; href?: string; link?: LinkRender }) {
+  const body = (
+    <>
+      {props.icon ? <IconChip icon={props.icon} tone={props.tone} /> : null}
+      <span className="stat-cell-text">
+        <span className="stat-cell-label">{props.label}</span>
+        {props.value !== undefined && props.value !== null ? <span className="stat-cell-value">{props.value}</span> : null}
+        {props.note ? <span className="stat-cell-note">{props.note}</span> : null}
+      </span>
+      {props.href ? (
+        <span className="stat-cell-go" aria-hidden="true">
+          <Icon name="arrow-right" size={16} />
+        </span>
+      ) : null}
+    </>
+  );
+  const className = cx("stat-cell", props.highlight && "highlight");
+  if (!props.href) return <div className={className}>{body}</div>;
+  if (props.link) return props.link({ href: props.href, className, children: body });
+  return (
+    <a className={className} href={props.href}>
+      {body}
+    </a>
+  );
+}
+
+/**
+ * The head of a section on a page: an optional eyebrow, the heading (an H2 by default, display 24px; an H3 at 19px)
+ * with a line under it, and an action on the right (a TextLink such as "All applicants"). `id` goes on the heading, for
+ * aria-labelledby or a link to it.
+ */
+export function SectionHeader(props: { title: ReactNode; sub?: ReactNode; eyebrow?: ReactNode; action?: ReactNode; id?: string; level?: 2 | 3 }) {
+  const Heading = props.level === 3 ? "h3" : "h2";
+  return (
+    <div className="section-header">
+      <div className="section-header-text">
+        {props.eyebrow ? <Eyebrow>{props.eyebrow}</Eyebrow> : null}
+        <Heading id={props.id}>{props.title}</Heading>
+        {props.sub ? <p className="section-header-sub">{props.sub}</p> : null}
+      </div>
+      {props.action ? <div className="section-header-action">{props.action}</div> : null}
+    </div>
+  );
+}
+
+export { cn } from "./cn";
 export { Icon, ICON_NAMES, type IconName } from "./icons";
 // The match score's breakdown (Wave F): bars per requirement, no hooks.
 export { barFigures, barTone, ScoreBar, type ScoreBarItem, ScoreBars } from "./score-bars";
@@ -369,3 +458,5 @@ export { SplitView } from "./split-view";
 export { AutoTextarea } from "./auto-textarea";
 export { Menu, type MenuItem, StageButton } from "./menu";
 export { Toast, Toaster } from "./toast";
+// Motion's provider (LazyMotion with domMax, strict, and MotionConfig reducedMotion="user"), mounted once by the shell.
+export { MotionProvider } from "./motion-provider";

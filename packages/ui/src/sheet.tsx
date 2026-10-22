@@ -9,8 +9,9 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([t
 /** Open panels, newest last: only the top one answers Escape and keeps Tab inside it (a sheet opened from a drawer). */
 const openPanels: object[] = [];
 
+/** The controls Tab can reach: shown, and not inside something inert (a toast on its way out keeps its box for a moment). */
 function focusablesIn(root: HTMLElement): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.getClientRects().length > 0);
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.getClientRects().length > 0 && !el.closest("[inert]"));
 }
 
 /**

@@ -13,14 +13,21 @@ export function Link(props: { to: string; children: ReactNode; className?: strin
 }
 
 /**
- * A link that marks itself as the current page. `activeFor`: the path it stands for when that differs from where it
- * goes (a job in the rail opens on its Candidates, and is the current one on every page of that job).
+ * A link that marks itself as the current page: aria-current="page" and the class "active" (after any `className`).
+ * `activeFor`: the path it stands for when that differs from where it goes (a job in the rail opens on its Candidates,
+ * and is the current one on every page of that job). `children` may be a function of whether it is current, so the rail
+ * can draw its highlight inside the current link only.
  */
-export function NavLink(props: { to: string; end?: boolean; activeFor?: string; children: ReactNode }) {
+export function NavLink(props: { to: string; end?: boolean; activeFor?: string; className?: string; title?: string; children: ReactNode | ((active: boolean) => ReactNode) }) {
   const pathname = usePathname() ?? "";
   const at = props.activeFor ?? props.to;
   const active = props.end ? pathname === at : pathname === at || pathname.startsWith(`${at}/`);
-  return <NextLink href={props.to} className={active ? "active" : undefined} aria-current={active ? "page" : undefined}>{props.children}</NextLink>;
+  const className = [props.className, active ? "active" : null].filter(Boolean).join(" ") || undefined;
+  return (
+    <NextLink href={props.to} className={className} title={props.title} aria-current={active ? "page" : undefined}>
+      {typeof props.children === "function" ? props.children(active) : props.children}
+    </NextLink>
+  );
 }
 
 export function useParams<T extends Record<string, string | undefined> = Record<string, string | undefined>>(): T {

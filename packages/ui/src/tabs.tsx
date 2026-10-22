@@ -66,7 +66,7 @@ export function Tabs(props: { items: TabItem[]; label: string; value?: string; d
               onKeyDown={(e) => onKeyDown(e, i)}
             >
               {t.icon ? <Icon name={t.icon} size={16} /> : null}
-              {/* data-label: the label keeps the width of its bold self, so choosing a tab never nudges the others (tokens.css) */}
+              {/* data-label: the label keeps the width of its bold self, so choosing a tab never nudges the others (styles.css) */}
               <span className="tab-label" data-label={t.label}>{t.label}</span>
               {/* the space keeps "New 2" two words for a screen reader; flex layout drops it on screen */}
               {t.count !== undefined ? <>{" "}<span className="count">{t.count}</span></> : null}
