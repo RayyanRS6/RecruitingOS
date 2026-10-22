@@ -52,14 +52,14 @@ function ApplyModeForm(props: { view: RoleApplyModeView; roleId: string; choice:
   const effective = choice === "default" ? view.companyDefault : choice;
   const changing = choice !== roleChoiceOf(view);
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <p className="small" style={{ margin: 0 }}>Now: <strong>{roleApplyModeLine(view)}</strong>.</p>
+    <div className="stack gap-3">
+      <p className="small text-ink-2">Now: <strong className="text-ink">{roleApplyModeLine(view)}</strong>.</p>
       <Field label="Applicants to this role" htmlFor={`apply-mode-${props.roleId}`}>
         <select id={`apply-mode-${props.roleId}`} className="select" value={choice} onChange={(e) => props.onChoice(e.target.value as RoleChoice)}>
           {roleChoices(view.companyDefault).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </Field>
-      {props.compact ? null : <p className="small muted" style={{ margin: 0 }}>{APPLY_MODE_HELP[effective]}</p>}
+      {props.compact ? null : <p className="small muted">{APPLY_MODE_HELP[effective]}</p>}
       {changing ? (
         <>
           <Field label="Why (required, kept with the change)" htmlFor={`apply-mode-why-${props.roleId}`} hint={`At least ${REASON_MIN} characters.`}>
@@ -71,7 +71,7 @@ function ApplyModeForm(props: { view: RoleApplyModeView; roleId: string; choice:
           </div>
         </>
       ) : null}
-      {props.compact ? null : <p className="small muted" style={{ margin: 0 }}>{APPLY_MODE_NOTE}</p>}
+      {props.compact ? null : <p className="small muted border-t border-line pt-3">{APPLY_MODE_NOTE}</p>}
     </div>
   );
 }

@@ -74,15 +74,16 @@ export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: strin
   const suggestions = (check.data?.suggestions ?? []).filter((s) => !dismissed.includes(s.id));
   return (
     <Card title="Change it by asking">
-      <div className="stack" style={{ gap: 10 }}>
+      <div className="grid min-w-0 gap-3">
         {suggestions.length ? (
-          <div className="stack" style={{ gap: 8 }}>
-            <p className="small muted" style={{ margin: 0 }}>{check.data?.summary ?? "Suggestions about the requirements."} They only suggest; nothing changes unless you tap a fix.</p>
+          <div className="grid min-w-0 gap-2">
+            <p className="small muted">{check.data?.summary ?? "Suggestions about the requirements."} They only suggest; nothing changes unless you tap a fix.</p>
             {suggestions.map((s) => <SuggestionCard key={s.id} s={s} onFix={(id) => fix.mutate(id)} fixing={fix.isPending ? fix.variables ?? null : null} onDismiss={(id) => setDismissed([...dismissed, id])} />)}
           </div>
         ) : null}
-        {asked ? <p className="small" style={{ margin: 0, color: "var(--ink-2)" }}>You asked: "{asked}"</p> : null}
-        {revise.isPending ? <p className="small muted" style={{ margin: 0 }}>Working out the change…</p> : null}
+        {/* what was asked, as the person's own message; then the assistant at work, as the conversation shows it */}
+        {asked ? <p className="bubble user max-w-[min(68ch,88%)] rounded-2xl rounded-tr-md text-[14px] motion-safe:animate-enter">You asked: "{asked}"</p> : null}
+        {revise.isPending ? <p className="inline-flex items-center gap-2.5 text-[13px] text-ink-3 motion-safe:animate-fade"><span className="dots" aria-hidden="true"><i /><i /><i /></span>Working out the change…</p> : null}
         {question ? <Alert tone="info">{question}</Alert> : null}
         {proposal ? <ProposalCard proposal={proposal} onConfirm={() => confirm.mutate(proposal)} onKeep={() => keepAsIs.mutate(proposal)} confirming={confirm.isPending} keeping={keepAsIs.isPending} /> : null}
         {problem ? <Alert tone="critical">{problem}</Alert> : null}

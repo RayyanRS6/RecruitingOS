@@ -19,12 +19,13 @@ import { FinalistCard, HireStep, OfferStep, WaitingOnCandidateCard } from "./hir
 import { useCandidateAction, useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
 import { NotesSummary } from "./notes";
 import { TellCard } from "./telling";
-import { Why } from "./why";
+import { LEAD, STEP, Why } from "./why";
 
 /**
  * The area under the panel's header (plan A10; founder decision Q23): everything that waits on a person about this
  * candidate, then the step a stage choice opened. Each card is the same decision it always was, said in one short line
- * with its buttons (Wave S1); the longer words are one click away under "Why".
+ * with its buttons (Wave S1); the longer words are one click away under "Why". Each one is a compact "Your next step"
+ * card (the lavender-to-peach wash, its title, a line and a plum pill), under one label (coral-dotted while one waits on you).
  */
 
 type Props = { a: ApplicationDetail; roleId: string; myRole: string | null; myUserId: string | null; step: PanelStep | null; setStep: (step: PanelStep | null, opts?: { roundKey?: string }) => void; roundKey?: string; onTab?: (tab: PanelTab) => void };
@@ -36,6 +37,14 @@ const FINALIST = ["finalist", "reference_check"];
 const INTERVIEW_READY = ["interview_recommended", "interview_complete"];
 /** Why the same round is proposed again (founder decision L-12): our interviewer missed it, and the invitation apologises. */
 const MISSED_BY_US_LINE = "Our interviewer missed it. The new invitation says sorry.";
+/** The assistant's suggested line, kept apart from the person's own words until they keep it. */
+const SUGGESTED = "grid gap-2 rounded-xl border border-line-tint bg-tint px-4 py-3";
+/**
+ * The coral "live" dot on the eyebrow (the kit's `eyebrow live` look), only while a card there waits on you: a card that
+ * waits on nobody (declined on an eligibility answer, a message waiting for someone else, a parked Cancelled card) leaves
+ * a plain label.
+ */
+const LIVE_DOT = "[&:has(>.needs-you)>.eyebrow]:before:size-1.5 [&:has(>.needs-you)>.eyebrow]:before:flex-none [&:has(>.needs-you)>.eyebrow]:before:rounded-full [&:has(>.needs-you)>.eyebrow]:before:bg-accent [&:has(>.needs-you)>.eyebrow]:before:shadow-[0_0_0_3px_var(--accent-soft)]";
 
 export function NeedsYou(props: Props) {
   const { a, roleId, step, setStep } = props;
@@ -80,7 +89,11 @@ export function NeedsYou(props: Props) {
   ].filter(Boolean);
   if (!cards.length) return null;
   return (
-    <section className="needs-area" aria-label="What needs you">
+    // Rises in once, filled backwards only: afterwards the section is no containing block or layer for the sheets drawn
+    // inside its cards. A long word or address breaks anywhere, so it never pushes a phone's screen sideways.
+    <section className={`mb-1 grid gap-3 wrap-anywhere motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards] ${LIVE_DOT}`} aria-label="What needs you">
+      {/* the hero card's eyebrow, once over the cards; decorative (the section is named for screen readers) */}
+      <p className="eyebrow" aria-hidden="true">What needs you</p>
       {cards}
     </section>
   );
@@ -104,10 +117,12 @@ export function DeclineNotice({ a, interviews, eligibility = false }: { a: Appli
   const lines = declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews });
   return (
     <Alert tone="caution">
-      <div className="stack" style={{ gap: 4 }}>
-        {lines.map((l) => <span key={l}>{l}</span>)}
+      <div className="grid gap-2">
+        <div className="grid gap-1">
+          {lines.map((l) => <span key={l}>{l}</span>)}
+        </div>
+        <Why label="What happens next">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, eligibility })}{eligibility ? " The reason recorded is the eligibility answer above." : ""}</Why>
       </div>
-      <Why label="What happens next">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, eligibility })}{eligibility ? " The reason recorded is the eligibility answer above." : ""}</Why>
     </Alert>
   );
 }
@@ -125,10 +140,10 @@ function HoldStep({ a, roleId, cancelled, onClose }: { a: ApplicationDetail; rol
   const act = useCandidateAction(a.id, roleId, () => onClose());
   const valid = until >= bounds.min && until <= bounds.max;
   return (
-    <Card needsYou lift title="Put on hold">
-      <p className="small" style={{ color: "var(--ink-2)" }}>Private: nothing is sent to the candidate.{cancelled ? ` ${HOLD_ENDS_CANCELLED}` : ""}</p>
+    <Card needsYou lift title="Put on hold" className={STEP}>
+      <p className={LEAD}>Private: nothing is sent to the candidate.{cancelled ? ` ${HOLD_ENDS_CANCELLED}` : ""}</p>
       <Why>Nothing about {a.candidate.firstName} waits on anyone until the date you choose; then they come back to your Home page.</Why>
-      <div className="stack" style={{ gap: 8, marginTop: 10 }}>
+      <div className="stack gap-3">
         <Field label="Bring them back on" htmlFor="hold-until" hint="Eight weeks at most."><input ref={first} id="hold-until" className="input" type="date" min={bounds.min} max={bounds.max} value={until} onChange={(e) => setUntil(e.target.value)} /></Field>
         <Field label="Note (kept internally, optional)" htmlFor="hold-note"><input id="hold-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: waiting to hear about the second chair" /></Field>
         <div className="row">
@@ -154,9 +169,9 @@ function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: str
   const act = useCandidateAction(a.id, roleId, () => onClose());
   const interviews = activeInterviews(a.interviews);
   return (
-    <Card needsYou lift title="Not moving forward">
+    <Card needsYou lift title="Not moving forward" className={STEP}>
       <DeclineNotice a={a} interviews={interviews} />
-      <div className="stack" style={{ gap: 8, marginTop: 10 }}>
+      <div className="stack gap-3">
         <Field label="Reason" htmlFor="decline-reason"><select ref={first} id="decline-reason" className="select" value={reason} onChange={(e) => setReason(e.target.value)}>{DECLINE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
         <Field label="Note (kept internally, optional)" htmlFor="decline-note"><input id="decline-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         <div className="row">
@@ -240,20 +255,21 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
   // The same round again after our interviewer missed it (founder decision L-12): the card says why it proposes it.
   const missedByUs = !!filled && filled.roundKey === chosenRoundKey && (filled as InterviewDraft & { sameRoundAgain?: string }).sameRoundAgain === "missed_by_us";
   return (
-    <Card needsYou lift title="Approve an interview">
-      {missedByUs ? <p className="small" style={{ margin: 0 }}>{MISSED_BY_US_LINE}</p> : null}
-      <p className="small" style={{ color: "var(--ink-2)" }}>Times go out to {a.candidate.firstName} once you approve.{filled && filled.roundKey === chosenRoundKey ? " Filled in from your interview plan." : ""}</p>
+    <Card needsYou lift title="Approve an interview" className={STEP}>
+      {missedByUs ? <p className="small">{MISSED_BY_US_LINE}</p> : null}
+      <p className={LEAD}>Times go out to {a.candidate.firstName} once you approve.{filled && filled.roundKey === chosenRoundKey ? " Filled in from your interview plan." : ""}</p>
       <Why>
         <span>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</span>
-        {filled && filled.roundKey === chosenRoundKey ? <span className="interview-filled">{interviewDraftLine(filled)}</span> : null}
+        {filled && filled.roundKey === chosenRoundKey ? <span className="rounded-xl bg-surface-2 px-3 py-2 text-ink-2">{interviewDraftLine(filled)}</span> : null}
       </Why>
       {a.interviewPlan.length === 0 ? <Alert tone="caution">This job has no interview rounds yet. Add them on the job's Interview plan tab.</Alert> : (
         <>
           <Field label="Round" htmlFor="iv-round"><select ref={first} id="iv-round" className="select" value={chosenRoundKey ?? ""} onChange={(e) => { setRoundKey(e.target.value); setInterviewers(null); }}>{a.interviewPlan.map((r) => <option key={r.key} value={r.key}>{r.title} · {r.durationMinutes} min · {r.format.replace("_", " ")}</option>)}</select></Field>
-          <fieldset style={{ border: 0, padding: 0, margin: "10px 0" }}>
-            <legend className="small muted">Interviewers</legend>
+          {/* each interviewer a row to tick, tinted once ticked */}
+          <fieldset className="grid gap-2">
+            <legend className="small muted mb-2">Interviewers</legend>
             {members.isLoading || currentPlan.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team, so nobody can be picked yet." onRetry={() => members.refetch()} /> : activeMembers.map((m) => (
-              <label key={m.userId} className="row small" style={{ gap: 8 }}>
+              <label key={m.userId} className="check flex-wrap items-center">
                 <input type="checkbox" checked={chosenInterviewers.includes(m.userId)} onChange={(e) => setInterviewers(e.target.checked ? [...chosenInterviewers, m.userId] : chosenInterviewers.filter((x) => x !== m.userId))} />
                 {m.name ?? m.email} <Chip tone={m.schedulable ? "good" : "caution"}>{m.schedulable ? "availability known" : "no calendar or hours yet"}</Chip>
               </label>
@@ -266,26 +282,26 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
               <input id="iv-url" className="input" type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" />
             </Field>
           ) : null}
-          {!link.offerCalendar && videoRound && !meetingUrl.trim() ? <p className="small muted" style={{ margin: 0 }}>This round is a video call. Without a link here, the invitation names the format only, so send {a.candidate.firstName} the link yourself.</p> : null}
+          {!link.offerCalendar && videoRound && !meetingUrl.trim() ? <p className="small muted">This round is a video call. Without a link here, the invitation names the format only, so send {a.candidate.firstName} the link yourself.</p> : null}
           {!link.offerCalendar ? <Why label="Why no calendar link?">A link is made with the calendar event only for an interviewer who connected their calendar in Settings.</Why> : null}
           {/* The personal line is optional and rarely used: one click away (the assistant's suggestion is asked for inside it). */}
           <details className="more">
             <summary>{line.trim() ? "Your personal line (it goes with the times)" : "Add a personal line (optional)"}</summary>
-            <div className="stack" style={{ gap: 8 }}>
+            <div className="stack gap-3">
               <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`It goes with the times, under your name: one or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
                 <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => { setLine(e.target.value); if (!e.target.value.trim()) setKept(null); }} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
               </Field>
               {suggestion?.line && !kept ? (
-                <div className="suggested-line">
-                  <p className="small" style={{ margin: 0 }}><q>{suggestion.line}</q></p>
-                  <p className="small muted" style={{ margin: "4px 0 0" }}>{suggestion.note}</p>
-                  <div className="row" style={{ marginTop: 6 }}><Button size="sm" onClick={() => { setLine(suggestion.line!); setKept({ line: suggestion.line!, runId: suggestion.suggestionRunId }); }}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
+                <div className={SUGGESTED}>
+                  <p className="small"><q>{suggestion.line}</q></p>
+                  <p className="small muted">{suggestion.note}</p>
+                  <div className="row"><Button size="sm" onClick={() => { setLine(suggestion.line!); setKept({ line: suggestion.line!, runId: suggestion.suggestionRunId }); }}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
                 </div>
-              ) : suggestion && !suggestion.line ? <p className="small muted" style={{ margin: 0 }}>{suggestion.note}</p> : null}
+              ) : suggestion && !suggestion.line ? <p className="small muted">{suggestion.note}</p> : null}
               {!kept ? <div className="row"><Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} disabled={!chosenRoundKey} onClick={() => suggest.mutate()} title="The assistant suggests one friendly line; if you keep it, the invitation says the assistant helped">Suggest a line</Button></div> : null}
               {lineAiHelped ? (
-                <div className="row" style={{ gap: 8 }}>
-                  <p className="small muted" style={{ margin: 0 }}>{suggestedLineNote(lineStillWhole, "invitation")}</p>
+                <div className="row gap-2">
+                  <p className="small muted">{suggestedLineNote(lineStillWhole, "invitation")}</p>
                   {lineStillWhole ? <Button size="sm" variant="quiet" onClick={() => { setLine(line.replace(kept!.line, "").trim()); setKept(null); }}>Take out the assistant's line</Button> : null}
                 </div>
               ) : null}
@@ -293,7 +309,7 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
           </details>
         </>
       )}
-      <div className="row" style={{ marginTop: 10 }}>
+      <div className="row">
         <Button variant="primary" size="sm" loading={request.isPending} disabled={!chosenRoundKey || !chosenInterviewers.length || !link.ready} onClick={() => request.mutate()}>Approve and offer times</Button>
         <Button size="sm" variant="quiet" onClick={onClose}>Not now</Button>
       </div>
@@ -326,15 +342,15 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
   });
   const pastDecision = a.stage === "talent_pool";
   return (
-    <Card needsYou lift title="Record what happened">
-      <p className="small" style={{ color: "var(--ink-2)" }}>Recorded with your name. {outcomeNoticeText(activeInterviews(a.interviews))}</p>
+    <Card needsYou lift title="Record what happened" className={STEP}>
+      <p className={LEAD}>Recorded with your name. {outcomeNoticeText(activeInterviews(a.interviews))}</p>
       <Why>You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</Why>
-      <div className="row" style={{ marginTop: 8 }}>
+      <div className="row">
         <span className="small">Hired them?</span>
         <Button size="sm" onClick={onHire}>Open the hire sheet</Button>
       </div>
       {pastDecision ? null : (
-        <div className="stack" style={{ gap: 8, marginTop: 10 }}>
+        <div className="stack gap-3">
           <Field label="What happened" htmlFor="oc-outcome"><select ref={first} id="oc-outcome" className="select" value={form.outcome} onChange={(e) => setForm({ ...form, outcome: e.target.value, confirming: false })}>
             {a.stage === "offer_sent" ? <option value="offer_declined_externally">They declined the offer made outside the platform</option> : null}
             <option value="candidate_withdrew">The candidate withdrew</option>
@@ -348,14 +364,14 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
             <DeclineNotice a={a} interviews={activeInterviews(a.interviews)} />
           </> : null}
           {/* "No hire" is a private decision too (they move to the talent pool untold): the safety net is said (D-03 A). */}
-          {form.outcome === "no_hire" ? <p className="small muted" style={{ margin: 0 }}>Private: nothing is sent to them now. {safetyNetAfterDecision({ decisionMessage: decisionHint(a) })}</p> : null}
+          {form.outcome === "no_hire" ? <p className="small muted">Private: nothing is sent to them now. {safetyNetAfterDecision({ decisionMessage: decisionHint(a) })}</p> : null}
           <Field label="Note (kept internally, optional)" htmlFor="oc-note"><input id="oc-note" className="input" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
           {form.confirming ? (
-            <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>Record this outcome under your name? It is audited and can only be corrected by an administrator.</span><span className="row"><Button size="sm" variant="primary" loading={record.isPending} onClick={() => record.mutate()}>Yes, record it</Button><Button size="sm" variant="quiet" onClick={() => setForm({ ...form, confirming: false })}>No</Button></span></div></Alert>
+            <Alert tone="caution"><div className="row justify-between"><span>Record this outcome under your name? It is audited and can only be corrected by an administrator.</span><span className="row"><Button size="sm" variant="primary" loading={record.isPending} onClick={() => record.mutate()}>Yes, record it</Button><Button size="sm" variant="quiet" onClick={() => setForm({ ...form, confirming: false })}>No</Button></span></div></Alert>
           ) : <div className="row"><Button size="sm" variant="primary" onClick={() => setForm({ ...form, confirming: true })}>Continue</Button><Button size="sm" variant="quiet" onClick={onClose}>Cancel</Button></div>}
         </div>
       )}
-      {pastDecision ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="quiet" onClick={onClose}>Cancel</Button></div> : null}
+      {pastDecision ? <div className="row"><Button size="sm" variant="quiet" onClick={onClose}>Cancel</Button></div> : null}
     </Card>
   );
 }
@@ -389,11 +405,11 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
   });
   const rationale = firstSentence(p.rationale);
   return (
-    <Card needsYou lift title="The assistant suggests an interview">
-      {rationale.line ? <p className="small" style={{ color: "var(--ink-2)" }}>{rationale.line}</p> : null}
+    <Card needsYou lift title="The assistant suggests an interview" className={STEP}>
+      {rationale.line ? <p className={LEAD}>{rationale.line}</p> : null}
       {rationale.rest ? <Why>{rationale.rest}</Why> : null}
       {declining ? (
-        <div className="stack" style={{ gap: 8, marginTop: 10 }}>
+        <div className="stack gap-3">
           <Field label="Why not now? (optional, kept internally)" htmlFor={`why-${p.id}`}><input id={`why-${p.id}`} className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
           <div className="row">
             <Button size="sm" variant="primary" loading={decide.isPending} onClick={() => decide.mutate({ decision: "reject", note: why.trim() || "Not now" })}>Set it aside</Button>
@@ -401,7 +417,7 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
           </div>
         </div>
       ) : (
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="row">
           <Button variant="primary" size="sm" loading={decide.isPending} onClick={() => decide.mutate({ decision: "approve" })}>Yes, interview</Button>
           <Button size="sm" onClick={() => setDeclining(true)}>Not now</Button>
           <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
@@ -429,9 +445,9 @@ function readyToInterviewWords(a: Pick<ApplicationDetail, "candidate" | "intervi
 function ReadyToInterviewCard({ a, onApprove }: { a: ApplicationDetail; onApprove: () => void }) {
   const w = readyToInterviewWords(a);
   return (
-    <Card needsYou title={w.title}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>{w.body}</p>
-      <div className="row" style={{ marginTop: 10 }}>
+    <Card needsYou title={w.title} className={STEP}>
+      <p className={LEAD}>{w.body}</p>
+      <div className="row">
         <Button variant="primary" size="sm" onClick={onApprove}>{w.button}</Button>
       </div>
       <Why>Nothing is sent until you approve it. The approval opens filled in from your interview plan.</Why>
@@ -490,14 +506,14 @@ function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationD
   const parked = c.auto.state === "waiting" || c.auto.state === "waiting_check";
   const needsYou = !parked && (c.times === "none" || c.times === "expired" || c.times === "not_reached");
   return (
-    <Card needsYou={needsYou} title={cancelledTitle(first, c.reason)}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>{cancelledBody({ firstName: first, round, c, companyConfirmed, decideBelow: can("record_decision") })}</p>
+    <Card needsYou={needsYou} title={cancelledTitle(first, c.reason)} className={STEP}>
+      <p className={LEAD}>{cancelledBody({ firstName: first, round, c, companyConfirmed, decideBelow: can("record_decision") })}</p>
       {asking === "send" ? (
-        <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{sendNewTimesQuestion(first, round)}</span><span className="row"><Button size="sm" variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>Yes, send</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Cancel</Button></span></div></Alert>
+        <Alert tone="caution"><div className="row justify-between"><span>{sendNewTimesQuestion(first, round)}</span><span className="row"><Button size="sm" variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>Yes, send</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Cancel</Button></span></div></Alert>
       ) : asking === "stop" ? (
-        <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{stopNewTimesQuestion(first)}</span><span className="row"><Button size="sm" variant="primary" loading={stop.isPending} onClick={() => stop.mutate()}>Yes, stop</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Keep it</Button></span></div></Alert>
+        <Alert tone="caution"><div className="row justify-between"><span>{stopNewTimesQuestion(first)}</span><span className="row"><Button size="sm" variant="primary" loading={stop.isPending} onClick={() => stop.mutate()}>Yes, stop</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Keep it</Button></span></div></Alert>
       ) : maySend || can("stop_new_times") || noInterviewers ? (
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="row">
           {maySend ? <Button size="sm" variant="primary" icon="send" onClick={() => setAsking("send")}>Send new times</Button> : null}
           {can("stop_new_times") ? <Button size="sm" variant="quiet" onClick={() => setAsking("stop")}>Don't send automatically</Button> : null}
           {noInterviewers ? <Button size="sm" variant="quiet" onClick={onChooseInterviewers}>Choose interviewers</Button> : null}
@@ -540,12 +556,12 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onSameRound, onHire, onN
   // other choices stay, second.
   const sameRoundFirst = !!last && last.outcome === "no_show_interviewer" && a.allowedActions.includes("interview");
   return (
-    <Card needsYou lift title="How did the interview go?">
-      <p className="small" style={{ color: "var(--ink-2)" }}>{last ? `${last.title}${last.outcome === "no_show_candidate" ? " (the candidate did not attend)" : last.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : ""}. ` : ""}Your decision, recorded with your name.</p>
-      {sameRoundFirst ? <p className="small" style={{ margin: "6px 0 0" }}>{MISSED_BY_US_LINE}</p> : null}
+    <Card needsYou lift title="How did the interview go?" className={STEP}>
+      <p className={LEAD}>{last ? `${last.title}${last.outcome === "no_show_candidate" ? " (the candidate did not attend)" : last.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : ""}. ` : ""}Your decision, recorded with your name.</p>
+      {sameRoundFirst ? <p className="small">{MISSED_BY_US_LINE}</p> : null}
       {canReadNotes(myRole) ? <NotesSummary applicationId={a.id} onOpen={onNotes} /> : null}
       {!decision ? (
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="row">
           {sameRoundFirst && last ? <Button size="sm" variant="primary" onClick={() => onSameRound(last.roundKey)}>Approve the same round again</Button> : null}
           {hasNextRound ? <Button size="sm" variant={sameRoundFirst ? undefined : "primary"} loading={record.isPending} onClick={() => record.mutate({ decision: "next_round" })}>Next round</Button> : null}
           <Button size="sm" variant={hasNextRound || sameRoundFirst ? undefined : "primary"} onClick={() => setDecision("finalist")}>Finalist</Button>
@@ -554,7 +570,7 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onSameRound, onHire, onN
           <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
         </div>
       ) : (
-        <div className="stack" style={{ marginTop: 12 }}>
+        <div className="stack gap-3">
           {decision === "not_moving_forward" ? (
             <>
               <DeclineNotice a={a} interviews={activeInterviews(a.interviews)} />
@@ -583,18 +599,20 @@ function EligibilityCard({ a, roleId }: { a: ApplicationDetail; roleId: string }
   const can = (x: ApplicationDetail["allowedActions"][number]) => a.allowedActions.includes(x);
   const blocked = (x: ApplicationDetail["allowedActions"][number]) => a.blockedReasons[x] ?? "Not available at this step.";
   return (
-    <Card needsYou title="Held on an eligibility answer">
-      <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${eligibilityAnswerWords(f)}`).join("; ")}</p>
-      <p className="small muted" style={{ marginTop: 6 }}>Held for your decision; nothing was sent to them.</p>
+    <Card needsYou title="Held on an eligibility answer" className={STEP}>
+      <div className="grid gap-1">
+        <p className={LEAD}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${eligibilityAnswerWords(f)}`).join("; ")}</p>
+        <p className="small muted">Held for your decision; nothing was sent to them.</p>
+      </div>
       <Why>Keep them in if the answer was a mistake. You are reminded daily, and an ITS recruiter is brought in after three days. Say why if you keep them in; it is recorded and the system learns from it.</Why>
       <Field label="Why keep them in?" htmlFor="ovnote"><input id="ovnote" className="input" value={overrideNote} onChange={(e) => setOverrideNote(e.target.value)} placeholder="For example: sitting the licensing exam next week" /></Field>
-      <div className="row" style={{ marginTop: 10 }}>
+      <div className="row">
         <Button variant="primary" size="sm" disabled={!overrideNote.trim() || !can("override_eligibility")} title={can("override_eligibility") ? (overrideNote.trim() ? "Keeps them in the process with your reason" : "Say why first") : blocked("override_eligibility")} loading={act.isPending && act.variables?.action === "override_eligibility"} onClick={() => act.mutate({ action: "override_eligibility", note: overrideNote })}>Keep them in</Button>
         <Button size="sm" variant="destructive" disabled={!can("reject")} title={can("reject") ? "Not moving forward on this answer: you confirm next" : blocked("reject")} onClick={() => setConfirming(true)}>Decline now</Button>
       </div>
-      {!can("reject") ? <p className="small muted" style={{ marginTop: 6 }}>{blocked("reject")}</p> : null}
+      {!can("reject") ? <p className="small muted">{blocked("reject")}</p> : null}
       {confirming ? (
-        <div className="stack" style={{ marginTop: 12 }}>
+        <div className="stack gap-3">
           <DeclineNotice a={a} eligibility />
           <Field label="Note (kept internally, optional)" htmlFor="elig-note"><input id="elig-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
           <div className="row"><Button variant="destructive" loading={act.isPending && act.variables?.action === "reject"} onClick={() => act.mutate({ action: "reject", reason: "eligibility", note: note.trim() || "Confirmed after the eligibility hold" })}>Confirm decline</Button><Button onClick={() => setConfirming(false)}>Cancel</Button></div>
@@ -609,9 +627,9 @@ function EligibilityDeclinedCard({ a, roleId }: { a: ApplicationDetail; roleId: 
   const act = useCandidateAction(a.id, roleId);
   const can = a.allowedActions.includes("review_anyway");
   return (
-    <Card title="Declined on an eligibility answer">
-      <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${eligibilityAnswerWords(f)}`).join("; ") || "An eligibility rule you authored was not met."}</p>
-      <div className="row" style={{ marginTop: 10 }}><Button size="sm" disabled={!can} title={can ? "Reopens the application so it is looked at again" : a.blockedReasons.review_anyway ?? "Not available at this step."} loading={act.isPending} onClick={() => act.mutate({ action: "review_anyway", note: "Reopened by the owner" })}>Review anyway</Button></div>
+    <Card title="Declined on an eligibility answer" className={STEP}>
+      <p className={LEAD}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${eligibilityAnswerWords(f)}`).join("; ") || "An eligibility rule you authored was not met."}</p>
+      <div className="row"><Button size="sm" disabled={!can} title={can ? "Reopens the application so it is looked at again" : a.blockedReasons.review_anyway ?? "Not available at this step."} loading={act.isPending} onClick={() => act.mutate({ action: "review_anyway", note: "Reopened by the owner" })}>Review anyway</Button></div>
     </Card>
   );
 }
@@ -620,10 +638,10 @@ function EligibilityDeclinedCard({ a, roleId }: { a: ApplicationDetail; roleId: 
 function HoldEndedCard({ a, roleId, onHoldAgain }: { a: ApplicationDetail; roleId: string; onHoldAgain: () => void }) {
   const act = useCandidateAction(a.id, roleId);
   return (
-    <Card needsYou title="The hold has ended">
-      <p className="small" style={{ color: "var(--ink-2)" }}>You put {a.candidate.firstName} on hold{a.mark?.remindAt ? ` until ${holdDay(a.mark.remindAt)}` : ""}{a.mark?.note ? ` (${a.mark.note})` : ""}.</p>
+    <Card needsYou title="The hold has ended" className={STEP}>
+      <p className={LEAD}>You put {a.candidate.firstName} on hold{a.mark?.remindAt ? ` until ${holdDay(a.mark.remindAt)}` : ""}{a.mark?.note ? ` (${a.mark.note})` : ""}.</p>
       <Why>Decide what comes next: take them off hold, hold them again, or choose another stage at the top. Nothing has been sent to them.</Why>
-      <div className="row" style={{ marginTop: 10 }}>
+      <div className="row">
         <Button size="sm" variant="primary" disabled={!a.allowedActions.includes("clear_mark")} loading={act.isPending} onClick={() => act.mutate({ action: "clear_mark", note: "Hold ended" })}>Take off hold</Button>
         <Button size="sm" onClick={onHoldAgain}>Hold again</Button>
       </div>
@@ -651,15 +669,18 @@ function WaitingMessages({ a, roleId, myRole, myUserId }: { a: ApplicationDetail
   return (
     <>
       {waiting.map((p) => (
-        <Card key={p.id} needsYou={mayDecide(p)} title={`A message to ${a.candidate.firstName}`}>
+        <Card key={p.id} needsYou={mayDecide(p)} title={`A message to ${a.candidate.firstName}`} className={STEP}>
           {mayDecide(p) ? (
             <Alert tone="caution">Send this message to {name}? {p.proposal.senderName ?? "A team member"} wrote it; nothing goes out until you say yes.</Alert>
           ) : (
             <Alert tone="neutral">{myUserId && p.proposal.senderUserId === myUserId ? "You wrote" : `${p.proposal.senderName ?? "A team member"} wrote`} this to {name}. It is waiting for {whoDecides(p.requiredRoles)} to read it; nothing goes out until they say yes.</Alert>
           )}
-          {p.proposal.subject ? <p className="small" style={{ margin: "8px 0 0" }}><strong>{p.proposal.subject}</strong></p> : null}
-          <p className="small" style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{p.proposal.text}</p>
-          {mayDecide(p) ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="primary" loading={decide.isPending} onClick={() => decide.mutate({ id: p.id, decision: "approve" })}>Yes, send it</Button><Button size="sm" variant="quiet" loading={decide.isPending} onClick={() => decide.mutate({ id: p.id, decision: "reject" })}>Do not send</Button></div> : null}
+          {/* the message itself, as the candidate would read it */}
+          <div className="grid gap-1.5 rounded-xl border border-line bg-surface px-4 py-3">
+            {p.proposal.subject ? <p className="small"><strong>{p.proposal.subject}</strong></p> : null}
+            <p className="small whitespace-pre-wrap">{p.proposal.text}</p>
+          </div>
+          {mayDecide(p) ? <div className="row"><Button size="sm" variant="primary" loading={decide.isPending} onClick={() => decide.mutate({ id: p.id, decision: "approve" })}>Yes, send it</Button><Button size="sm" variant="quiet" loading={decide.isPending} onClick={() => decide.mutate({ id: p.id, decision: "reject" })}>Do not send</Button></div> : null}
         </Card>
       ))}
     </>

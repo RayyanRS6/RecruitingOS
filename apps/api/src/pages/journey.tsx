@@ -48,25 +48,25 @@ export function Journey(props: JourneyProps) {
 }
 
 /**
- * The header's own styles: the shared tokens only, no motion. Each step is a numbered pill joined to the next by a short
- * line; the current one is filled in ink, a finished one shows a tick (its "(done)" is said to a screen reader). On a
- * phone only the current step keeps its words, so the three fit on one line.
+ * The header's own styles (the October 2026 redesign, screenshot 5's "Application" line): the shared tokens only, no
+ * motion. Each step is a mono label under its own segment of one thin line: the finished steps' segments in plum with a
+ * tick (their "(done)" is said to a screen reader), the current one running from plum to coral, the steps to come in
+ * the hairline grey. On a phone only the current step keeps its words, so the line stays one line.
  */
 export const JOURNEY_CSS = `
-.journey { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin: 0 0 22px; padding: 0 0 14px; border-bottom: 1px solid var(--line); color: var(--ink-3); font-size: 14px; }
-.journey ol { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; padding: 0; list-style: none; counter-reset: journey; }
-.journey li { display: inline-flex; align-items: center; gap: 8px; counter-increment: journey; font-weight: 600; }
-.journey li::before { content: counter(journey); content: counter(journey) / ""; display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 7px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--surface); color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.journey li:not(:last-child)::after { content: ""; display: inline-block; width: 18px; height: 1px; background: var(--line-2); }
-.journey li.current { color: var(--ink); }
-.journey li.current::before { border-color: var(--ink); background: var(--ink); color: var(--ground); }
+.journey { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin: 0 0 28px; color: var(--ink-3); font-size: 14px; }
+.journey ol { display: grid; flex: 1 1 100%; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.journey li { color: var(--ink-3); font: 400 11px/1.4 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; overflow-wrap: anywhere; }
+.journey li::before { content: ""; display: block; height: 3px; margin-bottom: 10px; border-radius: var(--r-pill); background: var(--line); }
 .journey li.done { color: var(--ink-2); }
-.journey li.done::before { content: "\\2713"; content: "\\2713" / ""; border-color: var(--ink-3); color: var(--ink); }
+.journey li.done::before { background: var(--primary); }
+.journey li.done::after { content: " \\2713"; content: " \\2713" / ""; }
+.journey li.current { color: var(--ink); }
+.journey li.current::before { background: linear-gradient(90deg, var(--primary), var(--accent)); }
 .journey .journey-count { margin: 0; color: var(--ink-2); font-weight: 600; }
 .journey .journey-later { display: flex; align-items: center; gap: 12px; margin: 0 0 0 auto; }
-.journey .journey-later > span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--ink-3); }
+.journey .journey-later > span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--good); }
 @media (max-width: 600px) {
-  .journey li:not(.current) { font-size: 0; gap: 0; }
-  .journey li:not(.current)::after { margin-left: 10px; }
+  .journey li:not(.current) { font-size: 0; }
 }
 `;

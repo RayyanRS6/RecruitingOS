@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PACKET_VISIBILITY_LABEL, type IntakeFacts, type IntakeFactsPatch, type PacketVisibility } from "@ros/contracts";
 import { Alert, Avatar, Button, Field, Icon } from "@ros/ui";
+import { SEEN_TAG, TEAM_CHIP } from "./look";
 import { EMPLOYMENT_WORD, REASON_WORD, WORK_MODEL_WORD } from "./rules";
 import { factsFormFrom, factsPatch, type FactsForm, type ListField, type TextField } from "./facts-form";
 
@@ -21,8 +22,11 @@ const LISTS: Array<{ field: ListField; label: string; hint: string; seen: Packet
 ];
 
 function SeenBy({ v }: { v: PacketVisibility }) {
-  return <span className="seen-by"><Icon name={v === "public" || v === "asked" ? "eye" : "lock"} size={13} />{PACKET_VISIBILITY_LABEL[v]}</span>;
+  return <span className={SEEN_TAG}><Icon name={v === "public" || v === "asked" ? "eye" : "lock"} size={13} />{PACKET_VISIBILITY_LABEL[v]}</span>;
 }
+
+/** Who sees the fields above it, under them. */
+const FIELD_SEEN = "-mt-1.5 flex flex-wrap items-center gap-2 text-[12.5px] leading-snug text-ink-2";
 
 /**
  * Edit mode of the draft panel (plan C7): the answers as plain fields, each marked with who sees it. Save sends only what
@@ -37,9 +41,9 @@ export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSav
   const text = (k: TextField, v: string) => setForm({ ...form, text: { ...form.text, [k]: v } });
   const deciders = props.team.filter((m) => DECIDERS.includes(m.role));
   return (
-    <div className="stack facts-editor" style={{ gap: 14 }}>
+    <div className="grid min-w-0 gap-4">
       <Field label="Job title" htmlFor="ed-title"><input id="ed-title" className="input" value={form.text.title} onChange={(e) => text("title", e.target.value)} /></Field>
-      <p className="field-seen"><SeenBy v="public" /></p>
+      <p className={FIELD_SEEN}><SeenBy v="public" /></p>
       <div className="grid-2">
         <Field label="Where the job is" htmlFor="ed-where"><input id="ed-where" className="input" value={form.text.locationText} onChange={(e) => text("locationText", e.target.value)} placeholder="City, state" /></Field>
         <Field label="Schedule" htmlFor="ed-schedule"><input id="ed-schedule" className="input" value={form.text.schedule} onChange={(e) => text("schedule", e.target.value)} placeholder="e.g. Mon to Thu, 8 to 5" /></Field>
@@ -56,7 +60,7 @@ export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSav
           </select>
         </Field>
       </div>
-      <p className="field-seen"><SeenBy v="public" /></p>
+      <p className={FIELD_SEEN}><SeenBy v="public" /></p>
 
       {LISTS.map((l) => (
         <ListEditor key={l.field} id={`ed-${l.field}`} label={l.label} hint={l.hint} seen={l.seen} max={l.max} placeholder={l.placeholder} items={form.lists[l.field]} onChange={(items) => setForm({ ...form, lists: { ...form.lists, [l.field]: items } })} />
@@ -74,15 +78,15 @@ export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSav
         <Field label="Benefits" htmlFor="ed-benefits"><input id="ed-benefits" className="input" value={form.text.benefits} onChange={(e) => text("benefits", e.target.value)} placeholder="e.g. Health, dental, 401(k), paid time off" /></Field>
       </div>
       <Field label="What would not work out" htmlFor="ed-failure"><input id="ed-failure" className="input" value={form.text.whatFailureLooksLike} onChange={(e) => text("whatFailureLooksLike", e.target.value)} placeholder="e.g. Someone who needs a lot of direction" /></Field>
-      <p className="field-seen"><SeenBy v="internal" /> Why you are hiring, when they start and what would not work out stay with your team. Benefits are shown on the job page.</p>
+      <p className={FIELD_SEEN}><SeenBy v="internal" /> Why you are hiring, when they start and what would not work out stay with your team. Benefits are shown on the job page.</p>
 
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-        <legend style={{ fontWeight: 600, fontSize: 13.5, padding: 0, marginBottom: 6 }}>Who interviews</legend>
-        <div className="team-chips">
+      <fieldset className="grid min-w-0 gap-2.5">
+        <legend className="mb-2 p-0 text-[13px] font-semibold text-ink">Who interviews</legend>
+        <div className="flex flex-wrap gap-2">
           {props.team.map((m) => {
             const on = form.interviewerUserIds.includes(m.userId);
             return (
-              <label key={m.userId} className="team-chip" data-checked={on ? "true" : undefined}>
+              <label key={m.userId} className={TEAM_CHIP} data-checked={on ? "true" : undefined}>
                 <input type="checkbox" checked={on} onChange={() => setForm({ ...form, interviewerUserIds: on ? form.interviewerUserIds.filter((id) => id !== m.userId) : [...form.interviewerUserIds, m.userId] })} />
                 <Avatar name={m.name} size="sm" />
                 <span>{m.name}</span>
@@ -109,7 +113,7 @@ export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSav
       ) : null}
 
       {props.error ? <Alert tone="critical">{props.error}</Alert> : null}
-      <div className="row">
+      <div className="sticky bottom-0 -mx-4 -mb-4 flex flex-wrap items-center gap-2 border-t border-line bg-surface px-4 py-3 sm:-mx-5 sm:-mb-5 sm:px-5">
         <Button variant="primary" disabled={!patch} loading={props.saving} onClick={() => patch && props.onSave(patch)}>Save changes</Button>
         <Button variant="ghost" onClick={props.onCancel}>Cancel</Button>
         {!patch ? <span className="small muted">Nothing changed yet.</span> : null}
@@ -128,22 +132,22 @@ function ListEditor(props: { id: string; label: string; hint: string; seen: Pack
     setDraft("");
   };
   return (
-    <div className="field list-editor">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <label htmlFor={props.id}>{props.label}</label>
+    <div className="field">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <label htmlFor={props.id} className="text-[13px] font-semibold text-ink">{props.label}</label>
         <SeenBy v={props.seen} />
       </div>
       {props.items.length ? (
-        <ul className="list-editor-items">
+        <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
           {props.items.map((t, i) => (
-            <li key={`${i}-${t}`}>
-              <span>{t}</span>
-              <button type="button" className="icon-btn sm" aria-label={`Remove: ${t}`} title="Remove" onClick={() => props.onChange(props.items.filter((_, j) => j !== i))}><Icon name="x" size={14} /></button>
+            <li key={`${i}-${t}`} className="flex min-w-0 items-center justify-between gap-3 py-1.5 pl-3.5 pr-1.5 text-[14px]">
+              <span className="min-w-0 wrap-anywhere">{t}</span>
+              <button type="button" className="icon-btn sm border-transparent bg-transparent hover:bg-tint" aria-label={`Remove: ${t}`} title="Remove" onClick={() => props.onChange(props.items.filter((_, j) => j !== i))}><Icon name="x" size={14} /></button>
             </li>
           ))}
         </ul>
       ) : null}
-      <div className="row" style={{ flexWrap: "nowrap" }}>
+      <div className="flex min-w-0 items-center gap-2">
         <input id={props.id} className="input" value={draft} maxLength={500} placeholder={props.placeholder} disabled={props.items.length >= props.max} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); add(); } }} />
         <Button size="sm" disabled={!draft.trim() || props.items.length >= props.max} onClick={add}>Add</Button>
       </div>

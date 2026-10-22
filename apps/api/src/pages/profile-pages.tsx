@@ -9,6 +9,7 @@ import { confirmRepeat, repeatConfirmationView, type RepeatConfirmationView } fr
 import { applicationForStatusToken, changeLearnedFact, learnFromConfirmedRepeat, otherRolesFor, queueReuseLink, queueReuseLinkFor, type OtherRole } from "../services/profile-facts";
 import { anonymizedFor, jobTakesApplications, linkGone, loadJob } from "./candidate-shared";
 import { Layout } from "./layout";
+import { CARD_PAGE_CSS } from "./signin-link";
 
 /**
  * What the candidate's company-scoped record knows and reuses (Wave S7, slice S7-F): confirming by email that answers
@@ -119,7 +120,7 @@ function OtherRolesPage(props: { companyName: string; slug: string | null; roles
   const { companyName } = props;
   const base = `/c/status/${props.statusToken}/apply-another`;
   return (
-    <Layout title={`Apply for another role at ${companyName}`}>
+    <Layout title={`Apply for another role at ${companyName}`} extraCss={CARD_PAGE_CSS}>
       <p class="back"><a href={`/c/status/${props.statusToken}`}>Back to your application</a></p>
       <p class="eyebrow">{companyName} · Your applications</p>
       <h1>Apply for another role at {companyName}</h1>
@@ -176,19 +177,19 @@ const ReuseRequestForm = z.object({ email: z.email().max(254) });
 
 function ReuseRequestPage(props: { companyName: string; roleTitle: string; formPath: string; error?: string; email?: string }) {
   return (
-    <Layout title={`Use your details for ${props.roleTitle}`}>
+    <Layout title={`Use your details for ${props.roleTitle}`} extraCss={CARD_PAGE_CSS}>
       <p class="back"><a href={props.formPath}>Back to the form</a></p>
       <p class="eyebrow">{props.companyName} · {props.roleTitle}</p>
       <h1>Use the details you gave {props.companyName} before</h1>
       <p class="lead">Type the email address you applied with. If {props.companyName} has your details, we email you a link that opens this job's form with them filled in, for you to check. We never show them on this page.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" action={`${props.formPath}/reuse`} class="card">
-        <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
+        <div class="trap" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
         <label for="email" class="flush">Your email address</label>
         <input id="email" name="email" type="email" required autocomplete="email" value={props.email ?? ""} />
         <button class="btn" type="submit">Email me the link</button>
       </form>
-      <p class="meta">Only what you gave {props.companyName} is used. Nothing is shared with another company.</p>
+      <p class="meta assure">Only what you gave {props.companyName} is used. Nothing is shared with another company.</p>
       <p>Rather not? <a href={props.formPath}>Fill in the form yourself</a>.</p>
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>
@@ -198,7 +199,7 @@ function ReuseRequestPage(props: { companyName: string; roleTitle: string; formP
 /** What every request answers, whether or not the address is known: only the mailbox learns that. */
 function ReuseRequestSent(props: { companyName: string; roleTitle: string; formPath: string }) {
   return (
-    <Layout title="Check your email">
+    <Layout title="Check your email" extraCss={CARD_PAGE_CSS}>
       <p class="eyebrow">{props.companyName} · {props.roleTitle}</p>
       <h1>Check your email</h1>
       <div class="card" role="status">
@@ -264,7 +265,7 @@ function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string
   };
   const done = view.state === "ready" ? null : outcome[view.state];
   return (
-    <Layout title={done ? done.title : "Please confirm"}>
+    <Layout title={done ? done.title : "Please confirm"} extraCss={CARD_PAGE_CSS}>
       <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
       {done ? (
         <>

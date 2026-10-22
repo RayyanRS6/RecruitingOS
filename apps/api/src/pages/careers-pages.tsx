@@ -81,7 +81,8 @@ candidatePages.get("/careers/:slug", async (c) => {
       <div class="careers">
         <div class="careers-head">
           <CompanyLine company={view} eyebrow="Careers" />
-          <h1>Work with {company.name}</h1>
+          {/* The name in plum: the two-tone heading of the redesign (the words are unchanged). */}
+          <h1>Work with <span>{company.name}</span></h1>
           <p class="lead">{intro}</p>
         </div>
         {view.about ? (
@@ -99,6 +100,7 @@ candidatePages.get("/careers/:slug", async (c) => {
               const accepting = r.acceptingApplications && !paused;
               return (
                 <li class="card role">
+                  <span class="role-icon" aria-hidden="true"><Icon name="briefcase" /></span>
                   <div class="role-main">
                     <h3>{title}</h3>
                     <JobFacts packet={packet} pay={publicPay(packet, jobNotices(packet, company))} small schedule={false} />

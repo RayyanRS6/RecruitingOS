@@ -70,7 +70,7 @@ describe("No AI interview yet, the strip's first column (20 Oct 2026, R20-7; it 
     nav.search = "";
     const html = render(client(), createElement(People));
     expect(html).toContain("3 applicants · 1 waiting on you · 2 without an AI interview yet");
-    expect(html).toMatch(/<div class="talent-strip"><div role="tablist" aria-label="Stages"/);
+    expect(html).toMatch(/<div class="talent-strip[^"]*"><div role="tablist" aria-label="Stages"/);
     expect(html).toContain('<span class="tab-label" data-label="No AI interview yet">No AI interview yet</span> <span class="count">2</span>');
     expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">1</span>');
     expect(text(html)).not.toContain("Still applying");
@@ -150,10 +150,10 @@ describe("the candidate panel (plan E3, E10, E11)", () => {
     const words = text(html);
     expect(words).toContain("2 answered, 1 not answered by choice");
     expect(words).toContain('"Chose not to answer" is never held against them');
-    expect(html).toContain("<dt>What pay are you looking for?</dt><dd style=\"white-space:pre-wrap\"><span class=\"muted\"><em>Chose not to answer</em></span></dd>");
+    expect(html).toContain("<dt>What pay are you looking for?</dt><dd class=\"whitespace-pre-wrap\"><span class=\"muted\"><em>Chose not to answer</em></span></dd>");
     expect(html).toMatch(/I can start on Monday, November 2, 2026\. <span class="chip neutral">Changed before sending<\/span>/);
     expect(words).toContain("Yes (picked from the choices)");
-    expect(html).toContain('<div class="bubble system" style="white-space:pre-wrap">Chose not to answer this question.</div>');
+    expect(html).toContain('<div class="bubble system">Chose not to answer this question.</div>');
     expect(html).toContain('<span class="bubble-label">Changed on the check-your-answers page</span>');
   });
 

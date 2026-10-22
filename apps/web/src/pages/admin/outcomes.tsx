@@ -1,8 +1,8 @@
 "use client";
 
-import { type CSSProperties, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Chip, Drawer, ErrorState, Field, Table } from "@ros/ui";
+import { Alert, Button, Card, Chip, cn, Drawer, ErrorState, Field, Table } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { toast } from "../../toast";
 import { DECLINE_REASONS } from "../candidate-panel/helpers";
@@ -29,7 +29,16 @@ export function outcomeLevel(o: Pick<OutcomeRow, "applicationId">): string {
   return o.applicationId ? "For a candidate" : "For the job";
 }
 
-const LINE: CSSProperties = { fontSize: 14, color: "var(--ink)" };
+/** A cell's first line: 14 px in ink; its second lines are `.small.muted` (13 px, --ink-3). */
+const LINE = "text-sm text-ink";
+
+/**
+ * The facts of one record as "at a glance" rows (screenshot 7's side card), for a `<dl>` of dt/dd pairs: the label over
+ * its fact on a phone, beside it from 640 px, a hairline between rows; a chip after a line of words sits a little lower.
+ * From 640 px the space between label and fact is inside the fact (no column gap), so each hairline runs unbroken.
+ * The customer drawer's Overview uses it too.
+ */
+export const GLANCE = "grid grid-cols-1 text-sm text-ink sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] sm:[&>dd]:pl-5 [&>dt]:border-t [&>dt]:border-line [&>dt]:pt-3 [&>dt]:text-[13px] [&>dt]:text-ink-3 [&>dd]:min-w-0 [&>dd]:break-words [&>dd]:pt-1 [&>dd]:pb-3 sm:[&>dt]:pb-3 sm:[&>dd]:border-t sm:[&>dd]:border-line sm:[&>dd]:pt-3 [&>dt:first-of-type]:border-t-0 [&>dt:first-of-type]:pt-0 sm:[&>dd:first-of-type]:border-t-0 sm:[&>dd:first-of-type]:pt-0 [&>dd:last-of-type]:pb-0 sm:[&>dt:last-of-type]:pb-0 [&>dd>div+.chip]:mt-1.5";
 
 /** Human-recorded hiring outcomes across customers; an administrator corrects one with a reason, and the original stays. */
 export function Outcomes() {
@@ -41,23 +50,25 @@ export function Outcomes() {
   if (q.error) return <ErrorState message="Could not load outcomes." onRetry={() => q.refetch()} />;
   const fixing = fix ? (q.data?.outcomes.find((o) => o.id === fix.id) ?? null) : null;
   return (
-    <div className="stack" style={{ gap: 14 }}>
+    <div className="stack gap-4">
       {q.data ? <Alert tone="info">{q.data.statement}</Alert> : null}
       <Table head={["Customer", "What was recorded", "Hire date", "Recorded by", ""]} label="Hiring outcomes" loading={q.isLoading ? 4 : undefined} empty="No outcomes recorded yet.">
         {(q.data?.outcomes ?? []).map((o) => (
           <tr key={o.id}>
-            <td><div style={LINE}>{o.companyName}</div></td>
+            <td><div className={cn(LINE, "font-semibold")}>{o.companyName}</div></td>
             <td>
-              <Chip tone={o.correctedAt ? "neutral" : "accent"}>{outcomeWords(o.outcome)}</Chip>
-              <div className="small muted">{outcomeLevel(o)}{o.correctionOf ? " · a correction" : ""}</div>
-              {o.correctedAt ? <div className="small muted">Corrected: {o.correctionReason}</div> : null}
+              <div className="grid justify-items-start gap-1">
+                <Chip tone={o.correctedAt ? "neutral" : "accent"}>{outcomeWords(o.outcome)}</Chip>
+                <div className="small muted">{outcomeLevel(o)}{o.correctionOf ? " · a correction" : ""}</div>
+                {o.correctedAt ? <div className="small muted">Corrected: {o.correctionReason}</div> : null}
+              </div>
             </td>
-            <td><div style={LINE}>{o.hireDate ?? ""}</div></td>
+            <td><div className={cn(LINE, "tabular-nums whitespace-nowrap")}>{o.hireDate ?? ""}</div></td>
             <td>
-              <div style={LINE}>{o.recordedBy.name ?? o.recordedBy.id}</div>
+              <div className={LINE}>{o.recordedBy.name ?? o.recordedBy.id}</div>
               <div className="small muted" title={exactWhen(o.recordedAt)}>{whenWords(o.recordedAt)}</div>
             </td>
-            <td>{o.correctedAt ? null : <Button size="sm" variant="secondary" ariaLabel={`Correct the outcome for ${o.companyName}`} onClick={() => setFix({ id: o.id, outcome: "voided", hireDate: "", reason: "", declineReason: DECLINE_REASONS[0][0] })}>Correct</Button>}</td>
+            <td className="text-right">{o.correctedAt ? null : <Button size="sm" variant="secondary" ariaLabel={`Correct the outcome for ${o.companyName}`} onClick={() => setFix({ id: o.id, outcome: "voided", hireDate: "", reason: "", declineReason: DECLINE_REASONS[0][0] })}>Correct</Button>}</td>
           </tr>
         ))}
       </Table>
@@ -70,19 +81,21 @@ export function Outcomes() {
 function CorrectionDrawer({ o, fix, onChange, onConfirm, pending, onClose }: { o: OutcomeRow; fix: Fix; onChange: (f: Fix) => void; onConfirm: () => void; pending: boolean; onClose: () => void }) {
   return (
     <Drawer open onClose={onClose} title="Correct an outcome" sub={`${o.companyName} · ${outcomeWords(o.outcome)}`}>
-      <div className="stack" style={{ gap: 18 }}>
-        <dl className="kv" style={LINE}>
-          <dt>Customer</dt>
-          <dd>{o.companyName}</dd>
-          <dt>Recorded</dt>
-          <dd>{outcomeWords(o.outcome)} · {outcomeLevel(o).toLowerCase()}</dd>
-          <dt>Hire date</dt>
-          <dd>{o.hireDate ?? "None"}</dd>
-          <dt>Recorded by</dt>
-          <dd>{o.recordedBy.name ?? o.recordedBy.id}, {exactWhen(o.recordedAt)}</dd>
-        </dl>
-        <p className="muted" style={{ margin: 0 }}>The original record stays, marked corrected.</p>
-        <div className="stack" style={{ gap: 10 }}>
+      <div className="stack gap-5">
+        <Card className="p-5 sm:px-6">
+          <dl className={GLANCE}>
+            <dt>Customer</dt>
+            <dd>{o.companyName}</dd>
+            <dt>Recorded</dt>
+            <dd>{outcomeWords(o.outcome)} · {outcomeLevel(o).toLowerCase()}</dd>
+            <dt>Hire date</dt>
+            <dd>{o.hireDate ?? "None"}</dd>
+            <dt>Recorded by</dt>
+            <dd>{o.recordedBy.name ?? o.recordedBy.id}, {exactWhen(o.recordedAt)}</dd>
+          </dl>
+        </Card>
+        <p className="text-sm text-ink-2">The original record stays, marked corrected.</p>
+        <div className="stack gap-3">
           <Field label="Corrected outcome" htmlFor={`fx-o-${o.id}`}>
             <select id={`fx-o-${o.id}`} className="select" value={fix.outcome} onChange={(e) => onChange({ ...fix, outcome: e.target.value })}>
               <option value="voided">Recorded in error (void)</option>

@@ -22,9 +22,10 @@ export function CustomerReportPanel({ companyId }: { companyId: string }) {
   if (q.isLoading) return <Skeleton lines={8} />;
   if (q.error || !q.data) return <ErrorState message="Could not load the report." onRetry={() => q.refetch()} />;
   return (
-    <div className="stack" style={{ gap: 14 }}>
+    <div className="stack gap-4">
       <p className="small muted">All roles of this customer together, as of {new Date(q.data.report.generatedAt).toLocaleString()}. Counts and days only; no candidate is named here.</p>
-      <Card title={`Roles (${q.data.roles.length})`}>
+      {/* each role's title reads as the row's title (the cell itself stays bare) */}
+      <Card title={`Roles (${q.data.roles.length})`} className="[&_tbody_td:first-child]:font-semibold">
         {q.data.roles.length ? (
           <Table head={["Role", "Status", numHead("Applicants"), numHead("Waiting on them"), numHead("Hired")]} label="Roles of this customer">
             {q.data.roles.map((r) => <tr key={r.id}><td>{r.title}</td><td><Pill size="sm" tone={r.status === "open" ? "good" : r.status === "closed" ? "neutral" : "caution"}>{r.status.replace(/_/g, " ")}</Pill></td><td className="num">{r.applicants}</td><td className="num">{r.waitingOnYou}</td><td className="num">{r.hired}</td></tr>)}

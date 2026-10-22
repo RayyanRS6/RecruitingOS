@@ -26,21 +26,25 @@ export function StatusPill({ s }: { s: StatusChip }) {
   );
 }
 
+/**
+ * One place the job goes, as a row of the side card in screenshot 7: an icon chip, the place and what happens there (with
+ * Copy and Open when it has an address), and its status on the right; on a narrow screen the status moves under it.
+ */
 function DestinationRow({ d }: { d: Destination }) {
   return (
-    <li className="dest">
-      <span className="dest-icon" aria-hidden="true"><Icon name={d.icon} size={16} /></span>
-      <div className="dest-main">
-        <span className="dest-name">{d.name}</span>
-        <span className="dest-detail">{d.detail}</span>
+    <li className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-line py-3.5 first:border-t-0">
+      <span className="inline-flex size-9 flex-none items-center justify-center rounded-xl bg-tint-2 text-primary" aria-hidden="true"><Icon name={d.icon} size={16} /></span>
+      <div className="grid min-w-0 flex-[1_1_14rem] gap-0.5">
+        <span className="text-[15px] font-semibold text-ink">{d.name}</span>
+        <span className="text-[13px] text-ink-2 [overflow-wrap:anywhere]">{d.detail}</span>
         {d.copy || d.url ? (
-          <span className="dest-actions">
+          <span className="mt-1.5 flex flex-wrap gap-2">
             {d.copy ? <Button size="sm" icon="copy" onClick={() => copy(d.copy!.text, d.copy!.what)}>Copy</Button> : null}
             {d.url ? <a className="btn ghost sm" href={d.url} target="_blank" rel="noopener noreferrer"><Icon name="external" />Open<span className="sr-only"> {d.name} in a new tab</span></a> : null}
           </span>
         ) : null}
       </div>
-      <span className="dest-status"><StatusPill s={d.status} /></span>
+      <span className="flex-none max-sm:pl-12"><StatusPill s={d.status} /></span>
     </li>
   );
 }
@@ -97,38 +101,40 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
         </>
       }
     >
-      {sharing ? (
-        <section ref={shareRef} aria-label="Share it now" className="stack" style={{ gap: 8 }}>
-          <h3 style={{ fontSize: 15 }}>Share it now</h3>
-          <p className="small muted" style={{ margin: 0 }}>The quickest first applicants often come from people who already know you.</p>
-          <ShareJob roleId={props.roleId} roleTitle={props.roleTitle} companyName={props.companyName} compact />
+      <div className="stack gap-5">
+        {sharing ? (
+          <section ref={shareRef} aria-label="Share it now" className="stack gap-2 rounded-2xl border border-line-tint bg-tint p-4">
+            <h3 className="eyebrow">Share it now</h3>
+            <p className="small muted">The quickest first applicants often come from people who already know you.</p>
+            <ShareJob roleId={props.roleId} roleTitle={props.roleTitle} companyName={props.companyName} compact />
+          </section>
+        ) : null}
+        <section aria-label="Where it is going" className="stack gap-2">
+          <h3 className="eyebrow">{props.editWhileOpen ? "Where the job is" : "Where it is going"}</h3>
+          {q.isLoading || !d ? <Skeleton lines={4} /> : (
+            <>
+              <ul className="rounded-2xl border border-line bg-surface px-4" aria-busy={preparing || undefined}>
+                {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} />)}
+              </ul>
+              <p className="small muted">Nothing is marked as up until it has been checked. This list keeps itself current while it is open.</p>
+            </>
+          )}
+          {noBoards ? <p className="small muted">{noBoards}</p> : null}
+          {outdated ? <Alert tone="info">{outdated}</Alert> : null}
         </section>
-      ) : null}
-      <section aria-label="Where it is going" className="stack" style={{ gap: 8 }}>
-        <h3 style={{ fontSize: 15 }}>{props.editWhileOpen ? "Where the job is" : "Where it is going"}</h3>
-        {q.isLoading || !d ? <Skeleton lines={4} /> : (
-          <>
-            <ul className="dest-list" aria-busy={preparing || undefined}>
-              {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} />)}
-            </ul>
-            <p className="small muted" style={{ margin: 0 }}>Nothing is marked as up until it has been checked. This list keeps itself current while it is open.</p>
-          </>
-        )}
-        {noBoards ? <p className="small muted" style={{ margin: 0 }}>{noBoards}</p> : null}
-        {outdated ? <Alert tone="info">{outdated}</Alert> : null}
-      </section>
-      {note ? (
-        <Alert tone="caution">
-          <div className="stack" style={{ gap: 6 }}>
-            <span>{note}</span>
-            {props.canEditPacket ? <div className="row"><Button size="sm" onClick={() => goTo("plan")}>Choose interviewers</Button></div> : <span className="small">An owner, an admin or a hiring manager chooses them on the Interview plan tab.</span>}
-          </div>
-        </Alert>
-      ) : null}
-      {q.error ? <Alert tone="critical">Could not read where the job stands. The Share tab shows it too.</Alert> : null}
-      <p className="small muted" style={{ margin: 0 }}>
-        {props.canManage ? <>Change the boards, the closing date or the links on the <button type="button" className="link-btn" onClick={() => goTo("posting")}>Share tab</button>.</> : "Only an owner or an admin changes where the job is posted. The Share tab shows where it stands."}
-      </p>
+        {note ? (
+          <Alert tone="caution">
+            <div className="stack gap-1.5">
+              <span>{note}</span>
+              {props.canEditPacket ? <div className="row"><Button size="sm" onClick={() => goTo("plan")}>Choose interviewers</Button></div> : <span className="small">An owner, an admin or a hiring manager chooses them on the Interview plan tab.</span>}
+            </div>
+          </Alert>
+        ) : null}
+        {q.error ? <Alert tone="critical">Could not read where the job stands. The Share tab shows it too.</Alert> : null}
+        <p className="small muted">
+          {props.canManage ? <>Change the boards, the closing date or the links on the <button type="button" className="link-btn" onClick={() => goTo("posting")}>Share tab</button>.</> : "Only an owner or an admin changes where the job is posted. The Share tab shows where it stands."}
+        </p>
+      </div>
     </Dialog>
   );
 }

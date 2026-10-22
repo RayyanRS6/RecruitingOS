@@ -24,6 +24,32 @@ import { Layout } from "./layout";
  */
 export const schedulePages = new Hono<Vars>();
 
+/**
+ * The scheduling pages' own styles (October 2026 redesign, the form card of the reference screens), on top of the
+ * candidate stylesheet: each day's times as selectable rounded tiles in a grid under the day's name (a chosen tile in
+ * lavender with a plum edge), the cancel choices as full-width option cards with their hint under each, and the
+ * confirmed interview as label-over-value rows with the time first and largest. Tokens only, no button rules, no
+ * motion; the radios stay real radios.
+ */
+export const SCHEDULE_CSS = `
+fieldset > legend { margin: 0 0 4px; color: var(--ink); font-size: 15px; font-weight: 600; }
+fieldset > .card { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(136px, 100%), 1fr)); gap: 8px; margin: 12px 0 0; padding: 16px; }
+fieldset > .card > strong { grid-column: 1 / -1; margin: 0 0 2px; color: var(--ink); font-size: 14.5px; font-weight: 600; }
+.slot { display: flex; align-items: center; gap: 10px; min-height: 48px; margin: 0; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); color: var(--ink); font-size: 15px; font-weight: 600; line-height: 1.3; cursor: pointer; }
+.slot:has(input:checked) { border-color: var(--primary); background: var(--tint); box-shadow: inset 0 0 0 1px var(--primary); }
+.slot input { flex: none; margin: 0; }
+#cancel fieldset > .slot { margin: 12px 0 0; }
+#cancel fieldset > small { display: block; margin: 6px 0 0 14px; color: var(--ink-2); }
+div.card.status { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 16px 24px; margin: 20px 0; padding: 20px 22px; background: var(--surface); }
+.card.status > div { display: grid; align-content: start; gap: 2px; margin: 0; padding: 0; border: 0; }
+.card.status > div:first-child { grid-column: 1 / -1; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.card.status > div > :first-child { color: var(--ink-2); font-size: 13px; font-weight: 400; }
+.card.status > div > :last-child { min-width: 0; font-size: 15px; font-weight: 600; text-align: left; overflow-wrap: anywhere; }
+.card.status > div > :last-child:not(a) { color: var(--ink); }
+.card.status > div:first-child > :last-child { font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
+@media (hover: hover) and (pointer: fine) { .slot:hover { border-color: var(--line-strong); } }
+`;
+
 const ZONES = ["America/Los_Angeles", "America/Denver", "America/Phoenix", "America/Chicago", "America/New_York", "America/Anchorage", "Pacific/Honolulu"];
 
 async function loadByToken(db: Db, token: string) {
@@ -172,7 +198,7 @@ schedulePages.get("/c/schedule/:token", async (c) => {
   const groups = groupSlotsByDay(ahead, tz);
   const error = c.req.query("error");
   return c.html(
-    <Layout title={`Pick a time: ${b.iv.title} at ${b.company.name}`}>
+    <Layout title={`Pick a time: ${b.iv.title} at ${b.company.name}`} extraCss={SCHEDULE_CSS}>
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>Pick a time for your {b.iv.title.toLowerCase()}</h1>
       <p class="lead">{b.iv.durationMinutes} minutes, {b.iv.format.replace("_", " ")}{b.participants.length ? ` with ${b.participants.map((p) => p.firstName).join(" and ")}` : ""}. Times are shown in <strong>{tz.replace(/_/g, " ")}</strong>.</p>
@@ -320,7 +346,7 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
   const plan = !b.closed && ahead ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now })) : null;
   const missing = c.req.query("error") === "cancel";
   return c.html(
-    <Layout title={`Confirmed: ${b.iv.title} at ${b.company.name}`}>
+    <Layout title={`Confirmed: ${b.iv.title} at ${b.company.name}`} extraCss={SCHEDULE_CSS}>
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>You're confirmed</h1>
       <div class="card status">

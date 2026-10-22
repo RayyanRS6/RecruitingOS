@@ -2,11 +2,13 @@
 /** @jsxImportSource hono/jsx */
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
+import { CARD_PAGE_CSS } from "./signin-link";
 
 /**
  * The staff second-factor step, server-rendered like the candidate pages: no JavaScript, the same design tokens, and the
  * per-request nonce. The secret shown at enrolment comes from the identity service and is never written anywhere by
- * this application.
+ * this application. Its own look (`CARD_PAGE_CSS`): the six-digit code in a wide monospace box, the QR code on a white
+ * tile, the setup key in a key cap.
  */
 const CodeForm: FC<{ action: string; cancelAction: string; error?: string | null; label: string; button: string; cancelLabel?: string }> = (p) => (
   <>
@@ -26,7 +28,7 @@ function grouped(secret: string): string {
 }
 
 export const EnrolPage: FC<{ productName: string; secret: string; uri: string; qrSvg: string | null; backup: boolean; error?: string | null; action: string; cancelAction: string }> = (p) => (
-  <Layout title={p.backup ? "Add a backup authenticator" : "Set up your authenticator app"}>
+  <Layout title={p.backup ? "Add a backup authenticator" : "Set up your authenticator app"} extraCss={CARD_PAGE_CSS}>
     <p class="eyebrow">{p.productName}</p>
     <h1>{p.backup ? "Add a backup authenticator" : "Set up your authenticator app"}</h1>
     <p>
@@ -49,7 +51,7 @@ export const EnrolPage: FC<{ productName: string; secret: string; uri: string; q
 );
 
 export const VerifyPage: FC<{ productName: string; error?: string | null; action: string; cancelAction: string }> = (p) => (
-  <Layout title="Enter your code">
+  <Layout title="Enter your code" extraCss={CARD_PAGE_CSS}>
     <p class="eyebrow">{p.productName}</p>
     <h1>Enter your code</h1>
     <p>Open your authenticator app and enter the code it shows for {p.productName}.</p>
@@ -61,7 +63,7 @@ export const VerifyPage: FC<{ productName: string; error?: string | null; action
 );
 
 export const BackupOfferPage: FC<{ backupHref: string; skipAction: string; continueHref: string }> = (p) => (
-  <Layout title="Add a backup authenticator?">
+  <Layout title="Add a backup authenticator?" extraCss={CARD_PAGE_CSS}>
     <h1>You are signed in.</h1>
     <p>You have one authenticator. If that phone is lost, only the platform owner can reset your second factor. A backup authenticator on another device avoids that.</p>
     <div class="card">

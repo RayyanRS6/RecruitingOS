@@ -85,7 +85,7 @@ describe("the pool board on the Candidates page", () => {
     const html = render(client(), createElement(People));
     const words = text(html);
     // one line, then the switch and the button (Wave S1)
-    expect(html).toContain('<section class="sort-strip" aria-label="Sort the pool">');
+    expect(html).toMatch(/<section class="sort-strip[^"]*" aria-label="Sort the pool">/);
     expect(words).toContain("Groups everyone who finished applying, with a reason for each. Nothing moves until you apply it, and nothing is sent to anyone. Board List Sort the pool");
     expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>.*Sort the pool<\/button>/);
   });
@@ -122,7 +122,7 @@ describe("the pool board on the Candidates page", () => {
     expect(html).toContain('<span class="chip neutral">Ready to apply</span>');
     expect(html).toContain('<span class="chip neutral">High confidence</span>');
     expect(html).not.toContain('<span class="chip good">');
-    expect(html).toContain('<ul class="board-card-facts"><li>Must-haves: 2 of 2 shown</li><li>From the résumé and the AI interview</li><li>Invited to the AI interview automatically</li></ul>');
+    expect(html).toMatch(/<ul class="board-card-facts[^"]*"><li>Must-haves: 2 of 2 shown<\/li><li>From the résumé and the AI interview<\/li><li>Invited to the AI interview automatically<\/li><\/ul>/);
     expect(words).toContain("Strength: Active CA RDH license · résumé");
     expect(words).toContain("Gap: Patient communication: partly shown · AI interview, no quote");
     expect(words).toContain("Interview Strong evidence on every must-have.");
@@ -131,7 +131,7 @@ describe("the pool board on the Candidates page", () => {
     expect(html).toContain('<span class="chip critical">Missing must-have: Active CA RDH license</span>');
     expect(words).toContain("Done Shortlist");
     // the read-only lane "No AI interview yet" (R20-7): name, where they stand, when they applied; no score, never placed
-    expect(html).toContain('<section class="board-col" data-column="no_ai_interview" aria-labelledby="board-col-no-ai-interview">');
+    expect(html).toMatch(/<section class="board-col[^"]*" data-column="no_ai_interview" aria-labelledby="board-col-no-ai-interview">/);
     expect(words).toContain("No AI interview yet 1 Scored after the AI interview: they join the board when they send it, and Review and apply never includes them. SL Sofia Lind Applied yesterday Invited (not started)");
     expect(words).not.toContain("still applying");
   });
@@ -195,7 +195,7 @@ describe("Ask about this pool", () => {
     const qc = client();
     const html = render(qc, createElement(AnswerView, { answer: answer as never, onOpen: () => undefined, onShow: () => undefined, onCompareAgain: null }));
     const words = text(html);
-    expect(html).toContain('<button type="button" class="person-chip"><span class="avatar sm" aria-hidden="true">LO</span><span>Luis Ortega</span>');
+    expect(html).toMatch(/<button type="button" class="person-chip[^"]*"><span class="avatar sm" aria-hidden="true">LO<\/span><span>Luis Ortega<\/span>/);
     // a résumé-only score says so beside it, the full label on hover (R20-9); an interviewed one does not
     expect(html).toContain('<span class="person-chip-score" title="Résumé only: no AI interview">88');
     expect(words).toContain("Ana Cruz 88 out of 100 · Résumé only");

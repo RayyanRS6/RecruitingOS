@@ -362,19 +362,19 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       {blockers ? (
         <Alert tone="caution">
           <strong>Not ready to ask for approval yet.</strong>
-          <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>{blockers.map((b) => <li key={b}>{b}</li>)}</ul>
+          <ul className="mt-1.5 grid list-disc gap-0.5 pl-[18px]">{blockers.map((b) => <li key={b}>{b}</li>)}</ul>
         </Alert>
       ) : null}
       {problem ? (
         <Alert tone="caution">
-          <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <span>{problem.message}</span>
             {problem.ask ? <AskRecruiter label={problem.ask.label} size="sm" variant="primary" preset={presetOf(problem.ask.body)} /> : null}
           </div>
         </Alert>
       ) : null}
       {draftRunning ? (
-        <div className="draft-progress">
+        <div className="rounded-xl border border-line-tint bg-tint px-4 py-3.5 motion-safe:animate-fade">
           <ProgressSteps live label="Writing the draft" steps={draftSteps(view.progress?.stage === "done" || view.progress?.stage === "failed" ? "starting" : view.progress?.stage ?? "starting")} />
         </div>
       ) : null}
@@ -389,8 +389,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
         />
       ) : null}
       {!hasDraft && view.readiness.mayDraft && !draftRunning && !busy ? (
-        <div className="draft-ready">
-          <span><Icon name="sparkle" size={16} /> There is enough for a first draft. Keep answering, or write it now.</span>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line-tint bg-linear-110 from-tint to-peach px-4 py-3 text-[14px] text-ink motion-safe:animate-enter">
+          <span className="flex min-w-0 items-start gap-2"><Icon name="sparkle" size={16} className="mt-0.5 text-accent" /> There is enough for a first draft. Keep answering, or write it now.</span>
           <Button size="sm" variant="primary" onClick={() => draft.mutate()}>Write the draft</Button>
         </div>
       ) : null}
@@ -428,19 +428,23 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   );
 
   return (
-    <div className="builder">
-      <header className="builder-head">
-        <div className="builder-head-title">
+    <div className="builder grid gap-5">
+      {/* The page's head (screenshot 1): eyebrow, the title with its Draft pill, and on the right More and the primary
+          "Ask for approval". Whenever the head wraps (a phone, a tablet, a narrow window), the actions sit on their own
+          line at its right end, so the menu and the tooltip open inside the screen. */}
+      <header className="flex flex-wrap items-end gap-x-6 gap-y-4">
+        <div className="grid min-w-0 flex-1 basis-[min(100%,26rem)] gap-2">
           <Eyebrow>{companyName ? `Drafting · ${companyName}` : "Drafting"}</Eyebrow>
-          <div className="row" style={{ flexWrap: "nowrap", minWidth: 0 }}>
-            <h1 className={title ? undefined : "placeholder"}>{title ?? "Untitled role"}</h1>
-            <Pill size="sm" tone="neutral">Draft</Pill>
+          <div className="flex min-w-0 items-center gap-3 [&>h1]:min-w-0 [&>h1]:wrap-anywhere md:[&>h1]:text-[40px]">
+            <h1 className={title ? undefined : "text-ink-3"}>{title ?? "Untitled role"}</h1>
+            <Pill size="sm" tone="caution">Draft</Pill>
           </div>
         </div>
-        <div className="builder-head-actions">
+        <div className="ml-auto flex w-full items-center justify-end gap-2 sm:w-auto">
           <Menu
             label="More"
             ariaLabel="More for this draft"
+            buttonClassName="btn ghost"
             align="end"
             items={[{ id: "new", label: "Start a different role", icon: "plus" }, { id: "quick", label: "New role from quick questions", icon: "arrow-right" }, { id: "preview", label: "See what candidates will see", icon: "eye", disabled: !view.draft, reason: "Once the draft is written." }, { id: "discard", label: "Discard this draft", icon: "x", danger: true }]}
             onSelect={(id) => {
@@ -456,7 +460,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
 
       {confirmDiscard ? (
         <Alert tone="caution">
-          <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <span>Discard this draft? It stays in your records but cannot be continued. Nothing has been sent to anyone.</span>
             <span className="row">
               <Button size="sm" variant="danger" loading={abandon.isPending} onClick={() => abandon.mutate()}>Discard it</Button>
@@ -467,7 +471,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       ) : null}
       {!view.startedBy.mine ? (
         <Alert tone="info">
-          <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <span>{view.startedBy.name ?? "Someone on your team"} started this draft. You can work on it; it stays theirs{mayTakeOver ? " unless you take it over" : ""}.</span>
             {mayTakeOver ? <Button size="sm" loading={takeOver.isPending} onClick={() => takeOver.mutate()}>Take it over</Button> : null}
           </div>
@@ -514,15 +518,16 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
 }
 
 /**
- * "Ask for approval": near-black, and greyed until the server says the role is ready. Pointing at it, focusing it or
- * pressing it while greyed lists what is still missing, in the server's words (a tooltip a keyboard can reach too).
+ * "Ask for approval": the plum page action, and greyed until the server says the role is ready. Pointing at it,
+ * focusing it or pressing it while greyed lists what is still missing, in the server's words (a tooltip a keyboard can
+ * reach too). The tooltip shows on a mouse's hover, on focus, or once pressed (`data-open`), and fades in.
  */
 function ApprovalButton(props: { help: ReturnType<typeof approvalHelp>; loading: boolean; onAsk: () => void }) {
   const [open, setOpen] = useState(false);
   const tipId = useId();
   const { help } = props;
   return (
-    <span className="tip-wrap">
+    <span className="group/tip relative inline-flex">
       <button
         type="button"
         className="btn primary"
@@ -544,9 +549,9 @@ function ApprovalButton(props: { help: ReturnType<typeof approvalHelp>; loading:
         )}
       </button>
       {help.ready ? null : (
-        <span className="tip" id={tipId} role="tooltip" data-open={open ? "true" : undefined}>
-          <strong>{help.heading}</strong>
-          <span className="tip-lines">{help.lines.map((l) => <span key={l}>{l}</span>)}</span>
+        <span className="absolute right-0 top-[calc(100%+8px)] z-30 hidden w-[min(320px,calc(100vw-32px))] gap-2 rounded-xl border border-line-2 bg-surface p-3.5 text-left text-[13px] leading-snug text-ink shadow-pop group-hover/tip:grid group-focus-within/tip:grid data-[open=true]:grid motion-safe:animate-fade" id={tipId} role="tooltip" data-open={open ? "true" : undefined}>
+          <strong className="font-semibold">{help.heading}</strong>
+          <span className="grid gap-1.5 text-ink-2">{help.lines.map((l) => <span key={l} className="flex gap-2 before:mt-[7px] before:size-1.5 before:shrink-0 before:rounded-full before:bg-caution-dot before:content-['']">{l}</span>)}</span>
         </span>
       )}
     </span>

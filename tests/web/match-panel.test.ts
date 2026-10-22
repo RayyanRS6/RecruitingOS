@@ -264,7 +264,7 @@ describe("the panel's wiring", () => {
     const card = read("../../apps/web/src/pages/candidate-panel/assessment.tsx");
     expect(card).toContain("orderRequirementFindings(result.requirementFindings, labels.mustHaves)");
     expect(card).toContain("orderCompetencyFindings(result.competencyFindings, skills)");
-    expect(card).toContain('{c.evidence?.quote ? <span className="small muted"> "{c.evidence.quote}"</span>');
+    expect(card).toContain('{c.evidence?.quote ? <span className={LIST_QUOTE}> "{c.evidence.quote}"</span>');
     expect(card).toContain("{c.note ?");
     // "Something wrong?" reaches an ITS recruiter now (plan F11): the toast says what the API did, not a promise
     expect(card).toContain('toast(r.message ?? "Flagged and recorded.", "Nothing changes for the candidate.")');

@@ -1,8 +1,8 @@
 "use client";
 
-import { type CSSProperties, type ReactNode, useState } from "react";
+import { Children, type CSSProperties, type ReactNode, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, Chip, ErrorState, Field, numHead, Skeleton, Table, Tabs } from "@ros/ui";
+import { Button, Card, Chip, ErrorState, Field, Icon, numHead, Skeleton, Table, Tabs } from "@ros/ui";
 import { api, ApiError, type Me } from "../../api/client";
 import { toast } from "../../toast";
 import { adminKeys, type AlertRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
@@ -124,8 +124,17 @@ export function problemCounts(d: { failures?: FailuresAnswer; suppressions?: Sup
 
 // ---- the row every part draws ----
 
-const LIST: CSSProperties = { listStyle: "none", margin: 0, padding: 0 };
-const ROW: CSSProperties = { display: "grid", gap: 4, padding: "10px 0", borderTop: "1px solid var(--line)" };
+/**
+ * A part's rows inside its card (the reference desk's "Applications to pick up" list): edge to edge across the card,
+ * a hairline over the first and between each, each row rising in on its first appearance.
+ */
+const LIST = "-mx-6 divide-y divide-line border-t border-line";
+/**
+ * The staggered first appearance (30ms apart, the eighth and later together; off for reduced motion). The delay carries
+ * motion-safe: too, so it comes after the `animation` shorthand in the CSS, which would otherwise reset it to 0s.
+ */
+const ENTER = "motion-safe:animate-enter motion-safe:[animation-delay:calc(var(--i)*30ms)]";
+const stagger = (i: number) => ({ "--i": Math.min(i, 7) }) as CSSProperties;
 
 /** A date as the console reads it ("today", "3 days ago", "Oct 3"), the exact time on hover. */
 function When({ at }: { at: string | null | undefined }) {
@@ -135,25 +144,32 @@ function When({ at }: { at: string | null | undefined }) {
 
 /**
  * One problem: a chip (severity, kind), its title and when, then a sentence, one quieter line of details and its
- * buttons. Row text in the page's ink; the details line small and grey (redesign spec 3.3).
+ * buttons. Row text in the page's ink; the details line small and grey (redesign spec 3.3). `index`: its place in the
+ * list, for the staggered first appearance (30ms apart, the eighth and later together; off for reduced motion).
  */
-function ProblemRow(props: { lead?: ReactNode; title: ReactNode; at?: string | null; body?: ReactNode; detail?: ReactNode; children?: ReactNode }) {
+function ProblemRow(props: { lead?: ReactNode; title: ReactNode; at?: string | null; body?: ReactNode; detail?: ReactNode; children?: ReactNode; index?: number }) {
   return (
-    <li className="problem-row" style={ROW}>
-      <div className="row">
+    <li className={`grid min-w-0 gap-1.5 px-6 py-4 last:pb-0 ${ENTER}`} style={stagger(props.index ?? 0)}>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
         {props.lead}
-        <strong>{props.title}</strong>
-        {props.at ? <span className="small muted">· <When at={props.at} /></span> : null}
+        <strong className="min-w-0 text-[15px] text-ink [overflow-wrap:anywhere]">{props.title}</strong>
+        {props.at ? <span className="small muted whitespace-nowrap">· <When at={props.at} /></span> : null}
       </div>
-      {props.body ? <p style={{ margin: 0 }}>{props.body}</p> : null}
-      {props.detail ? <p className="small muted" style={{ margin: 0 }}>{props.detail}</p> : null}
-      {props.children}
+      {props.body ? <p className="text-[14px] text-ink-2">{props.body}</p> : null}
+      {props.detail ? <p className="small muted [overflow-wrap:anywhere]">{props.detail}</p> : null}
+      {Children.toArray(props.children).length ? <div className="mt-1 grid gap-2">{props.children}</div> : null}
     </li>
   );
 }
 
+/** A part with nothing in it: the one sentence, with a quiet tick. */
 function Empty() {
-  return <p className="muted" style={{ margin: "8px 0 0" }}>{PROBLEMS_EMPTY}</p>;
+  return (
+    <p className="muted mt-2 flex items-center gap-2 text-[14px]">
+      <Icon name="check-circle" size={16} className="text-good" />
+      {PROBLEMS_EMPTY}
+    </p>
+  );
 }
 
 // ---- Alerts ----
@@ -175,10 +191,10 @@ function AlertsPart() {
   // stay one click away, folded, with every button they had.
   const needing = q.data.alerts.filter(needsAPerson);
   const others = q.data.alerts.filter((a) => !needsAPerson(a));
-  const row = (a: AlertRow) => {
+  const row = (a: AlertRow, i: number) => {
     const credential = a.kind === "secret.delete_failed" ? a.target : null;
     return (
-      <ProblemRow key={a.id} lead={<Chip tone={severityTone(a.severity)}>{severityWords(a.severity)}</Chip>} title={a.title} at={a.createdAt} body={a.body}>
+      <ProblemRow key={a.id} index={i} lead={<Chip tone={severityTone(a.severity)}>{severityWords(a.severity)}</Chip>} title={a.title} at={a.createdAt} body={a.body}>
         <div className="row">
           {a.status === "acknowledged" ? <Chip tone="neutral">Acknowledged</Chip> : null}
           {ackIsForAnother(a, me.data?.user.id) ? (a.status === "open" ? <span className="small muted">{ACK_FOR_ANOTHER}</span> : null) : (
@@ -194,11 +210,11 @@ function AlertsPart() {
   };
   return (
     <Card title={`Alerts that need a person (${needing.length})`}>
-      {needing.length ? <ul style={LIST}>{needing.map(row)}</ul> : <Empty />}
+      {needing.length ? <ul className={LIST}>{needing.map(row)}</ul> : <Empty />}
       {others.length ? (
-        <details className="more">
+        <details className="more mt-5">
           <summary>{`Acknowledged and AI interview notices (${others.length})`}</summary>
-          <ul style={LIST}>{others.map(row)}</ul>
+          <ul className={LIST}>{others.map(row)}</ul>
         </details>
       ) : null}
     </Card>
@@ -218,12 +234,12 @@ function FailedWorkPart() {
   const { failedRuns, failedJobs, failedAi, pendingDeletions } = q.data;
   if (!failedRuns.length && !failedJobs.length && !failedAi.length && !pendingDeletions.length) return <Card title="Failed work (0)"><Empty /></Card>;
   return (
-    <div className="stack">
+    <div className="stack gap-5">
       {failedRuns.length ? (
         <Card title={`Failed workflow runs (${failedRuns.length})`}>
-          <ul style={LIST}>
-            {failedRuns.map((r) => (
-              <ProblemRow key={r.id} lead={<Chip tone="critical">Failed</Chip>} title={<button type="button" className="btn quiet sm" onClick={() => setShownRun(r)}>{workflowWords(r.workflowKey)}</button>} at={r.updatedAt} detail={[r.currentStep ? `Step: ${plainCode(r.currentStep)}` : null, r.lastError ? r.lastError.slice(0, 160) : null].filter(Boolean).join(" · ")}>
+          <ul className={LIST}>
+            {failedRuns.map((r, i) => (
+              <ProblemRow key={r.id} index={i} lead={<Chip tone="critical">Failed</Chip>} title={<button type="button" className="btn quiet sm -my-1.5 px-2.5 text-[15px] text-ink" onClick={() => setShownRun(r)}>{workflowWords(r.workflowKey)}</button>} at={r.updatedAt} detail={[r.currentStep ? `Step: ${plainCode(r.currentStep)}` : null, r.lastError ? r.lastError.slice(0, 160) : null].filter(Boolean).join(" · ")}>
                 <div className="row">
                   <Button size="sm" variant="secondary" loading={retryRun.isPending && retryRun.variables === r.id} onClick={() => retryRun.mutate(r.id)}>Retry</Button>
                 </div>
@@ -234,9 +250,9 @@ function FailedWorkPart() {
       ) : null}
       {pendingDeletions.length ? (
         <Card title={`Credentials still in the store after disconnect (${pendingDeletions.length})`}>
-          <ul style={LIST}>
-            {pendingDeletions.map((p) => (
-              <ProblemRow key={p.id} title={firstUpper(`${plainCode(p.provider)} ${plainCode(p.kind)}`)} at={p.disconnectedAt} detail={p.lastError}>
+          <ul className={LIST}>
+            {pendingDeletions.map((p, i) => (
+              <ProblemRow key={p.id} index={i} title={firstUpper(`${plainCode(p.provider)} ${plainCode(p.kind)}`)} at={p.disconnectedAt} detail={p.lastError}>
                 <div className="row">
                   <Button size="sm" variant="quiet" loading={retryDeletion.isPending && retryDeletion.variables === p.id} onClick={() => retryDeletion.mutate(p.id)}>Retry</Button>
                 </div>
@@ -247,15 +263,15 @@ function FailedWorkPart() {
       ) : null}
       {failedJobs.length ? (
         <Card title={`Background tasks that failed (${failedJobs.length})`}>
-          <ul style={LIST}>
-            {failedJobs.map((j) => <ProblemRow key={j.id} title={firstUpper(plainCode(j.kind))} at={j.createdAt} detail={[j.attempts ? `Tried ${timesWord(j.attempts)}` : null, j.lastError].filter(Boolean).join(" · ")} />)}
+          <ul className={LIST}>
+            {failedJobs.map((j, i) => <ProblemRow key={j.id} index={i} title={firstUpper(plainCode(j.kind))} at={j.createdAt} detail={[j.attempts ? `Tried ${timesWord(j.attempts)}` : null, j.lastError].filter(Boolean).join(" · ")} />)}
           </ul>
         </Card>
       ) : null}
       {failedAi.length ? (
         <Card title={`AI runs that were not OK (${failedAi.length})`}>
-          <ul style={LIST}>
-            {failedAi.map((a) => <ProblemRow key={a.id} lead={<Chip tone="caution">{aiStatusWords(a.status)}</Chip>} title={firstUpper(plainCode(a.task))} at={a.createdAt} detail={[a.model, a.error].filter(Boolean).join(" · ")} />)}
+          <ul className={LIST}>
+            {failedAi.map((a, i) => <ProblemRow key={a.id} index={i} lead={<Chip tone="caution">{aiStatusWords(a.status)}</Chip>} title={firstUpper(plainCode(a.task))} at={a.createdAt} detail={[a.model, a.error].filter(Boolean).join(" · ")} />)}
           </ul>
         </Card>
       ) : null}
@@ -270,7 +286,7 @@ function FailedWorkPart() {
 /** Addresses we must not send to (Release with a reason; a spam complaint never), then email applications that did not import. */
 function EmailPart() {
   return (
-    <div className="stack">
+    <div className="stack gap-5">
       <Suppressions />
       <FailedEmailApplications />
     </div>
@@ -286,22 +302,24 @@ function Suppressions() {
   return (
     <Card title={q.isLoading ? "Email addresses we must not send to" : `Email addresses we must not send to (${rows.length})`}>
       <p className="small muted">Hard bounces, spam complaints and repeated soft bounces land here from the provider's webhooks. Release one only after confirming the address by another channel; the release is audited with your reason.</p>
-      {q.isLoading ? <Skeleton lines={3} /> : q.error ? <ErrorState message="Could not load the addresses we must not send to." onRetry={() => q.refetch()} /> : rows.length ? (
-        <>
-          <Field label="How you confirmed the address (required to release)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
+      {q.isLoading ? <div className="mt-4"><Skeleton lines={3} /></div> : q.error ? <div className="mt-4"><ErrorState message="Could not load the addresses we must not send to." onRetry={() => q.refetch()} /></div> : rows.length ? (
+        <div className="stack mt-5 gap-4">
+          <div className="max-w-[520px]">
+            <Field label="How you confirmed the address (required to release)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
+          </div>
           <Table head={["Address", "Reason", numHead("Times"), "Last", ""]} label="Email addresses we must not send to">
-            {rows.map((s) => (
-              <tr key={s.id}>
-                <td><div>{s.address}</div><div className="small muted">{wordFor(SUPPRESSION_SOURCE_WORDS, s.source)}</div></td>
+            {rows.map((s, i) => (
+              <tr key={s.id} className={ENTER} style={stagger(i)}>
+                <td><div className="font-semibold [overflow-wrap:anywhere]">{s.address}</div><div className="small muted">{wordFor(SUPPRESSION_SOURCE_WORDS, s.source)}</div></td>
                 <td><Chip tone={s.reason === "spam_complaint" ? "critical" : "caution"}>{wordFor(SUPPRESSION_WORDS, s.reason)}</Chip></td>
                 <td className="num">{s.count}</td>
-                <td><When at={s.lastAt} /></td>
-                <td>{s.reason === "spam_complaint" ? <span className="small muted">Never released</span> : <Button size="sm" variant="quiet" ariaLabel={`Release ${s.address}`} disabled={releaseReason.trim().length < 5} loading={release.isPending && release.variables === s.id} onClick={() => release.mutate(s.id)}>Release</Button>}</td>
+                <td className="small nowrap text-ink-2"><When at={s.lastAt} /></td>
+                <td className="text-right">{s.reason === "spam_complaint" ? <span className="small muted">Never released</span> : <Button size="sm" variant="quiet" ariaLabel={`Release ${s.address}`} disabled={releaseReason.trim().length < 5} loading={release.isPending && release.variables === s.id} onClick={() => release.mutate(s.id)}>Release</Button>}</td>
               </tr>
             ))}
           </Table>
-          <p className="small muted">A spam complaint is never released from here: the person asked not to be emailed.</p>
-        </>
+          <p className="small muted flex items-start gap-2"><Icon name="shield" size={16} className="mt-0.5" />A spam complaint is never released from here: the person asked not to be emailed.</p>
+        </div>
       ) : <Empty />}
       <StopEmailsToAddress />
     </Card>
@@ -318,12 +336,14 @@ function StopEmailsToAddress() {
   const add = useMutation({ mutationFn: () => api.post("/api/v1/admin/email-suppressions", { address: form.address.trim(), reason: form.reason.trim() }, reason), onSuccess: () => { toast(`Added. Nothing more will be emailed to ${form.address.trim()}.`); setForm({ address: "", reason: "" }); qc.invalidateQueries({ queryKey: adminKeys.suppressions }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not add the address.") });
   const ready = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.address.trim()) && form.reason.trim().length >= 5;
   return (
-    <div className="stack" style={{ gap: 8, marginTop: 14, maxWidth: 520 }}>
-      <h3 className="eyebrow">Stop emails to an address</h3>
-      <p className="small muted">For someone who asked, by phone or in person, not to be emailed. Every message to this address stops, for every customer, until it is released.</p>
-      <Field label="Email address" htmlFor="sup-address"><input id="sup-address" className="input" type="email" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
-      <Field label="Why (required)" htmlFor="sup-reason"><input id="sup-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
-      <div className="row"><Button variant="secondary" disabled={!ready} loading={add.isPending} onClick={() => add.mutate()}>Add to the list</Button></div>
+    <div className="-mx-6 mt-6 border-t border-line px-6 pt-6">
+      <div className="stack max-w-[520px] gap-3">
+        <h3 className="eyebrow">Stop emails to an address</h3>
+        <p className="small muted">For someone who asked, by phone or in person, not to be emailed. Every message to this address stops, for every customer, until it is released.</p>
+        <Field label="Email address" htmlFor="sup-address"><input id="sup-address" className="input" type="email" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
+        <Field label="Why (required)" htmlFor="sup-reason"><input id="sup-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
+        <div className="row"><Button variant="secondary" disabled={!ready} loading={add.isPending} onClick={() => add.mutate()}>Add to the list</Button></div>
+      </div>
     </div>
   );
 }
@@ -353,12 +373,12 @@ function FailedEmailApplications() {
   return (
     <Card title={q.isLoading ? "Email applications that could not be imported" : q.error ? "Email applications that could not be imported (could not load)" : `Email applications that could not be imported (${rows.length})`}>
       {q.isLoading ? <Skeleton lines={3} /> : q.error ? <ErrorState message="Could not load the email applications." onRetry={() => q.refetch()} /> : rows.length ? (
-        <ul style={LIST}>
-          {rows.map((r) => (
-            <ProblemRow key={r.id} title={r.subject || "(no subject)"} at={r.receivedAt} body={failedEmailLine(r)} detail={`Why: ${r.error ?? "unknown"}`}>
+        <ul className={LIST}>
+          {rows.map((r, i) => (
+            <ProblemRow key={r.id} index={i} title={r.subject || "(no subject)"} at={r.receivedAt} body={failedEmailLine(r)} detail={`Why: ${r.error ?? "unknown"}`}>
               <details className="more">
                 <summary>Show the email</summary>
-                <p className="small" style={{ whiteSpace: "pre-wrap" }}>{r.text || "(no text)"}</p>
+                <p className="small whitespace-pre-wrap rounded-xl bg-surface-2 px-3.5 py-3 [overflow-wrap:anywhere]">{r.text || "(no text)"}</p>
               </details>
               <div className="row">
                 {r.canRetry ? <Button size="sm" variant="secondary" loading={retry.isPending && retry.variables === r.id} onClick={() => retry.mutate(r.id)}>Try again</Button> : <span className="small muted">The job is not taking applications right now.</span>}
@@ -383,15 +403,15 @@ function SecurityPart() {
   const unreviewed = reports.filter((r) => !r.reviewedAt).length;
   return (
     <Card title={csp.data ? `Content-security reports (${unreviewed} not reviewed yet)` : "Content-security reports"}>
-      {csp.data ? <p style={{ margin: "0 0 4px" }}>Policy: {wordFor(CSP_MODE_WORDS, csp.data.mode || "report-only")}</p> : null}
-      <p className="small muted">Browsers report what the policy would block. Review every unexplained report before enforcement is switched on (docs/readiness/18). Paths and origins only; never candidate data.</p>
+      {csp.data ? <p className="mb-1.5 flex items-center gap-2 text-[14px] font-medium"><Icon name="shield" size={16} className="text-primary" />Policy: {wordFor(CSP_MODE_WORDS, csp.data.mode || "report-only")}</p> : null}
+      <p className="small muted mb-4">Browsers report what the policy would block. Review every unexplained report before enforcement is switched on (docs/readiness/18). Paths and origins only; never candidate data.</p>
       {csp.isLoading ? <Skeleton lines={3} /> : csp.error ? <ErrorState message="Could not load the content-security reports." onRetry={() => csp.refetch()} /> : reports.length ? (
-        <ul style={LIST}>
-          {reports.slice(0, 50).map((r) => (
-            <ProblemRow key={r.id} lead={<Chip tone={r.reviewedAt ? "neutral" : "caution"}>{wordFor(CSP_SURFACE_WORDS, r.surface)}</Chip>} title={r.violatedDirective} at={r.lastAt} detail={`${r.documentPath} · blocked ${r.blockedOrigin ?? "(none)"} · ${timesWord(r.count)}`}>
+        <ul className={LIST}>
+          {reports.slice(0, 50).map((r, i) => (
+            <ProblemRow key={r.id} index={i} lead={<Chip tone={r.reviewedAt ? "neutral" : "caution"}>{wordFor(CSP_SURFACE_WORDS, r.surface)}</Chip>} title={r.violatedDirective} at={r.lastAt} detail={`${r.documentPath} · blocked ${r.blockedOrigin ?? "(none)"} · ${timesWord(r.count)}`}>
               {r.reviewedAt ? <span className="small muted">Reviewed: {r.disposition}</span> : r.disposition ? <span className="small muted">Recurred since it was reviewed ("{r.disposition}"); review again.</span> : null}
               {!r.reviewedAt ? (
-                <div className="row"><input className="input" style={{ maxWidth: 360 }} aria-label={`What this report means: ${r.violatedDirective} on ${r.documentPath}`} placeholder="expected in dev / fix needed / policy change" value={cspNote[r.id] ?? ""} onChange={(e) => setCspNote({ ...cspNote, [r.id]: e.target.value })} /><Button size="sm" variant="secondary" ariaLabel={`Mark reviewed: ${r.violatedDirective} on ${r.documentPath}`} disabled={(cspNote[r.id] ?? "").trim().length < 3} loading={reviewCsp.isPending && reviewCsp.variables?.id === r.id} onClick={() => reviewCsp.mutate({ id: r.id, disposition: cspNote[r.id] })}>Mark reviewed</Button></div>
+                <div className="flex flex-wrap items-center gap-2"><input className="input min-w-0 flex-[1_1_220px] sm:max-w-[360px]" aria-label={`What this report means: ${r.violatedDirective} on ${r.documentPath}`} placeholder="expected in dev / fix needed / policy change" value={cspNote[r.id] ?? ""} onChange={(e) => setCspNote({ ...cspNote, [r.id]: e.target.value })} /><Button size="sm" variant="secondary" ariaLabel={`Mark reviewed: ${r.violatedDirective} on ${r.documentPath}`} disabled={(cspNote[r.id] ?? "").trim().length < 3} loading={reviewCsp.isPending && reviewCsp.variables?.id === r.id} onClick={() => reviewCsp.mutate({ id: r.id, disposition: cspNote[r.id] })}>Mark reviewed</Button></div>
               ) : null}
             </ProblemRow>
           ))}

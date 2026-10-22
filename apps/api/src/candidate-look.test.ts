@@ -13,14 +13,18 @@ import { CSS } from "./pages/layout";
 import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
- * Wave DS, candidate pages: the server-rendered pages wear the application's look (docs/07). The token values are the
- * ones in packages/ui/src/tokens.css in both themes, the fonts come from this deployment's own origin so the policy
- * keeps `font-src 'self'`, secondary buttons are styled on every page (not only the screening page), and the job page
- * shows its facts as pills and one Apply button that stays reachable on a phone.
+ * Wave DS, candidate pages: the server-rendered pages wear the application's look (docs/07; the October 2026 redesign).
+ * Every colour and shadow token they declare carries the value packages/ui/src/styles.css gives it, in both themes (the
+ * pages copy the subset they use; only their corner radii and font stacks are their own), the fonts come from this
+ * deployment's own origin so the policy keeps `font-src 'self'`, secondary buttons are styled on every page (not only
+ * the screening page), and the job page shows its facts with their icons and one Apply button that stays reachable on
+ * a phone.
  */
 const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
-const uiCss = stripComments(readFileSync(new URL("../../../packages/ui/src/tokens.css", import.meta.url), "utf8"));
+const uiCss = stripComments(readFileSync(new URL("../../../packages/ui/src/styles.css", import.meta.url), "utf8"));
 const pageCss = stripComments(CSS);
+/** The candidate pages' own tokens, which the application has no copy of: corner radii and font stacks, no colours. */
+const PAGE_ONLY = new Set(["--r-control", "--r-card", "--r-panel", "--r-pill", "--display", "--ui", "--mono"]);
 
 /** The custom properties declared in the first `{ … }` block that follows `start` in `css`. */
 function block(css: string, start: string, from = 0): Map<string, string> {
@@ -40,11 +44,14 @@ const pageDark = block(pageCss, ":root {", pageCss.indexOf("@media (prefers-colo
 
 describe("candidate pages: design tokens and fonts", () => {
   it("copies the application's token values exactly, in the light and the dark theme", () => {
-    expect(pageLight.size).toBeGreaterThan(20);
-    for (const [name, value] of pageLight) expect(value, `${name} (light)`).toBe(uiLight.get(name));
+    const shared = [...pageLight.keys()].filter((name) => !PAGE_ONLY.has(name));
+    expect(shared.length).toBeGreaterThan(20);
+    for (const name of shared) expect(pageLight.get(name), `${name} (light)`).toBe(uiLight.get(name));
     for (const [name, value] of pageDark) expect(value, `${name} (dark)`).toBe(uiDark.get(name));
     // every token the page copies that turns in the dark theme turns on the page too
-    for (const name of pageLight.keys()) if (uiDark.has(name)) expect(pageDark.get(name), `${name} has no dark value on the page`).toBe(uiDark.get(name));
+    for (const name of shared) if (uiDark.has(name)) expect(pageDark.get(name), `${name} has no dark value on the page`).toBe(uiDark.get(name));
+    // the page's own tokens are shapes and type, never a colour of its own
+    for (const name of PAGE_ONLY) if (pageLight.has(name)) expect(pageLight.get(name), name).not.toMatch(/#|rgb|hsl/);
   });
 
   it("uses only tokens it declares, and no colour outside the token blocks", () => {
@@ -52,16 +59,17 @@ describe("candidate pages: design tokens and fonts", () => {
     for (const name of used) expect(pageLight.has(name), `${name} is used but not declared`).toBe(true);
     const outside = `${pageCss.slice(0, pageCss.indexOf(":root {"))}${pageCss.slice(pageCss.indexOf("* {"))}${stripComments(SCREEN_CSS)}${stripComments(STATUS_CSS)}`;
     expect(outside).not.toMatch(/#[0-9a-f]{3,8}\b/i);
-    // the near-black primary button and the outlined secondary one, on every page (the screening page used to be the only one with a secondary look)
+    // the plum primary button and the outlined secondary one, on every page (the screening page used to be the only one with a secondary look)
     expect(pageCss).toMatch(/\.btn \{[^}]*background: var\(--primary\); color: var\(--on-primary\);/);
     expect(pageCss).toMatch(/\.btn\.secondary \{ background: var\(--surface\); border-color: var\(--line-2\); color: var\(--ink\); \}/);
     expect(SCREEN_CSS).not.toContain(".btn");
     expect(STATUS_CSS).not.toContain(".btn");
-    // the status page's messages and the screening conversation are one look: the candidate's own on the right in near-black (plan G7)
-    for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
-    expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--ground);");
-    // the progress line (Wave S2, K4): down the page on a phone, across it from 600 pixels; the tick on the ink fill; no motion
-    expect(STATUS_CSS).toContain(".track li.done .dot { border-color: var(--ink); background: var(--ink); color: var(--ground); }");
+    // the status page's messages and the screening conversation are one look: the candidate's own on the right in peach,
+    // the assistant's and the team's on the left in white (plan G7; October 2026 redesign, the guided chat)
+    for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--peach); color: var(--ink);");
+    expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--surface);");
+    // the progress line (Wave S2, K4): down the page on a phone, across it from 600 pixels; the tick on the plum fill; no motion
+    expect(STATUS_CSS).toContain(".track li.done .dot { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }");
     expect(STATUS_CSS).toMatch(/@media \(min-width: 600px\) \{[^@]*\.track \{ grid-auto-flow: column;/);
     expect(stripComments(STATUS_CSS)).not.toMatch(/transition|animation/);
     expect(pageCss).toContain("@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }");
@@ -277,7 +285,7 @@ describe("candidate pages: the look, page by page", () => {
     const goLinks = [...html.matchAll(/<a class="btn go[^"]*" href="[^"]+">(.*?)<\/a>/g)].map((m) => m[1]);
     expect(goLinks).toHaveLength(2);
     for (const inner of goLinks) expect(inner.replace(/<(span|svg)\b[^>]*aria-hidden="true"[^>]*>.*?<\/\1>/g, "").replace(/<[^>]+>/g, "")).toBe("Apply now");
-    // the fill moves by transform alone, in 200ms, on a mouse's hover or a keyboard's focus; a tap never turns it near-black
+    // the fill moves by transform alone, in 200ms, on a mouse's hover or a keyboard's focus; a tap never leaves it plum
     expect(CSS).toMatch(/\.go-fill \{[^}]*transform: translateX\(calc\(-100% - 4px\)\); \}/);
     expect(CSS).toMatch(/@media \(hover: hover\) and \(pointer: fine\) \{[^@]*\.btn\.go:hover \.go-fill \{ transform: none; \}/);
     expect(CSS).toContain(".btn.go:focus-visible .go-fill, .btn.go:active .go-fill { transform: none; }");
@@ -331,7 +339,7 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<button class="btn" type="submit">Send my application</button>');
   });
 
-  it("the status page: withdrawing and the future-roles choice are outlined secondary buttons; the screening link is the one near-black button", async () => {
+  it("the status page: withdrawing and the future-roles choice are outlined secondary buttons; the screening link is the one plum button", async () => {
     const html = await page(`/c/status/${statusToken}`);
     expect(html).toContain('<p class="eyebrow">Look Dental · Your application</p>');
     expect(html).toContain('<button class="btn secondary" type="submit">Withdraw my application</button>');
@@ -362,13 +370,13 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).not.toContain("<script");
   });
 
-  it("the screening page carries its own styles in the head with the request's nonce; its introduction says first that it is the company's AI assistant, with Start as the one near-black button and the other two outlined", async () => {
+  it("the screening page carries its own styles in the head with the request's nonce; its introduction says first that it is the company's AI assistant, with Start as the one plum button and the other two outlined", async () => {
     const r = await app.request(`/c/screen/${screenToken}`);
     const nonce = (r.headers.get("content-security-policy-report-only") ?? "").match(/'nonce-([^']+)'/)![1];
     const html = await r.text();
     const head = html.slice(0, html.indexOf("</head>"));
     expect(head.split(`<style nonce="${nonce}">`).length - 1).toBe(2);
-    expect(head).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
+    expect(head).toContain(".msg.candidate { align-self: flex-end; background: var(--peach); color: var(--ink);");
     expect(html.slice(html.indexOf("</head>"))).not.toContain("<style");
     // the AI line is the first thing in the page, before the company's name and the heading
     const main = html.slice(html.indexOf("<main>"));
@@ -390,9 +398,9 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button>');
     expect(html).toContain(`<a class="link-action" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);
     expect(html).not.toMatch(/ style="/);
-    // the bar's colours come from the tokens, in both themes, without a style attribute
-    expect(SCREEN_CSS).toContain(".progress progress::-webkit-progress-value { border-radius: var(--r-pill); background: var(--ink); }");
-    expect(SCREEN_CSS).toContain(".progress progress::-moz-progress-bar { border-radius: var(--r-pill); background: var(--ink); }");
+    // the bar's colours come from the tokens (plum running into coral), in both themes, without a style attribute
+    expect(SCREEN_CSS).toContain(".progress progress::-webkit-progress-value { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }");
+    expect(SCREEN_CSS).toContain(".progress progress::-moz-progress-bar { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }");
     // the choice page: one heading, two equal outlined buttons
     const choice = await page(`/c/screen/${screenToken}/person`);
     expect(choice.match(/<h1[\s>]/g)).toHaveLength(1);

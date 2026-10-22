@@ -186,10 +186,10 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
   const words = text(html);
 
   it("leads with the job's public link, with Copy and Open, before anything about the boards (Wave S1)", () => {
-    const link = html.indexOf('<div class="share-link">');
+    const link = html.indexOf('<div class="share-link ');
     expect(link).toBeGreaterThan(-1);
     expect(link).toBeLessThan(html.indexOf("Where it is posted"));
-    expect(html.slice(link)).toMatch(/^<div class="share-link">.*<code title="https:\/\/jobs\.test\/c\/bright\/jobs\/r1">https:\/\/jobs\.test\/c\/bright\/jobs\/r1<\/code>.*Copy<\/button><a class="btn secondary sm" href="https:\/\/jobs\.test\/c\/bright\/jobs\/r1" target="_blank" rel="noopener noreferrer">.*Open<span class="sr-only"> the job page \(opens in a new tab\)<\/span><\/a><\/div>/);
+    expect(html.slice(link)).toMatch(/^<div class="share-link [^"]*">.*<code title="https:\/\/jobs\.test\/c\/bright\/jobs\/r1">https:\/\/jobs\.test\/c\/bright\/jobs\/r1<\/code>.*Copy<\/button><a class="btn secondary sm" href="https:\/\/jobs\.test\/c\/bright\/jobs\/r1" target="_blank" rel="noopener noreferrer">.*Open<span class="sr-only"> the job page \(opens in a new tab\)<\/span><\/a><\/div>/);
     // the message, the ready-made places, each board's card, the tracked links and the counts by source are one click away
     expect(words).toContain("The message that goes with it");
     expect(words).toContain("Links for a referral, a school or a group");
@@ -223,7 +223,7 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
     // focusable from code only: following Today's link scrolls there and puts the keyboard there too
     expect(html).toContain('<section id="share" class="setup-section" tabindex="-1">');
     expect(html).toContain('<section id="closing-date" class="setup-section" tabindex="-1">');
-    expect(html).toContain('<fieldset class="share-buttons" aria-label="Share the job">');
+    expect(html).toMatch(/<fieldset class="share-buttons[^"]*" aria-label="Share the job">/);
     // a place that has its link is a plain link to the network's own share page, in a new tab
     expect(html).toContain('href="https://wa.me/?text=');
     expect(html).toMatch(/href="https:\/\/wa\.me\/\?text=[^"]+" target="_blank" rel="noopener noreferrer"/);
@@ -269,12 +269,12 @@ describe("the LinkedIn post on the Share tab (Wave S2, K3)", () => {
     const html = tab(withRole());
     const words = text(html);
     const at = html.indexOf('<section id="linkedin" class="setup-section" tabindex="-1">');
-    expect(at).toBeGreaterThan(html.indexOf('<div class="share-link">'));
+    expect(at).toBeGreaterThan(html.indexOf('<div class="share-link '));
     expect(at).toBeLessThan(html.indexOf("Where it is posted"));
     expect(words).toContain("Post on LinkedIn");
-    expect(html).toMatch(/<legend class="small">Tone<\/legend>/);
+    expect(html).toMatch(/<legend class="small[^"]*">Tone<\/legend>/);
     // Proud is picked to start with
-    expect(html).toContain('<label class="wording-option" data-checked="true"><input type="radio" name="linkedin-tone-r1" checked="" value="proud"/>');
+    expect(html).toMatch(/<label class="wording-option[^"]*" data-checked="true"><input type="radio" name="linkedin-tone-r1" checked="" value="proud"\/>/);
     expect(html).toContain('<input type="radio" name="linkedin-tone-r1" value="straight"/>');
     expect(words).toContain("Proud Upbeat: big news, we're hiring");
     expect(words).toContain("Straight Just the facts");
@@ -288,7 +288,7 @@ describe("the LinkedIn post on the Share tab (Wave S2, K3)", () => {
     expect(html).toMatch(/<label for="linkedin-text">Your post<\/label><textarea id="linkedin-text" class="textarea" rows="14" aria-describedby="linkedin-count linkedin-hint">/);
     expect(words).toMatch(/\d+ of 3,000 characters/);
     // the preview shows the same words, for the eye only (the box holds them for everyone)
-    expect(html).toMatch(/<div class="stack" style="[^"]*" aria-hidden="true"><span class="small muted">Preview<\/span>/);
+    expect(html).toMatch(/<div class="stack[^"]*" aria-hidden="true"><span class="small muted">Preview<\/span>/);
     expect(words).toContain("Copy and open LinkedIn");
     expect(words).toContain("Copy text");
     expect(words).toContain("Nothing is posted for you. LinkedIn opens in a new tab: paste, then post.");
@@ -626,7 +626,7 @@ describe("Setup: When a candidate cancels (founder decisions 1A to 4A; 3A)", () 
     expect(words).toContain("When a candidate cancels");
     expect(words).toContain("When candidates cancel a booked interview, they choose: send me new times later, or I'm no longer interested.");
     expect(html).toMatch(/<input type="checkbox" checked=""\/>Send new times automatically to people who ask for them/);
-    expect(html).toMatch(/<input id="new-times-days" class="input" type="number" min="1" max="10" step="1" style="width:100px" value="3"\/>/);
+    expect(html).toMatch(/<input id="new-times-days" class="input w-25" type="number" min="1" max="10" step="1" value="3"\/>/);
     expect(words).toContain("Working days to wait");
     expect(words).toContain("1 to 10. Weekends and holidays are not counted. The email goes out in the morning, your company's time.");
     expect(words).toContain("Each person gets one set of new times by email, 3 working days after they cancel, for the same interview.");
@@ -669,7 +669,7 @@ describe("the empty applicant list of a live job (D8)", () => {
     qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0, byOwnerStage: { new: 0, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 } });
     const html = render(qc, createElement(People));
     expect(text(html)).toContain("Nobody has applied yet");
-    expect(html).toContain('<fieldset class="share-buttons" aria-label="Share the job">');
+    expect(html).toMatch(/<fieldset class="share-buttons[^"]*" aria-label="Share the job">/);
     // and the way to the Share tab's LinkedIn post (Wave S2)
     expect(html).toContain('<a href="/roles/r1?tab=share#linkedin">Post on LinkedIn</a>');
   });

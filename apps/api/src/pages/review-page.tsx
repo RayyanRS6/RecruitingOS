@@ -33,21 +33,32 @@ function JourneyHeader(props: { view: ConversationView }) {
 
 /**
  * Review & send's own styles, passed as the page's own (`extraCss`, never the candidate stylesheet, whose budget is
- * nearly spent): the two sections, the assistant's note set apart from the answer, the count, and the bar that leads
- * from "Check your answers" to the write-up. Shared tokens only, no motion.
+ * nearly spent): the two sections, the form's answers as one soft card, the assistant's note set apart from the answer
+ * (a lavender block with a plum rule and a small mono label, the way evidence is quoted in the team's app), the count,
+ * and the bar that leads from "Check your answers" to the write-up as the "your next step" card with its coral dot.
+ * Shared tokens only, no motion.
  */
 export const REVIEW_SEND_CSS = `
-.send-part { margin: 28px 0 0; }
-.send-part > h2 { margin: 0 0 6px; font-size: 20px; }
+.send-part { margin: 32px 0 0; }
+.send-part > h2 { margin: 0 0 6px; font-size: 22px; letter-spacing: -0.02em; }
 .send-part > p { color: var(--ink-2); }
-.send-part > h3 { margin: 22px 0 0; font-size: 16px; }
-.assistant-note { margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-2); color: var(--ink-2); font-size: 14.5px; }
-.assistant-note > p { margin: 0; }
-.assistant-note > .note-label { margin: 0 0 2px; color: var(--ink-3); font-size: 12.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
-.send-count { margin: 24px 0 8px; color: var(--ink-2); font-weight: 600; font-variant-numeric: tabular-nums; }
-.review-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin: 18px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface-2); }
-.review-bar > p { margin: 0; }
+.send-part > h3 { margin: 24px 0 0; font-size: 17px; }
+.send-part > ul { margin: 12px 0; padding: 12px 18px 12px 34px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); font-size: 14.5px; }
+.send-part > ul > li + li { margin-top: 4px; }
+.assistant-note { margin: 10px 0 0; padding: 10px 14px; border-left: 2px solid var(--primary); border-radius: 0 12px 12px 0; background: var(--tint); color: var(--ink-2); font-size: 14px; }
+.assistant-note > p { margin: 0; color: inherit; }
+.assistant-note > .note-label { margin: 0 0 4px; color: var(--ink-2); font-family: var(--mono); font-size: 11px; font-weight: 400; letter-spacing: 0.14em; line-height: 1.4; text-transform: uppercase; }
+.send-count { margin: 24px 0 10px; color: var(--ink-2); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.review-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px 20px; margin: 20px 0; padding: 24px; border: 1px solid var(--tint-2); border-radius: var(--r-panel); background: linear-gradient(115deg, var(--tint) 0%, var(--surface) 58%, var(--peach) 135%); }
+.review-bar > p { flex: 1 1 320px; margin: 0; color: var(--ink-2); }
+.review-bar > p > strong { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; color: var(--ink); font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
+.review-bar > p > strong::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .review-bar > form { margin: 0; }
+@media (max-width: 600px) {
+  .review-bar { padding: 20px 18px; }
+  .review-bar > p { flex-basis: 100%; }
+  .review-bar > p > strong { font-size: 20px; }
+}
 `;
 
 const PAGE_CSS = `${JOURNEY_CSS}${REVIEW_SEND_CSS}`;

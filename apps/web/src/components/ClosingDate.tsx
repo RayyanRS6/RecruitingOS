@@ -40,23 +40,24 @@ export function ClosingDateField(props: { roleId: string; closingDate: ClosingDa
   };
   const editable = props.canEdit && props.roleStatus !== "closed";
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>{closingDateLine(c)}</p>
+    <div className="stack gap-3">
+      <p className="small text-ink-2">{closingDateLine(c)}</p>
       {editable ? (
         <>
-          <div className="row" style={{ alignItems: "flex-end" }}>
-            <div style={{ flex: "0 1 220px" }}>
-              <Field label="Last day to apply" htmlFor={id} hint={`Ends at midnight, ${zoneWords(c.timeZone)}.`}>
-                <input id={id} className="input" type="date" min={today} value={value} onChange={(e) => setValue(e.target.value)} />
-              </Field>
-            </div>
+          {/* the date field, then its buttons on their own line (the field's hint sits under it) */}
+          <div className="max-w-[260px]">
+            <Field label="Last day to apply" htmlFor={id} hint={`Ends at midnight, ${zoneWords(c.timeZone)}.`}>
+              <input id={id} className="input" type="date" min={today} value={value} onChange={(e) => setValue(e.target.value)} />
+            </Field>
+          </div>
+          <div className="row">
             <Button variant="primary" size="sm" loading={save.isPending} disabled={!value || value === c.closesOn} onClick={submit}>{c.applicationsClosedByDate ? "Extend the date" : "Save the date"}</Button>
             {c.applicationsClosedByDate ? <Button size="sm" disabled={save.isPending} onClick={() => save.mutate(addDays(today, 14))}>Two more weeks</Button> : null}
             {c.closesOn && !c.requiredByLaw ? <Button size="sm" variant="ghost" disabled={save.isPending} onClick={() => save.mutate(null)}>Take the date off</Button> : null}
           </div>
-          {c.closesOn && c.requiredByLaw ? <p className="small muted" style={{ margin: 0 }}>The law in Colorado asks the job ad to say when applications close, so this job keeps a date. Choose a later one to give people more time.</p> : null}
+          {c.closesOn && c.requiredByLaw ? <p className="small muted">The law in Colorado asks the job ad to say when applications close, so this job keeps a date. Choose a later one to give people more time.</p> : null}
         </>
-      ) : props.canEdit ? null : <p className="small muted" style={{ margin: 0 }}>An owner or an admin sets the closing date.</p>}
+      ) : props.canEdit ? null : <p className="small muted">An owner or an admin sets the closing date.</p>}
       {problem ? <Alert tone="caution">{problem}</Alert> : null}
     </div>
   );
@@ -70,12 +71,12 @@ export function DraftClosingDate(props: { value: string; onChange: (value: strin
   const today = todayIn(props.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
   const problem = props.value ? closingDateProblem(props.value, today) : null;
   return (
-    <div className="stack" style={{ gap: 6 }}>
+    <div className="stack gap-2">
       <Field label="Last day to apply (optional)" htmlFor="draft-closes-on" hint={props.required ? "The law in Colorado asks the job ad to say when applications close. Leave it empty and the job gets a date 30 days after it opens, which you can change." : "Leave it empty to take applications until you stop them. Nobody is turned away when the date passes; people part-way through can finish."}>
-        <input id="draft-closes-on" className="input" type="date" min={today} value={props.value} onChange={(e) => props.onChange(e.target.value)} style={{ maxWidth: 220 }} />
+        <input id="draft-closes-on" className="input max-w-[220px]" type="date" min={today} value={props.value} onChange={(e) => props.onChange(e.target.value)} />
       </Field>
-      {props.value && !problem ? <p className="small muted" style={{ margin: 0 }}>The job page will say "Apply by {dayWords(props.value)}". It is set on the role when you ask for approval.</p> : null}
-      {problem ? <p className="small" style={{ color: "var(--caution)", margin: 0 }}>{problem}</p> : null}
+      {props.value && !problem ? <p className="small muted">The job page will say "Apply by {dayWords(props.value)}". It is set on the role when you ask for approval.</p> : null}
+      {problem ? <p className="small font-medium text-caution">{problem}</p> : null}
       {props.value ? <div className="row"><Button size="sm" variant="ghost" onClick={() => props.onChange("")}>Clear the date</Button></div> : null}
     </div>
   );

@@ -8,6 +8,7 @@ import { api, ApiError, type NewVersionResponse, type WhoPosts } from "../../api
 import { savedVersionToast } from "../../publishing";
 import { toast } from "../../toast";
 import { moveRow } from "../new-role/packet-form";
+import { ORDINAL } from "../RolePlan";
 import {
   APPLICANT_QUESTIONS_LEDE, FAIRNESS_LINE, QUICK_HINT, QUICK_KINDS, SCREENING_FALLBACK_LINE, WRITTEN_HINT,
   eligibilityList, newQuickRow, newWrittenRow, questionsOf, questionsPayload, questionsProblem, quickAnswerWords, quickRowsFrom, refusalsByRow, withKind, writtenList, writtenRowsFrom, writtenSource,
@@ -39,43 +40,53 @@ export function ApplicantQuestions(props: {
   const base = props.editBase;
   return (
     <Card title={COMPANY_QUESTIONS_LABEL} aside={<Chip>{PACKET_VISIBILITY_LABEL.asked}</Chip>}>
-      <div className="stack" style={{ gap: 14 }}>
-        <p className="small muted" style={{ margin: 0 }}>{APPLICANT_QUESTIONS_LEDE}</p>
+      <div className="stack gap-5">
+        <p className="small muted max-w-[80ch]">{APPLICANT_QUESTIONS_LEDE}</p>
         {editing && base ? (
           <QuestionsEditor key={base.version} roleId={props.roleId} baseVersion={base.version} packet={base.packet} whoPosts={props.whoPosts} onDone={() => setEditing(false)} />
         ) : (
           <>
-            <div className="stack" style={{ gap: 6 }}>
-              <h3 style={{ fontSize: 13.5, margin: 0 }}>{QUICK_QUESTIONS_LABEL}</h3>
+            <div className="stack gap-2">
+              <h3 className={LIST_HEADING}>{QUICK_QUESTIONS_LABEL}</h3>
               {eligibility.length || quick.length ? (
-                <ol style={{ paddingLeft: 18, margin: 0 }}>
-                  {eligibility.map((e) => (
-                    <li key={e.key}>{e.question} <Chip>Yes or no</Chip> {e.holds ? <Chip tone="needs">A "no" holds it for your decision</Chip> : null}</li>
+                // the questions as rows in one bordered box (screenshot 6's table rows), numbered as the form asks them
+                <ol className={QUESTION_LIST}>
+                  {eligibility.map((e, i) => (
+                    <li key={e.key} className={QUESTION_ROW}>
+                      <span aria-hidden="true" className={ORDINAL}>{i + 1}</span>
+                      <span className="min-w-0 flex-1"><span className="mr-1">{e.question}</span> <Chip>Yes or no</Chip> {e.holds ? <Chip tone="needs">A "no" holds it for your decision</Chip> : null}</span>
+                    </li>
                   ))}
-                  {quick.map((q) => (
-                    <li key={q.key}>
-                      {q.question} <Chip>{quickAnswerWords(q)}</Chip> {q.required ? null : <Chip>They may skip it</Chip>}
-                      {q.help ? <><br /><span className="small muted">{q.help}</span></> : null}
+                  {quick.map((q, i) => (
+                    <li key={q.key} className={QUESTION_ROW}>
+                      <span aria-hidden="true" className={ORDINAL}>{eligibility.length + i + 1}</span>
+                      <span className="grid min-w-0 flex-1 gap-1">
+                        <span><span className="mr-1">{q.question}</span> <Chip>{quickAnswerWords(q)}</Chip> {q.required ? null : <Chip>They may skip it</Chip>}</span>
+                        {q.help ? <span className="small muted">{q.help}</span> : null}
+                      </span>
                     </li>
                   ))}
                 </ol>
-              ) : <p className="small muted" style={{ margin: 0 }}>None yet. Applicants send their details and go straight to the chat.</p>}
+              ) : <p className="small muted">None yet. Applicants send their details and go straight to the chat.</p>}
             </div>
-            <div className="stack" style={{ gap: 6 }}>
-              <h3 style={{ fontSize: 13.5, margin: 0 }}>{WRITTEN_QUESTIONS_LABEL}</h3>
-              {source === "screening" ? <p className="small muted" style={{ margin: 0 }}>{SCREENING_FALLBACK_LINE}</p> : null}
+            <div className="stack gap-2">
+              <h3 className={LIST_HEADING}>{WRITTEN_QUESTIONS_LABEL}</h3>
+              {source === "screening" ? <p className="small muted">{SCREENING_FALLBACK_LINE}</p> : null}
               {written.length ? (
-                <ol style={{ paddingLeft: 18, margin: 0 }}>
-                  {written.map((q) => (
-                    <li key={q.key}>
-                      {q.question} {q.required ? null : <Chip>They may skip it</Chip>}
-                      {q.lookFor ? <><br /><span className="small muted">What a good answer shows ({PACKET_VISIBILITY_LABEL.internal.toLowerCase()}): {q.lookFor}</span></> : null}
+                <ol className={QUESTION_LIST}>
+                  {written.map((q, i) => (
+                    <li key={q.key} className={QUESTION_ROW}>
+                      <span aria-hidden="true" className={ORDINAL}>{i + 1}</span>
+                      <span className="grid min-w-0 flex-1 gap-1">
+                        <span><span className="mr-1">{q.question}</span> {q.required ? null : <Chip>They may skip it</Chip>}</span>
+                        {q.lookFor ? <span className="small muted">What a good answer shows ({PACKET_VISIBILITY_LABEL.internal.toLowerCase()}): {q.lookFor}</span> : null}
+                      </span>
                     </li>
                   ))}
                 </ol>
-              ) : <p className="small muted" style={{ margin: 0 }}>None yet.</p>}
+              ) : <p className="small muted">None yet.</p>}
             </div>
-            <p className="small muted" style={{ margin: 0 }}>{FAIRNESS_LINE}</p>
+            <p className="small muted max-w-[80ch]">{FAIRNESS_LINE}</p>
             {base || props.onEditEligibility ? (
               <div className="row">
                 {base ? <Button size="sm" icon="edit" onClick={() => setEditing(true)}>Change these questions</Button> : null}
@@ -125,21 +136,21 @@ export function QuestionsEditor(props: { roleId: string; baseVersion: number; pa
   const quickFilled = quick.filter((r) => r.question.trim()).length;
   const writtenFilled = written.filter((r) => r.question.trim()).length;
   return (
-    <div className="stack" style={{ gap: 14 }}>
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-        <legend style={{ fontWeight: 600, fontSize: 13.5, padding: 0, marginBottom: 6 }}>{`${QUICK_QUESTIONS_LABEL} (up to ${QUICK_QUESTIONS_MAX})`}</legend>
+    <div className="stack gap-6">
+      <fieldset className="field gap-2">
+        <legend className={LEGEND}>{`${QUICK_QUESTIONS_LABEL} (up to ${QUICK_QUESTIONS_MAX})`}</legend>
         <span className="hint">{QUICK_HINT}</span>
         <QuickRows rows={quick} onChange={setQuick} refusals={refusals} />
         <span className="small muted">{quickFilled >= QUICK_QUESTIONS_MAX ? `That is the most there can be (${QUICK_QUESTIONS_MAX}).` : null}</span>
       </fieldset>
-      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-        <legend style={{ fontWeight: 600, fontSize: 13.5, padding: 0, marginBottom: 6 }}>{`${WRITTEN_QUESTIONS_LABEL} (up to ${WRITTEN_QUESTIONS_MAX})`}</legend>
+      <fieldset className="field gap-2">
+        <legend className={LEGEND}>{`${WRITTEN_QUESTIONS_LABEL} (up to ${WRITTEN_QUESTIONS_MAX})`}</legend>
         <span className="hint">{WRITTEN_HINT}</span>
-        {writtenSource(props.packet) === "screening" ? <p className="small muted" style={{ margin: "0 0 6px" }}>{SCREENING_FALLBACK_LINE}</p> : null}
+        {writtenSource(props.packet) === "screening" ? <p className="small muted">{SCREENING_FALLBACK_LINE}</p> : null}
         <WrittenRows rows={written} onChange={setWritten} refusals={refusals} />
         <span className="small muted">{writtenFilled > WRITTEN_QUESTIONS_MAX ? `Keep at most ${WRITTEN_QUESTIONS_MAX}; take ${writtenFilled - WRITTEN_QUESTIONS_MAX} out.` : null}</span>
       </fieldset>
-      <p className="small muted" style={{ margin: 0 }}>{FAIRNESS_LINE}</p>
+      <p className="small muted">{FAIRNESS_LINE}</p>
       {problem ? <Alert tone="caution">{problem}</Alert> : null}
       {save.error ? <Alert tone="critical">{save.error instanceof ApiError ? save.error.message : "Could not save."}</Alert> : null}
       <div className="row">
@@ -153,15 +164,15 @@ export function QuestionsEditor(props: { roleId: string; baseVersion: number; pa
 function QuickRows({ rows, onChange, refusals }: { rows: QuickRow[]; onChange: (rows: QuickRow[]) => void; refusals: Map<string, string> }) {
   const update = (i: number, patch: Partial<QuickRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      {rows.length ? null : <p className="small muted" style={{ margin: 0 }}>None yet.</p>}
+    <div className="stack gap-3">
+      {rows.length ? null : <p className="small muted">None yet.</p>}
       {rows.map((r, i) => {
         const refused = refusals.get(`quick:${i}`);
         return (
-          <div key={r.key ?? `new-${i}`} className="stack" style={{ gap: 6, padding: 10, border: "1px solid var(--line)", borderRadius: 8 }}>
+          <div key={r.key ?? `new-${i}`} className={EDIT_ROW}>
             <Field label={`${i + 1}. Question`} htmlFor={`cq-q-${i}`}><input id={`cq-q-${i}`} className="input" value={r.question} maxLength={200} onChange={(e) => update(i, { question: e.target.value })} placeholder="e.g. How will you get to work?" /></Field>
             {refused ? <Alert tone="critical">{refused}</Alert> : null}
-            <div className="grid-2">
+            <div className={PAIR}>
               <Field label="Answered with" htmlFor={`cq-kind-${i}`}>
                 <select id={`cq-kind-${i}`} className="select" value={r.kind} onChange={(e) => onChange(rows.map((x, j) => (j === i ? withKind(x, e.target.value as QuickKind) : x)))}>
                   {QUICK_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
@@ -170,20 +181,20 @@ function QuickRows({ rows, onChange, refusals }: { rows: QuickRow[]; onChange: (
               <Field label="Help line (optional)" htmlFor={`cq-help-${i}`}><input id={`cq-help-${i}`} className="input" value={r.help} maxLength={200} onChange={(e) => update(i, { help: e.target.value })} placeholder="e.g. We start at 7am." /></Field>
             </div>
             {r.kind === "choice" ? (
-              <Field label={`The answers to choose from, one a line (2 to ${CHOICE_OPTIONS_MAX})`} htmlFor={`cq-opts-${i}`}><textarea id={`cq-opts-${i}`} className="textarea" style={{ minHeight: 80 }} value={r.options} onChange={(e) => update(i, { options: e.target.value })} placeholder={"My own car\nPublic transport\nBike or on foot"} /></Field>
+              <Field label={`The answers to choose from, one a line (2 to ${CHOICE_OPTIONS_MAX})`} htmlFor={`cq-opts-${i}`}><textarea id={`cq-opts-${i}`} className="textarea min-h-20" value={r.options} onChange={(e) => update(i, { options: e.target.value })} placeholder={"My own car\nPublic transport\nBike or on foot"} /></Field>
             ) : null}
             {r.kind === "number" ? (
-              <div className="grid-2">
+              <div className={PAIR}>
                 <Field label="Unit (optional)" htmlFor={`cq-unit-${i}`}><input id={`cq-unit-${i}`} className="input" value={r.unit} maxLength={30} onChange={(e) => update(i, { unit: e.target.value })} placeholder="e.g. years" /></Field>
-                <div className="row" style={{ flexWrap: "nowrap", alignItems: "flex-end" }}>
+                <div className="grid grid-cols-2 items-end gap-3">
                   <Field label="Smallest" htmlFor={`cq-min-${i}`}><input id={`cq-min-${i}`} className="input" inputMode="decimal" value={r.min} onChange={(e) => update(i, { min: e.target.value })} /></Field>
                   <Field label="Largest" htmlFor={`cq-max-${i}`}><input id={`cq-max-${i}`} className="input" inputMode="decimal" value={r.max} onChange={(e) => update(i, { max: e.target.value })} /></Field>
                 </div>
               </div>
             ) : null}
-            <div className="row">
-              <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={r.required} onChange={(e) => update(i, { required: e.target.checked })} /> Every applicant must answer it</label>
-              <span style={{ marginLeft: "auto" }} className="row">
+            <div className={ROW_FOOT}>
+              <label className={REQUIRED}><input type="checkbox" checked={r.required} onChange={(e) => update(i, { required: e.target.checked })} /> Every applicant must answer it</label>
+              <span className="row ml-auto gap-1.5">
                 <IconButton icon="chevron-up" size="sm" label={`Move quick question ${i + 1} up`} disabled={i === 0} onClick={() => onChange(moveRow(rows, i, -1))} />
                 <IconButton icon="chevron-down" size="sm" label={`Move quick question ${i + 1} down`} disabled={i === rows.length - 1} onClick={() => onChange(moveRow(rows, i, 1))} />
                 <Button size="sm" variant="quiet" onClick={() => onChange(rows.filter((_, j) => j !== i))}>Remove</Button>
@@ -192,7 +203,7 @@ function QuickRows({ rows, onChange, refusals }: { rows: QuickRow[]; onChange: (
           </div>
         );
       })}
-      <div className="row"><Button size="sm" disabled={rows.length >= QUICK_QUESTIONS_MAX} onClick={() => onChange([...rows, newQuickRow()])}>Add a quick question</Button></div>
+      <div className="row"><Button size="sm" icon="plus" disabled={rows.length >= QUICK_QUESTIONS_MAX} onClick={() => onChange([...rows, newQuickRow()])}>Add a quick question</Button></div>
     </div>
   );
 }
@@ -200,18 +211,18 @@ function QuickRows({ rows, onChange, refusals }: { rows: QuickRow[]; onChange: (
 function WrittenRows({ rows, onChange, refusals }: { rows: WrittenRow[]; onChange: (rows: WrittenRow[]) => void; refusals: Map<string, string> }) {
   const update = (i: number, patch: Partial<WrittenRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      {rows.length ? null : <p className="small muted" style={{ margin: 0 }}>None yet.</p>}
+    <div className="stack gap-3">
+      {rows.length ? null : <p className="small muted">None yet.</p>}
       {rows.map((r, i) => {
         const refused = refusals.get(`written:${i}`);
         return (
-          <div key={r.key ?? `new-${i}`} className="stack" style={{ gap: 6, padding: 10, border: "1px solid var(--line)", borderRadius: 8 }}>
+          <div key={r.key ?? `new-${i}`} className={EDIT_ROW}>
             <Field label={`${i + 1}. Question`} htmlFor={`wq-q-${i}`}><input id={`wq-q-${i}`} className="input" value={r.question} maxLength={400} onChange={(e) => update(i, { question: e.target.value })} placeholder="e.g. Tell us about a time you calmed a nervous patient." /></Field>
             <Field label={`What a good answer shows (${PACKET_VISIBILITY_LABEL.internal.toLowerCase()})`} htmlFor={`wq-look-${i}`}><input id={`wq-look-${i}`} className="input" value={r.lookFor} maxLength={400} onChange={(e) => update(i, { lookFor: e.target.value })} placeholder="e.g. A real example: what they noticed, what they did, how it ended" /></Field>
             {refused ? <Alert tone="critical">{refused}</Alert> : null}
-            <div className="row">
-              <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={r.required} onChange={(e) => update(i, { required: e.target.checked })} /> Every applicant must answer it (they can still skip, and say why)</label>
-              <span style={{ marginLeft: "auto" }} className="row">
+            <div className={ROW_FOOT}>
+              <label className={REQUIRED}><input type="checkbox" checked={r.required} onChange={(e) => update(i, { required: e.target.checked })} /> Every applicant must answer it (they can still skip, and say why)</label>
+              <span className="row ml-auto gap-1.5">
                 <IconButton icon="chevron-up" size="sm" label={`Move written question ${i + 1} up`} disabled={i === 0} onClick={() => onChange(moveRow(rows, i, -1))} />
                 <IconButton icon="chevron-down" size="sm" label={`Move written question ${i + 1} down`} disabled={i === rows.length - 1} onClick={() => onChange(moveRow(rows, i, 1))} />
                 <Button size="sm" variant="quiet" onClick={() => onChange(rows.filter((_, j) => j !== i))}>Remove</Button>
@@ -220,7 +231,19 @@ function WrittenRows({ rows, onChange, refusals }: { rows: WrittenRow[]; onChang
           </div>
         );
       })}
-      <div className="row"><Button size="sm" disabled={rows.length >= WRITTEN_QUESTIONS_MAX} onClick={() => onChange([...rows, newWrittenRow()])}>Add a written question</Button></div>
+      <div className="row"><Button size="sm" icon="plus" disabled={rows.length >= WRITTEN_QUESTIONS_MAX} onClick={() => onChange([...rows, newWrittenRow()])}>Add a written question</Button></div>
     </div>
   );
 }
+
+/** The card's two lists: a small heading over the questions as numbered rows in one bordered box (screenshot 6); the
+ * number beside each (ORDINAL) is the job page's own, from RolePlan.tsx. */
+const LIST_HEADING = "text-[14px] font-semibold";
+const QUESTION_LIST = "overflow-hidden rounded-xl border border-line bg-surface";
+const QUESTION_ROW = "flex items-start gap-3 border-t border-line px-4 py-3 text-[14.5px] first:border-t-0";
+/** The editor: each question a quiet card of its own (the application form's look, screenshot 5), its controls at its foot. */
+const LEGEND = "mb-1 text-[14px] font-semibold text-ink";
+const EDIT_ROW = "stack gap-3 rounded-xl border border-line bg-surface p-4";
+const PAIR = "grid grid-cols-1 gap-3 sm:grid-cols-2";
+const ROW_FOOT = "flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-3";
+const REQUIRED = "flex min-h-10 cursor-pointer items-center gap-2 text-[14px]";

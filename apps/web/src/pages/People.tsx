@@ -57,6 +57,13 @@ const readingLabel = (id: ReadingFilter) => READING_FILTERS.find((f) => f.id ===
 /** What an empty list says when the filters in force leave nobody (Wave S6); "Clear filters" sits under it. */
 const NO_MATCH = { title: "Nothing matches these filters", body: "Nobody here fits every filter that is on. Remove one above, or clear them all." };
 
+/** The page: the job's header (its own bottom margin trimmed, as on the job page), then each part 20px apart. */
+const PAGE = "stack gap-5 [&>.page-header]:mb-1";
+/** Each person's result after a send, one line each. */
+const RESULTS = "grid list-disc gap-1.5 ps-5 text-[14px] leading-snug marker:text-ink-3";
+/** A group of ticks' heading, above the rows. */
+const LEGEND = "mb-2 text-[13px] font-semibold text-ink";
+
 /**
  * Candidates (plan A3; founder decisions B3 and B6; Wave S1): one job's applicants as a calm list, under the job's own
  * header and tab strip (shared with the job page). The stage strip counts everyone at each stage and filters by a
@@ -268,7 +275,7 @@ export function People() {
   if (interviewer && roleId) {
     if (notOnThisJob(detail.error, myRole)) return <NotOnThisJob />;
     return (
-      <div className="stack" style={{ gap: 18 }}>
+      <div className={PAGE}>
         <JobHeader title={role?.title ?? job?.title ?? "Candidates"} status={status} pulse={status === "open"} companyName={company.name} noJob={false} sub={facts ?? undefined} />
         <NotOnThisJob title="Candidates are for the hiring team" body="You see the people you interview under Interviews." />
       </div>
@@ -276,7 +283,7 @@ export function People() {
   }
 
   return (
-    <div className="stack" style={{ gap: 18 }}>
+    <div className={PAGE}>
       <JobHeader
         title={role?.title ?? job?.title ?? "Candidates"}
         status={status}
@@ -336,47 +343,54 @@ export function People() {
           <PoolBoard roleId={roleId} board={board.data} only={only} onClearOnly={() => setOnlyFor(null)} onOpen={(id) => openPanel(id)} onReview={() => goTo(boardSearch(search, { review: true }))} onAsk={() => setAsking(true)} mayApply={mayApply} />
         ) : null
       ) : (
-        <>
-          <div className="talent-strip">
+        <div className="grid gap-4">
+          {/* The stage strip: the kit's counts tabs (each count above its word), the empty stages one click away at its end. */}
+          <div className="talent-strip flex items-center gap-2 shadow-[inset_0_-1px_0_var(--line)] [&>.tabs]:min-w-0 [&>.tabs]:flex-1">
             <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => pickStage(v as TalentView["stage"])} items={strip.shown} />
             {/* The stages nobody is at, one click away with their counts (Wave S1). */}
             {/* A stage picked here moves onto the strip (and "More stages" may go): focus follows it to its tab. */}
             {strip.more.length ? <Menu label="More stages" ariaLabel="More stages" heading="Stages with nobody in them" items={strip.more.map((s) => ({ id: s.id, label: s.label, hint: String(s.count) }))} onSelect={(id) => { pickStage(id as TalentView["stage"]); requestAnimationFrame(() => document.getElementById(`talent-strip-tab-${id}`)?.focus()); }} /> : null}
             {/* Beside the strip, not in it (plan E6): the people still in the visit that sent their application. */}
           </div>
-          <div className="talent-toolbar">
+          {/* The filters as pills, the search as a rounded field, Match and the order as dropdown pills on the right. */}
+          <div className="flex flex-wrap items-center gap-2">
             {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
             {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false, cancelledReason: null, aiInterview: null })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
             {/* under Cancelled: what each person chose, or that they did not come (founder decision 2A) */}
             {/* under "No AI interview yet": where people stand with it (R20-7), never how far anyone got */}
             {view.stage === "no_ai_interview" ? AI_INTERVIEW_CHIPS.map((c) => <button key={c.id} type="button" className="toggle-chip" aria-pressed={view.aiInterview === c.id} onClick={() => setView({ aiInterview: view.aiInterview === c.id ? null : c.id })}>{c.label} <span className="count">{aiCounts[c.id]}</span></button>) : null}
             {view.stage === "cancelled" ? cancelledChips(counts?.cancelled, rows).map((c) => <button key={c.id} type="button" className="toggle-chip" aria-pressed={view.cancelledReason === c.id} onClick={() => setView({ cancelledReason: view.cancelledReason === c.id ? null : c.id })}>{c.label} <span className="count">{c.count}</span></button>) : null}
-            <input className="input talent-search" type="search" value={view.query} onChange={(e) => setView({ query: e.target.value })} placeholder="Search name, email or source" aria-label="Search candidates" />
+            <div className="relative min-w-0 flex-[1_1_14rem] sm:max-w-xs">
+              <Icon name="search" size={16} className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 text-ink-3" />
+              <input className="input min-h-9 rounded-full py-1.5 ps-10 text-[14px] pointer-coarse:min-h-10" type="search" value={view.query} onChange={(e) => setView({ query: e.target.value })} placeholder="Search name, email or source" aria-label="Search candidates" />
+            </div>
             {/* Match and the order as dropdown chips (Wave S6): the choice in force is written on the chip and ticked in its list. */}
-            <Menu
-              label={`Match: ${readingLabel(view.reading)}`}
-              heading="Match"
-              buttonClassName="toggle-chip"
-              currentLabel="Now"
-              align="end"
-              items={READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => ({ id: f.id, label: f.id === "any" ? f.label : `${f.label} (${byReading[f.id]})`, current: f.id === view.reading }))}
-              onSelect={(id) => setView({ reading: id as ReadingFilter })}
-            />
-            <Menu
-              label={`Sort: ${ORDERS.find((o) => o.id === view.order)?.label ?? ORDERS[0].label}`}
-              heading="Sort by"
-              buttonClassName="toggle-chip"
-              currentLabel="Now"
-              align="end"
-              items={ORDERS.map((o) => ({ id: o.id, label: o.label, current: o.id === view.order }))}
-              onSelect={(id) => setView({ order: id as Order })}
-            />
+            <div className="flex flex-wrap items-center gap-2 sm:ms-auto">
+              <Menu
+                label={`Match: ${readingLabel(view.reading)}`}
+                heading="Match"
+                buttonClassName="toggle-chip"
+                currentLabel="Now"
+                align="end"
+                items={READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => ({ id: f.id, label: f.id === "any" ? f.label : `${f.label} (${byReading[f.id]})`, current: f.id === view.reading }))}
+                onSelect={(id) => setView({ reading: id as ReadingFilter })}
+              />
+              <Menu
+                label={`Sort: ${ORDERS.find((o) => o.id === view.order)?.label ?? ORDERS[0].label}`}
+                heading="Sort by"
+                buttonClassName="toggle-chip"
+                currentLabel="Now"
+                align="end"
+                items={ORDERS.map((o) => ({ id: o.id, label: o.label, current: o.id === view.order }))}
+                onSelect={(id) => setView({ order: id as Order })}
+              />
+            </div>
           </div>
           {/* What narrows the list, each removable, and one way to clear them all (Wave S6, as on Kanvis). */}
           {activeFilters.length ? (
-            <div className="talent-toolbar" style={{ gap: 8 }}>
+            <div className="flex flex-wrap items-center gap-2">
               <span className="small muted" id="talent-filters-on">Filters on</span>
-              <ul className="own-items" aria-labelledby="talent-filters-on">
+              <ul className="own-items flex min-w-0 flex-wrap items-center gap-2 [&>li]:max-w-full [&_.toggle-chip]:max-w-full [&_.toggle-chip]:whitespace-normal [&_.toggle-chip]:text-left" aria-labelledby="talent-filters-on">
                 {activeFilters.map((f) => (
                   <li key={f.id}>
                     <button type="button" className="toggle-chip" onClick={f.remove}>
@@ -393,7 +407,7 @@ export function People() {
           {view.stage === "no_ai_interview" && noInterviewCount > 0 ? <Alert tone="info">{aiInterviewAlert(aiCounts)}</Alert> : null}
           {mayTell && notTold.length && (view.told === "not_told" || view.stage === "not_moving_forward") ? (
             <Alert tone="info">
-              <div className="row" style={{ justifyContent: "space-between" }}>
+              <div className="row justify-between">
                 <span>{notTold.length === 1 ? "1 person has" : `${notTold.length} people have`} not been told your decision. {SAFETY_NET_NOTE}</span>
                 <Button size="sm" variant="primary" icon="send" onClick={() => setTelling(true)}>Review and send</Button>
               </div>
@@ -401,7 +415,7 @@ export function People() {
           ) : null}
           {mayManageInterviews && view.stage === "cancelled" && cancelledCount > 0 ? (
             <Alert tone="info">
-              <div className="row" style={{ justifyContent: "space-between" }}>
+              <div className="row justify-between">
                 <span>{cancelledAlertText(cancelledCount, newTimesSetting.data?.auto, newTimesSetting.data?.companyConfirmed)}</span>
                 {/* before ITS confirms the company every send is refused, so the way to send waits for it too */}
                 {newTimesSetting.data?.companyConfirmed === false ? null : <Button size="sm" variant="primary" icon="send" onClick={() => setSendingNewTimes(true)}>Send new times…</Button>}
@@ -409,30 +423,31 @@ export function People() {
             </Alert>
           ) : null}
           {compareOpen ? (
-            <div className="stack" style={{ gap: 8 }}>
+            <div className="stack gap-2">
               <div className="row"><Button size="sm" onClick={() => setCompareOpen(false)}>Done comparing</Button></div>
               <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel, score: a.score, interview: a.interview, basis: a.basis }))} />
             </div>
           ) : null}
-          <div ref={listArea}>
+          <div ref={listArea} className="[&>.tab-panel]:pt-0">
           <TabPanel idBase="talent-strip" value={view.stage}>
             {apps.isLoading ? <Skeleton lines={5} /> : apps.error ? <ErrorState message="Could not load the candidates." onRetry={() => apps.refetch()} /> : shown.length === 0 && total === 0 && status === "open" && canShareJob(myRole) ? (
               // Nobody yet on a live job (plan D8): the empty list is the place to share it from.
-              <div className="empty" style={{ justifyItems: "stretch", textAlign: "left" }}>
-                <h2 style={{ textAlign: "center" }}>Nobody has applied yet</h2>
-                <p style={{ textAlign: "center", justifySelf: "center" }}>Share the job to bring in your first applicants.</p>
+              <div className="empty justify-items-stretch text-left">
+                <h2 className="text-center">Nobody has applied yet</h2>
+                <p className="justify-self-center text-center">Share the job to bring in your first applicants.</p>
                 <ShareJob roleId={roleId} roleTitle={role?.title ?? job?.title ?? ""} companyName={company.name} compact />
               </div>
             ) : shown.length === 0 ? (
               <EmptyState icon="talent" title={empty.title} body={empty.body} action={filtersOn && total > 0 ? <Button size="sm" onClick={clearFilters}>Clear filters</Button> : undefined} />
             ) : (
-              <div className="talent-list">
-                {shown.map((a) => <TalentRow key={a.id} a={a} busy={rowAct.isPending && rowAct.variables?.id === a.id} onOpen={() => openPanel(a.id)} onMove={(to) => onRowMove(a, to)} />)}
+              // one bordered list (screenshot 4's table look); a row's menu may open over the rows below it
+              <div className="list-card">
+                {shown.map((a, i) => <TalentRow key={a.id} a={a} index={i} busy={rowAct.isPending && rowAct.variables?.id === a.id} onOpen={() => openPanel(a.id)} onMove={(to) => onRowMove(a, to)} />)}
               </div>
             )}
           </TabPanel>
           </div>
-        </>
+        </div>
       )}
       {/* The candidate panel comes last, so a name opened from Review and apply or from an answer sits on top of them. */}
       {reviewing && roleId && board.data ? <ReviewApply roleId={roleId} board={board.data} mayDecline={mayTell} onClose={closeReview} onOpen={(id) => openPanel(id)} /> : null}
@@ -474,8 +489,13 @@ function RowChipView({ c }: { c: RowChip }) {
   );
 }
 
-/** One applicant: initials, name, when they applied, the wait, at most two chips, the match score (B2), the stage button. */
-function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: boolean; onOpen: () => void; onMove: (to: OwnerStage) => void }) {
+/**
+ * One applicant: initials, name, when they applied, the wait, at most two chips, the match score (B2), the stage button.
+ * A row of screenshot 4's table: the person on the left, the chips, score and stage on the right (under the name on a
+ * phone). The name button, the chips' box and the score's slot keep bare class names (tests and the focus-after-move
+ * code find them), so their look comes from the row and the box around them. The first rows rise in one after another.
+ */
+function TalentRow({ a, index, busy, onOpen, onMove }: { a: ApplicationSummary; index: number; busy: boolean; onOpen: () => void; onMove: (to: OwnerStage) => void }) {
   const name = a.candidate?.name ?? "Unknown";
   // waiting on you, or (an offer made outside the app, plan H2) waiting on the candidate's answer
   const waiting = waitingText(a) ?? waitingOnCandidateRow(a);
@@ -488,30 +508,51 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
   const restWords = rest.map((c) => c.title ?? c.label).join("; ");
   const resumeOnly = resumeOnlyChip(a);
   return (
-    <div className="talent-row" data-application={a.id}>
+    <div className={ROW} style={{ animationDelay: `${Math.min(index, ROW_STAGGER_MAX) * 30}ms` }} data-application={a.id}>
       <Avatar name={name} />
-      <div className="talent-row-main">
+      <div className={ROW_MAIN}>
         <button type="button" className="talent-name" onClick={onOpen}>{name}</button>
-        <span className="talent-row-sub">
+        <span className={ROW_SUB}>
           <span>{appliedWhen(a.appliedAt ?? a.createdAt)}</span>
           <span>{a.source.replace(/_/g, " ")}</span>
-          {waiting ? <span className="waiting">{waiting}</span> : null}
+          {waiting ? <span className="font-medium text-caution">{waiting}</span> : null}
           {a.mark?.mark === "on_hold" && a.mark.remindAt && !a.tags.includes("Hold ended") ? <span>On hold until {holdDay(a.mark.remindAt)}</span> : null}
           {/* a review made against an earlier version of the job (plan F4): its score uses the requirements as they were then */}
           {a.readingVersion ? <span title={a.readingVersion.label}>Read against version {a.readingVersion.readAgainst}</span> : null}
         </span>
       </div>
-      <div className="talent-row-chips">
-        {seen.map((c) => <RowChipView key={c.key} c={c} />)}
-        {rest.length ? <span className="chip neutral" title={restWords}><span aria-hidden="true">+{rest.length}</span><span className="sr-only">Also: {restWords}</span></span> : null}
+      <div className={ROW_END}>
+        <div className="talent-row-chips">
+          {seen.map((c) => <RowChipView key={c.key} c={c} />)}
+          {rest.length ? <span className="chip neutral" title={restWords}><span aria-hidden="true">+{rest.length}</span><span className="sr-only">Also: {restWords}</span></span> : null}
+        </div>
+        {/* the match score, worked out by code from the checked findings (founder decision B2); an older answer has none.
+            A score with no AI interview in it yet says so beside the badge (R20-9), the full label on hover. */}
+        <span className="score-slot" title={scoreTitle(a)}>{resumeOnly ? <span className="chip neutral" title={resumeOnly.title}>{resumeOnly.label}</span> : null}{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" /> : null}</span>
+        <StageButton stage={a.ownerStage} label={a.ownerStageLabel} blocked={stageBlocked(a.stageMoves)} disabled={busy} onMove={onMove} align="end" />
       </div>
-      {/* the match score, worked out by code from the checked findings (founder decision B2); an older answer has none.
-          A score with no AI interview in it yet says so beside the badge (R20-9), the full label on hover. */}
-      <span className="score-slot" title={scoreTitle(a)}>{resumeOnly ? <span className="chip neutral" title={resumeOnly.title}>{resumeOnly.label}</span> : null}{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" /> : null}</span>
-      <StageButton stage={a.ownerStage} label={a.ownerStageLabel} blocked={stageBlocked(a.stageMoves)} disabled={busy} onMove={onMove} align="end" />
     </div>
   );
 }
+
+/** The first rows rise in 30ms apart; from the ninth on they come with the eighth (spec section 4). */
+const ROW_STAGGER_MAX = 7;
+/**
+ * A row of the list: the kit's divided row, roomier, a quiet fill under the mouse, rising in once (motion-safe). The
+ * whole row is the name button's press area (its ::after covers the row), so the row draws the button's focus ring,
+ * following the list card's rounded corners on the first and last rows.
+ */
+const ROW = "talent-row list-row relative flex-wrap gap-x-4 gap-y-2.5 px-4 py-3.5 hover:bg-surface-2/50 has-[.talent-name:focus-visible]:shadow-[inset_0_0_0_2px_var(--focus)] sm:px-5 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]";
+/** The name (its button's class is pinned, so the size and weight come from here) over the facts line. */
+const ROW_MAIN = "grid min-w-0 flex-[1_1_14rem] gap-0.5 text-[15px] font-semibold leading-snug text-ink [&>.talent-name]:justify-self-start [&>.talent-name]:rounded-sm [&>.talent-name]:text-left [&>.talent-name]:[overflow-wrap:anywhere] [&>.talent-name]:hover:text-primary [&>.talent-name]:focus-visible:outline-none [&>.talent-name]:after:absolute [&>.talent-name]:after:inset-0 [&>.talent-name]:after:content-[''] pointer-coarse:[&>.talent-name]:min-h-10";
+/** When they applied, the source, the wait and the rest, as one muted line with a dot between the parts. */
+const ROW_SUB = "flex flex-wrap gap-x-2 gap-y-0.5 text-[13px] font-normal text-ink-3 [&>*+*]:before:me-2 [&>*+*]:before:content-['·']";
+/**
+ * The chips, the score and the stage button: on the right on a wide screen, under the name on a phone. A long chip
+ * wraps rather than running past the row. The stage button sits above the row's press area, and above the rows below
+ * it while its menu is open.
+ */
+const ROW_END = "flex min-w-0 flex-wrap items-center gap-2 max-sm:w-full max-sm:ps-[52px] sm:ms-auto sm:justify-end [&>.talent-row-chips]:flex [&>.talent-row-chips]:min-w-0 [&>.talent-row-chips]:max-w-full [&>.talent-row-chips]:flex-wrap [&>.talent-row-chips]:items-center [&>.talent-row-chips]:gap-1.5 [&>.talent-row-chips:empty]:hidden [&>.talent-row-chips>*]:max-w-full [&>.talent-row-chips>*]:whitespace-normal [&>.score-slot]:inline-flex [&>.score-slot]:items-center [&>.score-slot]:gap-1.5 [&_.menu-wrap]:z-[1] [&_.menu-wrap:focus-within]:z-[3] [&_.menu-wrap:has(.menu)]:z-[3]";
 
 /** The wordings a person may choose for several people at once (Q28): each person's suggested one, or one approved wording for all. */
 const BULK_WORDINGS: ReadonlyArray<DecisionWording> = CHOOSABLE_WORDINGS;
@@ -562,8 +603,8 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
   return (
     <Sheet open onClose={onClose} title="Send the decision message">
       {results ? (
-        <div className="stack">
-          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+        <div className="stack gap-4">
+          <ul className={RESULTS}>
             {results.results.map((r) => <li key={r.applicationId}><strong>{nameOf(r.applicationId)}</strong>: {r.ok && r.candidateNotice ? noticeText(r.candidateNotice) : r.message ?? "Not sent."}</li>)}
           </ul>
           <div className="row">
@@ -572,38 +613,38 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
           </div>
         </div>
       ) : (
-        <div className="stack">
-          <p className="small" style={{ margin: 0 }}>Each person gets their own message, with their name. Untick anyone you will tell yourself.</p>
+        <div className="stack gap-5">
+          <p className="small text-ink-2">Each person gets their own message, with their name. Untick anyone you will tell yourself.</p>
           <Field label="Wording" htmlFor="bulk-wording" hint={wording === "each" ? "Each person gets the wording that fits their decision: after an interview, position filled, or the standard one." : WORDING_HINT[wording]}>
             <select id="bulk-wording" className="select" value={wording} onChange={(e) => setWording(e.target.value as DecisionWording | "each")}>
               <option value="each">The suggested wording for each person</option>
               {BULK_WORDINGS.map((w) => <option key={w} value={w}>{DECISION_WORDING_LABEL[w]} for everyone</option>)}
             </select>
           </Field>
-          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend className="small muted">Who gets it</legend>
+          <fieldset className="grid gap-2">
+            <legend className={LEGEND}>Who gets it</legend>
             {people.map((p) => (
-              <label key={p.id} className="row small" style={{ gap: 8 }}>
+              <label key={p.id} className="check">
                 <input type="checkbox" checked={picked.includes(p.id)} onChange={(e) => setPicked((now) => (e.target.checked ? [...now, p.id] : now.filter((x) => x !== p.id)))} />
-                {p.candidate?.name ?? "Unknown"}{p.candidate?.email ? "" : <span className="muted"> (no email address on file)</span>}
+                <span>{p.candidate?.name ?? "Unknown"}{p.candidate?.email ? "" : <span className="muted"> (no email address on file)</span>}</span>
               </label>
             ))}
           </fieldset>
           {sample ? (
             preview.isLoading ? <Skeleton lines={4} /> : preview.data ? (
               <Card title={`What ${nameOf(sample).split(" ")[0]} will get`}>
-                <p className="small" style={{ margin: 0 }}><strong>{preview.data.subject}</strong></p>
-                <p className="small" style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{preview.data.text}</p>
-                <p className="small muted" style={{ marginTop: 8 }}>People declined on an eligibility answer always get the version about their answers.</p>
+                <p className="small"><strong>{preview.data.subject}</strong></p>
+                <p className="small mt-1.5 whitespace-pre-wrap">{preview.data.text}</p>
+                <p className="small muted mt-2">People declined on an eligibility answer always get the version about their answers.</p>
               </Card>
             ) : preview.error instanceof ApiError && preview.error.code === "wording_not_allowed" ? (
               <Alert tone="info">{nameOf(sample)} gets the wording for their own decision instead: {preview.error.message}</Alert>
             ) : <ErrorState message="Could not load the message." onRetry={() => preview.refetch()} />
           ) : null}
           {policy === "not_sent" ? <Alert tone="caution">Under your settings no decision messages are sent. Tell each person yourself, then record it on their page.</Alert> : null}
-          {policy === "needs_approval" ? <p className="small muted" style={{ margin: 0 }}>Under your settings each message waits for approval before it goes out.</p> : null}
-          {policy === "sends" && preview.data?.undoSeconds ? <p className="small muted" style={{ margin: 0 }}>Each message waits {preview.data.undoSeconds} seconds before it goes, so you can undo the Send.</p> : null}
-          <p className="small muted" style={{ margin: 0 }}>To add a personal line, send from that person's own page.</p>
+          {policy === "needs_approval" ? <p className="small muted">Under your settings each message waits for approval before it goes out.</p> : null}
+          {policy === "sends" && preview.data?.undoSeconds ? <p className="small muted">Each message waits {preview.data.undoSeconds} seconds before it goes, so you can undo the Send.</p> : null}
+          <p className="small muted">To add a personal line, send from that person's own page.</p>
           <Button variant="primary" icon="send" disabled={!picked.length || policy === "not_sent"} loading={send.isPending} onClick={() => send.mutate()}>{policy === "needs_approval" ? `Send ${picked.length} for approval` : `Send to ${picked.length} ${picked.length === 1 ? "person" : "people"}`}</Button>
         </div>
       )}
@@ -640,21 +681,21 @@ function NewTimesSheet({ roleId, people, onClose }: { roleId: string; people: Ap
   return (
     <Sheet open onClose={onClose} title="Send new times">
       {results ? (
-        <div className="stack">
-          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+        <div className="stack gap-4">
+          <ul className={RESULTS}>
             {results.results.map((r) => <li key={r.applicationId}><strong>{r.name}</strong>: {newTimesResultLine(r)}</li>)}
           </ul>
           <div className="row"><Button onClick={onClose}>Done</Button></div>
         </div>
       ) : (
-        <div className="stack">
-          <p className="small" style={{ margin: 0 }}>{NEW_TIMES_SHEET_TEXT}</p>
-          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend className="small muted">Who gets new times</legend>
+        <div className="stack gap-5">
+          <p className="small text-ink-2">{NEW_TIMES_SHEET_TEXT}</p>
+          <fieldset className="grid gap-2">
+            <legend className={LEGEND}>Who gets new times</legend>
             {rows.map((p) => (
-              <label key={p.id} className="row small" style={{ gap: 8 }}>
+              <label key={p.id} className="check has-disabled:cursor-not-allowed has-disabled:opacity-60">
                 <input type="checkbox" checked={picked.includes(p.id)} disabled={p.disabled} onChange={(e) => setPicked((now) => (e.target.checked ? [...now, p.id] : now.filter((x) => x !== p.id)))} />
-                {p.name}{p.note ? <span className="muted">{p.note}</span> : null}
+                <span>{p.name}{p.note ? <span className="muted">{p.note}</span> : null}</span>
               </label>
             ))}
           </fieldset>

@@ -304,7 +304,7 @@ describe("the apply form: résumé first, check your details, questions from the
     expect(card).toContain(`<p class="notice" id="resume-notice">${RESUME_READ_NOTICE} See <a href="/privacy">how we handle your information</a>. Rather not? Fill in the form below yourself, or email `);
     expect(card).toContain("and a person will help. If you do not send your application, the file and what was read from it are deleted within a day.</p>");
     expect(html).toContain(`<form method="post" action="/careers/${slug}/jobs/${roleId}/apply" enctype="multipart/form-data"`);
-    // the Send button is still the one near-black button, and Enter before a file is chosen is handled by the server
+    // the Send button is still the one plum button, and Enter before a file is chosen is handled by the server
     expect(html).toContain('<button class="btn" type="submit">Send my application</button>');
     // Questions from the company: the eligibility questions first, then the company's own; numbered; counted
     expect(html).toContain('<h2 id="questions-title">Questions from Details Dental</h2>');

@@ -1,8 +1,8 @@
 "use client";
 
-import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Card, Chip, Drawer, ErrorState, Field, Menu, nextSort, Segmented, Skeleton, type SortDir, type SortKind, sortAnnouncement, sortRows, Table, type TableHead, TabPanel, Tabs } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, cn, Drawer, ErrorState, Field, Icon, Menu, nextSort, Pill, Segmented, Skeleton, type SortDir, type SortKind, sortAnnouncement, sortRows, Table, type TableHead, TabPanel, Tabs } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { type AllowanceAlert, allowanceAlerts, allowanceChip } from "../../allowance";
 import { EVERY_APPLICANT_LINE, REASON_MIN, reasonReady } from "../../apply-flow";
@@ -14,7 +14,7 @@ import { CustomerReportPanel } from "../AdminCustomerReport";
 import { type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
 import { activityWords, exactMoney, exactWhen, money, planStatusWords, planWords, trialWords, whenWords } from "./admin-words";
 import type { TrialStanding, TrialTerm } from "@ros/contracts";
-import { Outcomes } from "./outcomes";
+import { GLANCE, Outcomes } from "./outcomes";
 
 /*
  * The console's Customers section (redesign spec 3.2, Wave S6): every customer in a five-column list with filter pills,
@@ -153,9 +153,17 @@ export function waitingWords(createdAt: string, now: number = Date.now()): strin
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** A row's first line: 14 px in ink (redesign spec 3.3); its second lines are `.small.muted` (13 px, --ink-3). */
-const LINE: CSSProperties = { fontSize: 14, color: "var(--ink)" };
-/** The company's name, which opens its drawer. */
-const NAME: CSSProperties = { padding: 0, border: 0, background: "none", color: "var(--ink)", font: "600 15px/1.3 var(--ui)", textAlign: "left", cursor: "pointer" };
+const LINE = "text-sm text-ink";
+/** The company's name, which opens its drawer: a plain button that reads as the row's title (40 px tall under a finger). */
+const NAME = "inline-flex items-center border-0 bg-transparent p-0 text-left font-sans text-sm leading-snug font-semibold text-ink break-words transition-colors duration-150 ease-soft hover:text-primary hover:underline pointer-coarse:min-h-10";
+/** The cells' stacked lines: the first line, then the quieter ones and the chips, each on its own line. */
+const CELL = "grid justify-items-start gap-1";
+/** The fields and buttons under a card's explanation; a Segmented keeps its own width instead of stretching across. */
+const FORM = "mt-4 grid gap-3 [&>.segmented]:justify-self-start";
+/** A question to confirm (inside a caution alert), or a line with its button: the words, and the buttons on the right. */
+const CONFIRM = "flex flex-wrap items-center justify-between gap-x-4 gap-y-2";
+/** A card that only tells (the company's facts, how people apply): lavender-tinted, so the white cards that act stand out. */
+const TINTED = "border-line-tint bg-tint shadow-none";
 
 /**
  * All customers: pills (All, Waiting for the ITS check, Running low, Quiet) with counts, a search box and a Sort chip
@@ -215,21 +223,27 @@ export function Customers() {
   const opened = drawer ? (rows.find((c) => c.id === drawer.id) ?? null) : null;
 
   return (
-    <div className="stack" style={{ gap: 14 }}>
-      <div className="talent-toolbar">
+    <div className="stack gap-4">
+      {/* The filter pills, then the search box and the Sort chip on the right (screenshot 7's Filters pill). */}
+      <div className="flex flex-wrap items-center gap-2">
         {CUSTOMER_FILTERS.map((f) => (
           <button key={f.id} type="button" className="toggle-chip" aria-pressed={filter === f.id} onClick={() => pick(filter === f.id ? "all" : f.id)}>
             {f.label}
             {q.data ? <>{" "}<span className="count">{count(f.id)}</span></> : null}
           </button>
         ))}
-        <input className="input talent-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
-        <Menu label={sort ? `Sort: ${sortChoice(sort.key).label}` : "Sort"} heading="Sort customers" align="end" currentLabel="Now" items={CUSTOMER_SORT_CHOICES.map((c) => ({ id: c.id, label: c.label, current: sort?.key === c.id }))} onSelect={(id) => sortBy(id as CustomerSortKey, "chip")} />
+        <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto">
+          <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-none [&>input]:rounded-full [&>input]:pl-10">
+            <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-ink-3" />
+            <input className="input talent-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
+          </div>
+          <Menu label={sort ? `Sort: ${sortChoice(sort.key).label}` : "Sort"} heading="Sort customers" align="end" currentLabel="Now" items={CUSTOMER_SORT_CHOICES.map((c) => ({ id: c.id, label: c.label, current: sort?.key === c.id }))} onSelect={(id) => sortBy(id as CustomerSortKey, "chip")} />
+        </div>
       </div>
       {waiting.length ? (
         <Alert tone="caution">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <span>
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <span className="min-w-0 flex-1 basis-80">
               {waiting.length === 1 ? "1 company is" : `${waiting.length} companies are`} waiting for the ITS check: {waiting.map((c) => c.name).join(", ")}. Until you confirm a company, its careers page, job pages and Google listing are offline and its emails to candidates wait.
             </span>
             {filter !== "waiting" ? <Button size="sm" onClick={() => pick("waiting")}>Show only these</Button> : null}
@@ -238,13 +252,13 @@ export function Customers() {
       ) : null}
       {filter === "low" && lowCompanies.length ? (
         <Card needsYou title="AI interviews running low">
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
+          <ul className="grid list-disc gap-1 pl-5 text-[15px] marker:text-ink-3">
             {lowCompanies.map((c) => {
               const a = low.get(c.id);
               return a ? <li key={c.id}><strong>{c.name}</strong>: {allowanceChip(a)}, since {new Date(a.since).toLocaleDateString()}</li> : null;
             })}
           </ul>
-          <p className="muted" style={{ marginTop: 8 }}>Talk with each about topping up. Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the chat link by email when more are added or the month starts again. The owners were told too.</p>
+          <p className="mt-3 text-sm text-ink-2">Talk with each about topping up. Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the chat link by email when more are added or the month starts again. The owners were told too.</p>
         </Card>
       ) : null}
       {q.error ? <ErrorState message="Could not load customers." onRetry={() => q.refetch()} /> : (
@@ -252,7 +266,7 @@ export function Customers() {
           head={[heading("company"), "ITS check", "Plan and use", heading("activity"), ""]}
           label="Customers"
           loading={q.isLoading ? 4 : undefined}
-          empty={narrowed && rows.length ? <div className="row" style={{ justifyContent: "space-between" }}><span>Nothing matches this filter.</span><Button size="sm" onClick={showAll}>Show all customers</Button></div> : "No customers yet."}
+          empty={narrowed && rows.length ? <div className="flex flex-wrap items-center justify-between gap-3"><span>Nothing matches this filter.</span><Button size="sm" onClick={showAll}>Show all customers</Button></div> : "No customers yet."}
           announce={customerAnnouncement(announce, waiting.length)}
         >
           {shown.map((c) => <CustomerListRow key={c.id} c={c} low={low.get(c.id)} now={now} onOpen={(tab) => showDrawer({ id: c.id, tab })} />)}
@@ -263,7 +277,10 @@ export function Customers() {
   );
 }
 
-/** One customer in the list: name and kind of business, the ITS check, plan and use, last active, and one button. */
+/**
+ * One customer in the list (screenshot 7's Businesses): a square initial and the name over its kind of business, the ITS
+ * check as a pill with a dot, plan and use, last active, and one button.
+ */
 function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: AllowanceAlert | undefined; now: number; onOpen: (tab: CustomerTab) => void }) {
   const verified = !!c.verifiedAt;
   const activity = activityWords(c.lastActivityAt, now);
@@ -271,27 +288,38 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
   return (
     <tr>
       <td>
-        <button type="button" style={NAME} onClick={() => onOpen("overview")}>{c.name}</button>
-        <div className="small muted">{c.vertical} · {c.sizeBand}</div>
+        <div className="flex items-center gap-3">
+          <Avatar name={c.name} shape="square" />
+          <div className="grid min-w-0 justify-items-start gap-0.5">
+            <button type="button" className={NAME} onClick={() => onOpen("overview")}>{c.name}</button>
+            <div className="small muted">{c.vertical} · {c.sizeBand}</div>
+          </div>
+        </div>
       </td>
       <td>
-        {verified ? <Chip tone="good">Confirmed</Chip> : <span title={exactWhen(c.createdAt)}><Chip tone="caution">{waitingWords(c.createdAt, now)}</Chip></span>}
-        {c.heldMessages ? <div className="small muted">{plural(c.heldMessages, "message", "messages")} held</div> : null}
+        <div className={CELL}>
+          {verified ? <Pill tone="good" size="sm">Confirmed</Pill> : <Pill tone="caution" size="sm" title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt, now)}</Pill>}
+          {c.heldMessages ? <div className="small muted">{plural(c.heldMessages, "message", "messages")} held</div> : null}
+        </div>
       </td>
       <td>
-        <div style={LINE}>{planWords(c.planKey)}{c.status !== "active" ? ` · ${planStatusWords(c.status)}` : ""}</div>
-        {/* The Trial plan's 30 days (L-02 B): when they end, or that they ended and new applications are paused. */}
-        {c.trial ? <div className="small muted">{trialWords(c.trial, c.timezone)}</div> : null}
-        {c.trial?.ended ? <Chip tone="caution">Trial ended</Chip> : null}
-        {usage ? <div className="small muted">{usage.used}{usage.limit !== null ? ` of ${usage.limit}` : ""} chats this month</div> : null}
-        {low ? <span title={allowanceChip(low)}><Chip tone="caution">{low.level === "used_up" ? "Used up" : "Running low"}</Chip></span> : null}
+        <div className={CELL}>
+          <div className={LINE}>{planWords(c.planKey)}{c.status !== "active" ? ` · ${planStatusWords(c.status)}` : ""}</div>
+          {/* The Trial plan's 30 days (L-02 B): when they end, or that they ended and new applications are paused. */}
+          {c.trial ? <div className="small muted">{trialWords(c.trial, c.timezone)}</div> : null}
+          {c.trial?.ended ? <Chip tone="caution">Trial ended</Chip> : null}
+          {usage ? <div className="small muted">{usage.used}{usage.limit !== null ? ` of ${usage.limit}` : ""} chats this month</div> : null}
+          {low ? <span title={allowanceChip(low)}><Chip tone="caution">{low.level === "used_up" ? "Used up" : "Running low"}</Chip></span> : null}
+        </div>
       </td>
       <td>
-        {/* never active: the chip alone says so ("never active") */}
-        {c.lastActivityAt ? <div style={LINE} title={exactWhen(c.lastActivityAt)}>{whenWords(c.lastActivityAt, new Date(now))}</div> : null}
-        {activity.state !== "active" ? <Chip tone={activity.tone}>{activity.label}</Chip> : null}
+        <div className={CELL}>
+          {/* never active: the chip alone says so ("never active") */}
+          {c.lastActivityAt ? <div className={LINE} title={exactWhen(c.lastActivityAt)}>{whenWords(c.lastActivityAt, new Date(now))}</div> : null}
+          {activity.state !== "active" ? <Chip tone={activity.tone}>{activity.label}</Chip> : null}
+        </div>
       </td>
-      <td>
+      <td className="text-right">
         <Button size="sm" variant={verified ? "secondary" : "primary"} ariaLabel={`${verified ? "Open" : "Confirm"} ${c.name}`} onClick={() => onOpen(verified ? "overview" : "check")}>{verified ? "Open" : "Confirm"}</Button>
       </td>
     </tr>
@@ -333,8 +361,8 @@ function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: Custom
 /** A fact with its button on the right. */
 function Fact(props: { children: ReactNode; action?: ReactNode }) {
   return (
-    <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-      <span>{props.children}</span>
+    <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+      <span className="min-w-0">{props.children}</span>
       {props.action}
     </div>
   );
@@ -350,50 +378,53 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
   const activity = activityWords(c.lastActivityAt);
   const asks = c.recruiterAsks;
   return (
-    <div className="stack" style={{ gap: 18 }}>
-      <dl className="kv" style={LINE}>
-        <dt>ITS check</dt>
-        <dd>
-          <Fact action={<Button size="sm" variant={verified ? "quiet" : "primary"} ariaLabel={verified ? "Change the ITS check" : undefined} onClick={() => onTab("check")}>{verified ? "Change" : "Confirm"}</Button>}>
-            {verified ? `Confirmed ${exactWhen(c.verifiedAt)}${c.verifiedBy?.name ? ` by ${c.verifiedBy.name}` : ""}` : `${waitingWords(c.createdAt)} (signed up ${exactWhen(c.createdAt)})`}
-          </Fact>
-        </dd>
-        <dt>Job boards</dt>
-        <dd>{c.jobBoardsConfirmedAt ? "ITS can sign in" : "Not confirmed yet"}</dd>
-        <dt>Plan</dt>
-        <dd>
-          <Fact action={<Button size="sm" variant="quiet" onClick={() => onTab("plan")}>Change plan</Button>}>{planWords(c.planKey)} · {planStatusWords(c.status)}</Fact>
-          {c.trial ? <div className="small muted">Trial {trialWords(c.trial, c.timezone)}</div> : null}
-          {c.seats && c.seats.limit !== null ? <div className="small muted">{seatsWords(c.seats)}</div> : null}
-          {extensionLines(c.trialTerm, c.timezone).map((line) => <div key={line.key} className="small muted">{line.text}</div>)}
-          {c.screeningConversations ? <div className="small muted">{screeningLine(c.screeningConversations)}</div> : null}
-          {low ? <Chip tone="caution">{allowanceChip(low)}</Chip> : null}
-        </dd>
-        <dt>How people apply</dt>
-        <dd>
-          <Fact>The same for everyone: the form, then the AI interview</Fact>
-        </dd>
-        <dt>Applicants' match score</dt>
-        <dd>
-          <Fact action={<Button size="sm" variant="quiet" ariaLabel="Change whether applicants see their match score" onClick={() => onTab("apply")}>Change</Button>}>{candidateScoreWords(candidateScoreOn(c))}</Fact>
-        </dd>
-        <dt>Jobs</dt>
-        <dd>{plural(c.roles, "job", "jobs")} · {plural(c.applications, "applicant", "applicants")}</dd>
-        <dt>Recruiter requests</dt>
-        <dd>
-          <div>{asks ? `${asks.used}${asks.limit !== null ? ` of ${asks.limit}` : ""} this month` : "None recorded"} · {c.escalations} in all</div>
-          {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
-          {c.recruiterAsks?.over ? <Chip tone="caution">{RECRUITER_ASKS_OVER_CHIP}</Chip> : null}
-        </dd>
-        <dt>AI cost</dt>
-        <dd><span title={exactMoney(c.aiCostUsd)}>{money(c.aiCostUsd)}</span> in all</dd>
-        <dt>Last activity</dt>
-        <dd>{c.lastActivityAt ? <>{exactWhen(c.lastActivityAt)} </> : null}<Chip tone={activity.tone}>{activity.label}</Chip></dd>
-        <dt>Messages held</dt>
-        <dd>{c.heldMessages ? `${plural(c.heldMessages, "message", "messages")} to candidates` : "None"}</dd>
-      </dl>
-      <div className="row">
-        <Button onClick={() => onTab("report")}>See the report</Button>
+    <div className="stack gap-5">
+      {/* "At a glance" (screenshot 7): one card of rows, each label beside its fact, a hairline between them, outlined buttons */}
+      <Card className="p-5 sm:px-6">
+        <dl className={GLANCE}>
+          <dt>ITS check</dt>
+          <dd>
+            <Fact action={<Button size="sm" variant={verified ? "secondary" : "primary"} ariaLabel={verified ? "Change the ITS check" : undefined} onClick={() => onTab("check")}>{verified ? "Change" : "Confirm"}</Button>}>
+              {verified ? `Confirmed ${exactWhen(c.verifiedAt)}${c.verifiedBy?.name ? ` by ${c.verifiedBy.name}` : ""}` : `${waitingWords(c.createdAt)} (signed up ${exactWhen(c.createdAt)})`}
+            </Fact>
+          </dd>
+          <dt>Job boards</dt>
+          <dd>{c.jobBoardsConfirmedAt ? "ITS can sign in" : "Not confirmed yet"}</dd>
+          <dt>Plan</dt>
+          <dd>
+            <Fact action={<Button size="sm" variant="secondary" onClick={() => onTab("plan")}>Change plan</Button>}>{planWords(c.planKey)} · {planStatusWords(c.status)}</Fact>
+            {c.trial ? <div className="small muted">Trial {trialWords(c.trial, c.timezone)}</div> : null}
+            {c.seats && c.seats.limit !== null ? <div className="small muted">{seatsWords(c.seats)}</div> : null}
+            {extensionLines(c.trialTerm, c.timezone).map((line) => <div key={line.key} className="small muted">{line.text}</div>)}
+            {c.screeningConversations ? <div className="small muted">{screeningLine(c.screeningConversations)}</div> : null}
+            {low ? <Chip tone="caution">{allowanceChip(low)}</Chip> : null}
+          </dd>
+          <dt>How people apply</dt>
+          <dd>
+            <Fact>The same for everyone: the form, then the AI interview</Fact>
+          </dd>
+          <dt>Applicants' match score</dt>
+          <dd>
+            <Fact action={<Button size="sm" variant="secondary" ariaLabel="Change whether applicants see their match score" onClick={() => onTab("apply")}>Change</Button>}>{candidateScoreWords(candidateScoreOn(c))}</Fact>
+          </dd>
+          <dt>Jobs</dt>
+          <dd>{plural(c.roles, "job", "jobs")} · {plural(c.applications, "applicant", "applicants")}</dd>
+          <dt>Recruiter requests</dt>
+          <dd>
+            <div>{asks ? `${asks.used}${asks.limit !== null ? ` of ${asks.limit}` : ""} this month` : "None recorded"} · {c.escalations} in all</div>
+            {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
+            {c.recruiterAsks?.over ? <Chip tone="caution">{RECRUITER_ASKS_OVER_CHIP}</Chip> : null}
+          </dd>
+          <dt>AI cost</dt>
+          <dd><span title={exactMoney(c.aiCostUsd)}>{money(c.aiCostUsd)}</span> in all</dd>
+          <dt>Last activity</dt>
+          <dd>{c.lastActivityAt ? <>{exactWhen(c.lastActivityAt)} </> : null}<Chip tone={activity.tone}>{activity.label}</Chip></dd>
+          <dt>Messages held</dt>
+          <dd>{c.heldMessages ? `${plural(c.heldMessages, "message", "messages")} to candidates` : "None"}</dd>
+        </dl>
+      </Card>
+      <div className="flex flex-wrap gap-2">
+        <Button icon="chart" onClick={() => onTab("report")}>See the report</Button>
       </div>
     </div>
   );
@@ -480,22 +511,22 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
     onError: (e) => { setConfirming(false); toast(e instanceof ApiError ? e.message : "Could not change the plan."); },
   });
   return (
-    <div className="stack" style={{ gap: 14 }}>
+    <div className="stack gap-4">
       <Card title="Pick a plan">
         <p className="small muted">Now on {planWords(company.planKey)}.{company.screeningConversations ? ` ${screeningLine(company.screeningConversations)}.` : ""}</p>
         {plans.isLoading ? <Skeleton lines={3} /> : plans.error ? <ErrorState message="Could not load the plans." onRetry={() => plans.refetch()} /> : (
-          <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+          <div className={FORM}>
             <Field label="Plan" htmlFor="plan-pick">
               <select id="plan-pick" className="select" value={pick} onChange={(e) => { setPick(e.target.value); setConfirming(false); }}>
                 {(plans.data ?? []).map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
               </select>
             </Field>
-            {chosen ? <p className="small" style={{ margin: 0 }}>{planLimitsLine(chosen.limits)}</p> : null}
+            {chosen ? <p className="rounded-xl bg-surface-2 px-3.5 py-2.5 text-[13px] text-ink-2">{planLimitsLine(chosen.limits)}</p> : null}
             {pick !== company.planKey ? (
               <>
                 <Field label="Why (required, kept with the change)" htmlFor="plan-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="plan-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
                 {confirming ? (
-                  <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+                  <Alert tone="caution"><div className={CONFIRM}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
                 ) : <div className="row"><Button variant="primary" disabled={!reasonReady(why)} onClick={() => setConfirming(true)}>Change plan</Button><Button variant="quiet" onClick={() => { setPick(company.planKey); setWhy(""); }}>Cancel</Button></div>}
               </>
             ) : null}
@@ -535,11 +566,11 @@ function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: T
   return (
     <Card title="Extend the trial">
       <p className="small muted">{trial.ended ? `The trial ended on ${trialDate(trial.endsAt ?? "", company.timezone)}: new applications, new jobs and new AI interviews are paused.` : `The trial ends on ${trialDate(trial.endsAt ?? "", company.timezone)}.`} An extension counts from the later of the end and today. The owners are told, and they see your reason in their activity history.</p>
-      <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+      <div className={FORM}>
         <Field label="Days to add" htmlFor="trial-days" hint={`From 1 to ${TRIAL_EXTENSION_MAX_DAYS}.`}><input id="trial-days" className="input" type="number" inputMode="numeric" min={1} max={TRIAL_EXTENSION_MAX_DAYS} step={1} value={days} onChange={(e) => { setDays(e.target.value); setConfirming(false); }} /></Field>
         <Field label="Why (required, kept with the change)" htmlFor="trial-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="trial-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
         {confirming ? (
-          <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{trialExtensionQuestion(company.name, count, to, company.timezone)}</span><span className="row"><Button size="sm" variant="primary" loading={extend.isPending} onClick={() => extend.mutate()}>Yes, extend it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+          <Alert tone="caution"><div className={CONFIRM}><span>{trialExtensionQuestion(company.name, count, to, company.timezone)}</span><span className="row"><Button size="sm" variant="primary" loading={extend.isPending} onClick={() => extend.mutate()}>Yes, extend it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
         ) : <div className="row"><Button variant="primary" disabled={!ready} onClick={() => setConfirming(true)}>Extend the trial</Button></div>}
       </div>
     </Card>
@@ -553,8 +584,9 @@ function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: T
  */
 function ApplyFlowPanel({ company }: { company: CustomerRow }) {
   return (
-    <div className="stack" style={{ gap: 14 }}>
-      <Card title="How people apply">
+    <div className="stack gap-4">
+      {/* a fact with nothing to change: a tinted card */}
+      <Card title="How people apply" className={TINTED}>
         <p className="small muted">{EVERY_APPLICANT_LINE}</p>
       </Card>
       <CandidateScorePanel company={company} />
@@ -607,8 +639,8 @@ function CandidateScorePanel({ company }: { company: CustomerRow }) {
   return (
     <Card title="Applicants' match score">
       <p className="small muted">After sending, each applicant of {company.name} sees their match score on their application record: the number, and how it breaks down against the requirements on the job page. Other requirements fold into one line; the team's private notes never show. A lawyer reviews this before it is used with real applicants in New York City, Illinois, California or Colorado.</p>
-      {setBy ? <p className="small muted">Last set {exactWhen(setBy.at)}{setBy.by.name ? ` by ${setBy.by.name}` : ""}: {setBy.reason}</p> : null}
-      <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+      {setBy ? <p className="small muted mt-1.5">Last set {exactWhen(setBy.at)}{setBy.by.name ? ` by ${setBy.by.name}` : ""}: {setBy.reason}</p> : null}
+      <div className={FORM}>
         <Segmented value={choice} onChange={setChoice} ariaLabel="Applicants' match score" options={[{ value: "shown", label: "Show it" }, { value: "hidden", label: "Don't show it" }]} />
         {choice !== current ? (
           <>
@@ -653,30 +685,33 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the held messages."),
   });
   return (
-    <div className="stack" style={{ gap: 14 }}>
-      <Card title="The company">
-        <p className="small">{company.name} · {company.vertical} · {company.sizeBand} employees · {company.settings.website || "no website given"} · signed up {new Date(company.createdAt).toLocaleDateString()}</p>
-        <p className="small muted">{verified ? `Confirmed ${new Date(company.verifiedAt ?? "").toLocaleString()}${company.verifiedBy?.name ? ` by ${company.verifiedBy.name}` : ""}.` : "Not confirmed yet: its careers page, job pages and Google listing are offline, and its emails to candidates wait. It can draft and approve roles."}</p>
-        {company.heldMessages && !verified ? <p className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} held and will go out when you confirm.</p> : null}
-        {company.heldMessages && verified ? (
-          <div className="row" style={{ justifyContent: "space-between", marginTop: 6 }}>
-            <span className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} still held although the company is confirmed.</span>
-            <Button size="sm" variant="primary" loading={release.isPending} onClick={() => release.mutate()}>Send the held messages</Button>
-          </div>
-        ) : null}
+    <div className="stack gap-4">
+      {/* what is known about the company: a tinted card; the cards that act on it stay white */}
+      <Card title="The company" className={TINTED}>
+        <div className="grid gap-1.5">
+          <p className="small">{company.name} · {company.vertical} · {company.sizeBand} employees · {company.settings.website || "no website given"} · signed up {new Date(company.createdAt).toLocaleDateString()}</p>
+          <p className="small muted">{verified ? `Confirmed ${new Date(company.verifiedAt ?? "").toLocaleString()}${company.verifiedBy?.name ? ` by ${company.verifiedBy.name}` : ""}.` : "Not confirmed yet: its careers page, job pages and Google listing are offline, and its emails to candidates wait. It can draft and approve roles."}</p>
+          {company.heldMessages && !verified ? <p className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} held and will go out when you confirm.</p> : null}
+          {company.heldMessages && verified ? (
+            <div className={cn(CONFIRM, "mt-1")}>
+              <span className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} still held although the company is confirmed.</span>
+              <Button size="sm" variant="primary" loading={release.isPending} onClick={() => release.mutate()}>Send the held messages</Button>
+            </div>
+          ) : null}
+        </div>
       </Card>
       <Card title={verified ? "Take the confirmation back" : "Confirm the company"}>
         <p className="small muted">{verified ? "Its careers page, job pages and feeds go offline at once and its messages to candidates wait again. Roles, candidates and decisions are kept." : "Confirm only after checking the company is real: the kick-off call, its website, a phone number. Its pages go public, approved roles are published and held messages go out."} The owners are told, and they see your reason in their activity history.</p>
-        <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+        <div className={FORM}>
           <Field label={verified ? "Why you are taking it back" : "How you checked the company"} htmlFor="co-check-why"><input id="co-check-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
           {confirming ? (
-            <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{verified ? `Take back the confirmation of ${company.name}?` : `Confirm ${company.name} and make its pages public?`}</span><span className="row"><Button size="sm" variant={verified ? "destructive" : "primary"} loading={change.isPending} onClick={() => change.mutate()}>{verified ? "Yes, take it back" : "Yes, confirm it"}</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+            <Alert tone="caution"><div className={CONFIRM}><span>{verified ? `Take back the confirmation of ${company.name}?` : `Confirm ${company.name} and make its pages public?`}</span><span className="row"><Button size="sm" variant={verified ? "destructive" : "primary"} loading={change.isPending} onClick={() => change.mutate()}>{verified ? "Yes, take it back" : "Yes, confirm it"}</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
           ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setConfirming(true)}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
         </div>
       </Card>
       <Card title="Job-board access">
         <p className="small muted">The owner adds the ITS recruiter as a user on the company's LinkedIn, Indeed and ZipRecruiter accounts. Record here once ITS can sign in to each; it ticks the owner's getting-started step.</p>
-        <div className="row" style={{ marginTop: 8 }}>
+        <div className="row mt-3">
           {company.jobBoardsConfirmedAt
             ? <><Chip tone="good">ITS can sign in</Chip><Button size="sm" variant="secondary" loading={boards.isPending} onClick={() => boards.mutate(false)}>No longer confirmed</Button></>
             : <Button size="sm" variant="primary" loading={boards.isPending} onClick={() => boards.mutate(true)}>ITS can sign in to the job boards</Button>}

@@ -2,6 +2,7 @@
 
 import { PACKET_VISIBILITY_LABEL, type PacketRevisionProposal } from "@ros/contracts";
 import { Button, Icon } from "@ros/ui";
+import { SEEN_TAG } from "./look";
 import { changeLine, proposalSections, takesEffectWords } from "./refine-api";
 import type { SectionId } from "./rules";
 
@@ -34,33 +35,34 @@ const SHOWN = 8;
  * A change the assistant proposes (plan C10): its summary, every changed field with what it was and what it would be
  * (and who sees it), anything it would not do and why, what the wording check would flag, and what Confirm does. Nothing
  * changes until the person presses Confirm or Keep as is. `onShow` takes the reader to the changed parts of the draft.
+ * The changed fields are rows like a table's (screenshot 4): the field, what changes, who sees it.
  */
 export function ProposalCard(props: { proposal: PacketRevisionProposal; onConfirm: () => void; onKeep: () => void; onShow?: () => void; confirming: boolean; keeping?: boolean }) {
   const p = props.proposal;
   const ids = proposalSections(p);
   const changes = p.diff.sections.flatMap((s) => s.changes.map((c) => ({ ...c, section: s.label })));
   return (
-    <section className="proposal" aria-label="Proposed change">
-      <p className="proposal-head"><Icon name="sparkle" size={14} /> Proposed change, not saved yet</p>
-      <p>{p.summary}</p>
+    <section className="grid min-w-0 gap-3 rounded-2xl border border-line-tint bg-surface p-4 shadow-sm motion-safe:animate-enter sm:p-5" aria-label="Proposed change">
+      <p className="eyebrow live">Proposed change, not saved yet</p>
+      <p className="text-[15px] font-medium leading-snug text-ink">{p.summary}</p>
       {changes.length ? (
-        <ul className="proposal-changes" aria-label="What would change">
+        <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line" aria-label="What would change">
           {changes.slice(0, SHOWN).map((c) => (
-            <li key={`${c.path}-${c.kind}`}>
-              <span className="proposal-field">{c.label}</span>
-              <span className="proposal-change">{changeLine(c)}</span>
-              <span className="seen-by">{PACKET_VISIBILITY_LABEL[c.visibility]}</span>
+            <li key={`${c.path}-${c.kind}`} className="grid min-w-0 gap-1 px-3.5 py-3 text-[14px] sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto] sm:items-center sm:gap-4">
+              <span className="min-w-0 font-semibold text-ink wrap-anywhere">{c.label}</span>
+              <span className="min-w-0 text-ink-2 wrap-anywhere">{changeLine(c)}</span>
+              <span className={`${SEEN_TAG} justify-self-start`}>{PACKET_VISIBILITY_LABEL[c.visibility]}</span>
             </li>
           ))}
-          {changes.length > SHOWN ? <li className="small muted">and {changes.length - SHOWN} more {changes.length - SHOWN === 1 ? "change" : "changes"}</li> : null}
+          {changes.length > SHOWN ? <li className="px-3.5 py-2.5 text-[13px] text-ink-3">and {changes.length - SHOWN} more {changes.length - SHOWN === 1 ? "change" : "changes"}</li> : null}
         </ul>
       ) : null}
       {p.notChanged.length ? (
-        <ul className="small" style={{ margin: 0, paddingLeft: 18, color: "var(--ink-2)" }} aria-label="Not done">
+        <ul className="grid list-disc gap-1 pl-[18px] text-[13px] text-ink-2" aria-label="Not done">
           {p.notChanged.map((n) => <li key={n.request}>Not done: {n.request}. {n.reason}</li>)}
         </ul>
       ) : null}
-      {p.newFlags.length ? <p className="small" style={{ color: "var(--caution)" }}>The wording check would flag {p.newFlags.map((f) => `"${f.text}"`).join(", ")}; if you confirm, it asks you about it before approval.</p> : null}
+      {p.newFlags.length ? <p className="small inline-flex items-start gap-1.5 text-caution"><Icon name="flag" size={13} className="mt-[3px] shrink-0" />The wording check would flag {p.newFlags.map((f) => `"${f.text}"`).join(", ")}; if you confirm, it asks you about it before approval.</p> : null}
       {p.guardChanges.length ? <p className="small muted">{p.guardChanges.join(" ")}</p> : null}
       <p className="small muted">
         {ids.length ? `${partsLine(ids)} ` : ""}{takesEffectWords(p.takesEffect)}{" "}

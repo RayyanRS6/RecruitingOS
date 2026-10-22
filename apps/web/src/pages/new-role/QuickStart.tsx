@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IntakeFacts, IntakePayCard, IntakeQuestion, IntakeSessionSummary, IntakeSessionView, PlanRoom } from "@ros/contracts";
 import { Alert, Button, Eyebrow, Field, Icon } from "@ros/ui";
@@ -10,6 +10,7 @@ import { writeDraftClosingDate } from "../../publishing";
 import { browserStorage } from "../../start-hire";
 import { toast } from "../../toast";
 import { AssistantMark } from "./Conversation";
+import { OPTION_LABEL, OPTION_ROW, OPTION_TAG, OPTIONS, OWN_CHIP, OWN_CHIP_X, OWN_CHIPS } from "./look";
 import { PayFields } from "./PayCard";
 import {
   BELOW_CHOICES, DEAL_BREAKERS_MAX, EMPLOYMENT_CHOICES, EXPERIENCE_CHOICES, MUST_HAVES_MAX, OWN_QUESTIONS_MAX, QUICK_STEPS, STEP_HINT, STEP_LABEL, STEP_QUESTION, WORK_MODEL_CHOICES,
@@ -231,32 +232,44 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
   const primary = step === "review" ? "Write the job post" : state.fromReview ? "Back to review" : "Next";
 
   return (
-    <div className="start">
-      <Eyebrow>{name ? `New job · ${name}` : "New job"}</Eyebrow>
-      <p className="small muted" aria-live="polite">Step {state.step + 1} of {QUICK_STEPS.length} · {STEP_LABEL[step]}</p>
-      <h1 ref={heading} tabIndex={-1}>{STEP_QUESTION[step]}</h1>
-      <p className="start-lede">{STEP_HINT[step]}</p>
-      {full && room ? <RoomAlert room={room} ask={limit?.ask ?? null} /> : null}
-      <form className="stack" style={{ gap: 14 }} onSubmit={onSubmit} onKeyDown={onKeyDown} noValidate>
-        <StepBody step={step} a={a} set={set} vertical={vertical} suggest={suggest} onEdit={(i) => goTo(i, true)} />
-        {problem ? <Alert tone="caution">{problem}</Alert> : null}
-        {notARole ? (
-          <div className="chat-msg assistant">
-            <AssistantMark />
-            <div className="bubble assistant">{notARole}</div>
-          </div>
-        ) : null}
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          {state.step === 0 && !state.fromReview ? (
-            <Link to={NEW_ROLE_FRESH_HREF} className="btn ghost">Other ways to start</Link>
-          ) : (
-            <Button variant="ghost" icon="arrow-left" onClick={back}>{state.fromReview ? "Review" : "Back"}</Button>
-          )}
-          <Button type="submit" variant="primary" iconEnd={step === "review" ? "sparkle" : "arrow-right"} loading={write.isPending} disabled={step === "review" && full}>{primary}</Button>
+    <div className="start mx-auto grid w-full max-w-[760px] gap-4">
+      {/* One question a screen, in a form card (screenshot 5): where it is in the ten steps, a thin plum-to-coral bar, the
+          question, the answers, then Back on the left and Next on the right. */}
+      <div className="card grid gap-5 rounded-[20px] p-5 sm:p-8 md:[&>h1]:text-[38px] [&>h1:focus-visible]:rounded-md [&>h1:focus-visible]:outline-offset-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <Eyebrow>{name ? `New job · ${name}` : "New job"}</Eyebrow>
+          <p className="text-[12.5px] font-medium tabular-nums text-ink-3" aria-live="polite">Step {state.step + 1} of {QUICK_STEPS.length} · {STEP_LABEL[step]}</p>
         </div>
-      </form>
-      <p className="small muted start-note">
-        <Icon name="check" size={14} /> Press Enter to go on. Your answers are kept in this browser.
+        <div aria-hidden="true" className="-mt-2 h-1 overflow-hidden rounded-full bg-surface-3">
+          <div className="h-full origin-left scale-x-(--done) rounded-full bg-linear-to-r from-primary to-accent transition-transform duration-300 ease-soft" style={{ "--done": String((state.step + 1) / QUICK_STEPS.length) } as CSSProperties} />
+        </div>
+        <h1 ref={heading} tabIndex={-1}>{STEP_QUESTION[step]}</h1>
+        <p className="-mt-2 text-[15px] text-ink-2">{STEP_HINT[step]}</p>
+        {full && room ? <RoomAlert room={room} ask={limit?.ask ?? null} /> : null}
+        <form className="grid gap-4" onSubmit={onSubmit} onKeyDown={onKeyDown} noValidate>
+          {/* each step's answers fade in as the step opens */}
+          <div key={step} className="grid min-w-0 gap-4 motion-safe:animate-fade">
+            <StepBody step={step} a={a} set={set} vertical={vertical} suggest={suggest} onEdit={(i) => goTo(i, true)} />
+          </div>
+          {problem ? <Alert tone="caution">{problem}</Alert> : null}
+          {notARole ? (
+            <div className="flex min-w-0 items-start gap-2.5 motion-safe:animate-enter">
+              <AssistantMark />
+              <div className="bubble assistant min-w-0 rounded-2xl rounded-tl-md">{notARole}</div>
+            </div>
+          ) : null}
+          <div className="mt-1 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
+            {state.step === 0 && !state.fromReview ? (
+              <Link to={NEW_ROLE_FRESH_HREF} className="btn ghost">Other ways to start</Link>
+            ) : (
+              <Button variant="ghost" icon="arrow-left" onClick={back}>{state.fromReview ? "Review" : "Back"}</Button>
+            )}
+            <Button type="submit" variant="primary" iconEnd={step === "review" ? "sparkle" : "arrow-right"} loading={write.isPending} disabled={step === "review" && full}>{primary}</Button>
+          </div>
+        </form>
+      </div>
+      <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-center text-[12.5px] text-ink-3">
+        <Icon name="check" size={14} className="text-good" /> Press Enter to go on. Your answers are kept in this browser.
         {hasAnswers(a) || state.step > 0 ? <> <button type="button" className="link-btn" onClick={startOver}>Start over</button></> : null}
       </p>
     </div>
@@ -266,16 +279,16 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
 /** A group of choices, one or several, as rows to tick (the question card's look). */
 function Choices(props: { legend: string; name: string; multi?: boolean; options: ReadonlyArray<{ value: string; label: string; note?: string }>; checked: (value: string) => boolean; onPick: (value: string) => void; disabled?: boolean }) {
   return (
-    <fieldset className="qfield">
+    <fieldset className="min-w-0">
       <legend className="sr-only">{props.legend}</legend>
-      <div className="qopts">
+      <div className={OPTIONS}>
         {props.options.map((o) => {
           const on = props.checked(o.value);
           return (
-            <label key={o.value} className="qopt" data-checked={on ? "true" : undefined}>
+            <label key={o.value} className={OPTION_ROW} data-checked={on ? "true" : undefined}>
               <input type={props.multi ? "checkbox" : "radio"} name={props.name} value={o.value} aria-label={o.label} checked={on} disabled={props.disabled} onChange={() => props.onPick(o.value)} />
-              <span className="qopt-label">{o.label}</span>
-              {o.note ? <span className="qopt-origin">{o.note}</span> : null}
+              <span className={OPTION_LABEL}>{o.label}</span>
+              {o.note ? <span className={OPTION_TAG}>{o.note}</span> : null}
             </label>
           );
         })}
@@ -289,18 +302,18 @@ function AddOwn(props: { id: string; label: string; placeholder: string; items: 
   const [text, setText] = useState("");
   const add = () => { props.onAdd(text); setText(""); };
   return (
-    <div className="own-box">
+    <div className="grid min-w-0 gap-2">
       {props.items.length ? (
-        <ul className="own-items" aria-label="Added by you">
+        <ul className={OWN_CHIPS} aria-label="Added by you">
           {props.items.map((t) => (
-            <li key={t} className="chip accent">
+            <li key={t} className={OWN_CHIP}>
               {t}
-              <button type="button" className="chip-x" aria-label={`Remove ${t}`} onClick={() => props.onRemove(t)}><Icon name="x" size={12} /></button>
+              <button type="button" className={OWN_CHIP_X} aria-label={`Remove ${t}`} onClick={() => props.onRemove(t)}><Icon name="x" size={12} /></button>
             </li>
           ))}
         </ul>
       ) : null}
-      <div className="row" style={{ flexWrap: "nowrap" }}>
+      <div className="flex min-w-0 items-center gap-2">
         <label htmlFor={props.id} className="sr-only">{props.label}</label>
         <input
           id={props.id}
@@ -357,7 +370,7 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
           <Choices legend={STEP_QUESTION.experience} name="qs-experience" options={EXPERIENCE_CHOICES} checked={(v) => a.experience === v} onPick={(v) => set({ experience: v, below: v === "none" ? "" : a.below })} />
           {a.experience && a.experience !== "none" ? (
             <>
-              <h2 className="qcard-prompt" id="qs-below-h">Anyone with less?</h2>
+              <h2 className="mt-2 font-display text-[18px] font-bold tracking-[-0.015em]" id="qs-below-h">Anyone with less?</h2>
               <Choices legend="Anyone with less?" name="qs-below" options={BELOW_CHOICES} checked={(v) => a.below === v} onPick={(v) => set({ below: v as QuickAnswers["below"] })} />
             </>
           ) : null}
@@ -413,16 +426,16 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
           <Choices legend={STEP_QUESTION.dealbreakers} name="qs-none" multi options={[{ value: "none", label: "None" }]} checked={() => a.noDealBreakers} onPick={() => set({ noDealBreakers: !a.noDealBreakers })} />
           <AddOwn id="qs-deal-own" label="Add a deal-breaker" placeholder="e.g. Cannot work Saturdays" items={a.dealBreakers} max={DEAL_BREAKERS_MAX} disabled={a.noDealBreakers} onAdd={add} onRemove={remove} />
           {a.dealBreakers.length && !a.noDealBreakers ? (
-            <fieldset className="qfield">
-              <legend className="small">Count it openly as a must-have</legend>
-              <div className="qopts">
+            <fieldset className="grid min-w-0 gap-2">
+              <legend className="mb-2 text-[13px] font-semibold text-ink">Count it openly as a must-have</legend>
+              <div className={OPTIONS}>
                 {a.dealBreakers.map((d) => {
                   const on = isOpen(d);
                   return (
-                    <label key={d} className="qopt" data-checked={on ? "true" : undefined}>
+                    <label key={d} className={OPTION_ROW} data-checked={on ? "true" : undefined}>
                       <input type="checkbox" checked={on} aria-label={`Count "${d}" openly as a must-have`} disabled={!on && roomLeft <= 0} onChange={() => set({ dealBreakersPrivate: toggleItem(a.dealBreakersPrivate, d) })} />
-                      <span className="qopt-label">{d}</span>
-                      <span className="qopt-origin">{on ? "Must-have" : "Not used to judge"}</span>
+                      <span className={OPTION_LABEL}>{d}</span>
+                      <span className={OPTION_TAG}>{on ? "Must-have" : "Not used to judge"}</span>
                     </label>
                   );
                 })}
@@ -448,12 +461,12 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
     case "review":
       return (
         <>
-          <ul className="list" aria-label="Your answers" style={{ margin: 0, padding: 0, listStyle: "none" }}>
+          <ul className="list" aria-label="Your answers">
             {reviewRows(a, vertical).map((r) => (
-              <li key={r.label} className="list-item">
+              <li key={r.label} className="list-item min-h-14 py-3">
                 <span className="list-item-main">
-                  <strong>{r.label}</strong>
-                  <span className="sub">{r.value}</span>
+                  <strong className="text-[14px] font-semibold">{r.label}</strong>
+                  <span className="sub wrap-anywhere">{r.value}</span>
                 </span>
                 <span className="list-item-end">
                   <Button size="sm" variant="ghost" icon="edit" ariaLabel={`Edit ${r.label.toLowerCase()}`} onClick={() => onEdit(r.step)}>Edit</Button>
@@ -494,7 +507,7 @@ function TitleStep({ a, set }: { a: QuickAnswers; set: (patch: Partial<QuickAnsw
       </Field>
       <details className="more">
         <summary>{ad.trim() ? "Your job ad (it goes with your answers)" : "Paste a job ad instead"}</summary>
-        <div className="stack" style={{ gap: 8 }}>
+        <div className="grid gap-2">
           <textarea className="textarea" aria-label="Paste a job ad" value={ad} maxLength={20_000} rows={6} placeholder="Paste the ad here, or drop a text file on this box." onChange={(e) => setAd(e.target.value)} onDrop={onDrop} />
           <div className="row">
             <Button size="sm" disabled={!ad.trim()} onClick={() => use(ad)}>Fill in from this ad</Button>

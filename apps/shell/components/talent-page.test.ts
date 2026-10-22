@@ -169,7 +169,7 @@ describe("the Candidates page", () => {
     // a link to the Offer column and to one step (?stage=): nobody is at both
     nav.search = "ownerStage=offer&stage=rejected";
     const html = render(client([]), createElement(People));
-    expect(html).toContain('<ul class="own-items" aria-labelledby="talent-filters-on">');
+    expect(html).toMatch(/<ul class="own-items[^"]*" aria-labelledby="talent-filters-on">/);
     expect(html).toContain('<span class="sr-only">Remove the filter: </span>Stage: Offer<svg');
     expect(html).toMatch(/<span class="sr-only">Remove the filter: <\/span>Only: [^<]+<svg/);
     expect(text(html)).toContain("Clear all");
@@ -252,7 +252,7 @@ describe("the Candidates page", () => {
     const html = render(client([detail(maria, { hiddenTextNote: HIDDEN_TEXT_IN_CV })]), createElement(People));
     expect(text(html).split(HIDDEN_TEXT_IN_CV).length - 1).toBe(1);
     // a calm grey line, never a warning
-    expect(html).toContain(`<p class="small muted" style="margin:10px 0 0">${HIDDEN_TEXT_IN_CV}</p>`);
+    expect(html).toContain(`<p class="small muted">${HIDDEN_TEXT_IN_CV}</p>`);
     expect(text(render(client([detail(maria)]), createElement(People)))).not.toContain("aimed at the AI");
     expect(text(render(client([detail(maria, { hiddenTextNote: null })]), createElement(People)))).not.toContain("aimed at the AI");
   });
@@ -358,13 +358,14 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     const html = render(jobsClient(), createElement(Roles));
     expect(html).toMatch(/<h1>Jobs<\/h1>/);
     expect(text(html)).toContain("Open a job to see who applied.");
-    expect(html).toContain('<a href="/roles/r1/talent" style="text-decoration:none;color:inherit"><strong>Dental Hygienist</strong></a>');
+    // the title is the row's link (its press area stretched over the row), styled by its class, never inline
+    expect(html).toContain('<a href="/roles/r1/talent" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]"><strong>Dental Hygienist</strong></a>');
     // one line under the title, with the other view as a small link in it; what calls for action is a badge
     expect(text(html)).toContain("Dental Hygienist 2 applicants · 7 days open · Job details");
     expect(text(html)).toContain("1 to review");
     expect(text(html)).toContain("1 new");
     expect(html).toContain('<a href="/roles/r1" class="small">Job details<span class="sr-only">: Dental Hygienist</span></a>');
-    expect(html).toContain('<a href="/roles/r2" style="text-decoration:none;color:inherit"><strong>Office Manager</strong></a>');
+    expect(html).toContain('<a href="/roles/r2" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]"><strong>Office Manager</strong></a>');
     // "Not live" says it once: the line says why, and no status pill repeats it
     expect(text(html)).toContain("Office Manager Waiting for approval");
     expect(text(html).match(/Waiting for approval/g)).toHaveLength(1);

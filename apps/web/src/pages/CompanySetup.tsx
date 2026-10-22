@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "../nav";
-import { Alert, Button, Card, Eyebrow, Field } from "@ros/ui";
+import { Alert, Button, Eyebrow, Field } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { VERTICALS, ZONE_CHOICES, browserTimeZone, snapTimeZone, verticalHint } from "../company-setup";
 import { browserStorage } from "../start-hire";
@@ -54,17 +54,18 @@ export function CompanySetup() {
     nav("/login", { replace: true });
   };
   return (
-    <main className="main" style={{ maxWidth: 560, margin: "6vh auto" }}>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <div>
-          <Eyebrow>Getting started</Eyebrow>
-          <h1 style={{ marginTop: 6 }}>Tell us about your company</h1>
+    // The application card of screenshot 5, alone on the page's glow: what this is, then the form, Sign out at the top.
+    <main className="mx-auto w-full max-w-[620px] px-4 py-10 sm:py-16">
+      <div className="rounded-[20px] border border-line bg-surface px-5 py-7 shadow-sm motion-safe:animate-enter sm:px-9 sm:py-9">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <Eyebrow>Getting started</Eyebrow>
+            <h1 className="mt-2 text-[30px] sm:text-[34px]">Tell us about your company</h1>
+          </div>
+          <Button variant="quiet" size="sm" loading={leaving} onClick={signOut}>Sign out</Button>
         </div>
-        <Button variant="quiet" size="sm" loading={leaving} onClick={signOut}>Sign out</Button>
-      </div>
-      <p className="muted" style={{ margin: "6px 0 18px" }}>Two minutes. This shapes every role you open: how it is drafted, the notices candidates see, and where jobs get posted.</p>
-      <Card>
-        <form onSubmit={submit} className="stack">
+        <p className="mt-3 max-w-[56ch] text-[15px] text-ink-2">Two minutes. This shapes every role you open: how it is drafted, the notices candidates see, and where jobs get posted.</p>
+        <form onSubmit={submit} className="stack mt-7 gap-5 border-t border-line pt-7">
           <Field label="Company name" htmlFor="name"><input id="name" className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
           <Field label="Your name" htmlFor="owner"><input id="owner" className="input" value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} /></Field>
           <Field label="What kind of business" htmlFor="vertical" hint={verticalHint(form.vertical)}>
@@ -78,7 +79,7 @@ export function CompanySetup() {
               {SIZE_BANDS.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </Field>
-          <div className="grid-2">
+          <div className="grid gap-5 sm:grid-cols-2">
             <Field label="City" htmlFor="city"><input id="city" className="input" required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
             <Field label="State" htmlFor="region" hint="Two letters, for example TX"><input id="region" className="input" required minLength={2} maxLength={2} value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></Field>
           </div>
@@ -90,9 +91,12 @@ export function CompanySetup() {
           </Field>
           <Field label="Website (optional)" htmlFor="web"><input id="web" className="input" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} /></Field>
           {error ? <Alert tone="critical">{error}</Alert> : null}
-          <Button type="submit" variant="primary" loading={busy}>Create my hiring workspace</Button>
+          {/* the one main action, at the end of the form: a pill on the right, the full width on a phone */}
+          <div className="flex justify-end pt-1 max-sm:[&>.btn]:w-full">
+            <Button type="submit" variant="primary" loading={busy} iconEnd="arrow-right">Create my hiring workspace</Button>
+          </div>
         </form>
-      </Card>
+      </div>
     </main>
   );
 }

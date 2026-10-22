@@ -482,7 +482,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
         </div>
       ) : (
         <form method="post" action={props.links.apply} enctype="multipart/form-data" data-upload-intent={props.links.uploadIntent}>
-          <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
+          <input type="text" name="website" tabindex={-1} autocomplete="off" class="trap" aria-label="Leave this field empty" />
           <input type="hidden" name="uploadGrant" value={props.state?.resume?.grant ?? ""} />
           <input type="hidden" name="formOpened" value={props.formOpened} />
           {/* This page showed the reading ("Check your details"): a form sent back says so again only then (20 Oct). */}
@@ -507,23 +507,28 @@ export function ApplyFormPage(props: ApplyFormProps) {
 }
 
 /**
- * The form's own styles (Wave S7), passed as the page's styles beside the steps header's: the shared tokens only, no
- * button rules and no motion. The candidate stylesheet in layout.tsx has no room left (weight-guard.test.ts).
+ * The form's own styles (Wave S7; the October 2026 redesign, screenshot 5's form card), passed as the page's styles
+ * beside the steps header's: the shared tokens only, no button rules and no motion. The résumé's card (its file field is
+ * the page stylesheet's dashed drop area), "From your resume" marks as lavender pills, the company's questions as
+ * numbered tiles with Yes and No as two pills, and "Before you send" as the lavender consent box with the
+ * acknowledgment on a white row inside it.
  */
 export const APPLY_CSS = `
 .resume-card .read-line { display: flex; align-items: flex-start; gap: 10px; margin: 0; color: var(--ink); }
-.resume-card .read-line .icon { margin-top: 4px; }
-.tag { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; margin: 0 0 6px; padding: 2px 10px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-ink); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.resume-card .read-line .icon { margin-top: 4px; color: var(--primary); }
+.resume-card input[type=file] { margin-bottom: 4px; }
+.tag { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; margin: 0 0 8px; padding: 2px 10px; border-radius: var(--r-pill); background: var(--tint-2); color: var(--primary); font-size: 13px; font-weight: 600; line-height: 1.5; }
 .quick .q-count { margin: 0 0 4px; color: var(--ink-2); font-size: 14.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-ol.questions { display: grid; gap: 12px; margin: 12px 0 0; padding: 0; list-style: none; }
-ol.questions > li { padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
+ol.questions { display: grid; gap: 12px; margin: 16px 0 0; padding: 0; list-style: none; }
+ol.questions > li { padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
 ol.questions legend.question-legend, ol.questions .question-label { display: block; margin: 0 0 6px; color: var(--ink); font-size: 16px; font-weight: 600; }
-ol.questions .q-num { margin-right: 8px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+ol.questions .q-num { margin-right: 10px; color: var(--accent-ink); font: 400 13px/1 var(--mono); letter-spacing: 0.06em; }
 ol.questions .req { color: var(--ink-3); font-size: 14px; font-weight: 400; }
-.choices { display: grid; gap: 8px; margin: 10px 0 0; }
+.choices { display: grid; gap: 8px; margin: 12px 0 0; }
 .choices.pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .choices.days { grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); }
 .choices .slot { min-height: 48px; margin: 0; }
+.choices.pair .slot { justify-content: center; border-radius: var(--r-pill); }
 .number-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .number-row input[type=number] { max-width: 220px; }
 .number-row span { color: var(--ink-2); }
@@ -531,6 +536,9 @@ details.reuse { margin: 16px 0; }
 .earlier legend { margin: 0 0 4px; color: var(--ink); font-size: 17px; font-weight: 600; }
 .earlier ul { display: grid; gap: 2px; margin: 8px 0 0; padding: 0; list-style: none; }
 .earlier .check { margin: 8px 0; }
+main .card[aria-labelledby="before-you-send"] { border-color: var(--line-tint); background: var(--tint); }
+[aria-labelledby="before-you-send"] .check { padding: 14px 16px; border: 1px solid var(--line-tint); border-radius: var(--r-control); background: var(--surface); }
+[aria-labelledby="before-you-send"] .notice { background: var(--surface); }
 details.replace { margin-top: 24px; }
 .reading { display: grid; gap: 6px; }
 `;
@@ -1383,7 +1391,8 @@ function NoEmail() {
   );
 }
 
-const WAIT_CSS = `.wait{display:flex;gap:14px;align-items:flex-start}.loader{flex:none;width:22px;height:22px;margin-top:2px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:ros-spin .9s linear infinite}@keyframes ros-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.loader{animation:none}}`;
+/** The waiting room's card is the page's "next step" wash (a status card, layout.tsx); its loader a plum ring. */
+const WAIT_CSS = `.wait{display:flex;gap:16px;align-items:flex-start}.loader{flex:none;width:22px;height:22px;margin-top:2px;border:3px solid var(--tint-2);border-top-color:var(--primary);border-radius:50%;animation:ros-spin .9s linear infinite}@keyframes ros-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.loader{animation:none}}`;
 
 /**
  * The waiting room (20 Oct 2026, R20-12): after Send the page waits for this application's AI interview (the résumé read

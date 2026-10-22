@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "../nav";
-import { Alert, Button, EmptyState, ErrorState, Icon, Menu, PageHeader, Pill, Skeleton } from "@ros/ui";
+import { Alert, Button, EmptyState, ErrorState, Icon, IconChip, Menu, PageHeader, Pill, Skeleton } from "@ros/ui";
 import { api, type IntakeSessionSummary, type Me, type RoleSummary } from "../api/client";
 import { activeCompanyOf, jobHref } from "../rail";
 import { canSeeTalent, canShareJob, canStartHire } from "../roles";
@@ -93,30 +93,36 @@ export function Roles() {
   // The chips, search and order only once there is a job to sort; "No jobs yet" stands alone.
   const hasAny = all.length > 0;
   return (
-    <div className="stack" style={{ gap: 18 }}>
+    <div className="stack gap-5 [&>.page-header]:mb-3">
       <PageHeader eyebrow={company.name ?? undefined} title="Jobs" sub={interviewer ? "The jobs you interview for." : "Open a job to see who applied."} actions={mayStartHire ? startHire : null} />
       {again.limit?.room && !again.limit.room.ok ? <RoomAlert room={again.limit.room} ask={again.limit.ask} /> : null}
       {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
       {list && hasAny ? (
-        <div className="talent-toolbar">
-          <fieldset aria-label="Show jobs" className="row" style={{ gap: 6, flexWrap: "wrap", border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        // One toolbar (screenshot 4): the status chips on the left, the search and the order on the right.
+        <div className="flex flex-wrap items-center gap-3">
+          <fieldset aria-label="Show jobs" className="flex min-w-0 flex-wrap items-center gap-1.5">
             {JOB_FILTERS.map((f) => (
               <button key={f.id} type="button" className="toggle-chip" aria-pressed={view.status === f.id} onClick={() => setView({ status: f.id })}>
                 {f.label} <span className="count">{counts[f.id]}</span>
               </button>
             ))}
           </fieldset>
-          <input className="input talent-search" type="search" value={view.q} onChange={(e) => setView({ q: e.target.value })} placeholder="Search by title" maxLength={200} aria-label="Search jobs by title" />
-          {/* The order as a dropdown chip (Wave S6): the current order is written on it and ticked in its list. */}
-          <Menu
-            label={`Sort: ${JOB_SORTS.find((s) => s.id === view.sort)?.label ?? JOB_SORTS[0].label}`}
-            heading="Sort jobs by"
-            buttonClassName="toggle-chip"
-            currentLabel="Now"
-            align="end"
-            items={JOB_SORTS.map((s) => ({ id: s.id, label: s.label, current: s.id === view.sort }))}
-            onSelect={(id) => setView({ sort: id as JobSort })}
-          />
+          <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto">
+            <div className="relative min-w-0 flex-1 sm:w-60 sm:flex-none">
+              <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-ink-3" />
+              <input className="input min-h-10 rounded-full py-2 pl-10" type="search" value={view.q} onChange={(e) => setView({ q: e.target.value })} placeholder="Search by title" maxLength={200} aria-label="Search jobs by title" />
+            </div>
+            {/* The order as a dropdown chip (Wave S6): the current order is written on it and ticked in its list. */}
+            <Menu
+              label={`Sort: ${JOB_SORTS.find((s) => s.id === view.sort)?.label ?? JOB_SORTS[0].label}`}
+              heading="Sort jobs by"
+              buttonClassName="toggle-chip"
+              currentLabel="Now"
+              align="end"
+              items={JOB_SORTS.map((s) => ({ id: s.id, label: s.label, current: s.id === view.sort }))}
+              onSelect={(id) => setView({ sort: id as JobSort })}
+            />
+          </div>
         </div>
       ) : null}
       {!isClient || roles.isLoading ? <Skeleton lines={4} /> : roles.error || !list ? <ErrorState message="Could not load your jobs." onRetry={() => roles.refetch()} /> : list.length === 0 ? (
@@ -129,8 +135,11 @@ export function Roles() {
         // An empty filter says so, with one way on; the drafts below fill the Drafts view when there are some.
         view.status === "drafts" && !view.q.trim() && mine.length ? null : <EmptyState icon="roles" title={empty.title} body={empty.body} action={emptyAction} />
       ) : (
-        <ul className="list" aria-label="Your jobs" style={{ listStyle: "none", margin: 0, padding: 0 }}>
-          {shown.map((r) => {
+        // The jobs as one bordered table card (screenshot 4): a briefcase chip, the title over its one line of facts, the
+        // badges and the row's own actions, then an arrow. The title's link covers the whole row, so the row opens the job
+        // where it is pressed; the small links and buttons in it sit above that and keep their own job.
+        <ul className="list-card" aria-label="Your jobs">
+          {shown.map((r, i) => {
             const s = roleStatus(r.status);
             // the same rule as the rail and Home: a job that has gone live opens on its Candidates
             const primary = jobHref(r, { talent });
@@ -143,14 +152,15 @@ export function Roles() {
               ? <Link to={`/roles/${r.id}`} className="small">Job details<span className="sr-only">: {r.title}</span></Link>
               : talent ? <Link to={`/roles/${r.id}/talent`} className="small">Candidates<span className="sr-only">: {r.title}</span></Link> : null;
             return (
-              <li key={r.id} className="list-item">
-                <span className="list-item-main">
+              <li key={r.id} className={ROW} style={{ animationDelay: stagger(i) }}>
+                <span className="list-row-lead"><IconChip icon="briefcase" /></span>
+                <span className="list-row-main">
                   {/* the title opens the job: its candidates once it has gone live */}
-                  <Link to={primary} style={{ textDecoration: "none", color: "inherit" }}><strong>{r.title}</strong></Link>
+                  <Link to={primary} className={TITLE_LINK}><strong>{r.title}</strong></Link>
                   {/* the other view of the job is a small link in the row's line, not another control at its end */}
-                  <span className="sub tabular">{jobRowLine(r)}{other ? <> · {other}</> : null}</span>
+                  <span className="text-[13px] text-ink-3 tabular-nums">{jobRowLine(r)}{other ? <> · <span className="relative z-[1]">{other}</span></> : null}</span>
                 </span>
-                <span className="list-item-end">
+                <span className="list-row-end">
                   {badges.map((b) => (
                     <Pill key={b.key} size="sm" tone={b.tone} dot={false}>
                       {b.spoken ? <><span aria-hidden="true">{b.label}</span><span className="sr-only">{b.spoken}</span></> : b.label}
@@ -158,25 +168,28 @@ export function Roles() {
                   ))}
                   {r.needsYou > 0 ? <Pill size="sm" tone="caution">{approvalsWaitingLabel(r.needsYou)}</Pill> : null}
                   {statusShown ? <Pill size="sm" tone={s.tone}>{s.label}</Pill> : null}
-                  {mayShare && offersLinkedIn(r.status) ? <Link to={linkedInPostHref(r.id)} className="btn secondary sm"><Icon name="share" />Post on LinkedIn<span className="sr-only">: {r.title}</span></Link> : null}
-                  {mayStartHire && mayHireAgain(r.status) ? <Button size="sm" icon="refresh" loading={again.pendingRoleId === r.id} disabled={again.pending && again.pendingRoleId !== r.id} onClick={() => again.hireAgain(r.id)}>Hire for this job again</Button> : null}
+                  {mayShare && offersLinkedIn(r.status) ? <Link to={linkedInPostHref(r.id)} className="btn secondary sm relative z-[1]"><Icon name="share" />Post on LinkedIn<span className="sr-only">: {r.title}</span></Link> : null}
+                  {mayStartHire && mayHireAgain(r.status) ? <span className="relative z-[1]"><Button size="sm" icon="refresh" loading={again.pendingRoleId === r.id} disabled={again.pending && again.pendingRoleId !== r.id} onClick={() => again.hireAgain(r.id)}>Hire for this job again</Button></span> : null}
                 </span>
+                <Icon name="arrow-right" className="chev max-sm:hidden" />
               </li>
             );
           })}
         </ul>
       )}
       {showDrafts && mine.length ? (
-        <section className="stack" style={{ gap: 8 }} aria-label="Jobs you are drafting">
-          <h2 style={{ fontSize: 16 }}>Still being drafted</h2>
-          <div className="list">
-            {mine.map((s) => (
-              <Link key={s.id} to={startHireHref(s.id)} className="list-item">
-                <span className="list-item-main">
-                  <strong>{s.title ?? "Untitled job"}</strong>
-                  <span className="sub">{s.hasDraft ? "Draft written; ask for approval when you are happy" : "Still being drafted"} · {DRAFT_SEEN_BY}</span>
+        <section className="stack gap-3" aria-label="Jobs you are drafting">
+          <h2>Still being drafted</h2>
+          <div className="list-card">
+            {mine.map((s, i) => (
+              <Link key={s.id} to={startHireHref(s.id)} className="list-row motion-safe:animate-enter" style={{ animationDelay: stagger(i) }}>
+                <span className="list-row-lead"><IconChip icon="file-text" tone="peach" /></span>
+                <span className="list-row-main">
+                  <span className="list-row-title">{s.title ?? "Untitled job"}</span>
+                  <span className="list-row-meta">{s.hasDraft ? "Draft written; ask for approval when you are happy" : "Still being drafted"} · {DRAFT_SEEN_BY}</span>
                 </span>
-                <span className="list-item-end"><Pill size="sm">Draft</Pill><Icon name="chevron-right" /></span>
+                <span className="list-row-end"><Pill size="sm">Draft</Pill></span>
+                <Icon name="arrow-right" className="chev max-sm:hidden" />
               </Link>
             ))}
           </div>
@@ -185,23 +198,39 @@ export function Roles() {
       {showDrafts && others.length ? (
         <details className="more">
           <summary>Drafts on your team ({others.length})</summary>
-          <section className="stack" style={{ gap: 8 }} aria-label="Drafts others on your team started">
-            <p className="small muted" style={{ margin: 0 }}>Open one to help, or take it over if they are away or have left.</p>
-            <div className="list">
+          <section className="stack gap-3" aria-label="Drafts others on your team started">
+            <p className="small muted">Open one to help, or take it over if they are away or have left.</p>
+            <div className="list-card">
               {others.map((s) => (
-                <Link key={s.id} to={startHireHref(s.id)} className="list-item">
-                  <span className="list-item-main">
-                    <strong>{s.title ?? "Untitled job"}</strong>
-                    <span className="sub">Started by {s.startedBy.name ?? "someone on your team"} · {s.hasDraft ? "draft written" : "still being drafted"} · last changed {new Date(s.updatedAt).toLocaleDateString()}</span>
+                <Link key={s.id} to={startHireHref(s.id)} className="list-row">
+                  <span className="list-row-lead"><IconChip icon="file-text" tone="neutral" /></span>
+                  <span className="list-row-main">
+                    <span className="list-row-title">{s.title ?? "Untitled job"}</span>
+                    <span className="list-row-meta">Started by {s.startedBy.name ?? "someone on your team"} · {s.hasDraft ? "draft written" : "still being drafted"} · last changed {new Date(s.updatedAt).toLocaleDateString()}</span>
                   </span>
-                  <span className="list-item-end"><Pill size="sm">Draft</Pill><Icon name="chevron-right" /></span>
+                  <span className="list-row-end"><Pill size="sm">Draft</Pill></span>
+                  <Icon name="arrow-right" className="chev max-sm:hidden" />
                 </Link>
               ))}
             </div>
           </section>
         </details>
       ) : null}
-      <p className="small muted">Stuck? Bring in a recruiter from any job.</p>
+      {/* a quiet footnote under the table, as in screenshot 4 */}
+      <p className="small muted flex items-center gap-2"><Icon name="life-buoy" size={16} />Stuck? Bring in a recruiter from any job.</p>
     </div>
   );
 }
+
+/**
+ * A job's row: the kit's row, a soft fill under the mouse (the whole row is the title's link), fading in on first draw.
+ * The title link's keyboard focus ring is drawn on the row, the same area a press opens, like the kit's own link rows.
+ */
+const ROW = "list-row relative hover:bg-surface-2/60 motion-safe:animate-enter has-[.list-row-title:focus-visible]:outline-2 has-[.list-row-title:focus-visible]:-outline-offset-2 has-[.list-row-title:focus-visible]:outline-focus";
+/**
+ * The row's title link: the kit's row title, its press area stretched over the row (the small links sit above it), its
+ * own ring left to the row. On a phone a long title wraps instead of being cut short.
+ */
+const TITLE_LINK = "list-row-title after:absolute after:inset-0 focus-visible:outline-hidden max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]";
+/** Rows appear one after another on first draw, 30ms apart, the ninth and later with the eighth (docs/07 Motion). */
+const stagger = (i: number) => `${Math.min(i, 7) * 30}ms`;

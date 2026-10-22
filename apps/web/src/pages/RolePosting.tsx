@@ -8,7 +8,7 @@ import { POSTING_WAITS_FOR_CHECK } from "../company-check";
 import { BoardTicks } from "../components/BoardTicks";
 import { ClosingDateField } from "../components/ClosingDate";
 import { LinkedInPost } from "../components/LinkedInPost";
-import { ShareJob } from "../components/ShareJob";
+import { SHARE_LINK_ROW, SHARE_LINK_TEXT, ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
 import { scrollBehavior } from "../motion";
 import { toast } from "../toast";
@@ -120,19 +120,19 @@ export function AcceptingSheet({ role, mode, onClose }: { role: RoleDetail; mode
   return (
     <>
       <Sheet open={mode === "extend"} onClose={onClose} title={ACCEPTING_LABEL.extend}>
-        <div className="stack">
-          <p style={{ color: "var(--ink-2)" }}>Choose a later last day to apply. The apply button comes back straight away. Everyone who applied is untouched.</p>
+        <div className="stack gap-4">
+          <p className="text-ink-2">Choose a later last day to apply. The apply button comes back straight away. Everyone who applied is untouched.</p>
           {mode === "extend" ? <ClosingDateField roleId={role.id} closingDate={role.closingDate} canEdit roleStatus={role.status} idBase="extend" onSaved={onClose} /> : null}
         </div>
       </Sheet>
       <Sheet open={mode === "stop" || reopen} onClose={onClose} title={reopen ? "Accept applications again?" : "Stop accepting new applications?"}>
-        <div className="stack">
+        <div className="stack gap-4">
           {reopen ? (
-            <p style={{ color: "var(--ink-2)" }}>The job page shows the apply button again. Your team is told.</p>
+            <p className="text-ink-2">The job page shows the apply button again. Your team is told.</p>
           ) : (
             <>
-              <p style={{ color: "var(--ink-2)" }}>The job page stays up and says applications are closed. Everyone who applied stays where they are; nobody is rejected.</p>
-              <p className="small muted" style={{ margin: 0 }}>New applications are refused politely. Your team is told. You can reopen at any time.</p>
+              <p className="text-ink-2">The job page stays up and says applications are closed. Everyone who applied stays where they are; nobody is rejected.</p>
+              <p className="small muted">New applications are refused politely. Your team is told. You can reopen at any time.</p>
               <Field label="Why (optional, kept with the record)" htmlFor="accept-reason"><input id="accept-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Enough strong applicants for now" /></Field>
             </>
           )}
@@ -165,7 +165,7 @@ export function ClosedBanner({ role, canManage, onOpenPosting }: { role: RoleDet
   const byDate = !!role.closingDate?.applicationsClosedByDate;
   return (
     <Alert tone="caution">
-      <div className="stack" style={{ gap: 8 }}>
+      <div className="stack gap-2">
         <span>
           <strong>{byDate ? "Not taking new applications: the closing date has passed." : "Not taking new applications"}</strong>
           {byDate ? "" : ` since ${when(role.applicationsClosedAt)}${role.applicationsClosedReason ? ` (${role.applicationsClosedReason})` : ""}.`} The job page says so. Everyone who applied is untouched.
@@ -256,7 +256,7 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
   const linkedIn = linkedInPostLink({ roleStatus, check, publishing: d.publishing, share: d.share, jobUrl: d.urls.job });
 
   return (
-    <div className="stack">
+    <div className="stack gap-5">
       {!canManage ? <Alert tone="info">{READ_ONLY_POSTINGS}</Alert> : null}
       {roleStatus === "draft" || roleStatus === "pending_approval" ? <Alert tone="caution">Posting starts once the job is approved. Nothing is posted until then.</Alert> : null}
       {roleStatus === "paused" ? <Alert tone="caution">The job is paused: it is off your careers page and the feeds. Resume it to carry on. A board still shows it until it is paused or removed there.</Alert> : null}
@@ -287,14 +287,15 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
         // "Post on LinkedIn" from the jobs list lands here: while the company check runs, it says why there is nothing yet
         <section id="linkedin" className="setup-section" tabIndex={-1}>
           <Card title="Post on LinkedIn">
-            <p className="small muted" style={{ margin: 0 }}>You can post on LinkedIn once ITS has checked your company.</p>
+            <p className="small muted">You can post on LinkedIn once ITS has checked your company.</p>
           </Card>
         </section>
       ) : null}
 
+      {/* Where it is posted and the closing date: two cards side by side on a wide screen, one under the other on a phone */}
       <div className="grid-2">
         <Card title="Where it is posted">
-          <p className="small muted" style={{ marginBottom: 10 }}>{its ? "ITS posts it on the job boards from your company's accounts." : "Your team posts it on the job boards from your own accounts."}</p>
+          <p className="small muted mb-3">{its ? "ITS posts it on the job boards from your company's accounts." : "Your team posts it on the job boards from your own accounts."}</p>
           <BoardTicks key={d.boards.map((b) => `${b.channel}:${b.chosen}`).join(",")} roleId={roleId} boards={d.boards} roleStatus={roleStatus} whoPosts={d.whoPosts} canManage={canManage} />
         </Card>
         <section id="closing-date" className="setup-section" tabIndex={-1}>
@@ -309,7 +310,7 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
       {/* Each channel's own card: its state, its link and package, its steps and buttons. */}
       <details className="more" open={startOpen.current || undefined}>
         <summary>Each board and page, step by step ({channels.length})</summary>
-        <div className="stack">
+        <div className="stack gap-4">
           {careers || google ? (
             <div className="grid-2">
               {careers ? <NativeCard p={careers} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} /> : null}
@@ -337,9 +338,9 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
 /** The job's public address with Copy and Open, for someone who cannot make share links. */
 function JobLink({ url }: { url: string }) {
   return (
-    <div className="share-link">
-      <Icon name="link" size={16} />
-      <code title={url}>{url}</code>
+    <div className={SHARE_LINK_ROW}>
+      <Icon name="link" size={16} className="text-ink-3" />
+      <span className={SHARE_LINK_TEXT}><code title={url}>{url}</code></span>
       <Button size="sm" icon="copy" onClick={() => copy(url, "the job's address")}>Copy</Button>
       <a className="btn secondary sm" href={url} target="_blank" rel="noopener noreferrer"><Icon name="external" />Open<span className="sr-only"> the job page (opens in a new tab)</span></a>
     </div>
@@ -367,8 +368,8 @@ export function postingNeedsTeam(p: Pick<PostingView, "status" | "postedBy" | "i
 
 function Header({ p }: { p: PostingView }) {
   return (
-    <div className="card-title">
-      <h2 style={{ fontSize: 15 }}>{p.name}</h2>
+    <div className="card-title items-center">
+      <h2>{p.name}</h2>
       <Pill size="sm" tone={STATE_TONE[p.status] ?? "neutral"}>{p.stateLabel}</Pill>
     </div>
   );
@@ -432,7 +433,7 @@ function VerifyNote({ p, run, busy, onDone }: { p: PostingView; run: Run; busy: 
   const [note, setNote] = useState("");
   const id = `note-${p.id}`;
   return (
-    <div className="stack" style={{ gap: 8, marginTop: 8, maxWidth: 520 }}>
+    <div className="stack mt-3 max-w-[520px] gap-2.5 motion-safe:animate-fade">
       <Field label="What did you check, and when?" htmlFor={id} hint="Required. Recorded with your name; this is what makes the posting count as live."><textarea id={id} className="textarea" value={note} onChange={(e) => setNote(e.target.value)} placeholder={p.channel === "google_jobs" ? "e.g. Found it in a Google search on 24 September" : `e.g. Opened the listing on ${p.name} on 24 September; title and apply link are right`} /></Field>
       <div className="row">
         <Button variant="primary" disabled={note.trim().length < 3 || busy} onClick={() => run(p.channel, "verify", p.channel === "google_jobs" ? "Marked as found in Google, with your note." : `${p.name} is now live and verified, with your note.`, { note: note.trim() }, onDone)}>Confirm: I checked it</Button>
@@ -447,8 +448,8 @@ function CloseConfirm({ p, run, busy, onDone }: { p: PostingView; run: Run; busy
   const id = `close-${p.id}`;
   const up = ["posted_manually", "live_verified", "paused"].includes(p.status) && p.isBoard;
   return (
-    <div className="stack" style={{ gap: 8, marginTop: 8, maxWidth: 520 }}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>{up ? (p.postedBy === "its" ? `Closing here does not remove it from ${p.name} by itself: ITS gets a task to take it down from your company's account and ticks it off here.` : `Closing here does not remove it from ${p.name}: take it down from your own account too, then tick "Removed from this board".`) : "Closing here is final for this channel; a re-opened role prepares it again."}</p>
+    <div className="stack mt-3 max-w-[520px] gap-2.5 motion-safe:animate-fade">
+      <p className="small text-ink-2">{up ? (p.postedBy === "its" ? `Closing here does not remove it from ${p.name} by itself: ITS gets a task to take it down from your company's account and ticks it off here.` : `Closing here does not remove it from ${p.name}: take it down from your own account too, then tick "Removed from this board".`) : "Closing here is final for this channel; a re-opened role prepares it again."}</p>
       <Field label="Reason (optional)" htmlFor={id}><input id={id} className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
       <div className="row">
         <Button variant="destructive" disabled={busy} onClick={() => run(p.channel, "close", `${p.name} closed.`, { reason: reason.trim() || undefined }, onDone)}>Yes, close it</Button>
@@ -469,7 +470,7 @@ function Actions({ p, run, busy, roleStatus, onVerify, onClose }: { p: PostingVi
   const native = p.channel === "careers_page" || google;
   const checkable = p.isBoard || p.channel === "careers_page";
   return (
-    <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+    <div className="row mt-3">
       {p.status === "posted_manually" && p.verificationAttempts > 0 && checkable ? <Button size="sm" disabled={busy} onClick={() => run(p.channel, "retry", "Checking the link again.")}>Check again</Button> : null}
       {p.status === "failed" && p.externalUrl && checkable ? <Button size="sm" disabled={busy} onClick={() => run(p.channel, "retry", "Checking the link again.")}>Check again</Button> : null}
       {p.status === "failed" && !p.externalUrl && p.isBoard ? <Button size="sm" disabled={busy} onClick={() => run(p.channel, "retry", "Back to the steps.")}>Start over</Button> : null}
@@ -487,9 +488,9 @@ function RemovedCheckbox({ p, run, busy, canManage }: { p: PostingView; run: Run
   if (p.status !== "closed" || !p.closureRequired) return null;
   const id = `removed-${p.id}`;
   return (
-    <div className="row" style={{ marginTop: 10 }}>
+    <div className="row mt-3">
       <input id={id} type="checkbox" checked={!!p.closureConfirmedAt} disabled={!canManage || !!p.closureConfirmedAt || busy} onChange={() => run(p.channel, "closure-confirm", `Recorded: removed from ${p.name}.`)} />
-      <label htmlFor={id}>Removed from this board{p.closureConfirmedAt ? ` (confirmed ${when(p.closureConfirmedAt)})` : ""}</label>
+      <label htmlFor={id} className="inline-flex items-center pointer-coarse:min-h-10">Removed from this board{p.closureConfirmedAt ? ` (confirmed ${when(p.closureConfirmedAt)})` : ""}</label>
     </div>
   );
 }
@@ -510,8 +511,8 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
   // A board a person closed while it stays ticked on an open role comes back only by being prepared again (plan D6).
   const mayPrepareAgain = canManage && roleStatus === "open" && p.status === "closed" && p.chosen && !(p.closureRequired && !p.closureConfirmedAt);
   const recordForm = canRecord ? (
-    <div className="row" style={{ alignItems: "flex-end", marginTop: 10, flexWrap: "wrap" }}>
-      <div style={{ flex: "1 1 320px" }}>
+    <div className="row mt-3 items-end">
+      <div className="min-w-0 flex-[1_1_320px]">
         <Field label={p.externalUrl ? "Record a different public address" : "Record the public address of the posting"} htmlFor={urlId} hint="The full https:// link to the job on the board. It is checked before the posting is called live.">
           <input id={urlId} className="input" inputMode="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={`https://www.${p.channel === "linkedin_basic" ? "linkedin.com/jobs/view/..." : p.channel === "indeed" ? "indeed.com/viewjob?jk=..." : "ziprecruiter.com/jobs/..."}`} />
         </Field>
@@ -522,22 +523,22 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
   return (
     <Card>
       <Header p={p} />
-      {p.isBoard && p.status !== "closed" ? <p className="small muted" style={{ margin: "0 0 4px" }}>{its ? "Posted by ITS from your company's own account" : "Posted by your team from your own account"}</p> : null}
-      <p className="small" style={{ color: "var(--ink-2)" }}>{boardStateLine(p)}</p>
-      {chip ? <p style={{ margin: "6px 0 0" }}><Chip tone={chip.tone === "good" ? "good" : chip.tone === "accent" ? "accent" : chip.tone === "caution" ? "caution" : "neutral"}>{chip.label}</Chip></p> : null}
+      {p.isBoard && p.status !== "closed" ? <p className="small muted mb-1">{its ? "Posted by ITS from your company's own account" : "Posted by your team from your own account"}</p> : null}
+      <p className="small text-ink-2">{boardStateLine(p)}</p>
+      {chip ? <p className="mt-2"><Chip tone={chip.tone === "good" ? "good" : chip.tone === "accent" ? "accent" : chip.tone === "caution" ? "caution" : "neutral"}>{chip.label}</Chip></p> : null}
       {itsCouldNot ? (
-        <div className="alert caution" style={{ marginTop: 8 }}>
+        <div className="alert caution mt-3">
           <strong>ITS could not {itsCouldNot.label.charAt(0).toLowerCase()}{itsCouldNot.label.slice(1)}.</strong>{itsCouldNot.note ? ` ${itsCouldNot.recruiterName ?? "The recruiter"} wrote: "${itsCouldNot.note}"` : ""}
-          {canManage ? <div className="row" style={{ marginTop: 6 }}><Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "ask-its", `Asked ITS again: ${itsCouldNot.label.charAt(0).toLowerCase()}${itsCouldNot.label.slice(1)}.`)}>Ask ITS again</Button></div> : null}
+          {canManage ? <div className="row mt-2"><Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "ask-its", `Asked ITS again: ${itsCouldNot.label.charAt(0).toLowerCase()}${itsCouldNot.label.slice(1)}.`)}>Ask ITS again</Button></div> : null}
         </div>
       ) : null}
       {p.showsOldVersion && live ? (
-        <div className="alert caution" style={{ marginTop: 8 }}>
+        <div className="alert caution mt-3">
           <strong>Shows an earlier version of the job{p.boardVersion ? ` (version ${p.boardVersion})` : ""}.</strong>{" "}
           {its && !itsCouldNot ? "ITS has a task to update it from your company's account with the new posting package." : "Update the listing from your own account with the posting package below, then confirm it here."}
-          {canManage && (!its || itsCouldNot) && open !== "updated" ? <div className="row" style={{ marginTop: 6 }}><Button size="sm" variant="primary" onClick={() => setOpen("updated")}>It shows the new version now</Button></div> : null}
+          {canManage && (!its || itsCouldNot) && open !== "updated" ? <div className="row mt-2"><Button size="sm" variant="primary" onClick={() => setOpen("updated")}>It shows the new version now</Button></div> : null}
           {canManage && open === "updated" ? (
-            <div className="stack" style={{ gap: 6, marginTop: 6, maxWidth: 520 }}>
+            <div className="stack mt-2 max-w-[520px] gap-2">
               <Field label="What did you update? (optional)" htmlFor={`updated-${p.id}`}><input id={`updated-${p.id}`} className="input" value={updateNote} onChange={(e) => setUpdateNote(e.target.value)} placeholder="e.g. Pasted the new description on 9 October" /></Field>
               <div className="row">
                 <Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "updated", `${p.name} is up to date. Checking the link again.`, updateNote.trim() ? { note: updateNote.trim() } : {}, () => { setOpen(null); setUpdateNote(""); })}>Confirm</Button>
@@ -547,12 +548,12 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
           ) : null}
         </div>
       ) : null}
-      {p.externalUrl ? <p className="small">On {p.name}: <a href={p.externalUrl} target="_blank" rel="noreferrer">{p.externalUrl}</a></p> : null}
-      {mayPrepareAgain ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "prepare", its ? `${p.name} is prepared again; ITS posts it.` : `${p.name} is prepared again for you to post.`)}>Prepare this board again</Button></div> : null}
-      <div className="row" style={{ marginTop: 8, flexWrap: "wrap" }}>
+      {p.externalUrl ? <p className="small mt-2 wrap-anywhere">On {p.name}: <a href={p.externalUrl} target="_blank" rel="noreferrer">{p.externalUrl}</a></p> : null}
+      {mayPrepareAgain ? <div className="row mt-3"><Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "prepare", its ? `${p.name} is prepared again; ITS posts it.` : `${p.name} is prepared again for you to post.`)}>Prepare this board again</Button></div> : null}
+      <div className="row mt-3 border-t border-line pt-3">
         {p.link ? (
           <>
-            <span className="small">Apply link for {p.name}: <code>{p.link.url}</code></span>
+            <span className="small min-w-0 wrap-anywhere">Apply link for {p.name}: <code>{p.link.url}</code></span>
             <Button size="sm" onClick={() => copy(p.link!.url, "the apply link")}>Copy</Button>
             <span className="small muted">{p.link.visits} {p.link.visits === 1 ? "visit" : "visits"}</span>
           </>
@@ -561,11 +562,11 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
       </div>
       {p.steps.length ? (
         stepsOpen ? (
-          <ol style={{ paddingLeft: 18, margin: "10px 0 0" }}>{p.steps.map((s, i) => <li key={`${p.id}-step-${i}`} className="small">{s}</li>)}</ol>
-        ) : <p style={{ marginTop: 8 }}><Button size="sm" variant="quiet" onClick={() => setShowSteps(true)}>Show the steps</Button></p>
+          <ol className="mt-3 grid list-decimal gap-1 pl-5 marker:text-ink-3">{p.steps.map((s, i) => <li key={`${p.id}-step-${i}`} className="small">{s}</li>)}</ol>
+        ) : <p className="mt-2"><Button size="sm" variant="quiet" onClick={() => setShowSteps(true)}>Show the steps</Button></p>
       ) : null}
       {recordForm && its ? (
-        <details style={{ marginTop: 10 }}>
+        <details className="more mt-3">
           <summary className="small">Posted it yourself? Record the address</summary>
           {recordForm}
         </details>
@@ -574,7 +575,7 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
       {canManage && open === "close" ? <CloseConfirm p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
       {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => setOpen("close")} /> : null}
       <RemovedCheckbox p={p} run={run} busy={busy} canManage={canManage} />
-      {its && !canManage && p.status === "ready_to_post" ? <p className="small muted" style={{ marginTop: 8 }}>Nothing for you to do here: ITS posts it and this card follows.</p> : null}
+      {its && !canManage && p.status === "ready_to_post" ? <p className="small muted mt-2">Nothing for you to do here: ITS posts it and this card follows.</p> : null}
     </Card>
   );
 }
@@ -584,10 +585,10 @@ function NativeCard({ p, jobUrl, run, busy, roleStatus, canManage }: { p: Postin
   return (
     <Card>
       <Header p={p} />
-      <p className="small" style={{ color: "var(--ink-2)" }}>{nativeStateLine(p, jobUrl)}</p>
-      {p.channel === "careers_page" ? <p className="small">Job page: <a href={jobUrl} target="_blank" rel="noreferrer">{jobUrl}</a> <Button size="sm" onClick={() => copy(jobUrl, "the job page address")}>Copy</Button></p> : null}
-      {p.channel === "google_jobs" && p.instructions ? <p className="small muted">{p.instructions}</p> : null}
-      {roleStatus !== "closed" && p.status !== "closed" ? <p className="small muted">This follows the job. To stop new applications, use "Stop accepting applications" in the More menu at the top, or pause the job. Google then drops the listing on its own.</p> : null}
+      <p className="small text-ink-2">{nativeStateLine(p, jobUrl)}</p>
+      {p.channel === "careers_page" ? <p className="small mt-2 wrap-anywhere">Job page: <a href={jobUrl} target="_blank" rel="noreferrer">{jobUrl}</a> <Button size="sm" onClick={() => copy(jobUrl, "the job page address")}>Copy</Button></p> : null}
+      {p.channel === "google_jobs" && p.instructions ? <p className="small muted mt-2">{p.instructions}</p> : null}
+      {roleStatus !== "closed" && p.status !== "closed" ? <p className="small muted mt-2">This follows the job. To stop new applications, use "Stop accepting applications" in the More menu at the top, or pause the job. Google then drops the listing on its own.</p> : null}
       {canManage && open === "verify" ? <VerifyNote p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
       {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => undefined} /> : null}
     </Card>
@@ -600,16 +601,16 @@ function EmailInPanel({ emailIn, run, busy, roleStatus, canManage }: { emailIn: 
   return (
     <Card title="Applications by email" aside={<Pill size="sm" tone={emailIn.connected ? "good" : "caution"}>{emailIn.connected ? "Connected" : "Not connected"}</Pill>}>
       {emailIn.address ? (
-        <p className="small">Address: <code>{emailIn.address}</code> <Button size="sm" onClick={() => copy(emailIn.address!, "the intake address")}>Copy</Button></p>
+        <p className="small wrap-anywhere">Address: <code>{emailIn.address}</code> <Button size="sm" onClick={() => copy(emailIn.address!, "the intake address")}>Copy</Button></p>
       ) : <p className="small muted">No address yet; it is created when the role is prepared.</p>}
-      <p className="small muted" style={{ marginTop: 6 }}>
+      <p className="small muted mt-2">
         {emailIn.connected
           ? "Mail sent to this address arrives here as an application, résumé attached, as if the person applied on the careers page. Give it only to a board that insists on emailing applications; the apply links are better because they record the source."
           : `Inbound mail is not connected yet, so mail sent to this address does not arrive. Use each board's apply link instead. Ask ITS to connect inbound mail if a board can only email applications${canRecheck ? ", then use \"Check again\" here" : ""}.`}
       </p>
-      {!emailIn.connected && emailIn.error ? <p className="small muted" style={{ marginTop: 6 }}>Why: {emailIn.error}</p> : null}
+      {!emailIn.connected && emailIn.error ? <p className="small muted mt-2">Why: {emailIn.error}</p> : null}
       {canRecheck ? (
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="row mt-3">
           <Button size="sm" disabled={busy} onClick={() => run("email_in", "retry", "Checking the mailbox connection again.")}>Check again</Button>
         </div>
       ) : null}
@@ -633,14 +634,15 @@ function OtherLinks({ roleId, links, roleStatus, onChange, canManage }: { roleId
   });
   return (
     <Card title="Other links">
-      <p className="small muted">A link of your own for a referrer, a direct approach or anything else. Applications through it show this source and name, never the link itself.</p>
+      <p className="small muted mb-3">A link of your own for a referrer, a direct approach or anything else. Applications through it show this source and name, never the link itself.</p>
       {links.length ? (
         <Table head={["Name", "Source", "Link", numHead("Visits"), ""]} label="Other tracked links">
           {links.map((l) => (
-            <tr key={l.id} style={l.disabledAt ? { opacity: 0.6 } : undefined}>
+            // a disabled link reads quieter (muted ink, which keeps its contrast); its last cell says it is disabled
+            <tr key={l.id} className={l.disabledAt ? "text-ink-3" : undefined}>
               <td>{l.label}{l.sourceDetail && l.sourceDetail !== l.label ? <span className="small muted"> · {l.sourceDetail}</span> : null}</td>
               <td>{l.sourceLabel}</td>
-              <td><code className="small">{l.url}</code></td>
+              <td><code className="small break-all">{l.url}</code></td>
               <td className="num">{l.visits}</td>
               <td>
                 {l.disabledAt ? <span className="small muted">Disabled {when(l.disabledAt)}</span> : (
@@ -653,13 +655,13 @@ function OtherLinks({ roleId, links, roleStatus, onChange, canManage }: { roleId
             </tr>
           ))}
         </Table>
-      ) : <p className="small muted" style={{ marginTop: 8 }}>No other links yet.</p>}
+      ) : <p className="small muted">No other links yet.</p>}
       {canManage && roleStatus !== "closed" ? (
-        <div className="row" style={{ alignItems: "flex-end", marginTop: 10, flexWrap: "wrap" }}>
+        <div className="mt-4 grid items-end gap-3 border-t border-line pt-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_minmax(0,1fr)_auto]">
           <Field label="Kind" htmlFor="link-source"><select id="link-source" className="select" value={source} onChange={(e) => setSource(e.target.value as "referral" | "direct" | "other")}><option value="referral">Referral</option><option value="direct">Direct</option><option value="other">Other</option></select></Field>
           <Field label="Name (what you will see)" htmlFor="link-label"><input id="link-label" className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder={source === "referral" ? "Referral: Dr. Patel" : source === "direct" ? "Email to past applicants" : "Community board"} /></Field>
           <Field label="Who or what it is for (optional)" htmlFor="link-detail"><input id="link-detail" className="input" value={detail} onChange={(e) => setDetail(e.target.value)} placeholder={source === "referral" ? "Dr. Patel" : ""} /></Field>
-          <Button variant="primary" disabled={!label.trim()} loading={create.isPending} onClick={() => create.mutate()}>Create link</Button>
+          <div className="justify-self-start"><Button variant="primary" disabled={!label.trim()} loading={create.isPending} onClick={() => create.mutate()}>Create link</Button></div>
         </div>
       ) : null}
     </Card>
@@ -674,13 +676,13 @@ function VolumeCard({ report, loading, failed, onRetry }: { report: VolumeReport
   return (
     <Card title="Applications by source (last 14 days)">
       <p className="small muted">{report.totals.total} in total; {report.yesterday.total} yesterday, {report.today.total} so far today. Days run midnight to midnight, {zoneName(report.timeZone)}.</p>
-      <p className="small muted" style={{ marginTop: 4 }}>You are told when a day goes above {report.threshold}. Nobody is turned away automatically; "Stop accepting applications" in the More menu stops new ones.</p>
+      <p className="small muted mt-1 mb-3">You are told when a day goes above {report.threshold}. Nobody is turned away automatically; "Stop accepting applications" in the More menu stops new ones.</p>
       {report.sources.length ? (
         <Table head={["Source", numHead("Last 14 days"), numHead("Yesterday"), numHead("Today")]} label="Applications by source">
           {report.sources.map((s) => <tr key={s.source}><td>{s.label}</td><td className="num">{s.total}</td><td className="num">{yesterday?.bySource[s.source] ?? 0}</td><td className="num">{today?.bySource[s.source] ?? 0}</td></tr>)}
         </Table>
-      ) : <p className="small muted" style={{ marginTop: 8 }}>No applications in the last 14 days.</p>}
-      <p className="small muted" style={{ marginTop: 8 }}>By day: {report.days.map((d) => `${d.day.slice(5)}: ${d.total}`).join(" · ")}</p>
+      ) : <p className="small muted">No applications in the last 14 days.</p>}
+      <p className="small muted mt-3 tabular">By day: {report.days.map((d) => `${d.day.slice(5)}: ${d.total}`).join(" · ")}</p>
     </Card>
   );
 }

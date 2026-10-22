@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, cn, ErrorState, Field, Skeleton } from "@ros/ui";
 import { api, ApiError, type ApplicationsWithCounts, type ClosingMessagePreview, type ClosingMessageResult } from "../api/client";
 import { toast } from "../toast";
 import { CLOSING_SENDERS, closeRoleToast } from "../talent-actions";
@@ -23,6 +23,13 @@ type RoleClosed = { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: nu
 
 /** The people a close would move: everyone still in process (not hired, not already decided). */
 const STILL_IN_PROCESS = (a: ApplicationsWithCounts["applications"][number]) => !["hired", "not_moving_forward"].includes(a.ownerStage) && !["withdrawn", "declined"].includes(a.stage);
+
+/** The people a card names (still in process, or who gets the message): rows in a bordered list on the hero card. */
+const PEOPLE = "people-list list-card divide-y divide-line";
+const PERSON = "flex min-h-12 flex-wrap items-center gap-x-2.5 gap-y-1 px-4 py-2.5 text-[14px]";
+
+/** The "Your next step" hero's display title, one step below Home's hero because it sits inside the job page. */
+const HERO_TITLE = "[&>.card-title]:mb-3 [&>.card-title>h2]:text-[26px] [&>.card-title>h2]:leading-[1.1] [&>.card-title>h2]:tracking-[-0.03em] md:[&>.card-title>h2]:text-[30px]";
 
 /** The outcomes a role closes with, in the team's words. */
 const ROLE_OUTCOMES: ReadonlyArray<[string, string]> = [
@@ -58,27 +65,27 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
   });
   if (closed) return <ClosingMessageCard roleId={roleId} preview={closed} onDone={onClose} />;
   return (
-    <Card needsYou title="Close this job">
-      <p className="small" style={{ color: "var(--ink-2)" }}>Say what happened. It is recorded with your name. The platform made no offer.</p>
-      <div className="stack" style={{ gap: 10, marginTop: 8, maxWidth: 620 }}>
+    <Card needsYou title="Close this job" className={HERO_TITLE}>
+      <p className="text-[15px] text-ink-2">Say what happened. It is recorded with your name. The platform made no offer.</p>
+      <div className="stack mt-5 max-w-[620px] gap-4">
         <Field label="Outcome" htmlFor="rc-outcome"><select id="rc-outcome" className="select" value={outcome} onChange={(e) => setOutcome(e.target.value)}>
           {ROLE_OUTCOMES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select></Field>
         <Field label="Reason (optional, kept internally)" htmlFor="rc-reason"><input id="rc-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
         <div>
-          <h3 className="small" style={{ margin: "0 0 6px" }}>Still in process</h3>
+          <h3 className="eyebrow mb-2 flex">Still in process</h3>
           {apps.isLoading ? <Skeleton lines={2} /> : apps.error ? <ErrorState message="Could not load who is still in process." onRetry={() => apps.refetch()} /> : still.length ? (
             <>
-              <ul className="people-list" aria-label="Still in process">
+              <ul className={PEOPLE} aria-label="Still in process">
                 {still.map((a) => (
-                  <li key={a.id}><Avatar name={a.candidate?.name ?? "?"} size="sm" /><span>{a.candidate?.name ?? "A candidate"}</span><span className="muted small">{a.ownerStageLabel}</span></li>
+                  <li key={a.id} className={PERSON}><Avatar name={a.candidate?.name ?? "?"} size="sm" /><span className="min-w-0 font-medium text-ink">{a.candidate?.name ?? "A candidate"}</span><span className="muted small ml-auto">{a.ownerStageLabel}</span></li>
                 ))}
               </ul>
-              <p className="small muted" style={{ margin: "6px 0 0" }}>{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. {safetyNetShort({ policy: null, on: safetyNetDate(new Date().toISOString()), what: "the closing message" })} Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Home page.`}</p>
+              <p className="small muted mt-2.5">{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. {safetyNetShort({ policy: null, on: safetyNetDate(new Date().toISOString()), what: "the closing message" })} Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Home page.`}</p>
             </>
-          ) : <p className="small muted" style={{ margin: 0 }}>Nobody is still in process.</p>}
+          ) : <p className="small muted">Nobody is still in process.</p>}
         </div>
-        <div className="row"><Button variant="destructive" loading={close.isPending} onClick={() => close.mutate()}>Confirm and close the job</Button><Button variant="quiet" onClick={onClose}>Keep it open</Button></div>
+        <div className="row pt-1"><Button variant="destructive" loading={close.isPending} onClick={() => close.mutate()}>Confirm and close the job</Button><Button variant="quiet" onClick={onClose}>Keep it open</Button></div>
       </div>
     </Card>
   );
@@ -114,9 +121,9 @@ export function ClosingMessageCard({ roleId, preview, onDone }: { roleId: string
   });
   if (sent) {
     return (
-      <Card lift title={sent.title}>
-        {sent.detail ? <p className="small" style={{ color: "var(--ink-2)" }}>{sent.detail}</p> : null}
-        <div className="row" style={{ marginTop: 10 }}>
+      <Card lift title={sent.title} className="motion-safe:animate-enter">
+        {sent.detail ? <p className="small text-ink-2">{sent.detail}</p> : null}
+        <div className="row mt-4">
           <InlineUndo autoFocus label="Undo all" ariaLabel={`Undo all: take back the ${sent.items.length === 1 ? "closing message" : `${sent.items.length} closing messages`} still waiting`} undoUntil={sent.until} onUndo={async () => { await bulkTakeBack(roleId, sent.items); onDone(); }} />
           <Button size="sm" variant="quiet" onClick={onDone}>Close</Button>
         </div>
@@ -125,34 +132,34 @@ export function ClosingMessageCard({ roleId, preview, onDone }: { roleId: string
   }
   if (!p) {
     if (q.isLoading) return <Card title="The closing message"><Skeleton lines={4} /></Card>;
-    return <Card title="The closing message"><ErrorState message={q.error instanceof ApiError ? q.error.message : "Could not load the closing message."} onRetry={() => q.refetch()} /><div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="quiet" onClick={onDone}>Close</Button></div></Card>;
+    return <Card title="The closing message"><ErrorState message={q.error instanceof ApiError ? q.error.message : "Could not load the closing message."} onRetry={() => q.refetch()} /><div className="row mt-3"><Button size="sm" variant="quiet" onClick={onDone}>Close</Button></div></Card>;
   }
   const words = closingSheetLines(p);
   const sendable = p.count > 0 && !p.waitingApprovalId && p.policy !== "not_sent";
   return (
-    <Card needsYou={sendable} lift title={`Tell the people ${p.roleTitle} left in process`}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>{words.lead}</p>
+    <Card needsYou={sendable} lift title={`Tell the people ${p.roleTitle} left in process`} className={sendable ? HERO_TITLE : undefined}>
+      <p className="text-[15px] text-ink-2">{words.lead}</p>
       {p.people.length ? (
-        <ul className="people-list" aria-label="Who gets the closing message">
+        <ul className={cn(PEOPLE, "mt-4")} aria-label="Who gets the closing message">
           {p.people.map((x) => (
-            <li key={x.applicationId}><Avatar name={x.name} size="sm" /><span>{x.name}</span>{!x.hasEmail ? <Chip tone="caution">No email address</Chip> : null}{x.optedOut ? <Chip>Asked not to be kept</Chip> : null}</li>
+            <li key={x.applicationId} className={PERSON}><Avatar name={x.name} size="sm" /><span className="min-w-0 font-medium text-ink">{x.name}</span>{!x.hasEmail ? <Chip tone="caution">No email address</Chip> : null}{x.optedOut ? <Chip>Asked not to be kept</Chip> : null}</li>
           ))}
         </ul>
       ) : null}
-      {words.notes.length ? <ul className="small muted" style={{ margin: "8px 0 0", paddingLeft: 18 }}>{words.notes.map((n) => <li key={n}>{n}</li>)}</ul> : null}
+      {words.notes.length ? <ul className="small muted mt-3 grid list-disc gap-1 pl-5">{words.notes.map((n) => <li key={n}>{n}</li>)}</ul> : null}
       {p.count > 0 && p.text ? (
-        <div className="card message-preview" style={{ marginTop: 10 }}>
-          <p className="small muted" style={{ margin: "0 0 6px" }}>What each of them gets, with their own name</p>
-          <p className="small" style={{ margin: 0 }}><strong>{p.subject}</strong></p>
-          <p className="small" style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{p.text}</p>
+        <div className="card message-preview mt-4 rounded-xl p-4 shadow-none">
+          <p className="mb-2 text-[13px] font-medium text-ink-2">What each of them gets, with their own name</p>
+          <p className="small"><strong>{p.subject}</strong></p>
+          <p className="small mt-1.5 whitespace-pre-wrap text-ink-2">{p.text}</p>
         </div>
       ) : null}
-      {p.policy === "not_sent" ? <Alert tone="caution">Under your settings no decision messages are sent. Tell each person yourself, then record it on their page.</Alert> : null}
-      <div className="row" style={{ marginTop: 10 }}>
-        {sendable ? <Button size="sm" variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>{closingSendLabel(p)}</Button> : null}
-        <Button size="sm" variant="quiet" onClick={onDone}>{sendable ? "Not now" : "Close"}</Button>
+      {p.policy === "not_sent" ? <div className="mt-4"><Alert tone="caution">Under your settings no decision messages are sent. Tell each person yourself, then record it on their page.</Alert></div> : null}
+      <div className="row mt-5">
+        {sendable ? <Button variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>{closingSendLabel(p)}</Button> : null}
+        <Button variant="quiet" onClick={onDone}>{sendable ? "Not now" : "Close"}</Button>
       </div>
-      {sendable ? <p className="small muted" style={{ marginTop: 6 }}>Not now leaves them on your Home page as not told yet. {safetyNetPromise(p.policy, "the closing message")}</p> : null}
+      {sendable ? <p className="small muted mt-2">Not now leaves them on your Home page as not told yet. {safetyNetPromise(p.policy, "the closing message")}</p> : null}
     </Card>
   );
 }

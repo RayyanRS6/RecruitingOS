@@ -68,8 +68,8 @@ export function HelpLine(props: { contact: ContactLine; class?: string }) {
 }
 
 /**
- * The inside of the Apply now button (founder decision Q2 = A, 10 October 2026): a dark circle with an arrow, then the
- * words. On a mouse's hover or a keyboard's focus the dark fill slides across the words (CSS only, layout.tsx). The fill
+ * The inside of the Apply now button (founder decision Q2 = A, 10 October 2026): a plum circle with an arrow, then the
+ * words. On a mouse's hover or a keyboard's focus the plum fill slides across the words (CSS only, layout.tsx). The fill
  * and the arrow are decoration, hidden from screen readers; the words are the button's name.
  */
 function ApplyInner() {

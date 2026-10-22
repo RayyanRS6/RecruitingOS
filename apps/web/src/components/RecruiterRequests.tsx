@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RecruiterRequestView } from "@ros/contracts";
-import { Alert, Button, Card, Chip, Field, Pill, type Tone } from "@ros/ui";
+import { Alert, Button, Card, Chip, cn, Field, Pill, type Tone } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { useSearchParams } from "../nav";
 import { ACCESS_DAYS, accessWords } from "../recruiter-access";
@@ -42,21 +42,46 @@ export function RecruiterRequests() {
   const open = current.filter((r) => ["waiting", "working"].includes(requestState(r.status))).length;
   return (
     <div id="recruiter-requests">
-      <Card title="Your recruiter requests" aside={open ? <Pill size="sm" tone="accent">{open} open</Pill> : null}>
-        <p className="small muted" style={{ marginBottom: 8 }}>What your team asked ITS recruiters. Answers stay here {RECENT_DAYS} days.</p>
-        <ul aria-label="Your recruiter requests" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+      <Card title="Your recruiter requests" aside={open ? <Pill size="sm" tone="accent">{open} open</Pill> : null} className="max-sm:p-5">
+        <p className="small muted mb-3">What your team asked ITS recruiters. Answers stay here {RECENT_DAYS} days.</p>
+        <ul aria-label="Your recruiter requests" className={cn("divide-y divide-line", current.length > 0 && "border-t border-line")}>
           {current.map((r) => <RequestItem key={r.id} r={r} linked={r.id === linked} staff={who.staff} />)}
         </ul>
         {older.length ? (
-          <details open={showOlder} onToggle={(e) => setShowOlder((e.target as HTMLDetailsElement).open)} style={{ marginTop: 10 }}>
-            <summary className="small">Older requests ({older.length})</summary>
-            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          <details className="more mt-3 border-t border-line pt-3" open={showOlder} onToggle={(e) => setShowOlder((e.target as HTMLDetailsElement).open)}>
+            <summary>Older requests ({older.length})</summary>
+            <ul className="divide-y divide-line border-t border-line">
               {older.map((r) => <RequestItem key={r.id} r={r} linked={r.id === linked} staff={who.staff} />)}
             </ul>
           </details>
         ) : null}
       </Card>
     </div>
+  );
+}
+
+/** A conversation's first appearance (spec 4): each message 30ms after the one above, the ninth and later with the eighth. */
+const stagger = (i: number): CSSProperties | undefined => (i ? { animationDelay: `${Math.min(i, 7) * 30}ms` } : undefined);
+
+/**
+ * The thread as a chat, in the job builder's chat look: the team's messages on the right in peach, the recruiter's on
+ * the left in white. Only the messages there when it opens come in one after another; one added while it is open (a note
+ * sent, a reopen) comes in at once.
+ */
+function RequestThread({ thread }: { thread: RecruiterRequestView["thread"] }) {
+  const [openedWith] = useState(thread.length);
+  return (
+    <ol aria-label="The conversation" className="mt-3 grid gap-3 rounded-2xl border border-line bg-ground p-3 sm:p-4">
+      {thread.map((e, i) => {
+        const ours = e.side === "customer";
+        return (
+          <li key={e.id} className={cn("grid min-w-0 max-w-[min(100%,36rem)] gap-1 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]", ours ? "justify-items-end justify-self-end" : "justify-items-start justify-self-start")} style={i < openedWith ? stagger(i) : undefined}>
+            <p className="px-1 text-[12px] text-ink-3">{threadHeading(e)} · {new Date(e.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>
+            <p className={cn("bubble min-w-0 rounded-2xl text-sm", ours ? "user rounded-tr-md" : "assistant rounded-tl-md text-ink")}>{e.body}</p>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -84,41 +109,33 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
   const now = new Date();
   const picked = pickedUpWords(r);
   const fieldId = `request-${r.id}-text`;
+  // scroll-mt-20: a notice's link (?request=<id>) scrolls the request clear of the sticky bar above the page
   return (
-    <li id={`request-${r.id}`} style={{ borderTop: "1px solid var(--line)", padding: "10px 0", scrollMarginTop: 80 }}>
-      <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <strong>{aboutWords(r)}</strong>
-        <span className="row" style={{ gap: 6 }}>
+    <li id={`request-${r.id}`} className="scroll-mt-20 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <strong className="min-w-0 text-[15px] text-ink [overflow-wrap:anywhere]">{aboutWords(r)}</strong>
+        <span className="row gap-1.5">
           {r.urgency === "high" || r.urgency === "critical" ? <Chip tone="caution">Urgent</Chip> : null}
           {r.reopenedCount ? <Chip>Reopened</Chip> : null}
           <Pill size="sm" tone={STATE_TONE[state]}>{STATE_WORDS[state]}</Pill>
         </span>
       </div>
-      <p className="small muted" style={{ margin: "2px 0 0" }}>{[askedByWords(r.askedBy), replyByWords(r, now), picked].filter(Boolean).join(" · ")}</p>
+      <p className="small muted mt-0.5">{[askedByWords(r.askedBy), replyByWords(r, now), picked].filter(Boolean).join(" · ")}</p>
       {answer && state === "answered" ? (
-        <div style={{ marginTop: 8 }}>
-          <p className="small muted" style={{ margin: 0 }}>{threadHeading(answer)}</p>
-          <p style={{ whiteSpace: "pre-wrap", margin: "2px 0 0" }}>{answer.body}</p>
+        <div className="mt-3 rounded-xl border border-line-tint bg-tint px-4 py-3">
+          <p className="small text-ink-2">{threadHeading(answer)}</p>
+          <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{answer.body}</p>
         </div>
-      ) : <p className="small" style={{ whiteSpace: "pre-wrap", margin: "6px 0 0", color: "var(--ink-2)" }}>{r.question}</p>}
-      {said ? <div style={{ marginTop: 8 }}><Alert tone="info">{said}</Alert></div> : null}
-      <div className="row" style={{ marginTop: 8, gap: 6, flexWrap: "wrap" }}>
+      ) : <p className="small mt-2 whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{r.question}</p>}
+      {said ? <div className="mt-3"><Alert tone="info">{said}</Alert></div> : null}
+      <div className="row mt-3 gap-1.5">
         <Button size="sm" variant="quiet" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide the conversation" : `Show the conversation (${r.thread.length})`}</Button>
         {may.note && mode !== "note" ? <Button size="sm" variant="secondary" onClick={() => { setMode("note"); setText(""); setSaid(null); }}>Add a note for the recruiter</Button> : null}
         {may.reopen && mode !== "reopen" ? <Button size="sm" variant="secondary" onClick={() => { setMode("reopen"); setText(""); setSaid(null); }}>This didn't solve it</Button> : null}
       </div>
-      {expanded ? (
-        <ol aria-label="The conversation" style={{ listStyle: "none", margin: "8px 0 0", padding: "0 0 0 12px", borderLeft: "2px solid var(--line)" }}>
-          {r.thread.map((e) => (
-            <li key={e.id} style={{ padding: "4px 0" }}>
-              <p className="small muted" style={{ margin: 0 }}>{threadHeading(e)} · {new Date(e.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>
-              <p className="small" style={{ whiteSpace: "pre-wrap", margin: "2px 0 0" }}>{e.body}</p>
-            </li>
-          ))}
-        </ol>
-      ) : null}
+      {expanded ? <RequestThread thread={r.thread} /> : null}
       {mode === "note" ? (
-        <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+        <div className="stack mt-3 gap-2">
           <Field label="Your note for the recruiter" htmlFor={fieldId} hint={r.recruiterName ? `${r.recruiterName} is told there is a new note and reads it with your request.` : "The recruiter who picks the request up reads it with your request."}>
             <textarea id={fieldId} className="textarea" value={text} onChange={(e) => setText(e.target.value)} />
           </Field>
@@ -126,11 +143,11 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
         </div>
       ) : null}
       {mode === "reopen" ? (
-        <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+        <div className="stack mt-3 gap-2">
           <Field label="What is still missing?" htmlFor={fieldId} hint="The recruiter reads this first.">
             <textarea id={fieldId} className="textarea" value={text} onChange={(e) => setText(e.target.value)} />
           </Field>
-          <p className="small muted" style={{ margin: 0 }}>{reopenHint(r.recruiterName, accessWords(r.scope), ACCESS_DAYS)}</p>
+          <p className="small muted">{reopenHint(r.recruiterName, accessWords(r.scope), ACCESS_DAYS)}</p>
           <div className="row"><Button size="sm" variant="primary" disabled={text.trim().length < REOPEN_MIN} loading={reopen.isPending} onClick={() => reopen.mutate()}>Reopen the request</Button><Button size="sm" variant="quiet" onClick={() => setMode(null)}>Keep it closed</Button></div>
         </div>
       ) : null}

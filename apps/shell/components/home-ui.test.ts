@@ -84,7 +84,7 @@ describe("Home's top", () => {
     const empty = { kind: "empty", title: "Nothing needs you right now", body: "Applicants are being acknowledged and screened. I will tell you when someone is worth your time.", actions: [{ label: "See your roles", method: "GET", path: "/roles" }] };
     const html = render({ cards: [empty] });
     expect(html).toContain('<p class="page-header-sub">All caught up</p>');
-    expect(html).toContain("<h2 style=\"font-size:15.5px;min-width:0;overflow-wrap:anywhere\">Nothing needs you right now</h2>");
+    expect(html).toMatch(/<h2 class="[^"]*">Nothing needs you right now<\/h2>/);
     expect(text(html)).toContain("Applicants are being acknowledged and screened.");
     expect(text(html)).toContain("I will tell you when someone is worth your time.");
     expect(html).not.toContain(">Needs you</h2>");
@@ -182,7 +182,7 @@ describe("getting started", () => {
   it("keeps the steps still to do in view with their buttons, why behind a click, and the done ones folded", () => {
     const html = render();
     const words = text(html);
-    expect(html).toContain('<h2 style="font-size:16px">Getting started</h2>');
+    expect(html).toMatch(/<h2 class="[^"]*">Getting started<\/h2>/);
     expect(words).toContain("1 of 3 done.");
     expect(html).toContain('<ol aria-label="Steps to get started"');
     expect(html).toContain("<strong>Start your first role</strong>");
@@ -209,11 +209,11 @@ describe("your jobs", () => {
   it("lists the jobs in progress, each opening on its Candidates once live, with new and to-review counts", () => {
     const html = render();
     expect(html).toContain('<h2 id="home-jobs">Your jobs</h2>');
-    expect(html).toContain('<a href="/roles" class="small">All jobs</a>');
-    expect(html).toContain('<a href="/roles/r1/talent" class="list-item">');
+    expect(html).toMatch(/<a href="\/roles" class="text-link[^"]*">All jobs<svg/);
+    expect(html).toContain('<a href="/roles/r1/talent" class="list-row">');
     // each with the word for its status (role-status.ts), so the colour never says it alone
     expect(text(html)).toContain(`Dental Hygienist 3 new · 2 to review ${roleStatus("open").label}`);
-    expect(html).toContain('<a href="/roles/r3" class="list-item">');
+    expect(html).toContain('<a href="/roles/r3" class="list-row">');
     expect(text(html)).toContain(`Front Desk Lead Not live yet ${roleStatus("draft").label}`);
     // a closed job is on the Jobs page, not here
     expect(html).not.toContain('href="/roles/r4');

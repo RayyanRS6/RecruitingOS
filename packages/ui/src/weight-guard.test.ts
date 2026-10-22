@@ -326,8 +326,9 @@ describe("the kit's component layer", () => {
 });
 
 /**
- * The candidate pages' stylesheet (apps/api/src/pages/layout.tsx) keeps the rules it was written under until those pages
- * are redesigned: 200ms, its own loops, the literal reduced-motion rule, hovers behind (hover: hover) and (pointer: fine).
+ * The candidate pages' stylesheet (apps/api/src/pages/layout.tsx; redesigned in October 2026 with the application's
+ * palette) keeps the rules it was written under: 200ms, no loop of its own, one short entrance, the literal
+ * reduced-motion rule, hovers behind (hover: hover) and (pointer: fine).
  */
 describe("the candidate pages' stylesheet", () => {
   const cand = strip(candidate);
@@ -360,6 +361,11 @@ describe("the candidate pages' stylesheet", () => {
       if (/\binfinite\b/.test(v)) expect(LOOPS.has(name), `endless animation ${name}`).toBe(true);
       else if (!OLDER_ONE_OFFS.has(name)) for (const d of durations(v)) expect(d, `animation ${v}`).toBeLessThanOrEqual(200);
     }
+    // the guard finds what it guards: the page's one entrance, a 200ms rise that fills nothing after it ends, and not on
+    // a page that comes back after each answer or wait (a chat thread, the waiting room, the reading page)
+    expect(names.has("rise")).toBe(true);
+    expect(cand).toContain("main:not(:has(.thread, .wait, .reading)) { animation: rise 200ms ease-out backwards; }");
+    expect(cand).not.toMatch(/main \{[^}]*animation/);
   });
 
   it("keeps every transition to 200ms or less, on nothing that moves the layout", () => {
@@ -387,7 +393,11 @@ describe("the candidate pages' stylesheet", () => {
   });
 
   it("stays within its byte budget (gzip level 9, with comments, as it ships)", () => {
-    expect(gzipSync(Buffer.from(candidate), { level: 9 }).length).toBeLessThanOrEqual(5_100);
+    // 23 October 2026, the candidate pages' redesign: 5,100 raised to 5,500 (+400). The application's palette needs more
+    // tokens copied in both themes (30 colours and shadows, 21 before: the lavender and peach tints, the glow, the plum
+    // focus and shadows), and the pages gained the careers rows, the file's drop area and the "next step" status wash.
+    // Measured at 5,481 (after the review's fixes).
+    expect(gzipSync(Buffer.from(candidate), { level: 9 }).length).toBeLessThanOrEqual(5_500);
   });
 
   it("slides Apply now's fill by transform alone, edged in the field-border grey, with the candidate pages' literal timings", () => {

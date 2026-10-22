@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, Dialog, Drawer, ErrorState, Field, Menu, nextSort, Skeleton, type SortDir, sortAnnouncement, sortRows, Table, type TableHead, Tabs } from "@ros/ui";
 import { api, ApiError, type Me } from "../../api/client";
@@ -32,6 +32,12 @@ const isVerified = (code: string) => code.startsWith("verified");
 const verificationTone = (code: string) => (isVerified(code) ? "good" : code === "failed" ? "critical" : "caution");
 const isClosed = (r: Pick<DataRequest, "status">) => CLOSED_STATUSES.includes(r.status);
 const days = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
+/**
+ * A table row's first appearance: it rises in 30ms after the one above it (the eighth and later together; off for reduced
+ * motion). The delay carries motion-safe: too, so it comes after the `animation` shorthand, which would reset it.
+ */
+const ROW_ENTER = "motion-safe:animate-enter motion-safe:[animation-delay:calc(var(--i)*30ms)]";
+const stagger = (i: number) => ({ "--i": Math.min(i, 7) }) as CSSProperties;
 
 /** Whole days until the request's deadline: negative once it is overdue, 0 on the day it is due. */
 export function privacyDaysLeft(r: Pick<DataRequest, "slaDueAt">, now: number = Date.now()): number {
@@ -104,9 +110,9 @@ export function PrivacySection({ view, onView }: SectionProps) {
 
   return (
     <Tabs label="Privacy requests" value={part} onChange={onView} items={items}>
-      <div className="stack">
-        <div className="talent-toolbar">
-          <p style={{ margin: 0, flex: "1 1 240px" }}>{q.data ? summaryLine(openRows, part) : " "}</p>
+      <div className="stack gap-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="min-w-0 flex-[1_1_240px] text-[14px] text-ink-2">{q.data ? summaryLine(openRows, part) : " "}</p>
           {part === "open" ? (
             <Menu
               label={`Sort: ${PRIVACY_SORTS.find((c) => c.key === chosen.key && c.dir === chosen.dir)?.label ?? "Received, newest first"}`}
@@ -126,28 +132,29 @@ export function PrivacySection({ view, onView }: SectionProps) {
           <ErrorState message="Could not load privacy requests." onRetry={() => q.refetch()} />
         ) : part === "closed" ? (
           <Table head={["Customer", "What they asked", "Resolved", "Status", ""]} label="Closed privacy requests" loading={q.isLoading ? 3 : 0} empty="No closed requests yet.">
-            {closedRows.map((r) => (
-              <tr key={r.id}>
-                <td>{r.companyName ?? "Unknown customer"}</td>
+            {closedRows.map((r, i) => (
+              <tr key={r.id} className={ROW_ENTER} style={stagger(i)}>
+                <td className="font-semibold">{r.companyName ?? "Unknown customer"}</td>
                 <td><AskedCell r={r} /></td>
-                <td className="nowrap" title={exactWhen(r.resolvedAt)}>{whenWords(r.resolvedAt)}</td>
+                <td className="nowrap text-ink-2" title={exactWhen(r.resolvedAt)}>{whenWords(r.resolvedAt)}</td>
                 <td><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{privacyStatusWords(r.status)}</Chip></td>
-                <td><Button size="sm" variant="quiet" ariaLabel={openLabel(r)} onClick={() => showRequest(r.id)}>Open</Button></td>
+                <td className="text-right"><Button size="sm" variant="quiet" ariaLabel={openLabel(r)} onClick={() => showRequest(r.id)}>Open</Button></td>
               </tr>
             ))}
           </Table>
         ) : (
           <Table head={["Customer", "What they asked", dueHead, "Status", ""]} label="Open privacy requests" scroll announce={announce} loading={q.isLoading ? 4 : 0} empty="No open privacy requests.">
+            {/* no entrance here: a new order moves rows in the page, which would play it again on some of them */}
             {sortRequests(openRows, sort).map((r) => (
               <tr key={r.id}>
-                <td>{r.companyName ?? "Unknown customer"}</td>
+                <td className="font-semibold">{r.companyName ?? "Unknown customer"}</td>
                 <td><AskedCell r={r} /></td>
                 <td className="nowrap" title={exactWhen(r.slaDueAt)}><DueWords r={r} /></td>
                 <td>
                   <Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{privacyStatusWords(r.status)}</Chip>
-                  <div className="small muted">{verificationWords(r.verificationStatus)}</div>
+                  <div className="small muted mt-1">{verificationWords(r.verificationStatus)}</div>
                 </td>
-                <td><Button size="sm" ariaLabel={openLabel(r)} onClick={() => showRequest(r.id)}>Open</Button></td>
+                <td className="text-right"><Button size="sm" ariaLabel={openLabel(r)} onClick={() => showRequest(r.id)}>Open</Button></td>
               </tr>
             ))}
           </Table>
@@ -179,7 +186,7 @@ function AskedCell({ r }: { r: DataRequest }) {
   return (
     <>
       {kindWords(r.kind)}
-      <div className="small muted" title={exactWhen(r.createdAt)}>Received {whenWords(r.createdAt)} · {sourceWords(r.channel)}</div>
+      <div className="small muted mt-0.5" title={exactWhen(r.createdAt)}>Received {whenWords(r.createdAt)} · {sourceWords(r.channel)}</div>
     </>
   );
 }
@@ -191,13 +198,13 @@ function DueWords({ r }: { r: DataRequest }) {
     return (
       <>
         <Chip tone="critical">overdue</Chip>
-        <div className="small muted">{days(-d)} late</div>
+        <div className="small muted mt-1">{days(-d)} late</div>
       </>
     );
   }
   if (d === 0) return <Chip tone="caution">due today</Chip>;
   if (d <= PRIVACY_DUE_SOON_DAYS) return <Chip tone="caution">{days(d)} left</Chip>;
-  return <>{days(d)} left</>;
+  return <span className="text-ink-2">{days(d)} left</span>;
 }
 
 const EMPTY_FORM = { companyId: "", requesterEmail: "", kind: "access", details: "" };
@@ -287,8 +294,8 @@ function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void
   const title = [kindWords(r.kind), r.companyName].filter(Boolean).join(" · ");
   return (
     <Drawer open onClose={onClose} title={title} sub={`Received ${exactWhen(r.createdAt)} · from the ${sourceWords(r.channel)} · reference ${r.id.slice(0, 8)}`}>
-      <div className="stack" style={{ gap: 12 }}>
-        <dl className="kv">
+      <div className="stack gap-4">
+        <dl className="kv rounded-2xl border border-line bg-surface p-5 shadow-xs">
           <dt>Status</dt>
           <dd><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{privacyStatusWords(r.status)}</Chip></dd>
           <dt>Verified</dt>
@@ -307,25 +314,25 @@ function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void
           <dt>Candidate record</dt>
           <dd>{r.candidateId ? "linked" : "not linked"}</dd>
           <dt>What they wrote</dt>
-          <dd style={{ whiteSpace: "pre-wrap" }}>{r.details ?? "none"}</dd>
+          <dd className="whitespace-pre-wrap">{r.details ?? "none"}</dd>
           {r.verificationNote ? <><dt>How it was verified</dt><dd>{r.verificationNote}</dd></> : null}
           {r.escalationId ? <><dt>Escalation</dt><dd><a href={`/recruiter/queue/${r.escalationId}`}>open in the queue</a></dd></> : null}
         </dl>
         {!closedReq && !verified ? (
           <Card title="Verify the requester">
             <Field label="How you verified (for example: replied from the applying address on 18 Sep)" htmlFor="pr-method"><input id="pr-method" className="input" value={method} onChange={(e) => setMethod(e.target.value)} /></Field>
-            <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="primary" disabled={method.length < 3} loading={act.isPending} onClick={() => act.mutate({ path: "verify", body: { method, outcome: "verified" } })}>Verified</Button><Button size="sm" variant="destructive" disabled={method.length < 3} onClick={() => act.mutate({ path: "verify", body: { method, outcome: "failed" } })}>Could not verify</Button></div>
+            <div className="row mt-4"><Button size="sm" variant="primary" disabled={method.length < 3} loading={act.isPending} onClick={() => act.mutate({ path: "verify", body: { method, outcome: "verified" } })}>Verified</Button><Button size="sm" variant="destructive" disabled={method.length < 3} onClick={() => act.mutate({ path: "verify", body: { method, outcome: "failed" } })}>Could not verify</Button></div>
           </Card>
         ) : null}
         <Card title="Notes">
-          {r.notes.length ? <ul style={{ paddingLeft: 18, margin: 0 }}>{r.notes.map((n) => <li key={`${n.at}|${n.by}|${n.text}`}><span className="small muted">{exactWhen(n.at)} · {n.by}:</span> {n.text}</li>)}</ul> : <p className="small muted">None yet.</p>}
-          {!closedReq ? <div className="row" style={{ marginTop: 8 }}><input aria-label="New note" className="input" style={{ flex: "1 1 200px", width: "auto" }} value={note} onChange={(e) => setNote(e.target.value)} /><Button size="sm" disabled={!note.trim()} onClick={() => { act.mutate({ path: "notes", body: { text: note } }); setNote(""); }}>Add note</Button></div> : null}
+          {r.notes.length ? <ul className="grid gap-2.5 text-[14px]">{r.notes.map((n) => <li key={`${n.at}|${n.by}|${n.text}`} className="border-l-2 border-line-tint pl-3"><span className="small muted">{exactWhen(n.at)} · {n.by}:</span> {n.text}</li>)}</ul> : <p className="small muted">None yet.</p>}
+          {!closedReq ? <div className="row mt-4"><input aria-label="New note" className="input w-auto min-w-0 flex-[1_1_200px]" value={note} onChange={(e) => setNote(e.target.value)} /><Button size="sm" disabled={!note.trim()} onClick={() => { act.mutate({ path: "notes", body: { text: note } }); setNote(""); }}>Add note</Button></div> : null}
         </Card>
         {r.kind === "delete" && !closedReq ? (
           <Card title="Counsel decision (required before any anonymization)">
-            <p className="small muted">Retention rules are under counsel review. Record the decision exactly as counsel gave it. Status: <strong>{r.counselDecision ?? "not asked"}</strong>{r.counselNote ? ` · ${r.counselNote}` : ""}</p>
+            <p className="small muted mb-4">Retention rules are under counsel review. Record the decision exactly as counsel gave it. Status: <strong className="text-ink">{r.counselDecision ?? "not asked"}</strong>{r.counselNote ? ` · ${r.counselNote}` : ""}</p>
             <Field label="Note" htmlFor="pr-cn"><input id="pr-cn" className="input" value={counselNote} onChange={(e) => setCounselNote(e.target.value)} /></Field>
-            <div className="row" style={{ marginTop: 8 }}>
+            <div className="row mt-4">
               <Button size="sm" onClick={() => act.mutate({ path: "escalate", body: { note: counselNote || undefined } })}>Send to counsel</Button>
               <Button size="sm" variant="primary" onClick={() => act.mutate({ path: "counsel", body: { decision: "approved", note: counselNote || undefined } })}>Counsel approved</Button>
               <Button size="sm" variant="destructive" onClick={() => act.mutate({ path: "counsel", body: { decision: "declined", note: counselNote || undefined } })}>Counsel declined</Button>
@@ -334,12 +341,14 @@ function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void
         ) : null}
         {!closedReq ? (
           <Card title="Resolve">
-            {r.kind === "correct" ? <div className="grid-2"><Field label="Field" htmlFor="pr-field"><select id="pr-field" className="select" value={field} onChange={(e) => setField(e.target.value)}>{CORRECTION_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</select></Field><Field label="Corrected value" htmlFor="pr-value"><input id="pr-value" className="input" value={value} onChange={(e) => setValue(e.target.value)} /></Field></div> : null}
-            {r.kind === "delete" ? <label className="row small" style={{ gap: 8 }}><input type="checkbox" checked={confirmAnon} onChange={(e) => setConfirmAnon(e.target.checked)} /> I confirm counsel approved this anonymization and I have checked for a litigation hold or a hire.</label> : null}
-            {r.kind === "access" ? <p className="small"><a href={`/api/v1/admin/data-requests/${r.id}/export`}>Preview the export file</a> (audited).</p> : null}
-            <Field label="What you did (the requester reads this)" htmlFor="pr-res"><textarea id="pr-res" className="textarea" rows={3} value={resolution} onChange={(e) => setResolution(e.target.value)} /></Field>
-            {!verified ? <p className="small muted">Verify the requester before you fulfil the request.</p> : null}
-            <div className="row" style={{ marginTop: 8 }}>
+            <div className="stack gap-4">
+              {r.kind === "correct" ? <div className="grid-2"><Field label="Field" htmlFor="pr-field"><select id="pr-field" className="select" value={field} onChange={(e) => setField(e.target.value)}>{CORRECTION_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</select></Field><Field label="Corrected value" htmlFor="pr-value"><input id="pr-value" className="input" value={value} onChange={(e) => setValue(e.target.value)} /></Field></div> : null}
+              {r.kind === "delete" ? <label className="check"><input type="checkbox" checked={confirmAnon} onChange={(e) => setConfirmAnon(e.target.checked)} /> I confirm counsel approved this anonymization and I have checked for a litigation hold or a hire.</label> : null}
+              {r.kind === "access" ? <p className="small"><a href={`/api/v1/admin/data-requests/${r.id}/export`}>Preview the export file</a> (audited).</p> : null}
+              <Field label="What you did (the requester reads this)" htmlFor="pr-res"><textarea id="pr-res" className="textarea" rows={3} value={resolution} onChange={(e) => setResolution(e.target.value)} /></Field>
+              {!verified ? <p className="small muted">Verify the requester before you fulfil the request.</p> : null}
+            </div>
+            <div className="row mt-4">
               <Button size="sm" variant="primary" disabled={!resolution.trim() || !verified || (r.kind === "correct" && !value) || (r.kind === "delete" && !confirmAnon)} loading={act.isPending} onClick={() => act.mutate({ path: "fulfil", body: { resolution, correction: r.kind === "correct" ? { field, value } : undefined, confirmAnonymize: r.kind === "delete" ? confirmAnon : undefined } })}>Fulfil and confirm to the requester</Button>
               <Button size="sm" variant="destructive" disabled={!resolution.trim()} onClick={() => act.mutate({ path: "decline", body: { resolution } })}>Decline with this explanation</Button>
             </div>
@@ -348,7 +357,7 @@ function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void
         {closedReq && r.kind === "delete" && !r.confirmationSentAt ? (
           // the email after the commit failed: nothing retries it on its own, so the console offers it
           <Alert tone="caution">
-            <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="row justify-between">
               <span>The requester has not been told yet: the confirmation email did not go.</span>
               <Button size="sm" variant="secondary" loading={act.isPending} onClick={() => act.mutate({ path: "confirm-again", body: {} })}>Send the confirmation again</Button>
             </div>

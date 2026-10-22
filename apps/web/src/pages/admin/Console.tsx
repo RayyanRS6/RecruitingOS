@@ -54,8 +54,9 @@ export function Console({ section }: { section: ConsoleSection }) {
 
   if (section === "overview") return <Overview />;
   const { title, sub } = CONSOLE_SECTIONS[section];
+  // The header keeps its own space below it (the kit's page header); the section's part tabs follow as underline tabs.
   return (
-    <div className="stack" style={{ gap: 18 }}>
+    <div className="min-w-0">
       <PageHeader eyebrow="ITS · Console" title={title} sub={sub} />
       {section === "customers" ? <CustomersSection view={view} onView={onView} /> : section === "privacy" ? <PrivacySection view={view} onView={onView} /> : section === "problems" ? <ProblemsSection view={view} onView={onView} /> : <SystemSection view={view} onView={onView} />}
     </div>

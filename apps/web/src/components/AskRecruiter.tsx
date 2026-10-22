@@ -71,9 +71,9 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
       <Button variant={props.variant ?? "secondary"} size={props.size ?? "md"} icon="people" onClick={() => setOpen(true)}>{props.label ?? "Bring in a recruiter"}</Button>
       <Sheet open={open} onClose={close} title={topic === "plan" ? "Talk to ITS about your plan" : "Bring in a recruiter"}>
         {done ? (
-          <div className="stack"><Alert tone="info">{done}</Alert><Button onClick={close}>Done</Button></div>
+          <div className="stack gap-4 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]"><Alert tone="info">{done}</Alert><div className="row"><Button onClick={close}>Done</Button></div></div>
         ) : (
-          <div className="stack">
+          <div className="stack gap-5">
             {picks ? (
               <Field label="Which hire is this about?" htmlFor="ask-about" hint="The recruiter sees only what you choose here.">
                 <select id="ask-about" className="select" value={about} onChange={(e) => setAbout(e.target.value)}>
@@ -83,21 +83,24 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
                 </select>
               </Field>
             ) : null}
-            {scope ? <p className="small muted">The recruiter will see {accessWords(scope)}. {draftId ? `${DRAFT_HANDED_OVER} ` : ""}{ACCESS_LIMITS}</p> : null}
+            {scope ? <p className="small rounded-xl border border-line-tint bg-tint px-4 py-3 text-ink-2">The recruiter will see {accessWords(scope)}. {draftId ? `${DRAFT_HANDED_OVER} ` : ""}{ACCESS_LIMITS}</p> : null}
             {/* One choice of three: pressed buttons, so a screen reader hears which one is chosen. */}
             <Field label="What do you want help with?">
               <Segmented value={kind} onChange={setKind} ariaLabel="What do you want help with?" options={QUICK.map(([value, label]) => ({ value, label }))} />
             </Field>
-            {kind === "takeover" ? <p className="small muted">{TAKEOVER_WORDS}</p> : null}
+            {kind === "takeover" ? <p className="small muted -mt-2">{TAKEOVER_WORDS}</p> : null}
             <Field label="How urgent is it?" hint="Urgent requests go to the front of the ITS queue. The reply-by time stays the same.">
               <Segmented value={urgency} onChange={setUrgency} ariaLabel="How urgent is it?" options={[{ value: "normal", label: "Normal" }, { value: "high", label: "Urgent" }]} />
             </Field>
             <Field label={picks ? "In one line, what do you need?" : "Anything specific?"} htmlFor="q"><textarea id="q" className="textarea" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={picks ? "For example: help me set the pay for a second hygienist." : "Optional. For example: is Maria worth a working interview?"} /></Field>
-            {estimate.data ? <p className="small muted" data-testid="reply-by-estimate">{estimate.data.message}</p> : null}
-            {estimate.data?.allowance?.message ? <p className="small muted" data-testid="recruiter-request-allowance">{estimate.data.allowance.message}</p> : null}
-            {send.error ? <Alert tone="critical">{send.error instanceof ApiError ? send.error.message : "Could not send."}</Alert> : null}
-            <Button variant="primary" disabled={!ready} loading={send.isPending} onClick={() => send.mutate()}>{topic === "plan" ? "Send to ITS" : "Send to a recruiter"}</Button>
-            {picks && !ready ? <p className="small muted">{scope ? "Add a line about what you need." : "Choose which hire this is about first."}</p> : null}
+            {/* The send, with what it would mean, set apart at the foot of the form. */}
+            <div className="stack gap-3 border-t border-line pt-5">
+              {estimate.data ? <p className="small muted" data-testid="reply-by-estimate">{estimate.data.message}</p> : null}
+              {estimate.data?.allowance?.message ? <p className="small muted" data-testid="recruiter-request-allowance">{estimate.data.allowance.message}</p> : null}
+              {send.error ? <Alert tone="critical">{send.error instanceof ApiError ? send.error.message : "Could not send."}</Alert> : null}
+              <div className="row"><Button variant="primary" icon="send" disabled={!ready} loading={send.isPending} onClick={() => send.mutate()}>{topic === "plan" ? "Send to ITS" : "Send to a recruiter"}</Button></div>
+              {picks && !ready ? <p className="small muted">{scope ? "Add a line about what you need." : "Choose which hire this is about first."}</p> : null}
+            </div>
           </div>
         )}
       </Sheet>

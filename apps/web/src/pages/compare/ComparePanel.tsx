@@ -12,6 +12,15 @@ import { overallLabel } from "../candidate-panel/assessment";
 import { REC_LABEL } from "../candidate-panel/helpers";
 import { COMPARE_MAX, COMPARE_ORDERS, cellFigures, criterionCell, hasTeamNotes, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView, type CompareOrder, type CompareView } from "./compare-view";
 
+/** One person in the picker: an outlined pill with the tick, name, stage and score; ticked, it turns lavender. */
+const PICK = "inline-flex min-h-10 max-w-full cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 rounded-[20px] border border-line-2 bg-surface py-1 ps-3 pe-2 text-[14px] font-medium text-ink transition-colors duration-150 ease-soft has-checked:border-primary has-checked:bg-tint has-disabled:cursor-not-allowed has-disabled:opacity-55 not-has-checked:hover:bg-surface-2";
+/** A cell's small figures (% met, points it cost, what the score rests on). */
+const FIGURES = "text-[12px] leading-snug text-ink-3 tabular-nums";
+/** A cell: its finding, a bar and the figures stacked, wide enough to read beside four others; a long chip wraps. */
+const CELL = "grid min-w-[120px] gap-1.5 [&_.chip]:w-fit [&_.chip]:max-w-[220px] [&_.chip]:whitespace-normal";
+/** Their words or a note behind a click: the summary in the secondary ink, a hand under the mouse. */
+const MORE = "small text-ink-2 [&>summary]:cursor-pointer [&>summary]:font-medium [&>summary]:text-ink-2 [&[open]>summary]:mb-1";
+
 /**
  * Compare (docs/spec/21 F10; founder decision B2): tick up to five people, then see them side by side: each one's
  * match score with what it rests on, then every must-have and skill as a line with what was found, how much of it was
@@ -25,22 +34,22 @@ export function ComparePanel({ roleId, candidates, initial }: { roleId: string; 
   const q = useQuery({ queryKey: ["compare", roleId, (ids ?? []).join(",")], queryFn: () => api.get<CompareView>(`/api/v1/roles/${roleId}/compare?ids=${(ids ?? []).join(",")}`), enabled: !!ids?.length });
   return (
     <Card title="Compare candidates" aside={<span className="small muted">{picked.length} of {COMPARE_MAX} chosen</span>}>
-      <p className="small muted" style={{ margin: 0 }}>Tick up to five people, then compare.</p>
-      <div className="row" style={{ flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+      <p className="small muted">Tick up to five people, then compare.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
         {candidates.map((c) => {
           // R20-9: a score with no AI interview in it says so beside the badge, the full label on hover, as on the list
           const resumeOnly = resumeOnlyChip(c);
           return (
-            <label key={c.id} className="row small" style={{ gap: 6 }}>
+            <label key={c.id} className={PICK}>
               <input type="checkbox" checked={picked.includes(c.id)} disabled={!picked.includes(c.id) && picked.length >= COMPARE_MAX} onChange={(e) => setPicked((p) => togglePick(p, c.id, e.target.checked))} />
-              {c.name} <span className="muted">({c.stageLabel})</span>
+              <span>{c.name} <span className="muted font-normal">({c.stageLabel})</span></span>
               {c.score !== undefined && c.score !== null ? <ScoreBadge score={c.score} size="sm" /> : null}
               {resumeOnly ? <span className="chip neutral" title={resumeOnly.title}>{resumeOnly.label}</span> : null}
             </label>
           );
         })}
       </div>
-      <div className="row" style={{ marginTop: 10 }}>
+      <div className="row mt-4">
         <Button size="sm" variant="primary" disabled={!picked.length} onClick={() => setIds(picked)}>Compare selected</Button>
         {ids ? <Button size="sm" variant="quiet" onClick={() => { setIds(null); setPicked([]); }}>Clear</Button> : null}
       </div>
@@ -54,12 +63,12 @@ function Cell({ c, keyName, mustHave }: { c: CompareCandidateView; keyName: stri
   const cell = criterionCell(c, keyName, mustHave);
   if (cell.state !== "judged") return <span className="small muted">{cell.words}{cell.state === "raw" && cell.quote ? ` ("${cell.quote}")` : ""}</span>;
   return (
-    <div className="cmp-cell">
+    <div className={CELL}>
       <span className="small">{cell.words}</span>
       <ScoreBar pctMet={cell.pctMet} mustHave={cell.mustHave} size="sm" />
-      <span className="cmp-figures">{cellFigures(cell)}</span>
+      <span className={FIGURES}>{cellFigures(cell)}</span>
       {cell.quote ? (
-        <details className="small">
+        <details className={MORE}>
           <summary>Their words</summary>
           <span className="muted">"{cell.quote}"</span>
         </details>
@@ -72,11 +81,11 @@ function Cell({ c, keyName, mustHave }: { c: CompareCandidateView; keyName: stri
 function NotesCell({ notes }: { notes: NoteView[] }) {
   if (!notes.length) return <span className="small muted">No notes yet</span>;
   return (
-    <div className="cmp-cell">
+    <div className={CELL}>
       {notes.map((n) => (
-        <details key={n.id} className="small">
+        <details key={n.id} className={MORE}>
           <summary><strong>{n.mine ? "You" : n.author.name}</strong>{n.starterLabel ? ` · ${n.starterLabel}` : ""}: {noteExcerpt(n.body, 80)}</summary>
-          <p className="note-body">{n.body}</p>
+          <p className="whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{n.body}</p>
         </details>
       ))}
     </div>
@@ -90,8 +99,8 @@ export function CompareTable({ data }: { data: CompareView }) {
   const notes = versionNotes(cands);
   const withNotes = hasTeamNotes(cands);
   return (
-    <div style={{ marginTop: 12 }}>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+    <div className="mt-4 grid gap-3">
+      <div className="row justify-between">
         <span className="small muted">{orderLine(order, cands.length, mixedScores(cands))}</span>
         {cands.length > 1 ? <Segmented value={order} onChange={setOrder} options={COMPARE_ORDERS.map((o) => ({ value: o.value, label: o.label }))} ariaLabel="Order of the columns" /> : null}
       </div>
@@ -102,10 +111,10 @@ export function CompareTable({ data }: { data: CompareView }) {
             const s = scoreSummary(c);
             return (
               <td key={c.applicationId}>
-                <div className="cmp-cell">
-                  <span className="row" style={{ gap: 6 }}><ScoreBadge score={s.score} size="sm" />{s.band ? <span className="small">{s.band}</span> : null}</span>
-                  {s.coverage ? <span className="cmp-figures">{s.coverage}</span> : null}
-                  {s.basis ? <span className="cmp-figures">{s.basis}</span> : null}
+                <div className={CELL}>
+                  <span className="row gap-1.5"><ScoreBadge score={s.score} size="sm" />{s.band ? <span className="small">{s.band}</span> : null}</span>
+                  {s.coverage ? <span className={FIGURES}>{s.coverage}</span> : null}
+                  {s.basis ? <span className={FIGURES}>{s.basis}</span> : null}
                   {s.missing.map((x) => <Chip key={x} tone="critical">{x}</Chip>)}
                 </div>
               </td>
@@ -125,8 +134,8 @@ export function CompareTable({ data }: { data: CompareView }) {
         {withNotes ? <tr><th scope="row" className="small muted">Team notes <span className="sr-only">(private)</span></th>{cands.map((c) => <td key={c.applicationId}><NotesCell notes={c.notes ?? []} /></td>)}</tr> : null}
         <tr><th scope="row" className="small muted">Their panel</th>{cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
       </Table>
-      {notes.length ? <ul className="small" style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--caution)" }}>{notes.map((n) => <li key={n}>{n}</li>)}</ul> : null}
-      <p className="small muted" style={{ marginTop: 8 }}>{data.reminder}</p>
+      {notes.length ? <ul className="small list-disc ps-[18px] text-caution">{notes.map((n) => <li key={n}>{n}</li>)}</ul> : null}
+      <p className="small muted">{data.reminder}</p>
     </div>
   );
 }
