@@ -13,7 +13,7 @@ import { openScreenOf } from "../../evidence";
 import { offerMadeOn, plainDayWords } from "../../hiring";
 import { aiInterviewCard, callNotesState, noScreenWords, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
-import { sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft } from "../../telling";
+import { HIDDEN_LINK_NOTE, sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft, type ThreadPart } from "../../telling";
 import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard, StrengthsAndConcerns } from "./assessment";
 import { CallNotesCard } from "./call-notes";
 import { MatchVerdict, NextStepLine, ScoreBreakdown } from "./match";
@@ -89,7 +89,7 @@ function AiInterviewCard({ a, roleId, onDecline }: { a: ApplicationDetail; roleI
 
 /**
  * One line on where things stand: the mark and its note, a hold's date, interviews, a recorded outcome, whether a
- * decision was told, and the screening conversation when it says something ("Applied and talked in one visit", still
+ * decision was told, and the screening conversation when it says something ("Applied, then did the AI interview.", still
  * applying, sent without it, asked for a person; plan Wave E), and once a sent chat was written up, how many of the
  * company's questions it answered (Wave S7).
  */
@@ -455,9 +455,10 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
                 {m.long ? (
                   <details className="msg-more">
                     <summary>{m.text.slice(0, 160).trimEnd()}… <span className="link-like">Show all</span></summary>
-                    <p className="msg-body">{m.text}</p>
+                    <MessageBody parts={m.parts} />
                   </details>
-                ) : <p className="msg-body">{m.text}</p>}
+                ) : <MessageBody parts={m.parts} />}
+                {m.hiddenLinks ? <p className="small muted msg-hidden-note" style={{ margin: "4px 0 0" }}>{HIDDEN_LINK_NOTE}</p> : null}
               </li>
             ))}
           </ol>
@@ -499,6 +500,18 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * A message's words, with a link only the candidate can use (hidden by the API as `/c/<kind>/[link]`) shown as muted
+ * words, never a link to open (22 Oct 2026 try-out); the line under the message says why (`HIDDEN_LINK_NOTE`).
+ */
+function MessageBody({ parts }: { parts: ThreadPart[] }) {
+  return (
+    <p className="msg-body">
+      {parts.map((p, i) => (p.hiddenLink ? <span key={i} className="muted" title={HIDDEN_LINK_NOTE}>{p.text}</span> : <Fragment key={i}>{p.text}</Fragment>))}
+    </p>
   );
 }
 

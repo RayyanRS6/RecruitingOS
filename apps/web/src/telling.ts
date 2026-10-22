@@ -256,7 +256,39 @@ type Comm = ApplicationDetail["communications"][number];
 /** Who wrote a message, from the team's side or the candidate's. */
 export type ThreadFrom = "team" | "assistant" | "system" | "recruiter" | "candidate";
 
-export type ThreadItem = { id: string; from: ThreadFrom; who: string; at: string; channel: "email" | "sms"; subject: string | null; label: string; text: string; long: boolean; status: string | null; statusTone: "neutral" | "caution" | "critical" };
+/** A run of a message's text: plain words, or a candidate link the server hid (`hiddenLink`), shown as words, never a link. */
+export type ThreadPart = { text: string; hiddenLink: boolean };
+
+export type ThreadItem = { id: string; from: ThreadFrom; who: string; at: string; channel: "email" | "sms"; subject: string | null; label: string; text: string; parts: ThreadPart[]; hiddenLinks: boolean; long: boolean; status: string | null; statusTone: "neutral" | "caution" | "critical" };
+
+/** Said once under a message that carried a link only the candidate can use (22 Oct 2026 try-out). */
+export const HIDDEN_LINK_NOTE = "Links only the candidate can use are hidden here; their own email has the working link.";
+
+/**
+ * A candidate link as the API shows it to the team (`maskCandidateLinks` in packages/core/src/csp.ts: the token is
+ * `[link]`), with the address in front of it and anything after it up to a space: "https://app.example/c/screen/[link]".
+ */
+const HIDDEN_CANDIDATE_LINK = /(?:https?:\/\/[^\s]*?)?\/c\/(?:status|screen|schedule|confirm-answers|privacy-request\/verify)\/\[link\][^\s]*/g;
+
+/**
+ * A message's text cut into plain words and the candidate links the server hid (22 Oct 2026 try-out: the team's
+ * Messages view showed "Start your AI interview: https://…/c/screen/[link]" as if it were an address to open). The
+ * panel shows a hidden link as words only, never a link, and the note under the message says why (`HIDDEN_LINK_NOTE`).
+ * A full stop or comma right after the link stays with the words.
+ */
+export function threadParts(text: string): ThreadPart[] {
+  const parts: ThreadPart[] = [];
+  let at = 0;
+  for (const m of text.matchAll(HIDDEN_CANDIDATE_LINK)) {
+    const link = m[0].replace(/[.,;:!?)]+$/, "");
+    const start = m.index ?? 0;
+    if (start > at) parts.push({ text: text.slice(at, start), hiddenLink: false });
+    parts.push({ text: link, hiddenLink: true });
+    at = start + link.length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at), hiddenLink: false });
+  return parts;
+}
 
 /** A message's kind when it has no subject of its own, in the team's words. */
 const TEMPLATE_LABEL: Record<string, string> = {
@@ -334,7 +366,8 @@ export const THREAD_LONG = 420;
 /**
  * The conversation with the candidate, oldest first (plan G7): what the team sent (by whom), what the assistant and the
  * product sent by themselves, an ITS recruiter's answers, and the candidate's replies by email or text in their own
- * words. A message taken back or not delivered stays in the list, saying so.
+ * words. A message taken back or not delivered stays in the list, saying so. A link only the candidate can use, which
+ * the API hides (`/c/<kind>/[link]`), is marked so the panel shows it as words with one line saying why (`threadParts`).
  */
 export function threadItems(communications: readonly Comm[], candidateFirstName: string): ThreadItem[] {
   return [...communications]
@@ -344,7 +377,8 @@ export function threadItems(communications: readonly Comm[], candidateFirstName:
       const { from, who } = whoWrote(m, candidateFirstName);
       const text = m.direction === "inbound" ? replyOwnWords(m.bodyText) : m.bodyText.trim();
       const { status, tone } = statusOf(m);
-      return { id: m.id, from, who, at: m.createdAt, channel: m.channel === "sms" ? "sms" : "email", subject: m.direction === "inbound" ? null : m.subject, label: m.direction === "inbound" ? "Reply" : templateLabel(m.templateKey), text, long: m.direction === "outbound" && text.length > THREAD_LONG, status, statusTone: tone };
+      const parts = threadParts(text);
+      return { id: m.id, from, who, at: m.createdAt, channel: m.channel === "sms" ? "sms" : "email", subject: m.direction === "inbound" ? null : m.subject, label: m.direction === "inbound" ? "Reply" : templateLabel(m.templateKey), text, parts, hiddenLinks: parts.some((p) => p.hiddenLink), long: m.direction === "outbound" && text.length > THREAD_LONG, status, statusTone: tone };
     });
 }
 

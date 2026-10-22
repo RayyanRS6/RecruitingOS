@@ -91,7 +91,7 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
     expect(at("<summary>Full breakdown</summary>")).toBeLessThan(at("Contact: "));
     // the verdict: the score, how sure the AI was, and one line on the must-haves
     expect(t).toContain("High confidence");
-    // a score with no AI interview in it yet says so beside the number, the full label on hover (R20-9)
+    // a score with no AI interview in it yet says so beside the header's number, the full label on hover (R20-9)
     expect(html).toMatch(/<span title="Résumé only: AI interview not done yet"><span class="chip[^"]*"[^>]*>(<[^>]+>)*Résumé only/);
     expect(t).toContain("1 of 2 must-haves shown · 1 not known yet");
     // the next step: one line, its one button (the stage button's own step), the rest under "Why"
@@ -108,11 +108,36 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
   it("keeps the résumé-only label beside the header's score on every section, not only on the Overview (R20-9)", () => {
     const chip = /<span title="Résumé only: AI interview not done yet"><span class="chip[^"]*"[^>]*>(<[^>]+>)*Résumé only/g;
     for (const tab of ["history", "messages", "resume"]) expect(panel(client([scored]), { tab }).match(chip), tab).toHaveLength(1);
-    // on the Overview the verdict card says it too: twice in all
-    expect(panel(client([scored])).match(chip)).toHaveLength(2);
+    // on the Overview the header's chip once: the verdict card says it in words under the number instead (22 Oct 2026)
+    const overview = panel(client([scored]));
+    expect(overview.match(chip)).toHaveLength(1);
+    expect(overview).toMatch(/<p class="small muted match-basis"[^>]*>Résumé only: AI interview not done yet\.<\/p>/);
     const { matchScore } = scored as unknown as { matchScore: Record<string, unknown> };
     const interviewed = detail({ ...scored, matchScore: { ...matchScore, interview: "done", basis: "From the résumé and the AI interview" } });
     expect(text(panel(client([interviewed]), { tab: "history" }))).not.toContain("Résumé only");
+  });
+
+  // 22 Oct 2026 try-out: an interviewed person's Overview never said the score counted the AI interview (the words were
+  // only under "Full breakdown", folded); every scored person's verdict card now says what the number rests on
+  it("says what the score rests on under the number on the Overview, the AI interview's too (R20-9)", () => {
+    const { matchScore } = scored as unknown as { matchScore: Record<string, unknown> };
+    const overview = (m: Record<string, unknown>) => {
+      const html = panel(client([detail({ ...scored, matchScore: { ...matchScore, ...m } })]));
+      return html.slice(0, html.indexOf("<summary>Full breakdown</summary>"));
+    };
+    const basis = (html: string) => html.match(/<p class="small muted match-basis"[^>]*>([^<]*)<\/p>/)?.[1] ?? null;
+    const done = overview({ interview: "done", basis: "From the résumé and the AI interview" });
+    expect(basis(done)).toBe("From the résumé and the AI interview.");
+    // near the score: after the badge, before the must-have line
+    expect(done.indexOf("From the résumé and the AI interview.")).toBeGreaterThan(done.indexOf("Against your must-haves"));
+    expect(done.indexOf("From the résumé and the AI interview.")).toBeLessThan(done.indexOf("1 of 2 must-haves shown"));
+    expect(basis(overview({ interview: "being_scored", basis: "Résumé only for now: AI interview done, being scored" }))).toBe("Résumé only for now: AI interview done, being scored.");
+    expect(basis(overview({}))).toBe("Résumé only: AI interview not done yet.");
+    expect(basis(overview({ interview: "not_done", basis: "Résumé only: no AI interview" }))).toBe("Résumé only: no AI interview.");
+    // the number stays as it was
+    expect(text(done)).toContain("82");
+    // no number, no line
+    expect(basis(overview({ score: null }))).toBeNull();
   });
 
   it("keeps everything else under Full breakdown: the bars, what is not known yet, the AI review with its flag, and the eligibility answers", () => {
@@ -223,6 +248,23 @@ describe("telling a candidate the decision (Wave G)", () => {
     expect(t).toContain("Dana Whitfield");
     expect(t).toContain("Taken back before it was sent");
     expect(html).toContain('class="msg-item candidate"');
+    // nothing here carries a hidden candidate link, so no line about one
+    expect(t).not.toContain("Links only the candidate can use are hidden here");
+  });
+
+  // 22 Oct 2026 try-out: the one email showed "Start your AI interview: https://…/c/screen/[link]" as if it were an address
+  it("shows a link only the candidate can use as words, never a link, with one line saying why", () => {
+    const withLink = { ...declined, communications: [
+      { id: "m1", direction: "outbound", channel: "email", subject: "Thank you for applying", bodyText: "Hi Maria,\n\nStart your AI interview: https://app.recruiting.test/c/screen/[link]\n\nYour status page: https://app.recruiting.test/c/status/[link]#future-roles.", status: "sent", createdAt: daysAgo(2), templateKey: "acknowledgment", sentBy: null },
+    ] };
+    const html = panel(client([withLink]), { tab: "messages" });
+    const body = html.slice(html.indexOf('<p class="msg-body">'), html.indexOf("</li>", html.indexOf('<p class="msg-body">')));
+    // the words stay, plain and muted, never inside a link
+    expect(body).toContain('<span class="muted" title="Links only the candidate can use are hidden here; their own email has the working link.">https://app.recruiting.test/c/screen/[link]</span>');
+    expect(body).toContain('<span class="muted" title="Links only the candidate can use are hidden here; their own email has the working link.">https://app.recruiting.test/c/status/[link]#future-roles</span>.');
+    expect(body).not.toMatch(/<a\b/);
+    // one line under the message, however many links it had
+    expect(body.match(/<p class="small muted msg-hidden-note"[^>]*>Links only the candidate can use are hidden here; their own email has the working link\.<\/p>/g)).toHaveLength(1);
   });
 });
 

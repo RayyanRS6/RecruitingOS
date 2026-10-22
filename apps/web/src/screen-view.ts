@@ -3,10 +3,10 @@ import { canAddCallNotes } from "./roles";
 
 /**
  * The screening conversation as the team reads it (plan Wave E), kept free of React so it can be tested
- * (tests/web/screen-view.test.ts): whether it was offered in the visit that sent the application ("Applied and talked in
- * one visit"), each answer with what the candidate did with it (chose not to answer, changed it before sending, picked
- * it from the choices), a recruiter's call notes kept apart from the candidate's own words, who may add those notes, and
- * the role's figures in plain words.
+ * (tests/web/screen-view.test.ts): whether it came with the application ("Applied, then did the AI interview"), each
+ * answer with what the candidate did with it (chose not to answer, changed it before sending, picked it from the
+ * choices), a recruiter's call notes kept apart from the candidate's own words, who may add those notes, and the role's
+ * figures in plain words.
  */
 
 /** A conversation's state in a word or two. */
@@ -33,7 +33,12 @@ export const NOT_SENT_YET = "AI interview not sent yet";
 export const DECLINED_WORDS = "Chose not to answer";
 export const EDITED_WORDS = "Changed before sending";
 export const TAPPED_WORDS = "Picked from the choices";
-export const APPLIED_IN_ONE_VISIT = "Applied and talked in one visit";
+/**
+ * A finished AI interview that came with the application, in plain words (22 Oct 2026 try-out). It said "Applied and
+ * talked in one visit", from the time the chat was offered inside the apply visit; since 20 Oct 2026 every applicant gets
+ * the same automatic AI interview, by its own link.
+ */
+export const APPLIED_IN_ONE_VISIT = "Applied, then did the AI interview";
 
 type EventLike = Pick<TimelineEvent, "type" | "payload"> & { subjectId?: string };
 
@@ -67,7 +72,7 @@ function addedAfterConfirming(s: Pick<Screen, "id" | "invitedVia">, timeline: re
 
 /**
  * How the conversation reached the candidate, in a few words for the AI interview tab; null for an invitation sent by email
- * (nothing to say). "Applied and talked in one visit" once a conversation offered with the application is complete.
+ * (nothing to say). "Applied, then did the AI interview" once a conversation offered with the application is complete.
  */
 export function screenOrigin(s: Pick<Screen, "id" | "invitedVia" | "status" | "transcript"> & { progress?: Pick<Screen["progress"], "completedBy"> }, timeline: readonly EventLike[] = []): string | null {
   if (addedAfterConfirming(s, timeline)) return "Added after they confirmed a second application";
@@ -85,7 +90,7 @@ export function overviewScreenLine(a: Pick<ApplicationDetail, "screens" | "timel
   const s = a.screens[0];
   if (!s) return null;
   const origin = screenOrigin(s, a.timeline);
-  if (origin === APPLIED_IN_ONE_VISIT) return `${APPLIED_IN_ONE_VISIT}: the AI interview was answered after the form.`;
+  if (origin === APPLIED_IN_ONE_VISIT) return `${APPLIED_IN_ONE_VISIT}.`;
   if (origin === NOT_SENT_YET) return `${STILL_APPLYING_LINE}${s.status === "paused" ? " The AI interview is paused while the assistant is not working." : ""} Nothing about ${a.candidate.firstName} waits on you until then.`;
   if (s.status === "declined_by_candidate") return "Sent the application without the AI interview, by their own choice. It is never held against them.";
   if (s.status === "human_requested") return "Asked to talk to a person instead of the assistant. A recruiter contacts them and adds notes from the call. Anything they typed before asking was not sent, so you won't see it.";

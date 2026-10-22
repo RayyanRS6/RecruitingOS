@@ -3,7 +3,7 @@ import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntr
 import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { CHAT_WRAP_KEY, chatCounter } from "@ros/core";
 import {
-  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, chatClosingMessage, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
+  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
   newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, type ChatFacts,
 } from "./screening";
 import { answerInContext, credentialMustHaves } from "./triage";
@@ -1199,5 +1199,30 @@ describe("the local stand-in for screen.turn v3", () => {
     // an answer that already gives a figure or an example moves straight on too
     const withFigure = "I ran the Instagram for a skincare brand and grew it to 40,000 followers.";
     expect((await turn(ctx(asked, [{ role: "candidate", content: withFigure, at: "t" }], withFigure))).messageToCandidate).toBe("Thanks.");
+    // screen.turn v8 (22 Oct 2026 try-out): an answer that already says how they found the cause and the fix is never
+    // asked about again in other words
+    const fixed = "I traced the slow checkout to a missing index on the orders table and added it during a quiet hour.";
+    const after8 = await turn(ctx(asked, [{ role: "candidate", content: fixed, at: "t" }], fixed));
+    expect(after8).toMatchObject({ followUpReason: null, questionKey: "pay", messageToCandidate: "Thanks." });
+  });
+});
+
+describe("the chat's line after a tap or a skip, in code (22 Oct 2026 try-out)", () => {
+  it("says a tap back in the assistant's voice, neutral, never the candidate's own 'I'", () => {
+    // the try-out read "Noted: I'm looking for $18 to $20 an hour." and "Noted: I can start on Monday, November 16, 2026."
+    expect(chatCodeLead("I'm looking for $18 to $20 an hour.")).toBe("Noted: $18 to $20 an hour.");
+    expect(chatCodeLead("I can start on Monday, November 16, 2026.")).toBe("Noted: you could start on Monday, November 16, 2026.");
+    expect(chatCodeLead("I can work Monday, Tuesday and Saturday.")).toBe("Noted: you can work Monday, Tuesday and Saturday.");
+    expect(chatCodeLead("Yes")).toBe("Noted: Yes.");
+    expect(chatCodeLead("No")).toBe("Noted: No.");
+    // words of any other shape in the first person are not said back
+    expect(chatCodeLead("I'd rather discuss it on a call.")).toBe("Noted.");
+    for (const line of ["I'm looking for $48 an hour.", "I can start on Friday, October 23, 2026.", "I can work Sunday."].map((w) => chatCodeLead(w))) {
+      expect(line).not.toMatch(/\b(?:I|I'm|my)\b/);
+      expect(line).not.toMatch(/\b(?:great|perfect|excellent|thanks)\b/i);
+    }
+    // a skip says the same as before
+    expect(chatCodeLead(null)).toBe("No problem, we can leave that one.");
+    expect(chatCodeLead(null, true)).toBe("No problem, your answer is kept.");
   });
 });

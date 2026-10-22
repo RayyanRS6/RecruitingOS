@@ -35,8 +35,13 @@ describe("the screening assistant states pay as the job page does (plan 0.8)", (
     // Version 4 (a close that promises no time) keeps the pay rule of version 2; version 5 (Wave S5) leaves out skills
     // checked in the interviews only; version 6 (Wave S7) adds the Kanvis-style chat, and without a plan says what 5 said;
     // version 7 (Wave S9) states the turn's contract (follow-ups labelled, a candidate's question never recorded, help and
-    // a person for a confused candidate) and keeps the pay rule.
-    expect(screenTurnPrompt.version).toBe(7);
+    // a person for a confused candidate) and keeps the pay rule; version 8 (the 22 Oct 2026 try-out) never asks again for
+    // what the candidate already said.
+    expect(screenTurnPrompt.version).toBe(8);
+    expect(system(ctx())).toContain("Never ask for anything the candidate has already told you in this conversation, above all in their latest reply.");
+    // doubt is only about what was already said: a must-have their words do not plainly confirm keeps its follow-up
+    expect(system(ctx())).toContain("When in doubt whether they already said it, do not ask it again; but a must-have their words do not plainly confirm (a license held, never said to be active) still gets its one short follow-up.");
+    expect(system(ctx())).not.toContain("when in doubt, move on");
     expect(system(ctx())).toContain("never state or suggest a time");
     expect(system(ctx())).not.toMatch(/few days/);
     expect(system(ctx(true))).toContain("Posted pay: hourly 45 to 55 USD.");

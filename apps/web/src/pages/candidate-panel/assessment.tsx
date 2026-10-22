@@ -258,7 +258,7 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
 }
 
 /**
- * One screening conversation: its state and how it reached them ("Applied and talked in one visit"), the open
+ * One screening conversation: its state and how it reached them ("Applied, then did the AI interview"), the open
  * questions' answers first, each question with what the candidate did with it (chose not to answer, changed it before
  * sending, picked it from the choices), a recruiter's call notes labelled as theirs, and the whole transcript. Until the
  * candidate sends their answers, and for good if they never did, none of that is here (founder decision of 9 October

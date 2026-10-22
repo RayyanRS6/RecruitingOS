@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 /**
  * Applying and the screening conversation in one visit (plan Wave E) as the signed-in app first draws it, from answers
  * shaped like the API's: "Still applying" beside the stage strip and never as waiting on you (E6); the candidate panel's
- * "Applied and talked in one visit", questions the candidate chose not to answer, answers changed before sending and a
+ * "Applied, then did the AI interview", questions the candidate chose not to answer, answers changed before sending and a
  * recruiter's call notes kept apart (E3, E10, E11); the call-notes form for a recruiter when the candidate asked for a
  * person (E3); the role report's conversation figures (E13); the ITS-only switch for a role and a company (E1); and the
  * 80% allowance card on Today and in the ITS console (Q17).
@@ -136,9 +136,13 @@ const panel = (qc: QueryClient, d: ReturnType<typeof detail>, tab: "overview" | 
 };
 
 describe("the candidate panel (plan E3, E10, E11)", () => {
-  it("says 'Applied and talked in one visit' on the Overview and the Screen tab", () => {
-    expect(text(panel(client(), detail(), "overview"))).toContain("Applied and talked in one visit: the AI interview was answered after the form.");
-    expect(panel(client(), detail(), "screen")).toContain('<span class="chip good">Applied and talked in one visit</span>');
+  // 22 Oct 2026 try-out: every applicant gets the same automatic AI interview since 20 Oct, so the words say it plainly
+  it("says 'Applied, then did the AI interview' on the Overview and the Screen tab", () => {
+    const overview = text(panel(client(), detail(), "overview"));
+    expect(overview).toContain("Where things stand Applied, then did the AI interview.");
+    expect(overview).not.toContain("in one visit");
+    expect(overview).not.toContain("answered after the form");
+    expect(panel(client(), detail(), "screen")).toContain('<span class="chip good">Applied, then did the AI interview</span>');
   });
 
   it("shows a skipped question as 'Chose not to answer', marks a changed answer, and labels the transcript", () => {
