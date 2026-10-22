@@ -8,7 +8,7 @@ type ChatStep = ReturnType<typeof enforceChatTurn>["move"];
 
 /**
  * The chat.* suites (Wave S7, the Kanvis-style chat; scratchpad kanvis-2/spec-s7-apply-flow.md step 6): one turn of the
- * chat put to the model (`screen.turn` v7), then held to the code's rules exactly as the app holds it
+ * chat put to the model (`screen.turn` v8), then held to the code's rules exactly as the app holds it
  * (`enforceChatTurn`). Each case checks two things: what the model did on its own (it read the reply, it followed the
  * ladder, it moved on when it should), and what the candidate is shown after the code's checks (one restatement and one
  * question, no praise in "About your experience", no inference, nothing the form already asked, no private note, no
@@ -16,7 +16,9 @@ type ChatStep = ReturnType<typeof enforceChatTurn>["move"];
  * runner (packages/evals/src/runner.ts, wired by the integrator) passes the real model and the unit test the fake one.
  *
  * Suites: chat.shape (one restatement, one question), chat.ladder (one push, the analog, the smaller version, then not
- * known), chat.no_inference, chat.no_reask (the form's answers), chat.private_note, chat.fairness, chat.close.
+ * known, and the push a thin must-have reply still gets), chat.no_inference, chat.no_reask (the form's answers, what the
+ * candidate just said, and an item their earlier reply already answered), chat.private_note,
+ * chat.fairness, chat.close.
  */
 
 export type ChatSuite = "chat.shape" | "chat.ladder" | "chat.no_inference" | "chat.no_reask" | "chat.private_note" | "chat.fairness" | "chat.close";
@@ -132,6 +134,21 @@ export function chatCaseFailures(c: ChatCase, raw: ScreenTurn): string[] {
 const GAP_ASK = "This is one of the things the job needs: Hands-on Arduino or robotics hardware work. What can you tell me about it from your own work?";
 const ENGLISH_ASK = "This is one of the things the job needs: Explaining technical ideas in English. What can you tell me about it from your own work?";
 const followedUp = (raw: ScreenTurn) => !!raw.followUpReason && !raw.questionKey && !raw.done;
+/**
+ * The question a candidate is shown, without the restatement before it (which never asks: `shapeChatMessage`), so a
+ * restatement that names what they said ("You traced the dropouts to a loose ground wire") is never read as asking it.
+ */
+function shownQuestion(message: string): string {
+  const parts = message.split(/\n\n/);
+  const at = parts.findIndex((p) => /\?/.test(p) || /^(?:please\s+)?(?:tell me|describe|walk me|share|give me|explain)\b/i.test(p));
+  return at < 0 ? message : parts.slice(at).join("\n\n");
+}
+/** Asking again, on the same item, for what a reply already gave: how they found or fixed it, what came of it, how long. */
+const ASKS_AGAIN = /\b(?:how did you (?:find|figure|track|trace|fix)|what did you do (?:to fix|about it)|what was the cause|what came of it|how long)\b/i;
+/** Asking, on the next item, about the fault the arduino reply already described: its cause, the wire, the fix. */
+const ASKS_FAULT_AGAIN = /\b(?:the cause|caused|ground wire|resolder\w*|multimeter|pull-down|dropp(?:ed|ing) out|drop-?outs?|the fault|(?:find|found|fix|fixed|trace|traced) (?:it|that|the (?:problem|wire|fault)))\b/i;
+/** Asking the english item again after a reply that gave it: the item's own question, how long, or an example again. */
+const ASKS_ENGLISH_AGAIN = /\b(?:from your own work|what can you tell me about it|how long|how many years|tell me about (?:a|an|one) (?:specific )?(?:time|moment)|(?:an?|one) example|have you (?:ever )?explained)\b/i;
 
 export const chatCases: ChatCase[] = [
   {
@@ -157,6 +174,21 @@ export const chatCases: ChatCase[] = [
       ...(followedUp(raw) ? [] : ["a bare yes did not get a push for specifics"]),
       ...(move?.move === "push" ? [] : [`expected one push, got ${move?.move ?? "no move"}`]),
       ...(turn.answerRecorded?.answer === "Yes" ? ["a bare yes was recorded as the answer"] : []),
+    ],
+  },
+  {
+    // screen.turn v8: doubt about whether something was already said never skips a must-have's push; a reply that names
+    // the must-have without showing it still gets one
+    id: "thin_must_have_still_pushed",
+    suite: "chat.ladder",
+    gaps: ["arduino", "english"],
+    asking: "arduino",
+    asked: [],
+    transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "Yes, some Arduino stuff." }],
+    expect: ({ raw, move, turn }) => [
+      ...(followedUp(raw) ? [] : ["a reply that names the must-have without showing it did not get its push"]),
+      ...(move?.move === "push" ? [] : [`expected one push, got ${move?.move ?? "no move"}`]),
+      ...(turn.answerRecorded?.complete ? ["a thin reply was recorded as a full answer"] : []),
     ],
   },
   {
@@ -219,6 +251,39 @@ export const chatCases: ChatCase[] = [
     asked: ["wq_explain"],
     transcript: [{ role: "assistant", content: "Several robot kits fail at once in a class of twenty. How do you handle the room?", questionKey: "wq_room" }, { role: "candidate", content: "I would get the class on a paper task, then fix the kit blocking the most children first and pair the others up." }],
     expect: ({ turn }) => (/\blaptop\b/i.test(turn.messageToCandidate) ? [`asks again what the form asked: ${turn.messageToCandidate}`] : []),
+  },
+  {
+    // The 22 Oct 2026 staging try-out (screen.turn v8): the candidate described the fault, how they found it and the fix,
+    // and the next message asked "How did you find the cause, and what did you do to fix it?"
+    id: "just_said_not_asked_again",
+    suite: "chat.no_reask",
+    gaps: ["arduino", "english"],
+    asking: "arduino",
+    asked: [],
+    transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "At CUST the soil sensor readings kept dropping out. I traced it to a loose ground wire on the Arduino with a multimeter, resoldered it and added a pull-down resistor, and the pump ran without a fault for the rest of the term." }],
+    // Moving on, the question shown is the next item's ("what came of it" and "how long" are fair there): only a question
+    // about this fault again fails. Staying on this item, any of the reply's parts asked again fails.
+    expect: ({ raw, move, turn }) => [
+      ...(followedUp(raw) ? [`the model pushed for what the reply already gave: ${raw.messageToCandidate}`] : []),
+      ...(move?.move === "covered" ? [] : [`a reply that covers the item should move on, got ${move?.move ?? "no move"}`]),
+      ...((move?.move === "covered" ? ASKS_FAULT_AGAIN : ASKS_AGAIN).test(shownQuestion(turn.messageToCandidate)) ? [`asks again what was just said: ${turn.messageToCandidate}`] : []),
+    ],
+  },
+  {
+    // The try-out's first repeat: "about five years as a backend engineer", then "How long have you worked in software
+    // engineering overall?". Here the reply to arduino already gives the next item (two years explaining technical ideas
+    // in English to beginners, with the sensor example): moving on to it, the question shown never asks it again.
+    id: "earlier_reply_not_asked_again",
+    suite: "chat.no_reask",
+    gaps: ["arduino", "english"],
+    asking: "arduino",
+    asked: [],
+    transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "At CUST I built a soil-moisture pump on an Arduino and wrote its firmware. For two years I also ran a weekend robotics club, explaining technical ideas in English to beginners: a sensor is like a finger that feels when the soil is dry." }],
+    expect: ({ move, turn }) => [
+      ...(move?.move === "covered" ? [] : [`a reply that covers the item should move on, got ${move?.move ?? "no move"}`]),
+      ...(turn.questionKey === "english" ? [] : [`moved to ${turn.questionKey ?? "nothing"}, not the next item`]),
+      ...(ASKS_ENGLISH_AGAIN.test(shownQuestion(turn.messageToCandidate)) ? [`asks the next item again after the reply gave it: ${turn.messageToCandidate}`] : []),
+    ],
   },
   {
     id: "private_note_never_said",

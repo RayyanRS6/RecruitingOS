@@ -220,6 +220,9 @@ describe("Wave E: applying and the conversation in one visit", () => {
     // the chat's own shape: one line, a blank line, the next question
     expect(scr.transcript.some((t) => t.role === "assistant" && t.content.startsWith("No problem, we can leave that one.\n\n"))).toBe(true);
     expect(scr.transcript.some((t) => t.role === "assistant" && t.content.startsWith("Noted: Yes.\n\n"))).toBe(true);
+    // a tap is said back in the assistant's voice, never the candidate's own "I'm looking for …" (22 Oct 2026 try-out)
+    expect(scr.transcript.some((t) => t.role === "assistant" && t.content.startsWith("Noted: $50 to $54 an hour.\n\n"))).toBe(true);
+    expect(scr.transcript.filter((t) => t.role === "assistant" && /^Noted: (?:I|I'm)\b/.test(t.content))).toEqual([]);
     // only the typed answers went to the model (and the answer to the closing question), and the allowance did not count again
     const typed = questions.filter((q) => q.kind !== "behavioral" && q.kind !== "compensation" && q.kind !== "eligibility").length;
     expect(await turnsFor()).toBe(before + gapTurns + typed + 1);

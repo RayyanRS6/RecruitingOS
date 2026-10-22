@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, DecisionMessageResult } from "../../apps/web/src/api/client";
 import {
   PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, replyOwnWords, safetyNetActed, safetyNetDate,
-  safetyNetLine, safetyNetPromise, safetyNetShort, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
+  safetyNetLine, safetyNetPromise, safetyNetShort, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, threadParts, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
+  HIDDEN_LINK_NOTE,
 } from "../../apps/web/src/telling";
 
 describe("the safety net said when a decision is filed (Q27)", () => {
@@ -203,6 +204,27 @@ describe("the conversation thread on the Messages tab (plan G7)", () => {
     expect(failed).toMatchObject({ status: "Could not be delivered", statusTone: "critical" });
     expect(threadItems([comm({ bodyText: "x".repeat(THREAD_LONG + 1) })], "Luis")[0].long).toBe(true);
     expect(threadItems([comm({ bodyText: "short" })], "Luis")[0].long).toBe(false);
+  });
+
+  // 22 Oct 2026 try-out: "Start your AI interview: https://…/c/screen/[link]" read as an address to open
+  it("marks a link only the candidate can use, which the API hid, so it shows as words with one line saying why", () => {
+    expect(HIDDEN_LINK_NOTE).toBe("Links only the candidate can use are hidden here; their own email has the working link.");
+    const text = "Start your AI interview: https://app.recruiting.test/c/screen/[link]\nYour page (/c/status/[link]#future-roles).";
+    expect(threadParts(text)).toEqual([
+      { text: "Start your AI interview: ", hiddenLink: false },
+      { text: "https://app.recruiting.test/c/screen/[link]", hiddenLink: true },
+      { text: "\nYour page (", hiddenLink: false },
+      { text: "/c/status/[link]#future-roles", hiddenLink: true },
+      { text: ").", hiddenLink: false },
+    ]);
+    // every kind the server hides; the words put back together are the text as it came
+    for (const kind of ["status", "screen", "schedule", "confirm-answers", "privacy-request/verify"]) expect(threadParts(`Open https://x.test/c/${kind}/[link], please.`).filter((p) => p.hiddenLink).map((p) => p.text)).toEqual([`https://x.test/c/${kind}/[link]`]);
+    expect(threadParts(text).map((p) => p.text).join("")).toBe(text);
+    // an ordinary address, or a link the server did not hide, is left as words of the message
+    expect(threadParts("See https://brightdental.test/careers and /c/screen/abc123.")).toEqual([{ text: "See https://brightdental.test/careers and /c/screen/abc123.", hiddenLink: false }]);
+    const [withLink, plain] = threadItems([comm({ id: "a", bodyText: text }), comm({ id: "b", bodyText: "Can you work Saturdays?", createdAt: "2026-10-02T10:00:00.000Z" })], "Luis");
+    expect(withLink).toMatchObject({ hiddenLinks: true, text });
+    expect(plain).toMatchObject({ hiddenLinks: false, parts: [{ text: "Can you work Saturdays?", hiddenLink: false }] });
   });
 
   it("keeps a whole reply when nothing would be left of it, and cuts an Outlook block", () => {

@@ -3,7 +3,7 @@ import type { Screen, ScreeningFunnel, TimelineEvent } from "../../apps/web/src/
 import { APPLIED_IN_ONE_VISIT, DIDNT_FINISH_LINE, NOT_SENT_YET, SCREEN_STATUS_LABEL, STILL_APPLYING_LINE, aiInterviewCard, aiInterviewLine, answerLines, declineReasonFor, callNotesBody, callNotesMayStayOpen, callNotesQuestions, callNotesState, callNotesToast, funnelLines, generalNotes, hiddenAnswersLine, isRecruiterNote, minutesWords, noScreenWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
 
 /**
- * The screening conversation as the team reads it (plan Wave E): "Applied and talked in one visit", questions the
+ * The screening conversation as the team reads it (plan Wave E): "Applied, then did the AI interview", questions the
  * candidate chose not to answer, answers changed before sending, a recruiter's call notes kept apart from the
  * candidate's own words, who may add those notes, and a role's figures in plain words.
  */
@@ -38,9 +38,11 @@ describe("how the conversation reached them", () => {
     expect(offeredWithApplication(screen(), [invitedEvent({ invitedBy: "system" })])).toBe(false);
   });
 
-  it("says 'Applied and talked in one visit' once it is complete, and what happened otherwise", () => {
+  it("says 'Applied, then did the AI interview' once it is complete, and what happened otherwise", () => {
     expect(screenOrigin(screen({ invitedVia: "apply" }))).toBe(APPLIED_IN_ONE_VISIT);
-    expect(APPLIED_IN_ONE_VISIT).toBe("Applied and talked in one visit");
+    // 22 Oct 2026 try-out: every applicant gets the same automatic AI interview since 20 Oct, so no "in one visit"
+    expect(APPLIED_IN_ONE_VISIT).toBe("Applied, then did the AI interview");
+    expect(screenOrigin(screen({ invitedVia: "with_application" }))).toBe(APPLIED_IN_ONE_VISIT);
     expect(screenOrigin(screen({ invitedVia: "apply", status: "in_progress" }))).toBe(NOT_SENT_YET);
     expect(screenOrigin(screen({ invitedVia: "with_application", status: "invited" }))).toBe("AI interview not sent yet");
     expect(screenOrigin(screen({ invitedVia: "apply", status: "paused" }))).toBe(NOT_SENT_YET);
@@ -55,7 +57,8 @@ describe("how the conversation reached them", () => {
 
   it("puts one plain sentence on the Overview", () => {
     const a = (s: Screen) => ({ screens: [s], timeline: [], candidate: { firstName: "Sofia" } });
-    expect(overviewScreenLine(a(screen({ invitedVia: "apply" })))).toMatch(/^Applied and talked in one visit/);
+    expect(overviewScreenLine(a(screen({ invitedVia: "apply" })))).toBe("Applied, then did the AI interview.");
+    expect(overviewScreenLine(a(screen({ invitedVia: "with_application" })))).toBe("Applied, then did the AI interview.");
     expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "invited" })))).toBe("AI interview not sent yet: their answers appear here once they send them. Nothing about Sofia waits on you until then.");
     expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "paused" })))).toContain("paused while the assistant is not working");
     expect(overviewScreenLine(a(screen({ status: "declined_by_candidate" })))).toContain("never held against them");

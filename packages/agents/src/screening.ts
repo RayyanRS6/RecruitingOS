@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, scoredSkill, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
+import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, scoredSkill, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, companies, documents, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
@@ -1048,11 +1048,16 @@ async function answerInCode(q: Queryable, deps: ScreenDeps, b: ScreenBundle, inp
 }
 
 /**
- * The chat's line before the next question when a skip or a tap moved it on, in code: neutral, never praise. `kept`: the
- * skip ended a follow-up on an answer already given, which stays.
+ * The chat's line before the next question when a skip or a tap moved it on, in code: neutral, never praise. A tap is
+ * said back in the assistant's voice (`tapEcho`: "Noted: $18 to $20 an hour.", "Noted: you could start on Monday,
+ * November 16, 2026."; 22 Oct 2026 try-out), never in the candidate's own "I'm looking for …". `kept`: the skip ended a
+ * follow-up on an answer already given, which stays.
  */
 export function chatCodeLead(tapped: string | null, kept = false): string {
-  if (tapped !== null) return `Noted: ${tapped.replace(/[.!?]+$/, "")}.`;
+  if (tapped !== null) {
+    const echo = tapEcho(tapped);
+    return echo ? `Noted: ${echo}.` : "Noted.";
+  }
   return kept ? "No problem, your answer is kept." : "No problem, we can leave that one.";
 }
 

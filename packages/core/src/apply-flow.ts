@@ -209,6 +209,31 @@ export function tapAnswerText(format: TapFormat, answer: TapAnswer, now: Date = 
   }
 }
 
+/** The tap shapes `tapAnswerText` writes in the candidate's voice, and the same in the assistant's (22 Oct 2026 try-out). */
+const TAP_ECHO: ReadonlyArray<[RegExp, (rest: string) => string]> = [
+  [/^I'm looking for (.+)$/, (rest) => rest],
+  [/^I can start on (.+)$/, (rest) => `you could start on ${rest}`],
+  [/^I can work (.+)$/, (rest) => `you can work ${rest}`],
+];
+const FIRST_PERSON = /\b(?:I|I'm|I've|I'd|I'll|me|my|mine|myself)\b/i;
+
+/**
+ * A tap said back in the chat's "Noted: …" line, in the assistant's voice (22 Oct 2026 try-out: the line read "Noted:
+ * I'm looking for $18 to $20 an hour."): the bare value for pay ("$18 to $20 an hour"), "you could start on Monday,
+ * November 16, 2026", "you can work Monday and Friday", and "Yes" or "No" as they are. The recorded answer stays the
+ * candidate's own sentence. Null for words of any other shape that speak in the first person, so the line says only
+ * "Noted." rather than say their "I" back to them.
+ */
+export function tapEcho(words: string): string | null {
+  const w = words.trim().replace(/[.!?]+$/, "");
+  if (!w) return null;
+  for (const [shape, said] of TAP_ECHO) {
+    const m = shape.exec(w);
+    if (m) return said(m[1]);
+  }
+  return FIRST_PERSON.test(w) ? null : w;
+}
+
 /* ------------------------------------------------------------------------------------------------------------ */
 /* How the conversation goes for a role (E13)                                                                     */
 /* ------------------------------------------------------------------------------------------------------------ */

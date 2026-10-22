@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScreenProgress } from "@ros/contracts";
-import { APPLY_FLOW_FALLBACK, CHAT_GAP_LIMIT, CHAT_WRAP_KEY, buildChatPlan, chatItemSettled, chatMoveStays, chatNextMove, isStillApplying, resolveApplyMode, saysNotDone, screeningFunnel, syncChatPlan, tapAnswerText, tapFormatFor, type FunnelScreen } from "./apply-flow";
+import { APPLY_FLOW_FALLBACK, CHAT_GAP_LIMIT, CHAT_WRAP_KEY, buildChatPlan, chatItemSettled, chatMoveStays, chatNextMove, isStillApplying, resolveApplyMode, saysNotDone, screeningFunnel, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, type FunnelScreen } from "./apply-flow";
 import { chatCounter } from "./apply-questions";
 import { canTransition } from "./stages";
 
@@ -138,6 +138,30 @@ describe("tap answers (plan E12)", () => {
     expect(tapAnswerText({ kind: "pay_range", basis: "salary", currency: "USD" }, { kind: "pay_range", min: 72000 })).toBe("I'm looking for $72,000 a year.");
     expect(tapAnswerText({ kind: "pay_range", basis: "hourly", currency: "USD" }, { kind: "pay_range", min: 60, max: 50 })).toBeNull();
     expect(tapAnswerText({ kind: "yes_no" }, { kind: "pay_range", min: 50 })).toBeNull();
+  });
+
+  // 22 Oct 2026 try-out: the chat's "Noted: …" line said the candidate's own "I'm looking for …" back to them
+  it("says every tap back in the assistant's voice, never the candidate's 'I'", () => {
+    const now = new Date("2026-10-22T12:00:00Z");
+    const echo = (format: Parameters<typeof tapAnswerText>[0], answer: Parameters<typeof tapAnswerText>[1]) => tapEcho(tapAnswerText(format, answer, now)!);
+    expect(echo({ kind: "pay_range", basis: "hourly", currency: "USD" }, { kind: "pay_range", min: 18, max: 20 })).toBe("$18 to $20 an hour");
+    expect(echo({ kind: "pay_range", basis: "salary", currency: "USD" }, { kind: "pay_range", min: 72000 })).toBe("$72,000 a year");
+    expect(echo({ kind: "start_date" }, { kind: "start_date", date: "2026-11-16" })).toBe("you could start on Monday, November 16, 2026");
+    expect(echo({ kind: "days", options: [] }, { kind: "days", days: ["Friday", "monday"] })).toBe("you can work Monday and Friday");
+    expect(echo({ kind: "yes_no" }, { kind: "yes_no", choice: "yes" })).toBe("Yes");
+    expect(echo({ kind: "yes_no" }, { kind: "yes_no", choice: "no" })).toBe("No");
+    // every shape a tap can take, in every kind: none says "I", "I'm" or "my"
+    const taps: Array<[Parameters<typeof tapAnswerText>[0], Parameters<typeof tapAnswerText>[1]]> = [
+      [{ kind: "pay_range", basis: "hourly", currency: "USD" }, { kind: "pay_range", min: 48 }],
+      [{ kind: "pay_range", basis: "salary", currency: "EUR" }, { kind: "pay_range", min: 50000, max: 60000.5 }],
+      [{ kind: "start_date" }, { kind: "start_date", date: "2026-10-23" }],
+      [{ kind: "days", options: [] }, { kind: "days", days: ["Sunday"] }],
+    ];
+    for (const [f, a] of taps) expect(echo(f, a), JSON.stringify(a)).not.toMatch(/\b(?:I|I'm|my|me)\b/);
+    // words of any other shape in the first person are not said back at all; anything else is
+    expect(tapEcho("I'd rather say on a call.")).toBeNull();
+    expect(tapEcho("Weekends only.")).toBe("Weekends only");
+    expect(tapEcho("  ")).toBeNull();
   });
 });
 

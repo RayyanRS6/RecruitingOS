@@ -119,6 +119,18 @@ export function coverageLine(m: MatchScore): string {
   return basis ? `${m.coverage.words}. ${basis}.` : `${m.coverage.words}.`;
 }
 
+/**
+ * What the number rests on, said under the score on the Overview's verdict card for every scored person (R20-9;
+ * docs/spec/22): "From the résumé and the AI interview." once the AI interview is in it, otherwise its "Résumé only: …"
+ * label. The 22 Oct 2026 try-out found it only under "Full breakdown" (`coverageLine`), folded, so an interviewed
+ * person's score never said it counted the interview. Null without a number. It never changes the number.
+ */
+export function basisLine(m: MatchScore | null | undefined): string | null {
+  if (!m || m.score === null) return null;
+  const basis = scoreBasis(m);
+  return basis ? `${basis}.` : null;
+}
+
 const CONFIDENCE_WORD: Record<string, string> = { high: "High", medium: "Medium", low: "Low" };
 
 /**

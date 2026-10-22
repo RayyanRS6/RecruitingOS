@@ -7,7 +7,7 @@ import { CLOSER_LOOK_LABEL, LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLoo
 import { overallLabel } from "./assessment";
 import { resumeOnlyChip } from "../../talent-list";
 import { firstSentence, notReadYetWords } from "./helpers";
-import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, cappedLine, confidenceChip, coverageLine, leftOut, matchBars, matchCardState, missingMustHaves, nextStepAction, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
+import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, basisLine, cappedLine, confidenceChip, coverageLine, leftOut, matchBars, matchCardState, missingMustHaves, nextStepAction, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
 import { Why } from "./why";
 
 /**
@@ -36,8 +36,11 @@ export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?:
     : fallback ? firstSentence(fallback.result.summary).line
     : notReadYetWords(a.stage);
   const lowShown = confidence?.tone === "caution" || fallback?.confidence === "low";
-  // R20-9: a number with no AI interview in it yet says so beside it, the full label on hover (the breakdown says it too)
-  const resumeOnly = m ? resumeOnlyChip(m) : null;
+  // What every number rests on, in words under it, the AI interview's too (22 Oct 2026 try-out; R20-9)
+  const basis = state.kind === "scored" ? basisLine(m) : null;
+  // R20-9: a number with no AI interview in it yet says so beside it, the full label on hover; never with the line above,
+  // which says it in full (the panel's header keeps its own chip on every section)
+  const resumeOnly = m && !basis ? resumeOnlyChip(m) : null;
   return (
     <Card title={MATCH_TITLE}>
       <div className="match-head">
@@ -47,6 +50,7 @@ export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?:
         {look.needsCloserLook ? <span title={look.reason ?? undefined}><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></span> : look.lowConfidence && !lowShown ? <span title={LOW_CONFIDENCE_TEXT}><Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip></span> : null}
         {version?.changed ? <span title={version.text}><Chip tone="caution">Read against older job details</Chip></span> : null}
       </div>
+      {basis ? <p className="small muted match-basis" style={{ margin: "6px 0 0" }}>{basis}</p> : null}
       {line ? <p className="match-coverage">{line}</p> : null}
       {/* the chip's reason, for keyboard and touch too (a title shows on hover only); the card above says it when no review could be made */}
       {look.needsCloserLook && look.reason && !look.assessmentUnavailable ? <Why label="Why a closer look?">{look.reason}</Why> : null}

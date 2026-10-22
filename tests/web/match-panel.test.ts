@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment, RolePacket } from "@ros/contracts";
 import type { ApplicationDetail } from "../../apps/web/src/api/client";
-import { MATCH_PROMISE, cappedLine, competencyChip, confidenceChip, coverageLine, criterionTag, importanceTag, leftOut, matchBars, matchCardState, missingMustHaves, mustHaveLineOf, nextStepAction, orderCompetencyFindings, orderRequirementFindings, quoteSummary, requirementChip, suggestedStepOf, verdictLine, versionNote } from "../../apps/web/src/pages/candidate-panel/match-view";
+import { MATCH_PROMISE, basisLine, cappedLine, competencyChip, confidenceChip, coverageLine, criterionTag, importanceTag, leftOut, matchBars, matchCardState, missingMustHaves, mustHaveLineOf, nextStepAction, orderCompetencyFindings, orderRequirementFindings, quoteSummary, requirementChip, suggestedStepOf, verdictLine, versionNote } from "../../apps/web/src/pages/candidate-panel/match-view";
 import { firstSentence } from "../../apps/web/src/pages/candidate-panel/helpers";
 import { MATCH_SCORE_PROMISE, matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
@@ -57,6 +57,26 @@ describe("the match card", () => {
     expect(coverageLine(matchScore({ resume: resumeOnly, screen: null }, packet, { interview: "being_scored" })!)).toBe("Based on 1 of 5 requirements. Résumé only for now: AI interview done, being scored.");
     // an older answer without the label: the reading it came from
     expect(coverageLine({ ...score(resumeOnly), basis: "" })).toBe("Based on 1 of 5 requirements. From the AI review of the résumé.");
+  });
+
+  // 22 Oct 2026 try-out: an interviewed person's panel (100/100, interview done) never said the score counted the AI
+  // interview: the words were only under "Full breakdown", folded
+  it("says what every score rests on under the number on the Overview, the AI interview's too (R20-9)", () => {
+    const resume = reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "yes", "perio charting")]);
+    const interviewed = score(resume, reading("screen", [must("perio", "yes", "I chart every day")], [], { createdAt: "2026-10-02T10:00:00Z" }));
+    expect(interviewed.interview).toBe("done");
+    expect(basisLine(interviewed)).toBe("From the résumé and the AI interview.");
+    const words = (interview: "being_scored" | "not_done_yet" | "not_done") => basisLine(matchScore({ resume, screen: null }, packet, { interview })!);
+    expect(words("being_scored")).toBe("Résumé only for now: AI interview done, being scored.");
+    expect(words("not_done_yet")).toBe("Résumé only: AI interview not done yet.");
+    expect(words("not_done")).toBe("Résumé only: no AI interview.");
+    // the number is the same whatever the words say
+    expect(matchScore({ resume, screen: null }, packet, { interview: "not_done_yet" })!.score).toBe(score(resume).score);
+    // an older answer without the label: the reading it came from; nothing without a number
+    expect(basisLine({ ...interviewed, basis: "" })).toBe("From the résumé and the AI interview.");
+    expect(basisLine({ ...interviewed, score: null })).toBeNull();
+    expect(basisLine(null)).toBeNull();
+    expect(basisLine(undefined)).toBeNull();
   });
 
   it("says the verdict in one line: the must-haves shown, partly shown, not met and not known yet (Wave S1)", () => {

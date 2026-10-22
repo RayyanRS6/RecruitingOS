@@ -654,7 +654,8 @@ function parseScreenSystem(req: StructuredRequest<unknown>) {
   const channel = sys.match(/Channel: (web|sms)\./)?.[1] ?? "web";
   const minutes = qBlock?.[1] ?? "15";
   const competencies = parseBracketList(sys.match(/Competencies: ([^\n]+)/)?.[1]);
-  return { questions, company: company?.[1]?.trim() ?? "the company", role: company?.[2]?.trim() ?? "the role", pay: pay ? { basis: pay[1], min: Number(pay[2]), max: Number(pay[3]) } : null, progress, name, channel, minutes, competencies };
+  const mustHaves = parseBracketList(sys.match(/Must-haves this screen should confirm \(evidencedBy includes screen\): ([^\n]+?)\.?$/m)?.[1]);
+  return { questions, company: company?.[1]?.trim() ?? "the company", role: company?.[2]?.trim() ?? "the role", pay: pay ? { basis: pay[1], min: Number(pay[2]), max: Number(pay[3]) } : null, progress, name, channel, minutes, competencies, mustHaves };
 }
 
 /** The candidate's earlier message in the transcript the prompt renders (the latest one is already the last line). */
@@ -735,9 +736,11 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
     }
     // A fuller answer that makes a claim about their work ("I ran the brand's Instagram and grew it a lot") with no
     // figure and no example yet gets one follow-up that quotes their own words, once in the whole conversation, so a
-    // local run shows what the model does (polish list). Never on anything personal, never on the open questions.
+    // local run shows what the model does (polish list). Never on anything personal, never on the open questions, and
+    // never for what the reply already says (screen.turn v8, the 22 Oct 2026 try-out): how they found it, or the fix.
     const noFollowUpYet = Object.values(s.progress.followUps).every((n) => !n);
-    const claim = ["skills", "behavioral"].includes(currentQ.kind) && complete && trimmed.length >= 40 && /^I\b/.test(trimmed) && !/\d/.test(trimmed) && !/\b(?:for example|for instance|e\.g\.|once|one time)\b/i.test(trimmed) && redactProtected(trimmed) === trimmed;
+    const saysHow = /\b(?:traced|found|tracked down|figured out|fixed|resolved|solved|because)\b/i.test(trimmed);
+    const claim = ["skills", "behavioral"].includes(currentQ.kind) && complete && trimmed.length >= 40 && /^I\b/.test(trimmed) && !/\d/.test(trimmed) && !saysHow && !/\b(?:for example|for instance|e\.g\.|once|one time)\b/i.test(trimmed) && redactProtected(trimmed) === trimmed;
     if (claim && noFollowUpYet && !confused && !isFocusKey(currentQ.key)) {
       followUpReason = "a claim with no example yet";
       return { ...base, messageToCandidate: `You said "${quoteOf(trimmed)}". Could you give one example of what that looked like, and what came of it?`, followUpReason, answerRecorded: null, sentiment: "fine" };
@@ -795,13 +798,28 @@ function fakeChatTurn(s: ReturnType<typeof parseScreenSystem>, plan: { current: 
   const item = plan.items.find((i) => i.key === current);
   if (!item) return { ...base, questionKey: next?.key ?? null, done: !next, messageToCandidate: "Noted." };
   const vague = said.length < 25 && !/\d/.test(said);
+  // screen.turn v8 (22 Oct 2026 try-out): the sentence of theirs that already speaks to a must-have item (every word of
+  // five letters or more in it, by its first four letters), or null; moving on to it asks one short check on what they
+  // said, never the item's own question again (the code would add it word for word)
+  const saidAlready = (key: string | undefined): string | null => {
+    const text = plan.items.find((i) => i.key === key)?.kind === "gap" ? s.mustHaves.find((m) => m.key === key)?.text : undefined;
+    const stems = (text?.toLowerCase().match(/[a-z]{5,}/g) ?? []).map((w) => w.slice(0, 4));
+    if (!stems.length) return null;
+    const theirs = [...user.matchAll(/^candidate: (.*)$/gm)].flatMap((m) => m[1].split(/(?<=[.!?])\s+/));
+    return theirs.find((x) => {
+      const own = new Set((x.toLowerCase().match(/[a-z]{4,}/g) ?? []).map((w) => w.slice(0, 4)));
+      return stems.every((w) => own.has(w)) && redactProtected(x) === x;
+    }) ?? null;
+  };
   const moveOn = (reading: "concrete" | "vague" | "not_done"): ScreenTurn => {
     // Their words about this item since it was asked, verbatim and in order.
     const at = user.lastIndexOf(item.question);
     // a keyword command is not an answer
     const replies = [...(at >= 0 ? user.slice(at) : user).matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim()).filter((x) => x && !/^(?:human|person|a person|a human|agent|representative|withdraw(?: my application)?|confirm)[.!]?$/i.test(x)).join(" ");
     const recorded = reading === "not_done" && item.kind === "gap" ? null : { questionKey: item.key, answer: redactProtected(replies || said), complete: reading === "concrete" };
-    return { ...base, reading, questionKey: next?.key ?? null, done: !next, answerRecorded: recorded, messageToCandidate: reading === "not_done" ? "Understood, thanks for saying so." : `You said "${quoteOf(said)}".` };
+    const already = reading === "concrete" ? saidAlready(next?.key) : null;
+    const message = reading === "not_done" ? "Understood, thanks for saying so." : already ? `You also said "${quoteOf(already)}".\n\nIs there one thing you would add about that?` : `You said "${quoteOf(said)}".`;
+    return { ...base, reading, questionKey: next?.key ?? null, done: !next, answerRecorded: recorded, messageToCandidate: message };
   };
   if (item.ladder && said.length < 60 && /^(no|nope|not really|never|i haven'?t|i have not)\b/i.test(said) && !/\bbut\b/i.test(said)) {
     if (item.step === "direct") return { ...base, reading: "not_done", followUpReason: "the analog", messageToCandidate: "Not done that exactly? Tell me about something similar from your own work." };
