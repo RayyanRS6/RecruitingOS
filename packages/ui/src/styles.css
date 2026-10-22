@@ -1,0 +1,363 @@
+/*
+ * Recruiting OS look (October 2026 redesign): warm paper ground, deep plum ink and buttons, a coral spark, lavender and
+ * peach tints. Tailwind CSS v4 builds every class the pages use from this one file; the colours live in the custom
+ * properties below so light and dark flip by themselves, and only these colours exist (Tailwind's own palette is
+ * switched off). Contrast ratios are WCAG 2 figures; theme.test.ts recomputes them for both themes. The application's
+ * entry (apps/shell/app/globals.css) imports Tailwind first and then this file.
+ */
+
+/* Tailwind only scans the app it is built in (apps/shell); the pages and the kit live in other packages. */
+@source "../../../apps/web/src";
+@source "../../../apps/shell/app";
+@source "../../../apps/shell/components";
+@source ".";
+
+/* Dark when the theme switch says so, or when the device prefers dark and no light theme was picked. */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
+:root {
+  /* Ground and surfaces */
+  --ground: #faf7f5;
+  --surface: #fefcfb;
+  --surface-2: #f6f1ee; /* sunken: table header band, hovered row, quiet chips */
+  --surface-3: #ece5e0; /* pressed, skeleton */
+  --tint: #f5eff5; /* lavender: active nav item, selected row, notes */
+  --tint-2: #ece4f1; /* lavender: icon chips, avatars */
+  --peach: #fbe7e0; /* peach: icon chips, the person's own chat bubbles */
+  --glow-1: rgb(237 143 120 / 0.11);
+  --glow-2: rgb(150 110 185 / 0.08);
+  --line: #e6ded7; /* hairlines between surfaces (decorative) */
+  --line-2: #d9cec6; /* outlines of secondary buttons and pills */
+  --line-tint: #ded4e5; /* lavender outline of highlighted cards */
+  --line-strong: #8f8395; /* 3.5:1 on --surface: form fields must be seen (WCAG 1.4.11) */
+  /* Ink */
+  --ink: #2f2239;
+  --ink-2: #65596e;
+  --ink-3: #726679;
+  /* Plum: primary actions, links, the active item */
+  --primary: #523267;
+  --primary-hover: #432853;
+  --on-primary: #fdfbf8;
+  --focus: #7a4e98;
+  /* Coral spark: the logo's "OS", live dots, sparkles. Text only at large sizes. */
+  --accent: #db5533;
+  --accent-ink: #a8401f;
+  --accent-soft: #fbe7e0;
+  /* Signals, always beside a word */
+  --good: #48644f;
+  --good-soft: #eaf3eb;
+  --good-dot: #6f9474;
+  --caution: #85522a;
+  --caution-soft: #fbefe4;
+  --caution-dot: #d29a6c;
+  --critical: #a33a2c;
+  --critical-soft: #fbeae7;
+  --critical-dot: #d9604c;
+  --info: #493579;
+  --info-soft: #ebe7f3;
+  --warm: #863918;
+  --warm-soft: #fae4dc;
+  --neutral-dot: #a89dad;
+  /* Floating layers */
+  --scrim: rgb(28 18 32 / 0.34);
+  --sh-xs: 0 1px 2px rgb(47 34 57 / 0.04);
+  --sh-sm: 0 1px 2px rgb(47 34 57 / 0.05), 0 6px 16px -8px rgb(47 34 57 / 0.14);
+  --sh-pop: 0 18px 44px -14px rgb(47 34 57 / 0.3), 0 2px 6px rgb(47 34 57 / 0.06);
+  --sh-primary: 0 8px 20px -10px rgb(82 50 103 / 0.6);
+  --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.6);
+  color-scheme: light;
+}
+
+/* Dark: plum-tinted near-black. Kept identical to the [data-theme="dark"] block below, key for key. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #141016;
+    --surface: #1c1720;
+    --surface-2: #231d28;
+    --surface-3: #2e2634;
+    --tint: #2c2233;
+    --tint-2: #35293d;
+    --peach: #3a2622;
+    --glow-1: rgb(240 138 108 / 0.06);
+    --glow-2: rgb(170 130 210 / 0.07);
+    --line: #2f2734;
+    --line-2: #41364a;
+    --line-tint: #4a3b56;
+    --line-strong: #8a7d92;
+    --ink: #f3eef5;
+    --ink-2: #c3b7ca;
+    --ink-3: #a497ab;
+    --primary: #cdb0e2;
+    --primary-hover: #dcc5ec;
+    --on-primary: #1e1426;
+    --focus: #cdb0e2;
+    --accent: #f08a6c;
+    --accent-ink: #f4a68e;
+    --accent-soft: #3a2622;
+    --good: #9cc6a3;
+    --good-soft: #1e2b21;
+    --good-dot: #7fb488;
+    --caution: #e9bc90;
+    --caution-soft: #33271d;
+    --caution-dot: #d9a274;
+    --critical: #ff9f92;
+    --critical-soft: #3a2020;
+    --critical-dot: #f07a68;
+    --info: #c0b2ec;
+    --info-soft: #28233a;
+    --warm: #f2ab8f;
+    --warm-soft: #3a2620;
+    --neutral-dot: #7d7085;
+    --scrim: rgb(0 0 0 / 0.55);
+    --sh-xs: 0 1px 2px rgb(0 0 0 / 0.35);
+    --sh-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 20px -10px rgb(0 0 0 / 0.6);
+    --sh-pop: 0 20px 48px -12px rgb(0 0 0 / 0.75), 0 2px 6px rgb(0 0 0 / 0.4);
+    --sh-primary: 0 8px 22px -10px rgb(0 0 0 / 0.7);
+    --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #141016;
+  --surface: #1c1720;
+  --surface-2: #231d28;
+  --surface-3: #2e2634;
+  --tint: #2c2233;
+  --tint-2: #35293d;
+  --peach: #3a2622;
+  --glow-1: rgb(240 138 108 / 0.06);
+  --glow-2: rgb(170 130 210 / 0.07);
+  --line: #2f2734;
+  --line-2: #41364a;
+  --line-tint: #4a3b56;
+  --line-strong: #8a7d92;
+  --ink: #f3eef5;
+  --ink-2: #c3b7ca;
+  --ink-3: #a497ab;
+  --primary: #cdb0e2;
+  --primary-hover: #dcc5ec;
+  --on-primary: #1e1426;
+  --focus: #cdb0e2;
+  --accent: #f08a6c;
+  --accent-ink: #f4a68e;
+  --accent-soft: #3a2622;
+  --good: #9cc6a3;
+  --good-soft: #1e2b21;
+  --good-dot: #7fb488;
+  --caution: #e9bc90;
+  --caution-soft: #33271d;
+  --caution-dot: #d9a274;
+  --critical: #ff9f92;
+  --critical-soft: #3a2020;
+  --critical-dot: #f07a68;
+  --info: #c0b2ec;
+  --info-soft: #28233a;
+  --warm: #f2ab8f;
+  --warm-soft: #3a2620;
+  --neutral-dot: #7d7085;
+  --scrim: rgb(0 0 0 / 0.55);
+  --sh-xs: 0 1px 2px rgb(0 0 0 / 0.35);
+  --sh-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 20px -10px rgb(0 0 0 / 0.6);
+  --sh-pop: 0 20px 48px -12px rgb(0 0 0 / 0.75), 0 2px 6px rgb(0 0 0 / 0.4);
+  --sh-primary: 0 8px 22px -10px rgb(0 0 0 / 0.7);
+  --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* Only our colours exist as classes: bg-surface, text-ink-2, border-line, bg-primary, text-good, bg-caution-soft... */
+@theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-tint: var(--tint);
+  --color-tint-2: var(--tint-2);
+  --color-peach: var(--peach);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-line-tint: var(--line-tint);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-on-primary: var(--on-primary);
+  --color-focus: var(--focus);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-good-dot: var(--good-dot);
+  --color-caution: var(--caution);
+  --color-caution-soft: var(--caution-soft);
+  --color-caution-dot: var(--caution-dot);
+  --color-critical: var(--critical);
+  --color-critical-soft: var(--critical-soft);
+  --color-critical-dot: var(--critical-dot);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-warm: var(--warm);
+  --color-warm-soft: var(--warm-soft);
+  --color-neutral-dot: var(--neutral-dot);
+  --color-scrim: var(--scrim);
+
+  --font-sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", Menlo, Consolas, monospace;
+
+  --shadow-xs: var(--sh-xs);
+  --shadow-sm: var(--sh-sm);
+  --shadow-pop: var(--sh-pop);
+  --shadow-primary: var(--sh-primary);
+  --shadow-inset: var(--sh-inset);
+
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --animate-enter: enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-fade: fade 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-shimmer: shimmer 1.6s ease-in-out infinite;
+  --animate-live: live 2.4s ease-out infinite;
+  --animate-typing: typing 1.2s ease-in-out infinite;
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes shimmer {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes live {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  70%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@keyframes typing {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    min-height: 100dvh;
+    background-color: var(--ground);
+    background-image:
+      radial-gradient(60rem 36rem at 100% -6rem, var(--glow-1), transparent 70%),
+      radial-gradient(48rem 30rem at 38% -10rem, var(--glow-2), transparent 70%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  ::selection {
+    background: var(--tint-2);
+    color: var(--ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  /* Form fields keep the browser's own controls but wear the theme. */
+  input,
+  textarea,
+  select {
+    accent-color: var(--primary);
+  }
+  ::placeholder {
+    color: var(--ink-3);
+    opacity: 1;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  [hidden] {
+    display: none !important;
+  }
+}
+
+/* Nothing moves for someone who asked for less motion, pseudo-elements included. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
