@@ -177,9 +177,11 @@ describe("the application record (status page) after sending", () => {
     expect(score).toContain("The team sees what you sent; their private notes are never shared with you.");
     expect(score).toContain("A person makes every decision");
     expect(html).not.toMatch(/PRIVATE RATIONALE|PRIVATE NOTE/);
-    // the job as they applied to it, with its public page
+    // the job as they applied to it, with its public page; its facts follow the heading, without the title and employer
+    // again (the page's heading is the job and the line on who decides names the employer; fewer words, 23 October 2026)
     const job = html.slice(html.indexOf('<section class="card" id="job"'));
-    expect(job).toContain(`<p><strong>${packet.identity.title}</strong> at Record Dental</p>`);
+    expect(job).toContain('<h2 id="job-h">The job</h2><ul class="facts small">');
+    expect(job).not.toContain(`<strong>${packet.identity.title}</strong> at Record Dental`);
     expect(job).toContain(`<a href="/careers/${slug}/jobs/${roleId}">See the job page</a>`);
     // everything that was on the page stays (redesign spec C8)
     for (const kept of ["<h2>What happens next</h2>", '<div class="card status">', "No longer interested?", "Ask for a copy, a fix, deletion, or a person's review", "Shared this link by mistake?", "How AI is used", "make every decision about your application"]) expect(html).toContain(kept);
@@ -196,6 +198,8 @@ describe("the application record (status page) after sending", () => {
       await tx.delete(assessments).where(eq(assessments.applicationId, a.id));
     });
     let r = await page(`/c/status/${a.statusToken}`);
+    // draft wording pending counsel (register items 1 and 21): the block keeps every word, its eyebrow included, until
+    // counsel signs off; the fewer-words pass of 23 October 2026 does not apply to it
     expect(r.html).toContain('<section class="card" id="score" aria-labelledby="score-h" role="status"><p class="eyebrow">Your match score</p><h2 id="score-h">Working out your match score…</h2>');
     expect(r.html).toContain(`<a href="/c/status/${a.statusToken}#score">Check again</a>`);
     // the page holds forms the candidate may be typing in: it never reloads itself
@@ -205,7 +209,8 @@ describe("the application record (status page) after sending", () => {
     // past the window it says so plainly
     await container.db.update(applications).set({ createdAt: at(-20 * 60) }).where(eq(applications.id, a.id));
     r = await page(`/c/status/${a.statusToken}`);
-    expect(r.html).toContain('<h2 id="score-h">Not ready yet</h2>');
+    // word for word as drafted for counsel: the eyebrow, the heading, and the line that says where the score will show
+    expect(r.html).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Not ready yet</h2><p>Your match score shows here once it is ready. The hiring team reads every application themselves either way.</p>');
     expect(r.html).not.toContain("http-equiv");
     expect(r.refresh).toBeNull();
     // a change to what the chats added says what happened, a refused one as an alert

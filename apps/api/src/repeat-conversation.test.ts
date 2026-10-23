@@ -195,6 +195,8 @@ describe("a repeat submission's conversation is detached until the address owner
     const [copyRow] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, ref.id));
     await container.db.update(unconfirmedScreens).set({ progress: { ...copyRow.progress, writeup: { v: 1, writtenAt: new Date(BASE).toISOString(), aiRunId: null, promptVersion: null, answers: [{ questionKey: "wq_x", answer: "Words that joined nothing.", status: "answered", quotes: [], note: null, by: "writeup" }] } } }).where(eq(unconfirmedScreens.id, ref.id));
     expect(await confirmRepeat(container, token)).toMatchObject({ state: "not_added" });
+    // its page names neither the employer nor the job, so the "Company · Job" eyebrow stays above the heading (23 October 2026)
+    expect(await (await app.request(`/c/confirm-answers/${token}`)).text()).toMatch(/<main><p class="eyebrow">Repeat Dental · [^<]+<\/p><h1>Nothing was added<\/h1>/);
     expect((await reload(rosaId)).stage).toBe(stage);
     expect((await screensOf(rosaId))).toHaveLength(1);
     // answers that were not added never joined any application: nothing of them is kept on the copy
@@ -274,7 +276,15 @@ describe("a repeat submission's conversation is detached until the address owner
     expect(mail().filter((m) => m.to === "lou@repeat.test" && /^Please check/.test(m.subject))).toHaveLength(0); // never "it works again"
     const token = confirmLink("lou@repeat.test")!;
     expect(await repeatConfirmationView(container.db, token, container.engine.clock())).toMatchObject({ state: "ready", intent: "outage" });
+    // past its seven days, before the clean-up runs, the link reads as expired; that page names neither the employer nor
+    // the job, so the "Company · Job" eyebrow stays (23 October 2026). Only the clock moves here: no job runs.
+    const at = offset;
+    setClock(at + 8 * DAY);
+    expect(await (await app.request(`/c/confirm-answers/${token}`)).text()).toMatch(/<main><p class="eyebrow">Repeat Dental · [^<]+<\/p><h1>This link has expired<\/h1>/);
+    setClock(at);
     expect(await confirmRepeat(container, token)).toMatchObject({ state: "person" });
+    // once confirmed, the line under the heading names the employer and the job, so no eyebrow repeats them
+    expect(await (await app.request(`/c/confirm-answers/${token}`)).text()).toMatch(/<main><h1>A person will be in touch<\/h1><div class="card" role="status"><p>We have asked the hiring team at Repeat Dental to contact you about your application for [^<]+\./);
     expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, first.applicationId))).toHaveLength(1);
     container.fake!.clearScripts();
   });

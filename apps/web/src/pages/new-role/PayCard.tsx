@@ -3,15 +3,17 @@
 import { useState } from "react";
 import type { IntakePayCard } from "@ros/contracts";
 import { Alert, Button, Field, Icon, Segmented } from "@ros/ui";
+import { SeenBy } from "./marks";
 import { marketRange, marketSource, payFormFrom, payPayload, payProblem, type PayForm } from "./rules";
 
 const UNIT = { hourly: "an hour", salary: "a year" } as const;
 const VIA: Record<string, string> = { typed: "typed in the conversation", pay_card: "set on the pay card", edited: "changed in the draft", confirmed: "confirmed as still right" };
 
 /**
- * The pay boxes (plan C8), on a question card and on the draft's pay card: hourly or salary, the market figure for the
- * job and place with its source and year (or a plain line saying there is none), the range candidates see, and the most
- * the owner would pay, which only the team sees.
+ * The pay boxes (plan C8), on a question card, a quick start step and the draft's pay card: hourly or salary, the market
+ * figure for the job and place with its source and year (or a plain line saying there is none), the range candidates
+ * see, and the most the owner would pay, which only the team sees (the eye and the lock beside each box's label, the
+ * kit's Field `aside`).
  */
 export function PayFields({ form, onChange, card, idBase }: { form: PayForm; onChange: (form: PayForm) => void; card: IntakePayCard; idBase: string }) {
   const range = marketRange(card);
@@ -19,9 +21,11 @@ export function PayFields({ form, onChange, card, idBase }: { form: PayForm; onC
   const comparable = !!card.benchmark && (!form.basis || card.benchmark.basis === form.basis);
   const unit = form.basis ? UNIT[form.basis] : "";
   return (
-    <div className="stack" style={{ gap: 10 }}>
+    // a size container: the three boxes sit in a row once their own box is wide enough (the dock, the draft, a step)
+    <div className="@container grid min-w-0 gap-3 [&>.segmented]:justify-self-start">
       <Segmented value={form.basis} onChange={(basis) => onChange({ ...form, basis })} ariaLabel="How the job is paid" options={[{ value: "hourly", label: "By the hour" }, { value: "salary", label: "A yearly salary" }]} />
-      <div className="pay-market">
+      {/* the market figure, when there is one: a soft lavender note above the boxes */}
+      <div className="grid gap-0.5 rounded-xl border border-line-tint bg-tint/70 px-3.5 py-2.5 text-[14px] empty:hidden">
         {comparable && range ? (
           <>
             <p><strong>Market pay here:</strong> {range}</p>
@@ -33,14 +37,14 @@ export function PayFields({ form, onChange, card, idBase }: { form: PayForm; onC
           <p className="small muted">The market figure we have is {card.benchmark.basis === "hourly" ? "hourly" : "a yearly salary"}; choose the same to compare.</p>
         ) : null}
       </div>
-      <div className="pay-grid">
-        <Field label={`Lowest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-min`} hint="Candidates see this.">
+      <div className="grid gap-3 @md:grid-cols-3">
+        <Field label={`Lowest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-min`} aside={<SeenBy v="public" />}>
           <input id={`${idBase}-min`} className="input" inputMode="decimal" value={form.min} onChange={(e) => onChange({ ...form, min: e.target.value })} placeholder={form.basis === "salary" ? "e.g. 60,000" : "e.g. 24"} />
         </Field>
-        <Field label={`Highest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-max`} hint="Candidates see this.">
+        <Field label={`Highest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-max`} aside={<SeenBy v="public" />}>
           <input id={`${idBase}-max`} className="input" inputMode="decimal" value={form.max} onChange={(e) => onChange({ ...form, max: e.target.value })} placeholder={form.basis === "salary" ? "e.g. 70,000" : "e.g. 28"} />
         </Field>
-        <Field label="The most you would pay" htmlFor={`${idBase}-ceiling`} hint="Only your team sees this. Optional.">
+        <Field label="The most you would pay" htmlFor={`${idBase}-ceiling`} aside={<SeenBy v="internal" />} hint="Optional.">
           <input id={`${idBase}-ceiling`} className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => onChange({ ...form, ceiling: e.target.value })} />
         </Field>
       </div>
@@ -68,15 +72,16 @@ export function PayCard({ card, onSave, saving, error }: { card: IntakePayCard; 
     }
   };
   return (
-    <div className="pay-card">
+    <div className="grid min-w-0 gap-3">
       {card.confirmed ? (
-        <p className="small" style={{ color: "var(--ink-2)" }}>
-          <Icon name="check-circle" size={16} /> {card.confirmed.byName ? `${card.confirmed.byName} ` : "Pay "}{VIA[card.confirmed.via] ?? "set"} on {new Date(card.confirmed.at).toLocaleDateString()}.
+        <p className="small text-ink-2">
+          <Icon name="check-circle" size={16} className="mr-0.5 text-good" /> {card.confirmed.byName ? `${card.confirmed.byName} ` : "Pay "}{VIA[card.confirmed.via] ?? "set"} on {new Date(card.confirmed.at).toLocaleDateString()}.
         </p>
       ) : card.stated.min !== null ? (
-        <p className="small" style={{ color: "var(--caution)" }}>Is this still right? Pay read from an ad or an earlier role is used only once you confirm it.</p>
+        <p className="small font-medium text-caution">Is this still right? Pay read from an ad or an earlier role is used only once you confirm it.</p>
       ) : (
-        <p className="small muted">Pay is always shown on the job ad. Set it here, or tell the assistant.</p>
+        // pay transparency (a required notice; founder decision Q9), said before any pay is set
+        <p className="small muted">Pay is always shown on the job ad.</p>
       )}
       {/* Below a figure for a broader group of jobs is worth knowing, not a warning (polish list). */}
       {card.belowMarket ? <Alert tone={card.benchmark?.approximate ? "info" : "caution"}>{card.summary}</Alert> : null}
@@ -91,7 +96,7 @@ export function PayCard({ card, onSave, saving, error }: { card: IntakePayCard; 
           </div>
         </>
       ) : (
-        <div className="row">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           {marketRange(card) ? <span className="small muted">Market pay here: {marketRange(card)}</span> : card.gap ? <span className="small muted">{card.gap.message}</span> : null}
           <Button size="sm" variant="secondary" onClick={() => { setForm(payFormFrom(card)); setEditing(true); }}>Change the pay</Button>
         </div>

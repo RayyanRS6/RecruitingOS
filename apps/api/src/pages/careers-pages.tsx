@@ -74,15 +74,19 @@ candidatePages.get("/careers/:slug", async (c) => {
   const view = publicCompany(company, container.env);
   // A trial that ended (L-02 B) shows every job as not taking new applications, in the words a job's own stop uses.
   const paused = trialPaused(company, container.engine.clock());
-  const intro = company.settings.careersPage?.intro ?? "We respond to every applicant and keep the process short.";
-  const summary = `${open.length ? `${open.length} open ${open.length === 1 ? "job" : "jobs"} at ${company.name}.` : `Jobs at ${company.name}.`} ${view.about ?? intro}`.slice(0, 300);
+  // The company's own introduction is the page's lead; without one the page has no lead (fewer words, 23 October 2026).
+  // The link-preview text still falls back to the old default line, which is never on the page itself.
+  const intro = company.settings.careersPage?.intro ?? null;
+  const summary = `${open.length ? `${open.length} open ${open.length === 1 ? "job" : "jobs"} at ${company.name}.` : `Jobs at ${company.name}.`} ${view.about ?? intro ?? "We respond to every applicant and keep the process short."}`.slice(0, 300);
   return c.html(
     <Layout title={`Careers at ${company.name}`} wide description={summary} share={{ title: `Careers at ${company.name}`, description: summary, url: jobUrls(container.env, { slug: company.slug, roleId: "-" }).careers, siteName: company.name, image: publicLogoUrl(company, container.env) }}>
       <div class="careers">
         <div class="careers-head">
-          <CompanyLine company={view} eyebrow="Careers" />
-          <h1>Work with {company.name}</h1>
-          <p class="lead">{intro}</p>
+          {/* The logo alone: the heading names the company, and the page's title says it is the careers page. */}
+          <CompanyLine company={view} />
+          {/* The name in plum: the two-tone heading of the redesign (the words are unchanged). */}
+          <h1>Work with <span>{company.name}</span></h1>
+          {intro ? <p class="lead">{intro}</p> : null}
         </div>
         {view.about ? (
           <section class="card about" aria-labelledby="about-company">
@@ -99,6 +103,7 @@ candidatePages.get("/careers/:slug", async (c) => {
               const accepting = r.acceptingApplications && !paused;
               return (
                 <li class="card role">
+                  <span class="role-icon" aria-hidden="true"><Icon name="briefcase" /></span>
                   <div class="role-main">
                     <h3>{title}</h3>
                     <JobFacts packet={packet} pay={publicPay(packet, jobNotices(packet, company))} small schedule={false} />
@@ -186,7 +191,6 @@ candidatePages.get("/privacy", async (c) => {
   const smsEnabled = c.get("container").env.SMS_ENABLED;
   return c.html(
     <Layout title="How we handle your information">
-      <p class="eyebrow">Privacy</p>
       <h1>How we handle your information</h1>
       <p>{n?.text}</p>
       {/* The apply form's "Who can see it" points here (docs/readiness/20 section D, item 6): every kind of service provider that touches an application, and what each one does. */}

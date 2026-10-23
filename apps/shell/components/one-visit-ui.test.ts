@@ -70,7 +70,7 @@ describe("No AI interview yet, the strip's first column (20 Oct 2026, R20-7; it 
     nav.search = "";
     const html = render(client(), createElement(People));
     expect(html).toContain("3 applicants · 1 waiting on you · 2 without an AI interview yet");
-    expect(html).toMatch(/<div class="talent-strip"><div role="tablist" aria-label="Stages"/);
+    expect(html).toMatch(/<div class="talent-strip[^"]*"><div role="tablist" aria-label="Stages"/);
     expect(html).toContain('<span class="tab-label" data-label="No AI interview yet">No AI interview yet</span> <span class="count">2</span>');
     expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">1</span>');
     expect(text(html)).not.toContain("Still applying");
@@ -132,7 +132,7 @@ function detail(over: Record<string, unknown> = {}) {
 }
 const panel = (qc: QueryClient, d: ReturnType<typeof detail>, tab: "overview" | "screen") => {
   qc.setQueryData(["application", d.id], d);
-  return render(qc, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+  return render(qc, createElement(CandidatePanel, { id: d.id, roleId: "r1", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
 };
 
 describe("the candidate panel (plan E3, E10, E11)", () => {
@@ -150,10 +150,10 @@ describe("the candidate panel (plan E3, E10, E11)", () => {
     const words = text(html);
     expect(words).toContain("2 answered, 1 not answered by choice");
     expect(words).toContain('"Chose not to answer" is never held against them');
-    expect(html).toContain("<dt>What pay are you looking for?</dt><dd style=\"white-space:pre-wrap\"><span class=\"muted\"><em>Chose not to answer</em></span></dd>");
+    expect(html).toContain("<dt>What pay are you looking for?</dt><dd class=\"whitespace-pre-wrap\"><span class=\"muted\"><em>Chose not to answer</em></span></dd>");
     expect(html).toMatch(/I can start on Monday, November 2, 2026\. <span class="chip neutral">Changed before sending<\/span>/);
     expect(words).toContain("Yes (picked from the choices)");
-    expect(html).toContain('<div class="bubble system" style="white-space:pre-wrap">Chose not to answer this question.</div>');
+    expect(html).toContain('<div class="bubble system">Chose not to answer this question.</div>');
     expect(html).toContain('<span class="bubble-label">Changed on the check-your-answers page</span>');
   });
 
@@ -205,6 +205,8 @@ describe("the role report and the ITS controls", () => {
     expect(html).toContain("<option value=\"default\" selected=\"\">The company&#x27;s default (apply and talk in one visit)</option>");
     expect(html).toContain("<option value=\"form_then_screen\">Form now, conversation later</option>");
     expect(text(html)).toContain("always uses the later path");
+    // the rules staff need are folded into one disclosure, not paragraphs on the card (fewer words, 23 October 2026)
+    expect(html).toMatch(/<details class="more"><summary>How this works<\/summary>.*always uses the later path.*<\/details>/);
   });
 
   it("warns an owner on Today at 80% of the month's screening conversations, with a way to ask ITS", () => {

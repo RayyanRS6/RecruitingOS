@@ -96,8 +96,11 @@ describe("the confirmation dialog", () => {
 describe("the status chips", () => {
   it("tick only what was checked; a spinner while something is under way; otherwise a dot", () => {
     const done = renderToStaticMarkup(createElement(StatusPill, { s: { label: "Up and checked", tone: "good", done: true, working: false } }));
-    expect(done).toContain('class="pill sm good"');
+    // the kit's Pill (its class order: tone, then size); the spinner is its `busy`
+    expect(done).toContain('<span class="pill good sm"><svg');
     expect(done).not.toContain("spinner");
+    // a tick wins over a spinner once it was checked
+    expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Up and checked", tone: "good", done: true, working: true } }))).not.toContain("spinner");
     expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Checking it is up", tone: "neutral", done: false, working: true } }))).toContain('<span class="spinner" aria-hidden="true"></span>Checking it is up');
     expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Waiting for ITS", tone: "neutral", done: false, working: false } }))).toContain('<span class="dot" aria-hidden="true"></span>Waiting for ITS');
   });
@@ -175,9 +178,13 @@ describe("the approval card (D1, D5, D6, D9)", () => {
 
   it("marks the must-haves and nice-to-haves as on the job page (D10)", () => {
     const withLists = { ...role, currentPacket: { ...role.currentPacket, packet: { provenance: { assumptions: [] }, requirements: { mustHaves: [{ key: "m1", text: "Active RDH license", rationale: "Required by the state", evidencedBy: ["resume"] }], niceToHaves: [{ key: "n1", text: "Dentrix", rationale: "We use it", evidencedBy: ["resume"] }], eligibility: [] } } } };
-    const out = text(render(client(), createElement(PacketApprovalCard, { role: withLists as never, onEdit: () => undefined, canEdit: true, canManage: true, canSeePay: true, showingProposed: false, onShowProposed: () => undefined, onApproved: () => undefined })));
+    const html = render(client(), createElement(PacketApprovalCard, { role: withLists as never, onEdit: () => undefined, canEdit: true, canManage: true, canSeePay: true, showingProposed: false, onShowProposed: () => undefined, onApproved: () => undefined }));
+    const out = text(html);
     expect(out).toContain("Candidates see this The job page lists what you are looking for: Active RDH license. Nice to have: Dentrix.");
     expect(out).not.toContain("Required by the state");
+    // that the reasons stay with the team is a lock whose words are its accessible name and tooltip (fewer words, 23 Oct 2026)
+    expect(html).toContain('<span class="icon-label align-text-bottom" title="Why each one matters stays with your team.">');
+    expect(out).toContain("Nice to have: Dentrix. Why each one matters stays with your team.");
   });
 });
 
@@ -186,10 +193,10 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
   const words = text(html);
 
   it("leads with the job's public link, with Copy and Open, before anything about the boards (Wave S1)", () => {
-    const link = html.indexOf('<div class="share-link">');
+    const link = html.indexOf('<div class="share-link ');
     expect(link).toBeGreaterThan(-1);
     expect(link).toBeLessThan(html.indexOf("Where it is posted"));
-    expect(html.slice(link)).toMatch(/^<div class="share-link">.*<code title="https:\/\/jobs\.test\/c\/bright\/jobs\/r1">https:\/\/jobs\.test\/c\/bright\/jobs\/r1<\/code>.*Copy<\/button><a class="btn secondary sm" href="https:\/\/jobs\.test\/c\/bright\/jobs\/r1" target="_blank" rel="noopener noreferrer">.*Open<span class="sr-only"> the job page \(opens in a new tab\)<\/span><\/a><\/div>/);
+    expect(html.slice(link)).toMatch(/^<div class="share-link [^"]*">.*<code title="https:\/\/jobs\.test\/c\/bright\/jobs\/r1">https:\/\/jobs\.test\/c\/bright\/jobs\/r1<\/code>.*Copy<\/button><a class="btn secondary sm" href="https:\/\/jobs\.test\/c\/bright\/jobs\/r1" target="_blank" rel="noopener noreferrer">.*Open<span class="sr-only"> the job page \(opens in a new tab\)<\/span><\/a><\/div>/);
     // the message, the ready-made places, each board's card, the tracked links and the counts by source are one click away
     expect(words).toContain("The message that goes with it");
     expect(words).toContain("Links for a referral, a school or a group");
@@ -198,6 +205,9 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
     expect(words).toContain("Applications by source, last 14 days");
     // nothing waits on the team here (ITS posts), so the boards' cards start folded
     expect(html).toContain('<details class="more"><summary>Each board and page, step by step (3)</summary>');
+    // fewer words (23 October 2026): no helper lines around the share buttons and the message
+    expect(words).not.toContain("Each place gets its own link");
+    expect(words).not.toContain("You see it in your own app before anything is sent");
   });
 
   it("opens the boards' cards when one holds a step for the team, and offers the link to someone who cannot share", () => {
@@ -212,7 +222,9 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
   });
 
   it("says ITS is posting, with the task, and keeps the address field folded away", () => {
+    // who posts a board is an icon beside its state, the words its accessible name and tooltip
     expect(words).toContain("Posted by ITS from your company's own account");
+    expect(html).toContain('<span class="icon-label" title="Posted by ITS from your company&#x27;s own account">');
     expect(words).toContain("ITS is posting this on Indeed from your company's own account");
     expect(words).toContain("Post the job on Indeed: waiting for ITS");
     expect(words).toContain("Posted it yourself? Record the address");
@@ -223,7 +235,7 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
     // focusable from code only: following Today's link scrolls there and puts the keyboard there too
     expect(html).toContain('<section id="share" class="setup-section" tabindex="-1">');
     expect(html).toContain('<section id="closing-date" class="setup-section" tabindex="-1">');
-    expect(html).toContain('<fieldset class="share-buttons" aria-label="Share the job">');
+    expect(html).toMatch(/<fieldset class="share-buttons[^"]*" aria-label="Share the job">/);
     // a place that has its link is a plain link to the network's own share page, in a new tab
     expect(html).toContain('href="https://wa.me/?text=');
     expect(html).toMatch(/href="https:\/\/wa\.me\/\?text=[^"]+" target="_blank" rel="noopener noreferrer"/);
@@ -269,16 +281,19 @@ describe("the LinkedIn post on the Share tab (Wave S2, K3)", () => {
     const html = tab(withRole());
     const words = text(html);
     const at = html.indexOf('<section id="linkedin" class="setup-section" tabindex="-1">');
-    expect(at).toBeGreaterThan(html.indexOf('<div class="share-link">'));
+    expect(at).toBeGreaterThan(html.indexOf('<div class="share-link '));
     expect(at).toBeLessThan(html.indexOf("Where it is posted"));
     expect(words).toContain("Post on LinkedIn");
-    expect(html).toMatch(/<legend class="small">Tone<\/legend>/);
+    expect(html).toMatch(/<legend class="small[^"]*">Tone<\/legend>/);
     // Proud is picked to start with
-    expect(html).toContain('<label class="wording-option" data-checked="true"><input type="radio" name="linkedin-tone-r1" checked="" value="proud"/>');
+    expect(html).toMatch(/<label class="wording-option[^"]*" data-checked="true"><input type="radio" name="linkedin-tone-r1" checked="" value="proud"\/>/);
     expect(html).toContain('<input type="radio" name="linkedin-tone-r1" value="straight"/>');
-    expect(words).toContain("Proud Upbeat: big news, we're hiring");
-    expect(words).toContain("Straight Just the facts");
-    expect(words).toContain("Friendly Warm: asks people to share it");
+    // each tone by its name only (fewer words, 23 October 2026): what it sounds like is the name's title, and the box shows it
+    expect(words).toContain("Tone Proud Straight Friendly");
+    expect(words).not.toContain("Pick a tone, check the words");
+    expect(words).not.toContain("Upbeat: big news");
+    expect(words).not.toContain("Just the facts");
+    expect(html).toContain('title="Just the facts">Straight</span>');
     // the words come from the job itself: company, title, place, kind of job, pay, must-haves and the job's address
     const post = box(html);
     expect(post).toContain("Big news: Bright Dental is hiring.");
@@ -288,10 +303,12 @@ describe("the LinkedIn post on the Share tab (Wave S2, K3)", () => {
     expect(html).toMatch(/<label for="linkedin-text">Your post<\/label><textarea id="linkedin-text" class="textarea" rows="14" aria-describedby="linkedin-count linkedin-hint">/);
     expect(words).toMatch(/\d+ of 3,000 characters/);
     // the preview shows the same words, for the eye only (the box holds them for everyone)
-    expect(html).toMatch(/<div class="stack" style="[^"]*" aria-hidden="true"><span class="small muted">Preview<\/span>/);
+    expect(html).toMatch(/<div class="stack[^"]*" aria-hidden="true"><span class="small muted">Preview<\/span>/);
     expect(words).toContain("Copy and open LinkedIn");
     expect(words).toContain("Copy text");
-    expect(words).toContain("Nothing is posted for you. LinkedIn opens in a new tab: paste, then post.");
+    // what the main button does is its title now, not a line under it (the toast after the copy says the next step)
+    expect(words).not.toContain("Nothing is posted for you.");
+    expect(html).toMatch(/<button type="button" class="btn primary" title="Nothing is posted for you\. LinkedIn opens in a new tab: paste, then post\.">/);
     // plain words and plain links only: nothing from LinkedIn loads on the page
     expect(html).not.toMatch(/<script|<iframe/);
   });
@@ -372,6 +389,12 @@ describe("an ITS posting task in the recruiter queue (D3)", () => {
     expect(words).toContain("Record the address");
     expect(words).toContain("Close the task with this note");
     expect(words).not.toMatch(/Candidate:|Resume text/);
+    // fewer words (23 October): the ad's version goes with its package, the company and job stay in the request's title
+    // only, the address field has no hint, and who reads the note is the eye beside "Cannot do it?"
+    expect(words).toContain("The posting package (the job ad to paste) · version 1");
+    expect(words).not.toContain("Bright Dental · Dental hygienist · version 1");
+    expect(words).not.toContain("It is checked before anything is called live");
+    expect(html).toContain('<span class="icon-label" title="The customer&#x27;s owners and admins read this in full, on the job&#x27;s Share tab and in their updates.">');
   });
 
   it("says before accepting that a posting task opens nothing about candidates", () => {
@@ -480,6 +503,10 @@ describe("the recruiter queue's pills, search and request (Wave S6, 2.3)", () =>
       expect(html).toContain('<details class="more"><summary>What the request is about (1)</summary>');
       expect(words).toContain("Your answer Write to the customer");
       expect(words).toContain("Resolve What you did or advised (the customer reads this in full)");
+      // who reads a message is the eye beside "Write to the customer" (its words its name and tooltip), not a hint line;
+      // the minutes field has no hint (23 October)
+      expect(html).toContain('<span class="icon-label" title="The person who asked and the owners read it in full on Today.">');
+      expect(words).not.toContain("Recorded to size recruiter capacity");
       // ITS recruiters cannot open the console, so the link is not there
       expect(words).not.toContain("See this customer in the console");
     });
@@ -541,9 +568,14 @@ describe("a request in the recruiter queue: who raised it, and who it is about o
   it("the page header and the empty queue do not say every request comes from a customer", () => {
     const qc = client();
     qc.setQueryData(["escalations"], []);
-    const words = text(render(qc, createElement(RecruiterQueue)));
-    expect(words).toContain("Requests from customers, and ones Recruiting OS raised automatically: urgent ones first");
-    expect(words).toContain("Requests appear here.");
+    const html = render(qc, createElement(RecruiterQueue));
+    const words = text(html);
+    // fewer words (23 October): the title alone, no eyebrow, no line describing the page; the empty queue's one line
+    expect(html).toContain("<h1>Recruiter queue</h1>");
+    expect(words).not.toContain("ITS recruiters");
+    expect(words).not.toContain("Requests from customers");
+    expect(words).toContain("Queue is empty");
+    expect(words).not.toContain("Requests appear here.");
     expect(words).not.toContain("Customer requests appear here.");
   });
 
@@ -574,7 +606,10 @@ describe("Setup: how candidates see the company, and the job boards (Q13, D3, Q1
     expect(words).toContain("How candidates see you");
     expect(words).toContain("No logo yet: job pages show your company's name.");
     expect(html).toMatch(/<input id="co-logo-file" class="input" type="file" accept="image\/png,image\/jpeg,image\/webp"/);
-    expect(words).toContain("Nothing yet. Job pages show the job without an \"about the company\" part until someone approves one.");
+    // the empty state's one line, then its two ways forward (founder, 23 October 2026: fewer words)
+    expect(words).toContain("About the company Nothing yet.");
+    expect(words).not.toContain("Job pages show the job without an \"about the company\" part");
+    expect(words).not.toContain("What candidates see on your careers page and every job page.");
     expect(words).toContain("Draft it with the assistant");
     expect(words).toContain("Write it yourself");
     // the boards: ITS posts by default, ZipRecruiter only with the company's own plan; the services table says ITS posts
@@ -583,13 +618,16 @@ describe("Setup: how candidates see the company, and the job boards (Q13, D3, Q1
     expect(words).toContain("ITS posts your jobs here from your company's own account");
     // who candidates write to before they apply: the ITS inbox until the company sets its own (plan D10)
     expect(words).toContain("Who candidates can write to before they apply");
-    expect(words).toContain("Candidates see: help@its.test. This is the ITS inbox that answers for your company");
+    expect(words).toContain("Candidates see: help@its.test. This is the ITS inbox that answers for your company.");
+    expect(words).not.toContain("set your own address to have them write to you");
     expect(words).toContain("Set your own contact");
   });
 
   it("shows the company's own contact once it is set, with the way back to the ITS inbox", () => {
     const words = text(page({ hiringContact: { email: "jobs@bright.test", name: "Dana" } }));
-    expect(words).toContain("Candidates see: Dana, jobs@bright.test. Your own address, set here.");
+    // the address alone: its buttons already say it is the company's own
+    expect(words).toContain("Candidates see: Dana, jobs@bright.test. Change the contact");
+    expect(words).not.toContain("Your own address, set here.");
     expect(words).toContain("Change the contact");
     expect(words).toContain("Use the ITS inbox");
   });
@@ -599,7 +637,10 @@ describe("Setup: how candidates see the company, and the job boards (Q13, D3, Q1
     const words = text(html);
     expect(html).toContain('<img src="/files/logo/co1.png" alt="Bright Dental logo"/>');
     expect(words).toContain("We are a family dental practice in Irvine.");
-    expect(words).toMatch(/Approved by Dana Whitfield on .+\. Shown on your careers page and every job page\./);
+    expect(words).toMatch(/Approved by Dana Whitfield on [^.]+\./);
+    expect(words).not.toContain("Shown on your careers page and every job page.");
+    // beside a stored logo, nothing: where it shows is not said again
+    expect(words).not.toContain("Shown at the top of your careers page");
     expect(words).toContain("Change it");
     expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">Our team posts them<\/button>/);
     expect(words).toContain("Not connected to Indeed. Post from your own Indeed account");
@@ -625,8 +666,12 @@ describe("Setup: When a candidate cancels (founder decisions 1A to 4A; 3A)", () 
     expect(html).toContain('id="setup-new-times"');
     expect(words).toContain("When a candidate cancels");
     expect(words).toContain("When candidates cancel a booked interview, they choose: send me new times later, or I'm no longer interested.");
+    // the title then the checkbox; the explanation of what candidates choose waits under How this works (fewer words, 23 Oct)
+    const card = words.slice(words.indexOf("When a candidate cancels"));
+    expect(card).toMatch(/^When a candidate cancels Send new times automatically/);
+    expect(card.indexOf("How this works")).toBeLessThan(card.indexOf("When candidates cancel a booked interview"));
     expect(html).toMatch(/<input type="checkbox" checked=""\/>Send new times automatically to people who ask for them/);
-    expect(html).toMatch(/<input id="new-times-days" class="input" type="number" min="1" max="10" step="1" style="width:100px" value="3"\/>/);
+    expect(html).toMatch(/<input id="new-times-days" class="input w-25" type="number" min="1" max="10" step="1" value="3"\/>/);
     expect(words).toContain("Working days to wait");
     expect(words).toContain("1 to 10. Weekends and holidays are not counted. The email goes out in the morning, your company's time.");
     expect(words).toContain("Each person gets one set of new times by email, 3 working days after they cancel, for the same interview.");
@@ -669,7 +714,7 @@ describe("the empty applicant list of a live job (D8)", () => {
     qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0, byOwnerStage: { new: 0, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 } });
     const html = render(qc, createElement(People));
     expect(text(html)).toContain("Nobody has applied yet");
-    expect(html).toContain('<fieldset class="share-buttons" aria-label="Share the job">');
+    expect(html).toMatch(/<fieldset class="share-buttons[^"]*" aria-label="Share the job">/);
     // and the way to the Share tab's LinkedIn post (Wave S2)
     expect(html).toContain('<a href="/roles/r1?tab=share#linkedin">Post on LinkedIn</a>');
   });

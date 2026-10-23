@@ -14,24 +14,31 @@ import { workModelLabel } from "./RolePlan";
 
 /**
  * The one header and tab strip a job's pages share (Wave S1): /roles/:id (the job, its scoring, interview plan, sharing,
- * report and activity) and /roles/:id/talent (its candidates). The eyebrow names the company, the title the job, a pill
- * its status, one line under it; on the right "Bring in a recruiter" and a More menu with everything else.
+ * report and activity) and /roles/:id/talent (its candidates). The title names the job, a pill its status, one line of
+ * facts under it; on the right "Bring in a recruiter" and a More menu with everything else. No eyebrow: the "Job ·
+ * company" line above the title was cut by the founder's fewer-words rule (23 Oct 2026); the rail names the company.
  *
  * It draws what the page hands it. On the first draw (server and browser alike) a page hands it only what the server
  * also has: the rail's jobs list waits for useIsClient() (components/use-is-client.ts), so Candidates first says
- * "Candidates" on both sides and the job's title follows (Wave S2).
+ * "Candidates" on both sides and the job's title follows (Wave S2). `className` places the header (`mb-1`), passed on to
+ * the kit's PageHeader.
  */
-export function JobHeader(props: { title: ReactNode; status: string | null; pulse?: boolean; companyName: string | null; sub?: ReactNode; actions?: ReactNode; noJob?: boolean }) {
+export function JobHeader(props: {
+  title: ReactNode;
+  status: string | null;
+  pulse?: boolean;
+  sub?: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+}) {
   const s = props.status ? roleStatus(props.status) : null;
-  // `noJob`: Candidates before there is any job to show (the page then names only the company)
-  const eyebrow = props.noJob ? props.companyName ?? undefined : props.companyName ? `Job · ${props.companyName}` : "Job";
   return (
     <PageHeader
-      eyebrow={eyebrow}
       title={props.title}
       status={s ? <Pill tone={s.tone} pulse={props.pulse}>{s.label}</Pill> : undefined}
       sub={props.sub}
       actions={props.actions}
+      className={props.className}
     />
   );
 }

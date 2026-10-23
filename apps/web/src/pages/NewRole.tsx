@@ -32,6 +32,6 @@ export function NewRole() {
   // The quick start's answers are kept in this browser for this person in this company only.
   const scope = me.data?.activeCompanyId && me.data.user?.id ? { companyId: me.data.activeCompanyId, userId: me.data.user.id } : null;
   if (sessionId) return <Builder key={sessionId} sessionId={sessionId} companyName={company.name} />;
-  if (way === "quick") return <QuickStart key={scope ? `${scope.companyId}:${scope.userId}` : "nobody"} companyName={company.name} scope={scope} />;
-  return <StartView key={fresh ? "fresh" : "resume"} fresh={fresh} companyName={company.name} scope={scope} />;
+  if (way === "quick") return <QuickStart key={scope ? `${scope.companyId}:${scope.userId}` : "nobody"} scope={scope} />;
+  return <StartView key={fresh ? "fresh" : "resume"} fresh={fresh} scope={scope} />;
 }

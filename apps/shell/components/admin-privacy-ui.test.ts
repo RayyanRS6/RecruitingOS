@@ -100,6 +100,9 @@ describe("the console's privacy requests", () => {
     expect(html).toContain('<th scope="col">Resolved</th>');
     expect(html).not.toContain("th-sort");
     expect(html).not.toContain("Sort:");
+    // no line describing the part (23 October): its tab says what it is; the record button stays
+    expect(html).not.toContain("Requests that were done or declined");
+    expect(html).toContain("Record a request from the privacy mailbox");
     const closed = from(html, "<tbody");
     expect(closed).toContain("Bright Dental");
     expect(closed).toContain(">Done<");
@@ -126,6 +129,10 @@ describe("the console's privacy requests", () => {
     for (const words of ["<dt>Status</dt>", "<dt>Verified</dt>", "<dt>Assigned</dt>", "<dt>Due</dt>", "Not checked yet", ">overdue<", "You", "Assign to me", "Verify the requester", "Could not verify", "Asked counsel.", "Add note", "Send to counsel", "Counsel approved", "Counsel declined", "I confirm counsel approved this anonymization", "Fulfil and confirm to the requester", "Decline with this explanation"]) {
       expect(drawer, words).toContain(words);
     }
+    // where it stands is the kit's at-a-glance rows; the verification field's example is its placeholder, not its label
+    expect(drawer).toContain('<dl class="glance"><dt>Status</dt>');
+    expect(drawer).toContain('<label for="pr-method">How you verified</label>');
+    expect(drawer).toContain('placeholder="Replied from the applying address on 18 Sep"');
   });
 
   it("offers the export preview for a copy of their data, the plain correction fields, and sending the confirmation again", () => {

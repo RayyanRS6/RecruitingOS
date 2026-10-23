@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type { JobPreview } from "@ros/contracts";
-import { Alert, Drawer, ErrorState, Icon, Skeleton } from "@ros/ui";
+import { Alert, Drawer, ErrorState, Eyebrow, Icon, Skeleton } from "@ros/ui";
 import { api } from "../../api/client";
 import { previewPageHref } from "../../publishing";
 import { errorWords } from "./rules";
@@ -18,11 +18,12 @@ export function CandidatePreview(props: { open: boolean; onClose: () => void; pa
   const q = useQuery({ queryKey: ["job-preview", props.path], queryFn: () => api.get<JobPreview>(props.path), enabled: props.open, staleTime: 0 });
   const p = q.data;
   return (
-    <Drawer open={props.open} onClose={props.onClose} title="What candidates will see" sub={p?.banner ?? "A preview of the job page. Nothing is public until the role is approved."} size="lg">
+    // the server's banner says which version this is and that it is not public; nothing stands in for it while loading
+    <Drawer open={props.open} onClose={props.onClose} title="What candidates will see" sub={p?.banner} size="lg">
       {q.isLoading ? <Skeleton lines={6} /> : q.error || !p ? <ErrorState message={errorWords(q.error, "Could not load the preview.")} onRetry={() => q.refetch()} /> : (
         <>
           {/* The real page, drawn by the public pages' own components (plan D1); never public, never indexed. */}
-          <p className="small" style={{ margin: "0 0 10px" }}><a href={previewPageHref(props.path)} target="_blank" rel="noopener noreferrer"><Icon name="eye" size={14} /> Open the full job page<span className="sr-only"> (opens in a new tab)</span></a></p>
+          <p className="mb-5"><a href={previewPageHref(props.path)} target="_blank" rel="noopener noreferrer" className="text-link"><Icon name="eye" size={14} /> Open the full job page<span className="sr-only"> (opens in a new tab)</span></a></p>
           <JobPreviewBody p={p} />
         </>
       )}
@@ -43,53 +44,70 @@ export function UnsavedPreview(props: { open: boolean; onClose: () => void; prev
   );
 }
 
+/** A heading inside the job page, and its words (screenshot 5's left column: "About the work"). */
+const JOB_H2 = "font-display text-[21px] font-bold leading-tight tracking-[-0.02em] text-ink";
+/** A smaller heading under it (What we're looking for, Nice to have, Benefits). */
+const JOB_SUB = "mt-3 font-display text-[17px] font-bold leading-tight tracking-[-0.015em] text-ink";
+const JOB_TEXT ="whitespace-pre-wrap text-[14.5px] leading-relaxed text-ink-2";
+const JOB_LIST = "grid list-disc gap-1.5 pl-5 text-[14.5px] leading-relaxed text-ink-2 marker:text-ink-3";
+/** A notice on the job page (pay, the law of the place): a soft lavender note with a shield, as the job page shows them. */
+const JOB_NOTICE = "flex items-start gap-2.5 rounded-xl border border-line-tint bg-tint px-4 py-3 text-[13px] leading-snug text-ink-2";
+
 /** The job page and the apply form's questions, as candidates would see them, with what is still missing on top. */
 export function JobPreviewBody({ p }: { p: JobPreview }) {
   return (
-    <div className="stack" style={{ gap: 14 }}>
+    <div className="grid min-w-0 gap-6">
       {p.gaps.length ? (
         <Alert tone="caution">
-          <ul style={{ margin: 0, paddingLeft: 18 }}>{p.gaps.map((g) => <li key={g}>{g}</li>)}</ul>
+          <ul className="grid list-disc gap-0.5 pl-[18px]">{p.gaps.map((g) => <li key={g}>{g}</li>)}</ul>
         </Alert>
       ) : null}
-      <article className="job-preview" aria-label="Job page preview">
-        <p className="eyebrow">Careers at {p.company.name}</p>
-        <h1>{p.job.title}</h1>
-        <ul className="job-preview-facts" aria-label="About this job">
-          {p.job.facts.map((f) => (
-            <li key={f.key} className="chip accent">
-              <Icon name={FACT_ICON[f.key]} size={14} />
-              <span className="sr-only">{f.label}: </span>
-              {f.text}
-            </li>
-          ))}
-        </ul>
-        <section>
-          <h2>About the job</h2>
-          <p className="job-preview-desc">{p.job.description}</p>
+      <article className="grid min-w-0 gap-7" aria-label="Job page preview">
+        <header className="grid gap-3">
+          <Eyebrow>Careers at {p.company.name}</Eyebrow>
+          <h1 className="font-display text-[34px] font-bold leading-[1.02] tracking-[-0.04em] text-ink wrap-anywhere sm:text-[42px]">{p.job.title}</h1>
+          {/* the facts in one row between two hairlines */}
+          <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-2 border-y border-line py-3 text-[13.5px] text-ink-2" aria-label="About this job">
+            {p.job.facts.map((f) => (
+              <li key={f.key} className="inline-flex min-w-0 items-center gap-1.5 [&>.icon]:text-ink-3">
+                <Icon name={FACT_ICON[f.key]} size={15} />
+                <span className="sr-only">{f.label}: </span>
+                {f.text}
+              </li>
+            ))}
+          </ul>
+        </header>
+        <section className="grid gap-3">
+          <h2 className={JOB_H2}>About the job</h2>
+          <p className={JOB_TEXT}>{p.job.description}</p>
           {/* The same blocks, in the same order, as the job page (plan D10). */}
-          {p.job.mustHaves?.length ? <><h2>What we're looking for</h2><ul>{p.job.mustHaves.map((m) => <li key={m}>{m}</li>)}</ul></> : null}
-          {p.job.niceToHaves?.length ? <><h2>Nice to have</h2><ul>{p.job.niceToHaves.map((m) => <li key={m}>{m}</li>)}</ul></> : null}
-          {p.job.benefits ? <><h2>Benefits</h2><p className="job-preview-desc">{p.job.benefits}</p></> : null}
+          {p.job.mustHaves?.length ? <><h2 className={JOB_SUB}>What we're looking for</h2><ul className={JOB_LIST}>{p.job.mustHaves.map((m) => <li key={m}>{m}</li>)}</ul></> : null}
+          {p.job.niceToHaves?.length ? <><h2 className={JOB_SUB}>Nice to have</h2><ul className={JOB_LIST}>{p.job.niceToHaves.map((m) => <li key={m}>{m}</li>)}</ul></> : null}
+          {p.job.benefits ? <><h2 className={JOB_SUB}>Benefits</h2><p className={JOB_TEXT}>{p.job.benefits}</p></> : null}
         </section>
-        <section>
-          <h2>What to expect</h2>
-          <ol>{p.job.steps.map((s) => <li key={s}>{s}</li>)}</ol>
+        <section className="grid gap-3">
+          <h2 className={JOB_H2}>What to expect</h2>
+          <ol className="grid list-decimal gap-1.5 pl-5 text-[14.5px] leading-relaxed text-ink-2 marker:text-ink-3">{p.job.steps.map((s) => <li key={s}>{s}</li>)}</ol>
         </section>
         {p.company.about ? (
-          <section>
-            <h2>About {p.company.name}</h2>
-            <p className="job-preview-desc">{p.company.about}</p>
+          <section className="grid gap-3">
+            <h2 className={JOB_H2}>About {p.company.name}</h2>
+            <p className={JOB_TEXT}>{p.company.about}</p>
           </section>
         ) : null}
-        {p.pay.note ? <p className="small muted">{p.pay.note}</p> : null}
-        {p.job.notices.map((n) => <p key={n.key} className="small muted">{n.text}</p>)}
+        {p.pay.note || p.job.notices.length ? (
+          <div className="grid gap-2">
+            {p.pay.note ? <p className={JOB_NOTICE}><Icon name="shield" size={16} className="mt-px shrink-0 text-primary" />{p.pay.note}</p> : null}
+            {p.job.notices.map((n) => <p key={n.key} className={JOB_NOTICE}><Icon name="shield" size={16} className="mt-px shrink-0 text-primary" />{n.text}</p>)}
+          </div>
+        ) : null}
       </article>
       {p.apply.questions.length || p.apply.quickQuestions?.length || p.apply.writtenQuestions ? (
-        <section className="job-preview" aria-label="The application form">
-          <h2>Questions from {p.company.name}</h2>
+        // the application form's questions, as screenshot 5's form card
+        <section className="grid min-w-0 gap-3 rounded-2xl border border-line bg-surface p-5 shadow-xs" aria-label="The application form">
+          <h2 className={JOB_H2}>Questions from {p.company.name}</h2>
           {p.apply.questions.length || p.apply.quickQuestions?.length ? (
-            <ul>
+            <ul className="divide-y divide-line text-[14.5px] text-ink [&>li]:py-2.5">
               {p.apply.questions.map((a) => <li key={a.key}>{a.question}{a.help ? <span className="small muted"> {a.help}</span> : null}</li>)}
               {(p.apply.quickQuestions ?? []).map((q) => (
                 <li key={q.key}>

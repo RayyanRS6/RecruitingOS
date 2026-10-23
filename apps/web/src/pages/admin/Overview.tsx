@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { type CSSProperties, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, cx, ErrorState, Icon, PageHeader, Skeleton } from "@ros/ui";
+import { Avatar, Button, Card, ErrorState, Icon, IconChip, PageHeader, Skeleton, StatCell, StatStrip } from "@ros/ui";
 import { api, type Me } from "../../api/client";
 import { allowanceAlerts, allowanceChip } from "../../allowance";
 import { useIsClient } from "../../components/use-is-client";
@@ -21,6 +21,9 @@ import { costsSinceKey, monthStartIn } from "./system";
  * card whose search reaches any customer's drawer in one click; the month's AI spend with the top three customers; and
  * one line on the system. Each source is read on its own (the same queries as the sections, so one answer serves both),
  * and a source that fails says so on its own row with "Try again" while the others still show.
+ * Fewer words (founder, 23 Oct 2026): the counts live in the stat strip, so the card titles under it carry none (the
+ * greeting keeps "N things need you.", the state to act on), and "Nothing needs you right now." is the list's own row,
+ * not a second line under the title.
  */
 
 type FailuresDto = { failedRuns: Array<{ id: string }>; failedJobs: Array<{ id: number; createdAt?: string }>; failedAi: Array<{ id: string; createdAt?: string }>; alerts: AlertRow[]; pendingDeletions: Array<{ id: string }> };
@@ -244,7 +247,7 @@ export function Overview() {
   const queue = useQuery({ queryKey: adminKeys.queue, queryFn: () => api.get<QueueDto>("/api/v1/admin/queue", why), refetchInterval: 30_000 });
   // "This month" starts on the 1st in the business calendar's time zone; the costs wait for the calendar's answer.
   const since = monthStart(calendar.data?.current.timeZone);
-  const costs = useQuery({ queryKey: costsSinceKey(since),queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
+  const costs = useQuery({ queryKey: costsSinceKey(since), queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
   const isClient = useIsClient();
 
   const sources = [
@@ -263,63 +266,122 @@ export function Overview() {
   const first = firstName(me.data?.user.name);
 
   return (
-    <div className="stack" style={{ gap: 20 }}>
+    <div className="min-w-0">
       <PageHeader
-        eyebrow="ITS · Console"
         title={`Good ${partOfDay(isClient)}${first ? `, ${first}` : ""}.`}
-        sub={settled ? (rows.length ? `${count(rows.length, "thing needs", "things need")} you.` : failed.length ? "Some things could not be checked." : "Nothing needs you right now.") : undefined}
+        sub={settled && rows.length ? `${count(rows.length, "thing needs", "things need")} you.` : undefined}
         actions={<Link to="/recruiter/queue" className="btn secondary">Open the recruiter queue</Link>}
       />
 
-      <Card title={settled ? `Needs attention (${rows.length})` : "Needs attention"}>
-        {loading.length === sources.length ? (
-          <Skeleton lines={3} />
-        ) : (
-          <ul className="console-list">
-            {rows.map((r) => (
-              <li key={r.key} className="console-row">
-                <span className={cx("console-row-icon", r.urgent && "urgent")} aria-hidden="true"><Icon name={r.urgent ? "alert" : "info"} /></span>
-                <span className="console-row-text">
-                  <span>{r.text}</span>
-                  {r.sub ? <span className="console-row-sub">{r.sub}</span> : null}
-                </span>
-                <Link to={r.action.href} className="btn secondary sm" aria-label={`${r.action.label}: ${r.text}`}>{r.action.label}</Link>
-              </li>
-            ))}
-            {failed.map((s) => (
-              <li key={`failed-${s.key}`} className="console-row">
-                <span className="console-row-icon urgent" aria-hidden="true"><Icon name="alert" /></span>
-                <span className="console-row-text">{`Could not check ${s.thing}.`}</span>
-                <Button size="sm" onClick={s.retry} ariaLabel={`Try again: ${s.thing}`}>Try again</Button>
-              </li>
-            ))}
-            {loading.length ? (
-              <li className="console-row">
-                <span className="console-row-icon" aria-hidden="true"><Icon name="clock" /></span>
-                <span className="console-row-text console-row-sub">{`Still checking ${someNames(loading.map((s) => s.thing))}…`}</span>
-              </li>
-            ) : null}
-            {settled && !rows.length && !failed.length ? (
-              <li className="console-row">
-                <span className="console-row-icon clear" aria-hidden="true"><Icon name="check-circle" /></span>
-                <span className="console-row-text">
-                  <span>Nothing needs you right now.</span>
-                  <span className="console-row-sub">Everything below is up to date.</span>
-                </span>
-              </li>
-            ) : null}
-          </ul>
-        )}
-      </Card>
+      <div className="stack gap-6">
+        {/*
+          Screenshot 7's row of stat cards: the page's counts, said here once (how many things need attention, the
+          customers, the companies waiting for the ITS check); a figure still loading shows a quiet bar, one that could not
+          be read is left out. The last, tinted cell is the console's rule staff must know, said once.
+        */}
+        <StatStrip label="At a glance">
+          <StatCell icon="alert" tone={settled && !rows.length ? "lavender" : "peach"} label="Needs attention" value={settled ? rows.length : PENDING} />
+          {customers.data || !customers.error ? (
+            <>
+              <StatCell icon="building" label="Customers" value={customers.data ? customers.data.length : PENDING} />
+              <StatCell icon="clock" label="Waiting for the ITS check" value={customers.data ? waitingCustomers(customers.data).length : PENDING} />
+            </>
+          ) : null}
+          <StatCell icon="shield" tone="plum" highlight label="Every read in the console is recorded with a reason." value={null} />
+        </StatStrip>
 
-      <div className="grid-2">
-        <CustomersCard rows={customers.data} error={!!customers.error} retry={() => void customers.refetch()} />
-        <CostsCard rows={costs.data} error={!!costs.error && !costs.data} retry={() => void costs.refetch()} since={since} names={new Map((customers.data ?? []).map((c) => [c.id, c.name]))} />
+        {/* The wide list (screenshot 7): a header strip, then the kit's rows, edge to edge, each with its one button. */}
+        <Card title="Needs attention" flush>
+          {loading.length === sources.length ? (
+            // in line with the flush card's title: 16px sides on a phone, 24px from 640px. A copy of the kit's flush padding,
+            // as the kit pads only a flush card's title and rows (exactly 640px wide, the kit's title still has 16px)
+            <div className="px-4 py-5 sm:px-6">
+              <Skeleton lines={3} />
+            </div>
+          ) : (
+            <ul>
+              {rows.map((r, i) => (
+                <li key={r.key} className={ROW} style={enterDelay(i)}>
+                  <span className="list-row-lead"><IconChip icon={r.urgent ? "alert" : "info"} tone={r.urgent ? "peach" : "lavender"} size="sm" /></span>
+                  <span className="list-row-main">
+                    <span className="list-row-title wrap">{r.text}</span>
+                    {r.sub ? <span className="list-row-meta">{r.sub}</span> : null}
+                  </span>
+                  <span className="list-row-end">
+                    <Link to={r.action.href} className="btn secondary sm" aria-label={`${r.action.label}: ${r.text}`}>{r.action.label}</Link>
+                  </span>
+                </li>
+              ))}
+              {failed.map((s, i) => (
+                <li key={`failed-${s.key}`} className={ROW} style={enterDelay(rows.length + i)}>
+                  <span className="list-row-lead"><IconChip icon="alert" tone="peach" size="sm" /></span>
+                  <span className="list-row-main">
+                    <span className="list-row-title wrap">{`Could not check ${s.thing}.`}</span>
+                  </span>
+                  <span className="list-row-end">
+                    <Button size="sm" onClick={s.retry} ariaLabel={`Try again: ${s.thing}`}>Try again</Button>
+                  </span>
+                </li>
+              ))}
+              {loading.length ? (
+                <li className={ROW}>
+                  <span className="list-row-lead"><IconChip icon="clock" tone="neutral" size="sm" /></span>
+                  <span className="list-row-main">
+                    <span className="list-row-meta">{`Still checking ${someNames(loading.map((s) => s.thing))}…`}</span>
+                  </span>
+                </li>
+              ) : null}
+              {settled && !rows.length && !failed.length ? (
+                <li className={ROW}>
+                  <span className="list-row-lead"><IconChip icon="check-circle" tone="good" size="sm" /></span>
+                  <span className="list-row-main">
+                    <span className="list-row-title wrap">Nothing needs you right now.</span>
+                  </span>
+                </li>
+              ) : null}
+            </ul>
+          )}
+        </Card>
+
+        {/* Customers beside this month's costs (the "at a glance" side card); one column on a phone or a tablet. */}
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+          <CustomersCard rows={customers.data} error={!!customers.error} retry={() => void customers.refetch()} />
+          <CostsCard rows={costs.data} error={!!costs.error && !costs.data} retry={() => void costs.refetch()} since={since} names={new Map((customers.data ?? []).map((c) => [c.id, c.name]))} />
+        </div>
+
+        {/* The system in one muted line, as the page's footer. */}
+        <div className="mt-2 border-t border-line pt-5">
+          <SystemLine queue={queue.data} queueFailed={!queue.data && !!queue.error} retryQueue={() => void queue.refetch()} calendar={calendar.data} calendarFailed={!calendar.data && !!calendar.error} retryCalendar={() => void calendar.refetch()} />
+        </div>
       </div>
-
-      <SystemLine queue={queue.data} queueFailed={!queue.data && !!queue.error} retryQueue={() => void queue.refetch()} calendar={calendar.data} calendarFailed={!calendar.data && !!calendar.error} retryCalendar={() => void calendar.refetch()} />
-      <p className="small muted">Every read in the console is recorded with a reason.</p>
     </div>
+  );
+}
+
+/**
+ * One row of the "Needs attention" list card (Card flush): the kit's row (icon chip, words, the row's one button), which
+ * the flush card lines up with its title, rising in once. Its title is `list-row-title wrap`: the rows are sentences and
+ * names that must be whole at every width, never ending in "…".
+ */
+const ROW = "list-row motion-safe:animate-enter";
+
+/** A stat cell's figure while it is being read: a quiet bar, so no 0 shows before the answer. */
+const PENDING = <span className="skeleton my-1 h-6 w-12" aria-hidden="true" />;
+
+/** Rows arrive one after another, 30 ms apart, the ninth and later with the eighth. */
+const enterDelay = (i: number): CSSProperties => ({ animationDelay: `${Math.min(i, 7) * 30}ms` });
+
+/**
+ * "See all costs", with an arrow that nudges toward it; the whole line, arrow included, follows the link (40 px under a
+ * finger). The link's own class, `console-more`, is unstyled: a hook console-overview.test.ts pins, so the look sits on
+ * the line around it.
+ */
+function MoreLink({ to, children }: { to: string; children: string }) {
+  return (
+    <p className="text-link relative mt-4 w-fit pointer-coarse:min-h-10 [&>a]:after:absolute [&>a]:after:inset-0">
+      <Link to={to} className="console-more">{children}</Link>
+      <Icon name="arrow-right" size={16} />
+    </p>
   );
 }
 
@@ -329,34 +391,44 @@ function CustomersCard({ rows, error, retry }: { rows: CustomerRow[] | undefined
   const matches = rows ? customerMatches(rows, typed) : [];
   const seeAll = typed.trim() ? `/admin/customers?q=${encodeURIComponent(typed.trim())}` : "/admin/customers";
   return (
-    <Card title={rows ? `Customers (${rows.length})` : "Customers"}>
+    // the count is the stat strip's, above; the "See all" link at the foot says it again where it is followed
+    <Card title="Customers">
       {!rows ? (
         error ? <ErrorState message="Could not load customers." onRetry={retry} /> : <Skeleton lines={4} />
       ) : (
         <>
-          {rows.length ? <input className="input" type="search" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Search customers" aria-label="Search customers" /> : null}
-          <ul className="console-list" style={{ marginTop: 6 }}>
+          {rows.length ? (
+            <div className="relative">
+              <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-ink-3" />
+              <input className="input rounded-full pl-10" type="search" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
+            </div>
+          ) : null}
+          {/* the businesses as an inset box of the kit's rows inside the card (screenshot 7) */}
+          <ul className="mt-3 overflow-hidden rounded-xl border border-line">
             {matches.slice(0, CUSTOMERS_SHOWN).map((c) => (
-              <li key={c.id} className="console-row">
-                <span className="console-row-text">
-                  <span>{c.name}</span>
-                  <span className="console-row-sub">{customerLine(c)}</span>
+              <li key={c.id} className="list-row">
+                <span className="list-row-lead"><Avatar name={c.name} shape="square" /></span>
+                <span className="list-row-main">
+                  <span className="list-row-title wrap">{c.name}</span>
+                  <span className="list-row-meta">{customerLine(c)}</span>
                 </span>
-                {c.verifiedAt
-                  ? <Link to={`/admin/customers?open=${encodeURIComponent(c.id)}`} className="btn secondary sm" aria-label={`Open ${c.name}`}>Open</Link>
-                  : <Link to={`/admin/customers?open=${encodeURIComponent(c.id)}&tab=check`} className="btn secondary sm" aria-label={`Review ${c.name}`}>Review</Link>}
+                <span className="list-row-end">
+                  {c.verifiedAt
+                    ? <Link to={`/admin/customers?open=${encodeURIComponent(c.id)}`} className="btn secondary sm" aria-label={`Open ${c.name}`}>Open</Link>
+                    : <Link to={`/admin/customers?open=${encodeURIComponent(c.id)}&tab=check`} className="btn secondary sm" aria-label={`Review ${c.name}`}>Review</Link>}
+                </span>
               </li>
             ))}
-            {!rows.length ? <li className="console-row muted">No customers yet.</li> : !matches.length ? <li className="console-row muted">{`No customer matches “${typed.trim()}”.`}</li> : null}
+            {!rows.length ? <li className="px-4 py-5 text-sm text-ink-3">No customers yet.</li> : !matches.length ? <li className="px-4 py-5 text-sm text-ink-3">{`No customer matches “${typed.trim()}”.`}</li> : null}
           </ul>
-          {rows.length ? <Link to={seeAll} className="console-more">{typed.trim() ? "See every match in Customers" : `See all ${rows.length} customers`}</Link> : null}
+          {rows.length ? <MoreLink to={seeAll}>{typed.trim() ? "See every match in Customers" : `See all ${rows.length} customers`}</MoreLink> : null}
         </>
       )}
     </Card>
   );
 }
 
-/** The month's AI spend (one figure: founder answer F4) and the three customers who spent most. */
+/** The month's AI spend (one figure: founder answer F4) and the three customers who spent most: the "at a glance" side card. */
 function CostsCard({ rows, error, retry, since, names }: { rows: CostRow[] | undefined; error: boolean; retry: () => void; since: string; names: ReadonlyMap<string, string> }) {
   const sum = rows ? costSummary(rows, names) : null;
   const from = new Date(`${since}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -366,21 +438,31 @@ function CostsCard({ rows, error, retry, since, names }: { rows: CostRow[] | und
         error ? <ErrorState message="Could not load costs." onRetry={retry} /> : <Skeleton lines={4} />
       ) : (
         <>
-          <p className="console-figure">{money(sum.total)}</p>
-          <p className="console-row-sub" style={{ margin: 0 }}>{`AI spend since ${from}, at list prices`}</p>
+          {/*
+            the big figure: its paragraph (`console-figure`, kept bare as the test's hook) takes the display face, size and
+            colour from this box. The card's title says what it is; "at list prices" changes what it means (not the billed
+            amount), so it stays in view on the figure's baseline (System › Costs has it only as a tooltip). The start date
+            is the tooltip.
+          */}
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <div className="font-display text-[40px] leading-none font-bold tracking-[-0.03em] text-ink tabular-nums" title={`AI spend since ${from}`}>
+              <p className="console-figure">{money(sum.total)}</p>
+            </div>
+            <span className="small muted">at list prices</span>
+          </div>
           {sum.top.length ? (
-            <ul className="console-list" style={{ marginTop: 6 }} aria-label="Customers who spent most this month">
+            <ul className="mt-4 divide-y divide-line border-y border-line" aria-label="Customers who spent most this month">
               {sum.top.map((t) => (
-                <li key={t.companyId} className="console-row">
-                  <span className="console-row-text">{t.name}</span>
-                  <span className="console-amount">{money(t.usd)}</span>
+                <li key={t.companyId} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                  <span className="min-w-0 text-ink [overflow-wrap:anywhere]">{t.name}</span>
+                  <span className="shrink-0 font-semibold text-ink tabular-nums">{money(t.usd)}</span>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="muted" style={{ marginTop: 10 }}>No customer has spent anything on AI this month.</p>
+            <p className="mt-4 rounded-xl bg-surface-2 px-4 py-3 text-sm text-ink-2">No customer has spent anything on AI this month.</p>
           )}
-          <Link to="/admin/system?view=costs" className="console-more">See all costs</Link>
+          <MoreLink to="/admin/system?view=costs">See all costs</MoreLink>
         </>
       )}
     </Card>
@@ -391,12 +473,12 @@ function CostsCard({ rows, error, retry, since, names }: { rows: CostRow[] | und
 function SystemLine(props: { queue: QueueDto | undefined; queueFailed: boolean; retryQueue: () => void; calendar: CalendarDto | undefined; calendarFailed: boolean; retryCalendar: () => void }) {
   const { queue, calendar } = props;
   return (
-    <p className="console-system">
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-2 [&_strong]:text-ink">
       <strong>System:</strong>
       {queue ? <span>{`${count(queue.queued, "job", "jobs")} waiting · ${queue.failed} failed · ${count(queue.waitingRuns, "workflow run", "workflow runs")} waiting`}</span> : props.queueFailed ? <><span>Could not check the queue.</span><Button size="sm" variant="quiet" onClick={props.retryQueue} ariaLabel="Try again: the queue">Try again</Button></> : <span>checking the queue…</span>}
       <span aria-hidden="true">·</span>
       {calendar ? <span>{calendar.version !== null ? `business calendar version ${calendar.version} in force` : "standard business hours (no calendar version yet)"}</span> : props.calendarFailed ? <><span>Could not check the business calendar.</span><Button size="sm" variant="quiet" onClick={props.retryCalendar} ariaLabel="Try again: the business calendar">Try again</Button></> : <span>checking the calendar…</span>}
-      <Link to="/admin/system?view=queue">System and settings</Link>
+      <Link to="/admin/system?view=queue" className="text-link text-[13px] pointer-coarse:min-h-10 sm:ml-auto">System and settings<Icon name="arrow-right" size={16} /></Link>
     </p>
   );
 }

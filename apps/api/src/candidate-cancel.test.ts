@@ -205,7 +205,8 @@ describe("candidate cancels an interview", () => {
     const html = await done.text();
     expect(html).toContain("<h1>Your interview is cancelled</h1>");
     expect(html).toMatch(new RegExp(`We let Cancel Dental(&#39;|')s team know\\. We will email you new times on ${day}, unless the team gets in touch first\\.`));
-    expect(html).toContain("If anything changes, reply to any of our emails.");
+    // one line on replying, the notice that a person is one reply away (fewer words, 23 October 2026: no second "reply to any of our emails")
+    expect(html).not.toContain("If anything changes, reply to any of our emails.");
     expect(html).toContain('<p class="notice">Reply to any of our emails with HUMAN to reach a person.</p>');
     expect(html).not.toContain(reason);
 

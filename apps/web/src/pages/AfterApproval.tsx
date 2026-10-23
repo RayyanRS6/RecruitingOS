@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Dialog, Icon, Skeleton, cx } from "@ros/ui";
+import { Alert, Button, Dialog, Eyebrow, Icon, IconChip, Pill, Skeleton } from "@ros/ui";
 import { api, type PostingsResponse } from "../api/client";
 import { ShareJob } from "../components/ShareJob";
 import { scrollBehavior } from "../motion";
@@ -16,31 +16,34 @@ function copy(text: string, what: string) {
   navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}.`), () => toast("Could not copy. Select the text and copy it by hand."));
 }
 
-/** A status chip with a spinner while something is under way and a tick only once it was checked. */
-export function StatusPill({ s }: { s: StatusChip }) {
-  return (
-    <span className={cx("pill", "sm", s.tone)}>
-      {s.done ? <Icon name="check" size={14} /> : s.working ? <span className="spinner" aria-hidden="true" /> : <span className="dot" aria-hidden="true" />}
-      {s.label}
-    </span>
-  );
+/**
+ * A status chip: the kit's Pill with a tick only once it was checked, its spinner (`busy`) while something is under way,
+ * otherwise its dot. `className` places it.
+ */
+export function StatusPill({ s, className }: { s: StatusChip; className?: string }) {
+  return <Pill size="sm" tone={s.tone} icon={s.done ? "check" : undefined} busy={!s.done && s.working} className={className}>{s.label}</Pill>;
 }
 
+/**
+ * One place the job goes, as a row of the side card in screenshot 7: an icon chip, the place and what happens there (with
+ * Copy and Open when it has an address), and its status on the right; on a narrow screen the status moves under it.
+ */
 function DestinationRow({ d }: { d: Destination }) {
   return (
-    <li className="dest">
-      <span className="dest-icon" aria-hidden="true"><Icon name={d.icon} size={16} /></span>
-      <div className="dest-main">
-        <span className="dest-name">{d.name}</span>
-        <span className="dest-detail">{d.detail}</span>
+    <li className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-line py-3.5 first:border-t-0">
+      <IconChip icon={d.icon} size="sm" />
+      <div className="grid min-w-0 flex-[1_1_14rem] gap-0.5">
+        <span className="text-[15px] font-semibold text-ink">{d.name}</span>
+        <span className="text-[13px] text-ink-2 [overflow-wrap:anywhere]">{d.detail}</span>
         {d.copy || d.url ? (
-          <span className="dest-actions">
+          <span className="mt-1.5 flex flex-wrap gap-2">
             {d.copy ? <Button size="sm" icon="copy" onClick={() => copy(d.copy!.text, d.copy!.what)}>Copy</Button> : null}
             {d.url ? <a className="btn ghost sm" href={d.url} target="_blank" rel="noopener noreferrer"><Icon name="external" />Open<span className="sr-only"> {d.name} in a new tab</span></a> : null}
           </span>
         ) : null}
       </div>
-      <span className="dest-status"><StatusPill s={d.status} /></span>
+      {/* under the words on a phone: the chip's 32px and the 12px gap */}
+      <StatusPill s={d.status} className="flex-none max-sm:ml-11" />
     </li>
   );
 }
@@ -97,38 +100,39 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
         </>
       }
     >
-      {sharing ? (
-        <section ref={shareRef} aria-label="Share it now" className="stack" style={{ gap: 8 }}>
-          <h3 style={{ fontSize: 15 }}>Share it now</h3>
-          <p className="small muted" style={{ margin: 0 }}>The quickest first applicants often come from people who already know you.</p>
-          <ShareJob roleId={props.roleId} roleTitle={props.roleTitle} companyName={props.companyName} compact />
-        </section>
-      ) : null}
-      <section aria-label="Where it is going" className="stack" style={{ gap: 8 }}>
-        <h3 style={{ fontSize: 15 }}>{props.editWhileOpen ? "Where the job is" : "Where it is going"}</h3>
-        {q.isLoading || !d ? <Skeleton lines={4} /> : (
-          <>
-            <ul className="dest-list" aria-busy={preparing || undefined}>
+      <div className="stack gap-5">
+        {sharing ? (
+          <section ref={shareRef} aria-label="Share it now" className="stack gap-2 rounded-2xl border border-line-tint bg-tint p-4">
+            <Eyebrow as="h3">Share it now</Eyebrow>
+            <ShareJob roleId={props.roleId} roleTitle={props.roleTitle} companyName={props.companyName} compact />
+          </section>
+        ) : null}
+        <section aria-label="Where it is going" className="stack gap-2">
+          <Eyebrow as="h3">{props.editWhileOpen ? "Where the job is" : "Where it is going"}</Eyebrow>
+          {/* each place's status says where it stands (a tick only once checked, a spinner while under way); the list
+              asks again by itself while it is open */}
+          {q.isLoading || !d ? <Skeleton lines={4} /> : (
+            <ul className="rounded-2xl border border-line bg-surface px-4" aria-busy={preparing || undefined}>
               {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} />)}
             </ul>
-            <p className="small muted" style={{ margin: 0 }}>Nothing is marked as up until it has been checked. This list keeps itself current while it is open.</p>
-          </>
-        )}
-        {noBoards ? <p className="small muted" style={{ margin: 0 }}>{noBoards}</p> : null}
-        {outdated ? <Alert tone="info">{outdated}</Alert> : null}
-      </section>
-      {note ? (
-        <Alert tone="caution">
-          <div className="stack" style={{ gap: 6 }}>
-            <span>{note}</span>
-            {props.canEditPacket ? <div className="row"><Button size="sm" onClick={() => goTo("plan")}>Choose interviewers</Button></div> : <span className="small">An owner, an admin or a hiring manager chooses them on the Interview plan tab.</span>}
-          </div>
-        </Alert>
-      ) : null}
-      {q.error ? <Alert tone="critical">Could not read where the job stands. The Share tab shows it too.</Alert> : null}
-      <p className="small muted" style={{ margin: 0 }}>
-        {props.canManage ? <>Change the boards, the closing date or the links on the <button type="button" className="link-btn" onClick={() => goTo("posting")}>Share tab</button>.</> : "Only an owner or an admin changes where the job is posted. The Share tab shows where it stands."}
-      </p>
+          )}
+          {noBoards ? <p className="small muted">{noBoards}</p> : null}
+          {outdated ? <Alert tone="info">{outdated}</Alert> : null}
+        </section>
+        {note ? (
+          <Alert tone="caution">
+            <div className="stack gap-1.5">
+              <span>{note}</span>
+              {props.canEditPacket ? <div className="row"><Button size="sm" onClick={() => goTo("plan")}>Choose interviewers</Button></div> : <span className="small">An owner, an admin or a hiring manager chooses them on the Interview plan tab.</span>}
+            </div>
+          </Alert>
+        ) : null}
+        {q.error ? <Alert tone="critical">Could not read where the job stands. The Share tab shows it too.</Alert> : null}
+        {/* the way to change where it goes, for those who may; nobody else is offered anything to change here */}
+        {props.canManage ? (
+          <p className="small muted">Change the boards, the closing date or the links on the <button type="button" className="link-btn" onClick={() => goTo("posting")}>Share tab</button>.</p>
+        ) : null}
+      </div>
     </Dialog>
   );
 }

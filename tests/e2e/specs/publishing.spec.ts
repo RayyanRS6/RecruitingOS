@@ -101,7 +101,9 @@ test("Setup: the logo and the 'about the company' text, and who posts on the job
   await profile.getByRole("button", { name: "Set your own contact" }).click();
   await profile.getByLabel("Email address").fill(`jobs+${run}@brightline.test`);
   await profile.getByRole("button", { name: "Save the contact" }).click();
-  await expect(profile.getByText(`Candidates see: jobs+${run}@brightline.test. Your own address, set here.`)).toBeVisible({ timeout: 30_000 });
+  // the address alone since the fewer-words round (23 Oct 2026); its buttons say it is the company's own
+  await expect(profile.getByText(`Candidates see: jobs+${run}@brightline.test.`, { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(profile.getByRole("button", { name: "Use the ITS inbox" })).toBeVisible();
   await expectAccessible(page, "company profile");
   // the job boards card sits on the Settings page's Hiring rules tab (Wave S1)
   await page.getByRole("tab", { name: "Hiring rules" }).click();

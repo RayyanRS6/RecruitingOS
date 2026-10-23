@@ -1,0 +1,1080 @@
+/*
+ * Recruiting OS look (October 2026 redesign): warm paper ground, deep plum ink and buttons, a coral spark, lavender and
+ * peach tints. Tailwind CSS v4 builds every class the pages use from this one file; the colours live in the custom
+ * properties below so light and dark flip by themselves, and only these colours exist (Tailwind's own palette is
+ * switched off). Contrast ratios are WCAG 2 figures; tokens.test.ts recomputes them for both themes. The application's
+ * entry (apps/shell/app/globals.css) imports Tailwind first and then this file. docs/07 describes the system.
+ */
+
+/* Tailwind only scans the app it is built in (apps/shell); the pages and the kit live in other packages. The kit's
+   tests are left out: a class word written only in a test must not add a utility to the sheet (the path is written
+   without "./" so it never opens a comment). */
+@source "../../../apps/web/src";
+@source "../../../apps/shell/app";
+@source "../../../apps/shell/components";
+@source ".";
+@source not "*.test.ts";
+
+/*
+ * Tailwind clash audit (spec 0b.5, 23 October 2026). Tailwind makes a utility of every word in the sources that names
+ * one, and a utility beats the component layer, so a class word that is also a utility gets that utility's CSS too.
+ * Every such word found in a string in apps/web/src, apps/shell and packages/ui, and what was decided:
+ *   list-item  rows on Home, Jobs, the recruiter queue and the job builder (pinned by tests). Harmful: the utility is
+ *              display: list-item. Switched off below, so .list-item keeps its flex row.
+ *   block      Button's `block` modifier. Harmful on .btn (display: block). Kit-internal and unpinned, so the kit now
+ *              writes `wide` (.btn.wide). The assessment's `<div class="block">` is a block already: harmless.
+ *   sticky     SplitView's sticky pane. Kit-internal and unpinned: renamed `keep-in-view`.
+ *   table      <table class="table">: harmless (a table is display: table already).
+ *   sr-only    the same rule in both: harmless.
+ *   ordinal    the kit's numbered circle (.ordinal, round 3). Harmful: the utility sets font-variant-numeric. Switched
+ *              off below; no screen uses Tailwind's ordinal figures.
+ *   hidden, visible, fixed, flex, grid, filter, shrink, underline, resize: found only in prose, inline style values,
+ *              prop values or icon names, never on an element's class: harmless (the unused utility costs a few bytes).
+ * Screens: never give an element a hook class that is also a utility's name.
+ */
+@source not inline("list-item");
+@source not inline("ordinal");
+
+/* Dark when the theme switch says so, or when the device prefers dark and no light theme was picked. */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
+/* Tailwind's `hover:` waits for a mouse, like the kit's own hovers: some phones report (hover: hover), and a tapped
+   control must never stay filled (the same rule as the candidate pages). */
+@custom-variant hover {
+  @media (hover: hover) and (pointer: fine) {
+    &:hover {
+      @slot;
+    }
+  }
+}
+
+:root {
+  /* Ground and surfaces */
+  --ground: #faf7f5;
+  --surface: #fefcfb;
+  --surface-2: #f6f1ee; /* sunken: table header band, hovered row, quiet chips */
+  --surface-3: #ece5e0; /* pressed, skeleton */
+  --tint: #f5eff5; /* lavender: active nav item, selected row, notes */
+  --tint-2: #ece4f1; /* lavender: icon chips, avatars */
+  --peach: #fbe7e0; /* peach: icon chips, the person's own chat bubbles */
+  --glow-1: rgb(237 143 120 / 0.11);
+  --glow-2: rgb(150 110 185 / 0.08);
+  --line: #e6ded7; /* hairlines between surfaces (decorative) */
+  --line-2: #d9cec6; /* outlines of secondary buttons and pills */
+  --line-tint: #ded4e5; /* lavender outline of highlighted cards */
+  --line-strong: #8f8395; /* 3.5:1 on --surface: form fields must be seen (WCAG 1.4.11) */
+  /* Ink */
+  --ink: #2f2239;
+  --ink-2: #65596e;
+  --ink-3: #6f6376; /* 4.5:1 even on the pressed grey (--surface-3) */
+  /* Plum: primary actions, links, the active item */
+  --primary: #523267;
+  --primary-hover: #432853;
+  --on-primary: #fdfbf8;
+  --focus: #7a4e98;
+  /* Coral spark: the logo's "OS", live dots, sparkles. Text only at large sizes. */
+  --accent: #db5533;
+  --accent-ink: #a8401f;
+  --accent-soft: #fbe7e0;
+  /* Signals, always beside a word */
+  --good: #48644f;
+  --good-soft: #eaf3eb;
+  --good-dot: #6f9474;
+  --caution: #85522a;
+  --caution-soft: #fbefe4;
+  --caution-dot: #d29a6c;
+  --critical: #a33a2c;
+  --critical-soft: #fbeae7;
+  --critical-dot: #d9604c;
+  --info: #493579;
+  --info-soft: #ebe7f3;
+  --warm: #863918;
+  --warm-soft: #fae4dc;
+  --neutral-dot: #a89dad;
+  /* Floating layers */
+  --scrim: rgb(28 18 32 / 0.34);
+  --sh-xs: 0 1px 2px rgb(47 34 57 / 0.04);
+  --sh-sm: 0 1px 2px rgb(47 34 57 / 0.05), 0 6px 16px -8px rgb(47 34 57 / 0.14);
+  --sh-pop: 0 18px 44px -14px rgb(47 34 57 / 0.3), 0 2px 6px rgb(47 34 57 / 0.06);
+  --sh-primary: 0 8px 20px -10px rgb(82 50 103 / 0.6);
+  --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.6);
+  /* Motion and focus (not colours: the same in both themes) */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ring: 0 0 0 3px color-mix(in srgb, var(--focus) 28%, transparent);
+  color-scheme: light;
+}
+
+/* Dark: plum-tinted near-black. Kept identical to the [data-theme="dark"] block below, key for key. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #141016;
+    --surface: #1c1720;
+    --surface-2: #231d28;
+    --surface-3: #2e2634;
+    --tint: #2c2233;
+    --tint-2: #35293d;
+    --peach: #3a2622;
+    --glow-1: rgb(240 138 108 / 0.06);
+    --glow-2: rgb(170 130 210 / 0.07);
+    --line: #2f2734;
+    --line-2: #41364a;
+    --line-tint: #4a3b56;
+    --line-strong: #8a7d92;
+    --ink: #f3eef5;
+    --ink-2: #c3b7ca;
+    --ink-3: #a497ab;
+    --primary: #cdb0e2;
+    --primary-hover: #dcc5ec;
+    --on-primary: #1e1426;
+    --focus: #cdb0e2;
+    --accent: #f08a6c;
+    --accent-ink: #f4a68e;
+    --accent-soft: #3a2622;
+    --good: #9cc6a3;
+    --good-soft: #1e2b21;
+    --good-dot: #7fb488;
+    --caution: #e9bc90;
+    --caution-soft: #33271d;
+    --caution-dot: #d9a274;
+    --critical: #ff9f92;
+    --critical-soft: #3a2020;
+    --critical-dot: #f07a68;
+    --info: #c0b2ec;
+    --info-soft: #28233a;
+    --warm: #f2ab8f;
+    --warm-soft: #3a2620;
+    --neutral-dot: #7d7085;
+    --scrim: rgb(0 0 0 / 0.55);
+    --sh-xs: 0 1px 2px rgb(0 0 0 / 0.35);
+    --sh-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 20px -10px rgb(0 0 0 / 0.6);
+    --sh-pop: 0 20px 48px -12px rgb(0 0 0 / 0.75), 0 2px 6px rgb(0 0 0 / 0.4);
+    --sh-primary: 0 8px 22px -10px rgb(0 0 0 / 0.7);
+    --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #141016;
+  --surface: #1c1720;
+  --surface-2: #231d28;
+  --surface-3: #2e2634;
+  --tint: #2c2233;
+  --tint-2: #35293d;
+  --peach: #3a2622;
+  --glow-1: rgb(240 138 108 / 0.06);
+  --glow-2: rgb(170 130 210 / 0.07);
+  --line: #2f2734;
+  --line-2: #41364a;
+  --line-tint: #4a3b56;
+  --line-strong: #8a7d92;
+  --ink: #f3eef5;
+  --ink-2: #c3b7ca;
+  --ink-3: #a497ab;
+  --primary: #cdb0e2;
+  --primary-hover: #dcc5ec;
+  --on-primary: #1e1426;
+  --focus: #cdb0e2;
+  --accent: #f08a6c;
+  --accent-ink: #f4a68e;
+  --accent-soft: #3a2622;
+  --good: #9cc6a3;
+  --good-soft: #1e2b21;
+  --good-dot: #7fb488;
+  --caution: #e9bc90;
+  --caution-soft: #33271d;
+  --caution-dot: #d9a274;
+  --critical: #ff9f92;
+  --critical-soft: #3a2020;
+  --critical-dot: #f07a68;
+  --info: #c0b2ec;
+  --info-soft: #28233a;
+  --warm: #f2ab8f;
+  --warm-soft: #3a2620;
+  --neutral-dot: #7d7085;
+  --scrim: rgb(0 0 0 / 0.55);
+  --sh-xs: 0 1px 2px rgb(0 0 0 / 0.35);
+  --sh-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 20px -10px rgb(0 0 0 / 0.6);
+  --sh-pop: 0 20px 48px -12px rgb(0 0 0 / 0.75), 0 2px 6px rgb(0 0 0 / 0.4);
+  --sh-primary: 0 8px 22px -10px rgb(0 0 0 / 0.7);
+  --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* Only our colours exist as classes: bg-surface, text-ink-2, border-line, bg-primary, text-good, bg-caution-soft... */
+@theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-tint: var(--tint);
+  --color-tint-2: var(--tint-2);
+  --color-peach: var(--peach);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-line-tint: var(--line-tint);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-on-primary: var(--on-primary);
+  --color-focus: var(--focus);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-good-dot: var(--good-dot);
+  --color-caution: var(--caution);
+  --color-caution-soft: var(--caution-soft);
+  --color-caution-dot: var(--caution-dot);
+  --color-critical: var(--critical);
+  --color-critical-soft: var(--critical-soft);
+  --color-critical-dot: var(--critical-dot);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-warm: var(--warm);
+  --color-warm-soft: var(--warm-soft);
+  --color-neutral-dot: var(--neutral-dot);
+  --color-scrim: var(--scrim);
+
+  --font-sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", Menlo, Consolas, monospace;
+
+  --shadow-xs: var(--sh-xs);
+  --shadow-sm: var(--sh-sm);
+  --shadow-pop: var(--sh-pop);
+  --shadow-primary: var(--sh-primary);
+  --shadow-inset: var(--sh-inset);
+
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* The frame's switch: from 900px the side rail, under it the top bar. `rail:` and `max-rail:` are written in rem like
+     sm: md: lg:, so Tailwind sorts them between md and lg (an arbitrary min-[900px]: sorts before every rem breakpoint).
+     The kit's own 900px queries write the same 56.25rem (Biome's CSS linter does not know theme() inside @media);
+     weight-guard.test.ts checks they match this value. */
+  --breakpoint-rail: 56.25rem;
+
+  /* No blur utilities (slow on cheap devices), and only our own animations: Tailwind's ping, pulse and bounce loop forever. */
+  --blur-*: initial;
+  --animate-*: initial;
+  --animate-enter: enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-fade: fade 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-shimmer: shimmer 1.6s ease-in-out infinite;
+  --animate-live: live 2.4s ease-out infinite;
+  --animate-typing: typing 1.2s ease-in-out infinite;
+  --animate-spin: spin 0.8s linear infinite;
+}
+
+/* Every keyframe moves or fades only (transform, opacity); weight-guard.test.ts checks it. */
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes shimmer {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes live {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  70%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@keyframes typing {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+/* Floating layers: a panel slides in from its side, a dialog or menu grows from 97%, a toast rises. */
+@keyframes sheet-in { from { opacity: 0; transform: translateX(24px); } }
+@keyframes sheet-up { from { opacity: 0; transform: translateY(24px); } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(0.97); } }
+@keyframes menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.97); } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+
+@layer base {
+  /* A bare `border` (Tailwind's or a page's) is the hairline, not the text colour. */
+  *,
+  ::before,
+  ::after,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--line);
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    min-height: 100dvh;
+    background-color: var(--ground);
+    background-image:
+      radial-gradient(60rem 36rem at 100% -6rem, var(--glow-1), transparent 70%),
+      radial-gradient(48rem 30rem at 38% -10rem, var(--glow-2), transparent 70%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    text-wrap: balance;
+  }
+  /* Sizes for a bare heading (several are pinned by tests without a class); a page's own classes win over these. */
+  h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.035em; line-height: 1.05; }
+  h2 { font-size: 20px; font-weight: 700; }
+  h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+  h4 { font-size: 15px; font-weight: 600; letter-spacing: 0; line-height: 1.35; }
+  /* IBM Plex Sans has no 700: "bolder" would be drawn as a fake bold. */
+  strong, b { font-weight: 600; }
+  :is(h1, h2, h3, h4) :is(strong, b) { font-weight: inherit; }
+  p {
+    text-wrap: pretty;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { cursor: pointer; }
+  fieldset { min-width: 0; }
+  code, kbd, samp, pre { font-family: var(--font-mono); font-size: 0.9em; }
+  pre { padding: 12px 14px; border-radius: 12px; background: var(--surface-2); overflow-x: auto; white-space: pre-wrap; }
+  ::selection {
+    background: var(--tint-2);
+    color: var(--ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  /* Form fields keep the browser's own controls but wear the theme. */
+  input,
+  textarea,
+  select {
+    accent-color: var(--primary);
+  }
+  ::placeholder {
+    color: var(--ink-3);
+    opacity: 1;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  [hidden] {
+    display: none !important;
+  }
+}
+
+/*
+ * The kit's component layer: every class the @ros/ui components render and the shared primitives pages combine with
+ * Tailwind utilities (spec 0b.3 and 5b). Utilities beat this layer, so a page can adjust any of it with a class.
+ * Hover fills wait for a mouse ((hover: hover) and (pointer: fine)); presses and nudges wait for motion to be welcome.
+ * Layers: sticky headers 5, panels and dialogs 60, menus 70, toasts 80.
+ */
+@layer components {
+  /* Icons sit in the line of text (preflight makes every svg a block). */
+  .icon { display: inline-block; flex: none; vertical-align: -0.2em; }
+
+  /* Layout primitives */
+  .stack { display: grid; gap: 12px; align-content: start; }
+  .stack > * { min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 16px; }
+  .muted { color: var(--ink-3); }
+  .small { font-size: 13px; line-height: 1.5; }
+  .tabular, .num { font-variant-numeric: tabular-nums; }
+  .kv { display: grid; grid-template-columns: minmax(0, 160px) minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 14px; }
+  .kv dt { color: var(--ink-3); }
+  .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* At a glance (screenshot 7): label and value rows split by hairlines; dt and dd in pairs, straight inside the dl */
+  dl.glance { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); column-gap: 16px; margin: 0; }
+  dl.glance > :is(dt, dd) { padding-block: 10px; border-top: 1px solid var(--line); }
+  dl.glance > dt { color: var(--ink-3); font-size: 13px; line-height: 1.6; }
+  dl.glance > dd { margin: 0; min-width: 0; color: var(--ink); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+  dl.glance > dt:first-child, dl.glance > dt:first-child + dd { padding-top: 0; border-top: 0; }
+  /* A section a link can land on (#share, #setup-team): it stops clear of a sticky top bar. */
+  .setup-section { display: grid; min-width: 0; scroll-margin-top: 88px; }
+  .setup-section:focus:not(:focus-visible) { outline: none; }
+
+  /* Links */
+  /* Plain links in a page's text read as links: plum and semibold, with a quiet underline at rest, so a link inside bold
+     words still shows (WCAG 1.4.1). A link with any other class styles itself. */
+  :where(main) :is(a:not([class]), a[class="small"]) { color: var(--primary); font-weight: 600; text-decoration-line: underline; text-decoration-thickness: 1px; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 3px; }
+  .text-link { display: inline-flex; align-items: center; gap: 6px; color: var(--primary); font-size: 14px; font-weight: 600; text-decoration: none; text-underline-offset: 3px; }
+  .text-link .icon { width: 16px; height: 16px; transition: transform 150ms var(--ease); }
+  .link-btn { display: inline; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-weight: 600; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
+  .link-like { color: var(--primary); font-weight: 600; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  details.more > summary, .sbars-more > summary { display: inline-flex; align-items: center; gap: 8px; width: fit-content; color: var(--ink-2); font-size: 14px; font-weight: 500; cursor: pointer; list-style: none; }
+  details.more > summary::-webkit-details-marker, .sbars-more > summary::-webkit-details-marker { display: none; }
+  details.more > summary::before, .sbars-more > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 150ms var(--ease); }
+  details.more[open] > summary::before, .sbars-more[open] > summary::before { transform: rotate(45deg); }
+  details.more[open] > summary { margin-bottom: 12px; }
+  .sbars-more[open] > summary { margin-bottom: 14px; }
+
+  /* Eyebrows and headers */
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--ink-2); font-family: var(--font-mono); font-size: 11px; font-weight: 400; line-height: 1.4; letter-spacing: 0.14em; text-transform: uppercase; }
+  .eyebrow .icon { width: 14px; height: 14px; }
+  .eyebrow.live::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .page-header { display: grid; gap: 8px; margin-bottom: 32px; }
+  .page-header-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+  .page-header-row h1 { min-width: 0; font-size: 34px; font-weight: 700; line-height: 1.05; letter-spacing: -0.035em; overflow-wrap: anywhere; }
+  .page-header-row h1.placeholder { color: var(--ink-3); }
+  .page-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+  .page-header-sub { max-width: 70ch; color: var(--ink-2); font-size: 15px; font-variant-numeric: tabular-nums; }
+  /* PageHeader hero: Home's greeting (screenshot 1), 36px, 44px from 640px, 52px from 768px; the H1 stays bare */
+  .page-header.hero .page-header-row h1 { font-size: 36px; }
+  @media (min-width: 640px) {
+    .page-header.hero .page-header-row h1 { font-size: 44px; }
+  }
+  @media (min-width: 768px) {
+    .page-header-row h1 { font-size: 40px; }
+    .page-header.hero .page-header-row h1 { font-size: 52px; }
+  }
+  .section-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 16px; margin-bottom: 16px; }
+  .section-header-text { display: grid; gap: 4px; min-width: 0; }
+  .section-header h2 { font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.15; }
+  .section-header h3 { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+  .section-header-sub { color: var(--ink-2); font-size: 14px; }
+  .section-header-action { display: flex; flex: none; align-items: center; gap: 8px; }
+
+  /* Surfaces */
+  .card { min-width: 0; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: var(--sh-inset), var(--sh-xs); }
+  a.card { display: block; text-decoration: none; }
+  /* the title and its aside share a line while they fit; a long title pushes the aside under it, never off the card */
+  .card-title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+  .card-title h2 { min-width: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; overflow-wrap: anywhere; }
+  /* an IconLabel beside the title sits on the title's middle (it has no baseline of its own) */
+  .card-title > .icon-label { align-self: center; }
+  /* Something waiting for the reader: the "Your next step" wash, lavender to peach, edged in lavender. */
+  .card.needs-you { padding: 28px; border-color: var(--line-tint); border-radius: 20px; background: linear-gradient(115deg, var(--tint) 0%, var(--surface) 58%, var(--peach) 135%); }
+  /* A page's one next step (Card hero): its title at the hero size. Only on request, so the needs-you cards in a side
+     panel or a report keep the 19px title. */
+  .card.hero > .card-title h2 { font-size: 26px; letter-spacing: -0.03em; line-height: 1.15; }
+  @media (min-width: 768px) {
+    .card.hero > .card-title h2 { font-size: 30px; }
+  }
+  /* A list card (Card flush): no padding of its own; the title keeps the card's sides over a hairline and the rows run
+     edge to edge, their words in line with it. Nothing is clipped (a row's menu opens over what lies below), so the
+     first and last rows, alone or in one list, take the card's corners, as in .list. */
+  .card.flush { padding: 0; }
+  .card.flush > .card-title { align-items: center; margin: 0; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  .card.flush :is(.list-row, .list-item) { padding-inline: 24px; }
+  .card.flush > :first-child, .card.flush > :is(ul, ol):first-child > :first-child { border-top-left-radius: 15px; border-top-right-radius: 15px; }
+  .card.flush > :last-child, .card.flush > :is(ul, ol):last-child > :last-child { border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; }
+  .card.lift, a.card, a.side-card { transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease); }
+  .side-card { display: grid; align-content: start; gap: 4px; min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-xs); }
+  .side-card > :is(h2, h3) { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  /* an Eyebrow drawn as a heading (as="h2" or "h3") keeps its small mono size where a card or panel sizes its headings */
+  .eyebrow:is(h2, h3) { font-size: 11px; font-weight: 400; line-height: 1.4; letter-spacing: 0.14em; }
+  .side-card .list-row { margin-inline: -8px; padding: 12px 8px; border-radius: 12px; }
+  .side-card .list-row + .list-row { border-top: 0; box-shadow: 0 -1px 0 var(--line); }
+  .list, .list-card { min-width: 0; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-xs); }
+  /* Rows: a row is a link, a button or a plain item; menus inside a row may open over the rows below (no clipping). */
+  .list-item, .list-row { display: flex; align-items: center; gap: 14px; min-width: 0; min-height: 64px; padding: 14px 18px; color: var(--ink); text-decoration: none; transition: background-color 150ms var(--ease); }
+  :is(.list, .list-card) > :first-child { border-top-left-radius: 15px; border-top-right-radius: 15px; }
+  :is(.list, .list-card) > :last-child { border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; }
+  .list-item + .list-item, .list-row + .list-row { border-top: 1px solid var(--line); }
+  button.list-item, button.list-row { width: 100%; background: none; font: inherit; text-align: left; cursor: pointer; }
+  :is(.list-item, .list-row):focus-visible { outline-offset: -2px; }
+  .list-row-lead { display: inline-flex; flex: none; }
+  .list-item-main, .list-row-main { display: grid; flex: 1; gap: 2px; min-width: 0; }
+  .list-row-title { overflow: hidden; color: var(--ink); font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  /* a title that must be whole (a sentence, a name) wraps at every width */
+  .list-row-title.wrap { white-space: normal; overflow-wrap: anywhere; }
+  .list-item-main .sub, .list-row-meta { color: var(--ink-3); font-size: 13px; }
+  .list-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
+  .list-row-meta .icon { width: 14px; height: 14px; }
+  .list-item-end, .list-row-end { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-left: auto; color: var(--ink-3); font-size: 13px; }
+  /* the trailing arrow: `.chev`, or the older rows' last icon in `.list-item-end` (Home's and Jobs' chevrons) */
+  .chev, .list-item-end > .icon:last-child { flex: none; color: var(--ink-3); transition: color 150ms var(--ease), transform 150ms var(--ease); }
+  @media (max-width: 640px) {
+    /* A card has 16px sides and 20px above and below (a needs-you one too); a list card's title and rows take 16px sides. */
+    .card:not(.flush) { padding: 20px 16px; }
+    .card.flush > .card-title, .card.flush :is(.list-row, .list-item) { padding-inline: 16px; }
+    /* The title keeps room for itself; badges, dates and the arrow move to a second line when they do not fit. */
+    .list-item, .list-row { flex-wrap: wrap; gap: 10px 12px; padding: 12px 14px; }
+    .list-item-main, .list-row-main { flex: 1 1 150px; }
+    .list-item-end, .list-row-end { margin-left: 0; justify-content: flex-start; }
+    /* a phone shows the whole title on more lines instead of cutting it off */
+    .list-row-title { white-space: normal; overflow-wrap: anywhere; }
+    dl.glance { grid-template-columns: minmax(0, 1fr); }
+    dl.glance > dt { padding-bottom: 2px; }
+    dl.glance > dd { padding-top: 0; border-top: 0; }
+  }
+
+  /* Figures: the strip of cells (screenshots 1 and 4), the report's figures and its 30 day bars */
+  .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-xs); }
+  /* each cell draws the line on its left and top; the strip's edge hides the ones on its outside */
+  .stat-cell { position: relative; display: flex; align-items: center; gap: 14px; min-width: 0; padding: 18px 20px; color: var(--ink); text-decoration: none; box-shadow: -1px 0 0 var(--line), 0 -1px 0 var(--line); transition: background-color 150ms var(--ease); }
+  .stat-cell-text { display: grid; gap: 2px; min-width: 0; }
+  .stat-cell-label { color: var(--ink-2); font-size: 13px; }
+  .stat-cell-value { color: var(--ink); font-family: var(--font-display); font-size: 28px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .stat-cell-note { color: var(--ink-2); font-size: 12.5px; }
+  .stat-cell.highlight { background: linear-gradient(110deg, var(--tint), var(--peach)); }
+  .stat-cell-go { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 36px; height: 36px; margin-left: auto; border: 1px solid var(--line-2); border-radius: 9999px; background: var(--surface); color: var(--ink-2); transition: color 150ms var(--ease), border-color 150ms var(--ease), transform 150ms var(--ease); }
+  a.stat-cell:focus-visible { outline-offset: -3px; }
+  .stat-row { display: flex; flex-wrap: wrap; gap: 16px 32px; }
+  .stat { display: grid; gap: 2px; min-width: 0; }
+  .stat-n { color: var(--ink); font-family: var(--font-display); font-size: 30px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .stat-label { color: var(--ink-2); font-size: 13px; }
+  .daybars { display: flex; align-items: flex-end; gap: 3px; height: 48px; margin-top: 12px; }
+  .daybars > span { flex: 1; min-width: 3px; border-radius: 3px 3px 1px 1px; background: var(--primary); }
+  .daybars > span.zero { background: var(--line-2); }
+  .icon-chip { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px; background: var(--tint-2); color: var(--primary); }
+  .icon-chip.xs { width: 28px; height: 28px; border-radius: 9px; }
+  .icon-chip.sm { width: 32px; height: 32px; border-radius: 10px; }
+  .icon-chip.lg { width: 48px; height: 48px; border-radius: 14px; }
+  .icon-chip.peach { background: var(--peach); color: var(--accent-ink); }
+  .icon-chip.plum { background: var(--primary); color: var(--on-primary); }
+  .icon-chip.good { background: var(--good-soft); color: var(--good); }
+  .icon-chip.caution { background: var(--caution-soft); color: var(--caution); }
+  .icon-chip.neutral { background: var(--surface-2); color: var(--ink-2); }
+  /* IconLabel: an icon whose words are for screen readers and the tooltip only */
+  .icon-label { display: inline-flex; flex: none; align-items: center; color: var(--ink-3); }
+  /* The number beside a step or a question (1, 2, 3): a 24px lavender circle, plum mono figures */
+  .ordinal { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 9999px; background: var(--tint-2); color: var(--primary); font-family: var(--font-mono); font-size: 11px; font-weight: 400; line-height: 1; font-variant-numeric: tabular-nums; }
+  /* A small tag inside a line of text ("(you)" beside one's own name): lavender, plum mono, never squeezed */
+  .inline-tag { display: inline-block; flex: none; padding: 0 6px; border-radius: 6px; background: var(--tint-2); color: var(--primary); font-family: var(--font-mono); font-size: 11px; font-weight: 400; line-height: 1.5; white-space: nowrap; }
+
+  /* Buttons: pills everywhere; 44px, or 36px when small */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 20px; border: 1px solid transparent; border-radius: 9999px; font-family: var(--font-sans); font-size: 15px; font-weight: 600; line-height: 1.2; text-align: center; text-decoration: none; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), box-shadow 150ms var(--ease), transform 150ms var(--ease); }
+  .btn .icon { width: 18px; height: 18px; }
+  .btn.primary { background: var(--primary); color: var(--on-primary); box-shadow: var(--sh-primary); }
+  .btn.secondary { border-color: var(--line-2); background: var(--surface); color: var(--ink); }
+  .btn.ghost, .btn.quiet { background: transparent; color: var(--ink-2); }
+  .btn.quiet { padding-inline: 12px; }
+  .btn.danger, .btn.destructive { border-color: transparent; background: var(--critical-soft); color: var(--critical); }
+  .btn:disabled, .btn[aria-disabled="true"] { box-shadow: none; opacity: 0.5; cursor: not-allowed; }
+  .btn[aria-busy="true"] { cursor: progress; }
+  .btn.sm { gap: 6px; min-height: 36px; padding: 6px 14px; font-size: 14px; }
+  .btn.sm .icon { width: 16px; height: 16px; }
+  .btn.quiet.sm { padding-inline: 10px; }
+  .btn.wide { display: flex; width: 100%; }
+  .btn .kbd { height: 18px; min-width: 18px; border-color: color-mix(in srgb, currentColor 40%, transparent); background: transparent; color: inherit; }
+  .icon-btn { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 1px solid var(--line); border-radius: 9999px; background: var(--surface); color: var(--ink-2); text-decoration: none; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease); }
+  .icon-btn.sm { width: 32px; height: 32px; }
+  .icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface-2); color: var(--ink-2); font-family: var(--font-mono); font-size: 11px; font-weight: 400; line-height: 1; }
+
+  /* Forms. The open list of every dropdown is coloured on the options themselves, so it reads in both themes whatever
+     the system paints (Windows in dark mode); the native arrow is kept and follows color-scheme. */
+  select, option, optgroup { background-color: var(--surface); color: var(--ink); }
+  .input, .textarea, .select { width: 100%; min-height: 44px; padding: 10px 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); color: var(--ink); font: inherit; font-size: 15px; line-height: 1.4; transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease); }
+  .input:focus, .textarea:focus, .select:focus { border-color: var(--primary); outline: none; box-shadow: var(--ring); }
+  .input[aria-invalid="true"], .textarea[aria-invalid="true"], .select[aria-invalid="true"] { border-color: var(--critical); }
+  .input:disabled, .textarea:disabled, .select:disabled { background: var(--surface-2); opacity: 0.7; cursor: not-allowed; }
+  .textarea { min-height: 112px; resize: vertical; }
+  .autogrow { display: block; width: 100%; resize: none; overflow-y: hidden; }
+  /* Tailwind's preflight greys placeholders by mixing; ours is the checked muted ink */
+  input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
+  input[type="checkbox"], input[type="radio"] { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+  input[type="file"]::file-selector-button { margin-right: 12px; padding: 7px 14px; border: 1px solid var(--line-2); border-radius: 9999px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; transition: background-color 150ms var(--ease); }
+  .field { display: grid; gap: 6px; min-width: 0; }
+  .field > label, .field > .label, .field-head > label { color: var(--ink); font-size: 13px; font-weight: 600; }
+  /* Field aside: the label and what is shown beside it (an IconLabel) share one line */
+  .field-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+  .hint { color: var(--ink-2); font-size: 12.5px; }
+  .field-error { display: flex; align-items: flex-start; gap: 6px; color: var(--critical); font-size: 12.5px; font-weight: 500; }
+  .field-error .icon { width: 14px; height: 14px; margin-top: 2px; }
+  .check { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 14px; line-height: 1.45; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease); }
+  .check > input { margin-top: 1px; }
+  .check:has(> input:checked) { border-color: var(--line-tint); background: var(--tint); }
+  /* One choice of several: a bordered row around a native radio or checkbox, its words and an optional .option-tag at
+     the end ("Recommended"). The chosen row is tinted; while the keyboard is on its control the row carries the one
+     focus ring (the control's own outline steps aside; browsers without :has keep it). Only the input counts, never a
+     selected <option> or a disabled button elsewhere in the row. */
+  .option-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 14px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 14.5px; line-height: 1.4; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), box-shadow 150ms var(--ease); }
+  .option-row:has(input:checked) { border-color: var(--primary); background: var(--tint); }
+  .option-row:has(input:focus-visible) { border-color: var(--primary); box-shadow: var(--ring); }
+  .option-row:has(input:focus-visible) input:focus-visible { outline: none; }
+  .option-row:has(input:is([type="radio"], [type="checkbox"]):disabled) { opacity: 0.6; cursor: not-allowed; }
+  .option-tag { flex: none; margin-left: auto; padding: 1px 8px; border-radius: 9999px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .option-row:has(input:checked) .option-tag { background: var(--tint-2); color: var(--primary); }
+  .dropzone { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 16px 18px; border: 1.5px dashed var(--line-strong); border-radius: 14px; background: var(--surface-2); color: var(--ink-2); font-size: 14px; transition: background-color 150ms var(--ease), border-color 150ms var(--ease); }
+  .dropzone:focus-within, .dropzone[data-over="true"] { border-color: var(--primary); background: var(--tint); }
+
+  /* Pills, chips, dots, scores, avatars */
+  .dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-dot); }
+  .dot.good { background: var(--good-dot); }
+  .dot.caution { background: var(--caution-dot); }
+  .dot.critical { background: var(--critical-dot); }
+  .dot.accent { background: var(--primary); }
+  .dot.info { background: var(--info); }
+  .dot.warm { background: var(--accent); }
+  /* Live: a ring grows out of the dot and fades; the dot itself stays still */
+  .dot.pulse { position: relative; }
+  .dot.pulse::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: inherit; animation: live 2.4s var(--ease) infinite; }
+  .pill, .pill-button, .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 9999px; background: var(--surface-2); color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+  .pill { min-height: 26px; padding: 2px 10px; font-size: 12.5px; line-height: 1.4; }
+  .pill.sm { gap: 5px; min-height: 22px; padding: 1px 8px; font-size: 12px; }
+  /* a status sentence that may be long: it wraps onto more lines, its mark beside the first */
+  .pill.wrap { align-items: flex-start; padding-block: 3px; border-radius: 12px; white-space: normal; overflow-wrap: anywhere; }
+  .pill.wrap > .dot { margin-top: 0.46em; }
+  .pill.wrap > .icon { margin-top: 0.14em; }
+  .pill .icon, .chip .icon { width: 14px; height: 14px; }
+  /* Pill busy: the spinner in the dot's place, in the pill's own colour */
+  .pill > .spinner { width: 12px; height: 12px; border-width: 1.5px; }
+  .pill.wrap > .spinner { margin-top: 0.22em; }
+  :is(.pill, .pill-button).good { background: var(--good-soft); color: var(--good); }
+  :is(.pill, .pill-button).good .dot { background: var(--good-dot); }
+  :is(.pill, .pill-button).caution { background: var(--caution-soft); color: var(--caution); }
+  :is(.pill, .pill-button).caution .dot { background: var(--caution-dot); }
+  :is(.pill, .pill-button).critical { background: var(--critical-soft); color: var(--critical); }
+  :is(.pill, .pill-button).critical .dot { background: var(--critical-dot); }
+  :is(.pill, .pill-button).accent { background: var(--tint-2); color: var(--primary); }
+  :is(.pill, .pill-button).accent .dot { background: var(--primary); }
+  :is(.pill, .pill-button).info { background: var(--info-soft); color: var(--info); }
+  :is(.pill, .pill-button).info .dot { background: var(--info); }
+  :is(.pill, .pill-button).warm { background: var(--warm-soft); color: var(--warm); }
+  :is(.pill, .pill-button).warm .dot { background: var(--accent); }
+  .pill.solid { background: var(--ink-2); color: var(--surface); }
+  .pill.solid.good { background: var(--good); }
+  .pill.solid.caution { background: var(--caution); }
+  .pill.solid.critical { background: var(--critical); }
+  .pill.solid.accent { background: var(--primary); color: var(--on-primary); }
+  .pill.solid .dot { background: currentColor; }
+  /* The stage button: a pill that opens "Move to stage" */
+  .pill-button { min-height: 32px; padding: 4px 10px 4px 12px; border-color: color-mix(in srgb, currentColor 22%, transparent); font-family: var(--font-sans); font-size: 13px; line-height: 1.3; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease); }
+  .pill-button .icon { width: 14px; height: 14px; }
+  .pill-button[aria-expanded="true"] { border-color: currentColor; }
+  .pill-button:disabled { opacity: 0.55; cursor: not-allowed; }
+  .chip { min-height: 22px; padding: 1px 9px; font-size: 12px; line-height: 1.4; }
+  .chip.accent { background: var(--tint-2); color: var(--primary); }
+  .chip.needs, .chip.caution { background: var(--caution-soft); color: var(--caution); }
+  .chip.good { background: var(--good-soft); color: var(--good); }
+  .chip.critical { background: var(--critical-soft); color: var(--critical); }
+  .chip.info { background: var(--info-soft); color: var(--info); }
+  .chip.warm { background: var(--warm-soft); color: var(--warm); }
+  .chip.source { border-color: var(--line-2); background: transparent; color: var(--ink-2); font-weight: 500; }
+  .score { display: inline-flex; align-items: baseline; gap: 1px; min-height: 26px; padding: 2px 10px; border: 1px solid transparent; border-radius: 9999px; background: var(--surface-2); color: var(--ink-2); font-size: 13.5px; font-weight: 600; line-height: 1.4; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .score .of { font-size: 11px; font-weight: 400; }
+  .score.good { background: var(--good-soft); color: var(--good); }
+  .score.caution { background: var(--caution-soft); color: var(--caution); }
+  .score.neutral { background: var(--surface-2); color: var(--ink-2); }
+  .score.none { border-color: var(--line-2); border-style: dashed; background: transparent; color: var(--ink-3); font-size: 12.5px; font-weight: 500; }
+  .score.sm { min-height: 22px; padding: 1px 8px; font-size: 12.5px; }
+  .score.lg { min-height: 0; padding: 0; border: 0; background: none; color: var(--ink); font-family: var(--font-display); font-size: 40px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
+  .score.lg .of { margin-left: 4px; color: var(--ink-3); font-family: var(--font-sans); font-size: 15px; font-weight: 500; letter-spacing: 0; }
+  .score-wrap { display: inline-flex; align-items: center; gap: 10px; }
+  .score-band { color: var(--ink-2); font-size: 13px; font-weight: 600; }
+  .avatar { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 36px; height: 36px; border: 1px solid var(--line-tint); border-radius: 9999px; background: var(--tint-2); color: var(--primary); font-family: var(--font-mono); font-size: 12px; font-weight: 400; letter-spacing: 0.02em; line-height: 1; user-select: none; }
+  .avatar.sm { width: 24px; height: 24px; font-size: 10px; }
+  .avatar.lg { width: 44px; height: 44px; font-size: 14px; }
+  .avatar.xl { width: 56px; height: 56px; font-size: 18px; }
+  .avatar.ink { border-color: transparent; background: var(--primary); color: var(--on-primary); }
+  .avatar.square { border-radius: 12px; }
+  .avatar.sm.square { border-radius: 8px; }
+
+  /* Filters and switches */
+  .toggle-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 13px; border: 1px solid var(--line-2); border-radius: 9999px; background: var(--surface); color: var(--ink-2); font-family: var(--font-sans); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease); }
+  .toggle-chip[aria-pressed="true"] { border-color: var(--primary); background: var(--tint-2); color: var(--primary); }
+  .toggle-chip .count { min-width: 18px; padding: 0 6px; border-radius: 9999px; background: var(--surface-2); font-size: 11.5px; font-weight: 500; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+  .toggle-chip[aria-pressed="true"] .count { background: var(--surface); }
+  .segmented { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; margin: 0; padding: 3px; border: 1px solid var(--line); border-radius: 9999px; background: var(--surface-2); }
+  .segmented button { min-height: 32px; padding: 5px 14px; border: 0; border-radius: 9999px; background: transparent; color: var(--ink-2); font-size: 13.5px; font-weight: 500; cursor: pointer; transition: background-color 150ms var(--ease), color 150ms var(--ease), box-shadow 150ms var(--ease), transform 150ms var(--ease); }
+  /* the chosen segment: a white pill edged in the field-border grey (3:1 on the track, WCAG 1.4.11), not only a fill */
+  .segmented button:is(.on, [aria-pressed="true"]) { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line-strong), var(--sh-xs); }
+  .suggestion { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 14px; border: 1px solid var(--line-2); border-radius: 9999px; background: var(--surface); color: var(--ink-2); font-family: var(--font-sans); font-size: 13px; font-weight: 500; text-align: left; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease); }
+
+  /* Messages and states */
+  /* An alert's mark is drawn by CSS (its markup is pinned): an "i" in a circle, a warning triangle, or "!" in a circle,
+     masked from a data: image (img-src allows data:) and painted in the alert's own colour. Decorative: the words say it. */
+  .alert { position: relative; padding: 14px 16px 14px 44px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--ink); font-size: 14px; line-height: 1.5; --alert-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v5M12 8h.01'/%3E%3C/svg%3E"); }
+  .alert::before { content: ""; position: absolute; top: 15px; left: 16px; width: 18px; height: 18px; background: currentColor; -webkit-mask: var(--alert-mark) center / 18px 18px no-repeat; mask: var(--alert-mark) center / 18px 18px no-repeat; }
+  .alert.info { border-color: var(--line-tint); background: var(--tint); }
+  .alert.info::before { background: var(--primary); }
+  .alert.caution { border-color: color-mix(in srgb, var(--caution-dot) 45%, transparent); background: var(--caution-soft); color: var(--caution); --alert-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 4.2 2.6 17.5a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0ZM12 9.5v4M12 17h.01'/%3E%3C/svg%3E"); }
+  .alert.critical { border-color: color-mix(in srgb, var(--critical-dot) 45%, transparent); background: var(--critical-soft); color: var(--critical); --alert-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5v5.5M12 16.5h.01'/%3E%3C/svg%3E"); }
+  .alert strong { font-weight: 600; }
+  .error-state { justify-content: space-between; }
+  .empty { display: grid; justify-items: center; gap: 8px; padding: 48px 24px; border: 1px dashed var(--line-2); border-radius: 16px; background: var(--surface); color: var(--ink-2); text-align: center; }
+  .empty :is(h1, h2) { color: var(--ink); font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .empty p { max-width: 52ch; font-size: 14.5px; }
+  .empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; margin-bottom: 4px; border-radius: 14px; background: var(--tint-2); color: var(--primary); }
+  .empty-action { margin-top: 8px; }
+  /* Loading: a soft block that fades and comes back (opacity only), on the pressed grey so it shows in both themes */
+  .skeleton { display: block; min-height: 14px; border-radius: 8px; background: var(--surface-3); animation: shimmer 1.6s ease-in-out infinite; }
+  .stack[aria-busy="true"] > .skeleton { width: 92%; height: 14px; }
+  .stack[aria-busy="true"] > .skeleton:nth-child(3n + 2) { width: 78%; }
+  .stack[aria-busy="true"] > .skeleton:nth-child(3n) { width: 60%; }
+  .spinner { display: inline-block; flex: none; width: 14px; height: 14px; border: 2px solid color-mix(in srgb, currentColor 22%, transparent); border-top-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  .steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 14px; }
+  .steps li { display: flex; align-items: center; gap: 10px; color: var(--ink-3); }
+  .steps li > .icon { width: 18px; height: 18px; }
+  .steps li > .spinner { width: 16px; height: 16px; margin: 1px; color: var(--primary); }
+  .steps li[data-state="done"] { color: var(--ink-2); }
+  .steps li[data-state="done"] > .icon { color: var(--good); }
+  .steps li[data-state="active"] { color: var(--ink); font-weight: 600; }
+  .steps li[data-state="failed"] { color: var(--critical); }
+  .step-dot { display: inline-block; flex: none; width: 18px; height: 18px; border: 1.5px dashed var(--line-strong); border-radius: 50%; }
+  .timeline { display: grid; margin: 0; padding: 0; list-style: none; }
+  .timeline li { position: relative; display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; padding: 8px 0 8px 18px; border-left: 1px solid var(--line); font-size: 13.5px; }
+  .timeline li::before { content: ""; position: absolute; top: 15px; left: -4px; width: 7px; height: 7px; border: 1.5px solid var(--line-strong); border-radius: 50%; background: var(--surface); }
+  .timeline .when { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  @media (max-width: 480px) {
+    .timeline li { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .kv dd + dt { margin-top: 8px; }
+  }
+  .pipeline { display: flex; gap: 2px; height: 8px; overflow: hidden; border-radius: 9999px; background: var(--surface-2); }
+  .pipeline span { display: block; height: 100%; }
+
+  /* Conversation */
+  .bubble { max-width: min(68ch, 100%); padding: 12px 16px; border-radius: 12px; font-size: 15px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .bubble.assistant { border: 1px solid var(--line); background: var(--surface); box-shadow: var(--sh-xs); }
+  .bubble.user { margin-left: auto; border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--peach)); background: var(--peach); color: var(--ink); }
+  /* the person's picked answers, gathered into one message */
+  .bubble.answers { border-color: var(--line-tint); background: var(--tint); }
+  .bubble.system { padding: 4px 0; background: transparent; color: var(--ink-3); font-size: 13px; }
+  /* A recruiter's notes from a call: set apart from the candidate's own words, with who wrote them */
+  .bubble.recruiter { border: 1px dashed var(--line-strong); background: var(--tint); }
+  .bubble.typing { display: inline-flex; align-items: center; gap: 10px; color: var(--ink-3); }
+  .bubble .dots, .dots { display: inline-flex; gap: 4px; }
+  .dots i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: typing 1.2s ease-in-out infinite; }
+  .dots i:nth-child(2) { animation-delay: 150ms; }
+  .dots i:nth-child(3) { animation-delay: 300ms; }
+  .bubble-label { display: block; margin-bottom: 4px; color: var(--ink-2); font-family: var(--font-mono); font-size: 11px; font-weight: 400; letter-spacing: 0.1em; text-transform: uppercase; white-space: normal; }
+  .composer { display: flex; align-items: flex-end; gap: 8px; min-width: 0; padding: 6px 6px 6px 16px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-xs); transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease); }
+  .composer:focus-within { border-color: var(--primary); box-shadow: var(--ring); }
+  .composer[data-disabled="true"] { opacity: 0.6; }
+  .composer :is(.autogrow, textarea) { flex: 1; min-width: 0; padding: 9px 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 15px; line-height: 1.5; resize: none; }
+  .composer :is(.autogrow, textarea):focus { outline: none; }
+  .composer.lg { padding: 12px 12px 12px 18px; border-radius: 20px; }
+  .composer.lg :is(.autogrow, textarea) { min-height: 84px; font-size: 16px; }
+  .composer-send { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 9999px; background: var(--primary); color: var(--on-primary); cursor: pointer; transition: background-color 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease); }
+  .composer-send:disabled { background: var(--surface-2); color: var(--ink-3); cursor: not-allowed; }
+
+  /* The match score's breakdown (ScoreBars) */
+  .sbars-wrap { display: grid; gap: 14px; }
+  .sbars { display: grid; gap: 16px; margin: 0; padding: 0; list-style: none; }
+  .sbar { display: grid; gap: 6px; min-width: 0; }
+  .sbar-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 14px; }
+  .sbar-label { min-width: 0; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+  .sbar-tag { padding: 1px 7px; border-radius: 9999px; background: var(--surface-2); color: var(--ink-2); font-family: var(--font-mono); font-size: 10.5px; font-weight: 400; letter-spacing: 0.1em; line-height: 1.6; text-transform: uppercase; white-space: nowrap; }
+  .sbar-tag.must { background: var(--tint-2); color: var(--primary); }
+  .sbar-figures { display: inline-flex; gap: 10px; margin-left: auto; color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sbar-lost { color: var(--ink-3); }
+  .sbar-track { display: block; height: 8px; overflow: hidden; border-radius: 9999px; background: var(--surface-3); }
+  .sbar-track.sm { height: 5px; }
+  .sbar-track.critical { background: var(--critical-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--critical-dot) 50%, transparent); }
+  .sbar-fill { display: block; height: 100%; border-radius: inherit; background: var(--neutral-dot); }
+  .sbar-fill.good { background: var(--good-dot); }
+  .sbar-fill.caution { background: var(--caution-dot); }
+  .sbar-fill.critical { background: var(--critical-dot); }
+  .sbar-detail { color: var(--ink-2); font-size: 13.5px; }
+  .sbar-detail details > summary { width: fit-content; color: var(--ink-2); cursor: pointer; }
+  /* Evidence: the candidate's words in a lavender block with a plum rule */
+  .sbar-detail blockquote { margin: 8px 0 0; padding: 8px 12px; border-left: 2px solid var(--primary); border-radius: 0 10px 10px 0; background: var(--tint); color: var(--ink-2); }
+
+  /* Tables: a clean bordered box (screenshot 4), mono headings, roomy rows; it scrolls sideways only when it must */
+  .table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-xs); scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+  .table-wrap:focus-visible { outline-offset: 2px; }
+  .table { width: 100%; border-collapse: separate; border-spacing: 0; color: var(--ink); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .table thead th { padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--ink-3); font-family: var(--font-mono); font-size: 11px; font-weight: 400; line-height: 1.35; letter-spacing: 0.12em; text-align: left; text-transform: uppercase; vertical-align: bottom; }
+  .table td, .table tbody th { padding: 14px; border-top: 1px solid var(--line); overflow-wrap: break-word; vertical-align: middle; transition: background-color 150ms var(--ease); }
+  .table tbody th { font-weight: inherit; text-align: left; }
+  /* rows at least 64px tall (screenshot 4), with or without an icon chip in the first cell */
+  .table tbody tr { height: 64px; }
+  .table tbody tr:first-child > :is(td, th) { border-top: 0; }
+  .table :is(th, td):first-child { padding-left: 18px; }
+  .table :is(th, td):last-child { padding-right: 18px; }
+  .table .num { text-align: right; white-space: nowrap; }
+  .table .nowrap { white-space: nowrap; }
+  .table tbody tr[aria-selected="true"] > :is(td, th) { background: var(--tint); }
+  /* A heading that sorts: the heading is the button; a faint pair of arrows until it sorts, then one arrow in ink */
+  .th-sort { display: inline-flex; align-items: center; gap: 4px; margin: -4px -6px; padding: 4px 6px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; vertical-align: top; cursor: pointer; }
+  .th-sort .icon { color: var(--ink-3); }
+  [aria-sort] > .th-sort, [aria-sort] > .th-sort .icon { color: var(--ink); }
+  .table th.num .th-sort { flex-direction: row-reverse; }
+  .th-sort:focus-visible { outline-offset: 0; }
+  /* No rows to show: one quiet row under the headings, left-aligned so it stays in view on a phone */
+  .table td.table-empty { padding: 32px 18px; color: var(--ink-2); text-align: left; }
+  .table .skeleton { display: block; width: 72%; min-height: 12px; }
+  .table .num .skeleton { margin-left: auto; }
+  /* Table wrapHeads: long headings wrap onto more lines (a figure column's too) instead of widening the table */
+  .table-wrap.wrap-heads thead th { white-space: normal; }
+  /* from the frame's rail breakpoint (900px), where the page has the height for a box that scrolls on its own */
+  @media (width >= 56.25rem) {
+    .table-wrap.scroll { max-height: min(70vh, 640px); overflow: auto; }
+    .table-wrap.scroll thead th { position: sticky; top: 0; z-index: 2; }
+  }
+  .table-wrap.pin-first :is(th, td):first-child { position: sticky; left: 0; z-index: 1; box-shadow: inset -1px 0 0 var(--line); }
+  .table-wrap.pin-first tbody :is(th, td):first-child { background: var(--surface); }
+  .table-wrap.pin-first thead th:first-child { z-index: 3; }
+  .table-wrap.pin-first td.table-empty { position: static; box-shadow: none; }
+  /* Inside a card the table is its own inset box (screenshot 7), flat on the card */
+  .card .table-wrap { border-radius: 12px; box-shadow: none; }
+
+  /* Tabs: underlined; the chosen one gets a plum line that grows from its middle */
+  .tabs { display: flex; gap: 4px 24px; overflow-x: auto; scrollbar-width: none; box-shadow: inset 0 -1px 0 var(--line); }
+  .tab { position: relative; display: inline-flex; flex: none; align-items: center; gap: 8px; padding: 12px 2px 14px; border: 0; background: none; color: var(--ink-2); font-family: var(--font-sans); font-size: 14.5px; font-weight: 500; line-height: 1.2; white-space: nowrap; text-decoration: none; cursor: pointer; transition: color 150ms var(--ease); }
+  .tab::after { content: ""; position: absolute; right: 0; bottom: 0; left: 0; height: 2px; border-radius: 2px; background: var(--primary); transform: scaleX(0); transition: transform 200ms var(--ease); }
+  .tab[aria-selected="true"], .tab[aria-current="page"] { color: var(--ink); font-weight: 600; }
+  .tab[aria-selected="true"]::after, .tab[aria-current="page"]::after { transform: scaleX(1); }
+  .tab:focus-visible { border-radius: 6px; outline-offset: -2px; }
+  .tab:disabled { opacity: 0.45; cursor: not-allowed; }
+  .tab .icon { width: 16px; height: 16px; }
+  .tab .count { min-width: 20px; padding: 0 6px; border-radius: 9999px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; font-weight: 500; line-height: 20px; text-align: center; font-variant-numeric: tabular-nums; }
+  .tab[aria-selected="true"] .count, .tab[aria-current="page"] .count { background: var(--tint-2); color: var(--primary); }
+  /* The label keeps the width of its bold self, so choosing a tab never nudges the tabs beside it (hidden from screen readers) */
+  .tab-label { display: inline-flex; flex-direction: column; align-items: center; }
+  .tab-label::after { content: attr(data-label); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; pointer-events: none; user-select: none; }
+  .tab .tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  /* The stage strip: each count above its word */
+  .tabs.counts { gap: 4px 28px; }
+  .tabs.counts .tab { flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 2px; }
+  .tabs.counts .tab .count { order: -1; min-width: 0; padding: 0; background: none; color: var(--ink); font-family: var(--font-display); font-size: 22px; font-weight: 700; line-height: 1.1; text-align: left; }
+  .tabs.counts .tab[data-empty="true"] .count { color: var(--ink-3); }
+  .tab-panel { padding-top: 20px; }
+  .tab-panel:focus-visible { outline-offset: 4px; }
+  /* Down the side (Tabs orientation="vertical", screenshot 6): an inner nav of 40px rows, the chosen one tinted plum
+     and marked by more than colour: the underline turns into a plum bar on its left, grown from its middle */
+  .tabs[aria-orientation="vertical"] { display: grid; align-content: start; gap: 2px; overflow: visible; box-shadow: none; }
+  .tabs[aria-orientation="vertical"] .tab { min-height: 40px; padding: 8px 12px; border-radius: 12px; white-space: normal; text-align: left; transition: background-color 150ms var(--ease), color 150ms var(--ease); }
+  .tabs[aria-orientation="vertical"] .tab::after { top: 10px; right: auto; bottom: 10px; left: 0; width: 3px; height: auto; transform: scaleY(0); }
+  .tabs[aria-orientation="vertical"] .tab[aria-selected="true"]::after { transform: none; }
+  .tabs[aria-orientation="vertical"] .tab[aria-selected="true"] { background: var(--tint); color: var(--primary); font-weight: 600; }
+  .tabs[aria-orientation="vertical"] .tab-label { align-items: flex-start; }
+  .tabs[aria-orientation="vertical"] .tab .count { margin-left: auto; }
+  .tabs[aria-orientation="vertical"] .tab:focus-visible { border-radius: 12px; }
+
+  /* Two panes side by side; under the rail breakpoint (900px) one at a time, with a switch above them */
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 24px; }
+  .split[data-ratio="wide-primary"] { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .split[data-ratio="wide-secondary"] { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  .split-switch { display: none; }
+  .split-pane { min-width: 0; }
+  /* --sticky-top: the frame sets it when its top bar stays on screen */
+  .split-secondary.keep-in-view { position: sticky; top: var(--sticky-top, 24px); }
+  @media (width < 56.25rem) {
+    .split, .split[data-ratio] { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .split-switch { display: inline-flex; justify-self: start; }
+    .split[data-show="primary"] > .split-secondary, .split[data-show="secondary"] > .split-primary { display: none; }
+    .split-secondary.keep-in-view { position: static; }
+  }
+
+  /* Floating layers. Menus, dialogs and panels grow or slide in (160-240ms, transform and opacity only). */
+  .menu-wrap { position: relative; display: inline-flex; }
+  /* The open menu's edge is the stronger hairline, so it shows against the page in dark mode too */
+  .menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 70; min-width: min(232px, calc(100vw - 32px)); max-width: min(340px, calc(100vw - 32px)); padding: 6px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-pop); transform-origin: top left; animation: menu-in 160ms var(--ease); }
+  .menu[data-align="end"] { right: 0; left: auto; transform-origin: top right; }
+  .menu-heading { padding: 8px 10px 6px; color: var(--ink-3); font-family: var(--font-mono); font-size: 11px; font-weight: 400; line-height: 1.3; letter-spacing: 0.14em; text-transform: uppercase; }
+  .menu [role="menu"] { display: grid; gap: 1px; }
+  .menu [role="menu"]:focus { outline: none; }
+  .menu-item { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 2px 10px; width: 100%; min-height: 36px; padding: 7px 10px; border: 0; border-radius: 8px; background: none; color: var(--ink); font-family: var(--font-sans); font-size: 14px; text-align: left; cursor: pointer; transition: background-color 120ms var(--ease); }
+  /* the keyboard's fill shows on every device; the pointer's waits for a mouse */
+  .menu-item:focus { background: var(--tint); outline: none; }
+  .menu-item:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+  .menu-item .dot { justify-self: center; }
+  .menu-item[aria-checked="true"] { font-weight: 600; }
+  .menu-item[aria-checked="true"] > .icon { color: var(--primary); }
+  .menu-item[aria-disabled="true"] { color: var(--ink-3); cursor: not-allowed; }
+  .menu-item.danger { color: var(--critical); }
+  .menu-hint { color: var(--ink-3); font-size: 12px; font-weight: 500; }
+  .menu-reason { grid-column: 2 / -1; color: var(--ink-3); font-size: 12.5px; font-weight: 400; }
+  /* The side panel (Drawer, Sheet): from the right on a desk, from the bottom on a phone */
+  .sheet-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; justify-content: flex-end; background: var(--scrim); animation: fade 200ms var(--ease); }
+  .sheet-backdrop-hit { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: default; }
+  .sheet { position: relative; display: flex; flex-direction: column; width: min(640px, 100%); height: 100%; overflow-y: auto; overscroll-behavior: contain; border-left: 1px solid var(--line); border-radius: 16px 0 0 16px; background: var(--ground); box-shadow: var(--sh-pop); animation: sheet-in 240ms var(--ease); }
+  .sheet.lg { width: min(720px, 100%); }
+  .sheet:focus { outline: none; }
+  .drawer-head { position: sticky; top: 0; z-index: 5; padding: 20px 24px 0; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .drawer-head-row { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 16px; }
+  .drawer-title { flex: 1; min-width: 0; }
+  .drawer-title h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; overflow-wrap: anywhere; }
+  .drawer-sub { margin-top: 2px; color: var(--ink-2); font-size: 14px; }
+  .drawer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+  .drawer-close { margin: -2px -6px 0 0; }
+  .drawer-banner { padding-bottom: 14px; }
+  .drawer-head .tabs { box-shadow: none; }
+  .drawer-body { flex: 1; padding: 24px 24px 40px; }
+  /* The dialog: a calm confirmation in the middle of the screen; on a phone it rises from the bottom */
+  .dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; overflow-y: auto; background: var(--scrim); animation: fade 200ms var(--ease); }
+  .dialog { position: relative; display: flex; flex-direction: column; width: min(480px, 100%); max-height: calc(100dvh - 48px); overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-pop); animation: pop-in 200ms var(--ease); }
+  .dialog.lg { width: min(720px, 100%); }
+  .dialog:focus { outline: none; }
+  .dialog-close { position: absolute; top: 14px; right: 14px; z-index: 1; }
+  .dialog-head { display: grid; justify-items: start; gap: 6px; padding: 28px 64px 0 28px; }
+  .dialog-head h2 { font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.15; }
+  .dialog-mark { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; margin-bottom: 6px; border-radius: 14px; background: var(--tint-2); color: var(--primary); }
+  .dialog-mark.good { background: var(--good-soft); color: var(--good); }
+  .dialog-sub { color: var(--ink-2); font-size: 15px; }
+  .dialog-body { flex: 1 1 auto; min-height: 0; padding: 16px 28px 24px; overflow-y: auto; }
+  .dialog-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 16px 28px; border-top: 1px solid var(--line); background: var(--surface); }
+  @media (max-width: 640px) {
+    .sheet-backdrop { align-items: flex-end; }
+    .sheet, .sheet.lg { width: 100%; height: auto; max-height: calc(100dvh - 16px); border-top: 1px solid var(--line); border-left: 0; border-radius: 16px 16px 0 0; animation-name: sheet-up; }
+    .drawer-head { padding: 16px 16px 0; }
+    .drawer-head-row { flex-wrap: wrap; }
+    /* a wrapped line of actions ends at the right edge, so a menu opening leftward from its last button stays on the screen */
+    .drawer-actions { order: 4; flex-basis: 100%; justify-content: flex-end; }
+    .drawer-body { padding: 16px 16px 32px; }
+    .dialog-backdrop { place-items: end stretch; padding: 16px 0 0; }
+    .dialog, .dialog.lg { width: 100%; max-height: calc(100dvh - 16px); border-radius: 20px 20px 0 0; animation-name: sheet-up; }
+    .dialog-head { padding: 24px 60px 0 20px; }
+    .dialog-body { padding: 14px 20px 20px; }
+    .dialog-foot { padding: 14px 20px; }
+    .dialog-foot > * { flex: 1 1 0; }
+    .page-header-actions { width: 100%; margin-left: 0; }
+    /* the message box gives its text the whole width and puts the send button under it, at the right */
+    .composer { flex-wrap: wrap; }
+    .composer :is(.autogrow, textarea) { flex-basis: 100%; }
+    .composer > .btn { margin-left: auto; }
+  }
+  /* On a desk too, a panel with actions puts them on their own line under the title, so a long name and its details
+     keep the width (the candidate panel has five actions); the close button stays at the top right. */
+  @media (min-width: 641px) {
+    .drawer-head-row:has(> .drawer-actions > *) { flex-wrap: wrap; }
+    .drawer-head-row:has(> .drawer-actions > *) > .drawer-actions { order: 4; flex-basis: 100%; justify-content: flex-start; }
+  }
+  /* The toast: bottom centre on a phone, bottom right on a desk. The Toaster's live region (role="status") is the fixed
+     box and stays in the page while empty, so a new message is announced; a bare .toast places itself. */
+  .toast-region { position: fixed; right: 16px; bottom: 16px; left: 16px; z-index: 80; display: flex; justify-content: center; pointer-events: none; }
+  .toast-region .toast { position: static; margin: 0; pointer-events: auto; animation: none; }
+  .toast { position: fixed; right: 16px; bottom: 16px; left: 16px; z-index: 80; display: flex; align-items: flex-start; gap: 10px; width: fit-content; max-width: min(480px, calc(100vw - 32px)); margin: 0 auto; padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 14px; line-height: 1.45; box-shadow: var(--sh-inset), var(--sh-pop); animation: toast-in 200ms var(--ease); }
+  .toast .icon { width: 16px; height: 16px; margin-top: 2px; }
+  .toast.good .icon { color: var(--good); }
+  .toast.critical { border-color: color-mix(in srgb, var(--critical-dot) 45%, transparent); }
+  .toast.critical .icon { color: var(--critical); }
+  .toast-title { display: block; font-weight: 600; }
+  .toast-detail { display: block; margin-top: 1px; color: var(--ink-2); font-size: 13px; }
+  .toast.has-action { align-items: center; }
+  .toast-action { flex: none; min-height: 32px; margin-left: 8px; padding: 5px 14px; border: 1px solid var(--line-2); border-radius: 9999px; background: var(--surface); color: var(--primary); font-family: var(--font-sans); font-size: 13px; font-weight: 600; line-height: 1.2; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease); }
+  @media (min-width: 641px) {
+    .toast-region { right: 24px; bottom: 24px; left: auto; justify-content: flex-end; }
+  }
+
+  /* Touch screens: every control at least 40px tall */
+  @media (pointer: coarse) {
+    .btn.sm, .pill-button, .toggle-chip, .segmented button, .suggestion, .toast-action, .menu-item, .th-sort { min-height: 40px; }
+    .icon-btn, .icon-btn.sm { width: 40px; height: 40px; }
+    details.more > summary, .sbars-more > summary { min-height: 40px; }
+  }
+
+  /* Hover: only where there is a mouse, so nothing stays filled after a tap on a phone (some phones report hover: hover) */
+  @media (hover: hover) and (pointer: fine) {
+    :where(main) :is(a:not([class]), a[class="small"]):hover { text-decoration-color: currentColor; }
+    .btn.primary:hover { background: var(--primary-hover); }
+    .btn.secondary:hover { border-color: var(--line-strong); background: var(--surface-2); }
+    .btn.ghost:hover, .btn.quiet:hover { background: var(--tint); color: var(--ink); }
+    .btn.danger:hover, .btn.destructive:hover { border-color: var(--critical); }
+    .icon-btn:hover { border-color: var(--line-2); background: var(--tint); color: var(--ink); }
+    .pill-button:hover { border-color: currentColor; }
+    .toggle-chip:hover { border-color: var(--line-strong); color: var(--ink); }
+    .toggle-chip[aria-pressed="true"]:hover { border-color: var(--primary); color: var(--primary); }
+    .segmented button:not(.on, [aria-pressed="true"]):hover { background: color-mix(in srgb, var(--surface) 60%, transparent); color: var(--ink); }
+    .suggestion:hover { border-color: var(--line-tint); background: var(--tint); color: var(--ink); }
+    .input:hover, .textarea:hover, .select:hover { border-color: var(--ink-3); }
+    .check:hover { border-color: var(--line-2); }
+    input[type="file"]::file-selector-button:hover { background: var(--surface-2); }
+    a.list-item:hover, button.list-item:hover, a.list-row:hover, button.list-row:hover { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
+    :is(.list-item, .list-row):hover :is(.chev, .list-item-end > .icon:last-child), .table tbody tr:hover .chev { color: var(--primary); }
+    a.stat-cell:hover { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
+    a.stat-cell.highlight:hover { background: linear-gradient(110deg, var(--tint), var(--peach)); }
+    a.stat-cell:hover .stat-cell-go { border-color: var(--primary); color: var(--primary); }
+    .card.lift:hover, a.card:hover, a.side-card:hover { border-color: var(--line-2); box-shadow: var(--sh-inset), var(--sh-sm); }
+    .card.needs-you.lift:hover { border-color: var(--line-tint); }
+    .table tbody tr:hover > :is(td, th):not(.table-empty) { background: color-mix(in srgb, var(--surface-2) 60%, var(--surface)); }
+    .th-sort:hover { color: var(--ink); }
+    .tab:hover { color: var(--ink); }
+    .tabs[aria-orientation="vertical"] .tab:not([aria-selected="true"], :disabled):hover { background: var(--surface-2); }
+    .option-row:not(:has(input:checked, input:disabled)):hover { border-color: var(--line-strong); }
+    .menu-item:hover { background: var(--tint); }
+    .composer-send:not(:disabled):hover { background: var(--primary-hover); }
+    .toast-action:hover { border-color: var(--line-strong); background: var(--tint); }
+    .text-link:hover { text-decoration: underline; }
+  }
+  /* Arrows nudge 2px toward where they lead, under a mouse and only when motion is welcome */
+  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    .text-link:hover .icon:last-child, :is(.list-item, .list-row):hover :is(.chev, .list-item-end > .icon:last-child), .table tbody tr:hover .chev, a.stat-cell:hover .stat-cell-go { transform: translateX(2px); }
+  }
+  /* Pressed: a control gives a little under the finger or the click (transform only); off for reduced motion */
+  @media (prefers-reduced-motion: no-preference) {
+    :is(.btn, .icon-btn, .pill-button, .toggle-chip, .segmented button, .suggestion, .composer-send, .toast-action):active:not(:disabled, [aria-disabled="true"]) { transform: scale(0.98); }
+  }
+  /* Forced colours (Windows High Contrast) drop backgrounds and shadows: a pressed filter chip, the chosen segment and
+     the chosen tab's line or bar keep the system highlight, an alert's mark is drawn in the text colour, and an option
+     row whose control stepped its outline aside takes the outline itself. */
+  @media (forced-colors: active) {
+    .toggle-chip[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; border-color: Highlight; color: HighlightText; }
+    .segmented button:is(.on, [aria-pressed="true"]) { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+    .tab[aria-selected="true"]::after, .tab[aria-current="page"]::after { forced-color-adjust: none; background: Highlight; }
+    .option-row:has(input:focus-visible) { outline: 2px solid CanvasText; outline-offset: 2px; }
+    .alert::before { forced-color-adjust: none; background: CanvasText; }
+  }
+}
+
+/* Nothing moves for someone who asked for less motion, pseudo-elements included; nothing waits either (a staggered
+   entrance would otherwise sit invisible for its delay and then pop in). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -9,6 +9,7 @@ import { findConversation, type ConversationRef, type ConversationView, type Tur
 import { anonymizedFor } from "./candidate-shared";
 import { Icon } from "./icons";
 import { Layout, currentNonce } from "./layout";
+import { FOOT_CSS } from "./signin-link";
 import { THREAD_CSS } from "./thread";
 import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
 
@@ -24,47 +25,79 @@ import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /**
- * The conversation's own styles, on top of the page stylesheet: the line on top of every page saying it is the
- * company's AI assistant, the question in large type, the assistant's messages on the left in a sunken box and the
- * candidate's own in near-black on the right (shared with the status page's messages, thread.tsx), a thin progress bar (a native progress element, so no inline style), the
- * tap answers, the quiet actions (skip, a person, later), the line shown while an answer is on its way, and the "check
- * your answers" list. Buttons and their secondary look come from the page stylesheet, like every other candidate page.
+ * The conversation's own styles, on top of the page stylesheet (October 2026 redesign, the guided chat of the reference
+ * screens): the line on top of every page saying it is the company's AI assistant, as a soft lavender note with its tag;
+ * the introduction's points as rows with an icon chip; the question in large type; the assistant's messages on the left
+ * in white bubbles and the candidate's own in peach on the right (shared with the status page's messages, thread.tsx); a
+ * thin progress bar that runs from plum to coral (a native progress element, so no inline style); the tap answers as
+ * tiles; the reply box drawn as one field with its Send button (`form.reply`); the quiet actions (skip, a person,
+ * later) as plain text links; the line shown while an answer is on its way; the two equal choices; and "check your
+ * answers" as the rows of one list with a pill for each mark. Buttons and their secondary look come from the page
+ * stylesheet, like every other candidate page; tokens only.
  */
 export const SCREEN_CSS = `
-.ai-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 22px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-2); color: var(--ink-2); font-size: 14px; line-height: 1.45; }
-.ai-tag { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: var(--r-pill); background: var(--ink); color: var(--ground); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
-h1.question { margin: 12px 0 18px; font-size: 28px; line-height: 1.22; }
+.ai-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 24px; padding: 12px 16px; border: 1px solid var(--tint-2); border-radius: 14px; background: var(--tint); color: var(--ink-2); font-size: 14px; line-height: 1.5; }
+.ai-tag { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 8px; border: 1px solid var(--tint-2); border-radius: var(--r-pill); background: var(--surface); color: var(--primary); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+.ai-tag::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--accent); clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); }
+h1.question { margin: 14px 0 18px; font-size: 28px; line-height: 1.2; letter-spacing: -0.025em; }
 .lead-in { margin: 20px 0 0; color: var(--ink-2); }
 ${THREAD_CSS}
-.progress { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; color: var(--ink-3); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.points { display: grid; gap: 0; margin: 22px 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; }
+.points li { display: flex; align-items: center; gap: 14px; margin: 0; padding: 12px 18px 12px 14px; color: var(--ink); font-size: 15px; line-height: 1.45; }
+.points li + li { border-top: 1px solid var(--line); }
+.points .icon { flex: none; box-sizing: content-box; width: 18px; height: 18px; margin: 0; padding: 9px; border-radius: 12px; background: var(--tint-2); color: var(--primary); }
+.points li > span { min-width: 0; padding-top: 0; overflow-wrap: anywhere; }
+.progress { display: flex; align-items: center; gap: 14px; margin: 0 0 8px; color: var(--ink-2); font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .progress label { flex: none; margin: 0; color: inherit; font-size: inherit; font-weight: inherit; }
-.progress progress { flex: 1; min-width: 0; height: 6px; overflow: hidden; border: 0; border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink); -webkit-appearance: none; appearance: none; }
-.progress progress::-webkit-progress-bar { border-radius: var(--r-pill); background: var(--surface-2); }
-.progress progress::-webkit-progress-value { border-radius: var(--r-pill); background: var(--ink); }
-.progress progress::-moz-progress-bar { border-radius: var(--r-pill); background: var(--ink); }
-details.earlier, details.own-words { margin: 18px 0 0; }
-details.earlier > summary, details.own-words > summary { color: var(--ink-2); font-size: 15px; font-weight: 600; cursor: pointer; }
-.days { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 8px; }
-.pay-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
-.link-action { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink-2); font: 600 15px/1.3 var(--ui); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
-.link-action:hover { color: var(--ink); text-decoration-thickness: 2px; }
+.progress progress { flex: 1; min-width: 0; height: 6px; overflow: hidden; border: 0; border-radius: var(--r-pill); background: var(--line); color: var(--primary); -webkit-appearance: none; appearance: none; }
+.progress progress::-webkit-progress-bar { border-radius: var(--r-pill); background: var(--line); }
+.progress progress::-webkit-progress-value { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }
+.progress progress::-moz-progress-bar { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }
+details.earlier, details.own-words { margin: 20px 0 0; }
+details.earlier > summary, details.own-words > summary { padding: 9px 0; color: var(--ink-2); font-size: 14.5px; font-weight: 600; cursor: pointer; }
+.days { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr)); gap: 8px; margin-top: 10px; }
+.days .slot { display: flex; align-items: center; gap: 10px; min-height: 48px; margin: 0; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); color: var(--ink); font-size: 15px; font-weight: 600; line-height: 1.3; cursor: pointer; }
+.days .slot:has(input:checked) { border-color: var(--primary); background: var(--tint); box-shadow: inset 0 0 0 1px var(--primary); }
+.days .slot input { flex: none; margin: 0; }
+.pay-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; }
+.reply { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 14px; margin: 20px 0 0; padding: 12px 12px 12px 18px; border: 1px solid var(--line-strong); border-radius: var(--r-panel); background: var(--surface); }
+.reply:focus-within { border-color: var(--primary); }
+.reply:has(> textarea:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.reply > label { grid-column: 1 / -1; margin: 0 0 2px; color: var(--ink-2); font-size: 13px; font-weight: 600; }
+.reply > textarea { grid-column: 1 / -1; width: 100%; min-height: 88px; margin: 0; padding: 4px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; resize: vertical; }
+.reply > textarea:focus, .reply > textarea:focus-visible { outline: 2px solid transparent; outline-offset: 0; }
+.reply > .actions { grid-column: 2; justify-content: flex-end; margin: 8px 0 0; }
+.reply > .actions > :first-child { min-width: 0; }
+.link-action { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: 14.5px; font-weight: 600; line-height: 1.3; text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: var(--line-strong); text-underline-offset: 4px; cursor: pointer; }
 .link-action:disabled { color: var(--ink-3); text-decoration: none; cursor: not-allowed; }
-.sending { margin: 16px 0 0; color: var(--ink-2); font-size: 14.5px; }
+.sending { margin: 16px 0 0; color: var(--ink-2); font-size: 14px; }
 .sending:empty { margin: 0; }
-.aside-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0 24px; margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--line); }
+.aside-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0 24px; margin-top: 28px; padding-top: 8px; border-top: 1px solid var(--line); }
 .aside-actions > form { display: contents; }
-.paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 20px 0; }
-.paths > .card { display: flex; flex-direction: column; margin: 0; }
-.paths > .card > h2 { margin-top: 0; }
-.paths > .card > form { margin-top: auto; }
-.answers { display: grid; gap: 12px; margin: 20px 0; padding: 0; list-style: none; }
-.answer { padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
-.answer-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
-.answer-q { margin: 0; color: var(--ink); font-weight: 600; }
-.answer > p { margin: 8px 0 0; }
-.answer > a { display: inline-block; margin-top: 8px; font-weight: 600; }
-.pill { display: inline-flex; align-items: center; padding: 2px 10px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; }
-@media (max-width: 600px) { h1.question { font-size: 23px; } }
+.paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 14px; margin: 22px 0; }
+.paths > section.card { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 22px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+.paths > .card > h2 { margin: 0; font-size: 19px; line-height: 1.25; letter-spacing: -0.02em; }
+.paths > .card > p { margin: 0; }
+.paths > .card > form { margin-top: auto; padding-top: 10px; }
+.answers { margin: 20px 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; }
+.answer { padding: 16px 18px; }
+.answer + .answer { border-top: 1px solid var(--line); }
+.answer:target { background: var(--tint); }
+.answer-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.answer-q { margin: 0; color: var(--ink); font-size: 15px; font-weight: 600; line-height: 1.4; }
+.answer > p { margin: 6px 0 0; color: var(--ink-2); font-size: 14.5px; }
+.answer > a { display: inline-flex; align-items: center; min-height: 40px; color: var(--primary); font-size: 14px; font-weight: 600; }
+.answer .pill { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 10px; border: 0; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-ink); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+${FOOT_CSS}
+@media (hover: hover) and (pointer: fine) {
+  .link-action:hover { color: var(--primary); text-decoration-color: currentColor; }
+  .days .slot:hover { border-color: var(--line-strong); }
+}
+@media (max-width: 600px) {
+  h1.question { font-size: 24px; }
+  .reply { grid-template-columns: minmax(0, 1fr); padding: 12px 12px 12px 14px; }
+  .reply > .actions { grid-column: 1; justify-content: flex-start; }
+}
 `;
 
 /**
@@ -108,10 +141,11 @@ function AiLine(props: { companyName: string }) {
 }
 
 /**
- * Every page of the conversation: the AI line, the company and the job, the page, the line that says an answer is on its
- * way (empty until a button is pressed), the AI notice, the privacy link, and the script that stops a second press. The
- * AI line on top already says it is the company's AI assistant, so the notice's full text (and `aiMore`, the role's own
- * AI wording on the introduction) sits one click away under "How AI is used" (founder brief, 14 October 2026).
+ * Every page of the conversation: the AI line, the page, the line that says an answer is on its way (empty until a
+ * button is pressed), the AI notice, the privacy link, and the script that stops a second press. The AI line on top
+ * already says it is the company's AI assistant, so the notice's full text (and `aiMore`, the role's own AI wording on
+ * the introduction) sits one click away under "How AI is used" (founder brief, 14 October 2026). No "Company · Job"
+ * eyebrow (fewer words, 23 October 2026): the AI line names the company, and the browser tab names the job.
  *
  * Wave S7 (S7-0, nothing passes them yet): `header` is drawn directly under the AI line, which stays the first thing on
  * the page (the steps header, pages/journey.tsx); `extraCss` is a page's own styles, added to the conversation's in the
@@ -123,7 +157,6 @@ export function ConversationPage(props: { view: ConversationView; title: string;
     <Layout title={`${props.title}: ${view.roleTitle} at ${view.companyName}`} extraCss={props.extraCss ? `${SCREEN_CSS}${props.extraCss}` : SCREEN_CSS}>
       <AiLine companyName={view.companyName} />
       {props.header ? props.header : null}
-      <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
       {props.children}
       {/* `busyNote` (the chat's "Reading your reply…"): what the line says while an answer is on its way. */}
       <p class="sending" id="sending" role="status" data-wait={props.busyNote ?? undefined} />
@@ -186,16 +219,31 @@ export const CHAT_BUSY_NOTE = "Reading your reply… This can take up to a minut
 
 /**
  * The chat's own styles, passed as a page's `extraCss` (never into the candidate stylesheet, whose budget is spent):
- * tokens only, no button rules, no motion. The "where your answers go" line, the chat's title, the latest message in
- * a slightly larger type (the question to answer now), and the bar at the chat's end.
+ * tokens only, no button rules. The "where your answers go" line with its icon chip, the chat's title, the whole chat
+ * in one soft panel (the guided conversation of the reference screens: lavender at the top, a touch of peach at the
+ * foot), the latest message slightly larger and lifted (the question to answer now), and the bar at the chat's end as
+ * the "your next step" card with its coral dot. The one motion on the page: the newest message fades in and rises 8px
+ * once, in 200ms, only when motion is welcome (and the candidate stylesheet stops every animation for reduced motion).
  */
 export const CHAT_CSS = `
-.where-go { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 14px; color: var(--ink-2); font-size: 14.5px; line-height: 1.45; }
-.where-go .icon { flex: none; margin-top: 2px; }
-h1.chat-title { margin: 6px 0 4px; font-size: 24px; line-height: 1.25; }
-.thread .msg.assistant.now { font-size: 17px; }
-.chat-end { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin: 22px 0 0; padding: 14px 18px; border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface-2); }
-.chat-end p { margin: 0; color: var(--ink); font-weight: 600; }
+.where-go { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; color: var(--ink-2); font-size: 14px; line-height: 1.45; }
+.where-go .icon { flex: none; box-sizing: content-box; width: 16px; height: 16px; padding: 6px; border-radius: 9px; background: var(--tint-2); color: var(--primary); }
+h1.chat-title { margin: 6px 0 8px; font-size: 26px; line-height: 1.2; letter-spacing: -0.025em; }
+.thread[aria-label="Your chat"] { margin: 18px 0 20px; padding: 20px 18px; border: 1px solid var(--line); border-radius: var(--r-panel); background: linear-gradient(165deg, var(--tint) 0%, var(--surface) 46%, var(--surface) 72%, var(--peach) 140%); }
+.thread .msg.assistant.now { border-color: var(--line-2); font-size: 16.5px; box-shadow: var(--sh-pop); }
+.chat-end { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px 20px; margin: 24px 0 0; padding: 24px; border: 1px solid var(--tint-2); border-radius: var(--r-panel); background: linear-gradient(115deg, var(--tint) 0%, var(--surface) 58%, var(--peach) 135%); }
+.chat-end p { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--ink); font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
+.chat-end p::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.chat-end form { margin: 0; }
+@keyframes msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  .thread .msg.now { animation: msg-in 200ms cubic-bezier(0.22, 1, 0.36, 1) 60ms both; }
+}
+@media (max-width: 600px) {
+  .thread[aria-label="Your chat"] { padding: 14px 12px; border-radius: var(--r-card); }
+  .chat-end { padding: 20px 18px; }
+  .chat-end p { font-size: 20px; }
+}
 `;
 
 /**
@@ -227,11 +275,11 @@ function SkipButton(props: { keepsAnswer?: boolean }) {
 
 /** The typed answer. Its label names the question (or the follow-up) it answers, for a screen reader (E14). */
 function TypedAnswer(props: { action: string; about: string; submit: string; skip: boolean; keepsAnswer?: boolean; autofocus?: boolean; value?: string; label?: string }) {
+  // `reply`: drawn as one field holding the words and the Send button (SCREEN_CSS).
   return (
-    <form method="post" action={props.action}>
+    <form method="post" action={props.action} class="reply">
       <label for="message">{props.label ?? "Your answer"}<span class="sr-only"> to: {props.about}</span></label>
-      <textarea id="message" name="message" rows={4} maxlength={2000} required autofocus={props.autofocus} aria-describedby="message-hint">{props.value ?? ""}</textarea>
-      <small id="message-hint">In your own words. A few sentences is plenty, and there are no wrong answers.</small>
+      <textarea id="message" name="message" rows={4} maxlength={2000} required autofocus={props.autofocus}>{props.value ?? ""}</textarea>
       <div class="actions">
         <button class="btn" type="submit">{props.submit}</button>
         {props.skip ? <SkipButton keepsAnswer={props.keepsAnswer} /> : null}

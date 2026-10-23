@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Button, Card, Chip, EmptyState, ErrorState, Skeleton } from "@ros/ui";
+import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Skeleton } from "@ros/ui";
 import { formatPayRange } from "@ros/contracts";
 import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
@@ -20,7 +20,7 @@ import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage"
 import { AfterApproval } from "./AfterApproval";
 import { JobHeader, JobMenu, JobTabs, jobFactsFor } from "./JobHeader";
 import { ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
-import { ActivityTab, CandidatesSeeThis, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, catchUpInterval, waitingOnWorker, workModelLabel } from "./RolePlan";
+import { ActivityTab, CandidatesSeeThis, DIVIDED_ROW as ROW, DIVIDED_ROWS as ROWS, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, catchUpInterval, waitingOnWorker, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
 import { ReportTab } from "./RoleReport";
 import { ApplicantQuestions } from "./role/ApplicantQuestions";
@@ -38,13 +38,16 @@ export function notOnThisJob(error: unknown, myRole: string | null | undefined):
   return myRole === "interviewer" && error instanceof ApiError && (error.status === 404 || error.status === 403);
 }
 
-/** What an interviewer sees on a job they are not on, or on its candidates: where their own interviews are. */
+/**
+ * What an interviewer sees on a job they are not on, or on its candidates: the title says so and the one button leads
+ * to their own interviews (no body line by default: the button already says where to go).
+ */
 export function NotOnThisJob(props: { title?: string; body?: string }) {
   return (
     <EmptyState
       icon="calendar"
       title={props.title ?? "You are not on this job"}
-      body={props.body ?? "You see the jobs you interview for. Your interviews are under Interviews."}
+      body={props.body}
       action={<Link to="/interviews" className="btn primary">Go to Interviews</Link>}
     />
   );
@@ -178,12 +181,13 @@ export function RoleDetail() {
   const visibleTab: JobPageTab = tabItems.some((o) => o.id === tab) ? tab : "job";
 
   return (
-    <div className="stack" style={{ gap: 18 }}>
+    <div className="stack gap-5">
+      {/* the header's own bottom margin trimmed to the stack's rhythm (the Candidates page does the same) */}
       <JobHeader
+        className="mb-1"
         title={r.title}
         status={r.status}
         pulse={r.status === "open" && r.acceptingApplications}
-        companyName={companyName}
         // place · type · how it is worked · pay, and "Apply by …" (plan D7) while a closing date is set
         sub={jobFactsFor(r) ?? "No job details yet."}
         actions={
@@ -230,61 +234,67 @@ export function RoleDetail() {
           {proposed && shown === proposed ? <Alert tone="info">Showing version {proposed.version}, waiting for approval. The job still runs on version {current?.version ?? "?"}. <Button size="sm" onClick={() => setShowProposed(false)}>Back to version {current?.version ?? "?"}</Button></Alert> : null}
 
           {visibleTab === "job" ? (
-            <div className="grid-2">
-              <div className="stack">
-                <Card title="Job description" aside={<CandidatesSeeThis />}><p style={{ whiteSpace: "pre-wrap", color: "var(--ink-2)" }}>{p.description.publicJobDescription}</p></Card>
-                {editPacket && REFINABLE.includes(r.status) ? <RoleRefine roleId={r.id} packet={editSource?.packet ?? p} whoPosts={r.whoPosts} /> : null}
-              </div>
-              <div className="stack">
-                <Card title="The basics" aside={<Chip>Version {shown!.version}</Chip>}>
-                  <dl className="kv">
-                    <dt>Pay</dt><dd>{money(p)}</dd>
-                    <dt>Shown to candidates</dt><dd>{payShownLabel(shown!, p.compensation.discloseRange)}</dd>
-                    <dt>Work model</dt><dd>{workModelLabel(p.identity.remotePolicy)}</dd>
-                    <dt>Schedule</dt><dd>{p.identity.schedule ?? "As posted"}</dd>
-                    <dt>Target start</dt><dd>{p.business.timeline.targetStartDate ?? "Flexible"}</dd>
+            <>
+              {/* The description on the left, the basics beside it as a narrow side card (screenshot 7's "at a glance") */}
+              <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+                <div className="stack gap-5">
+                  <Card title="Job description" aside={<CandidatesSeeThis />}><p className="whitespace-pre-wrap text-ink-2">{p.description.publicJobDescription}</p></Card>
+                  {editPacket && REFINABLE.includes(r.status) ? <RoleRefine roleId={r.id} packet={editSource?.packet ?? p} whoPosts={r.whoPosts} /> : null}
+                </div>
+                <Card title="The basics" aside={<Chip>Version {shown!.version}</Chip>} className="p-5">
+                  <dl className="glance">
+                    <Fact term="Pay">{money(p)}</Fact>
+                    <Fact term="Shown to candidates">{payShownLabel(shown!, p.compensation.discloseRange)}</Fact>
+                    <Fact term="Work model">{workModelLabel(p.identity.remotePolicy)}</Fact>
+                    <Fact term="Schedule">{p.identity.schedule ?? "As posted"}</Fact>
+                    <Fact term="Target start">{p.business.timeline.targetStartDate ?? "Flexible"}</Fact>
                   </dl>
-                  <details className="more" style={{ marginTop: 10 }}>
+                  <details className="more mt-4 border-t border-line pt-4">
                     <summary>Pay ceiling, reason and urgency</summary>
-                    <dl className="kv">
-                      <dt>Ceiling</dt><dd>{p.compensation.basis === "hourly" ? `$${p.compensation.ceiling}/hr` : `$${p.compensation.ceiling.toLocaleString()}`} <span className="muted small">(never exceeded without your approval)</span></dd>
-                      <dt>Pay sources</dt><dd>{p.compensation.sources.map((s) => s.name).join("; ") || "owner-stated"}</dd>
-                      <dt>Reason</dt><dd>{REASON_WORD[p.business.reason] ?? p.business.reason.replace(/_/g, " ")}{p.business.reasonDetail ? ` · ${p.business.reasonDetail}` : ""}</dd>
-                      <dt>Urgency</dt><dd>{p.business.timeline.urgency}</dd>
+                    <dl className="glance">
+                      <Fact term="Ceiling">{p.compensation.basis === "hourly" ? `$${p.compensation.ceiling}/hr` : `$${p.compensation.ceiling.toLocaleString()}`} <span className="muted small">(never exceeded without your approval)</span></Fact>
+                      <Fact term="Pay sources">{p.compensation.sources.map((s) => s.name).join("; ") || "owner-stated"}</Fact>
+                      <Fact term="Reason">{REASON_WORD[p.business.reason] ?? p.business.reason.replace(/_/g, " ")}{p.business.reasonDetail ? ` · ${p.business.reasonDetail}` : ""}</Fact>
+                      <Fact term="Urgency">{p.business.timeline.urgency}</Fact>
                     </dl>
                   </details>
                 </Card>
-                <details className="more">
-                  <summary>What matters to you, and where candidates come from</summary>
-                  <div className="stack">
-                    <PreferencesCard packet={p} decisionMaker={r.decisionMaker ?? null} />
-                    <Card title="Where candidates will come from"><p className="small" style={{ color: "var(--ink-2)" }}>{p.sourcing.summary}</p><div className="row" style={{ marginTop: 8 }}>{p.sourcing.channels.map((c) => <Chip key={c}>{c.replace("_", " ")}</Chip>)}</div></Card>
-                  </div>
-                </details>
               </div>
-            </div>
+              <details className="more">
+                <summary>What matters to you, and where candidates come from</summary>
+                <div className="grid grid-cols-1 items-start gap-5 md:grid-cols-2">
+                  <PreferencesCard packet={p} decisionMaker={r.decisionMaker ?? null} />
+                  <Card title="Where candidates will come from"><p className="small text-ink-2">{p.sourcing.summary}</p><div className="row mt-3">{p.sourcing.channels.map((c) => <Chip key={c}>{c.replace("_", " ")}</Chip>)}</div></Card>
+                </div>
+              </details>
+            </>
           ) : null}
 
           {visibleTab === "scoring" ? (
-            <div className="stack">
-              <div className="grid-2">
+            <div className="stack gap-5">
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                 <Card title="Must-haves" aside={<CandidatesSeeThis />}>
                   <RequirementList items={p.requirements.mustHaves} empty="None listed." />
-                  <p className="small muted" style={{ marginTop: 8 }}>{MUST_HAVES_SCORE_LINE}</p>
-                  <details className="more" style={{ marginTop: 6 }}>
+                  {/* the rules behind the list, folded into the card's one disclosure (fewer words, 23 Oct 2026) */}
+                  <details className="more mt-4">
                     <summary>Where each one is checked</summary>
-                    <p className="small muted" style={{ margin: 0 }}>The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the AI interview.</p>
+                    <div className="stack gap-2">
+                      <p className="small muted">The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked.</p>
+                      <p className="small muted">{MUST_HAVES_SCORE_LINE}</p>
+                    </div>
                   </details>
-                  {editPacket ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" icon="edit" onClick={() => openEditor("must-haves")}>Change the must-haves</Button></div> : null}
+                  {editPacket ? <div className="row mt-4"><Button size="sm" icon="edit" onClick={() => openEditor("must-haves")}>Change the must-haves</Button></div> : null}
                 </Card>
                 <Card title="What we look for">
-                  <ul style={{ paddingLeft: 18, margin: 0 }}>{p.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong> <span className="sbar-tag">{importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip><br /><span className="small muted">{c.definition}</span></li>)}</ul>
-                  <p className="small muted" style={{ marginTop: 8 }}>{SCORE_WEIGHTS_LINE}</p>
-                  {editPacket ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" icon="edit" onClick={() => openEditor("skills")}>Change the skills or how much each counts</Button>{mayTryWeights ? <Button size="sm" onClick={() => setWeightsOpen(true)}>Try different weights</Button> : null}</div> : null}
+                  <ul className={ROWS}>{p.competencies.map((c) => <li key={c.key} className={cn(ROW, "grid gap-1")}><span className="flex flex-wrap items-center gap-x-2 gap-y-1"><strong>{c.name}</strong> <span className="sbar-tag">{importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip></span><span className="small muted">{c.definition}</span></li>)}</ul>
+                  {/* Kept visible for everyone, not only in the editor: how the levels weigh in the match score and the
+                      fairness rule (unknown is never counted against anyone). e2e match-panel.spec.ts reads it here. */}
+                  <p className="small muted mt-4">{SCORE_WEIGHTS_LINE}</p>
+                  {editPacket ? <div className="row mt-4"><Button size="sm" icon="edit" onClick={() => openEditor("skills")}>Change the skills or how much each counts</Button>{mayTryWeights ? <Button size="sm" onClick={() => setWeightsOpen(true)}>Try different weights</Button> : null}</div> : null}
                 </Card>
                 <Card title="Nice-to-haves" aside={<CandidatesSeeThis />}><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
                 <Card title={`Screening questions (about ${p.screening.maxMinutes} minutes)`}>
-                  <ol style={{ paddingLeft: 18, margin: 0 }}>{p.screening.questions.map((q) => <li key={q.key}>{q.question} <Chip>{q.kind}</Chip></li>)}</ol>
+                  <ol className={ROWS}>{p.screening.questions.map((q, i) => <li key={q.key} className={cn(ROW, "flex items-start gap-3")}><span className="ordinal mt-px">{i + 1}</span><span className="min-w-0 flex-1">{q.question} <Chip>{q.kind}</Chip></span></li>)}</ol>
                 </Card>
               </div>
               {/* Wave S7: the quick questions on the form and the written questions in the chat, changed here. */}
@@ -297,15 +307,15 @@ export function RoleDetail() {
               />
               <details className="more">
                 <summary>Eligibility questions, interview rounds, messages and notices</summary>
-                <div className="grid-2">
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                   <Card title="Eligibility questions (the only automatic holds)">
-                    <p className="small muted" style={{ marginBottom: 8 }}>Candidates answer these when they apply. A "no" on a required one holds them for you to decide; nobody is declined automatically.</p>
-                    <p className="small muted" style={{ marginBottom: 8 }}>After you decline: {SAFETY_NET_NOTE.charAt(0).toLowerCase()}{SAFETY_NET_NOTE.slice(1)}</p>
-                    <ul style={{ paddingLeft: 18, margin: 0 }}>{p.requirements.eligibility.map((e) => <li key={e.key}>{e.question} <Chip tone={e.knockout ? "needs" : "neutral"}>{e.knockout ? "required" : "asked"}</Chip><br /><span className="small muted">{e.rationale}</span></li>)}</ul>
+                    <p className="small muted mb-2">Candidates answer these when they apply. A "no" on a required one holds them for you to decide; nobody is declined automatically.</p>
+                    <p className="small muted mb-3">After you decline: {SAFETY_NET_NOTE.charAt(0).toLowerCase()}{SAFETY_NET_NOTE.slice(1)}</p>
+                    <ul className={ROWS}>{p.requirements.eligibility.map((e) => <li key={e.key} className={cn(ROW, "grid gap-1")}><span>{e.question} <Chip tone={e.knockout ? "needs" : "neutral"}>{e.knockout ? "required" : "asked"}</Chip></span><span className="small muted">{e.rationale}</span></li>)}</ul>
                   </Card>
-                  <Card title="Interview rounds"><p className="small" style={{ color: "var(--ink-2)" }}>{p.interviews.plan.map((s) => s.title).join(", ")}.</p><p className="small muted" style={{ marginTop: 6 }}>Who interviews in each round is on the Interview plan tab.</p><div className="row" style={{ marginTop: 8 }}><Button size="sm" onClick={() => pickTab("plan")}>Open the interview plan</Button></div></Card>
-                  <Card title="How candidates are messaged"><p className="small" style={{ color: "var(--ink-2)" }}>{p.communication.disclosureText}</p><p className="small muted" style={{ marginTop: 6 }}>{p.communication.humanAlternativeText}</p></Card>
-                  <Card title="Notices candidates see"><div className="row">{p.compliance.notices.map((n) => <Chip key={n}>{n.replace(/_/g, " ")}</Chip>)}</div><p className="small muted" style={{ marginTop: 8 }}>Jurisdictions: {p.compliance.jurisdictions.join(", ") || "none"}</p></Card>
+                  <Card title="Interview rounds"><p className="small text-ink-2">{p.interviews.plan.map((s) => s.title).join(", ")}.</p><div className="row mt-4"><Button size="sm" onClick={() => pickTab("plan")}>Open the interview plan</Button></div></Card>
+                  <Card title="How candidates are messaged"><p className="small text-ink-2">{p.communication.disclosureText}</p><p className="small muted mt-1.5">{p.communication.humanAlternativeText}</p></Card>
+                  <Card title="Notices candidates see"><div className="row">{p.compliance.notices.map((n) => <Chip key={n}>{n.replace(/_/g, " ")}</Chip>)}</div><p className="small muted mt-3">Jurisdictions: {p.compliance.jurisdictions.join(", ") || "none"}</p></Card>
                 </div>
               </details>
             </div>
@@ -319,13 +329,12 @@ export function RoleDetail() {
           {visibleTab === "report" ? <ReportTab roleId={r.id} /> : null}
 
           {visibleTab === "activity" ? (
-            <div className="stack">
+            <div className="stack gap-5">
               {activity ? <ActivityTab roleId={r.id} /> : null}
               <Card title="Versions of the job">
-                <ul style={{ paddingLeft: 18, margin: 0 }}>
-                  {r.packetVersions.map((v) => <li key={v.version}>Version {v.version} · {v.status} · {v.source.replace("_", " ")} · {new Date(v.createdAt).toLocaleString()} · {v.createdBy.name ?? v.createdBy.kind}{v.changeSummary ? ` · ${v.changeSummary}` : ""}</li>)}
+                <ul className={ROWS}>
+                  {r.packetVersions.map((v) => <li key={v.version} className={cn(ROW, "text-sm text-ink-2")}><strong className="text-ink">Version {v.version}</strong> · {v.status} · {v.source.replace("_", " ")} · {new Date(v.createdAt).toLocaleString()} · {v.createdBy.name ?? v.createdBy.kind}{v.changeSummary ? ` · ${v.changeSummary}` : ""}</li>)}
                 </ul>
-                <p className="small muted" style={{ marginTop: 8 }}>Every version is kept. Nothing is overwritten.</p>
               </Card>
             </div>
           ) : null}
@@ -345,6 +354,22 @@ export function RoleDetail() {
 function money(p: RolePacket): string {
   return formatPayRange(p.compensation);
 }
+
+/**
+ * One fact of the basics: a term and its value straight inside the kit's `dl.glance` (screenshot 7's "at a glance":
+ * label and value rows split by hairlines, the label over the value on a phone).
+ */
+function Fact(props: { term: string; children: ReactNode }) {
+  return (
+    <>
+      <dt>{props.term}</dt>
+      <dd>{props.children}</dd>
+    </>
+  );
+}
+
+// Lists inside a card as rows divided by hairlines come from RolePlan.tsx (ROWS, ROW), so this page and the approval card
+// read alike; the number beside an ordered one is the kit's `ordinal`, as on the questions card.
 
 // The packet editor lives in RoleEditor.tsx; the approval card, the preferences card and the Interview plan and Activity
 // tabs in RolePlan.tsx; the header, the tab strip and the More menu in JobHeader.tsx (shared with the Candidates page).

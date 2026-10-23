@@ -11,6 +11,7 @@ import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { addressMatch } from "../services/applications";
 import { Icon } from "./icons";
 import { Layout } from "./layout";
+import { CARD_PAGE_CSS } from "./signin-link";
 
 /**
  * The public privacy-request form (audit finding D13): anyone can ask for a copy, a correction or deletion of their
@@ -43,15 +44,14 @@ function RequestForm(props: { privacyEmail: string; company: string | null; erro
   const privacy = noticesFor(["*"]).find((n) => n.key === "privacy");
   const v = props.values ?? {};
   return (
-    <Layout title="Request, correct or delete your information">
+    <Layout title="Request, correct or delete your information" extraCss={CARD_PAGE_CSS}>
       <p class="back"><a href="/privacy"><Icon name="arrow-left" />How we handle your information</a></p>
-      <p class="eyebrow">Privacy</p>
       <h1>Your information</h1>
       <p class="lead">Ask for a copy of what we hold about you, correct it, or have it deleted. Use the email address you applied with.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" action="/c/privacy-request" class="card">
         {props.company ? <input type="hidden" name="company" value={props.company} /> : null}
-        <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
+        <div class="trap" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
         <label for="email" class="flush">Your email address</label>
         <input id="email" name="email" type="email" required autocomplete="email" value={v.email ?? ""} />
         <label for="kind">What would you like?</label>
@@ -84,8 +84,7 @@ privacyRequestPages.get("/c/privacy-request", async (c) => {
 /** What every submission answers, whether or not an address is known: the confirmation is in the mailbox. */
 function SentPage(props: { email: string }) {
   return (
-    <Layout title="Check your email">
-      <p class="eyebrow">Privacy</p>
+    <Layout title="Check your email" extraCss={CARD_PAGE_CSS}>
       <h1>Check your email</h1>
       <div class="card" role="status">
         <p><strong>We sent a confirmation link to {props.email}.</strong></p>
@@ -152,8 +151,7 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
 
 function LinkPage(props: { title: string; body: string }) {
   return (
-    <Layout title={props.title}>
-      <p class="eyebrow">Privacy</p>
+    <Layout title={props.title} extraCss={CARD_PAGE_CSS}>
       <h1>{props.title}</h1>
       <div class="card" role="status"><p>{props.body}</p></div>
       <p class="foot"><a href="/c/privacy-request">Send a new request</a> · <a href="/privacy">How we handle your information</a></p>
@@ -182,8 +180,7 @@ privacyRequestPages.get("/c/privacy-request/verify/:token", async (c) => {
   });
   if (state.used) return usedLinkPage(c, payload.id);
   return c.html(
-    <Layout title="Confirm your request">
-      <p class="eyebrow">Privacy</p>
+    <Layout title="Confirm your request" extraCss={CARD_PAGE_CSS}>
       <h1>Confirm your request</h1>
       <div class="card">
         <p>Someone asked, using <strong>{payload.email}</strong>, for {KIND_WORDS[payload.kind]} held by <strong>{state.companyName}</strong>. Reference {payload.id.slice(0, 8)}.</p>
@@ -227,8 +224,7 @@ privacyRequestPages.post("/c/privacy-request/verify", rateLimit(POLICIES.privacy
   if (result.kind === "used") return usedLinkPage(c, result.row.id);
   const due = new Date(result.row.slaDueAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
   return c.html(
-    <Layout title="Thanks, your request is confirmed">
-      <p class="eyebrow">Privacy</p>
+    <Layout title="Thanks, your request is confirmed" extraCss={CARD_PAGE_CSS}>
       <h1>Thanks, your request is confirmed</h1>
       <div class="card" role="status">
         <p><strong>Reference {result.row.id.slice(0, 8)}.</strong></p>

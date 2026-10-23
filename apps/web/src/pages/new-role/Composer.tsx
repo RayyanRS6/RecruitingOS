@@ -18,9 +18,21 @@ function useTouch(): boolean {
 }
 
 /**
+ * How the keys work at a desk (fewer words, 23 October 2026): no line on screen. The Send button announces Enter as its
+ * shortcut (the kit's `keyshortcuts`) and shows this as its tooltip, and the box itself is described by it for screen
+ * readers (Enter normally starts a new line in a text box, so they hear it before they type). On a touch screen Enter is a
+ * new line, so neither says it.
+ */
+const KEYS_DESK = "Enter sends · Shift+Enter for a new line";
+
+/** The Send button: plum once there is something to send, a quiet grey pill until then (or while greyed), never faded. */
+const SEND = "shrink-0 disabled:not-aria-busy:bg-surface-2 disabled:not-aria-busy:text-ink-3 disabled:not-aria-busy:opacity-100 disabled:not-aria-busy:shadow-none";
+
+/**
  * The message box (plan C5): it grows with what is typed and takes a whole pasted job ad. At a desk Enter sends and
- * Shift+Enter starts a new line; on a touch screen Enter is a new line and the Send button sends. A message that is too
- * long is said so before sending, with the limit. `size="lg"` is the big box on the empty page.
+ * Shift+Enter starts a new line; on a touch screen Enter is a new line and the Send button sends. Under the box is one
+ * small line at most: a message that is too long is said so before sending, with the limit, or else the `hint` (the job
+ * builder's what to do next while the draft cannot be written yet). `size="lg"` is the big box on the empty page.
  */
 export function Composer(props: {
   value: string;
@@ -33,20 +45,24 @@ export function Composer(props: {
   disabled?: boolean;
   size?: "lg" | "md";
   inputRef?: MutableRefObject<HTMLTextAreaElement | null>;
-  hint?: ReactNode;
   sendLabel?: string;
+  /** The line under the box when there is no problem to say; read with the box by screen readers. */
+  hint?: ReactNode;
   /** A shorter limit than a turn of conversation (a request to change the draft). */
   changeMax?: number;
 }) {
   const touch = useTouch();
   const hintId = useId();
+  const problemId = useId();
+  const keysId = useId();
   const problem = messageProblem(props.value, !!props.first, props.changeMax);
+  const hint = problem ? null : props.hint;
   const canSend = !props.disabled && !props.sending && !!props.value.trim() && !problem;
   const send = () => {
     if (canSend) props.onSend(props.value.trim());
   };
   return (
-    <div className="composer-wrap">
+    <div className="grid min-w-0 gap-1.5">
       <div className={props.size === "lg" ? "composer lg" : "composer"} data-disabled={props.disabled ? "true" : undefined}>
         <AutoTextarea
           inputRef={props.inputRef}
@@ -54,7 +70,7 @@ export function Composer(props: {
           onChange={props.onChange}
           placeholder={props.placeholder}
           ariaLabel={props.label}
-          ariaDescribedBy={hintId}
+          ariaDescribedBy={[problem ? problemId : hint ? hintId : null, touch ? null : keysId].filter(Boolean).join(" ") || undefined}
           disabled={props.disabled}
           maxHeight={props.size === "lg" ? 360 : 240}
           onKeyDown={(e) => {
@@ -63,12 +79,11 @@ export function Composer(props: {
             send();
           }}
         />
-        <Button variant="primary" icon="send" disabled={!canSend} loading={props.sending} onClick={send}>{props.sendLabel ?? "Send"}</Button>
+        <Button variant="primary" icon="send" disabled={!canSend} loading={props.sending} onClick={send} title={touch ? undefined : KEYS_DESK} keyshortcuts={touch ? undefined : "Enter"} className={SEND}>{props.sendLabel ?? "Send"}</Button>
       </div>
-      <div className="composer-foot" id={hintId}>
-        {problem ? <span className="composer-problem" role="alert">{problem}</span> : <span>{props.hint}</span>}
-        <span className="composer-keys">{touch ? "Tap Send when you are ready." : "Enter sends · Shift+Enter for a new line"}</span>
-      </div>
+      {problem ? <p className="px-1.5 text-[12.5px] font-medium leading-snug text-critical" id={problemId} role="alert">{problem}</p> : null}
+      {hint ? <p className="px-1.5 text-[12.5px] leading-snug text-ink-3" id={hintId}>{hint}</p> : null}
+      {touch ? null : <span className="sr-only" id={keysId}>{KEYS_DESK}</span>}
     </div>
   );
 }

@@ -95,11 +95,17 @@ const render = (qc: QueryClient, node: ReactNode = createElement(Overview)) => r
 describe("the console's Overview", () => {
   it("greets the administrator, says how many things need them and keeps the recruiter queue one click away", () => {
     const html = render(client(ALL));
-    expect(html).toContain('<p class="eyebrow">ITS · Console</p>');
+    // no eyebrow over the greeting (founder's fewer-words rule, 23 Oct 2026): the rail already says this is the console
+    expect(html).not.toContain("ITS · Console");
     expect(html).toMatch(/<h1>Good (morning|afternoon|evening), Ada\.<\/h1>/);
     expect(html).toContain("8 things need you.");
     expect(html).toContain('<a href="/recruiter/queue" class="btn secondary">Open the recruiter queue</a>');
-    expect(html).toContain("<h2>Needs attention (8)</h2>");
+    // the count is said once, in the stat strip; the list's heading under it carries none
+    expect(html).toContain('<span class="stat-cell-label">Needs attention</span><span class="stat-cell-value">8</span>');
+    expect(html).toContain("<h2>Needs attention</h2>");
+    expect(html).not.toContain("Needs attention (8)");
+    // the console's audit rule, once, in the strip's tinted cell
+    expect(html.split("Every read in the console is recorded with a reason.")).toHaveLength(2);
   });
 
   it("lists one row per open problem, most urgent first, each with the button that opens the exact place", () => {
@@ -128,9 +134,12 @@ describe("the console's Overview", () => {
 
   it("says plainly when nothing needs a person", () => {
     const html = render(client(NOTHING));
-    expect(html).toContain("Nothing needs you right now.");
-    expect(html).toContain("Everything below is up to date.");
-    expect(html).toContain("<h2>Needs attention (0)</h2>");
+    // said once, as the list's own row: no second line under the greeting, no line under the row
+    expect(html.split("Nothing needs you right now.")).toHaveLength(2);
+    expect(html).not.toContain('<p class="page-header-sub">');
+    expect(html).not.toContain("Everything below is up to date.");
+    expect(html).toContain('<span class="stat-cell-label">Needs attention</span><span class="stat-cell-value">0</span>');
+    expect(html).toContain("<h2>Needs attention</h2>");
     expect(html).not.toContain("Try again");
     expect(html).not.toContain('class="btn secondary sm" aria-label="Open:');
   });
@@ -157,7 +166,9 @@ describe("the console's Overview", () => {
 
   it("finds any customer from the Customers card: waiting companies first, each one click from its drawer", () => {
     const html = render(client(ALL));
-    expect(html).toContain("<h2>Customers (4)</h2>");
+    // the count is the stat strip's (and the "See all" link's), not the card title's
+    expect(html).toContain("<h2>Customers</h2>");
+    expect(html).toContain('<span class="stat-cell-label">Customers</span><span class="stat-cell-value">4</span>');
     expect(html).toContain('aria-label="Search customers"');
     const t = text(html);
     const order = ["Zeta Dental Waiting for the ITS check (5 days)", "Cara Dental Waiting for the ITS check (3 days)", "Avon Dental Core · Quiet for 9 days", "Bright Dental Core · Active"].map((s) => t.indexOf(s));
@@ -175,6 +186,12 @@ describe("the console's Overview", () => {
     // the platform's own spend counts in the total, never among the customers
     expect(html).toContain('<p class="console-figure">$12.40</p>');
     const t = text(html);
+    // the title says what the figure is; "at list prices" changes what it means, so it stays in view beside the figure,
+    // once; the start date is the figure's tooltip, not a line under it
+    expect(t).toContain("$12.40 at list prices");
+    expect(html.split("at list prices")).toHaveLength(2);
+    expect(html).toMatch(/title="AI spend since [A-Z][a-z]{2} 1"><p class="console-figure">/);
+    expect(t).not.toContain("AI spend since");
     expect(t).toContain("Bright Dental $4.10");
     expect(t).toContain("Avon Dental $2.02");
     expect(t).toContain("Cara Dental $0.88");
@@ -259,12 +276,16 @@ describe("Overview's rules", () => {
 describe("the console's frame", () => {
   it("draws each section under its own title, its parts chosen by ?view=", () => {
     const html = render(client([]), createElement(Console, { section: "system" }));
-    expect(html).toContain('<p class="eyebrow">ITS · Console</p>');
+    // the title stands alone (founder's fewer-words rule, 23 Oct 2026): no eyebrow over it, no line describing the page
+    expect(html).not.toContain("ITS · Console");
+    expect(html).not.toContain("Costs, workflows, AI runs, the queue");
     expect(html).toContain("<h1>System and settings</h1>");
     // the section draws its own part tabs under the title
     expect(html).toContain('role="tablist"');
     expect(html.indexOf("<h1>System and settings</h1>")).toBeLessThan(html.indexOf('role="tablist"'));
-    expect(render(client([]), createElement(Console, { section: "customers" }))).toContain("<h1>Customers</h1>");
+    const customers = render(client([]), createElement(Console, { section: "customers" }));
+    expect(customers).toContain("<h1>Customers</h1>");
+    expect(customers).not.toContain("Every customer: the ITS check");
     expect(render(client([]), createElement(Console, { section: "privacy" }))).toContain("<h1>Privacy requests</h1>");
     expect(render(client([]), createElement(Console, { section: "problems" }))).toContain("<h1>Problems</h1>");
   });

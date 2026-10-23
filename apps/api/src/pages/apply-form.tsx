@@ -241,7 +241,7 @@ function NoResumeFold(props: { guided: (key: NoResumeKey) => string; open: boole
       <summary>No resume? Answer four short questions instead</summary>
       <fieldset aria-describedby="no-resume-note">
         <legend class="sr-only">Four short questions about your work, instead of a resume</legend>
-        <p class="meta" id="no-resume-note">Answer what you can; one answer is enough to apply. Nobody expects a cover letter.</p>
+        <p class="meta" id="no-resume-note">Answer what you can; one answer is enough to apply.</p>
         {NO_RESUME_QUESTIONS.map((q) => (
           <div>
             <label id={`nr_${q.key}-label`} for={`nr_${q.key}`}>{q.label}</label>
@@ -395,17 +395,17 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
       ) : (
         <section class="card resume-card" aria-labelledby="resume-title">
           <h2 id="resume-title">Start with your resume</h2>
-          <p>Software reads your resume and fills in this form for you, usually in about 20 seconds. You check every detail before you send, and people at {props.company.name} make every hiring decision.</p>
-          {/* The notice at collection comes before the file is chosen: with script, choosing it starts the reading. */}
+          {/* The notice at collection comes before the file is chosen: with script, choosing it starts the reading. It is
+              the card's one explanation (what reads the file, the person instead, filling the form in by hand); the
+              "about 20 seconds" is said when the reading starts, and "people decide" in "Before you send". */}
           <p class="notice" id="resume-notice">{RESUME_READ_NOTICE} See <a href="/privacy">how we handle your information</a>. Rather not? Fill in the form below yourself, or email <ContactLink contact={props.company.contact} /> and a person will help. If you do not send your application, the file and what was read from it are deleted within a day.</p>
           <ResumeInput kept={kept} resumeLost={!!props.state?.resumeLost} />
           <ReadButton read={props.links.read} preview={!!props.preview} />
           <NoResumeFold guided={guided} open={noResumeOpen} invalid={missing.has("noResume")} />
-          <p class="meta">Or fill in the form below yourself.</p>
         </section>
       )}
+      {/* After a reading, the line above ("We read …") and each field's "From your resume — check it" say what to do. */}
       <h2 id="details-title">{checking ? "Check your details" : "Your details"}</h2>
-      {checking ? <p class="meta">We filled these in from your resume. Check each one and change anything that is not right.</p> : null}
       <label for="firstName">First name</label>
       <Tag id="firstName-tag" text={tagOf("firstName")} />
       <input id="firstName" type="text" name="firstName" required autocomplete="given-name" value={v.firstName ?? ""} aria-invalid={invalid("firstName")} aria-describedby={described("firstName")} />
@@ -445,7 +445,6 @@ function ReuseFold(props: { company: string; action: string }) {
         <label for="reuse-email">The address you applied with</label>
         <input id="reuse-email" type="email" name="email" autocomplete="email" required />
         <button class="btn secondary" type="submit">Send me a link</button>
-        <p class="meta">If you applied to {props.company} before, we email a link to the address on file. It opens this form with your saved details, for you to check.</p>
       </form>
     </details>
   );
@@ -462,8 +461,9 @@ export function ApplyFormPage(props: ApplyFormProps) {
       {preview ? <PreviewNote preview={preview} /> : null}
       {props.flow === "one_visit" ? <Journey steps={["details", "chat", "review"]} current="details" /> : null}
       <p class="back"><a href={props.links.job}><Icon name="arrow-left" />Back to the job</a></p>
-      {/* The facts of the job stay in view while applying (Wave 0 item 0.8), pay included wherever the page must show it. */}
-      <p class="eyebrow">{props.company.name}</p>
+      {/* The facts of the job stay in view while applying (Wave 0 item 0.8), pay included wherever the page must show it.
+          No eyebrow above the title (fewer words, 23 October 2026): in the one-visit flow, the only one in use since
+          20 October 2026 (`APPLY_FLOW`), the lead right below names the employer. */}
       <h1>Apply: {props.packet.identity.title}</h1>
       <JobFacts packet={props.packet} pay={publicPay(props.packet, props.notices)} />
       {/* One line on how long it takes (plan E8); the resume field and "No resume?" right below say what to send. */}
@@ -482,7 +482,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
         </div>
       ) : (
         <form method="post" action={props.links.apply} enctype="multipart/form-data" data-upload-intent={props.links.uploadIntent}>
-          <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
+          <input type="text" name="website" tabindex={-1} autocomplete="off" class="trap" aria-label="Leave this field empty" />
           <input type="hidden" name="uploadGrant" value={props.state?.resume?.grant ?? ""} />
           <input type="hidden" name="formOpened" value={props.formOpened} />
           {/* This page showed the reading ("Check your details"): a form sent back says so again only then (20 Oct). */}
@@ -507,23 +507,28 @@ export function ApplyFormPage(props: ApplyFormProps) {
 }
 
 /**
- * The form's own styles (Wave S7), passed as the page's styles beside the steps header's: the shared tokens only, no
- * button rules and no motion. The candidate stylesheet in layout.tsx has no room left (weight-guard.test.ts).
+ * The form's own styles (Wave S7; the October 2026 redesign, screenshot 5's form card), passed as the page's styles
+ * beside the steps header's: the shared tokens only, no button rules and no motion. The résumé's card (its file field is
+ * the page stylesheet's dashed drop area), "From your resume" marks as lavender pills, the company's questions as
+ * numbered tiles with Yes and No as two pills, and "Before you send" as the lavender consent box with the
+ * acknowledgment on a white row inside it.
  */
 export const APPLY_CSS = `
 .resume-card .read-line { display: flex; align-items: flex-start; gap: 10px; margin: 0; color: var(--ink); }
-.resume-card .read-line .icon { margin-top: 4px; }
-.tag { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; margin: 0 0 6px; padding: 2px 10px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-ink); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.resume-card .read-line .icon { margin-top: 4px; color: var(--primary); }
+.resume-card input[type=file] { margin-bottom: 4px; }
+.tag { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; margin: 0 0 8px; padding: 2px 10px; border-radius: var(--r-pill); background: var(--tint-2); color: var(--primary); font-size: 13px; font-weight: 600; line-height: 1.5; }
 .quick .q-count { margin: 0 0 4px; color: var(--ink-2); font-size: 14.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-ol.questions { display: grid; gap: 12px; margin: 12px 0 0; padding: 0; list-style: none; }
-ol.questions > li { padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
+ol.questions { display: grid; gap: 12px; margin: 16px 0 0; padding: 0; list-style: none; }
+ol.questions > li { padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
 ol.questions legend.question-legend, ol.questions .question-label { display: block; margin: 0 0 6px; color: var(--ink); font-size: 16px; font-weight: 600; }
-ol.questions .q-num { margin-right: 8px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+ol.questions .q-num { margin-right: 10px; color: var(--accent-ink); font: 400 13px/1 var(--mono); letter-spacing: 0.06em; }
 ol.questions .req { color: var(--ink-3); font-size: 14px; font-weight: 400; }
-.choices { display: grid; gap: 8px; margin: 10px 0 0; }
+.choices { display: grid; gap: 8px; margin: 12px 0 0; }
 .choices.pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .choices.days { grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); }
 .choices .slot { min-height: 48px; margin: 0; }
+.choices.pair .slot { justify-content: center; border-radius: var(--r-pill); }
 .number-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .number-row input[type=number] { max-width: 220px; }
 .number-row span { color: var(--ink-2); }
@@ -531,6 +536,9 @@ details.reuse { margin: 16px 0; }
 .earlier legend { margin: 0 0 4px; color: var(--ink); font-size: 17px; font-weight: 600; }
 .earlier ul { display: grid; gap: 2px; margin: 8px 0 0; padding: 0; list-style: none; }
 .earlier .check { margin: 8px 0; }
+main .card[aria-labelledby="before-you-send"] { border-color: var(--line-tint); background: var(--tint); }
+[aria-labelledby="before-you-send"] .check { padding: 14px 16px; border: 1px solid var(--line-tint); border-radius: var(--r-control); background: var(--surface); }
+[aria-labelledby="before-you-send"] .notice { background: var(--surface); }
 details.replace { margin-top: 24px; }
 .reading { display: grid; gap: 6px; }
 `;
@@ -777,7 +785,6 @@ export function ReadingPage(props: { company: { name: string }; title: string; f
   return (
     <Layout title={`Reading your resume: ${props.title} at ${props.company.name}`} extraCss={`${JOURNEY_CSS}${APPLY_CSS}`}>
       {props.flow === "one_visit" ? <Journey steps={["details", "chat", "review"]} current="details" /> : null}
-      <p class="eyebrow">{props.company.name}</p>
       <h1>Reading your resume</h1>
       <div class="card reading" role="status" id="read-status">
         <p><strong>{props.still ? `Still reading ${props.filename}…` : `Reading ${props.filename}…`}</strong></p>
@@ -1349,7 +1356,7 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
   const minutes = props.packet.screening.maxMinutes;
   return (
     <Layout title="Check your email">
-      <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
+      <JobTrail company={props.company} role={props.role} title={props.packet.identity.title} />
       <h1>Thanks for applying</h1>
       <div class="card" role="status">
         <p><strong>Check your email.</strong> Your own link to this application goes to {props.to ?? "the email address you gave"}.</p>
@@ -1369,6 +1376,15 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
 }
 
 /**
+ * The way back to the job above the receipt and the waiting room. A trail with a parent link stays; the company's name
+ * after it does not, since the page's own lines name the company (fewer words, 23 October 2026: the AI interview page
+ * that follows has no "Company · Job" eyebrow either).
+ */
+function JobTrail(props: { company: { slug: string }; role: { id: string }; title: string }) {
+  return <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.title}</a></p>;
+}
+
+/**
  * "No email?" one click away (founder brief, 14 October 2026). The earlier-emails line is true for a first application
  * and a repeat alike: a repeat's reminder goes at most once a day, so it may be in an earlier email.
  */
@@ -1383,7 +1399,8 @@ function NoEmail() {
   );
 }
 
-const WAIT_CSS = `.wait{display:flex;gap:14px;align-items:flex-start}.loader{flex:none;width:22px;height:22px;margin-top:2px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:ros-spin .9s linear infinite}@keyframes ros-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.loader{animation:none}}`;
+/** The waiting room's card is the page's "next step" wash (a status card, layout.tsx); its loader a plum ring. */
+const WAIT_CSS = `.wait{display:flex;gap:16px;align-items:flex-start}.loader{flex:none;width:22px;height:22px;margin-top:2px;border:3px solid var(--tint-2);border-top-color:var(--primary);border-radius:50%;animation:ros-spin .9s linear infinite}@keyframes ros-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.loader{animation:none}}`;
 
 /**
  * The waiting room (20 Oct 2026, R20-12): after Send the page waits for this application's AI interview (the résumé read
@@ -1398,7 +1415,7 @@ function WaitingRoom(props: { company: { slug: string; name: string }; role: { i
   const base = receiptPath(props.company.slug, props.role.id);
   return (
     <Layout title="Preparing your AI interview" extraCss={WAIT_CSS}>
-      <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
+      <JobTrail company={props.company} role={props.role} title={props.packet.identity.title} />
       <h1>Thanks for applying</h1>
       <div class="card wait" role="status" aria-live="polite">
         {/* Shown by the script only: without it nothing on the page moves by itself. */}

@@ -86,41 +86,43 @@ function detail(over: Record<string, unknown> = {}) {
   };
 }
 
-function panel(d: ReturnType<typeof detail>, tab: "overview" | "screen") {
+function panel(d: ReturnType<typeof detail>, tab: "overview" | "screen", me: typeof owner = owner) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
-  qc.setQueryData(["me"], owner);
+  qc.setQueryData(["me"], me);
   qc.setQueryData(["roles"], [{ id: "r1", title: "Dental Hygienist", status: "open", openedAt: at, counts: { total: 1 }, needsYou: 1, daysOpen: 7 }]);
   qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0 } });
   qc.setQueryData(["company"], { settings: { verifiedAt: at }, planKey: "starter", usage: {} });
   qc.setQueryData(["application", d.id], d);
-  return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+  return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(CandidatePanel, { id: d.id, roleId: "r1", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
 }
 
 describe("the company's questions on the AI interview tab (Wave S7)", () => {
   it("shows each question, numbered, with the drafted answer and where its words come from", () => {
     const html = panel(detail(), "screen");
     const words = text(html);
-    expect(html).toContain('<section class="match-section" aria-label="Answers to your questions">');
+    expect(html).toMatch(/<section class="match-section[^"]*" aria-label="Answers to your questions">/);
     expect(html).toContain("<h3>Answers to your questions</h3>");
     expect(words).toContain("2 of 3 answered (1 partly).");
+    // the count stands alone: each answer says where its words come from, and its part of the chat is its own disclosure
+    expect(words).not.toContain("Each answer is drafted from their own replies");
     // in the write-up's order, inside one numbered list
     const list = html.slice(html.indexOf("<ol"), html.indexOf("</ol>"));
     expect(list.indexOf("Tell us about a time you calmed a nervous patient.")).toBeLessThan(list.indexOf("Why this practice?"));
     expect(list.indexOf("Why this practice?")).toBeLessThan(list.indexOf("Which charting software have you used?"));
     expect(list).toContain('<strong>Why this practice?</strong><span class="muted"> (optional)</span>');
-    expect(list).toContain(`${DRAFT}</p><p class="muted" style="margin:2px 0 0">Drafted by the assistant from their replies; they could change it before sending.</p>`);
+    expect(list).toContain(`${DRAFT}</p><p class="muted">Drafted by the assistant from their replies; they could change it before sending.</p>`);
     expect(text(list)).toContain("Their own words: they changed this before sending.");
     expect(list).toContain('<span class="chip good">Answered</span>');
     expect(list).toContain('<span class="chip accent">Partly answered</span>');
-    expect(list).toContain('<p class="muted" style="margin:4px 0 0"><em>Chose not to answer</em></p>');
+    expect(list).toContain('<p class="muted"><em>Chose not to answer</em></p>');
   });
 
   it("keeps the assistant's note in its own labelled box, never inside the answer", () => {
     const html = panel(detail(), "screen");
-    expect(html).toContain(`<div class="bubble assistant" style="margin-top:6px"><span class="bubble-label">Note from the assistant. Not the candidate&#x27;s own words.</span>${NOTE}</div>`);
+    expect(html).toContain(`<div class="bubble assistant"><span class="bubble-label">Note from the assistant. Not the candidate&#x27;s own words.</span>${NOTE}</div>`);
     expect(html.match(/Note from the assistant\./g)).toHaveLength(1);
     // the answer paragraph itself carries no note
-    expect(html).toContain('<p style="margin:4px 0 0;white-space:pre-wrap">I have not used any charting software yet.</p>');
+    expect(html).toContain('<p class="whitespace-pre-wrap">I have not used any charting software yet.</p>');
     // and a recruiter's call notes stay theirs
     expect(html).toContain('<span class="bubble-label">Notes from a call by Rae Recruiter. Not the candidate&#x27;s own words.</span>Said the same on the phone.');
   });
@@ -133,7 +135,7 @@ describe("the company's questions on the AI interview tab (Wave S7)", () => {
     expect(html).toContain("<summary>Their words it rests on (1)</summary>");
     expect(html).toContain('<li class="muted">&quot;let him hold the mirror&quot;</li>');
     // the whole chat stays at the bottom, open on the latest screen
-    expect(html).toMatch(/<details style="margin-top:8px" open=""><summary class="small">Read the chat \(9 messages\)<\/summary>/);
+    expect(html).toMatch(/<details class="more" open=""><summary class="small">Read the chat \(9 messages\)<\/summary>/);
   });
 
   it("lists the must-haves the résumé did not show, and the other answers apart", () => {
@@ -160,5 +162,14 @@ describe("the company's questions on the AI interview tab (Wave S7)", () => {
     expect(old).not.toContain("Answers to your questions");
     expect(old).not.toContain("Must-haves the résumé did not show");
     expect(old).toContain("Their answers When could you start? Monday");
+  });
+});
+
+describe("a recruiter's notes from a call on the AI interview tab (plan E3)", () => {
+  it("closed, it is the one button, not a card titled the same over it", () => {
+    const recruiter = { ...owner, memberships: [{ ...owner.memberships[0], role: "recruiter" }] };
+    const html = panel(detail({ stage: "screening", screens: [{ ...screen, status: "in_progress", completedAt: null }] }), "screen", recruiter);
+    expect(html).toMatch(/Add notes from a call<\/button>/);
+    expect(html).not.toContain("<h2>Notes from a call</h2>");
   });
 });

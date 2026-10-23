@@ -7,8 +7,7 @@
   "types": "./src/index.tsx",
   "exports": {
     ".": "./src/index.tsx",
-    "./tokens.css": "./src/tokens.css",
-    "./board.css": "./src/board.css"
+    "./styles.css": "./src/styles.css"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
@@ -20,5 +19,10 @@
     "@types/react": "^19.0.0",
     "react": "^19.0.0",
     "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "motion": "13.5.1",
+    "tailwind-merge": "3.7.0"
   }
 }

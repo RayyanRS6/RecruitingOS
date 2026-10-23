@@ -57,6 +57,21 @@ describe("Team card: signing a teammate out", () => {
   });
 });
 
+describe("Team card: fewer words (founder, 23 October 2026)", () => {
+  it("names the person on each round Remove button, the only words it has", () => {
+    const html = card("owner", "u-owner");
+    expect([...html.matchAll(/aria-label="Remove ([^"]+)" title="Remove [^"]+"/g)].map((m) => m[1])).toEqual(["Olive Owner", "Abe Admin", "Hope HR", "Ivy Interviewer"]);
+    // an admin never removes an owner, and nobody removes themselves
+    expect([...card("admin", "u-admin").matchAll(/aria-label="Remove ([^"]+)"/g)].map((m) => m[1])).toEqual(["Hope HR", "Ivy Interviewer"]);
+  });
+
+  it("says what each role may do once, under Who can do what, not again under the invite form", () => {
+    const words = text(card("owner", "u-owner"));
+    expect(words.match(/Runs hires: approves jobs/g)).toHaveLength(1);
+    expect(words).toContain("Hiring manager: Runs hires: approves jobs, decides on candidates.");
+  });
+});
+
 describe("Team card: leaving the company (founder decision L-10)", () => {
   it("everyone gets 'Leave this company' on their own row only, whatever their role", () => {
     for (const [role, id] of [["owner", "u-owner"], ["admin", "u-admin"], ["hr", "u-hr"], ["interviewer", "u-int"]]) {

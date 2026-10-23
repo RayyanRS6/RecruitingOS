@@ -54,7 +54,7 @@ function client(details: Array<ReturnType<typeof detail>>, extra: Array<[unknown
 }
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/\s+/g, " ");
-const panel = (qc: QueryClient, opts: { tab?: string; step?: string | null } = {}) => render(qc, createElement(CandidatePanel, { id: "a1", roleId: "r1", roleTitle: "Dental Hygienist", tab: (opts.tab ?? "overview") as never, onTab: () => undefined, step: (opts.step ?? null) as never, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+const panel = (qc: QueryClient, opts: { tab?: string; step?: string | null } = {}) => render(qc, createElement(CandidatePanel, { id: "a1", roleId: "r1", tab: (opts.tab ?? "overview") as never, onTab: () => undefined, step: (opts.step ?? null) as never, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
 
 describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
   const scored = detail({
@@ -185,7 +185,11 @@ describe("telling a candidate the decision (Wave G)", () => {
   const declined = detail({ stage: "rejected", stageLabel: "Not moving forward", group: "not_moving_forward", ownerStage: "not_moving_forward", ownerStageLabel: "Not moving forward", toldState: "not_told", rejectReason: "not_a_match_skills", rejectedAt: daysAgo(1), stageChangedAt: daysAgo(1), allowedActions: ["send_decision", "told_in_person"] });
 
   it("the 'not told yet' card says the decision is private, and in one short line on which day the safety net acts", () => {
-    const t = text(panel(client([declined])));
+    const html = panel(client([declined]));
+    const t = text(html);
+    // the cards that wait on someone sit straight under the tabs: named for screen readers, no label over them on screen
+    expect(html).toContain('aria-label="What needs you"');
+    expect(t).not.toContain("What needs you");
     expect(t).toContain("Maria has not been told yet");
     expect(t).toContain("Your decision is private: nothing has been sent to Maria.");
     expect(t).toMatch(/If nobody tells Maria first, the standard message goes by itself on \w+day, \w+ \d{1,2}\./);
@@ -227,11 +231,26 @@ describe("telling a candidate the decision (Wave G)", () => {
     // each radio is named by its wording, the suggested one first and chosen
     expect(html).toMatch(/<input type="radio" aria-label="After an interview \(suggested\)" name="wording-a1" checked="" value="after_interview"\/>/);
     expect(html).toContain('aria-label="Warmer"');
+    // the kit's option rows, the suggested one tagged; a wording's description is its tooltip, the message itself below
+    expect(html).toContain('<label class="option-row" title="For someone who met your team: thanks them for their time.">');
+    expect(html).toContain('<span class="option-tag" aria-hidden="true">Suggested</span>');
+    expect(t).not.toContain("A warmer version of the standard wording.");
     expect(t).toContain("A personal line (optional)");
     expect(t).toContain("no scores, no reasons for the decision");
     expect(t).toContain("What Maria gets");
     expect(t).toContain("Thank you for meeting us.");
     expect(t).toContain("Send");
+  });
+
+  it("with one approved wording the Send screen names it; its description shows only when it says why there is no choice", () => {
+    const base = { to: "maria@example.com", subject: "Your application", text: "Hi Maria,", personalLine: null, adverseDecisionLine: false, policy: "sends", toldState: "not_told", candidateToldAt: null, waitingApproval: false, undoSeconds: 30 };
+    const step = (wording: string, label: string) => render(client([declined], [[["decision-message", "a1"], { ...base, wording, wordings: [{ id: wording, label, suggested: true }] }]]), createElement(SendDecisionStep, { a: declined as never, roleId: "r1", onClose: () => undefined }));
+    // the description only says the name again: it is the name's tooltip, as on the option rows
+    const standard = step("v1", "Standard");
+    expect(standard).toContain('Wording: <strong title="The standard wording.">Standard</strong>.</p>');
+    expect(text(standard)).not.toContain("The standard wording.");
+    // the eligibility wording's description says why there is no choice, so it stays on screen
+    expect(text(step("eligibility", "Eligibility"))).toContain("Wording: Eligibility . After a decline on an eligibility answer: says how to correct an answer given in error. Always used for these.");
   });
 
   it("the Messages tab shows the conversation in order, who wrote each, and what was taken back", () => {
@@ -250,6 +269,10 @@ describe("telling a candidate the decision (Wave G)", () => {
     expect(html).toContain('class="msg-item candidate"');
     // nothing here carries a hidden candidate link, so no line about one
     expect(t).not.toContain("Links only the candidate can use are hidden here");
+    // each message carries its time, so the order has no label; closed, writing to them is one button, not a card titled the same
+    expect(t).not.toContain("Oldest first");
+    expect(html).toMatch(/Write to Maria<\/button>/);
+    expect(html).not.toContain("<h2>Write to Maria</h2>");
   });
 
   // 22 Oct 2026 try-out: the one email showed "Start your AI interview: https://…/c/screen/[link]" as if it were an address
@@ -282,8 +305,14 @@ describe("interviews to hire (Wave H)", () => {
     const finalist = detail({ stage: "finalist", allowedActions: ["record_outcome"] });
     const html = panel(client([finalist]), { step: "offer" });
     expect(text(html)).toContain("Record that you made Maria an offer, outside the app. The app never writes, sends or changes an offer, and nothing is sent to Maria.");
+    // the date field says what to record; the lead keeps only that nothing is sent
+    expect(text(html)).toContain("Nothing is sent to Maria.");
+    expect(text(html)).not.toContain("Record the day you made it");
     expect(html).toMatch(/<input id="offer-day" class="input" type="date" max="\d{4}-\d{2}-\d{2}" value="\d{4}-\d{2}-\d{2}"\/>/);
     expect(text(html)).toContain("Private note (kept internally, optional)");
+    // the label says who sees it; the hint keeps only the rule
+    expect(text(html)).toContain("No pay, tax or bank details.");
+    expect(text(html)).not.toContain("Only your team sees it.");
     expect(text(html)).toContain("Record the offer");
   });
 
@@ -331,7 +360,7 @@ describe("interviews to hire (Wave H)", () => {
     expect(t).toContain("Private to your hiring team. The candidate never sees notes, and they are never given to the AI assistant.");
     expect(t).toContain("Stick to job-related facts");
     expect(t).toContain("Your note");
-    expect(html).toMatch(/<fieldset class="row" style="[^"]*" aria-label="Start from"><button/);
+    expect(html).toMatch(/<fieldset class="row[^"]*" aria-label="Start from"><button/);
     expect(t).toMatch(/Before the interview After the interview For and against/);
     // the starter the note is filed under is heard as pressed, not only seen by its fill, and said in words
     expect(html).toMatch(/<button type="button" class="btn primary sm" title="What do you want to find out\?" aria-pressed="true">Before the interview<\/button>/);
@@ -345,9 +374,13 @@ describe("interviews to hire (Wave H)", () => {
 
   it("an interviewer's view of notes: only their own, with why they cannot write yet", () => {
     const notes = { notes: [], mine: null, canRead: "own", canWrite: false, writeBlockedReason: "You can write your note once the interview has started.", starters: [], privacy: "Private to your hiring team." };
-    const t = text(panel(client([detail()], [[["notes", "a1"], notes]]), { tab: "notes" }));
+    const html = panel(client([detail()], [[["notes", "a1"], notes]]), { tab: "notes" });
+    const t = text(html);
     expect(t).toContain("You can write your note once the interview has started.");
-    expect(t).toContain("You see your own note only.");
+    // who reads the notes is said once, under the disclosure that says "who sees it", not again at the tab's foot
+    const fold = html.slice(html.indexOf("<summary>What to write, and who sees it</summary>"));
+    expect(text(fold.slice(0, fold.indexOf("</details>")))).toContain("You see your own note only.");
+    expect(t.match(/You see your own note only\./g)).toHaveLength(1);
     expect(t).not.toContain("Your team's notes");
   });
 
@@ -365,6 +398,9 @@ describe("closing a role and its one closing message (Q30)", () => {
     const apps = { applications: [{ id: "a1", stage: "triaged", ownerStage: "new", ownerStageLabel: "New", candidate: { id: "c1", name: "Maria Reyes" } }, { id: "a2", stage: "rejected", ownerStage: "not_moving_forward", ownerStageLabel: "Not moving forward", candidate: { id: "c2", name: "Luis Ortega" } }, { id: "a3", stage: "finalist", ownerStage: "interviewing", ownerStageLabel: "Interviewing", candidate: { id: "c3", name: "Ana Holt" } }], counts: {} };
     const t = text(render(client([], [[["applications", "r1"], apps]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })));
     expect(t).toContain("Close this job");
+    // the line under the title keeps only whose name the outcome carries (fewer words, 23 October 2026)
+    expect(t).toContain("It is recorded with your name. The platform made no offer.");
+    expect(t).not.toContain("Say what happened.");
     expect(t).toContain("Confirm and close the job");
     expect(t).toContain("Still in process");
     expect(t).toContain("Maria Reyes");

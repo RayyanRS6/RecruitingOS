@@ -18,9 +18,7 @@ export const WEIGHT_LEVEL_LABEL: Record<WeightLevel, string> = { must_have: "Mus
 export const LEVEL_WEIGHT: Record<WeightLevel, number> = { must_have: MATCH_WEIGHT.must_have, essential: MATCH_WEIGHT.essential, important: MATCH_WEIGHT.important, helpful: MATCH_WEIGHT.helpful, off: 0 };
 
 export const PREVIEW_LABEL = "Preview — nothing is saved; candidates and the team never see these numbers.";
-export const INTRO = "Change how much each requirement counts and watch the order change. The scores come from what each application already showed; nothing is read again.";
 export const INTERVIEW_ONLY_LINE = "Skills checked only in your own interviews are not part of the match score, so they are not listed here.";
-export const LEAVE_OUT_HINT = "To leave something out for real, remove it in the editor. A skill can also be checked only in your own interviews.";
 export const USE_WEIGHTS_LINE = `"Use these weights" opens the job's editor; saving there makes a new version of the job. ${READ_FROM_NOW_ON}`;
 export const NOBODY_SCORED = { title: "Nobody has a match score yet", body: "Scores come once applications are read. Come back when someone has one." } as const;
 

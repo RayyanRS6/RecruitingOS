@@ -86,7 +86,7 @@ async function beginEnrolment(c: Context<Vars>, container: Container, tx: MfaTra
   const enrolment = await idp.enrolTotp(tx.accessToken, { friendlyName: nextFactorName(remaining), issuer: container.env.PRODUCT_NAME });
   saveTx(c, container, { ...tx, stage: backup ? "backup_enrol" : "enrol", factorIds: [enrolment.factorId], secret: enrolment.secret, uri: enrolment.uri, notice: null });
   const p = paths(container);
-  return c.html(<EnrolPage productName={container.env.PRODUCT_NAME} secret={enrolment.secret} uri={enrolment.uri} qrSvg={enrolment.qrCodeSvg} backup={backup} action={p.base} cancelAction={backup ? p.skip : p.cancel} />);
+  return c.html(<EnrolPage secret={enrolment.secret} uri={enrolment.uri} qrSvg={enrolment.qrCodeSvg} backup={backup} action={p.base} cancelAction={backup ? p.skip : p.cancel} />);
 }
 
 function renderStage(c: Context<Vars>, container: Container, tx: MfaTransaction) {
@@ -95,7 +95,7 @@ function renderStage(c: Context<Vars>, container: Container, tx: MfaTransaction)
   if (tx.notice) saveTx(c, container, { ...tx, notice: null });
   if (tx.stage === "enrol" || tx.stage === "backup_enrol") {
     const backup = tx.stage === "backup_enrol";
-    return c.html(<EnrolPage productName={container.env.PRODUCT_NAME} secret={tx.secret ?? ""} uri={tx.uri ?? ""} qrSvg={null} backup={backup} error={error} action={p.base} cancelAction={backup ? p.skip : p.cancel} />);
+    return c.html(<EnrolPage secret={tx.secret ?? ""} uri={tx.uri ?? ""} qrSvg={null} backup={backup} error={error} action={p.base} cancelAction={backup ? p.skip : p.cancel} />);
   }
   return c.html(<VerifyPage productName={container.env.PRODUCT_NAME} error={error} action={p.base} cancelAction={p.cancel} />);
 }
@@ -109,7 +109,7 @@ mfaRoutes.get("/", async (c) => {
   try {
     if (tx.stage === "backup_offer") {
       if (!sessionOf(c, tx)) { clearTx(c, container); return c.redirect(p.home, 302); }
-      return c.html(<BackupOfferPage backupHref={p.backup} skipAction={p.skip} continueHref={p.home} />);
+      return c.html(<BackupOfferPage backupHref={p.backup} skipAction={p.skip} />);
     }
     // A refresh shows the same setup key the person may already have scanned, and the message from a wrong code once.
     if ((tx.stage === "enrol" || tx.stage === "backup_enrol") && tx.secret && tx.factorIds.length) return renderStage(c, container, tx);
@@ -221,7 +221,7 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
     const verifiedCount = verifiedTotp(await idp.listFactors(newToken)).length;
     if (verifiedCount < 2) {
       saveTx(c, container, { ...tx, accessToken: newToken, stage: "backup_offer", factorIds: [], secret: null, uri: null, notice: null, expiresAt: container.engine.clock().getTime() + MFA_TRANSACTION_TTL_MS });
-      return c.html(<BackupOfferPage backupHref={p.backup} skipAction={p.skip} continueHref={p.home} />);
+      return c.html(<BackupOfferPage backupHref={p.backup} skipAction={p.skip} />);
     }
   } catch {
     // The backup offer is a convenience; the session stands.

@@ -134,7 +134,8 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(html.match(/<h1[\s>]/g)).toHaveLength(1);
     const main = html.slice(html.indexOf("<main>") + "<main>".length);
     expect(main.startsWith('<p class="ai-line"><span class="ai-tag">AI assistant</span><span>This conversation is with Visit Dental\'s AI assistant, a software program, not a person. People on the hiring team make every decision.</span></p>')).toBe(true);
-    expect(html).toContain(`<p class="eyebrow">Visit Dental · ${packet.identity.title}</p>`);
+    // no "Company · Job" eyebrow (fewer words, 23 October 2026): the AI line names the company, the heading the job
+    expect(html).not.toContain('<p class="eyebrow">');
     expect(html).toContain("<strong>Your application is sent.</strong><p>Your own link to it is on its way to m***@example.com.");
     expect(html).toContain(`<h1>A few questions about the ${packet.identity.title} role</h1>`);
     expect(html).toContain("Hi Maria, this is Visit Dental's hiring assistant, a software program.");
@@ -202,6 +203,9 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(html).toContain(`<input type="hidden" name="tap" value="yes_no"/><fieldset class="actions" aria-label="Your answer to: ${q1.question}"><button class="btn secondary" type="submit" name="choice" value="yes">Yes</button><button class="btn secondary" type="submit" name="choice" value="no">No</button><button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button></fieldset>`);
     expect(html).toContain("<summary>Answer in your own words instead</summary>");
     expect(html).toContain(`<label for="message">Your reply<span class="sr-only"> to: ${q1.question}</span></label>`);
+    // the box holds the words and its Send button, with no hint line under it (fewer words, 23 October 2026)
+    expect(html).toMatch(/<textarea id="message" name="message" rows="4" maxlength="2000" required="">[^<]*<\/textarea><div class="actions">/);
+    expect(html).not.toContain("message-hint");
     expect(html).toContain(`<a class="link-action" href="/c/screen/${mariaToken}/person">I'd rather talk to a person</a>`);
     expect(html).toContain(`<form method="post" action="/c/screen/${mariaToken}/later"><button class="link-action" type="submit">Finish later: email me the link</button></form>`);
     // the tap: recorded as fixed words; the next question follows word for word, after one neutral line
@@ -383,6 +387,8 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     const receiptCookie = (again.headers.get("set-cookie") ?? "").match(/ros_applied=[^;,]+/)![0];
     const receipt = await page(again.headers.get("location")!, { cookie: receiptCookie });
     expect(receipt).toContain("preparing your AI interview…");
+    // the waiting room keeps the link back to the job, without the company's name after it (fewer words, 23 October 2026)
+    expect(receipt).toMatch(/<p class="eyebrow"><a href="\/careers\/[^"]+\/jobs\/[^"]+">[^<]+<\/a><\/p><h1>Thanks for applying<\/h1>/);
     expect(receipt).toContain('name="grant"');
     expect(receipt).not.toContain("/c/screen/");
     expect(receipt).not.toContain(first);

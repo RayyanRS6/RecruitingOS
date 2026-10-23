@@ -26,7 +26,8 @@ test.describe("route inventory", () => {
       expect([headers["content-security-policy"], headers["content-security-policy-report-only"]].filter(Boolean), `${path} sends exactly one policy header`).toHaveLength(1);
       return headers["content-security-policy"] ?? headers["content-security-policy-report-only"];
     };
-    for (const path of ["/login", "/"]) {
+    // "/" signed out is the middleware's redirect to /welcome, which must carry the policy too; /welcome is the public page itself
+    for (const path of ["/login", "/", "/welcome"]) {
       const r = await page.request.get(`${baseURL}${path}`, { maxRedirects: 0 });
       const csp = policyOf(r.headers(), path);
       expect(csp).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/);
@@ -50,10 +51,18 @@ test.describe("route inventory", () => {
   });
 
   test("signed out, every private route sends the person to sign in", async ({ page }) => {
-    for (const path of ["/", "/roles", "/roles/new", "/talent", "/interviews", "/setup", "/updates", "/recruiter/queue", "/admin"]) {
+    for (const path of ["/roles", "/roles/new", "/talent", "/interviews", "/setup", "/updates", "/recruiter/queue", "/admin"]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/login/);
     }
+    // Home's address shows the public welcome page instead (October 2026 redesign), and its Sign in leads to the same form.
+    await page.goto("/");
+    await expect(page).toHaveURL(/\/welcome$/);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Hiring, made more manageable.");
+    await expectAccessible(page, "welcome");
+    await noHorizontalOverflow(page, "welcome");
+    await page.getByRole("link", { name: "Sign in", exact: true }).first().click();
+    await expect(page).toHaveURL(/\/login/);
   });
 
   test("an owner sees every company route; recruiter and admin routes send them home", async ({ page, baseURL }) => {

@@ -1,9 +1,9 @@
 "use client";
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "../nav";
-import { Alert, Button, Card, ErrorState, Icon, Menu, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
+import { Alert, Button, Card, cn, ErrorState, Icon, IconChip, Menu, PageHeader, Pill, SectionHeader, Skeleton, type Tone } from "@ros/ui";
 import type { GettingStartedAction, TrialStanding } from "@ros/contracts";
 import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, type InterviewDraft, type Me, type Notification, type RoleSummary } from "../api/client";
 import { ALLOWANCE_ASK, screeningAllowanceWarning, type AllowanceWarning, type UsageLine } from "../allowance";
@@ -24,6 +24,14 @@ import { HOME_ROWS, TODAY_REFRESH, cardLine, firstName, homeHeadline, homeJobs, 
 import { POOL_CARD_NOTE, boardPersonPath, poolCardView } from "./board/board-model";
 import { isDiscardDraft } from "./new-role/rules";
 import { TodayStart } from "./new-role/TodayStart";
+
+/**
+ * A list's first appearance (spec 4): ENTER fades a row up, `stagger` starts each 30ms after the one above (the ninth and
+ * later with the eighth). Filled backwards only, as the page's own template does: once it ends the row keeps no
+ * transform or opacity, so it is no containing block or stacking context for the menus and sheets drawn inside it.
+ */
+const ENTER = "motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]";
+const stagger = (i: number): CSSProperties | undefined => (i ? { animationDelay: `${Math.min(i, 7) * 30}ms` } : undefined);
 
 /**
  * Home (docs/07; the simple, Kanvis-like Home of 14 October 2026), top to bottom: the greeting with one line on how
@@ -73,9 +81,31 @@ export function Home() {
   const firstRun = !!empty && empty.actions.some((a) => a.path === START_HIRE_HREF);
   const name = firstName(me.data?.user.name);
 
+  // The trial and allowance rows do not wait for the brief: they come from the company's own plan and usage.
+  const needsBlock = rows.length || allowance || trial ? (
+    <NeedsYou title={needs > 0 ? "Needs you" : "Good to know"} items={[
+      ...(trial ? [{ key: "trial", node: <TrialRow row={trial} onSentToRecruiter={setSentToRecruiter} /> }] : []),
+      ...(allowance ? [{ key: "allowance", node: <AllowanceRow warning={allowance} onSentToRecruiter={setSentToRecruiter} /> }] : []),
+      ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
+    ]} />
+  ) : empty ? (
+    <Card><CardRow card={empty} level={2} onSentToRecruiter={setSentToRecruiter} /></Card>
+  ) : null;
+  // "Your jobs" sits beside Needs you on a wide screen (screenshot 1's "Open roles"), and after it for the keyboard and
+  // screen readers; on smaller screens it comes under it. The column is decided from what the first draw already knows
+  // (whether this person has a jobs list), not from the list's arrival: while the list is coming (always on the first
+  // draw) a quiet placeholder holds the column. Your jobs shows as soon as the list is in, even while the brief is still
+  // coming (its links must not wait for the brief); the columns may then settle once when Needs you arrives.
+  const jobsComing = listsRoles && (!isClient || roles.isPending);
+  const beside = !!needsBlock && (jobsComing || jobs.length > 0);
+  const showJobs = jobs.length > 0;
+
   return (
-    <div className="stack" style={{ gap: 20 }}>
+    <div className="stack gap-6 md:gap-8">
+      {/* The greeting at the kit's hero size (PageHeader hero); the page's gap spaces it, so no margin of its own. */}
       <PageHeader
+        hero
+        className="mb-0"
         title={`Good ${greeting(isClient)}${name ? `, ${name}` : ""}`}
         sub={brief.data && !brief.error ? homeHeadline(needs, { firstRun }) : undefined}
         actions={
@@ -87,20 +117,15 @@ export function Home() {
       />
 
       {/* A row's one-click request says what the recruiter will see and until when, and stays until read (the row itself may go). */}
-      {sentToRecruiter ? <Alert tone="info"><div className="row" style={{ justifyContent: "space-between" }}><span>{sentToRecruiter}</span><Button size="sm" variant="quiet" onClick={() => setSentToRecruiter(null)}>Got it</Button></div></Alert> : null}
+      {sentToRecruiter ? <Alert tone="info"><div className="row justify-between"><span>{sentToRecruiter}</span><Button size="sm" variant="quiet" onClick={() => setSentToRecruiter(null)}>Got it</Button></div></Alert> : null}
       {brief.isLoading ? <Skeleton lines={3} /> : brief.error ? <ErrorState message="Could not load what needs you." onRetry={() => brief.refetch()} /> : setup ? <GettingStartedCard card={setup} onSentToRecruiter={setSentToRecruiter} /> : null}
-      {/* The trial and allowance rows do not wait for the brief: they come from the company's own plan and usage. */}
-      {rows.length || allowance || trial ? (
-        <NeedsYou title={needs > 0 ? "Needs you" : "Good to know"} items={[
-          ...(trial ? [{ key: "trial", node: <TrialRow row={trial} onSentToRecruiter={setSentToRecruiter} /> }] : []),
-          ...(allowance ? [{ key: "allowance", node: <AllowanceRow warning={allowance} onSentToRecruiter={setSentToRecruiter} /> }] : []),
-          ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
-        ]} />
-      ) : empty ? (
-        <Card><CardRow card={empty} level={2} onSentToRecruiter={setSentToRecruiter} /></Card>
-      ) : null}
 
-      <YourJobs jobs={jobs} />
+      {needsBlock || showJobs ? (
+        <div className={cn("grid min-w-0 items-start gap-6", beside && "xl:grid-cols-[minmax(0,1fr)_320px]")}>
+          {needsBlock}
+          {showJobs ? <YourJobs jobs={jobs} /> : beside ? <JobsPlaceholder /> : null}
+        </div>
+      ) : null}
 
       {mayStartHire ? <TodayStart /> : null}
 
@@ -133,25 +158,32 @@ function rowKeys(cards: BriefCard[]): Array<{ key: string; card: BriefCard }> {
   });
 }
 
-/** "Needs you": five rows, then the rest behind "Show N more". */
+/**
+ * "Needs you" (screenshot 1's "Applications to pick up"): the heading over one bordered list, a row per thing, five
+ * rows, then the rest behind "Show N more" inside the same list. The list is a list card (Card flush: no padding of its
+ * own, each row keeps its sides), the `card` the end-to-end tests look in.
+ */
 function NeedsYou({ title, items }: { title: string; items: Array<{ key: string; node: ReactNode }> }) {
   const shown = items.slice(0, HOME_ROWS);
   const later = items.slice(HOME_ROWS);
-  const list = (part: typeof items) => (
-    <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-      {part.map((r) => <li key={r.key} style={{ borderTop: "1px solid var(--line)", padding: "12px 0" }}>{r.node}</li>)}
+  const list = (part: typeof items, from: number) => (
+    <ul className="divide-y divide-line">
+      {part.map((r, i) => <li key={r.key} className={cn("px-4 py-4 sm:px-5", ENTER)} style={stagger(from + i)}>{r.node}</li>)}
     </ul>
   );
   return (
-    <Card title={title}>
-      {list(shown)}
-      {later.length ? (
-        <details className="more" style={{ marginTop: 4 }}>
-          <summary>{`Show ${later.length} more`}</summary>
-          {list(later)}
-        </details>
-      ) : null}
-    </Card>
+    <section className="min-w-0">
+      <SectionHeader title={title} />
+      <Card flush>
+        {list(shown, 0)}
+        {later.length ? (
+          <details className="more border-t border-line [&>summary]:px-4 [&>summary]:py-3 sm:[&>summary]:px-5 [&[open]>summary]:mb-0">
+            <summary>{`Show ${later.length} more`}</summary>
+            <div className="border-t border-line">{list(later, shown.length)}</div>
+          </details>
+        ) : null}
+      </Card>
+    </section>
   );
 }
 
@@ -163,16 +195,16 @@ function Row(props: { title: string; pill: ReactNode; line?: string; rest?: Reac
   const Heading = props.level === 2 ? "h2" : "h3";
   const label = props.moreLabel ?? "Why";
   return (
-    <div>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline", flexWrap: "nowrap" }}>
-        <Heading style={{ fontSize: 15.5, minWidth: 0, overflowWrap: "anywhere" }}>{props.title}</Heading>
+    <div className="min-w-0">
+      <div className="flex items-start justify-between gap-3">
+        <Heading className="min-w-0 font-sans text-[15px] font-semibold leading-snug tracking-normal text-ink [overflow-wrap:anywhere]">{props.title}</Heading>
         {props.pill}
       </div>
-      {props.line ? <p className="small" style={{ margin: "2px 0 0", color: "var(--ink-2)" }}>{props.line}</p> : null}
-      {props.children ? <div className="row" style={{ marginTop: 10 }}>{props.children}</div> : null}
+      {props.line ? <p className="mt-1 text-sm text-ink-2">{props.line}</p> : null}
+      {props.children ? <div className="row mt-3">{props.children}</div> : null}
       {props.note}
       {props.rest ? (
-        <details className="more" style={{ marginTop: 8 }}>
+        <details className="more mt-2">
           <summary aria-label={`${label}: ${props.title}`}>{label}</summary>
           {props.rest}
         </details>
@@ -181,7 +213,7 @@ function Row(props: { title: string; pill: ReactNode; line?: string; rest?: Reac
   );
 }
 
-const restText = (text: string) => <p className="small" style={{ margin: 0, color: "var(--ink-2)", whiteSpace: "pre-wrap" }}>{text}</p>;
+const restText = (text: string) => <p className="small whitespace-pre-wrap text-ink-2">{text}</p>;
 
 /**
  * The month's screening conversations at 80% of the plan's allowance, or used up (founder decision Q17). Nothing stops
@@ -263,7 +295,7 @@ function CardRow({ card, level, onSentToRecruiter }: { card: BriefCard; level?: 
     <Row title={card.title} level={level} pill={<Pill size="sm" tone={firstRun ? "accent" : cardTone(card.kind, needsYou)}>{firstRun ? "First step" : label(card.kind)}</Pill>} line={line} rest={rest ? restText(rest) : null} moreLabel={moreLabel(card)}>
       {discarding ? (
         <>
-          <span ref={confirmRef} className="small" style={{ color: "var(--ink-2)" }}>Discard this draft? It stays in your records but cannot be continued.</span>
+          <span ref={confirmRef} className="small basis-full text-ink-2 sm:basis-auto">Discard this draft? It stays in your records but cannot be continued.</span>
           <Button size="sm" variant="danger" loading={act.isPending} onClick={() => act.mutate(discarding)}>Discard it</Button>
           <Button size="sm" variant="ghost" disabled={act.isPending} onClick={() => setDiscarding(null)}>Keep it</Button>
         </>
@@ -300,16 +332,16 @@ function PoolRow({ card }: { card: BriefCard }) {
   const view = poolCardView(card.pool!);
   const [first, ...others] = view.sentences;
   const rest = others.length || view.steps.length ? (
-    <div className="stack" style={{ gap: 8 }}>
-      {others.length ? <p className="small" style={{ margin: 0, color: "var(--ink-2)" }}>{others.join(" ")}</p> : null}
+    <div className="stack gap-2">
+      {others.length ? <p className="small text-ink-2">{others.join(" ")}</p> : null}
       {view.steps.length ? (
         <div>
-          <p className="small muted" style={{ margin: 0 }}>Suggested next steps</p>
-          <ul className="pool-steps" style={{ marginTop: 6 }}>
+          <p className="small muted">Suggested next steps</p>
+          <ul className="mt-1.5 grid gap-2">
             {view.steps.map((s) => (
-              <li key={s.applicationId}>
-                <span className="next-step-tag">{s.label}</span>
-                <span className="small"><Link to={boardPersonPath(card.roleId!, s.applicationId)}>{s.name}</Link>: {s.reason}</span>
+              <li key={s.applicationId} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className="chip accent">{s.label}</span>
+                <span className="small min-w-0 text-ink-2"><Link to={boardPersonPath(card.roleId!, s.applicationId)}>{s.name}</Link>: {s.reason}</span>
               </li>
             ))}
           </ul>
@@ -318,7 +350,7 @@ function PoolRow({ card }: { card: BriefCard }) {
     </div>
   ) : null;
   return (
-    <Row title={card.title} pill={<Pill size="sm" tone="good">{label(card.kind)}</Pill>} line={first} rest={rest} note={<p className="small muted" style={{ margin: "8px 0 0" }}>{POOL_CARD_NOTE}</p>}>
+    <Row title={card.title} pill={<Pill size="sm" tone="good">{label(card.kind)}</Pill>} line={first} rest={rest} note={<p className="small muted mt-2">{POOL_CARD_NOTE}</p>}>
       {card.actions.filter((a) => a.method === "GET").map((a, i) => <Link key={a.path} to={a.path} className={`btn ${i === 0 ? "quiet" : "secondary"} sm`}>{a.label}</Link>)}
     </Row>
   );
@@ -356,32 +388,31 @@ function GettingStartedCard({ card, onSentToRecruiter }: { card: BriefCard; onSe
   const hide = card.actions.find((a) => a.method === "POST");
   const unverified = setup?.verified === false;
   const { line, rest } = cardLine(card.body);
+  // Screenshot 1's "Your next step" hero, Home's one next step: the lavender-to-peach wash and the kit's hero title (Card
+  // hero), the word for ITS's check beside it, then the steps as a short checklist with the next one raised; the done
+  // ones stay folded.
   return (
-    <Card lift>
-      <div className="card-title">
-        <h2 style={{ fontSize: 16 }}>{card.title}</h2>
-        {unverified ? <Pill size="sm" tone="caution">Waiting for ITS</Pill> : null}
-      </div>
-      {line ? <p className="small" style={{ margin: 0, color: "var(--ink-2)" }}>{line}</p> : null}
+    <Card needsYou hero title={card.title} aside={unverified ? <Pill size="sm" tone="caution">Waiting for ITS</Pill> : null}>
+      {line ? <p className="max-w-[62ch] text-[15px] text-ink-2">{line}</p> : null}
       {rest ? (
-        <details className="more" style={{ marginTop: 6 }}>
+        <details className="more mt-3">
           <summary>{unverified ? "What waits until then" : "Why"}</summary>
           {restText(rest)}
         </details>
       ) : null}
       {todo.length ? (
-        <ol aria-label="Steps to get started" style={{ listStyle: "none", margin: "10px 0 0", padding: 0 }}>
-          {todo.map((s) => (
-            <li key={s.key} style={{ display: "flex", gap: 10, alignItems: "flex-start", borderTop: "1px solid var(--line)", padding: "10px 0" }}>
-              <span className="todo-ring" aria-hidden="true" />
-              <div style={{ flex: 1, minWidth: 0 }}>
+        <ol aria-label="Steps to get started" className="mt-5 grid gap-2.5">
+          {todo.map((s, n) => (
+            <li key={s.key} className={cn("flex items-start gap-3 rounded-2xl border p-4", ENTER, s === next ? "border-line-tint bg-surface shadow-sm" : "border-line bg-surface/70")} style={stagger(n)}>
+              <span aria-hidden="true" className={cn("mt-0.5 size-[18px] flex-none rounded-full border-[1.5px]", s === next ? "border-primary bg-tint" : "border-dashed border-line-strong")} />
+              <div className="min-w-0 flex-1">
                 <strong>{s.title}</strong>
                 <span className="sr-only"> (not done yet)</span>
-                {s.detail ? <p className="small" style={{ margin: "2px 0 0", color: "var(--ink-2)" }}>{s.detail}</p> : null}
-                {s.actions.length ? <div className="row" style={{ marginTop: 8 }}>{s.actions.map((a, i) => button(a, s === next && i === 0))}</div> : null}
-                <details className="more" style={{ marginTop: 6 }}>
+                {s.detail ? <p className="small mt-0.5 text-ink-2">{s.detail}</p> : null}
+                {s.actions.length ? <div className="row mt-3">{s.actions.map((a, i) => button(a, s === next && i === 0))}</div> : null}
+                <details className="more mt-2">
                   <summary aria-label={`Why: ${s.title}`}>Why</summary>
-                  <p className="small muted" style={{ margin: 0 }}>{s.why}</p>
+                  <p className="small muted">{s.why}</p>
                 </details>
               </div>
             </li>
@@ -389,49 +420,53 @@ function GettingStartedCard({ card, onSentToRecruiter }: { card: BriefCard; onSe
         </ol>
       ) : null}
       {done.length ? (
-        <details className="more" style={{ marginTop: 6 }}>
+        <details className="more mt-4">
           <summary>{`Done (${done.length})`}</summary>
-          <ul aria-label="Steps done" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          <ul aria-label="Steps done" className="grid gap-1">
             {done.map((s) => (
-              <li key={s.key} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "6px 0" }}>
-                <span style={{ color: "var(--good-dot)", flex: "none", marginTop: 1 }}><Icon name="check-circle" size={18} label="Done" /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <strong style={{ color: "var(--ink-3)" }}>{s.title}</strong>
-                  {s.detail ? <p className="small" style={{ margin: "2px 0 0", color: "var(--ink-2)" }}>{s.detail}</p> : null}
-                  <p className="small muted" style={{ margin: "2px 0 0" }}>{s.why}</p>
+              <li key={s.key} className="flex items-start gap-3 py-1.5">
+                <span className="mt-px flex-none text-good"><Icon name="check-circle" size={18} label="Done" /></span>
+                <div className="min-w-0 flex-1">
+                  <strong className="text-ink-3">{s.title}</strong>
+                  {s.detail ? <p className="small mt-0.5 text-ink-2">{s.detail}</p> : null}
+                  <p className="small muted mt-0.5">{s.why}</p>
                 </div>
               </li>
             ))}
           </ul>
         </details>
       ) : null}
-      {setup?.dismissible && hide ? <div className="row" style={{ justifyContent: "flex-end" }}><Button size="sm" variant="quiet" loading={act.isPending && act.variables === hide} disabled={act.isPending} onClick={() => act.mutate(hide)}>{hide.label}</Button></div> : null}
+      {setup?.dismissible && hide ? <div className="row mt-2 justify-end"><Button size="sm" variant="quiet" loading={act.isPending && act.variables === hide} disabled={act.isPending} onClick={() => act.mutate(hide)}>{hide.label}</Button></div> : null}
     </Card>
   );
 }
 
-/** "Your jobs" (the Kanvis way): one row per job being worked on, each opening on its Candidates once it is live. */
+/**
+ * "Your jobs" (the Kanvis way; screenshot 1's "Open roles" side card): one row per job being worked on, each opening on
+ * its Candidates once it is live. It arrives once the page is the browser's, so it fades in rather than popping.
+ */
 function YourJobs({ jobs }: { jobs: HomeJob[] }) {
   if (!jobs.length) return null;
   return (
-    <section className="stack" style={{ gap: 8 }} aria-labelledby="home-jobs">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+    <section className="side-card motion-safe:animate-fade motion-safe:[animation-fill-mode:backwards]" aria-labelledby="home-jobs">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h2 id="home-jobs">Your jobs</h2>
-        <Link to="/roles" className="small">All jobs</Link>
+        <Link to="/roles" className="text-link pointer-coarse:min-h-10">All jobs<Icon name="arrow-right" size={16} /></Link>
       </div>
-      <div className="list">
+      <div className="grid">
         {jobs.map((j) => {
           const s = roleStatus(j.status);
           return (
-            <Link key={j.id} to={j.href} className="list-item">
-              <span className="list-item-main">
-                <strong style={{ overflowWrap: "anywhere" }}>{j.title}</strong>
-                {j.facts ? <span className="sub">{j.facts}</span> : null}
+            <Link key={j.id} to={j.href} className="list-row">
+              <IconChip icon="briefcase" size="sm" />
+              <span className="list-row-main">
+                <span className="list-row-title wrap">{j.title}</span>
+                <span className="list-row-meta">
+                  {j.facts ? <span>{j.facts}</span> : null}
+                  <Pill size="sm" tone={s.tone}>{s.label}</Pill>
+                </span>
               </span>
-              <span className="list-item-end">
-                <Pill size="sm" tone={s.tone}>{s.label}</Pill>
-                <Icon name="chevron-right" />
-              </span>
+              <span className="chev"><Icon name="arrow-up-right" size={16} /></span>
             </Link>
           );
         })}
@@ -440,8 +475,24 @@ function YourJobs({ jobs }: { jobs: HomeJob[] }) {
   );
 }
 
+/**
+ * Holds Your jobs' column beside Needs you while the jobs list is coming, so Needs you does not narrow when it arrives.
+ * Only where the column is beside (xl up); on smaller screens Your jobs simply comes in under Needs you. Says nothing.
+ */
+function JobsPlaceholder() {
+  return (
+    <div aria-hidden="true" className="side-card hidden gap-3 xl:grid">
+      <div className="skeleton h-5 w-2/5" />
+      <div className="skeleton h-11" />
+      <div className="skeleton h-11" />
+    </div>
+  );
+}
+
 /** How many updates show at once; "Mark these read" marks exactly these, never ones nobody has seen. */
 const UPDATES_SHOWN = 8;
+/** A paragraph's link stands 40px tall on a touch screen (spec 0.5); the link itself keeps its plain markup. */
+const TOUCH_LINK = "pointer-coarse:[&>a]:inline-flex pointer-coarse:[&>a]:min-h-10 pointer-coarse:[&>a]:items-center";
 
 /**
  * "Do it and tell me": what the assistant did on its own since you last looked, folded under "Recent activity", with the
@@ -456,38 +507,39 @@ function RecentActivity({ summary }: { summary: string | null }) {
   });
   if (!q.isSuccess) return null;
   const items = q.data ?? [];
-  const day = summary ? <p className="small muted" style={{ margin: "0 0 8px" }}>{summary}</p> : null;
+  const day = summary ? <p className="small muted mb-2">{summary}</p> : null;
+  // Quiet on purpose: a hairline above, small type, folded until asked for.
   if (!items.length) {
     return (
-      <div className="stack" style={{ gap: 6 }}>
+      <div className="stack gap-1.5 border-t border-line pt-5">
         {day ? <details className="more"><summary>Recent activity</summary>{day}</details> : null}
-        <p className="small muted" style={{ margin: 0 }}>No new updates. <Link to="/updates">See earlier updates</Link></p>
+        <p className={cn("small muted", TOUCH_LINK)}>No new updates. <Link to="/updates">See earlier updates</Link></p>
       </div>
     );
   }
   const shown = items.slice(0, UPDATES_SHOWN);
   const more = items.length - shown.length;
   return (
-    <div className="stack" style={{ gap: 6 }}>
+    <div className="stack gap-1.5 border-t border-line pt-5">
       <details className="more">
         <summary>{`Recent activity (${items.length})`}</summary>
         {day}
-        {more > 0 ? <p className="small muted" style={{ margin: "0 0 8px" }}>Showing the {shown.length} newest. {more} more will show here once you mark these read.</p> : null}
-        <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }} className="stack">
+        {more > 0 ? <p className="small muted mb-2">Showing the {shown.length} newest. {more} more will show here once you mark these read.</p> : null}
+        <ul className="grid max-w-[72ch]">
           {shown.map((n) => (
-            <li key={n.id} className="small" style={{ borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+            <li key={n.id} className="small border-t border-line py-2.5">
               <strong>{n.title}</strong> <span className="muted">· {new Date(n.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
               <br />
-              <span style={{ color: "var(--ink-2)" }}>{n.body}</span>
+              <span className="text-ink-2">{n.body}</span>
               {n.action ? <> <Link to={n.action.href}>{n.action.label}</Link></> : null}
             </li>
           ))}
         </ul>
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="row mt-2">
           <Button size="sm" variant="secondary" loading={read.isPending} onClick={() => read.mutate(shown.map((n) => n.id))}>{more > 0 ? "Mark these read" : "Mark all read"}</Button>
         </div>
       </details>
-      <p className="small" style={{ margin: 0 }}><Link to="/updates">See earlier updates</Link></p>
+      <p className={cn("small", TOUCH_LINK)}><Link to="/updates">See earlier updates</Link></p>
     </div>
   );
 }

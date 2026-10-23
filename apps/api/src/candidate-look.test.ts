@@ -13,14 +13,18 @@ import { CSS } from "./pages/layout";
 import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
- * Wave DS, candidate pages: the server-rendered pages wear the application's look (docs/07). The token values are the
- * ones in packages/ui/src/tokens.css in both themes, the fonts come from this deployment's own origin so the policy
- * keeps `font-src 'self'`, secondary buttons are styled on every page (not only the screening page), and the job page
- * shows its facts as pills and one Apply button that stays reachable on a phone.
+ * Wave DS, candidate pages: the server-rendered pages wear the application's look (docs/07; the October 2026 redesign).
+ * Every colour and shadow token they declare carries the value packages/ui/src/styles.css gives it, in both themes (the
+ * pages copy the subset they use; only their corner radii and font stacks are their own), the fonts come from this
+ * deployment's own origin so the policy keeps `font-src 'self'`, secondary buttons are styled on every page (not only
+ * the screening page), and the job page shows its facts with their icons and one Apply button that stays reachable on
+ * a phone.
  */
 const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
-const uiCss = stripComments(readFileSync(new URL("../../../packages/ui/src/tokens.css", import.meta.url), "utf8"));
+const uiCss = stripComments(readFileSync(new URL("../../../packages/ui/src/styles.css", import.meta.url), "utf8"));
 const pageCss = stripComments(CSS);
+/** The candidate pages' own tokens, which the application has no copy of: corner radii and font stacks, no colours. */
+const PAGE_ONLY = new Set(["--r-control", "--r-card", "--r-panel", "--r-pill", "--display", "--ui", "--mono"]);
 
 /** The custom properties declared in the first `{ … }` block that follows `start` in `css`. */
 function block(css: string, start: string, from = 0): Map<string, string> {
@@ -40,11 +44,14 @@ const pageDark = block(pageCss, ":root {", pageCss.indexOf("@media (prefers-colo
 
 describe("candidate pages: design tokens and fonts", () => {
   it("copies the application's token values exactly, in the light and the dark theme", () => {
-    expect(pageLight.size).toBeGreaterThan(20);
-    for (const [name, value] of pageLight) expect(value, `${name} (light)`).toBe(uiLight.get(name));
+    const shared = [...pageLight.keys()].filter((name) => !PAGE_ONLY.has(name));
+    expect(shared.length).toBeGreaterThan(20);
+    for (const name of shared) expect(pageLight.get(name), `${name} (light)`).toBe(uiLight.get(name));
     for (const [name, value] of pageDark) expect(value, `${name} (dark)`).toBe(uiDark.get(name));
     // every token the page copies that turns in the dark theme turns on the page too
-    for (const name of pageLight.keys()) if (uiDark.has(name)) expect(pageDark.get(name), `${name} has no dark value on the page`).toBe(uiDark.get(name));
+    for (const name of shared) if (uiDark.has(name)) expect(pageDark.get(name), `${name} has no dark value on the page`).toBe(uiDark.get(name));
+    // the page's own tokens are shapes and type, never a colour of its own
+    for (const name of PAGE_ONLY) if (pageLight.has(name)) expect(pageLight.get(name), name).not.toMatch(/#|rgb|hsl/);
   });
 
   it("uses only tokens it declares, and no colour outside the token blocks", () => {
@@ -52,16 +59,17 @@ describe("candidate pages: design tokens and fonts", () => {
     for (const name of used) expect(pageLight.has(name), `${name} is used but not declared`).toBe(true);
     const outside = `${pageCss.slice(0, pageCss.indexOf(":root {"))}${pageCss.slice(pageCss.indexOf("* {"))}${stripComments(SCREEN_CSS)}${stripComments(STATUS_CSS)}`;
     expect(outside).not.toMatch(/#[0-9a-f]{3,8}\b/i);
-    // the near-black primary button and the outlined secondary one, on every page (the screening page used to be the only one with a secondary look)
+    // the plum primary button and the outlined secondary one, on every page (the screening page used to be the only one with a secondary look)
     expect(pageCss).toMatch(/\.btn \{[^}]*background: var\(--primary\); color: var\(--on-primary\);/);
     expect(pageCss).toMatch(/\.btn\.secondary \{ background: var\(--surface\); border-color: var\(--line-2\); color: var\(--ink\); \}/);
     expect(SCREEN_CSS).not.toContain(".btn");
     expect(STATUS_CSS).not.toContain(".btn");
-    // the status page's messages and the screening conversation are one look: the candidate's own on the right in near-black (plan G7)
-    for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
-    expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--ground);");
-    // the progress line (Wave S2, K4): down the page on a phone, across it from 600 pixels; the tick on the ink fill; no motion
-    expect(STATUS_CSS).toContain(".track li.done .dot { border-color: var(--ink); background: var(--ink); color: var(--ground); }");
+    // the status page's messages and the screening conversation are one look: the candidate's own on the right in peach,
+    // the assistant's and the team's on the left in white (plan G7; October 2026 redesign, the guided chat)
+    for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--peach); color: var(--ink);");
+    expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--surface);");
+    // the progress line (Wave S2, K4): down the page on a phone, across it from 600 pixels; the tick on the plum fill; no motion
+    expect(STATUS_CSS).toContain(".track li.done .dot { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }");
     expect(STATUS_CSS).toMatch(/@media \(min-width: 600px\) \{[^@]*\.track \{ grid-auto-flow: column;/);
     expect(stripComments(STATUS_CSS)).not.toMatch(/transition|animation/);
     expect(pageCss).toContain("@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }");
@@ -222,6 +230,8 @@ describe("candidate pages: the look, page by page", () => {
     expect(iv.scheduleToken).toBeTruthy();
     const pick = await looksRight(`/c/schedule/${iv.scheduleToken}`);
     const slotId = pick.match(/name="slotId" value="([^"]+)"/)![1];
+    // an emailed link opens it and nothing else on it names the employer or the job, so the "Company · Job" eyebrow stays
+    expect(pick).toMatch(/<main><p class="eyebrow">Look Dental · [^<]+<\/p><h1>Pick a time for your /);
     // picking a time is the page's one job; asking for other times is one click away (founder brief, 14 October 2026)
     expect(pick).toMatch(/<details class="more"><summary>None of these work\?<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/none-work" class="card">/);
     // the zone shown is named in the line under the heading; another zone is one click away, still a plain GET form
@@ -232,6 +242,8 @@ describe("candidate pages: the look, page by page", () => {
     expect((await app.request(`/c/schedule/${iv.scheduleToken}`, form({ slotId, timezone: "America/Los_Angeles" }))).status).toBe(302);
     await container.drain();
     const confirmed = await looksRight(`/c/schedule/${iv.scheduleToken}/confirmed`);
+    // the employer and the job are said nowhere else on it either, so its eyebrow stays too
+    expect(confirmed).toMatch(/<main><p class="eyebrow">Look Dental · [^<]+<\/p><h1>You&#39;re confirmed<\/h1>/);
     // the choice is a group of real radio buttons with a legend, in the page's own styles, one click away under "I need to cancel"
     expect(confirmed).toMatch(/<details class="more"><summary>I need to cancel<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/cancel" class="card" id="cancel">/);
     expect(confirmed).toContain('<legend class="question-legend">If you cancel, what would you like next?</legend>');
@@ -248,6 +260,15 @@ describe("candidate pages: the look, page by page", () => {
     const html = await page(`/careers/${slug}`);
     expect(html).toContain('<ul class="roles"><li class="card role">');
     expect(html).toMatch(/<a class="btn secondary" href="\/careers\/[^"]+\/jobs\/[^"]+">View and apply<span class="sr-only">: [^<]+<\/span><svg class="icon"/);
+    // fewer words (23 October 2026): the logo alone above the heading, no "Careers" eyebrow, and no default slogan as the
+    // lead when the company wrote no introduction of its own (the link preview's text may still carry it)
+    const main = html.slice(html.indexOf("<main"));
+    expect(main).toContain('<div class="careers-head"><div class="company"><span class="logo" aria-hidden="true">LD</span></div><h1>Work with <span>Look Dental</span></h1></div>');
+    expect(main).not.toContain('<p class="eyebrow">');
+    expect(main).not.toContain("We respond to every applicant and keep the process short.");
+    // the privacy page leads with its title, no eyebrow above it
+    const privacy = await page("/privacy");
+    expect(privacy.slice(privacy.indexOf("<main")).startsWith("<main><h1>How we handle your information</h1>")).toBe(true);
   });
 
   it("the job page: the company beside its initials, the facts as pills with icons and spoken names, an Apply button at the top and one in the panel that stays on a phone's screen, the notices before the panel", async () => {
@@ -277,7 +298,7 @@ describe("candidate pages: the look, page by page", () => {
     const goLinks = [...html.matchAll(/<a class="btn go[^"]*" href="[^"]+">(.*?)<\/a>/g)].map((m) => m[1]);
     expect(goLinks).toHaveLength(2);
     for (const inner of goLinks) expect(inner.replace(/<(span|svg)\b[^>]*aria-hidden="true"[^>]*>.*?<\/\1>/g, "").replace(/<[^>]+>/g, "")).toBe("Apply now");
-    // the fill moves by transform alone, in 200ms, on a mouse's hover or a keyboard's focus; a tap never turns it near-black
+    // the fill moves by transform alone, in 200ms, on a mouse's hover or a keyboard's focus; a tap never leaves it plum
     expect(CSS).toMatch(/\.go-fill \{[^}]*transform: translateX\(calc\(-100% - 4px\)\); \}/);
     expect(CSS).toMatch(/@media \(hover: hover\) and \(pointer: fine\) \{[^@]*\.btn\.go:hover \.go-fill \{ transform: none; \}/);
     expect(CSS).toContain(".btn.go:focus-visible .go-fill, .btn.go:active .go-fill { transform: none; }");
@@ -287,6 +308,21 @@ describe("candidate pages: the look, page by page", () => {
     expect(CSS).toContain("@media (hover: hover) and (pointer: fine) { .btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); } }");
     expect(CSS).not.toMatch(/backdrop-filter|filter:\s*blur|transition:[^;]*width/);
     expect(html.lastIndexOf(">Apply now<")).toBeGreaterThan(panel);
+    // the panel opens on its button (fewer words, 23 October 2026): no second job title, and no "We confirm by email."
+    // (the steps say it); a closing date, when there is one, comes first
+    expect(html.slice(panel)).toMatch(/^<div class="apply-panel"><div class="card apply-card"><a class="btn go" /);
+    expect(html).not.toContain('class="apply-title"');
+    expect(CSS).not.toContain(".apply-title");
+    expect(html.slice(panel, html.indexOf('<ul class="points">', panel))).not.toContain("We confirm by email.");
+    const closesOn = new Date(Date.now() + 20 * 86_400_000).toISOString().slice(0, 10);
+    await container.db.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, roleId));
+    try {
+      const closing = await page(`/careers/${slug}/jobs/${roleId}`);
+      expect(closing.slice(closing.indexOf('<div class="apply-panel">'))).toMatch(/^<div class="apply-panel"><div class="card apply-card"><p class="apply-by"><svg class="icon"[^>]*>.*?<\/svg>Apply by [^<]+<\/p><a class="btn go" /);
+    } finally {
+      await container.db.update(roles).set({ applicationsCloseOn: null }).where(eq(roles.id, roleId));
+    }
+    expect(CSS).toContain(".apply-card .apply-by { margin-bottom: 14px;");
     // the AI and pay notices come first in reading order, in readable notice boxes
     const notices = [...html.matchAll(/<(p|div) class="notice">/g)].map((m) => m.index ?? 0);
     expect(notices.length).toBeGreaterThanOrEqual(2);
@@ -322,18 +358,33 @@ describe("candidate pages: the look, page by page", () => {
     }
   });
 
-  it("the form keeps the job's facts above it, under a back link and the employer's name", async () => {
+  it("the form keeps the job's facts above it, under a back link, and the lead names the employer", async () => {
     const html = await page(`/careers/${slug}/jobs/${roleId}/apply`);
     const head = html.slice(0, html.indexOf("<form"));
     expect(head).toMatch(/<p class="back"><a href="\/careers\/[^"]+\/jobs\/[^"]+"><svg class="icon"[^>]*>.*?<\/svg>Back to the job<\/a><\/p>/);
-    expect(head).toContain('<p class="eyebrow">Look Dental</p>');
+    // no eyebrow above the title (fewer words, 23 October 2026): the title follows the back link, and the lead names the employer
+    expect(head).not.toContain('<p class="eyebrow">');
+    expect(head).toMatch(/Back to the job<\/a><\/p><h1>Apply: /);
+    expect(head).toMatch(/<p class="lead">About \d+ minutes, including a short AI interview with Look Dental&#39;s AI assistant\./);
     expect(head).toContain('<ul class="facts">');
     expect(html).toContain('<button class="btn" type="submit">Send my application</button>');
   });
 
-  it("the status page: withdrawing and the future-roles choice are outlined secondary buttons; the screening link is the one near-black button", async () => {
+  it("the receipt keeps the link back to the job above its title, without the company's name after it", async () => {
+    const html = await page(`/careers/${slug}/jobs/${roleId}/applied`);
+    // a trail with a parent link stays; the company is named in the page's own lines (fewer words, 23 October 2026)
+    expect(html).toMatch(/<p class="eyebrow"><a href="\/careers\/[^"]+\/jobs\/[^"]+">[^<]+<\/a><\/p><h1>Thanks for applying<\/h1>/);
+    expect(html).not.toContain("</a> · Look Dental");
+    expect(html).toContain("The hiring team at Look Dental reviews your application. People make every decision.");
+  });
+
+  it("the status page: withdrawing and the future-roles choice are outlined secondary buttons; the screening link is the one plum button", async () => {
     const html = await page(`/c/status/${statusToken}`);
-    expect(html).toContain('<p class="eyebrow">Look Dental · Your application</p>');
+    // the employer's name sits above the job's title: on a phone the next mention of the employer is far below the first
+    // screen (fewer words, 23 October 2026: an eyebrow only where nothing else near the top names them), with no "Your application"
+    expect(html.slice(html.indexOf("<main>")).startsWith('<main><p class="eyebrow">Look Dental</p><h1>')).toBe(true);
+    expect(html).toContain('<p class="meta">People on the hiring team at Look Dental make every decision about your application.</p>');
+    expect(html).not.toContain("· Your application");
     expect(html).toContain('<button class="btn secondary" type="submit">Withdraw my application</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Send request</button>');
@@ -362,13 +413,13 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).not.toContain("<script");
   });
 
-  it("the screening page carries its own styles in the head with the request's nonce; its introduction says first that it is the company's AI assistant, with Start as the one near-black button and the other two outlined", async () => {
+  it("the screening page carries its own styles in the head with the request's nonce; its introduction says first that it is the company's AI assistant, with Start as the one plum button and the other two outlined", async () => {
     const r = await app.request(`/c/screen/${screenToken}`);
     const nonce = (r.headers.get("content-security-policy-report-only") ?? "").match(/'nonce-([^']+)'/)![1];
     const html = await r.text();
     const head = html.slice(0, html.indexOf("</head>"));
     expect(head.split(`<style nonce="${nonce}">`).length - 1).toBe(2);
-    expect(head).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
+    expect(head).toContain(".msg.candidate { align-self: flex-end; background: var(--peach); color: var(--ink);");
     expect(html.slice(html.indexOf("</head>"))).not.toContain("<style");
     // the AI line is the first thing in the page, before the company's name and the heading
     const main = html.slice(html.indexOf("<main>"));
@@ -390,9 +441,9 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button>');
     expect(html).toContain(`<a class="link-action" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);
     expect(html).not.toMatch(/ style="/);
-    // the bar's colours come from the tokens, in both themes, without a style attribute
-    expect(SCREEN_CSS).toContain(".progress progress::-webkit-progress-value { border-radius: var(--r-pill); background: var(--ink); }");
-    expect(SCREEN_CSS).toContain(".progress progress::-moz-progress-bar { border-radius: var(--r-pill); background: var(--ink); }");
+    // the bar's colours come from the tokens (plum running into coral), in both themes, without a style attribute
+    expect(SCREEN_CSS).toContain(".progress progress::-webkit-progress-value { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }");
+    expect(SCREEN_CSS).toContain(".progress progress::-moz-progress-bar { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }");
     // the choice page: one heading, two equal outlined buttons
     const choice = await page(`/c/screen/${screenToken}/person`);
     expect(choice.match(/<h1[\s>]/g)).toHaveLength(1);

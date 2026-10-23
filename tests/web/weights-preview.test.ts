@@ -3,7 +3,7 @@ import type { EvidenceAssessment, MatchScore } from "@ros/contracts";
 import type { BoardCard, BoardView, RolePacket } from "../../apps/web/src/api/client";
 import { canTryWeights } from "../../apps/web/src/roles";
 import { READ_FROM_NOW_ON } from "../../apps/web/src/skills-form";
-import { INTERVIEW_ONLY_LINE, LEAVE_OUT_HINT, LEVEL_WEIGHT, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows } from "../../apps/web/src/weights-preview";
+import { INTERVIEW_ONLY_LINE, LEVEL_WEIGHT, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows } from "../../apps/web/src/weights-preview";
 import { matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -65,7 +65,6 @@ describe("the rows to weigh", () => {
     expect(rows.map((r) => r.key)).not.toContain("manner");
     // "your own" interviews (R20-9), so it is never read as "the AI interview does not count"
     expect(INTERVIEW_ONLY_LINE).toMatch(/only in your own interviews/);
-    expect(LEAVE_OUT_HINT).toMatch(/only in your own interviews/);
     // the real score's own weights; left out counts nothing
     expect(LEVEL_WEIGHT).toEqual({ must_have: 4, essential: 3, important: 2, helpful: 1, off: 0 });
   });

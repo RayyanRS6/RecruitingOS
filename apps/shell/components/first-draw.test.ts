@@ -62,7 +62,8 @@ describe("the first draw matches the server's", () => {
     const { server, browser } = both(() => createElement(People));
     expect(browser).toBe(server);
     expect(server).toMatch(/<h1>Candidates<\/h1>/);
-    expect(server).toContain("Job · Bright Dental");
+    // the job header has no "Job · company" eyebrow any more (fewer words, 23 Oct 2026), on either side
+    expect(server).not.toContain("Job · Bright Dental");
     // nothing from the jobs list: no job title, no job picker, no Live pill, no More menu waiting on the job's status
     expect(browser).not.toContain("Dental Hygienist");
     expect(browser).not.toContain("Switch job");

@@ -498,9 +498,13 @@ describe("every applicant's AI interview, in one email", () => {
       const confirmToken = /\/c\/confirm-answers\/([A-Za-z0-9_-]+)/.exec(confirm.text)![1];
       // opening the link changes nothing; the button adds them to the application's own interview
       expect((await app.request(`/c/confirm-answers/${confirmToken}`)).status).toBe(200);
+      // the question says only "this job", so the "Company · Job" eyebrow above it names them (an emailed link opens it)
+      expect(await (await app.request(`/c/confirm-answers/${confirmToken}`)).text()).toMatch(/<main><p class="eyebrow">[^<]+ · [^<]+<\/p><h1>Add these answers to your application\?<\/h1>/);
       expect((await own()).status).toBe("invited");
       expect((await app.request(`/c/confirm-answers/${confirmToken}`, { method: "POST" })).status).toBe(302);
       await later(0);
+      // once added, the line under the heading names the job and the employer, so no eyebrow repeats them (23 October 2026)
+      expect(await (await app.request(`/c/confirm-answers/${confirmToken}`)).text()).toMatch(/<main><h1>Your answers are added<\/h1><div class="card" role="status"><p>They are now part of your application for [^<]+ at [^<]+, and the hiring team reads them with it\./);
       const merged = await own();
       expect(merged.id).toBe(before.id);
       expect(merged.status).toBe("completed");

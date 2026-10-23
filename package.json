@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome lint --max-diagnostics=none .",
+    "css": "node apps/shell/scripts/build-css.mjs",
     "db:migrate": "pnpm --filter @ros/db migrate",
     "db:seed": "pnpm --filter @ros/db seed",
     "eval": "pnpm --filter @ros/evals eval",

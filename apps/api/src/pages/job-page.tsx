@@ -45,14 +45,19 @@ function website(value: string): { href: string; text: string } {
   return { href, text: value.replace(/^https?:\/\//i, "").replace(/\/$/, "") };
 }
 
-/** The logo square (or the initials) beside the company's name; decorative, since the name is always written beside it. */
-export function CompanyLine(props: { company: Pick<JobPageCompany, "name" | "logoSrc">; eyebrow: unknown }) {
+/**
+ * The logo square (or the initials), with the eyebrow beside it when there is one (the job page's "Careers at <Company>"
+ * trail). Decorative: the company's name is always written on the page (the eyebrow, or the careers page's heading).
+ */
+export function CompanyLine(props: { company: Pick<JobPageCompany, "name" | "logoSrc">; eyebrow?: unknown }) {
   return (
     <div class="company">
       <span class="logo" aria-hidden="true">{props.company.logoSrc ? <img src={props.company.logoSrc} alt="" width="56" height="56" /> : initials(props.company.name)}</span>
-      <div>
-        <p class="eyebrow">{props.eyebrow}</p>
-      </div>
+      {props.eyebrow ? (
+        <div>
+          <p class="eyebrow">{props.eyebrow}</p>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -68,8 +73,8 @@ export function HelpLine(props: { contact: ContactLine; class?: string }) {
 }
 
 /**
- * The inside of the Apply now button (founder decision Q2 = A, 10 October 2026): a dark circle with an arrow, then the
- * words. On a mouse's hover or a keyboard's focus the dark fill slides across the words (CSS only, layout.tsx). The fill
+ * The inside of the Apply now button (founder decision Q2 = A, 10 October 2026): a plum circle with an arrow, then the
+ * words. On a mouse's hover or a keyboard's focus the plum fill slides across the words (CSS only, layout.tsx). The fill
  * and the arrow are decoration, hidden from screen readers; the words are the button's name.
  */
 function ApplyInner() {
@@ -130,12 +135,15 @@ export function expectAtAGlance(steps: string[], companyName: string): string[] 
   return [firstSentence(steps[0], companyName), firstSentence(steps[1], companyName), interviews, steps[steps.length - 1]].filter((s): s is string => !!s);
 }
 
-/** The "not public yet" note at the top of a preview, with what the page is still missing. */
+/**
+ * The "not public yet" note at the top of a preview, with what the page is still missing. The disabled form shows by
+ * itself that it sends nothing, so the note says only where the page stands (fewer words, 23 October 2026).
+ */
 export function PreviewNote(props: { preview: PreviewInfo }) {
   const p = props.preview;
   return (
     <div class="preview-note" role="note">
-      <p><strong>{p.notPublicYet ? "Not public yet." : "Preview."}</strong> {p.banner} Links on this preview stay on it, and its form sends nothing.</p>
+      <p><strong>{p.notPublicYet ? "Not public yet." : "Preview."}</strong> {p.banner}</p>
       {p.gaps.length ? <ul>{p.gaps.map((g) => <li>{g}</li>)}</ul> : null}
       {p.publicHref ? <p><a href={p.publicHref}>Open the public page</a></p> : null}
     </div>
@@ -230,9 +238,9 @@ export function JobPage(props: JobPageProps) {
         </div>
         {role.accepting ? (
           <div class="apply-panel">
+            {/* No second title: the panel sits beside the job it belongs to. "We confirm by email" is in the steps. */}
             <div class="card apply-card">
-              <p class="apply-title">{title}</p>
-              {role.applyBy ? <p class="apply-by"><Icon name="calendar" />{role.applyBy}</p> : <p class="meta">We confirm by email.</p>}
+              {role.applyBy ? <p class="apply-by"><Icon name="calendar" />{role.applyBy}</p> : null}
               <a class="btn go" href={props.links.apply}><ApplyInner /></a>
               <FourPoints company={company} packet={packet} flow={props.flow} />
               <HelpLine contact={company.contact} />
@@ -241,8 +249,9 @@ export function JobPage(props: JobPageProps) {
         ) : null}
       </div>
       {/* Coming back to the job (spec-s7 step 9): the application record is where they see where things stand and the
-          decision once told; the link goes again to the address they applied with, never to this page. */}
-      <p class="foot">{preview ? "On the public page: a link to see an application again, and how we handle information." : <><a href="/c/link-request">Already applied? See your application</a> · <a href="/privacy">How we handle your information</a></>}</p>
+          decision once told; the link goes again to the address they applied with, never to this page. A preview has
+          no public links, so it has no foot. */}
+      {preview ? null : <p class="foot"><a href="/c/link-request">Already applied? See your application</a> · <a href="/privacy">How we handle your information</a></p>}
     </Layout>
   );
 }

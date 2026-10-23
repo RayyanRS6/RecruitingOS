@@ -67,6 +67,22 @@ export const GLYPHS = {
   // The light and dark theme switch at the foot of the rail.
   sun: { stroke: [circle(12, 12, 4), "M12 2.5v2", "M12 19.5v2", "M2.5 12h2", "M19.5 12h2", "m5.3 5.3 1.4 1.4", "m17.3 17.3 1.4 1.4", "m5.3 18.7 1.4-1.4", "m17.3 6.7 1.4-1.4"] },
   moon: { stroke: ["M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a6.8 6.8 0 0 0 10.7 10.7Z"] },
+  // October 2026 redesign: the logo's mark and the shapes the new screens use.
+  // Three bars rising from a common foot (the Recruiting OS mark, drawn in the logo's plum tile).
+  bars: { stroke: ["M7 18v-5", "M12 18V6", "M17 18v-8"] },
+  shield: { stroke: ["M12 3 5 6v5.5c0 4.3 2.9 7.9 7 9.5 4.1-1.6 7-5.2 7-9.5V6l-7-3Z"] },
+  "life-buoy": { stroke: [circle(12, 12, 9), circle(12, 12, 3.8), "M14.7 9.3l3.6-3.6", "M9.3 9.3 5.7 5.7", "M14.7 14.7l3.6 3.6", "M9.3 14.7l-3.6 3.6"] },
+  activity: { stroke: ["M3 12h4l3-7.5 4 15 3-7.5h4"] },
+  "user-plus": { stroke: [circle(9, 8, 4), "M2.5 21c0-3.9 2.9-7 6.5-7s6.5 3.1 6.5 7", "M19 8v6", "M16 11h6"] },
+  sliders: { stroke: ["M4 8h9", "M17 8h3", circle(15, 8, 2), "M4 16h3", "M11 16h9", circle(9, 16, 2)] },
+  "arrow-up-right": { stroke: ["M7 17 17 7", "M8.5 7H17v8.5"] },
+  "message-circle": { stroke: ["M20.5 11.5a8.5 8.5 0 0 1-12.4 7.6L3.5 20.5l1.4-4.4A8.5 8.5 0 1 1 20.5 11.5Z"] },
+  "file-text": { stroke: ["M6 3.5h8l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1Z", "M14 3.5v5h5", "M8.5 12.5h7", "M8.5 16.5h7"] },
+  sparkles: {
+    stroke: ["M10 4c.6 3.6 2.4 5.4 6 6-3.6.6-5.4 2.4-6 6-.6-3.6-2.4-5.4-6-6 3.6-.6 5.4-2.4 6-6Z", "M18 14c.3 1.4.9 2 2.3 2.3-1.4.3-2 .9-2.3 2.3-.3-1.4-.9-2-2.3-2.3 1.4-.3 2-.9 2.3-2.3Z", "M18.5 3v3", "M17 4.5h3"],
+  },
+  inbox: { stroke: ["M3.5 13.5 6.2 6.1a1 1 0 0 1 .9-.6h9.8a1 1 0 0 1 .9.6l2.7 7.4", "M3.5 13.5V18a1 1 0 0 0 1 1h15a1 1 0 0 0 1-1v-4.5h-5l-1.5 2.5h-4l-1.5-2.5h-5Z"] },
+  chart: { stroke: ["M4 4v15a1 1 0 0 0 1 1h15", "M8.5 16v-4", "M12.5 16V8", "M16.5 16v-6"] },
 } satisfies Record<string, Glyph>;
 
 /** Second names for the same drawing, matching the places they stand for (the rail's Today, Roles, Talent, Interviews). */

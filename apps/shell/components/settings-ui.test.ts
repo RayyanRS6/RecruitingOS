@@ -66,7 +66,15 @@ describe("Settings' tabs", () => {
   it("is called Settings, with one strip of five tabs, Company first and chosen", () => {
     const html = page();
     expect(html).toContain("<h1>Settings</h1>");
-    expect(html).toContain('<div role="tablist" aria-label="Settings" class="tabs"');
+    // the title alone (founder, 23 October 2026: fewer words): no company-name eyebrow above it, no line under it
+    // (the header's own margin trimmed with the kit's className, as the tab strip follows closely)
+    expect(html).toContain('<header class="page-header mb-3"><div class="page-header-row"><h1>Settings</h1></div></header>');
+    expect(text(html)).not.toContain("Your company, team, alerts and hiring rules.");
+    // the strip runs down the side as the kit's vertical tabs (Up and Down move too), a column at every width, so it is
+    // never laid out in a row while screen readers hear "vertical": the strip's wrapper is pinned whole (a layout utility
+    // added to it fails here), and no arbitrary variant anywhere on the page reaches into the tab list
+    expect(html).toContain('<div class="side-card min-w-0 p-2 xl:sticky xl:top-6"><div role="tablist" aria-label="Settings" class="tabs" aria-orientation="vertical"');
+    expect(html).not.toMatch(/\.tabs\]:|tablist\]\]:/);
     const tabs = [...html.matchAll(/role="tab" id="settings-tab-([a-z]+)"[^>]*aria-selected="(true|false)"/g)].map((m) => [m[1], m[2]]);
     expect(tabs).toEqual([["company", "true"], ["team", "false"], ["notifications", "false"], ["rules", "false"], ["security", "false"]]);
     expect(text(html)).toContain("Company Team Notifications Hiring rules Security");
@@ -125,21 +133,39 @@ describe("each card says one line, the rest one click away", () => {
     const words = text(html);
     expect(words).toContain("Who can do what Owner: Everything, including making other owners.");
     expect(words).toContain("Interviewers never see pay.");
+    // what the chosen role may do is said there only, not again under the invite form
+    expect(words.match(/Runs hires: approves jobs/g)).toHaveLength(1);
+    expect(words).toContain("Who can do what Owner: Everything, including making other owners. Admin: Everything except the owner role. Hiring manager: Runs hires: approves jobs");
     expect(page({ members: [{ userId: "u1", role: "owner", status: "active", email: "dana@bright.test", name: "Dana Whitfield", calendar: null, availability: { timezone: "America/Los_Angeles", windows: 5 }, schedulable: true }] })).not.toContain("Set your hours");
   });
 
   it("email alerts: the choices first; what always goes and when summaries arrive one click away", () => {
-    const words = text(page());
-    expect(words).toContain("Choose which updates also reach you by email at dana@bright.test.");
-    expect(words).toContain("Always emailed at once (1) These go out whatever you choose above. A candidate asks to talk to a person.");
+    const html = page();
+    const words = text(html);
+    // the title and the choices say it all (founder, 23 October 2026: fewer words): no intro line; the address and what
+    // each group covers wait under How this works, where every input reaches them, and a group's label carries its
+    // description as a tooltip too (a second aid only)
+    expect(words).not.toContain("Choose which updates also reach you by email");
+    expect(words).toContain("Email alerts See all your updates Candidates As it happens");
+    expect(html).toMatch(/<strong class="[^"]*" title="New applicants and their answers\.">Candidates<\/strong>/);
+    expect(words).toContain("Always emailed at once (1) A candidate asks to talk to a person.");
+    expect(words).not.toContain("These go out whatever you choose above.");
     expect(words).toContain("How this works Every update shows on Home and in your updates.");
+    expect(words).toContain("Emails go to dana@bright.test.");
     expect(words).toContain("Daily summaries arrive at 8:00 AM, Los Angeles time");
+    expect(words).toContain("Candidates: New applicants and their answers.");
+    // the description is not visible text in the row: its only words are inside the fold
+    const card = text(html.slice(html.indexOf('<div id="setup-notifications"'), html.indexOf('<div id="setup-availability"')));
+    expect(card.indexOf("New applicants and their answers.")).toBeGreaterThan(card.indexOf("How this works"));
   });
 
   it("the AI rules: the choices in their groups, the fixed work and the planned rules folded", () => {
     const html = page();
     const words = text(html);
-    expect(words).toContain("Choose how much the AI does without asking you. How this works What the product does today");
+    // the title, then the explanation one click away: no line under the title (founder, 23 October 2026: fewer words)
+    expect(words).toContain("What the AI may do on its own How this works What the product does today");
+    expect(words).not.toContain("Choose how much the AI does without asking you.");
+    expect(words).not.toContain("Planned, not in the product yet");
     // the rule group removed on 20 Oct (R20-4) does not come back under its old name
     expect(html).not.toContain('aria-label="Invite an applicant to the screening chat"');
     expect(html).not.toContain('aria-label="Invite every applicant to the AI interview"');
@@ -153,11 +179,15 @@ describe("each card says one line, the rest one click away", () => {
     expect(words).toMatch(/What each choice does Declining never sends anything by itself\. Do it: .*five working days after a decision, the standard message goes by itself/);
   });
 
-  it("the security cards: one line each, the explanations under How this works", () => {
+  it("the security cards: the title, then the explanations under How this works", () => {
     const words = text(page());
-    expect(words).toContain("Every place you are signed in. Sign out any you do not recognise.");
-    expect(words).toContain("Which ITS recruiters can see your hiring, and until when. How this works A recruiter gets access when your team asks for one");
-    expect(words).toContain("Who did what in your workspace, newest first.");
+    // no line under each title that only describes the card (founder, 23 October 2026: fewer words)
+    expect(words).toContain("Your sessions How this works Each place's internet address is shown only as a short code, never in full.");
+    expect(words).not.toContain("Every place you are signed in.");
+    expect(words).toContain("ITS recruiter access How this works A recruiter gets access when your team asks for one");
+    expect(words).not.toContain("Which ITS recruiters can see your hiring");
+    expect(words).toContain("Audit history Download as a spreadsheet How this works It lists recruiter access");
+    expect(words).not.toContain("Who did what in your workspace");
     // services in plain words, not code names
     expect(words).toContain("Job board LinkedIn Not connected");
   });

@@ -19,7 +19,7 @@ import { CallNotesCard } from "./call-notes";
 import { MatchVerdict, NextStepLine, ScoreBreakdown } from "./match";
 import type { NextStepAction } from "./match-view";
 import { eligibilityAnswerWords, historyItems, panelQuestions, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, writeupLines, writeupOverviewLine, type Compose, type HistoryItem } from "./helpers";
-import { Why } from "./why";
+import { CARD, QUOTE, SUGGESTED, Why } from "./why";
 
 export type { Compose } from "./helpers";
 import { useCandidateAction, useRefreshCandidate } from "./hooks";
@@ -36,7 +36,7 @@ import { useCandidateAction, useRefreshCandidate } from "./hooks";
 export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDetail; roleId: string; onHistory: () => void; onNext?: (action: NextStepAction) => void }) {
   const latest = a.assessments[0] ?? null;
   return (
-    <div className="stack" style={{ gap: 14 }}>
+    <div className="stack gap-4">
       <AiInterviewCard a={a} roleId={roleId} onDecline={() => onNext?.({ kind: "move", to: "not_moving_forward", label: "Not moving forward" })} />
       <NoAssessmentCard detail={a} />
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
@@ -47,7 +47,7 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
       <WhereTheyAre a={a} />
       <details className="more">
         <summary>Full breakdown</summary>
-        <div className="stack" style={{ gap: 14 }}>
+        <div className="stack gap-4">
           <ScoreBreakdown a={a} />
           {/* Without an AI review yet, the verdict above already says why (`notReadYetWords`, or the card that says it could not be made). */}
           {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "AI review: the AI interview" : "AI review: the résumé"} /> : null}
@@ -56,7 +56,8 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
         </div>
       </details>
       <ContactLine a={a} />
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      {/* the panel's foot: everything that happened, and a recruiter */}
+      <div className="row justify-between border-t border-line pt-4">
         <Button size="sm" variant="quiet" icon="clock" onClick={onHistory}>See all activity</Button>
         <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
       </div>
@@ -75,14 +76,14 @@ function AiInterviewCard({ a, roleId, onDecline }: { a: ApplicationDetail; roleI
   const card = aiInterviewCard(a);
   if (!card) return null;
   return (
-    <Card title="AI interview">
-      <p className="small" style={{ margin: "0 0 8px", color: "var(--ink-2)" }}>{card.line}</p>
+    <Card title="AI interview" className={CARD}>
+      <p className="small text-ink-2">{card.line}</p>
       <div className="row">
         {card.remind ? <Button size="sm" variant="primary" icon="send" disabled={!card.remind.allowed} title={card.remind.allowed ? undefined : card.remind.reason} loading={act.isPending && act.variables?.action === "remind_screen"} onClick={() => act.mutate({ action: "remind_screen" })}>Send a reminder</Button> : null}
         {card.resend ? <Button size="sm" variant="primary" icon="send" disabled={!card.resend.allowed} title={card.resend.allowed ? undefined : card.resend.reason} loading={act.isPending && act.variables?.action === "invite_screen"} onClick={() => act.mutate({ action: "invite_screen" })}>Send a new link</Button> : null}
         {card.decline ? <Button size="sm" variant="quiet" onClick={onDecline}>Not moving forward</Button> : null}
       </div>
-      {card.remind && !card.remind.allowed && card.remind.reason ? <p className="small muted" style={{ margin: "6px 0 0" }}>{card.remind.reason}</p> : null}
+      {card.remind && !card.remind.allowed && card.remind.reason ? <p className="small muted">{card.remind.reason}</p> : null}
     </Card>
   );
 }
@@ -110,11 +111,15 @@ function WhereTheyAre({ a }: { a: ApplicationDetail }) {
   const interviews = a.interviews;
   if (!lines.length && !interviews.length && !recorded) return null;
   return (
-    <Card title="Where things stand">
-      {lines.map((l) => <p key={l} className="small" style={{ margin: "0 0 4px" }}>{l}</p>)}
-      {interviews.map((i) => <p key={i.id} className="small" style={{ margin: "0 0 4px" }}><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {i.status.replace(/_/g, " ")}{i.startsAt ? ` · ${new Date(i.startsAt).toLocaleString("en-US", { timeZone: i.timezone ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : i.status === "scheduling" ? ` · ${i.offeredSlots.length} times offered` : ""}{i.decision ? ` · decision: ${i.decision.replace(/_/g, " ")}` : ""}</p>)}
+    <Card title="Where things stand" className={CARD}>
+      {lines.length || interviews.length ? (
+        <div className="grid gap-1">
+          {lines.map((l) => <p key={l} className="small">{l}</p>)}
+          {interviews.map((i) => <p key={i.id} className="small"><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {i.status.replace(/_/g, " ")}{i.startsAt ? ` · ${new Date(i.startsAt).toLocaleString("en-US", { timeZone: i.timezone ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : i.status === "scheduling" ? ` · ${i.offeredSlots.length} times offered` : ""}{i.decision ? ` · decision: ${i.decision.replace(/_/g, " ")}` : ""}</p>)}
+        </div>
+      ) : null}
       {recorded ? (
-        <p className="small" style={{ margin: "6px 0 0" }}>
+        <p className="small">
           <Chip tone={recorded.outcome === "hired_externally" ? "good" : "neutral"}>{OUTCOME_WORDS[recorded.outcome] ?? recorded.outcome.replace(/_/g, " ")}</Chip>{" "}
           <span className="muted">Recorded by {recorded.recordedBy.name ?? "a team member"} on {new Date(recorded.recordedAt).toLocaleDateString()}{recorded.hireDate ? `, hire date ${recorded.hireDate}` : ""}{recorded.correctionOf ? " (a correction by an ITS administrator)" : ""}. {outcomes.data?.statement}</span>
         </p>
@@ -128,11 +133,11 @@ const OUTCOME_WORDS: Record<string, string> = { hired_externally: "Hired", candi
 
 function EligibilityAnswers({ a }: { a: ApplicationDetail }) {
   return (
-    <Card title="Eligibility answers">
+    <Card title="Eligibility answers" className={CARD}>
       {a.eligibility ? (
-        <div className="small">
+        <div className="small grid gap-1">
           <p>{a.eligibility.passed ? "Met every required answer." : "Did not meet a required answer."}</p>
-          {a.eligibility.failedRules.map((f) => <p key={f.key} style={{ color: "var(--needs-you)" }}>{f.question} → {eligibilityAnswerWords(f)}</p>)}
+          {a.eligibility.failedRules.map((f) => <p key={f.key} className="text-caution">{f.question} → {eligibilityAnswerWords(f)}</p>)}
           {a.eligibility.unverifiable.map((u) => <p key={u.key} className="muted">{u.question}: not answered</p>)}
         </div>
       ) : <p className="muted small">Not checked yet.</p>}
@@ -160,25 +165,27 @@ export function FormAnswers({ a }: { a: Pick<ApplicationDetail, "formAnswers" | 
   if (!answers.length && !summary && !kept.length) return null;
   return (
     <Card title="Questions from the form">
-      {answers.length ? (
-        <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-          {answers.map((s) => <li key={`${s.source}:${s.key}`}>{s.sentence}{s.fromCv ? <span className="muted"> ({SUGGESTED_FROM_RESUME_KEPT})</span> : null}</li>)}
-        </ul>
-      ) : null}
-      {summary ? (
-        <div className="small" style={{ marginTop: answers.length ? 10 : 0 }}>
-          <p className="muted" style={{ margin: "0 0 4px" }}>{WORK_SUMMARY_LABEL}</p>
-          <p style={{ margin: 0, whiteSpace: "pre-line" }}>{summary.text}</p>
-        </div>
-      ) : null}
-      {kept.length ? (
-        <div className="small" style={{ marginTop: answers.length || summary ? 10 : 0 }}>
-          <p className="muted" style={{ margin: "0 0 4px" }}>{KEPT_FACTS_LABEL}</p>
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {kept.map((k) => <li key={k.id}>{k.text}</li>)}
+      <div className="small grid gap-3">
+        {answers.length ? (
+          <ul className="grid list-disc gap-1 pl-5 marker:text-ink-3">
+            {answers.map((s) => <li key={`${s.source}:${s.key}`}>{s.sentence}{s.fromCv ? <span className="muted"> ({SUGGESTED_FROM_RESUME_KEPT})</span> : null}</li>)}
           </ul>
-        </div>
-      ) : null}
+        ) : null}
+        {summary ? (
+          <div className="grid gap-1">
+            <p className="muted">{WORK_SUMMARY_LABEL}</p>
+            <p className="whitespace-pre-line">{summary.text}</p>
+          </div>
+        ) : null}
+        {kept.length ? (
+          <div className="grid gap-1">
+            <p className="muted">{KEPT_FACTS_LABEL}</p>
+            <ul className="grid list-disc gap-1 pl-5 marker:text-ink-3">
+              {kept.map((k) => <li key={k.id}>{k.text}</li>)}
+            </ul>
+          </div>
+        ) : null}
+      </div>
     </Card>
   );
 }
@@ -188,9 +195,9 @@ function ContactLine({ a }: { a: ApplicationDetail }) {
   const c = a.candidate;
   const parts = [c.email ?? "No email address", c.phone ?? "No phone", c.locationText].filter((x): x is string => !!x);
   return (
-    <section className="small" aria-label="Contact">
-      <p style={{ margin: 0, overflowWrap: "anywhere" }}><span className="muted">Contact: </span>{parts.join(" · ")}</p>
-      <details className="more" style={{ marginTop: 6 }}>
+    <section className="small grid gap-1.5" aria-label="Contact">
+      <p className="wrap-anywhere"><span className="muted">Contact: </span>{parts.join(" · ")}</p>
+      <details className="more">
         <summary>Consent and source</summary>
         <dl className="kv">
           <dt>Email</dt><dd>{c.email ?? "none"}</dd>
@@ -221,7 +228,7 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
   const allowed = known ? a.allowedActions.includes("cancel_screen") : true;
   if (!confirming) {
     return (
-      <div className="row" style={{ marginTop: 8 }}>
+      <div className="row">
         <Button size="sm" disabled={!allowed} title={allowed ? "Calls off the invitation before they start" : a.blockedReasons.cancel_screen} onClick={() => setConfirming(true)}>Stop this AI interview</Button>
         {!allowed && a.blockedReasons.cancel_screen ? <span className="small muted">{a.blockedReasons.cancel_screen}</span> : null}
       </div>
@@ -229,7 +236,7 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
   }
   return (
     <Alert tone="caution">
-      <div className="stack" style={{ gap: 8 }}>
+      <div className="stack gap-2">
         <span>Stop {a.candidate.firstName}'s AI interview invitation? Their link stops working, and they get a short, polite note saying it is no longer needed. Nothing is decided about them.</span>
         <div className="row"><Button size="sm" variant="primary" loading={act.isPending} onClick={() => act.mutate({ action: "cancel_screen" })}>Yes, stop it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>Keep it open</Button></div>
       </div>
@@ -249,9 +256,9 @@ export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; 
   if (!a.screens.length) {
     const none = noScreenWords(a);
     return (
-      <div className="stack" style={{ gap: 14 }}>
-        <Card title="AI interview">
-          <p className="small muted" style={{ margin: 0 }}>{none.line}</p>
+      <div className="stack gap-4">
+        <Card title="AI interview" className={CARD}>
+          <p className="small muted">{none.line}</p>
           <Why label="What is an AI interview?">{none.why}</Why>
         </Card>
         {notesCard}
@@ -259,7 +266,7 @@ export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; 
     );
   }
   return (
-    <div className="stack" style={{ gap: 14 }}>
+    <div className="stack gap-4">
       {/* The company's written questions name the answers too (Wave S7), with each one written up from the chat. */}
       {a.screens.map((s, i) => <ScreenCard key={s.id} screen={s} open={i === 0} questions={panelQuestions(a.packetLabels)} mustHaves={a.packetLabels.mustHaves} timeline={a.timeline} action={i === 0 ? <StopScreen a={a} roleId={roleId} /> : undefined} />)}
       {notesCard}
@@ -279,13 +286,16 @@ const GUIDED_ANSWERS: ReadonlyArray<[key: string, label: string]> = [["recentWor
  */
 export function NoResumeAnswers({ answers }: { answers: Record<string, string> }) {
   const lines = GUIDED_ANSWERS.filter(([key]) => answers[key]?.trim());
-  if (!lines.length) return <p className="small" style={{ whiteSpace: "pre-wrap" }}>{answers.summary}</p>;
+  if (!lines.length) return <p className="small whitespace-pre-wrap">{answers.summary}</p>;
   return (
     <dl className="kv small">
-      {lines.map(([key, label]) => <Fragment key={key}><dt>{label}</dt><dd style={{ whiteSpace: "pre-wrap" }}>{answers[key]}</dd></Fragment>)}
+      {lines.map(([key, label]) => <Fragment key={key}><dt>{label}</dt><dd className="whitespace-pre-wrap">{answers[key]}</dd></Fragment>)}
     </dl>
   );
 }
+
+/** The résumé viewer's frame: the file in a rounded box on the card's surface, as tall as the screen allows. */
+const VIEWER = "grid gap-2 [&>iframe]:w-full [&>iframe]:rounded-2xl [&>iframe]:border [&>iframe]:border-line [&>iframe]:bg-surface";
 
 /**
  * The résumé inside the panel (plan H5): the file in a frame of this site's own address (each opening is recorded, as
@@ -329,14 +339,16 @@ function ResumeViewer({ a, doc }: { a: ApplicationDetail; doc: ApplicationDetail
   }, [full, focusables]);
   if (!v.frame) return null;
   return (
-    <div ref={box} className={full ? "resume-viewer full" : "resume-viewer"} {...(full ? { role: "dialog", "aria-modal": true, "aria-label": `Résumé: ${doc.filename}` } : {})}>
-      <div className="resume-viewer-bar">
-        <span className="resume-viewer-name">{doc.filename}{v.asText ? <span className="muted"> (the words we read from it)</span> : null}</span>
-        <span className="row" style={{ gap: 6 }}>
+    // full screen: the whole window over the panel (its layer, under the toasts), the frame filling what the bar leaves
+    <div ref={box} className={full ? `${VIEWER} fixed inset-0 z-[70] grid-rows-[auto_minmax(0,1fr)] bg-ground px-4 pt-3 pb-4 [&>iframe]:h-full` : `${VIEWER} [&>iframe]:h-[min(70vh,760px)]`} {...(full ? { role: "dialog", "aria-modal": true, "aria-label": `Résumé: ${doc.filename}` } : {})}>
+      <div className="flex flex-wrap items-center justify-between gap-x-2.5 gap-y-1.5">
+        <span className="min-w-0 text-sm font-semibold wrap-anywhere">{doc.filename}{v.asText ? <span className="muted font-normal"> (the words we read from it)</span> : null}</span>
+        <span className="row gap-1.5">
           <Button size="sm" icon={full ? "shrink" : "expand"} onClick={() => setFull(!full)}>{full ? "Exit full screen" : "Full screen"}</Button>
           <a href={v.open} target="_blank" rel="noopener noreferrer" className="btn secondary sm">Open in a new tab</a>
         </span>
       </div>
+      {/* `resume-frame`: only a hook for telling-hiring-ui.test.ts; VIEWER styles the frame */}
       <iframe src={v.frame} title={`Résumé: ${doc.filename}`} className="resume-frame" referrerPolicy="same-origin" />
       {full ? (
         // biome-ignore lint/a11y: a focus guard: Tab out of the framed file lands here and goes back to the top, so focus stays in the full-screen résumé (key presses inside the frame never reach this page)
@@ -351,19 +363,19 @@ export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string 
   const readings = a.assessments.filter((x) => x.kind === "triage" && x.id !== a.assessments[0]?.id);
   const shown = resumeToShow(a.documents, a.resumeDocumentId);
   return (
-    <div className="stack" style={{ gap: 14 }}>
+    <div className="stack gap-4">
       {shown ? <ResumeViewer a={a} doc={shown} /> : null}
-      <Card title="What the résumé says">
+      <Card title="What the résumé says" className={CARD}>
         {a.extraction ? (
-          <div className="stack" style={{ gap: 8 }}>
-            {a.extraction.positions.map((p, i) => <div key={i} className="small"><strong>{p.title}</strong>{p.employer ? ` at ${p.employer}` : ""}{p.startDate ? ` · ${p.startDate}–${p.endDate ?? "present"}` : ""}{p.quote ? <><br /><span className="muted">"{p.quote}"</span> <EvidenceChip source="resume" /></> : null}</div>)}
+          <div className="stack gap-3">
+            {a.extraction.positions.map((p, i) => <div key={i} className="small grid gap-1.5"><span><strong>{p.title}</strong>{p.employer ? ` at ${p.employer}` : ""}{p.startDate ? ` · ${p.startDate}–${p.endDate ?? "present"}` : ""}</span>{p.quote ? <span className={QUOTE}>"{p.quote}" <EvidenceChip source="resume" /></span> : null}</div>)}
             {a.extraction.licenses.length ? <div className="row">{a.extraction.licenses.map((l, i) => <Chip key={i} tone="good">{l.name}{l.jurisdiction ? ` (${l.jurisdiction})` : ""}</Chip>)}</div> : null}
             {a.extraction.skills.length ? <p className="small muted">Skills mentioned: {a.extraction.skills.join(", ")}</p> : null}
             {a.extraction.anomalies.length ? <Alert tone="caution">{a.extraction.anomalies.map((an) => `${an.kind.replace(/_/g, " ")}: ${an.detail}`).join("; ")}. Flagged for a person to look at; never used to decline.</Alert> : null}
           </div>
         ) : a.answers.noResume?.summary ? <NoResumeAnswers answers={a.answers.noResume} /> : <p className="muted small">No résumé text available{a.documents.some((d) => d.status === "clean") ? " (the file could not be read; open it below)" : ""}.</p>}
         {a.documents.length ? (
-          <ul className="small" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
+          <ul className="small grid list-disc gap-1 pl-5 marker:text-ink-3">
             {a.documents.map((d) => (
               <li key={d.id}>
                 {d.status === "clean" ? (
@@ -387,6 +399,19 @@ export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string 
 
 /** The assistant's suggested line the person kept (Q28): the line itself, and the run it came from, for the record. */
 type KeptSuggestion = { line: string; runId: string | null };
+
+/**
+ * The conversation as chat bubbles (screenshot 3, the coss look): the team, the assistant and an ITS recruiter on the
+ * left on the surface with a hairline, the candidate's own words on the right in peach; each message rises in once,
+ * the first few one after another. The items' classes are pinned (`msg-item <from>`), so the list styles them.
+ */
+const THREAD = [
+  "flex flex-col gap-3",
+  "[&>li]:grid [&>li]:max-w-[88%] [&>li]:gap-1 [&>li]:self-start [&>li]:rounded-2xl [&>li]:rounded-bl-md [&>li]:border [&>li]:border-line [&>li]:bg-surface [&>li]:px-4 [&>li]:py-3 [&>li]:wrap-anywhere [&>li]:shadow-xs [&>li]:motion-safe:animate-enter [&>li]:motion-safe:[animation-fill-mode:backwards] max-sm:[&>li]:max-w-[96%]",
+  "[&>.candidate]:self-end [&>.candidate]:rounded-bl-2xl [&>.candidate]:rounded-br-md [&>.candidate]:border-accent/20 [&>.candidate]:bg-peach",
+  "[&>.recruiter]:border-dashed [&>.recruiter]:border-line-strong [&>.recruiter]:bg-tint [&>.system]:bg-surface-2 [&>.system]:shadow-none",
+  "[&_.msg-body]:text-sm [&_.msg-body]:whitespace-pre-wrap [&_.msg-body]:text-ink",
+].join(" ");
 
 /**
  * Messages (plan G7): the conversation with the candidate, oldest first, as a thread (what the team sent and who sent it,
@@ -441,64 +466,68 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
     setKept({ line, runId: suggestion?.suggestionRunId ?? null });
   };
   return (
-    <div className="stack" style={{ gap: 14 }}>
-      <Card title="Conversation" aside={thread.length ? <span className="small muted">Oldest first</span> : null}>
+    <div className="stack gap-4">
+      {/* oldest first: each message carries its time, so the order needs no label */}
+      <Card title="Conversation" className={CARD}>
         {thread.length ? (
-          <ol className="msg-thread" aria-label={`Messages with ${first}`}>
-            {thread.map((m) => (
-              <li key={m.id} className={`msg-item ${m.from}`}>
-                <p className="msg-head">
+          <ol className={THREAD} aria-label={`Messages with ${first}`}>
+            {thread.map((m, i) => (
+              // the first eight rise in one after another (30ms apart); the rest with the eighth
+              <li key={m.id} className={`msg-item ${m.from}`} style={{ animationDelay: `${Math.min(i, 7) * 30}ms` }}>
+                <p className="text-[12.5px] text-ink-3 [&>strong]:font-semibold [&>strong]:text-ink-2">
                   <strong>{m.who}</strong>{m.channel === "sms" ? " (text message)" : ""}<span aria-hidden="true"> · </span><span className="sr-only">, </span><time dateTime={new Date(m.at).toISOString()}>{threadWhen(m.at)}</time>
                   {m.status ? <> <Chip tone={m.statusTone}>{m.status}</Chip></> : null}
                 </p>
-                <p className="msg-subject">{m.subject ?? m.label}</p>
+                <p className="text-[13.5px] font-semibold text-ink">{m.subject ?? m.label}</p>
                 {m.long ? (
-                  <details className="msg-more">
+                  // the opening words read as a "read more" line: "Show all" says what opens, so no disclosure triangle
+                  <details className="[&>summary]:cursor-pointer [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden [&>summary]:text-[13.5px] [&>summary]:text-ink-2 [&[open]>summary]:mb-1.5">
                     <summary>{m.text.slice(0, 160).trimEnd()}… <span className="link-like">Show all</span></summary>
                     <MessageBody parts={m.parts} />
                   </details>
                 ) : <MessageBody parts={m.parts} />}
-                {m.hiddenLinks ? <p className="small muted msg-hidden-note" style={{ margin: "4px 0 0" }}>{HIDDEN_LINK_NOTE}</p> : null}
+                {/* `msg-hidden-note`: only a hook for telling-hiring-ui.test.ts */}
+                {m.hiddenLinks ? <p className="small muted msg-hidden-note">{HIDDEN_LINK_NOTE}</p> : null}
               </li>
             ))}
           </ol>
         ) : <p className="muted small">No messages yet.</p>}
       </Card>
-      <Card title={`Write to ${first}`}>
-        {!open ? (
-          <div className="row">
-            <Button size="sm" icon="mail" disabled={!a.candidate.email} title={a.candidate.email ? "Your own words, sent under the hiring team's name with yours in the footer" : "No email address on file"} onClick={() => setOpen(true)}>Write to {first}</Button>
-            {lastSent ? <InlineUndo autoFocus undoUntil={lastSent.undoUntil} ariaLabel={`Undo your message to ${first}`} onUndo={async () => { await takeBack({ applicationId: a.id, roleId, communicationId: lastSent.communicationId, firstName: first, kind: "message" }); setLastSent(null); }} /> : null}
-            {!a.candidate.email ? <span className="small muted">No email address on file.</span> : null}
-          </div>
-        ) : (
-          <div className="stack" style={{ gap: 8 }}>
-            <p className="small muted" style={{ margin: 0 }}>To {preview.data?.to ?? a.candidate.email}, from {preview.data?.fromName ?? "the hiring team"}.{preview.data?.needsApproval ? " An owner or admin reads it before it goes out." : ""}</p>
-            <Why label="How sending works">Your own words, sent as {preview.data?.fromName ?? "the hiring team"} to {preview.data?.to ?? a.candidate.email}. {preview.data ? (preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them.") : ""}{preview.data?.needsApproval ? " An owner or admin reads your message before it goes out." : ""}{preview.data?.undoSeconds ? ` After Send you have ${preview.data.undoSeconds} seconds to undo it.` : ""}</Why>
-            <Field label="Subject (optional)" htmlFor="msg-subject"><input id="msg-subject" className="input" value={subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} maxLength={200} /></Field>
-            <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => { setCompose({ ...compose, text: e.target.value }); if (!e.target.value.trim()) setKept(null); }} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
-            {suggestion?.line && !kept ? (
-              <div className="suggested-line">
-                <p className="small" style={{ margin: 0 }}><q>{suggestion.line}</q></p>
-                <p className="small muted" style={{ margin: "4px 0 0" }}>{suggestion.note}</p>
-                <div className="row" style={{ marginTop: 6 }}><Button size="sm" onClick={() => keepSuggestion(suggestion.line!)}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
-              </div>
-            ) : suggestion && !suggestion.line ? <p className="small muted" style={{ margin: 0 }}>{suggestion.note}</p> : null}
-            {preview.data ? <div className="small muted" style={{ whiteSpace: "pre-wrap", borderTop: "1px solid var(--line)", paddingTop: 8 }}>{aiHelped && preview.data.aiFooter ? preview.data.aiFooter : preview.data.footer}</div> : null}
-            <div className="row">
-              <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
-              {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
-              <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
+      {/* Closed, the one button says what it does (a card titled the same over it said it twice); open, the card's title
+          heads the form. "How sending works" holds only what the line above it does not say. */}
+      {!open ? (
+        <div className="row">
+          <Button size="sm" icon="mail" disabled={!a.candidate.email} title={a.candidate.email ? "Your own words, sent under the hiring team's name with yours in the footer" : "No email address on file"} onClick={() => setOpen(true)}>Write to {first}</Button>
+          {lastSent ? <InlineUndo autoFocus undoUntil={lastSent.undoUntil} ariaLabel={`Undo your message to ${first}`} onUndo={async () => { await takeBack({ applicationId: a.id, roleId, communicationId: lastSent.communicationId, firstName: first, kind: "message" }); setLastSent(null); }} /> : null}
+          {!a.candidate.email ? <span className="small muted">No email address on file.</span> : null}
+        </div>
+      ) : (
+        <Card title={`Write to ${first}`} className={CARD}>
+          <p className="small muted">To {preview.data?.to ?? a.candidate.email}, from {preview.data?.fromName ?? "the hiring team"}.{preview.data?.needsApproval ? " An owner or admin reads it before it goes out." : ""}</p>
+          {preview.data ? <Why label="How sending works">{preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them."}{preview.data.undoSeconds ? ` After Send you have ${preview.data.undoSeconds} seconds to undo it.` : ""}</Why> : null}
+          <Field label="Subject (optional)" htmlFor="msg-subject"><input id="msg-subject" className="input" value={subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} maxLength={200} /></Field>
+          <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => { setCompose({ ...compose, text: e.target.value }); if (!e.target.value.trim()) setKept(null); }} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
+          {suggestion?.line && !kept ? (
+            <div className={SUGGESTED}>
+              <p className="small"><q>{suggestion.line}</q></p>
+              <p className="small muted">{suggestion.note}</p>
+              <div className="row"><Button size="sm" onClick={() => keepSuggestion(suggestion.line!)}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
             </div>
-            {aiHelped ? (
-              <div className="row" style={{ gap: 8 }}>
-                <p className="small muted" style={{ margin: 0 }}>{suggestedLineNote(lineStillWhole, "footer")}</p>
-                {lineStillWhole ? <Button size="sm" variant="quiet" onClick={takeOutLine}>Take out the assistant's line</Button> : null}
-              </div>
-            ) : null}
+          ) : suggestion && !suggestion.line ? <p className="small muted">{suggestion.note}</p> : null}
+          {preview.data ? <div className="small muted whitespace-pre-wrap border-t border-line pt-3">{aiHelped && preview.data.aiFooter ? preview.data.aiFooter : preview.data.footer}</div> : null}
+          <div className="row">
+            <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
+            {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
+            <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
           </div>
-        )}
-      </Card>
+          {aiHelped ? (
+            <div className="row gap-2">
+              <p className="small muted">{suggestedLineNote(lineStillWhole, "footer")}</p>
+              {lineStillWhole ? <Button size="sm" variant="quiet" onClick={takeOutLine}>Take out the assistant's line</Button> : null}
+            </div>
+          ) : null}
+        </Card>
+      )}
     </div>
   );
 }
@@ -527,17 +556,17 @@ export function HistoryTab({ a, mayReadActivity }: { a: ApplicationDetail; mayRe
   const items = historyItems(a.timeline, recruiterEventsFor(a.id, recruiter.data ?? []));
   const both = suggestionAndDecision(a.timeline);
   return (
-    <div className="stack" style={{ gap: 14 }}>
+    <div className="stack gap-4">
       {both.suggested ? (
-        <Card>
-          <p className="small" style={{ margin: 0 }}>
+        <Card className={CARD}>
+          <p className="small">
             The assistant suggested <strong>{both.suggested}</strong>.{" "}
             {both.decided ? <>{both.decidedBy === "A team member" ? "Your team" : both.decidedBy} decided <strong>{both.decided}</strong>.</> : "Nobody has decided yet."}
           </p>
           <Why label="Who decides?">People make the hiring decisions. The assistant reads applications and suggests next steps, and it invites every applicant to its AI interview on its own.</Why>
         </Card>
       ) : null}
-      <Card title="What happened">
+      <Card title="What happened" className={CARD}>
         {recruiter.isLoading ? <Skeleton lines={2} /> : null}
         {items.length ? <HistoryList items={items} /> : <p className="small muted">Nothing yet.</p>}
       </Card>
@@ -545,18 +574,18 @@ export function HistoryTab({ a, mayReadActivity }: { a: ApplicationDetail; mayRe
   );
 }
 
+/** Everything that happened, newest first: divided rows with the time in a muted column (on a phone, above the words). */
 function HistoryList({ items }: { items: HistoryItem[] }) {
   return (
-    <ul className="history">
+    <ul className="grid">
       {items.map((it) => (
-        <li key={it.key}>
-          <span className="when">{new Date(it.when).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-          <span>
-            <span>{it.what}</span>
-            <br />
-            <span className="who">{it.who}</span>
-            {it.why ? <><br /><span className="why">{it.why}</span></> : null}
-            {it.told ? <><br /><span className="who">{it.told}</span></> : null}
+        <li key={it.key} className="grid gap-x-3 gap-y-0.5 border-t border-line py-3 text-[13.5px] first:border-t-0 first:pt-0 last:pb-0 sm:grid-cols-[112px_minmax(0,1fr)]">
+          <span className="text-[12.5px] text-ink-3 tabular-nums">{new Date(it.when).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+          <span className="grid min-w-0 gap-0.5 wrap-anywhere">
+            <span className="text-ink">{it.what}</span>
+            <span className="text-[12.5px] text-ink-3">{it.who}</span>
+            {it.why ? <span className="text-[13px] text-ink-2">{it.why}</span> : null}
+            {it.told ? <span className="text-[12.5px] text-ink-3">{it.told}</span> : null}
           </span>
         </li>
       ))}

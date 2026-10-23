@@ -35,42 +35,45 @@ export function NotificationsCard() {
   });
   const notMember = q.error instanceof ApiError && q.error.status === 403;
   const view = q.data;
+  // Screenshot 6's team table: one inset box of rows, what the emails are about on the left and how often on the right.
+  // The card's title and the choices say what it is for (founder, 23 October 2026: fewer words). The address the emails
+  // go to and what each group covers wait under "How this works", where every keyboard, touch and screen reader user
+  // reaches them; a group's label also carries its description as a tooltip, a second aid only.
   return (
     <Card title="Email alerts" aside={<Link to="/updates" className="btn secondary sm">See all your updates</Link>}>
-      <p className="small muted">Choose which updates also reach you by email{view?.email ? ` at ${view.email}` : ""}.</p>
       {q.isLoading ? <Skeleton lines={4} /> : notMember ? (
-        <p className="small muted" style={{ marginTop: 8 }}>Email alerts are for the people on this company's team.</p>
+        <p className="small muted">Email alerts are for the people on this company's team.</p>
       ) : q.error || !view ? <ErrorState message="Could not load your email alerts." onRetry={() => q.refetch()} /> : (
         <>
-          <div className="stack" style={{ gap: 0, marginTop: 8 }}>
-            {view.groups.map((g) => (
-              <div key={g.group} className="row" style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, padding: "10px 0", borderTop: "1px solid var(--line)" }}>
-                <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-                  <strong className="small">{g.label}</strong>
-                  <p className="small muted" style={{ margin: "2px 0 0" }}>{g.description}</p>
-                </div>
+          <div className="divide-y divide-line rounded-xl border border-line bg-surface">
+            {view.groups.map((g, i) => (
+              <div key={g.group} className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-3.5 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]" style={i ? { animationDelay: `${Math.min(i, 7) * 30}ms` } : undefined}>
+                <strong className="min-w-0 flex-[1_1_220px] text-sm text-ink" title={g.description}>{g.label}</strong>
                 <Segmented ariaLabel={`Emails about ${g.label}`} value={save.isPending && save.variables?.group === g.group ? save.variables.cadence : g.cadence} options={CADENCE_OPTIONS} onChange={(cadence) => { if (cadence !== g.cadence) save.mutate({ group: g.group, cadence }); }} />
               </div>
             ))}
           </div>
           {view.groups.some((g) => g.cadence !== g.defaultCadence) ? (
-            <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+            <div className="row mt-3 justify-end">
               <Button size="sm" variant="quiet" loading={resetAll.isPending} onClick={() => resetAll.mutate(view)}>Go back to the usual settings</Button>
             </div>
           ) : null}
           {/* The few updates that always go, and how summaries work: one click away. */}
-          <details className="more" style={{ marginTop: 10 }}>
+          <details className="more mt-4">
             <summary>Always emailed at once ({view.alwaysSent.length})</summary>
-            <p className="small muted" style={{ margin: "0 0 6px" }}>These go out whatever you choose above.</p>
-            <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-              {view.alwaysSent.map((a) => <li key={a.label} style={{ marginBottom: 4 }}><strong>{a.label}.</strong> {a.why}</li>)}
+            <ul className="small list-disc space-y-1 pl-5 marker:text-ink-3">
+              {view.alwaysSent.map((a) => <li key={a.label}><strong>{a.label}.</strong> {a.why}</li>)}
             </ul>
           </details>
-          <details className="more" style={{ marginTop: 6 }}>
+          <details className="more mt-2">
             <summary>How this works</summary>
-            <div className="stack small muted" style={{ gap: 6 }}>
-              <p style={{ margin: 0 }}>Every update shows on Home and in your updates. Emails name the job and link to it; candidate names and details stay in the app.</p>
-              <p style={{ margin: 0 }}>{digestTimeText(view.digest)}</p>
+            <div className="stack small muted gap-1.5">
+              <p>Every update shows on Home and in your updates. Emails name the job and link to it; candidate names and details stay in the app.</p>
+              <p>{`Emails go to ${view.email}.`}</p>
+              <p>{digestTimeText(view.digest)}</p>
+              <ul className="list-disc space-y-1 pl-5 marker:text-ink-3">
+                {view.groups.map((g) => <li key={g.group}><strong>{`${g.label}:`}</strong> {g.description}</li>)}
+              </ul>
             </div>
           </details>
         </>

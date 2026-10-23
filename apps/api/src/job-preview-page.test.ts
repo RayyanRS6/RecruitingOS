@@ -82,6 +82,10 @@ describe("the job-page preview (plan D1)", () => {
     const html = decode(await r.text());
     expectPreview(r, html);
     expect(html).toContain("<strong>Not public yet.</strong> Preview of version 1: not public.");
+    // fewer words (23 October 2026): the note says where the page stands and nothing about its own links, and the page has
+    // no foot describing the public page's links
+    expect(html).not.toContain("Links on this preview stay on it");
+    expect(html).not.toContain('<p class="foot">');
     // what the page could still show about the company (plan D10)
     // the staff glossary (14 October 2026): Setup is called Settings on screen
     expect(html).toContain("<li>There is no text about your company yet. Draft and approve it in Settings, and it shows on every job page.</li>");
@@ -137,7 +141,8 @@ describe("the job-page preview (plan D1)", () => {
       expect(notOnIt.status, path).toBe(404);
       expect(notOnIt.headers.get("content-type"), path).toContain("text/html");
       const html = decode(await notOnIt.text());
-      expect(html).toContain("This preview cannot be shown");
+      // the title first, with no "Preview" eyebrow above it (23 October 2026)
+      expect(html.slice(html.indexOf("<main>"))).toMatch(/^<main><h1>This preview cannot be shown<\/h1>/);
       expect(html).toContain("Role not found.");
     }
     const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });

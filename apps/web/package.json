@@ -10,7 +10,8 @@
     "@ros/contracts": "workspace:*",
     "@ros/ui": "workspace:*",
     "@tanstack/react-query": "^5.80.0",
-    "next": "^15.5.0",
+    "motion": "13.5.1",
+    "next": "^15.5.28",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

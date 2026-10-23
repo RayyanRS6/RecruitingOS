@@ -9,7 +9,7 @@ import { toast } from "../../toast";
 import { NOTE_AUTOSAVE_MS, NOTE_BODY_MAX, NOTES_REMINDER, NOTES_REMINDER_SHORT, applyStarter, earlierVersions, noteExcerpt, noteMeta, noteSaveState, othersNotes, saveStatusWords, shouldAutosave, starterChoices, timeWords, whoReadsLine, type NoteWithVersions } from "../../notes";
 import { firstSentence } from "./helpers";
 import { useDraft } from "./hooks";
-import { Why } from "./why";
+import { CARD, Why } from "./why";
 
 /**
  * Private team notes on a candidate (founder decision Q24; plan H3): each person's own note, saved as they type, with
@@ -19,6 +19,9 @@ import { Why } from "./why";
  */
 
 export const notesKey = (applicationId: string) => ["notes", applicationId] as const;
+
+/** A note's own words, as they were written (line breaks kept, long words wrapped). */
+const NOTE_BODY = "text-sm whitespace-pre-wrap wrap-anywhere text-ink";
 
 /** GET /applications/:id/notes, not retried on a refusal (a role that cannot read notes gets a 403, and that is an answer). */
 export function useNotes(applicationId: string, enabled = true) {
@@ -38,21 +41,26 @@ export function NotesTab({ applicationId, firstName }: { applicationId: string; 
   const view = q.data;
   const others = othersNotes(view);
   return (
-    <div className="stack" style={{ gap: 14 }}>
-      <Alert tone="info">
-        <span className="row" style={{ gap: 6, alignItems: "flex-start", flexWrap: "nowrap" }}><Icon name="lock" size={16} /><span><strong>{firstSentence(view.privacy).line}</strong> {NOTES_REMINDER_SHORT}</span></span>
-        <Why label="What to write, and who sees it">
-          <span>{view.privacy}</span>
-          <span>{NOTES_REMINDER}</span>
-        </Why>
+    <div className="stack gap-4">
+      {/* the privacy note's mark is the lock: it takes the place of the alert's own mark (hidden), not a second icon beside it */}
+      <Alert tone="info" className="before:hidden">
+        <div className="grid gap-2">
+          <span><Icon name="lock" size={16} className="absolute top-4 left-[17px] text-primary" /><span><strong>{firstSentence(view.privacy).line}</strong> {NOTES_REMINDER_SHORT}</span></span>
+          {/* who reads the notes, by role, sits with the privacy words under the one disclosure that says "who sees it",
+              instead of a second line at the foot of the tab (founder, 23 Oct 2026: fewer words) */}
+          <Why label="What to write, and who sees it">
+            <span>{view.privacy}</span>
+            <span>{whoReadsLine(view.canRead)}</span>
+            <span>{NOTES_REMINDER}</span>
+          </Why>
+        </div>
       </Alert>
       <MyNote applicationId={applicationId} view={view} firstName={firstName} />
       {view.canRead === "all" ? (
-        <Card title={others.length ? `Your team's notes (${others.length})` : "Your team's notes"}>
-          {others.length ? <ul className="note-list">{others.map((n) => <NoteItem key={n.id} n={n} />)}</ul> : <p className="small muted">Nobody else has written a note on {firstName} yet.</p>}
+        <Card title={others.length ? `Your team's notes (${others.length})` : "Your team's notes"} className={CARD}>
+          {others.length ? <ul className="grid gap-3">{others.map((n) => <NoteItem key={n.id} n={n} />)}</ul> : <p className="small muted">Nobody else has written a note on {firstName} yet.</p>}
         </Card>
       ) : null}
-      <p className="small muted" style={{ margin: 0 }}>{whoReadsLine(view.canRead)}</p>
     </div>
   );
 }
@@ -60,11 +68,11 @@ export function NotesTab({ applicationId, firstName }: { applicationId: string; 
 /** Someone else's note: who, from which starter, when, and the words. */
 function NoteItem({ n }: { n: NoteWithVersions }) {
   return (
-    <li className="note-item">
+    <li className="flex items-start gap-2.5 border-t border-line pt-3 first:border-t-0 first:pt-0">
       <Avatar name={n.author.name} size="sm" />
-      <div>
-        <p className="small muted" style={{ margin: 0 }}>{noteMeta(n)}</p>
-        <p className="note-body">{n.body}</p>
+      <div className="grid min-w-0 gap-0.5">
+        <p className="small muted">{noteMeta(n)}</p>
+        <p className={NOTE_BODY}>{n.body}</p>
       </div>
     </li>
   );
@@ -119,9 +127,9 @@ export function MyNote({ applicationId, view, firstName, compact = false }: { ap
   const boxId = `my-note-${applicationId}`;
   if (!view.canWrite) {
     return (
-      <Card title="Your note">
-        {mine ? <p className="note-body">{mine.body}</p> : null}
-        <p className="small muted" style={{ margin: mine ? "8px 0 0" : 0 }}>{view.writeBlockedReason ?? "Your role can't write notes on candidates."}</p>
+      <Card title="Your note" className={CARD}>
+        {mine ? <p className={NOTE_BODY}>{mine.body}</p> : null}
+        <p className="small muted">{view.writeBlockedReason ?? "Your role can't write notes on candidates."}</p>
       </Card>
     );
   }
@@ -130,42 +138,45 @@ export function MyNote({ applicationId, view, firstName, compact = false }: { ap
     if (!starter || !text.trim()) setStarter(s);
   };
   return (
-    <Card title="Your note" aside={mine?.edited || versions.length ? <Chip>Changed</Chip> : null}>
+    <Card title="Your note" aside={mine?.edited || versions.length ? <Chip>Changed</Chip> : null} className={CARD}>
       {compact ? (
-        <div style={{ margin: "0 0 8px" }}>
-          <p className="small muted" style={{ margin: 0 }}>{NOTES_REMINDER_SHORT}</p>
+        <div className="grid gap-1">
+          <p className="small muted">{NOTES_REMINDER_SHORT}</p>
           <Why label="What to write">{NOTES_REMINDER}</Why>
         </div>
       ) : null}
-      <fieldset className="row" style={{ gap: 6, margin: "0 0 8px", padding: 0, border: 0, minWidth: 0 }} aria-label="Start from">
+      <fieldset className="row gap-1.5" aria-label="Start from">
         {/* the chosen starter is heard as pressed, not only seen by its fill */}
         {starterChoices(view).map((s) => <Button key={s.id} size="sm" variant={starter === s.id ? "primary" : "secondary"} ariaPressed={starter === s.id} onClick={() => pick(s.id)} title={s.prompt}>{s.label}</Button>)}
         {/* once words are written, another starter adds its heading but the note stays filed under the first one: say which */}
         <span className="small muted" aria-live="polite">{starter ? `Filed under: ${starterChoices(view).find((c) => c.id === starter)?.label ?? starter}` : ""}</span>
       </fieldset>
-      <label htmlFor={boxId} className="sr-only">Your note on {firstName}</label>
-      <textarea id={boxId} className="textarea note-box" rows={compact ? 4 : 7} maxLength={NOTE_BODY_MAX + 200} value={text} onChange={(e) => setText(e.target.value)} placeholder={`What you saw and heard, as it bears on the job. Only your team reads it; ${firstName} never does.`} aria-describedby={`${boxId}-status`} />
-      <div className="row" style={{ justifyContent: "space-between", marginTop: 6 }}>
-        <span id={`${boxId}-status`} className={state === "error" || state === "too_long" ? "small note-problem" : "small muted"} aria-live="polite">{saveStatusWords(state, { savedAt: saved.at, error })}</span>
-        <span className="row" style={{ gap: 6 }}>
-          {state === "error" ? <Button size="sm" onClick={() => mutate(text.trim())}>Try again</Button> : null}
-          {saved.body && !removing ? <Button size="sm" variant="quiet" onClick={() => setRemoving(true)}>Remove my note</Button> : null}
-        </span>
+      {/* the box and where its save stands, together */}
+      <div className="grid gap-1.5">
+        <label htmlFor={boxId} className="sr-only">Your note on {firstName}</label>
+        <textarea id={boxId} className="textarea" rows={compact ? 4 : 7} maxLength={NOTE_BODY_MAX + 200} value={text} onChange={(e) => setText(e.target.value)} placeholder={`What you saw and heard, as it bears on the job. Only your team reads it; ${firstName} never does.`} aria-describedby={`${boxId}-status`} />
+        <div className="row justify-between">
+          <span id={`${boxId}-status`} className={state === "error" || state === "too_long" ? "small text-critical" : "small muted"} aria-live="polite">{saveStatusWords(state, { savedAt: saved.at, error })}</span>
+          <span className="row gap-1.5">
+            {state === "error" ? <Button size="sm" onClick={() => mutate(text.trim())}>Try again</Button> : null}
+            {saved.body && !removing ? <Button size="sm" variant="quiet" onClick={() => setRemoving(true)}>Remove my note</Button> : null}
+          </span>
+        </div>
       </div>
       {removing ? (
         <Alert tone="caution">
-          <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="row justify-between">
             <span>Remove your note? Nobody on the team will see it any more.</span>
             <span className="row"><Button size="sm" variant="primary" loading={remove.isPending} onClick={() => remove.mutate()}>Yes, remove it</Button><Button size="sm" variant="quiet" onClick={() => setRemoving(false)}>Keep it</Button></span>
           </div>
         </Alert>
       ) : null}
       {versions.length ? (
-        <details className="small" style={{ marginTop: 8 }}>
+        <details className="more small">
           <summary>Earlier versions ({versions.length})</summary>
-          <ul className="note-versions">{versions.map((v) => <li key={v.at}><span className="muted">Until {timeWords(v.at)}</span><p className="note-body">{v.body}</p></li>)}</ul>
+          <ul className="grid gap-2.5">{versions.map((v) => <li key={v.at} className="grid gap-0.5 rounded-xl bg-surface-2 px-3 py-2"><span className="muted">Until {timeWords(v.at)}</span><p className={NOTE_BODY}>{v.body}</p></li>)}</ul>
         </details>
-      ) : mine?.edited ? <p className="small muted" style={{ marginTop: 8 }}>Changed since it was first written; the earlier words are kept on record.</p> : null}
+      ) : mine?.edited ? <p className="small muted">Changed since it was first written; the earlier words are kept on record.</p> : null}
     </Card>
   );
 }
@@ -179,11 +190,11 @@ export function NotesSummary({ applicationId, onOpen }: { applicationId: string;
   if (!q.data) return null;
   const notes = [...q.data.notes].sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
   return (
-    <div className="notes-summary">
-      <p className="small" style={{ margin: 0 }}><strong>Team notes</strong> <span className="muted">(private)</span></p>
+    <div className="grid justify-items-start gap-1.5 rounded-xl border border-line bg-surface px-4 py-3">
+      <p className="small"><strong>Team notes</strong> <span className="muted">(private)</span></p>
       {notes.length ? (
-        <ul className="note-lines">{notes.map((n) => <li key={n.id} className="small"><strong>{n.mine ? "You" : n.author.name}</strong>{n.starterLabel ? <span className="muted"> · {n.starterLabel}</span> : null}: {noteExcerpt(n.body)}</li>)}</ul>
-      ) : <p className="small muted" style={{ margin: "2px 0 0" }}>No notes yet.</p>}
+        <ul className="grid gap-1">{notes.map((n) => <li key={n.id} className="small"><strong>{n.mine ? "You" : n.author.name}</strong>{n.starterLabel ? <span className="muted"> · {n.starterLabel}</span> : null}: {noteExcerpt(n.body)}</li>)}</ul>
+      ) : <p className="small muted">No notes yet.</p>}
       <Button size="sm" variant="quiet" onClick={onOpen}>{q.data.canWrite && !q.data.mine ? "Add your note" : "Open the notes"}</Button>
     </div>
   );

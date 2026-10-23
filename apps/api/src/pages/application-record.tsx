@@ -20,6 +20,7 @@ import { Icon } from "./icons";
 import { JobFacts } from "./job-facts";
 import { Layout } from "./layout";
 import { LearnedFactsSection } from "./profile-pages";
+import { CARD_PAGE_CSS } from "./signin-link";
 import { MessageThread, THREAD_CSS, threadOf, toldWording } from "./thread";
 import { forTheWeb } from "./web-wording";
 
@@ -40,13 +41,12 @@ const LinkRequestForm = z.object({ email: z.email().max(254) });
 
 function LinkRequestPage(props: { error?: string; email?: string }) {
   return (
-    <Layout title="Get your application link again">
-      <p class="eyebrow">Your application</p>
+    <Layout title="Get your application link again" extraCss={CARD_PAGE_CSS}>
       <h1>Lost your link?</h1>
       <p class="lead">Type the email address you applied with. If we have an application from it, we email your link there, never to this page.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" action="/c/link-request" class="card">
-        <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
+        <div class="trap" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
         <label for="email" class="flush">Your email address</label>
         <input id="email" name="email" type="email" required autocomplete="email" value={props.email ?? ""} />
         <button class="btn" type="submit">Email me my link</button>
@@ -59,8 +59,7 @@ function LinkRequestPage(props: { error?: string; email?: string }) {
 /** What every request answers, whether or not the address is known: only the mailbox learns that. */
 function LinkRequestSent() {
   return (
-    <Layout title="Check your email">
-      <p class="eyebrow">Your application</p>
+    <Layout title="Check your email" extraCss={CARD_PAGE_CSS}>
       <h1>Check your email</h1>
       <div class="card" role="status">
         <p><strong>If we have an application from that address, your link is on its way.</strong></p>
@@ -91,71 +90,100 @@ candidatePages.post("/c/link-request", rateLimit(POLICIES.linkRequest), async (c
 });
 
 /**
- * The progress line the status page leads with (Wave S2, slice K4; Kanvis-like): a numbered circle per step joined by a
- * line, past steps filled with a tick, the current one ringed and in the ink colour (and announced as the current step).
- * Down the page on a phone, across it from 600 pixels. No motion. The messages about the application read as a
- * conversation (plan G7), in the screening conversation's look.
+ * The progress line the status page leads with (Wave S2, slice K4; Kanvis-like; October 2026 redesign): a clean stepper
+ * in one card, a numbered circle per step joined by a line, past steps filled in plum with a tick, the current one
+ * ringed in plum with a lavender halo (and announced as the current step). Down the page on a phone, across it from 600
+ * pixels. No motion. The messages about the application read as a conversation (plan G7), in the screening
+ * conversation's look.
  */
 export const STATUS_CSS = `
-.track { display: grid; margin: 20px 0 8px; padding: 0; list-style: none; counter-reset: track; }
+.track { display: grid; margin: 22px 0 14px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; counter-reset: track; }
 .track li { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 6px 0; color: var(--ink-3); font-size: 15px; font-weight: 600; line-height: 1.3; counter-increment: track; }
-.track li > span:nth-child(2) { padding-top: 4px; }
-.track li:not(:last-child)::after { content: ""; position: absolute; top: 34px; bottom: -6px; left: 13px; width: 2px; background: var(--line-2); }
-.track li.done:not(:last-child)::after { background: var(--ink); }
-.track .dot { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border: 2px solid var(--line-2); border-radius: 50%; background: var(--surface); font-size: 13px; font-variant-numeric: tabular-nums; }
+.track li > span:nth-child(2) { padding-top: 6px; }
+.track li:not(:last-child)::after { content: ""; position: absolute; top: 40px; bottom: -4px; left: 15px; width: 2px; border-radius: 2px; background: var(--line); }
+.track li.done:not(:last-child)::after { background: var(--primary); }
+.track .dot { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border: 1.5px solid var(--line-2); border-radius: 50%; background: var(--surface); color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
 .track .dot::before { content: counter(track); }
-.track li.done .dot { border-color: var(--ink); background: var(--ink); color: var(--ground); }
+.track li.done .dot { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
 .track li.done .dot::before { content: none; }
-.track .dot .icon { width: 14px; height: 14px; stroke-width: 2.5; }
-.track li.current .dot { border-color: var(--ink); box-shadow: 0 0 0 3px var(--surface-2); }
-.track li.done, .track li.current { color: var(--ink); }
+.track .dot .icon { width: 15px; height: 15px; stroke-width: 2.5; }
+.track li.current .dot { border-color: var(--primary); color: var(--primary); box-shadow: 0 0 0 4px var(--tint-2); }
+.track li.done { color: var(--ink-2); }
+.track li.current { color: var(--ink); }
 @media (min-width: 600px) {
-  .track { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
-  .track li { flex-direction: column; align-items: center; gap: 8px; padding: 0 4px; font-size: 14px; text-align: center; }
+  .track { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); padding: 20px 12px 18px; }
+  .track li { flex-direction: column; align-items: center; gap: 10px; padding: 0 4px; font-size: 13.5px; text-align: center; }
   .track li > span:nth-child(2) { padding-top: 0; }
-  .track li:not(:last-child)::after { top: 13px; bottom: auto; left: calc(50% + 14px); right: calc(-50% + 14px); width: auto; height: 2px; }
+  .track li:not(:last-child)::after { top: 15px; bottom: auto; left: calc(50% + 22px); right: calc(-50% + 22px); width: auto; height: 2px; }
 }
-${THREAD_CSS}${recordCss()}`;
+${THREAD_CSS}${recordCss()}${CARD_PAGE_CSS}`;
 
 /**
- * The application record's own parts (Wave S7, S7-E): the pills that jump to each section, the match score with its
- * bars (native progress elements, so no inline style; the colour band from the tokens), the answers read back and the
- * other applications at the company. Tokens only, no motion. A function, so the status page's stylesheet above can
- * name it before this point in the file.
+ * The application record's own parts (Wave S7, S7-E; October 2026 redesign): the pills that jump to each section; "What
+ * happens next" as the "your next step" card (`.next-step`: its heading as a small eyebrow with a coral dot, the line in
+ * display type, the one thing to do); the status card as one strip of label-over-value cells; the match score with its
+ * bars (native progress elements, so no inline style; the colour band from the tokens); the answers read back (the
+ * assistant's notes in a lavender block with a plum rule); the details as label/value rows; and the other applications
+ * as the rows of one list with their pills. Tokens only, no motion, no button rules. A function, so the status page's
+ * stylesheet above can name it before this point in the file.
  */
 function recordCss(): string {
   return `
-.jump { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 20px; padding: 0; list-style: none; }
-.jump a { display: inline-block; padding: 6px 12px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--surface); color: var(--ink); font-size: 14px; font-weight: 600; text-decoration: none; }
-.jump a:hover { border-color: var(--line-strong); }
-.score-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin: 4px 0 6px; }
-.score-num { color: var(--ink); font: 700 44px/1 var(--display); font-variant-numeric: tabular-nums; }
-.score-num small { margin-left: 2px; color: var(--ink-3); font-size: 18px; }
+.jump { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 24px; padding: 0; list-style: none; }
+.jump a { display: inline-flex; align-items: center; min-height: 34px; padding: 6px 14px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--surface); color: var(--ink-2); font-size: 13.5px; font-weight: 600; line-height: 1.2; text-decoration: none; }
+.next-step { margin: 0 0 20px; padding: 26px; border: 1px solid var(--tint-2); border-radius: var(--r-panel); background: linear-gradient(115deg, var(--tint) 0%, var(--surface) 58%, var(--peach) 135%); }
+.next-step > h2 { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; color: var(--ink-2); font-family: var(--mono); font-size: 11.5px; font-weight: 400; line-height: 1.4; letter-spacing: 0.14em; text-transform: uppercase; }
+.next-step > h2::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.next-step > h2 + p { margin: 0; color: var(--ink); font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -0.02em; }
+.next-step > p + p { margin: 12px 0 0; color: var(--ink-2); font-size: 15px; }
+.next-step > a { margin-top: 20px; }
+main .next-step > .card, main .next-step > .card[role="status"] { margin: 16px 0 0; border-color: var(--line); border-radius: var(--r-card); background: var(--surface); }
+div.card.status { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 0; margin: 20px 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+.card.status > div { display: grid; align-content: start; gap: 4px; margin: 0; padding: 16px 20px; border: 0; box-shadow: -1px 0 0 var(--line), 0 -1px 0 var(--line); }
+.card.status > div > :first-child { color: var(--ink-2); font-size: 13px; font-weight: 400; }
+.card.status > div > :last-child { min-width: 0; color: var(--ink); font-family: var(--display); font-size: 19px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em; text-align: left; overflow-wrap: anywhere; }
+.score-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 6px 0 8px; }
+.score-num { color: var(--ink); font-family: var(--display); font-size: 48px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.score-num small { margin-left: 4px; color: var(--ink-3); font-family: var(--ui); font-size: 16px; font-weight: 600; letter-spacing: 0; }
+.score-head > span:last-child { padding: 3px 12px; border-radius: var(--r-pill); background: var(--tint-2); color: var(--primary); font-family: var(--ui); font-size: 14px; font-weight: 600; letter-spacing: 0; }
 .bars { display: grid; gap: 14px; margin: 12px 0; padding: 0; list-style: none; }
-.bar-head { display: flex; justify-content: space-between; gap: 12px; font-size: 15px; }
-.bar-head span:last-child { flex: none; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.bars progress { display: block; width: 100%; height: 8px; margin-top: 6px; overflow: hidden; border: 0; border-radius: var(--r-pill); background: var(--surface-2); -webkit-appearance: none; appearance: none; }
-.bars progress::-webkit-progress-bar { border-radius: var(--r-pill); background: var(--surface-2); }
-.bars progress::-webkit-progress-value { border-radius: var(--r-pill); background: var(--accent); }
-.bars progress::-moz-progress-bar { border-radius: var(--r-pill); background: var(--accent); }
+.bar-head { display: flex; justify-content: space-between; gap: 12px; font-size: 14.5px; }
+.bar-head span:first-child { min-width: 0; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.bar-head span:last-child { flex: 0 1 auto; color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
+.bars progress { display: block; width: 100%; height: 8px; margin-top: 6px; overflow: hidden; border: 0; border-radius: var(--r-pill); background: var(--line); -webkit-appearance: none; appearance: none; }
+.bars progress::-webkit-progress-bar { border-radius: var(--r-pill); background: var(--line); }
+.bars progress::-webkit-progress-value { border-radius: var(--r-pill); background: var(--good); }
+.bars progress::-moz-progress-bar { border-radius: var(--r-pill); background: var(--good); }
 .bars .partial progress::-webkit-progress-value { background: var(--caution); }
 .bars .partial progress::-moz-progress-bar { background: var(--caution); }
 .bars .short progress::-webkit-progress-value { background: var(--critical); }
 .bars .short progress::-moz-progress-bar { background: var(--critical); }
-.said { display: grid; gap: 14px; margin: 8px 0 0; padding: 0; list-style: none; }
+.said { display: grid; gap: 14px; margin: 10px 0 0; padding: 0; list-style: none; }
+.said > li + li { padding-top: 14px; border-top: 1px solid var(--line); }
 .said-q { margin: 0 0 4px; color: var(--ink); font-weight: 600; }
-.said .pre { margin: 0; }
-.said-note { margin: 8px 0 0; padding-left: 12px; border-left: 3px solid var(--line-2); color: var(--ink-2); font-size: 14.5px; }
-.state { display: inline-block; padding: 2px 10px; border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink-2); font-size: 13px; font-weight: 600; }
+.said .pre { margin: 0; color: var(--ink-2); }
+.said-note { margin: 8px 0 0; padding: 8px 12px; border-left: 2px solid var(--primary); border-radius: 0 10px 10px 0; background: var(--tint); color: var(--ink-2); font-size: 14px; }
+.state { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 10px; border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink-2); font-size: 12.5px; font-weight: 600; line-height: 1.3; white-space: nowrap; }
 .state.needs_you { background: var(--accent-soft); color: var(--accent-ink); }
-.details { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 8px 0 0; }
-.details dt { color: var(--ink-3); }
-.details dd { margin: 0; overflow-wrap: anywhere; }
-.apps { display: grid; gap: 10px; margin: 8px 0 0; padding: 0; list-style: none; }
-.apps li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
-.apps .meta { margin: 2px 0 0; }
+.state.waiting { background: var(--tint-2); color: var(--primary); }
+.details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 20px; margin: 10px 0 0; font-size: 14.5px; }
+.details dt { color: var(--ink-2); }
+.details dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+ul.apps { display: block; margin: 12px 0 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; }
+ul.apps > li.card { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0; padding: 14px 18px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+ul.apps > li.card + li.card { border-top: 1px solid var(--line); }
+ul.apps strong { color: var(--ink); font-size: 15px; }
+ul.apps .state { margin-left: 6px; }
+ul.apps .meta { margin: 2px 0 0; font-size: 13px; }
 .app-links { display: flex; flex-wrap: wrap; gap: 6px 16px; }
-@media (max-width: 600px) { .details { grid-template-columns: 1fr; } .details dd { margin-bottom: 6px; } }
+@media (hover: hover) and (pointer: fine) { .jump a:hover { border-color: var(--line-strong); color: var(--ink); } }
+@media (pointer: coarse) { .jump a { min-height: 40px; } }
+@media (max-width: 600px) {
+  .next-step { padding: 22px 18px; }
+  .next-step > h2 + p { font-size: 20px; }
+  .details { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .details dd { margin-bottom: 8px; }
+}
 `;
 }
 
@@ -409,6 +437,9 @@ function ScoreBar(props: { row: CandidateScoreRow }) {
  * on ("From your résumé and your AI interview", or "From your résumé only" until the AI interview is in it; R20-9) and the bars: only the
  * job page's must-haves by name, every other requirement in one line; what nothing showed yet is listed as not shown,
  * never held against them. Nothing at all when ITS switched it off for the company.
+ *
+ * Every word here, the eyebrows included, stays exactly as drafted until counsel signs off: a block under counsel review
+ * is outside the fewer-words pass (23 October 2026). That pass had cut two of its lines; both are back, word for word.
  */
 function ScoreSection(props: { score: RecordScore; companyName: string; chatSent: boolean; statusPath: string }) {
   const { score } = props;
@@ -464,7 +495,7 @@ function AnswersSection(props: { sent: SentAnswers; companyName: string; timeZon
   return (
     <section id="answers" aria-labelledby="answers-h">
       <h2 id="answers-h">Your answers</h2>
-      <p class="meta">What you sent to {props.companyName}, as they read it. {CORRECTION_LINE}</p>
+      <p class="meta">{CORRECTION_LINE}</p>
       <div class="card">
         <h3>Your details</h3>
         <dl class="details">
@@ -508,14 +539,17 @@ function AnswersSection(props: { sent: SentAnswers; companyName: string; timeZon
   );
 }
 
-/** "The job" (redesign spec C8): the job as it was when they applied, what the team looks for, and its page while it is public. */
-function JobSection(props: { packet: RolePacket; companyName: string; href: string | null }) {
+/**
+ * "The job" (redesign spec C8): the job's facts as they were when they applied, what the team looks for, and its page
+ * while it is public. Not its title and employer again: the page's heading is the job, and the line on who decides names
+ * the employer.
+ */
+function JobSection(props: { packet: RolePacket; href: string | null }) {
   const { packet } = props;
   const mustHaves = packet.requirements.mustHaves.map((m) => m.text.trim()).filter(Boolean);
   return (
     <section class="card" id="job" aria-labelledby="job-h">
       <h2 id="job-h">The job</h2>
-      <p><strong>{packet.identity.title}</strong> at {props.companyName}</p>
       <JobFacts packet={packet} pay="" small schedule={false} />
       {mustHaves.length ? <><h3>What the team is looking for</h3><ul>{mustHaves.map((t) => <li>{t}</li>)}</ul></> : null}
       {props.href ? <p><a href={props.href}>See the job page</a></p> : null}
@@ -534,7 +568,7 @@ function OtherApplications(props: { others: OtherApplication[]; companyName: str
   return (
     <section id="applications" aria-labelledby="applications-h">
       <h2 id="applications-h">Your applications at {props.companyName}</h2>
-      <p class="meta">Your other applications here. Each has its own page: open it from the email we sent you about it, or <a href="/c/link-request">get your links again</a> by email.</p>
+      <p class="meta">Each has its own page: open it from the email we sent you about it, or <a href="/c/link-request">get your links again</a> by email.</p>
       <ul class="apps">
         {props.others.map((o) => (
           <li class="card">
@@ -636,19 +670,27 @@ candidatePages.get("/c/status/:token", async (c) => {
   ];
   return c.html(
     <Layout title={`Your application at ${company?.name ?? ""}`} extraCss={STATUS_CSS}>
-      <p class="eyebrow">{company?.name ? `${company.name} · ` : ""}Your application</p>
+      {/* The employer's name above the job's title. The candidate pages' rule (fewer words, 23 October 2026): a company or
+          job eyebrow only where nothing else near the top names them. Here the heading is the job, and on a phone the next
+          mention of the employer sits below the progress line and the next-step card, so the name stays. */}
+      {company?.name ? <p class="eyebrow">{company.name}</p> : null}
       <h1>{role?.title}</h1>
       <ProgressLine steps={progress.steps} current={progress.current} />
       <JumpLinks items={jump} />
-      {/* Where things stand, then the one thing to do now (founder brief, 14 October 2026): the line, and the button or card. */}
-      <h2>What happens next</h2>
-      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming })}</p>
-      {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
-      {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
-      {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
-      {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
-      {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
-      {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
+      {/* Where things stand, then the one thing to do now (founder brief, 14 October 2026): the line, and the button or card,
+          drawn together as the "your next step" card (`next-step`, October 2026 redesign). */}
+      <div class="next-step">
+        <h2>What happens next</h2>
+        <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming })}</p>
+        {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
+        {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
+        {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
+        {/* The line above already says the team would like to interview them: the card is the time to pick and its button. */}
+        {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
+        {/* "What to prepare:" names the round's topics (its purpose); the sentence after it is the one thing to bring, kept. */}
+        {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
+        {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
+      </div>
       {/* One line that people decide; how the AI helps is one click away. */}
       <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application.</p>
       <details class="more">
@@ -665,7 +707,7 @@ candidatePages.get("/c/status/:token", async (c) => {
       <ScoreSection score={record.score} companyName={companyName} chatSent={!!record.sent.chat} statusPath={`/c/status/${app.statusToken}`} />
       <AnswersSection sent={record.sent} companyName={companyName} timeZone={companyZone} details={{ email: cand?.email ?? null, location: cand?.locationText ?? null, workSummary: app.answers.workSummary ?? null, resume: !!app.resumeDocumentId }} />
       <LearnedFactsSection facts={record.facts} statusToken={app.statusToken} companyName={companyName} timeZone={cand?.location?.timezone ?? companyZone} saved={c.req.query("facts") ?? null} />
-      {record.packet ? <JobSection packet={record.packet} companyName={companyName} href={jobHref} /> : null}
+      {record.packet ? <JobSection packet={record.packet} href={jobHref} /> : null}
       <OtherApplications others={record.others} companyName={companyName} timeZone={companyZone} />
       <h2 id="choices">Your choices</h2>
       {smsEnabled || smsOn ? (
@@ -821,8 +863,7 @@ candidatePages.post("/c/status/:token/new-link", rateLimit(POLICIES.withdraw), a
   await container.kick();
   c.header("Cache-Control", "no-store");
   return c.html(
-    <Layout title="Check your email">
-      <p class="eyebrow">Your application</p>
+    <Layout title="Check your email" extraCss={CARD_PAGE_CSS}>
       <h1>Your new link is on its way</h1>
       <div class="card" role="status">
         <p><strong>The link you used no longer works.</strong></p>

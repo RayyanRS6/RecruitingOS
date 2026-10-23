@@ -162,7 +162,8 @@ test.describe("the pool board", () => {
 
     // The list: the strip offers to sort the pool; each row has its match score, and the list sorts by it
     await page.goto(`/roles/${roleId}/talent`);
-    await expect(page.getByRole("region", { name: "Sort the pool" })).toContainText("Nothing moves until you apply it, and nothing is sent to anyone.", { timeout: 30_000 });
+    // no sentence in the bar (founder, 23 Oct 2026): what sorting does, and that nothing is sent, is the button's title
+    await expect(page.getByRole("region", { name: "Sort the pool" }).getByRole("button", { name: "Sort the pool" })).toHaveAttribute("title", /Nothing moves until you apply it, and nothing is sent to anyone\.$/, { timeout: 30_000 });
     await expect(page.locator(".talent-row .score-slot .score").first()).toBeVisible({ timeout: 30_000 });
     // the order is a dropdown chip (Wave S6): its list ticks the order in force, and choosing Score sorts by it
     await page.getByRole("button", { name: /^Sort: / }).click();
@@ -201,8 +202,9 @@ test.describe("the pool board", () => {
     // Ask about this pool: one click, an answer from the checked findings, the people as chips, what it looked at
     await page.getByRole("button", { name: "Ask about this pool" }).click();
     const panel = page.getByRole("dialog", { name: "Ask about this pool" });
-    await expect(panel.getByText("Pick a question. Each answer says what it looked at.")).toBeVisible();
-    await expect(panel.getByText("Typing your own question is not available yet. Pick one above, or bring in a recruiter.")).toBeVisible();
+    // where answers come from under the title, then the questions; no box, and no line about the box (23 Oct 2026)
+    await expect(panel.getByText("Answers come from the checked findings already on file.")).toBeVisible();
+    await expect(panel.getByText(/Typing your own question/)).toHaveCount(0);
     await expect(panel.locator("textarea")).toHaveCount(0);
     await panel.getByRole("button", { name: "Who is missing a must-have, and why?" }).click();
     await expect(panel.getByText(/^Looked at: \d+ (person|people)/)).toBeVisible({ timeout: 30_000 });
@@ -227,10 +229,13 @@ test.describe("the pool board", () => {
     const review = page.getByRole("dialog", { name: "Review and apply" });
     await expect(review).toBeVisible({ timeout: 30_000 });
     await expect(review.getByText("Private: nobody is emailed now.")).toBeVisible();
-    await expect(review.getByText(/^Filed privately; nobody is emailed now\. If nobody tells them within 5 working days, the standard message goes by itself/)).toBeVisible();
-    await expect(review.getByText("Untick anyone you want to decide yourself. Unticked people stay where they are.")).toBeVisible();
+    // where each group goes is its heading's title, and "untick anyone" the Apply button's (founder, 23 Oct 2026)
+    await expect(review.getByRole("heading", { level: 3, name: "Not moving forward" })).toHaveAttribute("title", /^Filed privately; nobody is emailed now\. If nobody tells them within 5 working days, the standard message goes by itself/);
+    await expect(review.getByRole("button", { name: /^Apply \d+ decisions?$/ })).toHaveAttribute("title", "Untick anyone you want to decide yourself. Unticked people stay where they are.");
     await expect(review.getByRole("checkbox", { name: "Cleo Park" })).toBeChecked();
     await expect(review.getByLabel("Reason for Cleo Park (change it if you disagree)")).toBeVisible();
+    // the day-5 safety net stays on screen in the footer while anyone not moving forward is ticked (founder decision D-03)
+    await expect(review.getByText(/^Not moving forward: if nobody tells them within 5 working days, the standard message goes by itself/)).toBeVisible();
     await expect(review.getByText(/From their evidence: Missing must-have/)).toBeVisible();
     await expectAccessible(page, "review and apply");
     // everyone in, Ben too if the board left him unticked

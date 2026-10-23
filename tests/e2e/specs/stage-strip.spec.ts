@@ -33,8 +33,8 @@ test.describe("the stage strip and the candidate panel", () => {
 
     // The page: the job, its status and how many applied; the strip counts everyone
     await page.goto(`/roles/${seeded.roleId}/talent`);
-    await expect(page.getByText(`Job · Strip Dental ${run}`)).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole("heading", { level: 1 })).toContainText(/Hygienist/i);
+    // the job's title heads the page (no "Job · company" eyebrow above it since the fewer-words cut of 23 Oct 2026)
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(/Hygienist/i, { timeout: 30_000 });
     // how many applied: the count on the job's Candidates tab (Wave S1: the header's line is the job's facts)
     await expect(page.getByRole("navigation", { name: "Job sections" }).getByRole("link", { name: /^Candidates 2$/ })).toBeVisible({ timeout: 30_000 });
     const strip = page.getByRole("tablist", { name: "Stages" });

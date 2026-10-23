@@ -52,7 +52,9 @@ describe("an interviewer on a job they are not on", () => {
   it("is told so on the job page, with the way to their interviews, instead of a failure to retry", () => {
     const html = render(refused(client("interviewer")), createElement(RoleDetail));
     expect(text(html)).toContain("You are not on this job");
-    expect(text(html)).toContain("You see the jobs you interview for. Your interviews are under Interviews.");
+    // the title and the one button say it all; the body line that repeated them was cut (fewer words, 23 Oct 2026)
+    expect(text(html)).not.toContain("You see the jobs you interview for. Your interviews are under Interviews.");
+    expect(text(html)).toContain("Go to Interviews");
     expect(html).toContain('href="/interviews"');
     expect(text(html)).not.toContain("Could not load this job.");
     expect(text(html)).not.toContain("Try again");

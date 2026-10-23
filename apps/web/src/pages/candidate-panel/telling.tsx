@@ -14,6 +14,7 @@ import { sendDecisionToast } from "../../talent-actions";
 import { PERSONAL_LINE_HINT, PERSONAL_LINE_MAX, WORDING_HINT, safetyNetLine, sendButtonLabel, sendPolicyLine, sentWithUndoToast, undoMillisLeft, wordingChoices } from "../../telling";
 import { whoDecides } from "./helpers";
 import { useCandidateAction, useDraft, useRefreshCandidate } from "./hooks";
+import { LEAD, STEP } from "./why";
 
 /**
  * Telling the candidate a decision (founder decisions B6, Q27, Q28; plan Wave G). The decision was private; this card
@@ -64,7 +65,7 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
     // a message that seems stuck can be settled by a person: recording that they told them withdraws it if it has not left
     return (
       <Alert tone="info">
-        <div className="row" style={{ justifyContent: "space-between" }}>
+        <div className="row justify-between">
           <span>{decisionOnItsWayText(first, check)}</span>
           <span className="row">
             {sent ? <InlineUndo autoFocus undoUntil={sent.undoUntil} ariaLabel={`Undo the decision message to ${first}`} onUndo={async () => { await takeBack({ applicationId: a.id, roleId, communicationId: sent.communicationId, firstName: first, kind: "decision" }); setSent(null); }} /> : null}
@@ -86,46 +87,46 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
   // a closed role's one closing message naming them waits for approval too (Q30): no safety-net date while it does
   const safety = safetyNetLine({ a, waitingApproval: !!waiting || !!a.decisionMessageWaiting });
   return (
-    <Card needsYou lift title={waiting ? `Send the decision message to ${first}?` : `${first} has not been told yet`}>
+    <Card needsYou lift title={waiting ? `Send the decision message to ${first}?` : `${first} has not been told yet`} className={STEP}>
       {waiting ? (
-        <p className="small" style={{ color: "var(--ink-2)" }}>{mayApprove ? `Someone on your team wants to send the decision message, in ${chosen}.` : `The decision message, in ${chosen}, is waiting for ${whoDecides(waiting.requiredRoles)} to approve it.`} Nothing goes out until it is approved.</p>
+        <p className={LEAD}>{mayApprove ? `Someone on your team wants to send the decision message, in ${chosen}.` : `The decision message, in ${chosen}, is waiting for ${whoDecides(waiting.requiredRoles)} to approve it.`} Nothing goes out until it is approved.</p>
       ) : a.decisionMessageWaiting ? (
-        <p className="small" style={{ color: "var(--ink-2)" }}>The role's closing message, which includes {first}, is waiting for approval. Nothing goes out until it is approved; it is decided on Home.</p>
+        <p className={LEAD}>The role's closing message, which includes {first}, is waiting for approval. Nothing goes out until it is approved; it is decided on Home.</p>
       ) : (
-        <p className="small" style={{ color: "var(--ink-2)" }}>Your decision is private: nothing has been sent to {first}.</p>
+        <p className={LEAD}>Your decision is private: nothing has been sent to {first}.</p>
       )}
-      {waiting && line ? <p className="small" style={{ margin: "6px 0 0" }}>Their personal line: <q>{line}</q></p> : null}
-      {/* The safety net in one short line (founder decision D-03 A), with its day. */}
-      {safety && !sending ? <p className="small muted safety-net" style={{ margin: "8px 0 0" }}>{safety}</p> : null}
+      {waiting && line ? <p className="small">Their personal line: <q>{line}</q></p> : null}
+      {/* The safety net in one short line (founder decision D-03 A), with its day, set off by a rule on its left. */}
+      {safety && !sending ? <p className="small muted border-l-2 border-line-2 pl-2.5">{safety}</p> : null}
       {waiting && mayApprove ? (
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="row">
           <Button size="sm" variant="primary" loading={decide.isPending} onClick={() => decide.mutate("approve")}>Yes, send it</Button>
           <Button size="sm" variant="quiet" loading={decide.isPending} onClick={() => decide.mutate("reject")}>Do not send</Button>
         </div>
       ) : null}
       {!waiting && !sending && !inPerson && !takingBack ? (
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="row">
           <Button size="sm" variant="primary" icon="send" disabled={!canSend} title={canSend ? "Shows the message before anything is sent" : a.blockedReasons.send_decision} onClick={() => setSending(true)}>Send message</Button>
           <Button size="sm" disabled={!canTell} title={canTell ? "Records it; nothing is sent" : a.blockedReasons.told_in_person} onClick={() => setInPerson(true)}>I told them myself</Button>
           {backTo ? <Button size="sm" variant="quiet" title="If this was a mistake: they go back to where they were" onClick={() => setTakingBack(true)}>Take back this decision</Button> : null}
         </div>
       ) : null}
       {takingBack && backTo ? (
-        <div className="stack" style={{ gap: 8, marginTop: 10 }}>
+        <div className="stack gap-3">
           {/* Someone declined from Cancelled goes back there, with what they chose (their promised new times may still go). */}
-          <p className="small" style={{ margin: 0 }}>{backTo.to === "cancelled" ? `Take back this decision? ${first} goes back under Cancelled, with what they chose. Nothing about this decision was sent to them, and nothing will be.` : `Take back this decision? ${first} goes back to ${backTo.label}. Nothing was sent to them, and nothing will be.`}</p>
+          <p className="small">{backTo.to === "cancelled" ? `Take back this decision? ${first} goes back under Cancelled, with what they chose. Nothing about this decision was sent to them, and nothing will be.` : `Take back this decision? ${first} goes back to ${backTo.label}. Nothing was sent to them, and nothing will be.`}</p>
           <div className="row">
             <Button size="sm" variant="primary" loading={act.isPending} onClick={() => act.mutate({ action: "undo_decision" })}>Yes, take it back</Button>
             <Button size="sm" variant="quiet" onClick={() => setTakingBack(false)}>Cancel</Button>
           </div>
         </div>
       ) : null}
-      {waiting && !inPerson && canTell ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="quiet" onClick={() => setInPerson(true)}>I told them myself</Button></div> : null}
-      {!canSend && !canTell && a.blockedReasons.send_decision ? <p className="small muted" style={{ marginTop: 6 }}>{a.blockedReasons.send_decision}</p> : null}
+      {waiting && !inPerson && canTell ? <div className="row"><Button size="sm" variant="quiet" onClick={() => setInPerson(true)}>I told them myself</Button></div> : null}
+      {!canSend && !canTell && a.blockedReasons.send_decision ? <p className="small muted">{a.blockedReasons.send_decision}</p> : null}
       {sending ? <SendDecisionStep a={a} roleId={roleId} onClose={() => setSending(false)} onSent={setSent} /> : null}
       {inPerson ? (
-        <div className="stack" style={{ gap: 8, marginTop: 10 }}>
-          <p className="small" style={{ margin: 0 }}>Record that you told {first} yourself? Nothing more will be sent to them about this decision.</p>
+        <div className="stack gap-3">
+          <p className="small">Record that you told {first} yourself? Nothing more will be sent to them about this decision.</p>
           <Field label="How and when (kept internally, optional)" htmlFor="told-note"><input id="told-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: by phone on Tuesday" /></Field>
           <div className="row">
             <Button size="sm" variant="primary" loading={act.isPending} onClick={() => act.mutate({ action: "told_in_person", note: note.trim() || undefined })}>Yes, record it</Button>
@@ -177,24 +178,30 @@ export function SendDecisionStep({ a, roleId, onClose, onSent }: { a: Applicatio
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the message."),
   });
-  if (base.isLoading) return <div style={{ marginTop: 10 }}><Skeleton lines={4} /></div>;
-  if (base.error || !base.data) return <div style={{ marginTop: 10 }}><ErrorState message="Could not load the message." onRetry={() => base.refetch()} /></div>;
+  if (base.isLoading) return <Skeleton lines={4} />;
+  if (base.error || !base.data) return <ErrorState message="Could not load the message." onRetry={() => base.refetch()} />;
   const d = base.data;
   const choices = wordingChoices(d.wordings);
   const fixed = choices.length <= 1;
+  const eligibility = d.wording === "eligibility";
   const sendable = !!d.to && d.policy !== "not_sent" && !refused && !checking && !!shown;
   return (
-    <div className="stack send-step" style={{ gap: 10, marginTop: 10 }}>
-      <p className="small muted" style={{ margin: 0 }}>{sendPolicyLine({ to: d.to, policy: d.policy, undoSeconds: d.undoSeconds })}</p>
+    <div className="stack gap-3">
+      <p className="small muted">{sendPolicyLine({ to: d.to, policy: d.policy, undoSeconds: d.undoSeconds })}</p>
       {fixed ? (
-        <p className="small" style={{ margin: 0 }}>Wording: <strong>{choices[0]?.label ?? DECISION_WORDING_LABEL[d.wording]}</strong>. <span className="muted">{WORDING_HINT[d.wording]}</span></p>
+        // one wording: its description is the name's tooltip, as on the option rows; it stays on screen only for the
+        // eligibility wording, where it says why there is no choice
+        <p className="small">Wording: <strong title={eligibility ? undefined : WORDING_HINT[d.wording]}>{choices[0]?.label ?? DECISION_WORDING_LABEL[d.wording]}</strong>.{eligibility ? <> <span className="muted">{WORDING_HINT[d.wording]}</span></> : null}</p>
       ) : (
-        <fieldset className="wording-picker">
+        // each approved wording the kit's option row, "Suggested" as its tag; the exact message shows below the choice, so
+        // a wording's one-line description is only its tooltip. The legend's look comes from here: a test pins it bare.
+        <fieldset className="grid gap-2 [&>legend]:mb-2 [&>legend]:font-semibold">
           <legend className="small">Which approved wording?</legend>
           {choices.map((c) => (
-            <label key={c.id} className="wording-option" data-checked={chosen === c.id ? "true" : undefined}>
+            <label key={c.id} className="option-row" title={c.hint}>
               <input type="radio" name={`wording-${a.id}`} value={c.id} checked={chosen === c.id} onChange={() => setWording(c.id)} aria-label={c.text} />
-              <span><strong>{c.text}</strong><br /><span className="small muted">{c.hint}</span></span>
+              {c.label}
+              {c.suggested ? <span className="option-tag" aria-hidden="true">Suggested</span> : null}
             </label>
           ))}
         </fieldset>
@@ -202,23 +209,25 @@ export function SendDecisionStep({ a, roleId, onClose, onSent }: { a: Applicatio
       {/* The personal line is optional: one click away; the message below always shows what goes, line included. */}
       <details className="more">
         <summary>{line.trim() ? "Your personal line" : "Add a personal line (optional)"}</summary>
-        <div className="stack" style={{ gap: 4 }}>
+        <div className="stack gap-1">
           <Field label="A personal line (optional)" htmlFor={`personal-line-${a.id}`} hint={PERSONAL_LINE_HINT}>
             <textarea id={`personal-line-${a.id}`} className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => setLine(e.target.value)} placeholder={`For example: It was a pleasure to meet you, ${a.candidate.firstName}.`} />
           </Field>
           {/* the count is announced only near the limit, not on every keystroke */}
-          <p className="small muted" style={{ margin: 0, textAlign: "right" }} aria-live={line.length >= PERSONAL_LINE_MAX - 30 ? "polite" : "off"}>{line.length} of {PERSONAL_LINE_MAX}</p>
+          <p className="small muted text-right tabular-nums" aria-live={line.length >= PERSONAL_LINE_MAX - 30 ? "polite" : "off"}>{line.length} of {PERSONAL_LINE_MAX}</p>
         </div>
       </details>
       {refused ? <Alert tone="critical">{refused}</Alert> : null}
       {custom && preview.error && !refused ? <ErrorState message={preview.error instanceof ApiError ? preview.error.message : "Could not show the message with your changes."} onRetry={() => preview.refetch()} /> : null}
       {shown && !refused ? (
-        <div className="card message-preview" aria-busy={checking || undefined}>
+        // the email as it goes: on the paper ground inside the card, like a letter (`message-preview`: only a hook for the
+        // talent-actions e2e spec)
+        <div className="card message-preview grid gap-1.5 rounded-xl bg-ground p-4 shadow-none" aria-busy={checking || undefined}>
           {/* only this short line is live, so the whole message is not read out again after each check */}
-          <p className="small muted" style={{ margin: "0 0 6px" }} aria-live="polite">What {a.candidate.firstName} gets{checking ? " (checking your line…)" : ""}</p>
-          <p className="small" style={{ margin: 0 }}><strong>{shown.subject}</strong></p>
-          <p className="small" style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{shown.text}</p>
-          {shown.adverseDecisionLine ? <p className="small muted" style={{ marginTop: 8 }}>Colorado's notice is included: they can ask for the reasons and for a person to review the decision.</p> : null}
+          <p className="small muted" aria-live="polite">What {a.candidate.firstName} gets{checking ? " (checking your line…)" : ""}</p>
+          <p className="small"><strong>{shown.subject}</strong></p>
+          <p className="small whitespace-pre-wrap">{shown.text}</p>
+          {shown.adverseDecisionLine ? <p className="small muted mt-1">Colorado's notice is included: they can ask for the reasons and for a person to review the decision.</p> : null}
         </div>
       ) : null}
       <div className="row">

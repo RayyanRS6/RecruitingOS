@@ -150,7 +150,9 @@ describe("the candidate's status page: the conversation, the decision in its own
     await message(a, { direction: "outbound", subject: "See you Tuesday", text: "Thanks Nora, see you then.", status: "delivered", createdAt: at(50) });
     const html = await page(`/c/status/${a.statusToken}`);
     expect(html).toContain('<h2 id="messages">Messages about your application</h2>');
-    expect(html).toContain("What we sent you and what you wrote back, oldest first. To write to the team, reply to any of our emails.");
+    // how to write to the team stays (there is no reply box); the line that only described the list is gone (fewer words, 23 October 2026)
+    expect(html).toContain('<h2 id="messages">Messages about your application</h2><p class="meta">To write to the team, reply to any of our emails.</p>');
+    expect(html).not.toContain("What we sent you and what you wrote back");
     const thread = html.slice(html.indexOf('<ol class="thread">'), html.indexOf("</ol>", html.indexOf('<ol class="thread">')));
     // the acknowledgment first, then the conversation in the order it happened
     const order = ["Thank you for applying: your next step", "Interview times at Thread Dental", "Tuesday at 10 works for me.", "Running five minutes late", "See you Tuesday"].map((t) => thread.indexOf(t));
@@ -173,7 +175,7 @@ describe("the candidate's status page: the conversation, the decision in its own
     const a = await applyAs("Omar", "omar.tester@example.com");
     for (let i = 1; i <= THREAD_LIMIT; i++) await message(a, { direction: "outbound", subject: `Update number ${i}`, text: `Update ${i}.`, status: "sent", createdAt: at(10 + i) });
     const html = await page(`/c/status/${a.statusToken}`);
-    expect(html).toContain(`oldest first; the latest ${THREAD_LIMIT} are shown.`);
+    expect(html).toContain(`<p class="meta">The latest ${THREAD_LIMIT} are shown. To write to the team, reply to any of our emails.</p>`);
     expect(html).not.toContain("Thank you for applying");
     expect(html).toContain("Update number 1<");
     expect(html).toContain(`Update number ${THREAD_LIMIT}<`);

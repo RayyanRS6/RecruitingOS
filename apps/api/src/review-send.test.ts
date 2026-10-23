@@ -143,7 +143,9 @@ describe("Review & send", () => {
     expect(html).toContain(`<form method="post" action="${base}/later" class="journey-later"><span>Saved</span><button class="link-action" type="submit">Finish later</button></form>`);
     expect(html.match(/<h1[\s>]/g)).toHaveLength(1);
     expect(html).toContain("<h1>Check what you're sending</h1>");
-    expect(html).toContain('<p class="lead">Send Dental reads this exactly as written, so change anything now. The hiring team sees your answers only once you send them.</p>');
+    // that nothing goes before Send stays; "change anything now" is said once, under "From your chat" (fewer words, 23 October 2026)
+    expect(html).toContain('<h1>Check what you\'re sending</h1><p class="lead">The hiring team sees your answers only once you send them.</p>');
+    expect(html).not.toContain("reads this exactly as written");
     expect(html).toContain("<details class=\"more\"><summary>What if I don't press Send?</summary><p>If you do not press Send, the conversation closes a few days after your last answer or change, and your application goes to the hiring team without these answers. If we have not reminded you yet, we email you once before then.</p></details>");
     expect(html).toContain('<h2 id="send-details">Your details for Send Dental</h2>');
     expect(html).toContain('<h2 id="send-chat">From your chat</h2><p>Written up from your own replies. Change anything that came out wrong.</p>');

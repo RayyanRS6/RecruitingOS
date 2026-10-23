@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Skeleton } from "@ros/ui";
+import { Alert, Avatar, Button, cn, Skeleton } from "@ros/ui";
 import { api, type RoleDetail, type ShareLinkResponse } from "../api/client";
 import { LINKEDIN_OPEN_URL, POST_TONES, linkedInPostText, postFactsOf, postLengthLine, previewParts, withTrackedLink, type PostTone } from "../linkedin-post";
 import { toast } from "../toast";
@@ -125,47 +125,51 @@ export function LinkedInPost(props: { roleId: string; roleTitle: string; company
 
   if (role.isLoading) return <Skeleton lines={4} />;
   return (
-    <div className="stack" style={{ gap: 12 }}>
-      <p className="small muted" style={{ margin: 0 }}>Pick a tone, check the words, then post it yourself.</p>
+    <div className="stack gap-4">
       {props.accepting ? null : <Alert tone="caution">This job is not taking applications right now. Hold the post until it is.</Alert>}
-      <fieldset className="wording-picker" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(170px, 100%), 1fr))" }}>
-        <legend className="small">Tone</legend>
+      {/* The tones, one kit option row each: picking one rewrites the words in the box at once, so the row shows only the
+          tone's name and its feel is the title. The legend is floated so it is a grid item above them, not set into a
+          border. `wording-option` and data-checked are hooks only: publishing-ui.test.ts finds the chosen tone by them. */}
+      <fieldset className="grid min-w-0 gap-2.5 sm:grid-cols-3">
+        <legend className="small float-left col-span-full w-full font-semibold text-ink">Tone</legend>
         {POST_TONES.map((t) => (
-          <label key={t.key} className="wording-option" data-checked={tone === t.key ? "true" : undefined}>
+          <label key={t.key} className="wording-option option-row" data-checked={tone === t.key ? "true" : undefined}>
             <input type="radio" name={`linkedin-tone-${props.roleId}`} value={t.key} checked={tone === t.key} onChange={() => { setTone(t.key); setEdited(null); }} />
-            <span><strong>{t.label}</strong><br /><span className="small muted">{t.hint}</span></span>
+            <span className="font-semibold" title={t.hint}>{t.label}</span>
           </label>
         ))}
       </fieldset>
-      <div className="grid-2">
+      {/* The words and how they look in a feed, side by side on a wide screen */}
+      <div className="grid-2 items-start">
         <div className="field">
           <label htmlFor="linkedin-text">Your post</label>
           <textarea ref={box} id="linkedin-text" className="textarea" rows={14} value={text} onChange={(e) => setEdited(e.target.value)} aria-describedby="linkedin-count linkedin-hint" />
-          <span id="linkedin-count" className="hint" style={count.over ? { color: "var(--critical)" } : undefined}>{count.line}</span>
-          <span id="linkedin-hint" className="hint">Change anything you like. Picking a tone starts the words again.</span>
+          <span id="linkedin-count" className={cn("hint tabular", count.over && "font-semibold text-critical")}>{count.line}</span>
+          {/* kept: a tone picked after an edit replaces the person's words */}
+          <span id="linkedin-hint" className="hint">Picking a tone starts the words again.</span>
         </div>
         {/* What the post looks like in a feed: for the eye only, the box beside it holds the same words */}
-        <div className="stack" style={{ gap: 6, alignContent: "start" }} aria-hidden="true">
+        <div className="stack gap-1.5" aria-hidden="true">
           <span className="small muted">Preview</span>
-          <div className="share-place" style={{ gap: 10 }}>
-            <div className="row" style={{ gap: 10, flexWrap: "nowrap" }}>
+          <div className="grid gap-3 rounded-2xl border border-line bg-surface p-4 shadow-xs">
+            <div className="flex items-center gap-2.5">
               <Avatar name={company} shape="square" tone="ink" />
-              <span className="small" style={{ minWidth: 0 }}><strong>{company}</strong><br /><span className="muted">Just now</span></span>
+              <span className="small min-w-0"><strong>{company}</strong><br /><span className="muted">Just now</span></span>
             </div>
-            <p className="share-text" style={{ margin: 0, overflowWrap: "anywhere" }}>
-              {previewParts(text).map((part, i) => <span key={`${i}-${part.link}`} style={part.link ? { color: "var(--link)" } : undefined}>{part.text}</span>)}
+            <p className="text-[14px] leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink">
+              {previewParts(text).map((part, i) => <span key={`${i}-${part.link}`} className={part.link ? "font-semibold text-primary" : undefined}>{part.text}</span>)}
             </p>
           </div>
         </div>
       </div>
       <div className="row" onPointerDown={prepare}>
-        {/* never disabled while at work (that would drop a keyboard user's focus); a second press meanwhile is ignored */}
-        <Button variant="primary" icon="external" disabled={!text.trim()} onClick={() => void run(true)}>Copy and open LinkedIn</Button>
+        {/* never disabled while at work (that would drop a keyboard user's focus); a second press meanwhile is ignored.
+            What it does in full is its title; the toast after the copy says the next step. */}
+        <Button variant="primary" icon="external" disabled={!text.trim()} title="Nothing is posted for you. LinkedIn opens in a new tab: paste, then post." onClick={() => void run(true)}>Copy and open LinkedIn</Button>
         <Button icon="copy" disabled={!text.trim()} onClick={() => void run(false)}>Copy text</Button>
         {/* the button goes once the words are the tone's own again, so the keyboard lands back in the box */}
         {edited !== null ? <Button variant="ghost" onClick={() => { if (busy.current) return; setEdited(null); box.current?.focus(); }}>Start again</Button> : null}
       </div>
-      <p className="small muted" style={{ margin: 0 }}>Nothing is posted for you. LinkedIn opens in a new tab: paste, then post.</p>
     </div>
   );
 }

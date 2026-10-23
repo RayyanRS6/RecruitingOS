@@ -68,13 +68,16 @@ describe("the weights preview drawer", () => {
     const html = drawn();
     expect(html).toContain('aria-label="Try different weights"');
     expect(html).toMatch(/<div class="drawer-banner"><div class="alert info" role="status">Preview — nothing is saved; candidates and the team never see these numbers\.<\/div><\/div>/);
-    expect(text(html)).toContain(wp.INTRO);
+    // the banner says it all: no line under the title describing the drawer (fewer words, 23 Oct 2026)
+    expect(text(html)).not.toContain("Change how much each requirement counts");
+    expect(html).not.toContain('class="drawer-sub"');
   });
 
   it("lists the must-haves and the scored skills in their own groups, each with a labelled choice at the job's own level", () => {
     const html = drawn();
-    expect(html).toContain('<fieldset class="weights-set"><legend>Must-haves</legend>');
-    expect(html).toContain('<fieldset class="weights-set"><legend>Skills we look for</legend>');
+    // each group a card of its own (the kit's Card), named by its legend in the kit's eyebrow
+    expect(html).toContain('<section class="card p-4"><fieldset class="weights-set grid gap-3"><legend class="eyebrow">Must-haves</legend>');
+    expect(html).toContain('<section class="card p-4"><fieldset class="weights-set grid gap-3"><legend class="eyebrow">Skills we look for</legend>');
     for (const [id, label, level] of [["weights-m-mh_xray", "Radiography certificate", "must_have"], ["weights-m-mh_chairside", "Chairside experience in a dental office", "must_have"], ["weights-s-chairside", "Chairside skill", "essential"], ["weights-s-patients", "Patient care", "important"], ["weights-s-infection", "Infection control", "important"]]) {
       expect(html).toContain(`<label for="${id}">${label}</label><select id="${id}" class="select">`);
       expect(html).toMatch(new RegExp(`<select id="${id}" class="select">(?:(?!</select>).)*<option value="${level}" selected="">`));
@@ -82,6 +85,10 @@ describe("the weights preview drawer", () => {
     // the skill checked in the interviews only is not offered, and the drawer says why
     expect(html).not.toContain("Bedside manner");
     expect(text(html)).toContain(wp.INTERVIEW_ONLY_LINE);
+    // and says it only when a skill was left out for that reason
+    const noInterviewOnly = { ...packet, competencies: packet.competencies.filter((c) => c.evaluatedIn !== "interview") };
+    const plain = render(client([[["applications", "r1", "board"], board]]), createElement(WeightsPreview, { roleId: "r1", packet: noInterviewOnly, onClose: () => undefined, onUse: () => undefined }));
+    expect(text(plain)).not.toContain(wp.INTERVIEW_ONLY_LINE);
     expect(html).toContain('<option value="off">Leave out of the score</option>');
   });
 

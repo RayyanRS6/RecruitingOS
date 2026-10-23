@@ -75,9 +75,13 @@ describe("the Problems section's parts", () => {
     expect(counts).toEqual({ alerts: 0, failed: 2, email: 0, security: 0 });
   });
 
-  it("says the same empty sentence in every part with nothing in it", () => {
-    expect(PROBLEMS_EMPTY).toBe("None. When something goes wrong, it shows here and on the Overview.");
-    for (const view of ["alerts", "failed", "email", "security"]) expect(text(section(view))).toContain(PROBLEMS_EMPTY);
+  it("says the same one word in every part with nothing in it, with no line explaining it (23 October)", () => {
+    expect(PROBLEMS_EMPTY).toBe("None.");
+    for (const view of ["alerts", "failed", "email", "security"]) {
+      const words = text(section(view));
+      expect(words).toContain(PROBLEMS_EMPTY);
+      expect(words).not.toContain("When something goes wrong");
+    }
   });
 
   it("draws each part's own heading when it is chosen", () => {
@@ -185,6 +189,8 @@ describe("email that could not go", () => {
     expect(text(html)).toContain("old@example.com Reported by the email provider");
     expect(text(html)).not.toContain("postmark");
     expect(text(html)).toContain("Bounced");
+    // no paragraph describing the list (23 October): the rule for a release is the reason field's own label
+    expect(text(html)).not.toContain("land here from the provider's webhooks");
   });
 
   it("never offers Release on a spam complaint, and keeps the reason box above the list", () => {
@@ -196,7 +202,11 @@ describe("email that could not go", () => {
     expect(text(spam)).toContain("Spam complaint");
     expect(text(spam)).toContain("Never released");
     expect(text(html)).toContain("A spam complaint is never released from here: the person asked not to be emailed.");
-    expect(html.indexOf("How you confirmed the address (required to release)")).toBeLessThan(html.indexOf("<table"));
+    // the release rule (confirm by another channel, never by emailing the address) and the audit notice are the reason
+    // field's own label: the admin knows their words become the audit record before typing them
+    const label = html.indexOf("How you confirmed the address by another channel (required to release; the release is audited with your reason)");
+    expect(label).toBeGreaterThan(-1);
+    expect(label).toBeLessThan(html.indexOf("<table"));
   });
 
   it("offers 'Stop emails to an address' under the list, even when the list is empty, asking for the address and why", () => {
@@ -213,7 +223,7 @@ describe("email that could not go", () => {
 });
 
 describe("security reports", () => {
-  it("shows the policy mode, the unreviewed count, the explanation, Mark reviewed and a report that came back", () => {
+  it("shows the policy mode, the unreviewed count, the explanation folded under the mode, Mark reviewed and a report that came back", () => {
     const report = { id: "c1", mode: "report-only", surface: "candidate", documentPath: "/jobs/x", violatedDirective: "style-src", blockedOrigin: "https://cdn.example", sourceFile: null, count: 3, lastAt: daysAgo(0), reviewedAt: null, disposition: "expected in dev" };
     const words = text(section("security", { csp: { mode: "report-only", reports: [report] } }));
     expect(words).toContain("Content-security reports (1 not reviewed yet)");
@@ -225,6 +235,8 @@ describe("security reports", () => {
     // where it came from in words, and each note and button names the report it is for
     expect(words).toContain("Candidate pages style-src");
     const html = section("security", { csp: { mode: "report-only", reports: [report] } });
+    // the explanation is one click away: the policy's mode is the summary of its disclosure (23 October)
+    expect(html).toMatch(/<details class="more[^"]*"><summary>(?:(?!<\/summary>).)*Policy: Report only(?:(?!<\/details>).)*Browsers report what the policy would block/);
     expect(html).toContain('aria-label="What this report means: style-src on /jobs/x"');
     expect(html).toContain('aria-label="Mark reviewed: style-src on /jobs/x"');
   });

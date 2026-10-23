@@ -104,10 +104,26 @@ describe("menuFixedAt", () => {
 });
 
 describe("the candidate panel's actions on a phone", () => {
-  const css = readFileSync(new URL("./tokens.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  /** The bodies of every `@media (max-width: 640px)` block, found by matching braces (the blocks sit inside a layer). */
+  const phoneBlocks = () => {
+    const open = "@media (max-width: 640px) {";
+    const out: string[] = [];
+    for (let at = css.indexOf(open); at >= 0; at = css.indexOf(open, at + open.length)) {
+      let depth = 1;
+      let i = at + open.length;
+      while (depth && i < css.length) {
+        if (css[i] === "{") depth++;
+        else if (css[i] === "}") depth--;
+        i++;
+      }
+      out.push(css.slice(at + open.length, i - 1));
+    }
+    return out;
+  };
 
   it("end each wrapped line at the right, so a menu opening leftward stays on the screen", () => {
-    const phone = [...css.matchAll(/@media \(max-width: 640px\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]).join("\n");
+    const phone = phoneBlocks().join("\n");
     const rule = phone.match(/\.drawer-actions \{([^}]*)\}/)?.[1] ?? "";
     expect(rule).toMatch(/justify-content: flex-end/);
   });

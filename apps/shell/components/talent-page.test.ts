@@ -99,7 +99,8 @@ describe("the Candidates page", () => {
   it("heads the page with the job's shared header and tabs, and opens on the people waiting on you", () => {
     nav.search = "";
     const html = render(client([]), createElement(People));
-    expect(html).toContain("Job · Bright Dental");
+    // no "Job · company" eyebrow above the title (fewer words, 23 Oct 2026): the rail names the company
+    expect(html).not.toContain("Job · Bright Dental");
     expect(html).toMatch(/<h1>Dental Hygienist<\/h1>/);
     expect(text(html)).toContain("Live");
     // one facts line, the same as on the job's other tabs (Wave S1)
@@ -169,7 +170,7 @@ describe("the Candidates page", () => {
     // a link to the Offer column and to one step (?stage=): nobody is at both
     nav.search = "ownerStage=offer&stage=rejected";
     const html = render(client([]), createElement(People));
-    expect(html).toContain('<ul class="own-items" aria-labelledby="talent-filters-on">');
+    expect(html).toMatch(/<ul class="own-items[^"]*" aria-labelledby="talent-filters-on">/);
     expect(html).toContain('<span class="sr-only">Remove the filter: </span>Stage: Offer<svg');
     expect(html).toMatch(/<span class="sr-only">Remove the filter: <\/span>Only: [^<]+<svg/);
     expect(text(html)).toContain("Clear all");
@@ -227,7 +228,9 @@ describe("the Candidates page", () => {
     nav.search = "open=a1";
     const html = render(client([detail(maria)]), createElement(People));
     expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Maria Reyes"/);
-    expect(text(html)).toMatch(/Applied \w{3} \d{1,2}, \d{4} · Dental Hygienist/);
+    expect(text(html)).toMatch(/Applied \w{3} \d{1,2}, \d{4}/);
+    // the job's own page behind the panel names the job: the header no longer repeats it (founder, 23 Oct 2026)
+    expect(text(html)).not.toMatch(/Applied \w{3} \d{1,2}, \d{4} · Dental Hygienist/);
     expect(text(html)).toContain("Email");
     expect(html.match(/aria-label="Stage: New\. Move to another stage"/g)?.length).toBe(2);
     // the list it opened from: one person, so next and previous say so
@@ -252,14 +255,14 @@ describe("the Candidates page", () => {
     const html = render(client([detail(maria, { hiddenTextNote: HIDDEN_TEXT_IN_CV })]), createElement(People));
     expect(text(html).split(HIDDEN_TEXT_IN_CV).length - 1).toBe(1);
     // a calm grey line, never a warning
-    expect(html).toContain(`<p class="small muted" style="margin:10px 0 0">${HIDDEN_TEXT_IN_CV}</p>`);
+    expect(html).toContain(`<p class="small muted">${HIDDEN_TEXT_IN_CV}</p>`);
     expect(text(render(client([detail(maria)]), createElement(People)))).not.toContain("aimed at the AI");
     expect(text(render(client([detail(maria, { hiddenTextNote: null })]), createElement(People)))).not.toContain("aimed at the AI");
   });
 
   it("keeps Previous and Next in place while the next person loads, so the button pressed keeps the focus", () => {
     // a2 is not loaded yet (nothing is fetched ahead for the neighbours)
-    const html = render(client([detail(maria)]), createElement(CandidatePanel, { id: "a2", roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+    const html = render(client([detail(maria)]), createElement(CandidatePanel, { id: "a2", roleId: "r1", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
     expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Candidate"/);
     expect(html).toContain('aria-label="Previous candidate (Alt+Up)"');
     expect(html).toContain('aria-label="Next candidate (Alt+Down)"');
@@ -317,7 +320,8 @@ describe("the job page: the same header and tab strip as Candidates (Wave S1)", 
   it("marks the tab an older link asked for as current, so a notification's ?tab=posting lands on Share", () => {
     nav.search = "tab=posting";
     const html = render(client([]), createElement(RoleDetail));
-    expect(html).toContain("Job · Bright Dental");
+    // the title stands alone: no "Job · company" eyebrow (fewer words, 23 Oct 2026)
+    expect(html).not.toContain("Job · Bright Dental");
     expect(html).toMatch(/<h1>Dental Hygienist<\/h1>/);
     expect(text(html)).toContain("Irvine, CA · full time · On site · $40–$52 an hour");
     expect(text(html)).toContain("Bring in a recruiter");
@@ -335,7 +339,8 @@ describe("the job page: the same header and tab strip as Candidates (Wave S1)", 
     expect(html).toContain('<a href="/roles/r1?tab=activity" class="tab" aria-current="page">');
     expect(text(html)).toContain("Versions of the job");
     expect(text(html)).toMatch(/Version 1 · approved · intake session · .+ · Dana Whitfield/);
-    expect(text(html)).toContain("Every version is kept. Nothing is overwritten.");
+    // the list of versions shows they are all kept; the line that said so was cut (fewer words, 23 Oct 2026)
+    expect(text(html)).not.toContain("Every version is kept. Nothing is overwritten.");
     expect(text(html)).not.toMatch(/packet/i);
   });
 });
@@ -357,14 +362,19 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     nav.search = "";
     const html = render(jobsClient(), createElement(Roles));
     expect(html).toMatch(/<h1>Jobs<\/h1>/);
-    expect(text(html)).toContain("Open a job to see who applied.");
-    expect(html).toContain('<a href="/roles/r1/talent" style="text-decoration:none;color:inherit"><strong>Dental Hygienist</strong></a>');
+    // the title stands alone (fewer words, 23 Oct 2026): no company eyebrow, no line describing the page, no footnote
+    expect(html).not.toContain('class="eyebrow"');
+    expect(text(html)).not.toContain("Open a job to see who applied.");
+    expect(text(html)).not.toContain("Stuck? Bring in a recruiter from any job.");
+    // the title is the row's link (its press area stretched over the row), styled by its class, never inline; the kit's
+    // row title wraps on a phone by itself
+    expect(html).toContain('<a href="/roles/r1/talent" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden"><strong>Dental Hygienist</strong></a>');
     // one line under the title, with the other view as a small link in it; what calls for action is a badge
     expect(text(html)).toContain("Dental Hygienist 2 applicants · 7 days open · Job details");
     expect(text(html)).toContain("1 to review");
     expect(text(html)).toContain("1 new");
     expect(html).toContain('<a href="/roles/r1" class="small">Job details<span class="sr-only">: Dental Hygienist</span></a>');
-    expect(html).toContain('<a href="/roles/r2" style="text-decoration:none;color:inherit"><strong>Office Manager</strong></a>');
+    expect(html).toContain('<a href="/roles/r2" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden"><strong>Office Manager</strong></a>');
     // "Not live" says it once: the line says why, and no status pill repeats it
     expect(text(html)).toContain("Office Manager Waiting for approval");
     expect(text(html).match(/Waiting for approval/g)).toHaveLength(1);
@@ -396,6 +406,10 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     const html = render(qc, createElement(Roles));
     expect(text(html)).toMatch(/All 4 Live 1 Drafts 3 Paused 0 Closed 0/);
     expect(text(html)).toContain("Still being drafted");
+    // who can see a draft is a lock whose words are its accessible name and tooltip; the heading is not said again
+    expect(html).toContain('<span class="icon-label" title="you, owners and admins can see it">');
+    expect(html).toContain('<span class="sr-only">you, owners and admins can see it</span>');
+    expect(text(html).match(/Still being drafted/g)).toHaveLength(1);
   });
 
   it("filters by status with counts, searches by title and sorts, all from the address", () => {
@@ -439,6 +453,8 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     const paused = render(jobsClient(), createElement(Roles));
     expect(text(paused)).toContain("No paused jobs");
     expect(text(paused)).toContain("Show all jobs");
+    // the title and its one button; no body line explaining it (fewer words, 23 Oct 2026)
+    expect(text(paused)).not.toContain("Pause a live job from its More menu.");
     nav.search = "q=zzz";
     const none = render(jobsClient(), createElement(Roles));
     expect(text(none)).toContain("No jobs match your search");
@@ -449,7 +465,7 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
 
 describe("the steps a stage choice opens", () => {
   const panel = (step: "hold" | "decline" | "interview" | "hire", d = detail(maria)) =>
-    render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+    render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
 
   it("On hold asks for the day they come back, inside eight weeks", () => {
     const html = panel("hold");
@@ -470,7 +486,7 @@ describe("the steps a stage choice opens", () => {
   it("someone already at the interview step, with nothing in motion, can still have an interview approved", () => {
     const iv = (over: Record<string, unknown>) => ({ id: "iv1", roundKey: "r1", title: "Working interview", status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 1, outcome: null, decision: null, offeredSlots: [], createdAt: daysAgo(2), ...over });
     const at = (stage: string, interviews: unknown[], over: Record<string, unknown> = {}) => detail({ ...maria, stage }, { interviews, ...over });
-    const open = (d: ReturnType<typeof detail>, step: "interview" | null = null) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    const open = (d: ReturnType<typeof detail>, step: "interview" | null = null) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
     // an interview cancelled from the Interviews page
     const cancelled = open(at("interview_recommended", [iv({})]));
     expect(cancelled).toContain("The interview was cancelled");
@@ -492,7 +508,7 @@ describe("the steps a stage choice opens", () => {
 
   it("does not offer a new interview while a decision waits, one is in motion, or the role may not request one", () => {
     const iv = { id: "iv1", roundKey: "r1", title: "Working interview", status: "completed", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 1, outcome: "happened", decision: null, offeredSlots: [], createdAt: daysAgo(2) };
-    const open = (d: ReturnType<typeof detail>) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    const open = (d: ReturnType<typeof detail>) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
     // a finished interview nobody has decided about: the decision card, not a new interview
     const deciding = open(detail({ ...maria, stage: "interview_complete" }, { interviews: [iv], allowedActions: ["interview", "record_decision", "reject", "record_outcome", "set_mark"] }));
     expect(deciding).toContain("How did the interview go?");
@@ -538,7 +554,7 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
     return qc;
   };
   const iv = (over: Record<string, unknown> = {}) => ({ id: "iv1", roundKey: "r1", title: "Working interview", status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 2, outcome: null, decision: null, offeredSlots: [], createdAt: daysAgo(3), ...over });
-  const open = (d: ReturnType<typeof detail>, step: "hold" | null = null) => plain(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+  const open = (d: ReturnType<typeof detail>, step: "hold" | null = null) => plain(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
 
   it("sits right after Interviewing on the strip, split by what each person chose, each row saying where their new times stand", () => {
     nav.search = "ownerStage=cancelled";
@@ -623,7 +639,7 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
     const d = detail({ ...ana, cancelled: notChecked }, { interviews: [iv()], allowedActions: ["interview", "reject", "record_outcome", "set_mark", "send_new_times"] });
     const cards = client([d]);
     cards.setQueryData(["new-times-setting"], { auto: true, workingDays: 3, pending: 0, companyConfirmed: false });
-    const panel = plain(render(cards, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    const panel = plain(render(cards, createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
     expect(panel).toContain("ITS had not confirmed your company in time, so nothing was sent automatically. You can send new times once ITS confirms your company, or decide.");
     // the API refuses a send until then, so the card offers none
     expect(panel).not.toContain("Send new times");

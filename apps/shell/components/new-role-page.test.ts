@@ -26,7 +26,7 @@ const { Home } = await import("@ros/web/src/pages/Home");
 const { checkSignature } = await import("@ros/web/src/pages/new-role/refine-api");
 const { samplePacket } = await import("../../../packages/agents/src/fixtures/sample-packet");
 const { StepBody } = await import("@ros/web/src/pages/new-role/QuickStart");
-const { emptyQuickAnswers } = await import("@ros/web/src/pages/new-role/quick-start");
+const { emptyQuickAnswers, STEP_HINT } = await import("@ros/web/src/pages/new-role/quick-start");
 const { suggestKey } = await import("@ros/web/src/pages/new-role/quick-suggest");
 type QuickAnswersT = import("@ros/web/src/pages/new-role/quick-start").QuickAnswers;
 
@@ -77,18 +77,31 @@ describe("the job builder", () => {
 
   it("opens on 'Who are you hiring?' with two ways to start: the quick questions first, then one big box and the roles our hiring guide knows", () => {
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [], room }], [["company"], { name: "Bright Dental", vertical: "dental", settings: {} }]]);
-    expect(html).toContain("New job · Bright Dental");
+    // fewer words (23 October 2026): no eyebrow and no line under the title
+    expect(html).not.toContain("New job");
     expect(html).toContain("<h1>Who are you hiring?</h1>");
-    expect(html).toContain("Two ways to start. The assistant drafts the job; you decide.");
-    // the quick questions are the main button, and come first
-    expect(html).toContain(">Answer a few quick questions</h2>");
+    expect(html).not.toContain("Two ways to start");
+    // the quick questions are the main button, and come first: the kit's hero card sizes the title
+    expect(html).toContain('<section class="card needs-you hero" aria-labelledby="start-quick-h"><div class="card-title"><h2 id="start-quick-h">Answer a few quick questions</h2>');
+    expect(html).not.toContain("Ten short steps");
     expect(html).toMatch(/class="btn primary"[^>]*>Start the quick questions<svg/);
     expect(html.indexOf("Start the quick questions")).toBeLessThan(html.indexOf("Or describe it, or paste a job ad"));
     expect(html).toContain(">Or describe it, or paste a job ad</h2>");
     expect(html).toMatch(/<textarea[^>]*aria-label="Describe the role, or paste a job ad"/);
-    expect(html).toContain("Paste a job ad: up to 20,000 characters.");
+    expect(html).not.toContain("up to 20,000 characters");
+    // the keys are no line on screen: at a desk the Send button announces Enter as its shortcut (the kit's
+    // keyshortcuts) and a mouse sees the keys as its tooltip; the box is described by them for screen readers only
+    expect(html).toMatch(/<button type="button" class="btn primary [^"]*"[^>]* title="Enter sends · Shift\+Enter for a new line"[^>]* aria-keyshortcuts="Enter">/);
+    const keys = html.match(/<span class="sr-only" id="([^"]+)">Enter sends · Shift\+Enter for a new line<\/span>/);
+    expect(keys).not.toBeNull();
+    expect(html).toMatch(new RegExp(`<textarea[^>]*aria-describedby="${keys![1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+    expect(html).not.toMatch(/<p[^>]*>Enter sends · Shift\+Enter for a new line</);
+    // the roles our hiring guide knows: the list is named, with no line above it
+    expect(html).toContain('aria-label="Start from a role our hiring guide knows"');
+    expect(html).not.toContain("Roles our hiring guide knows:");
     expect(html).toContain(">Dental hygienist</button>");
     expect(html).toContain(">Associate dentist</button>");
+    // the AI-use line stays
     expect(html).toContain("You are talking with an AI assistant. It drafts; you decide.");
   });
 
@@ -120,17 +133,21 @@ describe("the job builder", () => {
     nav.search = "way=quick";
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [{ id: "s9", status: "active", title: "Hygienist", startedBy: { userId: "u-dana", name: "Dana" }, mine: true, createdAt: "", updatedAt: "", ownerMessages: 1, hasDraft: false, missing: [] }], room }], [["company"], { name: "Bright Dental", vertical: "dental", settings: {} }]]);
     // a draft in progress does not take the person away from the quick questions they asked for
-    expect(html).toContain("New job · Bright Dental");
-    expect(html.replace(/<!-- -->/g, "")).toContain("Step 1 of 10 · Job title");
+    // fewer words: no eyebrow, the step without its name (the question says it), no hint under the question
+    expect(html).not.toContain("New job");
+    expect(html.replace(/<!-- -->/g, "")).toContain(">Step 1 of 10</p>");
     expect(html).toContain('<h1 tabindex="-1">What is the job title?</h1>');
-    expect(html).toContain("Or paste a job ad you already have to fill in the steps.");
+    expect(html).not.toContain("Or paste a job ad you already have");
     expect(html).toMatch(/<label for="qs-title">Job title<\/label>/);
     expect(html).toContain("<summary>Paste a job ad instead</summary>");
     expect(html).toMatch(/<textarea[^>]*aria-label="Paste a job ad"/);
     expect(html).toContain('href="/roles/new?new=1"');
     expect(html).toContain(">Other ways to start</a>");
     expect(html).toMatch(/<button type="submit" class="btn primary"[^>]*>Next<svg/);
-    expect(html).toContain("Press Enter to go on. Your answers are kept in this browser.");
+    // Enter moves on: the Next button's tooltip, not a line; where the answers are kept stays said
+    expect(html).toMatch(/<button type="submit" class="btn primary" title="Press Enter to go on\."[^>]*>Next<svg/);
+    expect(html).not.toContain("Press Enter to go on. Your answers");
+    expect(html).toContain("Your answers are kept in this browser.");
     expect(html).not.toContain("Start over");
     expect(html).not.toContain("Who are you hiring?");
   });
@@ -144,7 +161,8 @@ describe("the job builder", () => {
   it("puts the conversation and its question card beside the draft, with Ask for approval greyed and what is missing listed", () => {
     nav.search = "session=s1";
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "session", "s1"], { session: session() }], [["members"], [{ userId: "u-dana", role: "owner", status: "active", email: "dana@bright.test", name: "Dana Whitfield" }]]]);
-    expect(html).toContain("Drafting · Bright Dental");
+    // fewer words: no "Drafting · company" eyebrow over the title
+    expect(html).not.toContain("Drafting ·");
     expect(html).toContain("<h1>Dental Hygienist</h1>");
     expect(html).toMatch(/aria-disabled="true"[^>]*>Ask for approval<\/button>/);
     expect(html).toContain("Before you can ask for approval:");
@@ -156,20 +174,52 @@ describe("the job builder", () => {
     expect(html).toContain(">Pick one</span>");
     expect(html).toContain("1 of 2");
     expect(html).toContain("Replacing someone who left");
+    // the assistant's own answers carry the sparkle (its words read out and as a tooltip), not a word on every row
+    expect(html).toContain('<span class="icon-label" title="AI suggestion">');
+    expect(html).not.toContain(">Suggestion</span>");
     expect(html).toContain("<summary>Why we ask</summary>");
     expect(html).toContain("Or type your own answer…");
     expect(html).toMatch(/>Next<svg/);
     // the draft: what we know and what is missing, the title and who sees it, the pay card with the ITS estimate
     expect(html).toContain("What we know");
     expect(html).toContain("Still missing");
-    expect(html).toContain("Candidates see this");
-    expect(html).toContain("Only your team sees this");
+    // who sees each part: the eye or the lock, its words for screen readers and the tooltip
+    expect(html).toContain('<span class="icon-label" title="Candidates see this">');
+    expect(html).toContain('<span class="icon-label" title="Only your team sees this">');
+    expect(html).toContain('<span class="sr-only">Candidates see this</span>');
+    expect(html).toContain('<span class="sr-only">Only your team sees this</span>');
+    expect(html).toContain('<span class="icon-label" title="Candidates see the range; only your team sees the most you would pay">');
     expect(html).toContain("Market pay here:");
     expect(html).toContain("ITS estimate for Anaheim metro, 2025.");
     expect(html).toContain("Pay not set yet");
+    // pay transparency is said on the pay card before any pay is set; the line on how to set it is gone
+    expect(html).toContain('<p class="small muted">Pay is always shown on the job ad.</p>');
+    expect(html).not.toContain("Set it here, or tell the assistant.");
     // a phone shows one pane at a time, with a switch
     expect(html).toContain(">Conversation</button>");
     expect(html).toContain(">Draft</button>");
+  });
+
+  it("says what to do next in one small line under the message box, in the server's words, only while the draft cannot be written", () => {
+    nav.search = "session=s1";
+    const seed = (s: IntakeSessionView) => [[["me"], me("owner")], [["intake", "session", "s1"], { session: s }], [["members"], []]] as Array<[readonly unknown[], unknown]>;
+    // the question cards closed (none left): the message box is in the dock
+    const blocked = session({ questions: [], readiness: { ...session().readiness, draftBlocker: "Tell me the job title first, or say \"draft it\"." } });
+    const html = render(createElement(NewRole), seed(blocked));
+    const line = html.match(/<p class="px-1\.5 text-\[12\.5px\] leading-snug text-ink-3" id="([^"]+)">Tell me the job title first, or say &quot;draft it&quot;\.<\/p>/);
+    expect(line).not.toBeNull();
+    // read with the box by screen readers
+    expect(html).toMatch(new RegExp(`<textarea[^>]*aria-label="Message to the assistant" aria-describedby="${line![1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} [^"]+"`));
+    expect(html.match(/Tell me the job title first/g)).toHaveLength(1);
+    // the other blocker reads the same way
+    const cards = render(createElement(NewRole), seed(session({ questions: [] })));
+    expect(cards).toContain(">Answer the question cards first, or say &quot;draft it&quot;.</p>");
+    // once a draft may be written, the line goes (the "Write the draft" offer says it instead)
+    const ready = render(createElement(NewRole), seed(session({ questions: [], readiness: { ...session().readiness, mayDraft: true, draftBlocker: null } })));
+    expect(ready).not.toContain("or say &quot;draft it&quot;.</p>");
+    // with nothing blocking, the box is described by the keys alone (screen readers only)
+    expect(ready).toMatch(/<textarea[^>]*aria-describedby="[^" ]+"/);
+    expect(ready).toContain(">Write the draft</button>");
   });
 
   it("once the draft is written, the box asks for changes and the draft shows what candidates will read", () => {
@@ -184,6 +234,10 @@ describe("the job builder", () => {
     const check = { base: "dabc", version: null, summary: "One suggestion.", suggestions: [{ id: "c1", kind: "unprovable", title: "Hard to check before someone starts", path: "requirements.mustHaves[mh_chairside]", text: "Chairside experience in a dental office", why: "It can be shown in a short practical task instead.", fixes: [{ id: "c1-int", label: "Ask about it in the interview", op: "to_interview", after: null }], flagId: null }] };
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "session", "s1"], { session: written }], [["members"], []], [["intake", "check", "s1", checkSignature(draft)], check]]);
     expect(html).toContain("Ask me to change anything: make it warmer, drop the weekend requirement…");
+    // no helper line under the box: the proposal itself says it is not saved yet, and a blocker the server still sends
+    // is not said while the box asks for changes
+    expect(html).not.toContain("A change is shown to you before it is saved.");
+    expect(html).not.toContain("Answer the question cards first");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Ask for approval/);
     expect(html).toContain(draft.description.publicJobDescription.slice(0, 40));
     expect(html).toContain("What we&#x27;re looking for");
@@ -205,6 +259,8 @@ describe("the quick start's suggestions for any job (Wave S3, G3)", () => {
   it("shows our hiring guide's must-haves at once when it knows the job, and never waits on the assistant", () => {
     const html = draw({ kind: "guide" }, "musts", { ...emptyQuickAnswers(), title: "Dental hygienist" }, "dental");
     expect(html).toContain("Digital radiography and intraoral scanning");
+    // where each came from is a mark at the row's end, its words read out and shown as a tooltip
+    expect(html).toContain('<span class="icon-label" title="Our hiring guide">');
     expect(html).toContain("Our hiring guide");
     expect(html).not.toContain("AI suggestion");
     expect(html).not.toContain("Suggesting skills from your answers…");
@@ -222,7 +278,10 @@ describe("the quick start's suggestions for any job (Wave S3, G3)", () => {
     expect(html).toMatch(/<input type="checkbox" aria-label="Valid driver&#x27;s licence" name="qs-musts" value="Valid driver&#x27;s licence"\/>/);
     expect(html).toMatch(/<input type="checkbox" aria-label="Route planning" name="qs-musts" value="Route planning"\/>/);
     expect(html).not.toMatch(/name="qs-musts"[^>]*checked/);
-    expect(html).toContain("AI suggestion");
+    // an AI-use notice: each says "AI suggestion" on screen, with the sparkle, and its row lets the words drop below on a phone
+    expect(html.match(/<span class="option-tag inline-flex items-center gap-1"><svg[^>]*>.*?<\/svg>AI suggestion<\/span>/g)).toHaveLength(2);
+    expect(html).toMatch(/<label class="option-row flex-wrap gap-y-1\.5"><input type="checkbox" aria-label="Route planning"/);
+    expect(html).not.toContain('<span class="sr-only">AI suggestion</span>');
     expect(html).not.toContain("Suggesting skills");
     // ticked ones stay ticked
     expect(draw({ kind: "ai", mustHaves: ["Route planning"], questions: [] }, "musts", { ...driver, mustHaves: ["Route planning"] })).toMatch(/aria-label="Route planning" name="qs-musts" checked=""/);
@@ -239,11 +298,25 @@ describe("the quick start's suggestions for any job (Wave S3, G3)", () => {
     const aiSuggest = { key: suggestKey(driver), mustHaves: [], questions: ["Do you hold a valid driver's licence?"] };
     const html = draw({ kind: "ai", mustHaves: [], questions: aiSuggest.questions }, "questions", { ...driver, aiSuggest });
     expect(html).toMatch(/<input type="checkbox" aria-label="Do you hold a valid driver&#x27;s licence\?" name="qs-questions" checked=""/);
-    expect(html).toContain("AI suggestion");
+    // only the assistant's question says "AI suggestion" on screen; the general ones carry nothing
+    expect(html.match(/<\/svg>AI suggestion<\/span>/g)).toHaveLength(1);
     expect(html).toContain("Are you legally authorized to work in the United States for any employer?");
+    // the person's own questions go to the AI interview: said by the box's visible label, not a hint line
+    expect(html).toContain('<div class="field"><label for="qs-question-own">Add a question for the AI interview</label>');
     const waiting = draw({ kind: "waiting" }, "questions");
     expect(waiting).toContain('role="status">Suggesting questions from your answers…</p>');
     expect(waiting).toContain("Are you legally authorized to work in the United States for any employer?");
+  });
+});
+
+describe("the quick start's lines on how answers are used", () => {
+  it("says the pay is always published, and how a deal-breaker judges applicants (Q19)", () => {
+    // pay transparency, under the pay step's question
+    expect(STEP_HINT.pay).toBe("Pay is always shown on your job ad.");
+    const a = { ...emptyQuickAnswers(), title: "Delivery driver", dealBreakers: ["Cannot work Saturdays"] };
+    const html = renderToStaticMarkup(createElement(StepBody, { step: "dealbreakers", a, set: () => undefined, vertical: "logistics", onEdit: () => undefined }));
+    expect(html).toContain("Everyone is checked openly against must-haves. An unticked one is not used to judge anyone.");
+    expect(html).toMatch(/<label class="option-row flex-wrap gap-y-1\.5">[\s\S]*?<span class="option-tag">Must-have<\/span><\/label>/);
   });
 });
 

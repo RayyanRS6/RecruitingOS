@@ -15,7 +15,7 @@ import { dayWords, payPayload, payProblem, type PayForm } from "./rules";
 export const QUICK_STEPS = ["title", "type", "where", "experience", "pay", "closing", "musts", "dealbreakers", "questions", "review"] as const;
 export type QuickStepId = (typeof QUICK_STEPS)[number];
 
-/** What each step is called on the review and in "Step 3 of 10 · Where". */
+/** What each step is called on the review, and in the list of steps a job ad filled in. */
 export const STEP_LABEL: Readonly<Record<QuickStepId, string>> = {
   title: "Job title",
   type: "Employment type",
@@ -43,18 +43,15 @@ export const STEP_QUESTION: Readonly<Record<QuickStepId, string>> = {
   review: "Check your answers",
 };
 
-/** One short line under each question. */
-export const STEP_HINT: Readonly<Record<QuickStepId, string>> = {
-  title: "Or paste a job ad you already have to fill in the steps.",
-  type: "Pick one.",
-  where: "Pick one, then say the place.",
-  experience: "Pick the least you would accept.",
+/**
+ * A short line under a question, only where the question alone would not say how its answers are used (fewer words,
+ * 23 October 2026): the pay is always published (pay transparency, a required notice; founder decision Q9), and the
+ * must-haves are what every applicant is checked against. The other steps say it with their question, their choices and
+ * their field labels (a question added on the screening step is labelled as one for the AI interview).
+ */
+export const STEP_HINT: Readonly<Partial<Record<QuickStepId, string>>> = {
   pay: "Pay is always shown on your job ad.",
-  closing: "You can change it later.",
   musts: "Every applicant is checked against these.",
-  dealbreakers: "Each one passes a fairness check first.",
-  questions: "Yes/no questions on the form. Ones you add are asked in the AI interview. Each passes a fairness check first.",
-  review: "The assistant writes the job post from these.",
 };
 
 export const EMPLOYMENT_CHOICES: ReadonlyArray<{ value: string; label: string }> = [

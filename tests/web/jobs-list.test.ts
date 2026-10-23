@@ -103,10 +103,11 @@ describe("the jobs list", () => {
     expect(jobsEmpty({ ...DEFAULT_JOBS_VIEW, status: "drafts" }, { mayStartHire: true })).toMatchObject({ title: "No drafts", action: "start" });
     expect(jobsEmpty({ ...DEFAULT_JOBS_VIEW, status: "paused" }, { mayStartHire: true })).toMatchObject({ title: "No paused jobs", action: "all" });
     expect(jobsEmpty({ ...DEFAULT_JOBS_VIEW, status: "closed" }, { mayStartHire: true })).toMatchObject({ title: "No closed jobs", action: "all" });
-    expect(jobsEmpty({ ...DEFAULT_JOBS_VIEW, q: " nurse " }, { mayStartHire: true })).toEqual({ title: "No jobs match your search", body: 'Nothing called "nurse".', action: "clear" });
+    expect(jobsEmpty({ ...DEFAULT_JOBS_VIEW, q: " nurse " }, { mayStartHire: true })).toEqual({ title: "No jobs match your search", action: "clear" });
+    // the title alone, with its one action (founder, 23 Oct 2026: fewer words): no line under it
     for (const f of JOB_FILTERS) {
       const e = jobsEmpty({ ...DEFAULT_JOBS_VIEW, status: f.id }, { mayStartHire: true });
-      expect(e.body.split(/\s+/).length).toBeLessThanOrEqual(12);
+      expect(Object.keys(e).sort()).toEqual(["action", "title"]);
     }
   });
 });

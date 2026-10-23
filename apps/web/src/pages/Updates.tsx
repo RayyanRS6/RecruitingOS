@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { type CSSProperties, useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, EmptyState, ErrorState, PageHeader, Pill, Segmented, Skeleton } from "@ros/ui";
+import { Button, Card, cn, EmptyState, ErrorState, IconChip, PageHeader, Pill, Segmented, Skeleton } from "@ros/ui";
 import { api, ApiError, type NotificationHistoryPage, type NotificationView } from "../api/client";
 import { Link } from "../nav";
 import { READ_BATCH, markReadLabel, updateTime } from "../notification-settings";
@@ -48,56 +48,64 @@ export function Updates() {
     onError: (e) => toast(e instanceof ApiError ? e.message : "That didn't work. Try again."),
   });
 
+  // Screenshot 4's look: the header, a bar with the filter pills and the bulk action, then one bordered list of rows.
+  // The way back up to Home is the eyebrow on a phone only: from the frame's rail breakpoint (rail:, 900px) the frame's
+  // bar shows "Home / Updates" (AppShell's parentTrail), so the eyebrow would repeat it (founder, 23 October 2026: fewer
+  // words).
   return (
-    <div className="stack" style={{ gap: 18 }}>
+    <div className="stack gap-5">
       <PageHeader
-        eyebrow={<Link to="/">Home</Link>}
+        className="rail:[&>.eyebrow]:hidden"
+        eyebrow={<Link to="/" className="font-normal text-ink-2 underline decoration-line-strong underline-offset-2 transition-colors ease-soft hover:text-primary pointer-coarse:inline-flex pointer-coarse:min-h-10 pointer-coarse:items-center">Home</Link>}
         title="Updates"
-        sub="Everything the assistant told you, newest first."
         actions={<Link to="/setup#setup-notifications" className="btn secondary">Email alerts</Link>}
       />
-      <Card>
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-          <Segmented ariaLabel="Which updates to show" value={filter} onChange={setFilter} options={[{ value: "all", label: "All" }, { value: "unread", label: `Unread (${unread})` }]} />
-          {shownUnread.length ? <Button size="sm" variant="secondary" loading={readShown.isPending} onClick={() => readShown.mutate(shownUnread)}>{markReadLabel(shownUnread.length, unread)}</Button> : null}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Segmented ariaLabel="Which updates to show" value={filter} onChange={setFilter} options={[{ value: "all", label: "All" }, { value: "unread", label: `Unread (${unread})` }]} />
+        {shownUnread.length ? <Button size="sm" variant="secondary" loading={readShown.isPending} onClick={() => readShown.mutate(shownUnread)}>{markReadLabel(shownUnread.length, unread)}</Button> : null}
+      </div>
+      {q.isLoading ? <Card><Skeleton lines={5} /></Card> : q.error ? (
+        <ErrorState message="Could not load your updates." onRetry={() => q.refetch()} />
+      ) : !items.length ? (
+        filter === "unread"
+          ? <EmptyState icon="check-circle" title="Nothing unread" body="The earlier ones are under All." />
+          : <EmptyState title="No updates yet" />
+      ) : (
+        <ul aria-label="Updates" className="list-card">
+          {items.map((n, i) => <UpdateRow key={n.id} n={n} order={i} busy={mark.isPending && mark.variables?.id === n.id} onMark={(read) => mark.mutate({ id: n.id, read })} />)}
+        </ul>
+      )}
+      {q.hasNextPage ? (
+        <div className="row justify-center">
+          <Button size="sm" variant="secondary" loading={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>Show earlier updates</Button>
         </div>
-        {q.isLoading ? <div style={{ marginTop: 12 }}><Skeleton lines={5} /></div> : q.error ? (
-          <div style={{ marginTop: 12 }}><ErrorState message="Could not load your updates." onRetry={() => q.refetch()} /></div>
-        ) : !items.length ? (
-          filter === "unread"
-            ? <EmptyState icon="check-circle" title="Nothing unread" body="You have seen every update. The earlier ones are under All." />
-            : <EmptyState title="No updates yet" body="When the assistant does something for you, or something needs you, it shows here." />
-        ) : (
-          <ul aria-label="Updates" style={{ listStyle: "none", margin: "12px 0 0", padding: 0 }}>
-            {items.map((n) => <UpdateRow key={n.id} n={n} busy={mark.isPending && mark.variables?.id === n.id} onMark={(read) => mark.mutate({ id: n.id, read })} />)}
-          </ul>
-        )}
-        {q.hasNextPage ? (
-          <div className="row" style={{ justifyContent: "center", marginTop: 12 }}>
-            <Button size="sm" variant="secondary" loading={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>Show earlier updates</Button>
-          </div>
-        ) : null}
-      </Card>
+      ) : null}
     </div>
   );
 }
 
-function UpdateRow({ n, busy, onMark }: { n: NotificationView; busy: boolean; onMark: (read: boolean) => void }) {
+/** One update: a mark for read or not, the title and its word, the message, when and what kind, and its own button. */
+function UpdateRow({ n, order, busy, onMark }: { n: NotificationView; order: number; busy: boolean; onMark: (read: boolean) => void }) {
   const isNew = !n.readAt;
+  // a list's first appearance (spec 4): 30ms a row, the ninth and later with the eighth
+  const delay: CSSProperties | undefined = order % PAGE ? { animationDelay: `${Math.min(order % PAGE, 7) * 30}ms` } : undefined;
   return (
-    <li style={{ display: "flex", gap: 10, alignItems: "flex-start", borderTop: "1px solid var(--line)", padding: "10px 0" }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <strong className="small" style={{ overflowWrap: "anywhere", color: isNew ? "var(--ink)" : "var(--ink-2)" }}>{n.title}</strong>
+    <li className="list-row items-start motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]" style={delay}>
+      <IconChip icon={isNew ? "inbox" : "check"} size="sm" tone={isNew ? "lavender" : "neutral"} />
+      <div className="list-row-main gap-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <strong className={cn("text-[14.5px] [overflow-wrap:anywhere]", isNew ? "text-ink" : "text-ink-2")}>{n.title}</strong>
           {isNew ? <Pill size="sm" tone="accent">Unread</Pill> : null}
         </div>
-        <p className="small" style={{ margin: "2px 0 0", color: "var(--ink-2)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{n.body}</p>
-        <p className="small muted" style={{ margin: "4px 0 0" }}>
+        <p className="small whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{n.body}</p>
+        <p className="small muted">
           {updateTime(n.createdAt)} · {n.groupLabel}{n.emailedAt ? " · also emailed to you" : ""}
           {n.action ? <> · <Link to={n.action.href}>{n.action.label}</Link></> : null}
         </p>
       </div>
-      <Button size="sm" variant="quiet" loading={busy} onClick={() => onMark(isNew)} ariaLabel={`${isNew ? "Mark read" : "Mark unread"}: ${n.title}`}>{isNew ? "Mark read" : "Mark unread"}</Button>
+      <div className="list-row-end">
+        <Button size="sm" variant="quiet" loading={busy} onClick={() => onMark(isNew)} ariaLabel={`${isNew ? "Mark read" : "Mark unread"}: ${n.title}`}>{isNew ? "Mark read" : "Mark unread"}</Button>
+      </div>
     </li>
   );
 }

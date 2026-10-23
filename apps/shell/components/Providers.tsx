@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "@ros/ui";
+import { MotionProvider, Toaster } from "@ros/ui";
 import type { Me } from "../lib/session";
 
 /**
@@ -10,6 +10,8 @@ import type { Me } from "../lib/session";
  * Toaster shows what toast() (apps/web/src/toast.ts) sends: a title, and a second line when there is more to say.
  * Queries do not refetch on focus by default, so a half-filled form is never reloaded under someone; a page that must
  * stay current asks for it itself (Today: on focus and every minute, TODAY_REFRESH in apps/web/src/today.ts).
+ * MotionProvider (packages/ui) loads the motion features once for the pages' few JavaScript animations (moves, exits)
+ * and turns them off for anyone who asked their device for less motion.
  */
 export function Providers({ children, me }: { children: ReactNode; me: Me | null }) {
   const [client] = useState(() => {
@@ -20,8 +22,10 @@ export function Providers({ children, me }: { children: ReactNode; me: Me | null
   useEffect(() => { if (me) client.setQueryData(["me"], me); }, [client, me]);
   return (
     <QueryClientProvider client={client}>
-      {children}
-      <Toaster />
+      <MotionProvider>
+        {children}
+        <Toaster />
+      </MotionProvider>
     </QueryClientProvider>
   );
 }

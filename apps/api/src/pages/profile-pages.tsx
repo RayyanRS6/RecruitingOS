@@ -9,6 +9,7 @@ import { confirmRepeat, repeatConfirmationView, type RepeatConfirmationView } fr
 import { applicationForStatusToken, changeLearnedFact, learnFromConfirmedRepeat, otherRolesFor, queueReuseLink, queueReuseLinkFor, type OtherRole } from "../services/profile-facts";
 import { anonymizedFor, jobTakesApplications, linkGone, loadJob } from "./candidate-shared";
 import { Layout } from "./layout";
+import { CARD_PAGE_CSS } from "./signin-link";
 
 /**
  * What the candidate's company-scoped record knows and reuses (Wave S7, slice S7-F): confirming by email that answers
@@ -66,7 +67,7 @@ export function LearnedFactsSection(props: LearnedFactsSectionProps) {
       {saved ? <div class={saved.error ? "err" : "card"} role={saved.error ? "alert" : "status"}><p>{saved.text}</p></div> : null}
       {facts.length ? (
         <>
-          <p>Things you told us yourself in a chat you sent. {companyName} keeps them with your applications here, never with another company, for you to check. Change or remove any of them. When you apply for another role here with your details, the form lists them for you to keep or untick.</p>
+          <p>Things you told us yourself in a chat you sent. {companyName} keeps them with your applications here, never with another company, for you to check. When you apply for another role here with your details, the form lists them for you to keep or untick.</p>
           <ul class="roles">
             {facts.map((f) => (
               <li class="card">
@@ -119,9 +120,8 @@ function OtherRolesPage(props: { companyName: string; slug: string | null; roles
   const { companyName } = props;
   const base = `/c/status/${props.statusToken}/apply-another`;
   return (
-    <Layout title={`Apply for another role at ${companyName}`}>
+    <Layout title={`Apply for another role at ${companyName}`} extraCss={CARD_PAGE_CSS}>
       <p class="back"><a href={`/c/status/${props.statusToken}`}>Back to your application</a></p>
-      <p class="eyebrow">{companyName} · Your applications</p>
       <h1>Apply for another role at {companyName}</h1>
       <p class="lead">We email a link to the address on your application. It opens that job's form with your details filled in (your name, contact details, where you are and the summary of your work), for you to check and change. The form also lists what you told us in your chats here, for you to keep or untick. Nothing goes to another company.</p>
       {props.sent ? <div class="card" role="status"><p><strong>Check your email.</strong> The link is on its way to the address on your application. It can take a few minutes; look in your spam or promotions folder too.</p></div> : null}
@@ -176,19 +176,18 @@ const ReuseRequestForm = z.object({ email: z.email().max(254) });
 
 function ReuseRequestPage(props: { companyName: string; roleTitle: string; formPath: string; error?: string; email?: string }) {
   return (
-    <Layout title={`Use your details for ${props.roleTitle}`}>
+    <Layout title={`Use your details for ${props.roleTitle}`} extraCss={CARD_PAGE_CSS}>
       <p class="back"><a href={props.formPath}>Back to the form</a></p>
-      <p class="eyebrow">{props.companyName} · {props.roleTitle}</p>
       <h1>Use the details you gave {props.companyName} before</h1>
       <p class="lead">Type the email address you applied with. If {props.companyName} has your details, we email you a link that opens this job's form with them filled in, for you to check. We never show them on this page.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" action={`${props.formPath}/reuse`} class="card">
-        <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
+        <div class="trap" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
         <label for="email" class="flush">Your email address</label>
         <input id="email" name="email" type="email" required autocomplete="email" value={props.email ?? ""} />
         <button class="btn" type="submit">Email me the link</button>
       </form>
-      <p class="meta">Only what you gave {props.companyName} is used. Nothing is shared with another company.</p>
+      <p class="meta assure">Only what you gave {props.companyName} is used. Nothing is shared with another company.</p>
       <p>Rather not? <a href={props.formPath}>Fill in the form yourself</a>.</p>
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>
@@ -196,10 +195,9 @@ function ReuseRequestPage(props: { companyName: string; roleTitle: string; formP
 }
 
 /** What every request answers, whether or not the address is known: only the mailbox learns that. */
-function ReuseRequestSent(props: { companyName: string; roleTitle: string; formPath: string }) {
+function ReuseRequestSent(props: { companyName: string; formPath: string }) {
   return (
-    <Layout title="Check your email">
-      <p class="eyebrow">{props.companyName} · {props.roleTitle}</p>
+    <Layout title="Check your email" extraCss={CARD_PAGE_CSS}>
       <h1>Check your email</h1>
       <div class="card" role="status">
         <p><strong>If {props.companyName} has your details from before, a link is on its way.</strong></p>
@@ -263,9 +261,14 @@ function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string
     gone: { title: "This link has expired", text: "It was already used, or more than seven days went by and what was typed was deleted. Nothing was added to your application." },
   };
   const done = view.state === "ready" ? null : outcome[view.state];
+  // "Added" and "A person will be in touch" name the job and the employer in their own line, right under the heading.
+  const namesJob = view.state === "added" || view.state === "person";
   return (
-    <Layout title={done ? done.title : "Please confirm"}>
-      <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
+    <Layout title={done ? done.title : "Please confirm"} extraCss={CARD_PAGE_CSS}>
+      {/* The candidate pages' rule (fewer words, 23 October 2026): a "Company · Job" eyebrow only where nothing else on the
+          page names the employer or the job. An emailed link opens this page; the question ("this job"), "Nothing was
+          added" and "This link has expired" name neither, so they keep it. */}
+      {namesJob ? null : <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>}
       {done ? (
         <>
           <h1>{done.title}</h1>
@@ -275,8 +278,9 @@ function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string
         <>
           <h1>{person ? "Ask a person to contact you?" : "Add these answers to your application?"}</h1>
           <p class="lead">Someone using your email address sent an application for this job and {happened}. Nothing has been added to your application yet.</p>
-          <form method="post" action={`/c/confirm-answers/${props.token}`} class="card">
-            <p>If that was you, press the button {person ? "and a person will be in touch" : "to add those answers to your application"}.</p>
+          {/* The button says what it does; the line under it covers "it was not you". `actions` spaces the button from
+              the lead and from that line (`.actions + p`). */}
+          <form method="post" action={`/c/confirm-answers/${props.token}`} class="actions">
             <button class="btn" type="submit">{person ? "Yes, ask a person to contact me" : "Add these answers to my application"}</button>
           </form>
           <p>If it was not you, you do not need to do anything: nothing is added, and what was typed is deleted after seven days.</p>

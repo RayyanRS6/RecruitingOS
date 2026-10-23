@@ -175,21 +175,22 @@ export function approvalsWaitingLabel(n: number): string {
 }
 
 /**
- * What an empty filter says, with its one action: "start" (Start a hire, for those who may), "all" (show every job) or
- * "clear" (clear the search). Used when there are jobs, but none in this view; "No jobs yet" stays for none at all.
+ * What an empty filter says: its title alone (founder, 23 Oct 2026: fewer words), with its one action: "start" (Start a
+ * hire, for those who may), "all" (show every job) or "clear" (clear the search). Used when there are jobs, but none in
+ * this view; "No jobs yet" stays for none at all.
  */
-export function jobsEmpty(view: JobsView, opts: { mayStartHire: boolean }): { title: string; body: string; action: "start" | "all" | "clear" } {
-  if (view.q.trim()) return { title: "No jobs match your search", body: `Nothing called "${view.q.trim()}"${view.status === "all" ? "" : " here"}.`, action: "clear" };
+export function jobsEmpty(view: JobsView, opts: { mayStartHire: boolean }): { title: string; action: "start" | "all" | "clear" } {
+  if (view.q.trim()) return { title: "No jobs match your search", action: "clear" };
   switch (view.status) {
     case "live":
-      return { title: "No live jobs", body: "A job goes live once it is approved.", action: opts.mayStartHire ? "start" : "all" };
+      return { title: "No live jobs", action: opts.mayStartHire ? "start" : "all" };
     case "drafts":
-      return { title: "No drafts", body: "A job you start stays here until it goes live.", action: opts.mayStartHire ? "start" : "all" };
+      return { title: "No drafts", action: opts.mayStartHire ? "start" : "all" };
     case "paused":
-      return { title: "No paused jobs", body: "Pause a live job from its More menu.", action: "all" };
+      return { title: "No paused jobs", action: "all" };
     case "closed":
-      return { title: "No closed jobs", body: "Filled and closed jobs show here.", action: "all" };
+      return { title: "No closed jobs", action: "all" };
     default:
-      return { title: "No jobs here", body: "Try another filter.", action: "all" };
+      return { title: "No jobs here", action: "all" };
   }
 }

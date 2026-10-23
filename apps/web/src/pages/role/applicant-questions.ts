@@ -26,11 +26,21 @@ export const QUICK_KINDS: ReadonlyArray<{ value: QuickKind; label: string }> = [
   { value: "number", label: "A number" },
 ];
 
-export const APPLICANT_QUESTIONS_LEDE = "Quick questions are on the application form, for every applicant. Written questions are asked in the chat when the job offers it right after the form, and each answer is written up from the applicant's own words for you to read; a chat sent by email after you review, or by text, asks your screening questions instead. None of them turns anyone down: a person decides.";
-export const QUICK_HINT = "One tap or a number each. They never hold an application; only the yes/no questions below that may hold one do, for your decision.";
-export const WRITTEN_HINT = "Asked one at a time in the chat. What a good answer shows helps the chat ask well and you read the answers; applicants never see it.";
+/**
+ * The card's words (fewer words, 23 Oct 2026: the list headings already say where each kind is asked). The lede keeps
+ * the one rule the headings cannot show (which chat asks which questions) and "a person decides", which is never cut.
+ */
+export const APPLICANT_QUESTIONS_LEDE = "Written questions are asked in the chat when the job offers it right after the form; a chat sent by email after you review, or by text, asks your screening questions instead. None of them turns anyone down: a person decides.";
+/** Under the editor's quick questions: the rule that they never hold an application. */
+export const QUICK_HINT = "They never hold an application; only the yes/no questions that may hold one do, for your decision.";
+/** In the editor, where questions are written (the card itself does not repeat it). */
 export const FAIRNESS_LINE = "Each question passes the fairness check before it is saved: questions about age, sex, race, religion, family, health, national origin or a criminal record are refused, with the lawful way to ask about the real need.";
-export const SCREENING_FALLBACK_LINE = "You have not set your own written questions, so the chat asks your screening questions. Change them here to set the questions every applicant answers in the chat.";
+export const SCREENING_FALLBACK_LINE = "You have not set your own written questions, so the chat asks your screening questions.";
+/**
+ * The tooltip (and accessible description) of the editor's "What a good answer shows" field: the team's private note
+ * steers the AI chat. Moved from the editor's cut hint, so the team still learns that the chat reads it.
+ */
+export const LOOK_FOR_USE = "What a good answer shows helps the chat ask well and you read the answers.";
 
 const YES_NO = ["Yes", "No"];
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();

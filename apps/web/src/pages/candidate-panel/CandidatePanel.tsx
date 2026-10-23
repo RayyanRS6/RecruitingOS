@@ -17,7 +17,7 @@ import { type Compose, HistoryTab, MessagesTab, OverviewTab, ResumeTab, ScreenTa
 
 /**
  * The candidate panel (plan A10; founder decisions B3 and B6; Wave S1): a drawer with a sticky header (who, when they
- * applied, the role, Email, the stage button, More, next and previous), the decisions waiting for you under it (each one
+ * applied, the score, Email, the stage button, More, next and previous), the decisions waiting for you under it (each one
  * line and its buttons, the rest behind "Why"), then the sections, the Overview first. The page keeps
  * the panel's place in the address (`?open=<id>&tab=…`). Moving to the next person never carries a half-filled form
  * over (everything under the header is keyed by the person), and unsent text is never thrown away without asking.
@@ -26,7 +26,6 @@ import { type Compose, HistoryTab, MessagesTab, OverviewTab, ResumeTab, ScreenTa
 export type PanelProps = {
   id: string;
   roleId: string;
-  roleTitle: string | null;
   tab: PanelTab;
   onTab: (tab: PanelTab) => void;
   step: PanelStep | null;
@@ -41,6 +40,13 @@ export type PanelProps = {
 };
 
 const SEEN_KEY = (id: string) => `ros:panel-seen:${id}`;
+
+/**
+ * The sections under the tabs (October 2026 redesign): each card's title is a small mono label over its content, like
+ * screenshot 3's "Role brief draft", so the decisions above them, which keep their display titles on the wash, stand
+ * out. A card that itself needs you (an AI review marked for a closer look) keeps its display title here too.
+ */
+const SECTION_CARDS = "[&_.card:not(.needs-you)>.card-title]:items-center [&_.card:not(.needs-you)>.card-title>h2]:font-mono [&_.card:not(.needs-you)>.card-title>h2]:text-[11px] [&_.card:not(.needs-you)>.card-title>h2]:font-normal [&_.card:not(.needs-you)>.card-title>h2]:uppercase [&_.card:not(.needs-you)>.card-title>h2]:tracking-[0.14em] [&_.card:not(.needs-you)>.card-title>h2]:text-ink-2";
 
 /** When this reader last opened each section of this candidate; kept in this browser only, and optional. */
 function readSeen(id: string): SeenTabs | null {
@@ -157,7 +163,7 @@ export function CandidatePanel(props: PanelProps) {
     if (choice === "invite_screen") act.mutate({ action: "invite_screen" });
     if (choice === "record_outcome") props.onStep("outcome");
   };
-  const applied = a ? `Applied ${new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}${props.roleTitle ? ` · ${props.roleTitle}` : ""}` : undefined;
+  const applied = a ? `Applied ${new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : undefined;
   // The match score stays in sight on every section (founder decision B2); its breakdown is on the Overview. A score
   // with no AI interview in it says so beside it on every section too (R20-9), the full label on hover.
   const scored = a ? matchOf(a) ?? null : null;
@@ -180,9 +186,9 @@ export function CandidatePanel(props: PanelProps) {
         nav || a ? (
           <>
             {nav ? (
-              <span className="panel-nav" ref={navBox}>
+              <span className="inline-flex items-center gap-1.5 text-[13px] text-ink-3 tabular-nums" ref={navBox}>
                 <IconButton icon="chevron-up" size="sm" label="Previous candidate (Alt+Up)" disabled={!nav.prev} onClick={() => goTo(nav.prev)} />
-                <span>{nav.index + 1} of {nav.total}</span>
+                <span className="whitespace-nowrap px-0.5">{nav.index + 1} of {nav.total}</span>
                 <IconButton icon="chevron-down" size="sm" label="Next candidate (Alt+Down)" disabled={!nav.next} onClick={() => goTo(nav.next)} />
                 {/* one live region that stays mounted: after a move it says who is shown, once they have loaded */}
                 <span className="sr-only" aria-live="polite">{moved && a ? `${name}, ${nav.index + 1} of ${nav.total}` : ""}</span>
@@ -201,7 +207,7 @@ export function CandidatePanel(props: PanelProps) {
       banner={
         leaving ? (
           <Alert tone="caution">
-            <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="row justify-between">
               <span>You have text here that is not sent or saved. Leave it?</span>
               <span className="row">
                 <Button size="sm" variant="primary" onClick={discardAndGo}>Discard it and go on</Button>
@@ -218,12 +224,18 @@ export function CandidatePanel(props: PanelProps) {
           <div key={id}>
             <NeedsYou a={a} roleId={roleId} myRole={viewer.role} myUserId={viewer.userId} step={props.step} setStep={props.onStep} roundKey={props.roundKey} onTab={onTab} />
             <TabPanel idBase="candidate-panel" value={tab}>
-              {tab === "overview" ? <OverviewTab a={a} roleId={roleId} onHistory={() => onTab("history")} onNext={onNext} /> : null}
-              {tab === "screen" ? <ScreenTab a={a} roleId={roleId} myRole={viewer.role} /> : null}
-              {tab === "resume" ? <ResumeTab a={a} roleId={roleId} /> : null}
-              {tab === "messages" ? <MessagesTab a={a} roleId={roleId} compose={composing} setCompose={setCompose} /> : null}
-              {tab === "notes" ? <NotesTab applicationId={a.id} firstName={a.candidate.firstName} /> : null}
-              {tab === "history" ? <HistoryTab a={a} mayReadActivity={canSeeActivity(viewer.role)} /> : null}
+              {/* keyed by the section, so a switch fades the new one in (CSS: before any script, and not at all for less motion);
+                  filled backwards only, so once the fade ends this wrapper is no containing block or layer for the sheets, the
+                  dialog and the full-screen résumé drawn inside it; a long word or address breaks anywhere (it also stops
+                  counting as the cards' narrowest width), so it never pushes a phone's screen sideways */}
+              <div key={tab} className={`${SECTION_CARDS} wrap-anywhere motion-safe:animate-fade motion-safe:[animation-fill-mode:backwards]`}>
+                {tab === "overview" ? <OverviewTab a={a} roleId={roleId} onHistory={() => onTab("history")} onNext={onNext} /> : null}
+                {tab === "screen" ? <ScreenTab a={a} roleId={roleId} myRole={viewer.role} /> : null}
+                {tab === "resume" ? <ResumeTab a={a} roleId={roleId} /> : null}
+                {tab === "messages" ? <MessagesTab a={a} roleId={roleId} compose={composing} setCompose={setCompose} /> : null}
+                {tab === "notes" ? <NotesTab applicationId={a.id} firstName={a.candidate.firstName} /> : null}
+                {tab === "history" ? <HistoryTab a={a} mayReadActivity={canSeeActivity(viewer.role)} /> : null}
+              </div>
             </TabPanel>
           </div>
         </DraftContext.Provider>

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "../nav";
-import { Alert, Button, Card, ErrorState, Eyebrow, Field, Skeleton } from "@ros/ui";
+import { Alert, Button, ErrorState, Field, Icon, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 
 const ERRORS: Record<string, string> = {
@@ -47,47 +47,53 @@ export function Login() {
   const base = send.error ? (send.error instanceof ApiError ? send.error.message : "Could not send the link.") : errParam ? ERRORS[errParam] ?? "Sign-in failed. Try again." : null;
   const error = forgetError ? (base ? `${base} ${forgetError}` : forgetError) : base;
   return (
-    <main className="main" style={{ maxWidth: 480, margin: "8vh auto" }}>
-      <Eyebrow>Sign in</Eyebrow>
-      <h1 style={{ margin: "6px 0" }}>Recruiting OS</h1>
-      <p className="muted" style={{ marginBottom: 20 }}>A recruiting department for companies too small to have one.</p>
-      <Card>
-        <div className="stack">
+    // One card on the page's glow (screenshots 2 and 5): the mark, what this is, then the ways in.
+    <main className="grid min-h-dvh place-items-center px-4 py-10 sm:py-16">
+      <div className="w-full max-w-[440px] rounded-[20px] border border-line bg-surface px-5 py-8 shadow-sm motion-safe:animate-enter sm:px-9 sm:py-10">
+        <div className="grid justify-items-center text-center">
+          <span aria-hidden="true" className="grid size-12 place-items-center rounded-[14px] bg-primary text-on-primary shadow-primary">
+            <Icon name="bars" size={24} />
+          </span>
+          {/* the name as the logo writes it: "OS" in coral, which is large text at this size (AA from 18.66px bold) */}
+          <h1 className="mt-6 font-display text-[34px] font-bold leading-[1.05] tracking-[-0.035em] text-ink">Recruiting <span className="text-accent">OS</span></h1>
+        </div>
+        <div className="stack mt-8 gap-4">
           {error ? <Alert tone="critical">{error}</Alert> : null}
           {errParam === "invite_email_mismatch" ? <div><Button variant="quiet" size="sm" loading={forgetInvite.isPending} onClick={() => forgetInvite.mutate()}>Continue without the invitation</Button></div> : null}
           {/* The sign-in choices come from the server; if they cannot be loaded, say so and offer a retry instead of an empty card. */}
           {config.isLoading ? <Skeleton lines={2} /> : config.error ? <ErrorState message="We could not load the sign-in options. Check your connection and try again." onRetry={() => config.refetch()} /> : null}
           {config.data?.providers.length ? (
-            <div className="stack" style={{ gap: 8 }}>
+            <div className="stack gap-2.5">
               {config.data.providers.map((p) => (
-                <a key={p.key} className="btn primary" href={`/api/v1/auth/start/${p.key}`} style={{ textAlign: "center", textDecoration: "none" }}>Continue with {p.label}</a>
+                <a key={p.key} className="btn secondary wide" href={`/api/v1/auth/start/${p.key}`}>Continue with {p.label}</a>
               ))}
-              {config.data.mode === "fake_identity" ? <p className="small muted">Development: the provider buttons open a fake sign-in page; nothing leaves this machine.</p> : null}
+              {config.data.mode === "fake_identity" ? <p className="small muted text-center">Development: the provider buttons open a fake sign-in page; nothing leaves this machine.</p> : null}
             </div>
           ) : null}
+          {config.data?.providers.length && config.data.magicLink ? <div aria-hidden="true" className="h-px bg-line" /> : null}
           {config.data?.magicLink ? (
             send.data ? (
-              <div className="stack">
+              <div className="stack gap-3">
                 <Alert tone="info">Check your email for a sign-in link. It works for 15 minutes.</Alert>
                 {send.data.devLink ? <p className="small">Development mode: <a href={send.data.devLink}>open the sign-in link</a></p> : null}
               </div>
             ) : (
-              <form onSubmit={(e) => { e.preventDefault(); send.mutate(); }} className="stack">
-                <Field label="Or use your work email" htmlFor="email" hint="No password. We email you a link.">
+              <form onSubmit={(e) => { e.preventDefault(); send.mutate(); }} className="stack gap-3">
+                <Field label="Or use your work email" htmlFor="email">
                   <input id="email" className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
                 </Field>
-                <Button type="submit" variant="secondary" loading={send.isPending}>Email me a sign-in link</Button>
+                <Button type="submit" variant="primary" loading={send.isPending} block>Email me a sign-in link</Button>
               </form>
             )
           ) : null}
           {config.data?.providers.length ? (
-            <details className="small muted">
+            <details className="more small muted pt-1 text-center">
               <summary>ITS staff</summary>
-              <p style={{ marginTop: 6 }}>Sign in with Microsoft and your second factor.</p>
+              <p>Sign in with Microsoft and your second factor.</p>
             </details>
           ) : null}
         </div>
-      </Card>
+      </div>
     </main>
   );
 }

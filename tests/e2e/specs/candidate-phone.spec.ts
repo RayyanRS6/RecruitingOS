@@ -230,9 +230,10 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.getByText(/who is interviewed, hired or turned down is always a person's decision/)).toBeVisible();
     await expectAccessible(page, "status page");
     await noHorizontalOverflow(page, "status page");
-    // withdrawing is an outlined secondary button here too, not the near-black main action (under "No longer interested?")
+    // withdrawing is an outlined secondary button here too (the surface fill, --surface #fefcfb), not the plum main action
+    // (under "No longer interested?")
     await page.getByText("No longer interested?", { exact: true }).click();
-    await expect(page.getByRole("button", { name: "Withdraw my application" })).toHaveCSS("background-color", "rgb(255, 255, 255)");
+    await expect(page.getByRole("button", { name: "Withdraw my application" })).toHaveCSS("background-color", "rgb(254, 252, 251)");
     // the messages read as a conversation (plan G7): what we sent, oldest first, and no reply box (replies go by email)
     await expect(page.getByRole("heading", { level: 2, name: "Messages about your application" })).toBeVisible();
     await expect(page.locator("ol.thread li.msg.team").first()).toContainText(/Thank you for applying/);

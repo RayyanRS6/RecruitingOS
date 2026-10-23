@@ -76,22 +76,32 @@ export async function toldWording(q: Queryable, input: { applicationId: string; 
 }
 
 /**
- * The messages as a conversation, in the look of the screening conversation: the hiring team's on the left in a light
- * box, the candidate's own on the right in near-black. Each says who wrote it and when, in words a screen reader reads
- * too; an email shows its subject.
+ * The messages as a conversation, in the look of the screening conversation (October 2026 redesign, the guided chat of
+ * the reference screens): the assistant's and the hiring team's on the left in a white bubble with a hairline edge (the
+ * assistant's with a small coral sparkle beside it, drawn by CSS, decorative), the candidate's own on the right in peach.
+ * Each says who wrote it and when, in words a screen reader reads too; an email shows its subject. Tokens only, no
+ * colour of its own, no motion (the status page carries no motion at all).
  */
 export const THREAD_CSS = `
-.thread { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; padding: 0; list-style: none; }
-.msg { max-width: 88%; padding: 12px 16px; border-radius: 16px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg.assistant, .msg.team { align-self: flex-start; background: var(--ground); border: 1px solid var(--line); color: var(--ink); border-bottom-left-radius: 6px; }
-.msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground); border-bottom-right-radius: 6px; }
+.thread { display: flex; flex-direction: column; gap: 12px; margin: 20px 0; padding: 0; list-style: none; }
+.msg { position: relative; max-width: 86%; margin: 0; padding: 11px 16px; border: 1px solid transparent; border-radius: 16px; font-size: 15px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.assistant, .msg.team { align-self: flex-start; background: var(--surface); border-color: var(--line); color: var(--ink); border-top-left-radius: 6px; }
+.msg.assistant { max-width: calc(86% - 40px); margin-left: 40px; }
+.msg.assistant::before { content: ""; position: absolute; top: 0; left: -40px; width: 28px; height: 28px; border-radius: 9px; background: var(--peach); }
+.msg.assistant::after { content: ""; position: absolute; top: 7px; left: -33px; width: 14px; height: 14px; background: var(--accent); clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); }
+.msg.candidate { align-self: flex-end; background: var(--peach); color: var(--ink); border-color: var(--line-2); border-color: color-mix(in srgb, var(--accent) 22%, var(--peach)); border-top-right-radius: 6px; }
 .msg.candidate p, .msg.candidate strong { color: inherit; }
-.msg.system { align-self: center; background: transparent; color: var(--ink-3); font-size: 14px; }
-.msg-head { margin: 0 0 4px; color: var(--ink-3); font-size: 13.5px; font-weight: 600; white-space: normal; }
+.msg.system { align-self: center; max-width: 100%; padding: 2px 8px; border: 0; background: transparent; color: var(--ink-3); font-size: 13.5px; text-align: center; }
+.msg-head { margin: 0 0 4px; color: var(--ink-3); font-size: 13px; font-weight: 600; white-space: normal; }
 .msg-head time { font-weight: 400; }
 .msg-subject { margin: 0 0 6px; color: var(--ink); font-weight: 600; white-space: normal; }
 .msg-body { margin: 0; color: inherit; }
-@media (max-width: 600px) { .msg { max-width: 94%; } }
+@media (max-width: 600px) {
+  .msg { max-width: 94%; }
+  .msg.assistant { max-width: calc(100% - 34px); margin-left: 34px; }
+  .msg.assistant::before { left: -34px; width: 26px; height: 26px; }
+  .msg.assistant::after { top: 6px; left: -28px; width: 13px; height: 13px; }
+}
 `;
 
 /** "Oct 9, 2026, 3:04 PM PDT" in the candidate's time zone (the company's when theirs is not known). */
@@ -109,7 +119,8 @@ export function MessageThread(props: { messages: ThreadMessage[]; more: boolean;
   return (
     <section aria-labelledby="messages">
       <h2 id="messages">Messages about your application</h2>
-      <p class="meta">What we sent you and what you wrote back, oldest first{props.more ? `; the latest ${THREAD_LIMIT} are shown` : ""}. To write to the team, reply to any of our emails.</p>
+      {/* There is no reply box here (the link never expires; an email's address proves who wrote), so the line says how to write. */}
+      <p class="meta">{props.more ? `The latest ${THREAD_LIMIT} are shown. ` : ""}To write to the team, reply to any of our emails.</p>
       <ol class="thread">
         {props.messages.map((m) => {
           const who = m.from === "candidate" ? "You" : props.companyName;
