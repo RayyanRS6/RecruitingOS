@@ -59,6 +59,9 @@ test.describe("staff second factor", () => {
 
     await page.getByRole("button", { name: "Not now" }).click();
     await page.waitForURL((u) => !u.pathname.startsWith("/api/"));
+    // the first page may still send the person on (a staff member with no company goes to /setup/company): let it settle,
+    // or the next sign-in's page.goto is interrupted by that navigation on a loaded dev server
+    await page.waitForLoadState("networkidle");
 
     // Sign out, sign in again: the enrolled authenticator is challenged and no key is shown.
     expect((await page.request.post(`${baseURL}/api/v1/auth/logout`)).ok()).toBeTruthy();
