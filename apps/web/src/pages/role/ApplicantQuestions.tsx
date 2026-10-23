@@ -53,13 +53,13 @@ export function ApplicantQuestions(props: {
                 <ol className={QUESTION_LIST}>
                   {eligibility.map((e, i) => (
                     <li key={e.key} className={QUESTION_ROW}>
-                      <span aria-hidden="true" className={ORDINAL}>{i + 1}</span>
+                      <span className={ORDINAL}>{i + 1}</span>
                       <span className="min-w-0 flex-1"><span className="mr-1">{e.question}</span> <Chip>Yes or no</Chip> {e.holds ? <Chip tone="needs">A "no" holds it for your decision</Chip> : null}</span>
                     </li>
                   ))}
                   {quick.map((q, i) => (
                     <li key={q.key} className={QUESTION_ROW}>
-                      <span aria-hidden="true" className={ORDINAL}>{eligibility.length + i + 1}</span>
+                      <span className={ORDINAL}>{eligibility.length + i + 1}</span>
                       <span className="grid min-w-0 flex-1 gap-1">
                         <span><span className="mr-1">{q.question}</span> <Chip>{quickAnswerWords(q)}</Chip> {q.required ? null : <Chip>They may skip it</Chip>}</span>
                         {q.help ? <span className="small muted">{q.help}</span> : null}
@@ -76,7 +76,7 @@ export function ApplicantQuestions(props: {
                 <ol className={QUESTION_LIST}>
                   {written.map((q, i) => (
                     <li key={q.key} className={QUESTION_ROW}>
-                      <span aria-hidden="true" className={ORDINAL}>{i + 1}</span>
+                      <span className={ORDINAL}>{i + 1}</span>
                       <span className="grid min-w-0 flex-1 gap-1">
                         <span><span className="mr-1">{q.question}</span> {q.required ? null : <Chip>They may skip it</Chip>}</span>
                         {q.lookFor ? <span className="small muted">What a good answer shows ({PACKET_VISIBILITY_LABEL.internal.toLowerCase()}): {q.lookFor}</span> : null}

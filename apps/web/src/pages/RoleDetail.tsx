@@ -285,7 +285,7 @@ export function RoleDetail() {
                 </Card>
                 <Card title="Nice-to-haves" aside={<CandidatesSeeThis />}><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
                 <Card title={`Screening questions (about ${p.screening.maxMinutes} minutes)`}>
-                  <ol className={ROWS}>{p.screening.questions.map((q, i) => <li key={q.key} className={cn(ROW, "flex items-start gap-3")}><span aria-hidden="true" className={ORDINAL}>{i + 1}</span><span className="min-w-0 flex-1">{q.question} <Chip>{q.kind}</Chip></span></li>)}</ol>
+                  <ol className={ROWS}>{p.screening.questions.map((q, i) => <li key={q.key} className={cn(ROW, "flex items-start gap-3")}><span className={ORDINAL}>{i + 1}</span><span className="min-w-0 flex-1">{q.question} <Chip>{q.kind}</Chip></span></li>)}</ol>
                 </Card>
               </div>
               {/* Wave S7: the quick questions on the form and the written questions in the chat, changed here. */}

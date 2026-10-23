@@ -94,11 +94,11 @@ export function Home() {
   // "Your jobs" sits beside Needs you on a wide screen (screenshot 1's "Open roles"), and after it for the keyboard and
   // screen readers; on smaller screens it comes under it. The column is decided from what the first draw already knows
   // (whether this person has a jobs list), not from the list's arrival: while the list is coming (always on the first
-  // draw) a quiet placeholder holds the column, and while the brief is coming Your jobs waits with it, so neither column
-  // jumps sideways when the other fills in.
+  // draw) a quiet placeholder holds the column. Your jobs shows as soon as the list is in, even while the brief is still
+  // coming (its links must not wait for the brief); the columns may then settle once when Needs you arrives.
   const jobsComing = listsRoles && (!isClient || roles.isPending);
   const beside = !!needsBlock && (jobsComing || jobs.length > 0);
-  const showJobs = jobs.length > 0 && (!!needsBlock || !brief.isLoading);
+  const showJobs = jobs.length > 0;
 
   return (
     <div className="stack gap-6 md:gap-8 [&>.page-header]:mb-0 [&_.page-header-row>h1]:text-[36px] sm:[&_.page-header-row>h1]:text-[44px] md:[&_.page-header-row>h1]:text-[52px]">

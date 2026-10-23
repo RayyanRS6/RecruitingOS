@@ -426,7 +426,7 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
       <ol className="rounded-xl border border-line">
         {d.rounds.map((r, n) => (
           <li key={r.key} className="flex items-start gap-3 border-t border-line px-4 py-4 first:border-t-0 motion-safe:animate-enter" style={{ animationDelay: `${Math.min(n, 7) * 30}ms` }}>
-            <span aria-hidden="true" className={cn(ORDINAL, "mt-0.5")}>{n + 1}</span>
+            <span className={cn(ORDINAL, "mt-0.5")}>{n + 1}</span>
             <div className="min-w-0 flex-1">
               <p><strong>{r.title}</strong> <span className="text-ink-2">· {r.durationMinutes} min · {ROUND_FORMAT[r.format] ?? r.format}</span></p>
               <p className="small muted">{r.purpose}</p>

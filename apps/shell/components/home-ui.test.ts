@@ -222,6 +222,12 @@ describe("your jobs", () => {
   it("is left out when there is no job in progress", () => {
     expect(render({ roles: [] })).not.toContain("Your jobs");
   });
+
+  it("does not wait for the brief: the jobs show as soon as the list is in", () => {
+    const html = render({ cards: null });
+    expect(html).toContain('<h2 id="home-jobs">Your jobs</h2>');
+    expect(html).toContain('<a href="/roles/r1/talent" class="list-row">');
+  });
 });
 
 describe("the rest of Home", () => {
