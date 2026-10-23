@@ -883,6 +883,16 @@
     .dialog-foot { padding: 14px 20px; }
     .dialog-foot > * { flex: 1 1 0; }
     .page-header-actions { width: 100%; margin-left: 0; }
+    /* the message box gives its text the whole width and puts the send button under it, at the right */
+    .composer { flex-wrap: wrap; }
+    .composer :is(.autogrow, textarea) { flex-basis: 100%; }
+    .composer > .btn { margin-left: auto; }
+  }
+  /* On a desk too, a panel with actions puts them on their own line under the title, so a long name and its details
+     keep the width (the candidate panel has five actions); the close button stays at the top right. */
+  @media (min-width: 641px) {
+    .drawer-head-row:has(> .drawer-actions > *) { flex-wrap: wrap; }
+    .drawer-head-row:has(> .drawer-actions > *) > .drawer-actions { order: 4; flex-basis: 100%; justify-content: flex-start; }
   }
   /* The toast: bottom centre on a phone, bottom right on a desk. The Toaster's live region (role="status") is the fixed
      box and stays in the page while empty, so a new message is announced; a bare .toast places itself. */

@@ -343,8 +343,9 @@ export function People() {
           <PoolBoard roleId={roleId} board={board.data} only={only} onClearOnly={() => setOnlyFor(null)} onOpen={(id) => openPanel(id)} onReview={() => goTo(boardSearch(search, { review: true }))} onAsk={() => setAsking(true)} mayApply={mayApply} />
         ) : null
       ) : (
-        <div className="grid gap-4">
-          {/* The stage strip: the kit's counts tabs (each count above its word), the empty stages one click away at its end. */}
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
+          {/* The stage strip: the kit's counts tabs (each count above its word), the empty stages one click away at its end.
+              The column may shrink below the strip's width so the strip scrolls sideways instead of widening the page. */}
           <div className="talent-strip flex items-center gap-2 shadow-[inset_0_-1px_0_var(--line)] [&>.tabs]:min-w-0 [&>.tabs]:flex-1">
             <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => pickStage(v as TalentView["stage"])} items={strip.shown} />
             {/* The stages nobody is at, one click away with their counts (Wave S1). */}
