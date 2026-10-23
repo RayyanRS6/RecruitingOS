@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PACKET_VISIBILITY_LABEL, type DraftRolePacket, type IntakeFactsPatch, type IntakeSessionView, type PacketFlag, type PacketVisibility } from "@ros/contracts";
-import { Alert, Avatar, Button, cn, Eyebrow, Field, Icon, IconButton, Segmented } from "@ros/ui";
+import type { DraftRolePacket, IntakeFactsPatch, IntakeSessionView, PacketFlag } from "@ros/contracts";
+import { Alert, Avatar, Button, cn, Eyebrow, Field, Icon, IconButton, IconLabel, Segmented } from "@ros/ui";
 import { DraftClosingDate } from "../../components/ClosingDate";
 import { FactsEditor, type TeamPick } from "./FactsEditor";
-import { BULLETS, DRAFT_H3, DRAFT_PART, DRAFT_PART_HEAD, PANE_HEIGHT, SEEN_TAG } from "./look";
+import { BULLETS, DRAFT_H3, DRAFT_PART, DRAFT_PART_HEAD, PANE_HEIGHT } from "./look";
+import { SeenBy } from "./marks";
 import { PayCard } from "./PayCard";
 import {
   basicsChips, draftOutOfDate, draftSections, draftTitle, isEmptySection, readinessList, redraftWarning, sectionOfPath,
@@ -15,13 +16,10 @@ import { openFlags, proposalSections, rewordInstruction, suggestionsBySection, t
 
 type Pay = NonNullable<ReturnType<typeof payPayload>>;
 
-function SeenBy({ v }: { v: PacketVisibility }) {
-  return <span className={SEEN_TAG}><Icon name={v === "public" || v === "asked" ? "eye" : "lock"} size={13} />{PACKET_VISIBILITY_LABEL[v]}</span>;
-}
-
 /**
  * The draft beside the conversation (plan C7, C8, C9, C15). Preview shows the job as it is taking shape: the title and its
- * facts, the pay card, then each section with who sees it, filling in from the answers until the draft is written and
+ * facts, the pay card, then each section with who sees it (an eye or a lock beside its heading, its words read out and
+ * shown as a tooltip), filling in from the answers until the draft is written and
  * from the draft after. A section that just changed is briefly highlighted; one a proposed change would touch is marked
  * and shows the proposed words. "What we know / still missing" stays at the top until everything needed is in. Edit is
  * the same answers as plain fields. Wording the fairness check flagged waits here for a person: change it, or keep it
@@ -96,9 +94,9 @@ export function DraftPanel(props: {
             onCancel={() => setMode("preview")}
           />
         ) : nothingYet ? (
-          <div className="grid min-h-[300px] place-content-center justify-items-center gap-2 py-8 text-center text-[14px] text-ink-2">
+          // Nothing to show yet: the company's mark and the one line that says what fills this pane.
+          <div className="grid min-h-[300px] place-content-center justify-items-center gap-4 py-8 text-center text-[14px] text-ink-2">
             <Avatar name={props.companyName ?? "Your company"} tone="ink" shape="square" size="xl" letters={1} />
-            <strong className="mt-2 font-display text-xl font-bold text-ink">{props.companyName ?? "Your company"}</strong>
             <p>The job will appear here as we shape it.</p>
           </div>
         ) : (
@@ -148,7 +146,7 @@ export function DraftPanel(props: {
             <section className={DRAFT_PART} aria-labelledby="draft-pay-h">
               <div className={DRAFT_PART_HEAD}>
                 <h3 id="draft-pay-h" className={DRAFT_H3}>Pay</h3>
-                <span className={SEEN_TAG}><Icon name="eye" size={13} />Candidates see the range; only your team sees the most you would pay</span>
+                <IconLabel icon="eye" label="Candidates see the range; only your team sees the most you would pay" />
               </div>
               <PayCard key={JSON.stringify([view.pay.basis, view.pay.stated, !!view.pay.confirmed])} card={view.pay} onSave={props.onPay} saving={props.paying} error={props.payError} />
             </section>
@@ -188,7 +186,6 @@ export function DraftPanel(props: {
               <section className={DRAFT_PART}>
                 <div className={DRAFT_PART_HEAD}><h3 className={DRAFT_H3}>What the assistant assumed</h3><SeenBy v="internal" /></div>
                 <ul className={BULLETS}>{view.draft.provenance.assumptions.map((a) => <li key={a}>{a}</li>)}</ul>
-                <p className="small muted">Check these, and change anything that is not right before you ask for approval.</p>
               </section>
             ) : null}
             {view.facts.declinedCriteria.length ? (

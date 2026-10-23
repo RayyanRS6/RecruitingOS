@@ -49,7 +49,6 @@ function problemPage(c: Context<Vars>, err: unknown) {
   c.header("X-Robots-Tag", "noindex, nofollow");
   return c.html(
     <Layout title="Preview not available" noindex>
-      <p class="eyebrow">Preview</p>
       <h1>This preview cannot be shown</h1>
       <p>{known.message}</p>
     </Layout>,

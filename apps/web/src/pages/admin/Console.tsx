@@ -15,15 +15,17 @@ import { SystemSection } from "./system";
  * where it has several parts, its part tabs; the part chosen is `?view=` in the address, so a link, a reload or the
  * back button lands on the same part. Choosing another part drops `?open=` and `?tab=` (a drawer belongs to its part).
  * The rail (AppShell) and the guard (app/(app)/admin/layout.tsx) are the shell's; every read is audited by the API.
+ * The title stands alone (founder's fewer-words rule, 23 Oct 2026): no eyebrow over it and no line describing the page;
+ * the rail already says this is the console and the part tabs say what each section holds.
  */
 export type ConsoleSection = "overview" | "customers" | "privacy" | "problems" | "system";
 
-/** Each section's title and its one line, in the rail's order (Overview draws its own greeting instead). */
-export const CONSOLE_SECTIONS: Record<Exclude<ConsoleSection, "overview">, { title: string; sub: string }> = {
-  customers: { title: "Customers", sub: "Every customer: the ITS check, the plan, how people apply and the report." },
-  privacy: { title: "Privacy requests", sub: "What people asked about their data, and when each answer is due." },
-  problems: { title: "Problems", sub: "What went wrong and needs a person." },
-  system: { title: "System and settings", sub: "Costs, workflows, AI runs, the queue, the business calendar and administrators." },
+/** Each section's title, in the rail's order (Overview draws its own greeting instead). */
+export const CONSOLE_SECTIONS: Record<Exclude<ConsoleSection, "overview">, string> = {
+  customers: "Customers",
+  privacy: "Privacy requests",
+  problems: "Problems",
+  system: "System and settings",
 };
 
 /** The address after choosing a part: `?view=` set, a drawer's `?open=`/`?tab=` dropped, everything else kept. */
@@ -53,11 +55,10 @@ export function Console({ section }: { section: ConsoleSection }) {
   };
 
   if (section === "overview") return <Overview />;
-  const { title, sub } = CONSOLE_SECTIONS[section];
   // The header keeps its own space below it (the kit's page header); the section's part tabs follow as underline tabs.
   return (
     <div className="min-w-0">
-      <PageHeader eyebrow="ITS · Console" title={title} sub={sub} />
+      <PageHeader title={CONSOLE_SECTIONS[section]} />
       {section === "customers" ? <CustomersSection view={view} onView={onView} /> : section === "privacy" ? <PrivacySection view={view} onView={onView} /> : section === "problems" ? <ProblemsSection view={view} onView={onView} /> : <SystemSection view={view} onView={onView} />}
     </div>
   );

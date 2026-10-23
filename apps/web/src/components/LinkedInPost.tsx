@@ -126,15 +126,16 @@ export function LinkedInPost(props: { roleId: string; roleTitle: string; company
   if (role.isLoading) return <Skeleton lines={4} />;
   return (
     <div className="stack gap-4">
-      <p className="small muted">Pick a tone, check the words, then post it yourself.</p>
       {props.accepting ? null : <Alert tone="caution">This job is not taking applications right now. Hold the post until it is.</Alert>}
-      {/* The tones as cards to pick (the legend is floated so it is a grid item above them, not set into a border) */}
-      <fieldset className="wording-picker grid min-w-0 gap-2.5 sm:grid-cols-3">
+      {/* The tones, one kit option row each: picking one rewrites the words in the box at once, so the row shows only the
+          tone's name and its feel is the title. The legend is floated so it is a grid item above them, not set into a
+          border. `wording-option` and data-checked are hooks only: publishing-ui.test.ts finds the chosen tone by them. */}
+      <fieldset className="grid min-w-0 gap-2.5 sm:grid-cols-3">
         <legend className="small float-left col-span-full w-full font-semibold text-ink">Tone</legend>
         {POST_TONES.map((t) => (
-          <label key={t.key} className="wording-option check data-checked:border-primary data-checked:shadow-xs" data-checked={tone === t.key ? "true" : undefined}>
+          <label key={t.key} className="wording-option option-row" data-checked={tone === t.key ? "true" : undefined}>
             <input type="radio" name={`linkedin-tone-${props.roleId}`} value={t.key} checked={tone === t.key} onChange={() => { setTone(t.key); setEdited(null); }} />
-            <span className="min-w-0 leading-snug"><strong>{t.label}</strong><br /><span className="small muted">{t.hint}</span></span>
+            <span className="font-semibold" title={t.hint}>{t.label}</span>
           </label>
         ))}
       </fieldset>
@@ -144,30 +145,31 @@ export function LinkedInPost(props: { roleId: string; roleTitle: string; company
           <label htmlFor="linkedin-text">Your post</label>
           <textarea ref={box} id="linkedin-text" className="textarea" rows={14} value={text} onChange={(e) => setEdited(e.target.value)} aria-describedby="linkedin-count linkedin-hint" />
           <span id="linkedin-count" className={cn("hint tabular", count.over && "font-semibold text-critical")}>{count.line}</span>
-          <span id="linkedin-hint" className="hint">Change anything you like. Picking a tone starts the words again.</span>
+          {/* kept: a tone picked after an edit replaces the person's words */}
+          <span id="linkedin-hint" className="hint">Picking a tone starts the words again.</span>
         </div>
         {/* What the post looks like in a feed: for the eye only, the box beside it holds the same words */}
         <div className="stack gap-1.5" aria-hidden="true">
           <span className="small muted">Preview</span>
-          <div className="share-place grid gap-3 rounded-2xl border border-line bg-surface p-4 shadow-xs">
+          <div className="grid gap-3 rounded-2xl border border-line bg-surface p-4 shadow-xs">
             <div className="flex items-center gap-2.5">
               <Avatar name={company} shape="square" tone="ink" />
               <span className="small min-w-0"><strong>{company}</strong><br /><span className="muted">Just now</span></span>
             </div>
-            <p className="share-text text-[14px] leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink">
+            <p className="text-[14px] leading-relaxed whitespace-pre-wrap wrap-anywhere text-ink">
               {previewParts(text).map((part, i) => <span key={`${i}-${part.link}`} className={part.link ? "font-semibold text-primary" : undefined}>{part.text}</span>)}
             </p>
           </div>
         </div>
       </div>
       <div className="row" onPointerDown={prepare}>
-        {/* never disabled while at work (that would drop a keyboard user's focus); a second press meanwhile is ignored */}
-        <Button variant="primary" icon="external" disabled={!text.trim()} onClick={() => void run(true)}>Copy and open LinkedIn</Button>
+        {/* never disabled while at work (that would drop a keyboard user's focus); a second press meanwhile is ignored.
+            What it does in full is its title; the toast after the copy says the next step. */}
+        <Button variant="primary" icon="external" disabled={!text.trim()} title="Nothing is posted for you. LinkedIn opens in a new tab: paste, then post." onClick={() => void run(true)}>Copy and open LinkedIn</Button>
         <Button icon="copy" disabled={!text.trim()} onClick={() => void run(false)}>Copy text</Button>
         {/* the button goes once the words are the tone's own again, so the keyboard lands back in the box */}
         {edited !== null ? <Button variant="ghost" onClick={() => { if (busy.current) return; setEdited(null); box.current?.focus(); }}>Start again</Button> : null}
       </div>
-      <p className="small muted -mt-1">Nothing is posted for you. LinkedIn opens in a new tab: paste, then post.</p>
     </div>
   );
 }

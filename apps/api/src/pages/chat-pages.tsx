@@ -102,6 +102,23 @@ function IntroPage(props: { view: ConversationView; applied: string | null }) {
 }
 
 /**
+ * WITHDRAW asked first (Wave 0 item 0.7), on the question page and in the chat alike: nothing is withdrawn until the
+ * candidate presses the first button; the second keeps the application and picks up where it was.
+ */
+function WithdrawAsk(props: { view: ConversationView }) {
+  return (
+    <div class="card" role="status">
+      <strong>Do you want to withdraw your application?</strong>
+      <p>Withdrawing ends this conversation and your application for {props.view.roleTitle}.</p>
+      <form method="post" action={`${screenPath(props.view.token)}/withdraw`} class="actions">
+        <button class="btn" type="submit" name="confirm" value="yes">Yes, withdraw my application</button>
+        <button class="btn secondary" type="submit" name="confirm" value="no">No, keep my application</button>
+      </form>
+    </div>
+  );
+}
+
+/**
  * One question at a time: "Question 2 of 5" and a thin bar, the earlier questions folded away with the candidate's own
  * answers beside the assistant's lines (polish list), the question in large type, the candidate's answers as their own
  * messages and the assistant's follow-ups quoting them, then the answer: taps for the factual questions (E12), words
@@ -130,17 +147,7 @@ function QuestionPage(props: { view: ConversationView; error?: string | null }) 
       {said ? <p class="lead-in"><span class="sr-only">The assistant said: </span>{said}</p> : null}
       <h1 class="question" id="question">{heading}</h1>
       {exchange.length ? <ol class="thread" aria-label="This question so far">{exchange.map((l) => <Bubble line={l} open />)}</ol> : null}
-      {view.withdrawPending ? (
-        // WITHDRAW asked first (Wave 0 item 0.7): nothing is withdrawn until the candidate presses the first button.
-        <div class="card" role="status">
-          <strong>Do you want to withdraw your application?</strong>
-          <p>Withdrawing ends this conversation and your application for {view.roleTitle}. To keep going instead, just type your answer below.</p>
-          <form method="post" action={`${base}/withdraw`} class="actions">
-            <button class="btn" type="submit" name="confirm" value="yes">Yes, withdraw my application</button>
-            <button class="btn secondary" type="submit" name="confirm" value="no">No, keep my application</button>
-          </form>
-        </div>
-      ) : null}
+      {view.withdrawPending ? <WithdrawAsk view={view} /> : null}
       <ErrorNote code={props.error} />
       <AnswerForms action={base} tap={followUp ? null : q?.tap ?? null} about={followUp ?? heading} submit="Send" skip={!!q} keepsAnswer={!!q?.answered} />
       <AsideActions base={base} later />
@@ -188,17 +195,7 @@ function ChatPage(props: { view: ConversationView; error?: string | null }) {
       <h1 class="chat-title">Your chat about the {view.roleTitle} role</h1>
       <WhereAnswersGo companyName={view.companyName} />
       <ol class="thread" aria-label="Your chat">{lines.map((l, i) => <Bubble line={l} open now={i === at} />)}</ol>
-      {view.withdrawPending ? (
-        // WITHDRAW asked first (Wave 0 item 0.7): nothing is withdrawn until the candidate presses the first button.
-        <div class="card" role="status">
-          <strong>Do you want to withdraw your application?</strong>
-          <p>Withdrawing ends this conversation and your application for {view.roleTitle}. To keep going instead, just type your answer below.</p>
-          <form method="post" action={`${base}/withdraw`} class="actions">
-            <button class="btn" type="submit" name="confirm" value="yes">Yes, withdraw my application</button>
-            <button class="btn secondary" type="submit" name="confirm" value="no">No, keep my application</button>
-          </form>
-        </div>
-      ) : null}
+      {view.withdrawPending ? <WithdrawAsk view={view} /> : null}
       <ErrorNote code={props.error} />
       <AnswerForms action={base} tap={asking ? q?.tap ?? null : null} about={about} submit="Send" skip={!!q} keepsAnswer={!!q?.answered} label="Your reply" />
       <AsideActions base={base} later />
@@ -331,8 +328,8 @@ function LaterPage(props: { view: ConversationView }) {
   return (
     <ConversationPage view={view} title="Your link is on its way">
       <h1>Your link is on its way</h1>
+      {/* The heading says the link was emailed; the card says where it went and how long it keeps their place. */}
       <div class="card" role="status">
-        <strong>We emailed you the link to this conversation.</strong>
         <p>It went to the email address on your application. It keeps your place, so open it whenever suits you in the next few days.</p>
       </div>
       <p>Changed your mind? <a href={screenPath(view.token)}>Start now instead</a>.</p>

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, cn, Drawer, EmptyState, ErrorState, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
 import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
 import { toast } from "../toast";
 import { interviewNewTimesText } from "../cancelled";
@@ -24,9 +24,6 @@ const aheadSlots = <S extends { startsAt: string }>(slots: readonly S[], now: nu
 const INTERVIEW_SORT: Record<"candidate" | "round" | "when", (i: InterviewSummary) => SortValue> = { candidate: (i) => `${i.candidate.firstName} ${i.candidate.lastName}`, round: (i) => i.title, when: (i) => (i.startsAt ? Date.parse(i.startsAt) : null) };
 /** The side panel's cards sit a little tighter than a page's (screenshot 7's "at a glance" card). */
 const SHEET_CARD = "p-5 max-sm:p-4";
-/** The Details grid: a small label over its value. */
-const DT = "text-[12px] text-ink-3";
-const DD = "mt-0.5 text-sm font-medium text-ink [overflow-wrap:anywhere]";
 /** The brief's parts: a small mono heading over a bulleted list. */
 const BRIEF_HEAD = "eyebrow mb-2 flex";
 const BRIEF_LIST = "small list-disc space-y-1.5 pl-5 marker:text-ink-3";
@@ -50,10 +47,11 @@ export function Interviews() {
   // Screenshot 4's table look, Coming up over Past, each in its own card; the open interview slides in from the right.
   return (
     <div className="stack gap-6">
-      <PageHeader eyebrow={company.name ?? undefined} title="Interviews" sub={canManageInterviews(role) ? "Every interview a person approved. Reschedule or cancel from here." : "Your interviews. Afterwards, tell us whether it took place."} />
+      <PageHeader title="Interviews" />
       {list.isLoading ? <Card><Skeleton lines={4} /></Card> : list.error ? <ErrorState message="Could not load interviews." onRetry={() => list.refetch()} /> : (
         <>
-          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews coming up" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Candidates</Link> : undefined} /> : (
+          {/* the empty state's line only where it says what to do (founder, 23 October 2026: fewer words) */}
+          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews coming up" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : undefined} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Candidates</Link> : undefined} /> : (
             <Card title={`Coming up (${upcoming.length})`} className="max-sm:p-4">
               <Table head={[soon.col("candidate", "Candidate", "text"), soon.col("round", "Round", "text"), soon.col("when", "When", "date", { first: "ascending" }), "Interviewers", "Status", ""]} announce={soon.announce}>
                 {soon.apply(upcoming, INTERVIEW_SORT).map((i) => (
@@ -166,8 +164,8 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
   return (
     <Drawer open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"} leading={i ? <Avatar name={`${i.candidate.firstName} ${i.candidate.lastName}`} size="lg" /> : undefined}>
       {q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
-        // Screenshot 7's "Account at a glance": the state and what it is about on top, the facts as a grid of small labels
-        // over values, the questions to answer in their own cards, the history last.
+        // Screenshot 7's "Account at a glance": the state and what it is about on top, the facts as the kit's label and
+        // value rows (dl.glance), the questions to answer in their own cards, the history last.
         <div className="stack gap-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className="row"><Pill tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Pill><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></span>
@@ -191,13 +189,13 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
             </Card>
           ) : null}
           <Card title="Details" className={SHEET_CARD}>
-            <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-              <div className="min-w-0"><dt className={DT}>When</dt><dd className={DD}>{when(i.startsAt, i.timezone)}{i.timezone ? ` (${i.timezone})` : ""}</dd></div>
-              <div className="min-w-0"><dt className={DT}>Length</dt><dd className={DD}>{i.durationMinutes} minutes, {i.format.replace("_", " ")}</dd></div>
-              <div className="min-w-0 sm:col-span-2"><dt className={DT}>Link</dt><dd className={DD}>{i.meetingUrl ? <a href={i.meetingUrl} target="_blank" rel="noreferrer">{i.meetingUrl}</a> : noLinkText(i)}</dd></div>
-              <div className="min-w-0 sm:col-span-2"><dt className={DT}>Interviewers</dt><dd className={cn(DD, "flex flex-wrap gap-x-4 gap-y-1.5")}>{i.participants.map((p) => { const s = i.availabilitySources.find((x) => x.userId === p.userId); return <span key={p.userId} className="inline-flex flex-wrap items-center gap-1.5">{p.name ?? p.email} <Chip tone={s?.source === "calendar" ? "good" : s?.source === "declared" ? "accent" : "caution"}>{s?.source === "calendar" ? "calendar" : s?.source === "declared" ? "declared hours" : "no availability"}</Chip></span>; })}</dd></div>
-              <div className="min-w-0"><dt className={DT}>Window</dt><dd className={DD}>{i.schedulingWindow.fromDate} to {i.schedulingWindow.toDate}</dd></div>
-              <div className="min-w-0"><dt className={DT}>Candidate reschedules</dt><dd className={DD}>{i.rescheduleCountCandidate} of 2</dd></div>
+            <dl className="glance">
+              <dt>When</dt><dd>{when(i.startsAt, i.timezone)}{i.timezone ? ` (${i.timezone})` : ""}</dd>
+              <dt>Length</dt><dd>{i.durationMinutes} minutes, {i.format.replace("_", " ")}</dd>
+              <dt>Link</dt><dd>{i.meetingUrl ? <a href={i.meetingUrl} target="_blank" rel="noreferrer">{i.meetingUrl}</a> : noLinkText(i)}</dd>
+              <dt>Interviewers</dt><dd className="flex flex-wrap gap-x-4 gap-y-1.5">{i.participants.map((p) => { const s = i.availabilitySources.find((x) => x.userId === p.userId); return <span key={p.userId} className="inline-flex flex-wrap items-center gap-1.5">{p.name ?? p.email} <Chip tone={s?.source === "calendar" ? "good" : s?.source === "declared" ? "accent" : "caution"}>{s?.source === "calendar" ? "calendar" : s?.source === "declared" ? "declared hours" : "no availability"}</Chip></span>; })}</dd>
+              <dt>Window</dt><dd>{i.schedulingWindow.fromDate} to {i.schedulingWindow.toDate}</dd>
+              <dt>Candidate reschedules</dt><dd>{i.rescheduleCountCandidate} of 2</dd>
             </dl>
           </Card>
           {i.candidateAvailability?.note || i.candidateAvailability?.accessibilityNote ? <Alert tone="info">{i.candidateAvailability.accessibilityNote ? `Accommodation request: ${i.candidateAvailability.accessibilityNote}. ` : ""}{i.candidateAvailability.note ? `The candidate wrote: "${i.candidateAvailability.note}"` : ""}</Alert> : null}
@@ -211,7 +209,7 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
           {tookPlaceCard(i) !== "hidden" && (manage || participant) ? (
             <Card title="Did it take place?" className={SHEET_CARD}>
               {tookPlaceCard(i) === "early" ? <div className="mb-3"><Alert tone="caution">It has not started yet: it is booked for {when(i.startsAt, i.timezone)}. Answer once it has taken place; either answer ends the interview.</Alert></div> : null}
-              <p className="small muted mb-3">Either answer keeps the record straight; a no-show is never held against anyone automatically.</p>
+              <p className="small muted mb-3">A no-show is never held against anyone automatically.</p>
               <div className="row"><Button size="sm" variant="primary" loading={outcome.isPending} onClick={() => outcome.mutate("happened")}>Yes</Button><Button size="sm" loading={outcome.isPending} onClick={() => outcome.mutate("no_show_candidate")}>Candidate did not show</Button><Button size="sm" loading={outcome.isPending} onClick={() => outcome.mutate("no_show_interviewer")}>We did not show</Button></div>
             </Card>
           ) : null}

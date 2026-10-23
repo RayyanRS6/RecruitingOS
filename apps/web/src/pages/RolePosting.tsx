@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Icon, numHead, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, Field, IconLabel, numHead, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
 import { api, ApiError, type ApplicationLink, type Posting, type PostingView, type PostingsResponse, type RoleDetail, type VolumeReport, type WhoPosts } from "../api/client";
 import { POSTING_WAITS_FOR_CHECK } from "../company-check";
 import { BoardTicks } from "../components/BoardTicks";
 import { ClosingDateField } from "../components/ClosingDate";
 import { LinkedInPost } from "../components/LinkedInPost";
-import { SHARE_LINK_ROW, SHARE_LINK_TEXT, ShareJob } from "../components/ShareJob";
+import { JobAddress, ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
 import { scrollBehavior } from "../motion";
 import { toast } from "../toast";
@@ -33,7 +33,7 @@ import { linkedInPostLink } from "../linkedin-post";
  */
 
 /** What the read-only tab says to someone without role.manage. */
-export const READ_ONLY_POSTINGS = "Only an owner or an admin changes where this job is posted. You can see everything here.";
+export const READ_ONLY_POSTINGS = "Only an owner or an admin changes where this job is posted.";
 
 /** The dot beside each posting state: green once a check proved it live, amber while it waits on a person or is paused. */
 const STATE_TONE: Record<string, Tone> = { draft: "neutral", approved: "neutral", ready_to_post: "caution", posted_manually: "accent", submitted_integration: "accent", live_verified: "good", paused: "caution", failed: "critical", closed: "neutral" };
@@ -69,14 +69,6 @@ export function plainCheckFailure(raw: string | null | undefined): string {
 function checksIn(error: string | null | undefined): string {
   const m = /after (\d+) checks?/.exec(error ?? "");
   return m ? `after ${m[1]} ${m[1] === "1" ? "check" : "checks"}` : "";
-}
-/** Plain-language time zone name for the report ("Pacific Daylight Time"); the zone id itself when the browser cannot name it. */
-function zoneName(timeZone: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "long" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value ?? timeZone;
-  } catch {
-    return timeZone;
-  }
 }
 
 /** Starts one posting action; `onSuccess` runs only once the API has accepted it, so a form keeps what was typed when the request fails. */
@@ -119,11 +111,9 @@ export function AcceptingSheet({ role, mode, onClose }: { role: RoleDetail; mode
   const reopen = mode === "reopen";
   return (
     <>
+      {/* the date field says where the date stands and that nobody was turned away */}
       <Sheet open={mode === "extend"} onClose={onClose} title={ACCEPTING_LABEL.extend}>
-        <div className="stack gap-4">
-          <p className="text-ink-2">Choose a later last day to apply. The apply button comes back straight away. Everyone who applied is untouched.</p>
-          {mode === "extend" ? <ClosingDateField roleId={role.id} closingDate={role.closingDate} canEdit roleStatus={role.status} idBase="extend" onSaved={onClose} /> : null}
-        </div>
+        {mode === "extend" ? <ClosingDateField roleId={role.id} closingDate={role.closingDate} canEdit roleStatus={role.status} idBase="extend" onSaved={onClose} /> : null}
       </Sheet>
       <Sheet open={mode === "stop" || reopen} onClose={onClose} title={reopen ? "Accept applications again?" : "Stop accepting new applications?"}>
         <div className="stack gap-4">
@@ -131,8 +121,7 @@ export function AcceptingSheet({ role, mode, onClose }: { role: RoleDetail; mode
             <p className="text-ink-2">The job page shows the apply button again. Your team is told.</p>
           ) : (
             <>
-              <p className="text-ink-2">The job page stays up and says applications are closed. Everyone who applied stays where they are; nobody is rejected.</p>
-              <p className="small muted">New applications are refused politely. Your team is told. You can reopen at any time.</p>
+              <p className="text-ink-2">The job page stays up and says applications are closed. Everyone who applied stays where they are; nobody is rejected. Your team is told.</p>
               <Field label="Why (optional, kept with the record)" htmlFor="accept-reason"><input id="accept-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Enough strong applicants for now" /></Field>
             </>
           )}
@@ -168,7 +157,7 @@ export function ClosedBanner({ role, canManage, onOpenPosting }: { role: RoleDet
       <div className="stack gap-2">
         <span>
           <strong>{byDate ? "Not taking new applications: the closing date has passed." : "Not taking new applications"}</strong>
-          {byDate ? "" : ` since ${when(role.applicationsClosedAt)}${role.applicationsClosedReason ? ` (${role.applicationsClosedReason})` : ""}.`} The job page says so. Everyone who applied is untouched.
+          {byDate ? "" : ` since ${when(role.applicationsClosedAt)}${role.applicationsClosedReason ? ` (${role.applicationsClosedReason})` : ""}.`}
           {canManage ? "" : ` ${byDate ? "An owner or an admin can extend the date." : "An owner or an admin can reopen it."}`}
         </span>
         {canManage || onOpenPosting ? (
@@ -258,9 +247,9 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
   return (
     <div className="stack gap-5">
       {!canManage ? <Alert tone="info">{READ_ONLY_POSTINGS}</Alert> : null}
-      {roleStatus === "draft" || roleStatus === "pending_approval" ? <Alert tone="caution">Posting starts once the job is approved. Nothing is posted until then.</Alert> : null}
+      {roleStatus === "draft" || roleStatus === "pending_approval" ? <Alert tone="caution">Posting starts once the job is approved.</Alert> : null}
       {roleStatus === "paused" ? <Alert tone="caution">The job is paused: it is off your careers page and the feeds. Resume it to carry on. A board still shows it until it is paused or removed there.</Alert> : null}
-      {roleStatus === "closed" ? <Alert tone={d.boardsStillUp.length && !its ? "critical" : "neutral"}>{d.boardsStillUp.length ? `The job is closed. Still up on: ${boardNames(d.boardsStillUp)}. ${its ? "ITS takes each listing down and ticks it off below." : canManage ? "Take each one down from your own account, then tick it off below." : "An owner or an admin takes each one down and ticks it off below."}` : "The job is closed and every board is confirmed down. Nothing more to do here."}</Alert> : null}
+      {roleStatus === "closed" ? <Alert tone={d.boardsStillUp.length && !its ? "critical" : "neutral"}>{d.boardsStillUp.length ? `The job is closed. Still up on: ${boardNames(d.boardsStillUp)}. ${its ? "ITS takes each listing down and ticks it off below." : canManage ? "Take each one down from your own account, then tick it off below." : "An owner or an admin takes each one down and ticks it off below."}` : "The job is closed and every board is confirmed down."}</Alert> : null}
       {check === "waiting" && roleStatus !== "closed" ? <Alert tone="caution">{POSTING_WAITS_FOR_CHECK}</Alert> : null}
 
       {/* First: the job's public link, to share, copy or open. */}
@@ -272,7 +261,7 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
         </section>
       ) : roleStatus === "open" && check !== "waiting" && d.urls.job ? (
         <Card title="Your job link">
-          <JobLink url={d.urls.job} />
+          <JobAddress url={d.urls.job} />
         </Card>
       ) : null}
 
@@ -305,16 +294,22 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
         </section>
       </div>
 
-      {d.postings.length === 0 && check !== "waiting" ? <p className="muted">Nothing prepared yet. Everything is prepared the moment the job is approved.</p> : null}
+      {d.postings.length === 0 && check !== "waiting" ? <p className="muted">Nothing prepared yet.</p> : null}
 
       {/* Each channel's own card: its state, its link and package, its steps and buttons. */}
       <details className="more" open={startOpen.current || undefined}>
         <summary>Each board and page, step by step ({channels.length})</summary>
         <div className="stack gap-4">
           {careers || google ? (
-            <div className="grid-2">
-              {careers ? <NativeCard p={careers} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} /> : null}
-              {google ? <NativeCard p={google} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} /> : null}
+            <div className="stack gap-2">
+              <div className="grid-2">
+                {careers ? <NativeCard p={careers} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} /> : null}
+                {google ? <NativeCard p={google} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} /> : null}
+              </div>
+              {/* these two follow the job and have no Pause or Close of their own (see Actions): one line, under both, says where those are */}
+              {canManage && live && [careers, google].some((p) => p && p.status !== "closed") ? (
+                <p className="small muted">To stop new applications, use "Stop accepting applications" in the More menu at the top, or pause the job.{google ? " Google then drops the listing on its own." : ""}</p>
+              ) : null}
             </div>
           ) : null}
           <EmailInPanel emailIn={d.emailIn} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} />
@@ -331,18 +326,6 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
         <summary>Applications by source, last 14 days</summary>
         <VolumeCard report={volume.data} loading={volume.isLoading} failed={!!volume.error} onRetry={() => volume.refetch()} />
       </details>
-    </div>
-  );
-}
-
-/** The job's public address with Copy and Open, for someone who cannot make share links. */
-function JobLink({ url }: { url: string }) {
-  return (
-    <div className={SHARE_LINK_ROW}>
-      <Icon name="link" size={16} className="text-ink-3" />
-      <span className={SHARE_LINK_TEXT}><code title={url}>{url}</code></span>
-      <Button size="sm" icon="copy" onClick={() => copy(url, "the job's address")}>Copy</Button>
-      <a className="btn secondary sm" href={url} target="_blank" rel="noopener noreferrer"><Icon name="external" />Open<span className="sr-only"> the job page (opens in a new tab)</span></a>
     </div>
   );
 }
@@ -366,11 +349,15 @@ export function postingNeedsTeam(p: Pick<PostingView, "status" | "postedBy" | "i
 /* Cards                                                                                                          */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-function Header({ p }: { p: PostingView }) {
+/** A channel card's name and state; `by` (on a board's card) says who posts it, as an icon whose words are its accessible name. */
+function Header({ p, by }: { p: PostingView; by?: string }) {
   return (
     <div className="card-title items-center">
       <h2>{p.name}</h2>
-      <Pill size="sm" tone={STATE_TONE[p.status] ?? "neutral"}>{p.stateLabel}</Pill>
+      <span className="row">
+        {by ? <IconLabel icon="user" label={by} /> : null}
+        <Pill size="sm" tone={STATE_TONE[p.status] ?? "neutral"}>{p.stateLabel}</Pill>
+      </span>
     </div>
   );
 }
@@ -513,7 +500,8 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
   const recordForm = canRecord ? (
     <div className="row mt-3 items-end">
       <div className="min-w-0 flex-[1_1_320px]">
-        <Field label={p.externalUrl ? "Record a different public address" : "Record the public address of the posting"} htmlFor={urlId} hint="The full https:// link to the job on the board. It is checked before the posting is called live.">
+        {/* the placeholder shows the kind of address; that it is checked before it counts as live is said once it is recorded (the toast and the "posted_manually" state line) */}
+        <Field label={p.externalUrl ? "Record a different public address" : "Record the public address of the posting"} htmlFor={urlId}>
           <input id={urlId} className="input" inputMode="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={`https://www.${p.channel === "linkedin_basic" ? "linkedin.com/jobs/view/..." : p.channel === "indeed" ? "indeed.com/viewjob?jk=..." : "ziprecruiter.com/jobs/..."}`} />
         </Field>
       </div>
@@ -522,8 +510,7 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
   ) : null;
   return (
     <Card>
-      <Header p={p} />
-      {p.isBoard && p.status !== "closed" ? <p className="small muted mb-1">{its ? "Posted by ITS from your company's own account" : "Posted by your team from your own account"}</p> : null}
+      <Header p={p} by={p.isBoard && p.status !== "closed" ? (its ? "Posted by ITS from your company's own account" : "Posted by your team from your own account") : undefined} />
       <p className="small text-ink-2">{boardStateLine(p)}</p>
       {chip ? <p className="mt-2"><Chip tone={chip.tone === "good" ? "good" : chip.tone === "accent" ? "accent" : chip.tone === "caution" ? "caution" : "neutral"}>{chip.label}</Chip></p> : null}
       {itsCouldNot ? (
@@ -553,7 +540,7 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
       <div className="row mt-3 border-t border-line pt-3">
         {p.link ? (
           <>
-            <span className="small min-w-0 wrap-anywhere">Apply link for {p.name}: <code>{p.link.url}</code></span>
+            <span className="small min-w-0 wrap-anywhere">Apply link: <code>{p.link.url}</code></span>
             <Button size="sm" onClick={() => copy(p.link!.url, "the apply link")}>Copy</Button>
             <span className="small muted">{p.link.visits} {p.link.visits === 1 ? "visit" : "visits"}</span>
           </>
@@ -575,7 +562,6 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
       {canManage && open === "close" ? <CloseConfirm p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
       {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => setOpen("close")} /> : null}
       <RemovedCheckbox p={p} run={run} busy={busy} canManage={canManage} />
-      {its && !canManage && p.status === "ready_to_post" ? <p className="small muted mt-2">Nothing for you to do here: ITS posts it and this card follows.</p> : null}
     </Card>
   );
 }
@@ -588,7 +574,6 @@ function NativeCard({ p, jobUrl, run, busy, roleStatus, canManage }: { p: Postin
       <p className="small text-ink-2">{nativeStateLine(p, jobUrl)}</p>
       {p.channel === "careers_page" ? <p className="small mt-2 wrap-anywhere">Job page: <a href={jobUrl} target="_blank" rel="noreferrer">{jobUrl}</a> <Button size="sm" onClick={() => copy(jobUrl, "the job page address")}>Copy</Button></p> : null}
       {p.channel === "google_jobs" && p.instructions ? <p className="small muted mt-2">{p.instructions}</p> : null}
-      {roleStatus !== "closed" && p.status !== "closed" ? <p className="small muted mt-2">This follows the job. To stop new applications, use "Stop accepting applications" in the More menu at the top, or pause the job. Google then drops the listing on its own.</p> : null}
       {canManage && open === "verify" ? <VerifyNote p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
       {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => undefined} /> : null}
     </Card>
@@ -605,7 +590,7 @@ function EmailInPanel({ emailIn, run, busy, roleStatus, canManage }: { emailIn: 
       ) : <p className="small muted">No address yet; it is created when the role is prepared.</p>}
       <p className="small muted mt-2">
         {emailIn.connected
-          ? "Mail sent to this address arrives here as an application, résumé attached, as if the person applied on the careers page. Give it only to a board that insists on emailing applications; the apply links are better because they record the source."
+          ? "Give it only to a board that insists on emailing applications; the apply links are better because they record the source."
           : `Inbound mail is not connected yet, so mail sent to this address does not arrive. Use each board's apply link instead. Ask ITS to connect inbound mail if a board can only email applications${canRecheck ? ", then use \"Check again\" here" : ""}.`}
       </p>
       {!emailIn.connected && emailIn.error ? <p className="small muted mt-2">Why: {emailIn.error}</p> : null}
@@ -634,7 +619,6 @@ function OtherLinks({ roleId, links, roleStatus, onChange, canManage }: { roleId
   });
   return (
     <Card title="Other links">
-      <p className="small muted mb-3">A link of your own for a referrer, a direct approach or anything else. Applications through it show this source and name, never the link itself.</p>
       {links.length ? (
         <Table head={["Name", "Source", "Link", numHead("Visits"), ""]} label="Other tracked links">
           {links.map((l) => (
@@ -675,7 +659,7 @@ function VolumeCard({ report, loading, failed, onRetry }: { report: VolumeReport
   const today = report.days[report.days.length - 1];
   return (
     <Card title="Applications by source (last 14 days)">
-      <p className="small muted">{report.totals.total} in total; {report.yesterday.total} yesterday, {report.today.total} so far today. Days run midnight to midnight, {zoneName(report.timeZone)}.</p>
+      <p className="small muted">{report.totals.total} in total; {report.yesterday.total} yesterday, {report.today.total} so far today.</p>
       <p className="small muted mt-1 mb-3">You are told when a day goes above {report.threshold}. Nobody is turned away automatically; "Stop accepting applications" in the More menu stops new ones.</p>
       {report.sources.length ? (
         <Table head={["Source", numHead("Last 14 days"), numHead("Yesterday"), numHead("Today")]} label="Applications by source">

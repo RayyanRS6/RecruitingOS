@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PACKET_VISIBILITY_LABEL } from "@ros/contracts";
-import { Alert, Avatar, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, Pill, Skeleton, Timeline } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, IconLabel, Pill, Skeleton, Timeline } from "@ros/ui";
 import { api, ApiError, type DecisionMaker, type InterviewPlanView, type LegalCheck, type PacketFlag, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
 import { APPROVE_WAITS_FOR_CHECK, approvedToast } from "../company-check";
 import { BoardTicks } from "../components/BoardTicks";
@@ -47,10 +47,17 @@ export function catchUpInterval(waiting: boolean, since: number | null, now: num
   return waiting && since !== null && now - since < CATCH_UP_FOR_MS ? CATCH_UP_EVERY_MS : false;
 }
 
-/** The mark on a part of the role that is on the job page (plan D10), in the same words as the job builder's panel. */
+/**
+ * The mark on a part of the role that is on the job page (plan D10): the kit's eye, whose words (the job builder's
+ * "Candidates see this") are its accessible name and tooltip. Centred in a card's title row; inside a sentence it sits
+ * on the text's line.
+ */
 export function CandidatesSeeThis() {
-  return <span className="inline-flex items-center gap-1.5 rounded-full bg-tint px-2.5 py-0.5 align-middle text-xs font-semibold whitespace-nowrap text-primary"><Icon name="eye" size={13} />{PACKET_VISIBILITY_LABEL.public}</span>;
+  return <IconLabel icon="eye" label={PACKET_VISIBILITY_LABEL.public} className="self-center align-text-bottom" />;
 }
+
+/** The lock's words beside the must-haves on the approval card: their reasons are not on the job page. */
+export const WHY_STAYS_WITH_TEAM = "Why each one matters stays with your team.";
 
 /**
  * Lists inside a card as rows split by hairlines (screenshot 6's rows), and the number beside an ordered one. Shared by
@@ -96,7 +103,6 @@ export function PreferencesCard({ packet, decisionMaker }: { packet: RolePacket;
         <dd>{pref.whatFailureLooksLike ?? <span className="muted">Not stated</span>}</dd>
         {pref.interviewStyle ? <><dt>Interview style</dt><dd>{pref.interviewStyle}</dd></> : null}
       </dl>
-      <p className="small muted mt-4">In your words, from the job builder. Change them with Edit.</p>
     </Card>
   );
 }
@@ -154,18 +160,16 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
   const sentBack = role.status === "draft" && latest && (latest.status === "rejected" || latest.status === "expired") ? latest : null;
   if (sentBack) {
     return (
-      <Card needsYou lift title={sentBack.status === "expired" ? "The approval ran out of time" : "Sent back"} className={HERO}>
+      <Card needsYou hero lift title={sentBack.status === "expired" ? "The approval ran out of time" : "Sent back"}>
         <p className="max-w-[68ch] text-ink-2">
           {sentBack.status === "expired" ? "Nobody decided within 14 days, so the role is a draft again." : `Sent back${sentBack.decidedBy ? ` by ${sentBack.decidedBy.name}` : ""}${sentBack.decidedAt ? ` on ${new Date(sentBack.decidedAt).toLocaleDateString()}` : ""}: ${sentBack.decisionNote ?? "no note was left"}.`}
         </p>
+        {/* the two buttons say what comes next; someone who cannot edit is told who does */}
         {canEdit ? (
-          <>
-            <p className="small muted mt-1.5">Edit anything that needs changing, then ask for approval again. Every edit is kept as a new version.</p>
-            <div className="row mt-5">
-              <Button variant="primary" loading={again.isPending} onClick={() => again.mutate()}>Request approval again</Button>
-              <Button onClick={onEdit}>Edit first</Button>
-            </div>
-          </>
+          <div className="row mt-5">
+            <Button variant="primary" loading={again.isPending} onClick={() => again.mutate()}>Request approval again</Button>
+            <Button onClick={onEdit}>Edit first</Button>
+          </div>
         ) : <p className="small muted mt-1.5">An owner, an admin or a hiring manager edits it and asks for approval again.</p>}
       </Card>
     );
@@ -179,23 +183,31 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
   const autoLine = autoActionsLine(role.autoActionsOnOpen);
   const musts = packet?.requirements?.mustHaves ?? [];
   const nices = packet?.requirements?.niceToHaves ?? [];
+  // The person's own reason, or the state while a live job's change waits; a new job's buttons and "Once approved it
+  // goes to…" already say what approving does, so it needs no sentence of its own.
+  const lead = pending.rationale ?? (pending.editWhileOpen ? "The job keeps running on its approved version until you decide." : null);
+  // Reserved for someone (a name), and the date it lapses: the decision's only facts beyond the buttons.
+  const decides = [pending.decisionMaker ? `Reserved for ${pending.decisionMaker.name ?? pending.decisionMaker.email}; an owner can also decide.` : "", expires ? `Waits until ${expires}, then goes back to a draft.` : ""].filter(Boolean).join(" ");
+  // The page's one next step (screenshot 1's "Your next step"): the kit's needsYou wash with its hero-sized title.
   return (
-    <Card needsYou lift title={pending.editWhileOpen ? `Approve version ${pending.version} of ${role.title}` : "Approve this job"} className={HERO}>
+    <Card needsYou hero lift title={pending.editWhileOpen ? `Approve version ${pending.version} of ${role.title}` : "Approve this job"}>
       <div className="stack gap-3">
-        <p className="max-w-[68ch] text-ink-2">{pending.rationale ?? (pending.editWhileOpen ? "The job keeps running on its approved version until you decide." : "Review the job, edit anything, then approve. Approval opens the job: your careers page and Google come first, then each job board once it is posted there and checked.")}</p>
+        {lead ? <p className="max-w-[68ch] text-ink-2">{lead}</p> : null}
         {!pending.editWhileOpen && check === "waiting" ? <Alert tone="info">{APPROVE_WAITS_FOR_CHECK}</Alert> : null}
         {canSeePay ? (
-          <div className="row gap-x-3">
-            <a className="btn secondary sm" href={previewHref(role.id, pending.version)} target="_blank" rel="noopener noreferrer"><Icon name="eye" />Preview the job page<span className="sr-only"> (opens in a new tab)</span></a>
-            <span className="small muted min-w-0 flex-[1_1_16rem]">Version {pending.version} exactly as candidates will see it. The preview is not public and search engines never see it.</span>
+          // what the preview is, as the link's tooltip
+          <div className="row">
+            <a className="btn secondary sm" href={previewHref(role.id, pending.version)} target="_blank" rel="noopener noreferrer" title={`Version ${pending.version} exactly as candidates will see it. The preview is not public and search engines never see it.`}><Icon name="eye" />Preview the job page<span className="sr-only"> (opens in a new tab)</span></a>
           </div>
         ) : null}
         {!pending.editWhileOpen ? <WhereItGoes role={role} canManage={canManage} /> : null}
         {musts.length || nices.length ? (
-          // The job page lists them (plan D10), so the approver sees them as candidates will.
+          // The job page lists them (plan D10), so the approver sees them as candidates will; the eye says so, and the
+          // lock says why each one matters stays with the team (both words are the marks' names and tooltips).
           <p className="small text-ink-2">
             <CandidatesSeeThis /> The job page lists what you are looking for: {musts.map((m) => m.text).join("; ") || "nothing yet"}.
-            {nices.length ? ` Nice to have: ${nices.map((m) => m.text).join("; ")}.` : ""} Why each one matters stays with your team.
+            {nices.length ? ` Nice to have: ${nices.map((m) => m.text).join("; ")}.` : ""}{" "}
+            <IconLabel icon="lock" label={WHY_STAYS_WITH_TEAM} className="align-text-bottom" />
           </p>
         ) : null}
         {legal.missing.length || legal.inOrder.length ? <LegalCheckList role={role} check={pending.legalCheck ?? null} canEdit={canEdit} canManage={canManage} onEdit={onEdit} /> : null}
@@ -206,10 +218,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
             <Button size="sm" onClick={() => onShowProposed(!showingProposed)}>{showingProposed ? `Back to version ${role.currentPacket?.version ?? "?"}` : `Show version ${role.proposedPacket.version}`}</Button>
           </div>
         ) : null}
-        <p className="small muted">
-          {pending.decisionMaker ? `Reserved for ${pending.decisionMaker.name ?? pending.decisionMaker.email}; an owner can also decide.` : "Any owner, admin or hiring manager can decide."}
-          {expires ? ` Waits until ${expires}, then goes back to a draft.` : ""}
-        </p>
+        {decides ? <p className="small muted">{decides}</p> : null}
         {assumptions.length ? (
           <div className="alert caution">
             <strong>Assumptions the assistant made:</strong>
@@ -239,18 +248,6 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
 }
 
 /**
- * The approval card is the page's "Your next step" (screenshot 1): the kit's lavender-to-peach wash (needsYou), with its
- * title at the hero's display size.
- */
-const HERO = "[&>.card-title]:mb-3 [&>.card-title>h2]:text-[24px] [&>.card-title>h2]:leading-[1.1] [&>.card-title>h2]:tracking-[-0.03em] md:[&>.card-title>h2]:text-[28px]";
-
-/**
- * The interviewer pills on the Interview plan tab may wrap onto a second line (the kit keeps a pill on one), so a long
- * name and "no calendar or hours yet" stay whole on a 360px phone; a 12px corner reads as the same pill on one line.
- */
-const PILLS_WRAP = "[&>.pill]:whitespace-normal [&>.pill]:rounded-xl";
-
-/**
  * The approval card while the worker catches up (the role page reads the role again meanwhile), so the page says what is
  * happening rather than show nothing: just after "Ask for approval", just after approving, and just after this page sent
  * the role back (`sentBackHere`), when the API still says the role waits for approval until the worker makes it a draft.
@@ -262,7 +259,7 @@ export function CatchingUpCard({ latest, sentBackHere }: { latest: RoleDetail["p
       ? ["Approved: the job is opening", "The job opens in a few seconds. This page updates on its own; if it does not, reload it."]
       : ["Getting the approval ready", "The approval shows here in a few seconds. This page updates on its own; if it does not, reload it."];
   return (
-    <Card needsYou title={title} className={HERO}>
+    <Card needsYou hero title={title}>
       <p className="small row flex-nowrap items-start gap-2.5 text-ink-2 [&>.spinner]:mt-0.5" role="status">
         <span className="spinner" aria-hidden="true" />
         {words}
@@ -420,7 +417,9 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
   const toggle = (id: string, on: boolean) => setPicked((p) => (on ? [...new Set([...p, id])] : p.filter((x) => x !== id)));
   return (
     <Card title="Interview rounds" aside={<Chip>Version {d.version}</Chip>}>
-      <p className="small muted mb-4 max-w-[72ch]">Each round names who interviews. People with a calendar or hours can be offered times straight away; the others are asked to add theirs. {canEdit ? "Assigning interviewers saves a new version of the job." : "An owner, an admin or a hiring manager assigns the interviewers."}</p>
+      {/* each person's pill says whether times can be offered to them; someone who cannot assign is told who does, and
+          an editor reads what saving does beside Save */}
+      {canEdit ? null : <p className="small muted mb-4">An owner, an admin or a hiring manager assigns the interviewers.</p>}
       {/* The rounds in order, one row each (screenshot 6's team rows): the number, the round and its people, then Change.
           Nothing is clipped (the rows have no fill), and a long interviewer pill wraps on a phone rather than run out. */}
       <ol className="rounded-xl border border-line">
@@ -430,9 +429,9 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
             <div className="min-w-0 flex-1">
               <p><strong>{r.title}</strong> <span className="text-ink-2">· {r.durationMinutes} min · {ROUND_FORMAT[r.format] ?? r.format}</span></p>
               <p className="small muted">{r.purpose}</p>
-              <div className={cn("row mt-2.5", PILLS_WRAP)}>
+              <div className="row mt-2.5">
                 {r.interviewers.length
-                  ? r.interviewers.map((i) => <Pill key={i.userId} size="sm" tone={i.schedulable ? "good" : "caution"}>{i.name} · {i.schedulable ? "can be scheduled" : "no calendar or hours yet"}</Pill>)
+                  ? r.interviewers.map((i) => <Pill key={i.userId} size="sm" tone={i.schedulable ? "good" : "caution"} className="wrap">{i.name} · {i.schedulable ? "can be scheduled" : "no calendar or hours yet"}</Pill>)
                   : <span className="small muted">Nobody assigned yet{r.interviewerRoles.length ? ` (planned: ${roleWords(r.interviewerRoles)})` : ""}.</span>}
                 {canEdit && editingKey !== r.key ? <span className="sm:ml-auto"><Button size="sm" onClick={() => { setEditingKey(r.key); setPicked(r.interviewers.map((i) => i.userId)); }}>{r.interviewers.length ? "Change" : "Assign interviewers"}</Button></span> : null}
               </div>
@@ -442,15 +441,17 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
                     // the team as rows to tick: the person, their role and whether times can be offered to them
                     <div className="overflow-hidden rounded-xl border border-line bg-surface">
                       {d.team.map((m) => (
-                        <label key={m.userId} className={cn("flex min-h-14 cursor-pointer flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line px-3.5 py-2.5 first:border-t-0 hover:bg-surface-2/60 has-[:checked]:bg-tint", PILLS_WRAP)}>
+                        <label key={m.userId} className="flex min-h-14 cursor-pointer flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line px-3.5 py-2.5 first:border-t-0 hover:bg-surface-2/60 has-[:checked]:bg-tint">
                           <input type="checkbox" checked={picked.includes(m.userId)} onChange={(e) => toggle(m.userId, e.target.checked)} />
                           <Avatar name={m.name} size="sm" />
                           <span className="min-w-0 flex-1">{m.name} <span className="small muted">({m.role.replace(/_/g, " ")})</span></span>
-                          <Pill size="sm" tone={m.schedulable ? "good" : "caution"}>{m.schedulable ? "availability known" : "no calendar or hours yet"}</Pill>
+                          <Pill size="sm" tone={m.schedulable ? "good" : "caution"} className="wrap">{m.schedulable ? "availability known" : "no calendar or hours yet"}</Pill>
                         </label>
                       ))}
                     </div>
                   ) : <p className="small muted">Nobody is on the team yet. Invite people from Settings.</p>}
+                  {/* the consequence of saving, where the action is (on a live job the new version waits for approval) */}
+                  <p className="small muted">Assigning interviewers saves a new version of the job.</p>
                   <div className="row">
                     <Button variant="primary" size="sm" loading={save.isPending} onClick={() => save.mutate({ key: r.key, ids: picked })}>Save interviewers</Button>
                     <Button size="sm" variant="quiet" onClick={() => setEditingKey(null)}>Cancel</Button>
@@ -472,11 +473,10 @@ export function ActivityTab({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role-timeline", roleId], queryFn: () => api.get<RoleEvent[]>(`/api/v1/roles/${roleId}/timeline`) });
   if (q.isLoading) return <Skeleton lines={5} />;
   if (q.error || !q.data) return <ErrorState message={q.error instanceof ApiError && q.error.status === 403 ? "Your role cannot see this job's activity." : "Could not load the activity."} onRetry={() => q.refetch()} />;
-  if (!q.data.length) return <EmptyState title="Nothing yet" body="What happens on this job shows up here, newest first." />;
+  if (!q.data.length) return <EmptyState title="Nothing yet" />;
   return (
     <Card title="Activity" aside={<Chip>{q.data.length} {q.data.length === 1 ? "entry" : "entries"}</Chip>}>
       <Timeline items={q.data.map((e) => ({ when: e.occurredAt, what: describeRoleEvent(e), who: actorWords(e.actor) }))} />
-      <p className="small muted mt-4">Candidates are not named here; open Candidates for the people.</p>
     </Card>
   );
 }

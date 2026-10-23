@@ -149,7 +149,7 @@ function SendPage(props: { view: ConversationView; writeup: NonNullable<Conversa
   return (
     <ConversationPage view={view} title="Check what you're sending" header={<JourneyHeader view={view} />} extraCss={PAGE_CSS}>
       <h1>Check what you're sending</h1>
-      <p class="lead">{view.companyName} reads this exactly as written, so change anything now. The hiring team sees your answers only once you send them.</p>
+      <p class="lead">The hiring team sees your answers only once you send them.</p>
       <WithoutSend />
       {changed ? <div class="card" role="status"><strong>Your answer is changed.</strong></div> : null}
       <ErrorNote code={props.error} />
@@ -204,7 +204,7 @@ export function ReviewPage(props: { view: ConversationView; changed: string | nu
     <ConversationPage view={view} title="Check your answers" header={<JourneyHeader view={view} />} extraCss={PAGE_CSS}>
       <Progress at={view.total} total={view.total} text={`All ${view.total} questions done`} />
       <h1>Check your answers</h1>
-      <p class="lead">The hiring team sees your answers only once you send them. Change any answer you like, then press Send.</p>
+      <p class="lead">The hiring team sees your answers only once you send them.</p>
       <WithoutSend />
       {view.counter && view.written.length ? (
         <div class="review-bar">

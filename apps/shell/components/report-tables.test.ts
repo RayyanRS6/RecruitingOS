@@ -117,6 +117,10 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html).toContain('<div class="stat"><span class="stat-n">2</span><span class="stat-label">with it open now</span></div></div>');
     expect(html).toContain('<th scope="col" class="num">Chose not to answer</th>');
     expect(html).toContain('<td>What pay are you looking for?</td><td class="num">3</td>');
+    // the fairness rule and the no-names assurance stay on the card, as on the must-haves card; what "typical" means is
+    // in the Report tab's disclosure (fewer words, 23 Oct 2026)
+    expect(html).toContain("Choosing a person or not answering a question is never held against anyone. Counts only; nobody is named here.");
+    expect(html).not.toContain("is the middle value");
     // the old inline 28px figure is gone: the look comes from the stylesheet
     expect(html).not.toContain("font-size:28px");
   });
@@ -126,8 +130,10 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html).toContain('<div class="stat-row"><div class="stat"><span class="stat-n">3</span><span class="stat-label">applicants in total</span></div><div class="stat"><span class="stat-n">3</span><span class="stat-label">in the last 30 days</span></div></div>');
     expect(html).toContain('<div class="stat"><span class="stat-n">3</span><span class="stat-label">decisions only a person can make</span></div><div class="stat"><span class="stat-n">2</span><span class="stat-label">days the oldest has waited</span></div>');
     expect(html.match(/<div class="stat-row">/g)).toHaveLength(2);
-    // the day bars: the counts stay in the label, the empty day is marked for its quieter colour, the height is inline
-    expect(html).toContain('<div class="daybars" role="img" aria-label="Applicants per day over the last 30 days: 2026-10-09 2, 2026-10-10 1"><span title="2026-10-08: 0" class="zero" style="height:4%"></span><span title="2026-10-09: 2" style="height:100%"></span><span title="2026-10-10: 1" style="height:50%"></span></div>');
+    // the day bars: the counts stay in the label, the empty day is marked for its quieter colour, the height is inline;
+    // how to read them is the chart's tooltip, not a line under it (fewer words, 23 Oct 2026)
+    expect(html).toContain('<div class="daybars" role="img" aria-label="Applicants per day over the last 30 days: 2026-10-09 2, 2026-10-10 1" title="One bar per day, oldest on the left, days in America/Los_Angeles."><span title="2026-10-08: 0" class="zero" style="height:4%"></span><span title="2026-10-09: 2" style="height:100%"></span><span title="2026-10-10: 1" style="height:50%"></span></div>');
+    expect(html).not.toContain('<p class="small muted mt-1.5 mb-4">One bar per day');
     expect(html).not.toContain("border-radius:2px");
     // every count column, heading and cells
     expect(html).toContain('<th scope="col" class="num">Applicants</th>');
@@ -150,6 +156,26 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html).not.toContain("th-sort");
     expect(html).not.toContain("aria-sort");
     expect(html).not.toContain('role="status"');
+  });
+
+  it("keeps 'people make every decision' on its card and folds what the figures mean into one closed disclosure", async () => {
+    const { ReportTab } = await import("@ros/web/src/pages/RoleReport");
+    const cards = render(client(), createElement(ReportFigures, { report: report as never }));
+    expect(cards).toContain("People make every decision; the assistant only suggests.");
+    expect(cards).toContain("Every one of these is recorded with the person&#x27;s name and reason");
+    // the definitions under the tables moved into the Report tab's disclosure (fewer words, 23 Oct 2026)
+    expect(cards).not.toContain("is the middle value");
+    expect(cards).not.toContain("Response time is clock hours");
+    expect(cards).not.toContain("Everyone we tried to reach was reachable.");
+    const tab = render(client([[["role", "r1", "report"], report], [["role", "r1", "screening"], { offered: 0, started: 0, finished: 0, unfinished: 0, stillApplying: 0, medianMinutes: null, personChosen: { contactMe: 0, sendWithout: 0 }, skipped: [] }]]), createElement(ReportTab, { roleId: "r1" }));
+    expect(tab).toContain("Figures as of ");
+    expect(tab).toMatch(/<details class="more"><summary>What these figures mean<\/summary>/);
+    expect(tab).not.toMatch(/<details class="more" open/);
+    expect(tab).toContain("Counts and days only; nothing here ranks or scores a candidate.");
+    expect(tab).toContain("Response time is clock hours from your request to a recruiter picking it up");
+    // the AI interview's entry says what its card counts, then what its "typical" is
+    expect(tab).toContain("How many people were offered it, started it and finished it, the typical time to finish, who chose a person instead, and the questions people chose not to answer.");
+    expect(tab).toContain("is the middle value, from the first answer to sending.");
   });
 });
 

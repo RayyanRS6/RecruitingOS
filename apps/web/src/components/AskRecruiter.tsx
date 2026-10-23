@@ -74,8 +74,9 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
           <div className="stack gap-4 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]"><Alert tone="info">{done}</Alert><div className="row"><Button onClick={close}>Done</Button></div></div>
         ) : (
           <div className="stack gap-5">
+            {/* What the recruiter will see shows under the choice as soon as it is made, before anything can be sent (Q31). */}
             {picks ? (
-              <Field label="Which hire is this about?" htmlFor="ask-about" hint="The recruiter sees only what you choose here.">
+              <Field label="Which hire is this about?" htmlFor="ask-about">
                 <select id="ask-about" className="select" value={about} onChange={(e) => setAbout(e.target.value)}>
                   <option value="" disabled>{roles.isLoading ? "Loading your jobs…" : "Choose a job"}</option>
                   {choosable.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}

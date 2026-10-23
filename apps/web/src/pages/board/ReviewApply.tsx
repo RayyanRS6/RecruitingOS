@@ -8,8 +8,6 @@ import { api, ApiError, type BatchPreview, type BatchResult, type BoardView } fr
 import { toast } from "../../toast";
 import { BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, REVIEW_FOOT, REVIEW_SUB, applyLabel, appliedNote, appliedToast, batchItems, extraWarnings, groupCount, initialReview, isTicked, needsReason, previewByPerson, previewItems, readyCounts, readyLine, reasonOf, reviewFootNote, reviewRows, rowWarnings, tickable, type ReviewRow, type ReviewState } from "./board-model";
 
-/** A group's people, as one bordered table of rows (screenshot 6): divided, a ticked row tinted lavender. */
-const ROWS = "grid divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface";
 /** What to know first, in the warning's own colour: red only for a must-have their own words show missing. */
 const WARN_TONE: Record<"caution" | "critical", string> = { caution: "text-caution", critical: "text-critical" };
 
@@ -20,8 +18,11 @@ const WARN_TONE: Record<"caution" | "critical", string> = { caution: "text-cauti
  * reason. Each not-moving-forward row carries a reason from the fixed list, pre-filled from their own evidence and
  * changeable here. A preview from the API (nothing changes) says who cannot be included and why, before anything is
  * applied. Apply files everyone ticked privately, each in their own step: nobody is emailed now, and the decision
- * message is sent later by a person, from Candidates; a decision nobody tells meets the day-5 safety net (the group's
- * line, the footer and the toast say so; founder decision D-03).
+ * message is sent later by a person, from Candidates; a decision nobody tells meets the day-5 safety net (the footer
+ * and the toast say so; founder decision D-03).
+ *
+ * Few words (founder, 23 Oct 2026): where each group goes is its heading's title, and "untick anyone you want to decide
+ * yourself" is the Apply button's; the footer keeps what applying means, privately, beside the live counter.
  *
  * The rows are taken when the window opens, so the list does not shift under the person while the board refreshes.
  */
@@ -69,19 +70,19 @@ export function ReviewApply(props: { roleId: string; board: BoardView; mayDeclin
         {footNote ? <span>{footNote}</span> : null}
         <strong role="status" className="text-[14px] font-semibold text-ink tabular-nums">{readyLine(counts)}</strong>
       </p>
-      <div className="flex flex-wrap gap-2 max-sm:w-full max-sm:[&>.btn]:flex-1">
-        <Button variant="ghost" onClick={props.onClose} disabled={apply.isPending}>Cancel</Button>
-        <Button variant="primary" disabled={!counts.total} loading={apply.isPending} onClick={() => apply.mutate()}>{applyLabel(counts.total)}</Button>
+      <div className="flex flex-wrap gap-2 max-sm:w-full">
+        <Button variant="ghost" className="max-sm:flex-1" onClick={props.onClose} disabled={apply.isPending}>Cancel</Button>
+        <Button variant="primary" className="max-sm:flex-1" title={REVIEW_SUB} disabled={!counts.total} loading={apply.isPending} onClick={() => apply.mutate()}>{applyLabel(counts.total)}</Button>
       </div>
     </div>
   );
 
   return (
-    <Dialog open onClose={props.onClose} size="lg" title="Review and apply" sub={REVIEW_SUB} footer={footer}>
+    <Dialog open onClose={props.onClose} size="lg" title="Review and apply" footer={footer}>
       {results ? (
         <div className="grid gap-4">
           <Alert tone="info">{results.words} {appliedNote(results)}</Alert>
-          <ul className={ROWS}>
+          <ul className="list-card divide-y divide-line overflow-hidden">
             {results.results.map((r) => (
               <li key={r.applicationId} className="flex items-start gap-3 px-4 py-3 text-[14px] leading-snug">
                 <Chip tone={r.ok ? "good" : "caution"} icon={r.ok ? "check" : "alert"}>{r.ok ? "Done" : "Not applied"}</Chip>
@@ -91,7 +92,7 @@ export function ReviewApply(props: { roleId: string; board: BoardView; mayDeclin
           </ul>
         </div>
       ) : rows.length === 0 ? (
-        <p className="text-ink-2">Nobody waits to be sorted right now. Everyone on the board is already sorted, decided or still being read.</p>
+        <p className="text-ink-2">Nobody waits to be sorted right now.</p>
       ) : (
         <div className="grid gap-6">
           {preview.isLoading ? <p className="small muted" role="status">Checking each person against the same rules as their own page…</p> : null}
@@ -102,13 +103,14 @@ export function ReviewApply(props: { roleId: string; board: BoardView; mayDeclin
             if (!group.length) return null;
             const n = groupCount(rows, c.id, state);
             return (
-              <section key={c.id} className="grid gap-1.5" aria-labelledby={`review-group-${c.id}`}>
+              <section key={c.id} className="grid gap-2.5" aria-labelledby={`review-group-${c.id}`}>
                 <div className="flex items-center justify-between gap-3">
-                  <h3 id={`review-group-${c.id}`} className="text-[17px] font-bold tracking-[-0.015em]">{c.title}</h3>
+                  {/* where the group goes, privately, on hover: the footer says it for everyone ticked */}
+                  <h3 id={`review-group-${c.id}`} className="text-[17px] font-bold tracking-[-0.015em]" title={GROUP_WORDS[c.id]}>{c.title}</h3>
                   <span className="inline-flex min-h-6 items-center rounded-full bg-surface-2 px-2.5 text-[12.5px] font-semibold text-ink-2 tabular-nums"><span aria-hidden="true">{n.ticked}/{n.total}</span><span className="sr-only">{n.ticked} of {n.total} ticked</span></span>
                 </div>
-                <p className="text-[13px] leading-snug text-ink-2">{GROUP_WORDS[c.id]}</p>
-                <ul className={cn(ROWS, "mt-1.5")}>
+                {/* the kit's list card (screenshot 6), divided; overflow-hidden keeps a ticked row's lavender inside its corners */}
+                <ul className="list-card divide-y divide-line overflow-hidden">
                   {group.map((row) => <ReviewRowView key={row.applicationId} row={row} state={state} warnings={fromPreview.warnings[row.applicationId]} onTick={(on) => tick(row.applicationId, on)} onReason={(r) => choose(row.applicationId, r)} onOpen={() => props.onOpen(row.applicationId)} />)}
                 </ul>
               </section>

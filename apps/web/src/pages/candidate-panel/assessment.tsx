@@ -12,7 +12,7 @@ import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL
 import { actionToast } from "../../talent-actions";
 import { ASSISTANT_NOTE_LABEL, REC_LABEL, chatGapLines, writeupLines, writeupSummary, type PanelQuestion, type WriteupLine } from "./helpers";
 import { competencyChip, importanceTag, orderCompetencyFindings, orderRequirementFindings, requirementChip, skillLabels } from "./match-view";
-import { CARD, LABEL, QUOTE, STEP, Why } from "./why";
+import { CARD, QUOTE, STEP, Why } from "./why";
 
 /**
  * The evidence on the candidate panel (plan A10): the assistant's readings with every claim's source and quote, the
@@ -176,7 +176,7 @@ function Points({ title, items }: { title: string; items: readonly Point[] }) {
   const shown = items.slice(0, 3);
   return (
     <div className="grid content-start gap-2">
-      <h3 className={LABEL}>{title}</h3>
+      <h3 className="eyebrow">{title}</h3>
       {shown.length ? (
         <ul className="small grid list-disc gap-1.5 pl-5 marker:text-ink-3">
           {shown.map((s, j) => (
@@ -229,7 +229,7 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
       {/* the most serious finding first, then what counts most (plan F2) */}
       {result.requirementFindings?.length ? (
         <div className={PART}>
-          <h3 className={LABEL}>Must-haves</h3>
+          <h3 className="eyebrow">Must-haves</h3>
           <ul className={LIST}>
             {orderRequirementFindings(result.requirementFindings, labels.mustHaves).map((r, j) => {
               const chip = requirementChip(r);
@@ -238,10 +238,10 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
           </ul>
         </div>
       ) : null}
-      {result.questionFindings?.length ? <div className={PART}><h3 className={LABEL}>Answers</h3><ul className={LIST}>{result.questionFindings.map((f, j) => <li key={j}><span className="muted small">{question(f.questionKey)}</span><br />{f.finding} {f.answered ? <Chip tone={MET_TONE[f.meetsModelAnswer] ?? "neutral"}>{f.meetsModelAnswer === "unknown" ? "recorded" : f.meetsModelAnswer}</Chip> : null}</li>)}</ul></div> : null}
+      {result.questionFindings?.length ? <div className={PART}><h3 className="eyebrow">Answers</h3><ul className={LIST}>{result.questionFindings.map((f, j) => <li key={j}><span className="muted small">{question(f.questionKey)}</span><br />{f.finding} {f.answered ? <Chip tone={MET_TONE[f.meetsModelAnswer] ?? "neutral"}>{f.meetsModelAnswer === "unknown" ? "recorded" : f.meetsModelAnswer}</Chip> : null}</li>)}</ul></div> : null}
       {result.competencyFindings?.length ? (
         <div className={PART}>
-          <h3 className={LABEL}>Skills</h3>
+          <h3 className="eyebrow">Skills</h3>
           <ul className={LIST}>
             {orderCompetencyFindings(result.competencyFindings, skills).map((c, j) => {
               const chip = competencyChip(c);
@@ -258,9 +258,9 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
           </ul>
         </div>
       ) : null}
-      <div className={PART}><h3 className={LABEL}>Strengths</h3>{result.strengths.length ? <ul className={LIST}>{result.strengths.map((s, j) => <li key={j}>{s.claim} <EvidenceChip source={s.evidence.source} />{s.evidence.quote ? <span className={LIST_QUOTE}> "{s.evidence.quote}"</span> : isUnquoted(s.evidence) ? <NoQuote /> : null}</li>)}</ul> : <p className="muted small">None recorded.</p>}</div>
-      <div className={PART}><h3 className={LABEL}>Concerns</h3>{result.concerns.length ? <ul className={LIST}>{result.concerns.map((s, j) => <li key={j}>{s.claim} <EvidenceChip source={s.evidence.source} />{s.evidence.quote ? <span className={LIST_QUOTE}> "{s.evidence.quote}"</span> : isUnquoted(s.evidence) ? <NoQuote /> : null}</li>)}</ul> : <p className="muted small">None recorded.</p>}</div>
-      <div className={PART}><h3 className={LABEL}>Open questions</h3>{result.unknowns.length ? <ul className={LIST}>{result.unknowns.map((u, j) => <li key={j}>{u.question} <span className="muted small">({u.whyItMatters})</span></li>)}</ul> : <p className="muted small">Nothing outstanding.</p>}{triage ? <AskInScreen detail={detail} roleId={roleId} unknowns={result.unknowns.length} /> : null}</div>
+      <div className={PART}><h3 className="eyebrow">Strengths</h3>{result.strengths.length ? <ul className={LIST}>{result.strengths.map((s, j) => <li key={j}>{s.claim} <EvidenceChip source={s.evidence.source} />{s.evidence.quote ? <span className={LIST_QUOTE}> "{s.evidence.quote}"</span> : isUnquoted(s.evidence) ? <NoQuote /> : null}</li>)}</ul> : <p className="muted small">None recorded.</p>}</div>
+      <div className={PART}><h3 className="eyebrow">Concerns</h3>{result.concerns.length ? <ul className={LIST}>{result.concerns.map((s, j) => <li key={j}>{s.claim} <EvidenceChip source={s.evidence.source} />{s.evidence.quote ? <span className={LIST_QUOTE}> "{s.evidence.quote}"</span> : isUnquoted(s.evidence) ? <NoQuote /> : null}</li>)}</ul> : <p className="muted small">None recorded.</p>}</div>
+      <div className={PART}><h3 className="eyebrow">Open questions</h3>{result.unknowns.length ? <ul className={LIST}>{result.unknowns.map((u, j) => <li key={j}>{u.question} <span className="muted small">({u.whyItMatters})</span></li>)}</ul> : <p className="muted small">Nothing outstanding.</p>}{triage ? <AskInScreen detail={detail} roleId={roleId} unknowns={result.unknowns.length} /> : null}</div>
       {result.anomalies?.length ? <p className="small muted">Flags (never used to decline): {result.anomalies.map((an) => `${an.kind.replace(/_/g, " ")}: ${an.detail}`).join("; ")}</p> : null}
       <p className="small muted border-t border-line pt-3">{result.rationale}</p>
     </Card>
@@ -371,10 +371,11 @@ const QUOTES = "grid gap-1.5 [&>li]:rounded-r-[10px] [&>li]:border-l-2 [&>li]:bo
 export function WriteupAnswers({ lines }: { lines: readonly WriteupLine[] }) {
   if (!lines.length) return null;
   return (
-    // the heading is the mono label (it stays a bare h3)
+    // `match-section` is only a hook for writeup-panel-ui.test.ts; the heading is the mono label, styled from here because
+    // the test pins it as a bare h3. Each answer says where its words come from, so the count stands alone under it.
     <section className="match-section grid gap-2 border-t border-line pt-4 [&>h3]:font-mono [&>h3]:text-[11px] [&>h3]:font-normal [&>h3]:uppercase [&>h3]:tracking-[0.14em] [&>h3]:text-ink-2" aria-label="Answers to your questions">
       <h3>Answers to your questions</h3>
-      <p className="small muted">{writeupSummary(lines)}. Each answer is drafted from their own replies; the part of the chat behind it is one click away, and the whole chat is below.</p>
+      <p className="small muted">{writeupSummary(lines)}.</p>
       <ol className="small mt-1 grid list-decimal gap-5 pl-5 marker:font-mono marker:text-ink-3">
         {lines.map((l) => (
           <li key={l.key} className="space-y-1.5 pl-1">

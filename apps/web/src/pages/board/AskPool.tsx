@@ -7,22 +7,20 @@ import { api, type BoardCard, type BoardView, type PoolAnswer, type PoolQuestion
 import { CompareTable } from "../compare/ComparePanel";
 import type { CompareView } from "../compare/compare-view";
 import { resumeOnlyChip } from "../../talent-list";
-import { ASK_INTRO, ASK_SOON, ASK_TITLE, COMPARE_MAX, answerPath, boardOrder, lookedAtLine, sourceWords, togglePick } from "./board-model";
+import { ASK_TITLE, COMPARE_MAX, answerPath, boardOrder, lookedAtLine, sourceWords, togglePick } from "./board-model";
 
 /** A person named in an answer: initials and name in an outlined pill that opens their panel (its score styled from here). */
 const PERSON_CHIP = "person-chip inline-flex min-h-9 max-w-full items-center gap-2 justify-self-start rounded-full border border-line-2 bg-surface py-1 ps-1 pe-3.5 text-left text-[14px] font-semibold text-ink transition-colors duration-150 ease-soft hover:border-line-tint hover:bg-tint pointer-coarse:min-h-10 [&>.person-chip-score]:font-normal [&>.person-chip-score]:text-ink-2 [&>.person-chip-score]:tabular-nums";
-/** Lines up the questions and the picker under the assistant's message (its 32px mark and the gap beside it). */
-const UNDER_MARK = "sm:ps-[42px]";
 
 /**
  * "Ask about this pool" (plan F10; founder decision B5): one-click questions about the role's finished applications,
- * answered from the checked findings already on file, never by asking the AI anything new. Each answer names the people
- * it is about, as chips that open their panel, with why and the quotes it rests on, and a "Looked at" line saying what
- * was read. "Compare these" asks for up to five people first. Typing your own question is not offered yet, and the
- * panel says so in one line instead of showing a box that does nothing.
+ * answered from the checked findings already on file, never by asking the AI anything new (the line under the title
+ * says so). Each answer names the people it is about, as chips that open their panel, with why and the quotes it rests
+ * on, and a "Looked at" line saying what was read. "Compare these" asks for up to five people first. There is no box
+ * to type a question in: the questions are the way in (founder, 23 Oct 2026: no line explaining what is not there).
  *
- * It reads like the guided conversation (screenshot 3): the assistant's opening line as a bubble beside its sparkle,
- * the questions as reply rows, the question picked as the person's own bubble and the answer as the assistant's card.
+ * It reads like the guided conversation (screenshot 3): the questions as reply rows, the question picked as the
+ * person's own bubble and the answer as the assistant's card beside its sparkle.
  */
 export function AskPool(props: { roleId: string; board: BoardView; onClose: () => void; onOpen: (applicationId: string) => void; onShow: (applicationIds: string[], label: string) => void }) {
   const questions = useQuery({ queryKey: ["applications", props.roleId, "questions"], queryFn: () => api.get<{ questions: PoolQuestion[] }>(`/api/v1/roles/${props.roleId}/questions`) });
@@ -38,15 +36,12 @@ export function AskPool(props: { roleId: string; board: BoardView; onClose: () =
     setCompareIds([]);
   };
   return (
+    // `ask-mark` and `ask-questions` are bare hooks the tests read
     <Drawer open onClose={props.onClose} title={ASK_TITLE} sub="Answers come from the checked findings already on file." leading={<span className="ask-mark" aria-hidden="true"><IconChip icon="message-circle" /></span>}>
       <div className="grid gap-5">
-        <div className="flex items-start gap-2.5">
-          <IconChip icon="assistant" tone="peach" size="sm" />
-          <p className="bubble assistant text-[14.5px]">{ASK_INTRO}</p>
-        </div>
         {questions.isLoading ? <Skeleton lines={3} /> : questions.error ? <ErrorState message="Could not load the questions." onRetry={() => questions.refetch()} /> : (
           <fieldset className="ask-questions" aria-label="Questions you can ask">
-            <div className={`grid gap-2 ${UNDER_MARK}`}>
+            <div className="grid gap-2">
               {(questions.data?.questions ?? []).map((q) => (
                 <button key={q.id} type="button" className="suggestion min-h-11 w-full justify-start gap-2.5 rounded-xl px-4 py-2.5 text-[14px] aria-pressed:border-primary aria-pressed:bg-tint-2 aria-pressed:text-primary" aria-pressed={asked?.id === q.id} onClick={() => ask(q)}>
                   <Icon name={q.kind === "compare" ? "grid" : "search"} size={16} className="shrink-0" />
@@ -57,24 +52,22 @@ export function AskPool(props: { roleId: string; board: BoardView; onClose: () =
           </fieldset>
         )}
         {asked?.kind === "compare" && !compareIds.length ? (
-          <fieldset className={`grid gap-3 ${UNDER_MARK}`}>
+          <fieldset className="grid gap-3">
             <legend className="mb-3 text-[14px] font-semibold text-ink">Choose up to {COMPARE_MAX} people to compare</legend>
+            {/* each person a tick row (the kit's option-row); the button counts who is chosen */}
             <div className="flex flex-wrap gap-2">
               {people.map((c) => {
                 const on = picked.includes(c.applicationId);
                 return (
-                  <label key={c.applicationId} className="inline-flex min-h-10 max-w-full cursor-pointer items-center gap-2 rounded-[20px] border border-line-2 bg-surface py-1 ps-3 pe-3.5 text-[14px] font-medium text-ink transition-colors duration-150 ease-soft not-data-[checked=true]:hover:bg-surface-2 data-[checked=true]:border-primary data-[checked=true]:bg-tint-2 data-[checked=true]:text-primary has-disabled:cursor-not-allowed has-disabled:opacity-55" data-checked={on}>
+                  <label key={c.applicationId} className="option-row max-w-full">
                     <input type="checkbox" checked={on} disabled={!on && picked.length >= COMPARE_MAX} onChange={(e) => setPicked((p) => togglePick(p, c.applicationId, e.target.checked))} />
                     <Avatar name={c.name} size="sm" />
-                    {c.name}
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{c.name}</span>
                   </label>
                 );
               })}
             </div>
-            <div className="row">
-              <Button size="sm" variant="primary" disabled={!picked.length} onClick={() => setCompareIds(picked)}>Compare {picked.length ? picked.length : ""}</Button>
-              <span className="small muted">{picked.length} of {COMPARE_MAX} chosen</span>
-            </div>
+            <Button size="sm" variant="primary" className="justify-self-start" disabled={!picked.length} onClick={() => setCompareIds(picked)}>Compare {picked.length ? picked.length : ""}</Button>
           </fieldset>
         ) : null}
         {/* Always there, so a screen reader hears each new answer as it arrives. */}
@@ -85,7 +78,6 @@ export function AskPool(props: { roleId: string; board: BoardView; onClose: () =
             ) : null
           ) : null}
         </div>
-        <p className="border-t border-line pt-4 text-[13px] text-ink-3">{ASK_SOON}</p>
       </div>
     </Drawer>
   );

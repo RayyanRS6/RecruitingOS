@@ -99,7 +99,8 @@ describe("the Candidates page", () => {
   it("heads the page with the job's shared header and tabs, and opens on the people waiting on you", () => {
     nav.search = "";
     const html = render(client([]), createElement(People));
-    expect(html).toContain("Job · Bright Dental");
+    // no "Job · company" eyebrow above the title (fewer words, 23 Oct 2026): the rail names the company
+    expect(html).not.toContain("Job · Bright Dental");
     expect(html).toMatch(/<h1>Dental Hygienist<\/h1>/);
     expect(text(html)).toContain("Live");
     // one facts line, the same as on the job's other tabs (Wave S1)
@@ -227,7 +228,9 @@ describe("the Candidates page", () => {
     nav.search = "open=a1";
     const html = render(client([detail(maria)]), createElement(People));
     expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Maria Reyes"/);
-    expect(text(html)).toMatch(/Applied \w{3} \d{1,2}, \d{4} · Dental Hygienist/);
+    expect(text(html)).toMatch(/Applied \w{3} \d{1,2}, \d{4}/);
+    // the job's own page behind the panel names the job: the header no longer repeats it (founder, 23 Oct 2026)
+    expect(text(html)).not.toMatch(/Applied \w{3} \d{1,2}, \d{4} · Dental Hygienist/);
     expect(text(html)).toContain("Email");
     expect(html.match(/aria-label="Stage: New\. Move to another stage"/g)?.length).toBe(2);
     // the list it opened from: one person, so next and previous say so
@@ -317,7 +320,8 @@ describe("the job page: the same header and tab strip as Candidates (Wave S1)", 
   it("marks the tab an older link asked for as current, so a notification's ?tab=posting lands on Share", () => {
     nav.search = "tab=posting";
     const html = render(client([]), createElement(RoleDetail));
-    expect(html).toContain("Job · Bright Dental");
+    // the title stands alone: no "Job · company" eyebrow (fewer words, 23 Oct 2026)
+    expect(html).not.toContain("Job · Bright Dental");
     expect(html).toMatch(/<h1>Dental Hygienist<\/h1>/);
     expect(text(html)).toContain("Irvine, CA · full time · On site · $40–$52 an hour");
     expect(text(html)).toContain("Bring in a recruiter");
@@ -335,7 +339,8 @@ describe("the job page: the same header and tab strip as Candidates (Wave S1)", 
     expect(html).toContain('<a href="/roles/r1?tab=activity" class="tab" aria-current="page">');
     expect(text(html)).toContain("Versions of the job");
     expect(text(html)).toMatch(/Version 1 · approved · intake session · .+ · Dana Whitfield/);
-    expect(text(html)).toContain("Every version is kept. Nothing is overwritten.");
+    // the list of versions shows they are all kept; the line that said so was cut (fewer words, 23 Oct 2026)
+    expect(text(html)).not.toContain("Every version is kept. Nothing is overwritten.");
     expect(text(html)).not.toMatch(/packet/i);
   });
 });
@@ -357,15 +362,19 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     nav.search = "";
     const html = render(jobsClient(), createElement(Roles));
     expect(html).toMatch(/<h1>Jobs<\/h1>/);
-    expect(text(html)).toContain("Open a job to see who applied.");
-    // the title is the row's link (its press area stretched over the row), styled by its class, never inline
-    expect(html).toContain('<a href="/roles/r1/talent" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]"><strong>Dental Hygienist</strong></a>');
+    // the title stands alone (fewer words, 23 Oct 2026): no company eyebrow, no line describing the page, no footnote
+    expect(html).not.toContain('class="eyebrow"');
+    expect(text(html)).not.toContain("Open a job to see who applied.");
+    expect(text(html)).not.toContain("Stuck? Bring in a recruiter from any job.");
+    // the title is the row's link (its press area stretched over the row), styled by its class, never inline; the kit's
+    // row title wraps on a phone by itself
+    expect(html).toContain('<a href="/roles/r1/talent" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden"><strong>Dental Hygienist</strong></a>');
     // one line under the title, with the other view as a small link in it; what calls for action is a badge
     expect(text(html)).toContain("Dental Hygienist 2 applicants · 7 days open · Job details");
     expect(text(html)).toContain("1 to review");
     expect(text(html)).toContain("1 new");
     expect(html).toContain('<a href="/roles/r1" class="small">Job details<span class="sr-only">: Dental Hygienist</span></a>');
-    expect(html).toContain('<a href="/roles/r2" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]"><strong>Office Manager</strong></a>');
+    expect(html).toContain('<a href="/roles/r2" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden"><strong>Office Manager</strong></a>');
     // "Not live" says it once: the line says why, and no status pill repeats it
     expect(text(html)).toContain("Office Manager Waiting for approval");
     expect(text(html).match(/Waiting for approval/g)).toHaveLength(1);
@@ -397,6 +406,10 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     const html = render(qc, createElement(Roles));
     expect(text(html)).toMatch(/All 4 Live 1 Drafts 3 Paused 0 Closed 0/);
     expect(text(html)).toContain("Still being drafted");
+    // who can see a draft is a lock whose words are its accessible name and tooltip; the heading is not said again
+    expect(html).toContain('<span class="icon-label" title="you, owners and admins can see it">');
+    expect(html).toContain('<span class="sr-only">you, owners and admins can see it</span>');
+    expect(text(html).match(/Still being drafted/g)).toHaveLength(1);
   });
 
   it("filters by status with counts, searches by title and sorts, all from the address", () => {
@@ -440,6 +453,8 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     const paused = render(jobsClient(), createElement(Roles));
     expect(text(paused)).toContain("No paused jobs");
     expect(text(paused)).toContain("Show all jobs");
+    // the title and its one button; no body line explaining it (fewer words, 23 Oct 2026)
+    expect(text(paused)).not.toContain("Pause a live job from its More menu.");
     nav.search = "q=zzz";
     const none = render(jobsClient(), createElement(Roles));
     expect(text(none)).toContain("No jobs match your search");

@@ -32,14 +32,6 @@ export function outcomeLevel(o: Pick<OutcomeRow, "applicationId">): string {
 /** A cell's first line: 14 px in ink; its second lines are `.small.muted` (13 px, --ink-3). */
 const LINE = "text-sm text-ink";
 
-/**
- * The facts of one record as "at a glance" rows (screenshot 7's side card), for a `<dl>` of dt/dd pairs: the label over
- * its fact on a phone, beside it from 640 px, a hairline between rows; a chip after a line of words sits a little lower.
- * From 640 px the space between label and fact is inside the fact (no column gap), so each hairline runs unbroken.
- * The customer drawer's Overview uses it too.
- */
-export const GLANCE = "grid grid-cols-1 text-sm text-ink sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] sm:[&>dd]:pl-5 [&>dt]:border-t [&>dt]:border-line [&>dt]:pt-3 [&>dt]:text-[13px] [&>dt]:text-ink-3 [&>dd]:min-w-0 [&>dd]:break-words [&>dd]:pt-1 [&>dd]:pb-3 sm:[&>dt]:pb-3 sm:[&>dd]:border-t sm:[&>dd]:border-line sm:[&>dd]:pt-3 [&>dt:first-of-type]:border-t-0 [&>dt:first-of-type]:pt-0 sm:[&>dd:first-of-type]:border-t-0 sm:[&>dd:first-of-type]:pt-0 [&>dd:last-of-type]:pb-0 sm:[&>dt:last-of-type]:pb-0 [&>dd>div+.chip]:mt-1.5";
-
 /** Human-recorded hiring outcomes across customers; an administrator corrects one with a reason, and the original stays. */
 export function Outcomes() {
   const qc = useQueryClient();
@@ -77,13 +69,16 @@ export function Outcomes() {
   );
 }
 
-/** The correction form, moved out of the table's cell into a drawer: what was recorded on top, then the same fields. */
+/**
+ * The correction form, moved out of the table's cell into a drawer: what was recorded on top (the kit's glance rows, so
+ * the header carries only the title: the customer and the outcome are the first two rows), then the same fields.
+ */
 function CorrectionDrawer({ o, fix, onChange, onConfirm, pending, onClose }: { o: OutcomeRow; fix: Fix; onChange: (f: Fix) => void; onConfirm: () => void; pending: boolean; onClose: () => void }) {
   return (
-    <Drawer open onClose={onClose} title="Correct an outcome" sub={`${o.companyName} · ${outcomeWords(o.outcome)}`}>
+    <Drawer open onClose={onClose} title="Correct an outcome">
       <div className="stack gap-5">
-        <Card className="p-5 sm:px-6">
-          <dl className={GLANCE}>
+        <Card>
+          <dl className="glance">
             <dt>Customer</dt>
             <dd>{o.companyName}</dd>
             <dt>Recorded</dt>

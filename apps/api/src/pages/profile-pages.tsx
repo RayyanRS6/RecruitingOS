@@ -67,7 +67,7 @@ export function LearnedFactsSection(props: LearnedFactsSectionProps) {
       {saved ? <div class={saved.error ? "err" : "card"} role={saved.error ? "alert" : "status"}><p>{saved.text}</p></div> : null}
       {facts.length ? (
         <>
-          <p>Things you told us yourself in a chat you sent. {companyName} keeps them with your applications here, never with another company, for you to check. Change or remove any of them. When you apply for another role here with your details, the form lists them for you to keep or untick.</p>
+          <p>Things you told us yourself in a chat you sent. {companyName} keeps them with your applications here, never with another company, for you to check. When you apply for another role here with your details, the form lists them for you to keep or untick.</p>
           <ul class="roles">
             {facts.map((f) => (
               <li class="card">
@@ -122,7 +122,6 @@ function OtherRolesPage(props: { companyName: string; slug: string | null; roles
   return (
     <Layout title={`Apply for another role at ${companyName}`} extraCss={CARD_PAGE_CSS}>
       <p class="back"><a href={`/c/status/${props.statusToken}`}>Back to your application</a></p>
-      <p class="eyebrow">{companyName} · Your applications</p>
       <h1>Apply for another role at {companyName}</h1>
       <p class="lead">We email a link to the address on your application. It opens that job's form with your details filled in (your name, contact details, where you are and the summary of your work), for you to check and change. The form also lists what you told us in your chats here, for you to keep or untick. Nothing goes to another company.</p>
       {props.sent ? <div class="card" role="status"><p><strong>Check your email.</strong> The link is on its way to the address on your application. It can take a few minutes; look in your spam or promotions folder too.</p></div> : null}
@@ -179,7 +178,6 @@ function ReuseRequestPage(props: { companyName: string; roleTitle: string; formP
   return (
     <Layout title={`Use your details for ${props.roleTitle}`} extraCss={CARD_PAGE_CSS}>
       <p class="back"><a href={props.formPath}>Back to the form</a></p>
-      <p class="eyebrow">{props.companyName} · {props.roleTitle}</p>
       <h1>Use the details you gave {props.companyName} before</h1>
       <p class="lead">Type the email address you applied with. If {props.companyName} has your details, we email you a link that opens this job's form with them filled in, for you to check. We never show them on this page.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
@@ -197,10 +195,9 @@ function ReuseRequestPage(props: { companyName: string; roleTitle: string; formP
 }
 
 /** What every request answers, whether or not the address is known: only the mailbox learns that. */
-function ReuseRequestSent(props: { companyName: string; roleTitle: string; formPath: string }) {
+function ReuseRequestSent(props: { companyName: string; formPath: string }) {
   return (
     <Layout title="Check your email" extraCss={CARD_PAGE_CSS}>
-      <p class="eyebrow">{props.companyName} · {props.roleTitle}</p>
       <h1>Check your email</h1>
       <div class="card" role="status">
         <p><strong>If {props.companyName} has your details from before, a link is on its way.</strong></p>
@@ -266,6 +263,7 @@ function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string
   const done = view.state === "ready" ? null : outcome[view.state];
   return (
     <Layout title={done ? done.title : "Please confirm"} extraCss={CARD_PAGE_CSS}>
+      {/* Kept through the fewer-words pass (23 October 2026): an emailed link opens this page, and nothing else on it names the employer and job. */}
       <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
       {done ? (
         <>
@@ -276,8 +274,9 @@ function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string
         <>
           <h1>{person ? "Ask a person to contact you?" : "Add these answers to your application?"}</h1>
           <p class="lead">Someone using your email address sent an application for this job and {happened}. Nothing has been added to your application yet.</p>
-          <form method="post" action={`/c/confirm-answers/${props.token}`} class="card">
-            <p>If that was you, press the button {person ? "and a person will be in touch" : "to add those answers to your application"}.</p>
+          {/* The button says what it does; the line under it covers "it was not you". `actions` spaces the button from
+              the lead and from that line (`.actions + p`). */}
+          <form method="post" action={`/c/confirm-answers/${props.token}`} class="actions">
             <button class="btn" type="submit">{person ? "Yes, ask a person to contact me" : "Add these answers to my application"}</button>
           </form>
           <p>If it was not you, you do not need to do anything: nothing is added, and what was typed is deleted after seven days.</p>

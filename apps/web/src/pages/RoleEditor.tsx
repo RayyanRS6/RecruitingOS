@@ -2,14 +2,15 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MISSING_MUST_HAVE_CAP, type JobPreview } from "@ros/contracts";
-import { Alert, Button, cn, Drawer, Field, IconButton, Segmented } from "@ros/ui";
+import { MISSING_MUST_HAVE_CAP, PACKET_VISIBILITY_LABEL, type JobPreview } from "@ros/contracts";
+import { Alert, Button, cn, Drawer, Field, IconButton, IconLabel, Segmented } from "@ros/ui";
 import { api, ApiError, type ClosingDateView, type EvidenceSource, type InterviewPlanView, type NewVersionResponse, type Requirement, type RolePacket, type WhoPosts } from "../api/client";
 import { ClosingDateField } from "../components/ClosingDate";
 import { liveEditWords, materialChangesOf, previewOfEdit, savedVersionToast, type MaterialChange } from "../publishing";
-import { CHECKED_IN, IMPORTANCE_CHOICES, IMPORTANCE_HINT, READ_FROM_NOW_ON, SCORE_WEIGHTS_LINE, SKILLS_MAX, SKILLS_MIN, applySkills, newSkillRow, removalWords, skillRowsFrom, skillUses, skillsProblem, type EditorFocus, type SkillRow } from "../skills-form";
+import { CHECKED_IN, IMPORTANCE_CHOICES, IMPORTANCE_HINT, READ_FROM_NOW_ON, SCORE_WEIGHTS_LINE, SKILLS_MAX, SKILLS_MIN, applySkills, checkedInLabel, newSkillRow, removalWords, skillRowsFrom, skillUses, skillsProblem, type EditorFocus, type SkillRow } from "../skills-form";
 import { toast } from "../toast";
 import { UnsavedPreview } from "./new-role/CandidatePreview";
+import { SeenField } from "./new-role/marks";
 import {
   ELIGIBILITY_TYPES, QUESTION_KINDS, SCREENING_MAX, SCREENING_MIN, TONES, applyPacketForm, moveRow, packetFormFrom, packetFormProblem,
   type EligibilityRow, type PacketForm, type QuestionRow,
@@ -41,14 +42,24 @@ const EMPLOYMENT: Array<{ value: string; label: string }> = [
 ];
 const DECIDERS = ["owner", "admin", "hiring_manager"];
 const NEW_PERSON = "__someone_new";
+/** Where a must-have is checked; the screening conversation goes by the drawer's own name for it, "AI interview" (as in the skill rows). */
 const EVIDENCE: Array<{ value: EvidenceSource; label: string }> = [
   { value: "resume", label: "résumé" },
   { value: "application", label: "application" },
-  { value: "screen", label: "screen" },
+  { value: "screen", label: checkedInLabel("screen") },
   { value: "interview", label: "interview" },
 ];
 const MAX_MUST_HAVES = 6;
 const MAX_NICE_TO_HAVES = 10;
+
+/**
+ * Who sees a group's words: an icon beside its legend, the words its accessible name and tooltip (docs/07), in the job
+ * builder's words (PACKET_VISIBILITY_LABEL, and the pay line of new-role/DraftPanel.tsx), so both say it the same way.
+ */
+type Seen = { icon: "eye" | "lock"; label: string };
+const ON_JOB_PAGE: Seen = { icon: "eye", label: PACKET_VISIBILITY_LABEL.public };
+const PAY_SEEN: Seen = { icon: "eye", label: "Candidates see the range; only your team sees the most you would pay" };
+const TEAM_ONLY: Seen = { icon: "lock", label: PACKET_VISIBILITY_LABEL.internal };
 
 /*
  * The look (October 2026 redesign, screenshot 5's application card): every group of fields is a bordered card on the
@@ -57,14 +68,12 @@ const MAX_NICE_TO_HAVES = 10;
  */
 /** One group of fields: a bordered card. */
 const GROUP = "rounded-2xl border border-line bg-surface p-4 shadow-xs sm:p-5";
-/** A group's name: a legend floated so it sits inside the card (a grid item of the fieldset), not across its border. */
-const LEGEND = "float-left col-span-full w-full p-0 font-display text-[17px] font-bold leading-tight tracking-[-0.02em] text-ink";
+/** A group's name, with its `Seen` icon after it: a legend floated so it sits inside the card (a grid item of the fieldset), not across its border. */
+const LEGEND = "float-left col-span-full flex w-full items-center gap-2 p-0 font-display text-[17px] font-bold leading-tight tracking-[-0.02em] text-ink";
 /** A card around one field that has no group of its own: its label reads as the card's title. */
 const SOLO = cn(GROUP, "grid gap-4 [&>.field:first-child>label]:font-display [&>.field:first-child>label]:text-[17px] [&>.field:first-child>label]:font-bold [&>.field:first-child>label]:tracking-[-0.02em]");
 /** One row inside a group: a quieter box on the paper. */
 const ROW_BOX = "grid gap-3 rounded-xl border border-line bg-ground/60 p-3.5";
-/** A choice that is a checkbox in a pill: lavender once ticked. */
-const PICK = "inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-full border border-line-2 bg-surface px-3 text-[14px] text-ink-2 transition-colors duration-150 ease-soft hover:border-line-strong hover:text-ink has-checked:border-line-tint has-checked:bg-tint has-checked:text-ink pointer-coarse:min-h-10";
 
 type Row = { key: string | null; text: string; rationale: string; evidencedBy: EvidenceSource[] };
 
@@ -90,11 +99,12 @@ function RequirementRows({ rows, onChange, idPrefix, max, addLabel }: { rows: Ro
         <div key={r.key ?? `new-${i}`} className={ROW_BOX}>
           <Field label={`${i + 1}. What they must bring`} htmlFor={`${idPrefix}-text-${i}`}><input id={`${idPrefix}-text-${i}`} className="input" value={r.text} onChange={(e) => update(i, { text: e.target.value })} placeholder="e.g. Active CA dental hygiene (RDH) license" /></Field>
           <Field label="Why it matters" htmlFor={`${idPrefix}-why-${i}`}><input id={`${idPrefix}-why-${i}`} className="input" value={r.rationale} onChange={(e) => update(i, { rationale: e.target.value })} placeholder="e.g. Required by law to practice" /></Field>
-          <fieldset className="grid min-w-0 gap-2">
-            <legend className="small muted float-left w-full">Where we check it (pick at least one; "screen" means the screening conversation asks about it)</legend>
+          {/* a field's label as a legend (the group's name); the most a list holds is in its group's legend */}
+          <fieldset className="field">
+            <legend className="label float-left w-full">Where we check it</legend>
             <div className="flex flex-wrap gap-2">
               {EVIDENCE.map((ev) => (
-                <label key={ev.value} className={PICK}>
+                <label key={ev.value} className="option-row">
                   <input type="checkbox" checked={r.evidencedBy.includes(ev.value)} onChange={(e) => toggle(i, ev.value, e.target.checked)} /> {ev.label}
                 </label>
               ))}
@@ -105,7 +115,6 @@ function RequirementRows({ rows, onChange, idPrefix, max, addLabel }: { rows: Ro
       ))}
       <div className="row">
         <Button size="sm" disabled={rows.length >= max} onClick={() => onChange([...rows, { key: null, text: "", rationale: "", evidencedBy: ["resume", "screen"] }])}>{addLabel}</Button>
-        {rows.length >= max ? <span className="small muted">That is the most this list can hold ({max}).</span> : null}
       </div>
     </div>
   );
@@ -157,19 +166,22 @@ function SkillRows({ rows, onChange, packet }: { rows: SkillRow[]; onChange: (ro
       })}
       <div className="row">
         <Button size="sm" disabled={rows.length >= SKILLS_MAX} onClick={() => onChange([...rows, newSkillRow()])}>Add a skill</Button>
-        <span className="small muted">{rows.length >= SKILLS_MAX ? `That is the most there can be (${SKILLS_MAX}).` : filled <= SKILLS_MIN ? `At least ${SKILLS_MIN} are needed.` : null}</span>
       </div>
     </div>
   );
 }
 
-/** A group of requirement rows: a fieldset named by its legend, since there is no single control for a label to point at. */
-function RequirementGroup({ legend, hint, children, id }: { legend: string; hint: string; children: ReactNode; id?: string }) {
+/**
+ * A group of fields: a fieldset named by its legend, since there is no single control for a label to point at. `seen`
+ * says who sees the group's words as an icon after the legend (its words join the group's accessible name); `hint` is
+ * only for a rule the owner needs.
+ */
+function RequirementGroup({ legend, hint, seen, children, id }: { legend: string; hint?: string; seen?: Seen; children: ReactNode; id?: string }) {
   return (
     // scroll-mt: opened at this group (?edit=), it lands clear of the drawer's sticky head
     <fieldset id={id} className={cn("field scroll-mt-28 gap-3", GROUP)}>
-      <legend className={LEGEND}>{legend}</legend>
-      <span className="hint -mt-1.5">{hint}</span>
+      <legend className={LEGEND}>{legend}{seen ? <IconLabel icon={seen.icon} label={seen.label} /> : null}</legend>
+      {hint ? <span className="hint -mt-1.5">{hint}</span> : null}
       {children}
     </fieldset>
   );
@@ -209,14 +221,13 @@ function QuestionRows({ rows, onChange }: { rows: QuestionRow[]; onChange: (rows
             <span className="row ml-auto gap-1.5">
               <IconButton icon="chevron-up" size="sm" label={`Move question ${i + 1} up`} disabled={i === 0} onClick={() => onChange(moveRow(rows, i, -1))} />
               <IconButton icon="chevron-down" size="sm" label={`Move question ${i + 1} down`} disabled={i === rows.length - 1} onClick={() => onChange(moveRow(rows, i, 1))} />
-              <Button size="sm" variant="quiet" disabled={filled <= SCREENING_MIN && !!r.question.trim()} onClick={() => onChange(rows.filter((_, j) => j !== i))}>Remove</Button>
+              <Button size="sm" variant="quiet" disabled={filled <= SCREENING_MIN && !!r.question.trim()} title={filled <= SCREENING_MIN && r.question.trim() ? `A role needs at least ${SCREENING_MIN} questions` : undefined} onClick={() => onChange(rows.filter((_, j) => j !== i))}>Remove</Button>
             </span>
           </div>
         </div>
       ))}
       <div className="row">
         <Button size="sm" disabled={rows.length >= SCREENING_MAX} onClick={() => onChange([...rows, { key: null, question: "", kind: "skills" }])}>Add a question</Button>
-        <span className="small muted">{rows.length >= SCREENING_MAX ? `That is the most there can be (${SCREENING_MAX}).` : filled <= SCREENING_MIN ? `At least ${SCREENING_MIN} are needed.` : null}</span>
       </div>
     </div>
   );
@@ -227,7 +238,7 @@ function EligibilityRows({ rows, onChange }: { rows: EligibilityRow[]; onChange:
   const update = (i: number, patch: Partial<EligibilityRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <div className="stack gap-2.5">
-      {rows.length ? null : <p className="small muted">None. Candidates apply without any.</p>}
+      {rows.length ? null : <p className="small muted">None.</p>}
       {rows.map((r, i) => (
         <div key={r.key ?? `new-${i}`} className={ROW_BOX}>
           <Field label="What it checks" htmlFor={`el-type-${i}`}>
@@ -374,24 +385,19 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
     <>
       <Drawer open={open} onClose={onClose} title="Edit the role" sub={`Editing version ${version}`}>
         <div className="stack gap-4">
-          <p className="small muted">
-            {proposed
-              ? `You are editing v${version}, the version waiting for approval${currentVersion ? ` (the role still runs on v${currentVersion})` : ""}. Saving keeps its changes and adds yours as a new version.`
-              : `You are editing v${version}. Saving adds a new version; nothing is overwritten.`}
-          </p>
+          {/* the drawer's sub names the version; a version waiting for approval also says what the role runs on */}
+          {proposed ? <p className="small muted">{`You are editing v${version}, the version waiting for approval${currentVersion ? ` (the role still runs on v${currentVersion})` : ""}.`}</p> : null}
           {newerVersion ? <Alert tone="caution">A newer version, v{newerVersion}, was saved while this was open. Saving now starts from v{version} and would undo its changes. Copy anything you typed, close this, and open Edit again to start from the newest version.</Alert> : null}
-          {liveEdit ? <p className="small muted">The job is live. Before anything is saved you see what your change does: wording goes live when you confirm; a change to the pay, the title, the place or the application form's questions needs the same approval as a new role.</p> : null}
+          {/* saved by its own button, straight away: not part of the versions the foot saves */}
           {closingDate && roleStatus !== "closed" ? (
-            <fieldset className={cn("field gap-3", GROUP)}>
-              <legend className={LEGEND}>When applications close</legend>
-              <span className="hint -mt-1.5">Saved on its own, straight away. It is not part of the job's versions.</span>
+            <RequirementGroup legend="When applications close">
               <ClosingDateField roleId={roleId} closingDate={closingDate} canEdit={canManage} roleStatus={roleStatus} idBase="editor" />
-            </fieldset>
+            </RequirementGroup>
           ) : null}
           {advanced ? <Segmented value={mode} onChange={setMode} options={[{ value: "simple", label: "The usual edits" }, { value: "json", label: "Everything (advanced)" }]} /> : null}
           {mode === "simple" || !advanced ? (
             <>
-              <RequirementGroup legend="The job" hint="Shown on the job page.">
+              <RequirementGroup legend="The job" seen={ON_JOB_PAGE}>
                 <Field label="Job title" htmlFor="ed-title"><input id="ed-title" className="input" value={form.title} onChange={(e) => set({ title: e.target.value })} /></Field>
                 <PlaceRows rows={form.places} onChange={(places) => set({ places })} />
                 <div className="grid-2">
@@ -413,7 +419,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
               <div className={SOLO}>
                 <Field label="Public description" htmlFor="desc"><textarea id="desc" className="textarea min-h-[180px]" value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
               </div>
-              <RequirementGroup legend="Pay" hint="Candidates see the range; only your team sees the most you would pay.">
+              <RequirementGroup legend="Pay" seen={PAY_SEEN}>
                 <Field label="Paid" htmlFor="ed-basis">
                   <select id="ed-basis" className="select" value={form.basis} onChange={(e) => set({ basis: e.target.value as PacketForm["basis"] })}>
                     <option value="hourly">By the hour</option>
@@ -424,29 +430,37 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
                   <Field label="Pay minimum" htmlFor="min"><input id="min" className="input" inputMode="decimal" value={form.min} onChange={(e) => set({ min: e.target.value })} /></Field>
                   <Field label="Pay maximum" htmlFor="max"><input id="max" className="input" inputMode="decimal" value={form.max} onChange={(e) => set({ max: e.target.value })} /></Field>
                 </div>
-                <Field label="Ceiling (the most you would pay)" htmlFor="ceil" hint="Offers never go above this without a new approval."><input id="ceil" className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => set({ ceiling: e.target.value })} /></Field>
+                {/* the group's eye covers the range; the ceiling carries its own lock beside its label (the field's name stays its label) */}
+                <SeenField label="Ceiling (the most you would pay)" htmlFor="ceil" seen="internal"><input id="ceil" className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => set({ ceiling: e.target.value })} /></SeenField>
                 <Field label="Benefits" htmlFor="ed-benefits"><input id="ed-benefits" className="input" value={form.benefits} onChange={(e) => set({ benefits: e.target.value })} placeholder="e.g. Health, dental, 401(k), paid time off" /></Field>
               </RequirementGroup>
-              <RequirementGroup id="ed-must-haves" legend={`Must-haves (up to ${MAX_MUST_HAVES})`} hint={`The things you would not hire without. Each says why it matters and where it is checked. They count the most in each applicant's match score; one their own words show is missing holds the score at ${MISSING_MUST_HAVE_CAP} at most. ${READ_FROM_NOW_ON}`}>
+              {/* the score rule stays in sight here; how the weights compare folds under the skills; what a save does to people already read sits by the save */}
+              <RequirementGroup id="ed-must-haves" legend={`Must-haves (up to ${MAX_MUST_HAVES})`} hint={`They count the most in each applicant's match score; one their own words show is missing holds the score at ${MISSING_MUST_HAVE_CAP} at most.`}>
                 <RequirementRows rows={mustHaves} onChange={setMustHaves} idPrefix="mh" max={MAX_MUST_HAVES} addLabel="Add a must-have" />
               </RequirementGroup>
+              {/* kept in sight: nobody is held over a nice-to-have */}
               <RequirementGroup legend={`Nice-to-haves (up to ${MAX_NICE_TO_HAVES})`} hint="Helpful, never a reason to hold anyone.">
                 <RequirementRows rows={niceToHaves} onChange={setNiceToHaves} idPrefix="nh" max={MAX_NICE_TO_HAVES} addLabel="Add a nice-to-have" />
               </RequirementGroup>
-              <RequirementGroup id="ed-skills" legend={`Skills we look for (${SKILLS_MIN} to ${SKILLS_MAX})`} hint={`${SCORE_WEIGHTS_LINE} Only your team sees these. ${READ_FROM_NOW_ON}`}>
+              <RequirementGroup id="ed-skills" legend={`Skills we look for (${SKILLS_MIN} to ${SKILLS_MAX})`} seen={TEAM_ONLY}>
+                <details className="more">
+                  <summary>How this works</summary>
+                  <p className="hint">{SCORE_WEIGHTS_LINE}</p>
+                </details>
                 <SkillRows rows={skills} onChange={setSkills} packet={packet} />
               </RequirementGroup>
+              {/* kept in sight: the AI conversation is marked as AI with a person instead, and nobody is turned down automatically */}
               <RequirementGroup legend={`Screening questions (${SCREENING_MIN} to ${SCREENING_MAX})`} hint="Asked in a short conversation marked as AI, in this order, with a person available instead.">
                 <QuestionRows rows={form.questions} onChange={(questions) => set({ questions })} />
               </RequirementGroup>
               <RequirementGroup legend="Questions on the application form" hint="The only questions that can hold an application for your decision. Nothing is ever turned down automatically.">
                 <EligibilityRows rows={form.eligibility} onChange={(eligibility) => set({ eligibility })} />
               </RequirementGroup>
-              <RequirementGroup legend="Deal-breakers, in your words" hint="Only your team sees these. They are used only once you make them visible must-haves.">
+              <RequirementGroup legend="Deal-breakers, in your words" seen={TEAM_ONLY} hint="They are used only once you make them visible must-haves.">
                 <TextRows rows={form.dealBreakers} onChange={(dealBreakers) => set({ dealBreakers })} idPrefix="db" addLabel="Add a deal-breaker" placeholder="e.g. Cannot work Saturdays" />
               </RequirementGroup>
               <div className={SOLO}>
-                <Field label="Who has the final say" htmlFor="ed-decider" hint="Approvals of this role go to them; an owner can also decide.">
+                <Field label="Who has the final say" htmlFor="ed-decider">
                   <select id="ed-decider" className="select" value={form.decisionMakerUserId || (newDecider ? NEW_PERSON : "")} onChange={(e) => {
                     const v = e.target.value;
                     setNewDecider(v === NEW_PERSON);
@@ -469,12 +483,12 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
             </>
           ) : (
             <div className={SOLO}>
-              <Field label="Role packet JSON" htmlFor="packet-json" hint="Validated on save. Eligibility rules must use the allowed types."><textarea id="packet-json" className="textarea min-h-[360px] font-mono text-[12px]" value={json} onChange={(e) => setJson(e.target.value)} /></Field>
+              <Field label="Role packet JSON" htmlFor="packet-json"><textarea id="packet-json" className="textarea min-h-[360px] font-mono text-[12px]" value={json} onChange={(e) => setJson(e.target.value)} /></Field>
             </div>
           )}
-          {/* The foot: what changed, anything wrong, and the save as the primary pill (or the review of a live change) */}
+          {/* The foot: what changed (with what a save does to people already read), anything wrong, and the save as the primary pill (or the review of a live change) */}
           <div className={SOLO}>
-            <Field label="What changed and why" htmlFor="sum"><input id="sum" className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Raised the range after seeing the market number" /></Field>
+            <Field label="What changed and why" htmlFor="sum" hint={READ_FROM_NOW_ON}><input id="sum" className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Raised the range after seeing the market number" /></Field>
             {problem ? <Alert tone="caution">{problem}</Alert> : null}
             {save.error ? <Alert tone="critical">{save.error instanceof ApiError ? save.error.message : "Could not save."}</Alert> : null}
             {review && words ? (

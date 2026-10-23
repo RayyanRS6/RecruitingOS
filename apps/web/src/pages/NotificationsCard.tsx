@@ -36,20 +36,19 @@ export function NotificationsCard() {
   const notMember = q.error instanceof ApiError && q.error.status === 403;
   const view = q.data;
   // Screenshot 6's team table: one inset box of rows, what the emails are about on the left and how often on the right.
+  // The card's title and the choices say what it is for (founder, 23 October 2026: fewer words). The address the emails
+  // go to and what each group covers wait under "How this works", where every keyboard, touch and screen reader user
+  // reaches them; a group's label also carries its description as a tooltip, a second aid only.
   return (
     <Card title="Email alerts" aside={<Link to="/updates" className="btn secondary sm">See all your updates</Link>} className="max-sm:p-5">
-      <p className="small muted">Choose which updates also reach you by email{view?.email ? ` at ${view.email}` : ""}.</p>
-      {q.isLoading ? <div className="mt-4"><Skeleton lines={4} /></div> : notMember ? (
-        <p className="small muted mt-2">Email alerts are for the people on this company's team.</p>
-      ) : q.error || !view ? <div className="mt-4"><ErrorState message="Could not load your email alerts." onRetry={() => q.refetch()} /></div> : (
+      {q.isLoading ? <Skeleton lines={4} /> : notMember ? (
+        <p className="small muted">Email alerts are for the people on this company's team.</p>
+      ) : q.error || !view ? <ErrorState message="Could not load your email alerts." onRetry={() => q.refetch()} /> : (
         <>
-          <div className="mt-4 divide-y divide-line rounded-xl border border-line bg-surface">
+          <div className="divide-y divide-line rounded-xl border border-line bg-surface">
             {view.groups.map((g, i) => (
               <div key={g.group} className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-3.5 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]" style={i ? { animationDelay: `${Math.min(i, 7) * 30}ms` } : undefined}>
-                <div className="min-w-0 flex-[1_1_220px]">
-                  <strong className="text-sm text-ink">{g.label}</strong>
-                  <p className="small muted mt-0.5">{g.description}</p>
-                </div>
+                <strong className="min-w-0 flex-[1_1_220px] text-sm text-ink" title={g.description}>{g.label}</strong>
                 <Segmented ariaLabel={`Emails about ${g.label}`} value={save.isPending && save.variables?.group === g.group ? save.variables.cadence : g.cadence} options={CADENCE_OPTIONS} onChange={(cadence) => { if (cadence !== g.cadence) save.mutate({ group: g.group, cadence }); }} />
               </div>
             ))}
@@ -62,7 +61,6 @@ export function NotificationsCard() {
           {/* The few updates that always go, and how summaries work: one click away. */}
           <details className="more mt-4">
             <summary>Always emailed at once ({view.alwaysSent.length})</summary>
-            <p className="small muted mb-2">These go out whatever you choose above.</p>
             <ul className="small list-disc space-y-1 pl-5 marker:text-ink-3">
               {view.alwaysSent.map((a) => <li key={a.label}><strong>{a.label}.</strong> {a.why}</li>)}
             </ul>
@@ -71,7 +69,11 @@ export function NotificationsCard() {
             <summary>How this works</summary>
             <div className="stack small muted gap-1.5">
               <p>Every update shows on Home and in your updates. Emails name the job and link to it; candidate names and details stay in the app.</p>
+              <p>{`Emails go to ${view.email}.`}</p>
               <p>{digestTimeText(view.digest)}</p>
+              <ul className="list-disc space-y-1 pl-5 marker:text-ink-3">
+                {view.groups.map((g) => <li key={g.group}><strong>{`${g.label}:`}</strong> {g.description}</li>)}
+              </ul>
             </div>
           </details>
         </>

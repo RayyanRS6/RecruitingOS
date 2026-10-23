@@ -4,7 +4,8 @@ import { headerCounts, snapshotPlace, snapshotScore, type BoardSnapshot } from "
 /**
  * "Have a recruiter check this" (plan F9), as the ITS recruiter reads it once they accept the request: the pool board
  * as it stood when the team asked, the summary and where each person was placed and why. It is a picture of that
- * moment; the team applies the board themselves. The table keeps each person's name in view while it scrolls sideways
+ * moment; the team applies the board themselves, and the closing line says so (people make every hiring decision; the
+ * team's request is their own words and may not). The table keeps each person's name in view while it scrolls sideways
  * on a narrow screen, and the scores sit right-aligned.
  */
 export function BoardSnapshotCard({ snapshot }: { snapshot: BoardSnapshot }) {

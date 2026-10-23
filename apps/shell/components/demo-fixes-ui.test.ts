@@ -145,8 +145,12 @@ describe("the interview approval's meeting link", () => {
     expect(words).toContain("Approve an interview");
     expect(words).not.toContain("Create it with the calendar event");
     expect(words).toContain("Meeting link (optional)");
+    // "(optional)" says it may stay empty, and the video-call line below says what an empty one means: no hint repeats it
+    expect(words).not.toContain("For a video call, paste its link.");
     expect(words).toContain("A link is made with the calendar event only for an interviewer who connected their calendar in Settings.");
     expect(words).toContain("This round is a video call. Without a link here, the invitation names the format only, so send Maria the link yourself.");
+    // the personal line's hint says where its box stops and what it is checked against
+    expect(words).toMatch(/One or two sentences, \d+ characters at most\. It is checked before anything is sent: no scores/);
     // a calendar that needs attention makes no link either
     expect(step({ status: "manual_action_required" })).not.toContain("Create it with the calendar event");
   });

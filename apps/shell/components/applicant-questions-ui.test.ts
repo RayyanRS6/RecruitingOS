@@ -8,8 +8,9 @@ import { describe, expect, it, vi } from "vitest";
  * "Questions every applicant answers" on the job's Scoring tab (Wave S7), as the server first draws it: the quick
  * questions on the form (the yes/no ones that may hold an application first, then the company's own), the written
  * questions the chat asks (the screening questions until the company sets its own), what a good answer shows marked as
- * for the team only, the fairness line, and the editor's rows. The editor's pure parts (the rows, the first problem in
- * plain words, the body the PUT takes, the server's refusals by row) are checked here too.
+ * for the team only, and the editor's rows with the fairness line (the editor's, where questions are written; the card
+ * does not repeat it). The editor's pure parts (the rows, the first problem in plain words, the body the PUT takes, the
+ * server's refusals by row) are checked here too.
  */
 vi.mock("next/navigation", () => ({
   usePathname: () => "/roles/r1",
@@ -49,12 +50,17 @@ describe("the questions card on the Scoring tab", () => {
     const t = text(html);
     expect(t).toContain("Questions every applicant answers");
     expect(t).toContain("Candidates are asked this");
+    // said by the eye beside the title: its words are its accessible name and tooltip (fewer words, 23 Oct 2026)
+    expect(html).toContain('<span class="icon-label self-center" title="Candidates are asked this">');
+    // "a person decides" is never cut
+    expect(t).toContain("None of them turns anyone down: a person decides.");
     expect(t).toContain("Quick questions, on the application form");
     expect(t).toContain('Are you available Monday to Friday, 8 to 5? Yes or no A "no" holds it for your decision');
     expect(t).toContain("Written questions, asked in the chat");
     expect(t).toContain(aq.SCREENING_FALLBACK_LINE);
     for (const q of plain.screening.questions) expect(t).toContain(q.question);
-    expect(t).toContain(aq.FAIRNESS_LINE);
+    // the fairness line is the editor's, where questions are written; the card does not repeat it
+    expect(t).not.toContain(aq.FAIRNESS_LINE);
     expect(t).toContain("Change these questions");
     expect(t).toContain("Change the yes/no questions that may hold an application");
   });
@@ -76,7 +82,10 @@ describe("the questions card on the Scoring tab", () => {
   });
 
   it("the editor: a row per question, with its kind, its answers, whether it must be answered, and the fairness line", () => {
-    const t = text(render(createElement(QuestionsEditor, { roleId: "r1", baseVersion: 3, packet: withQuestions, whoPosts: "its", onDone: () => undefined })));
+    const html = render(createElement(QuestionsEditor, { roleId: "r1", baseVersion: 3, packet: withQuestions, whoPosts: "its", onDone: () => undefined }));
+    const t = text(html);
+    // that the chat reads the team's note is the field's tooltip and accessible description (fewer words, 23 Oct 2026)
+    expect(html).toContain(`id="wq-look-0" class="input" title="${aq.LOOK_FOR_USE}"`);
     expect(t).toContain("Quick questions, on the application form (up to 8)");
     expect(t).toContain("Written questions, asked in the chat (up to 5)");
     expect(t).toContain("1. Question");

@@ -199,6 +199,7 @@ schedulePages.get("/c/schedule/:token", async (c) => {
   const error = c.req.query("error");
   return c.html(
     <Layout title={`Pick a time: ${b.iv.title} at ${b.company.name}`} extraCss={SCHEDULE_CSS}>
+      {/* Kept through the fewer-words pass (23 October 2026): the only words on the page that say which employer and job this is. */}
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>Pick a time for your {b.iv.title.toLowerCase()}</h1>
       <p class="lead">{b.iv.durationMinutes} minutes, {b.iv.format.replace("_", " ")}{b.participants.length ? ` with ${b.participants.map((p) => p.firstName).join(" and ")}` : ""}. Times are shown in <strong>{tz.replace(/_/g, " ")}</strong>.</p>
@@ -347,6 +348,7 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
   const missing = c.req.query("error") === "cancel";
   return c.html(
     <Layout title={`Confirmed: ${b.iv.title} at ${b.company.name}`} extraCss={SCHEDULE_CSS}>
+      {/* The employer and job, said nowhere else on the page (kept, as on the page that picks the time). */}
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>You're confirmed</h1>
       <div class="card status">
@@ -525,7 +527,6 @@ schedulePages.get("/c/schedule/:token/cancelled", async (c) => {
         : promise === "team" ? <p>We let {company}'s team know you would like new times. Someone from the team will be in touch about them.</p>
         : promise === "not_interested" ? <p>We let {company}'s team know you are no longer interested in this interview. Your application stays open.{b.closed ? null : <span> To withdraw it, open your application page from our emails, or <a href="/c/link-request">get your link by email</a>.</span>}</p>
         : <p>We let {company}'s team know. The hiring team will be in touch.</p>}
-      <p>If anything changes, reply to any of our emails.</p>
       <p class="notice">Reply to any of our emails with HUMAN to reach a person.</p>
     </Layout>,
   );

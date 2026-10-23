@@ -187,7 +187,9 @@ describe("the customers list", () => {
     const low = render(qc(), Customers("show=low"));
     expect(text(low)).toContain("AI interviews running low");
     expect(text(low)).toContain("Bright Dental : 80% of AI interviews used (122 of 150), since");
-    expect(text(low)).toContain("Talk with each about topping up. Nothing is refused:");
+    // the one thing to do stays in view; the rule behind it folds under "How this works" (founder's fewer-words rule)
+    expect(text(low)).toContain("Talk with each about topping up.");
+    expect(low).toMatch(/<details class="more[^"]*"><summary>How this works<\/summary><p[^>]*>Nothing is refused: applications are still accepted/);
     expect(from(low, '<section class="table-wrap"')).not.toContain("Avon Dental");
 
     const quiet = from(render(qc(), Customers("show=quiet")), '<section class="table-wrap"');
@@ -256,7 +258,8 @@ describe("the customer drawer", () => {
     for (const tab of ["Overview", "ITS check", "Plan", "How people apply", "Report"]) expect(html).toContain(`data-label="${tab}"`);
     expect(html).toMatch(/id="customer-drawer-tab-overview" class="tab" aria-selected="true"/);
     const words = text(html);
-    expect(words).toContain("dental · 20-49 employees · signed up");
+    // the company's facts, said once in the drawer's header; a missing website is said too (the ITS check looks at it)
+    expect(words).toContain("dental · 20-49 employees · no website given · signed up");
     // AI cost in plain money, the exact figure on hover
     expect(html).toContain('<span title="$0.0400">$0.04</span> in all');
     // the recruiter requests this month and in all, and the billing chip past the plan's number (Q33)
@@ -273,6 +276,8 @@ describe("the customer drawer", () => {
     expect(words).toContain("Job boards Not confirmed yet");
     expect(words).toContain("Messages held None");
     expect(words).toContain("See the report");
+    // the facts are the kit's glance rows
+    expect(html).toContain('<dl class="glance">');
   });
 
   it("opens a waiting company on its ITS check, the old sheet's words unchanged", () => {
@@ -285,6 +290,12 @@ describe("the customer drawer", () => {
     expect(words).toContain("2 messages to candidates are held and will go out when you confirm.");
     expect(html).toContain('<label for="co-check-why">How you checked the company</label>');
     expect(words).toContain("ITS can sign in to the job boards");
+    // the company's facts are the drawer's header, not said again in "The company" (founder's fewer-words rule)
+    expect(html).toMatch(/<p class="drawer-sub">[^<]*no website given[^<]*<\/p>/);
+    expect(html.split("no website given")).toHaveLength(2);
+    expect(words).toContain("Not confirmed yet: its careers page, job pages and Google listing are offline");
+    // when to record job-board access folds under "How this works"
+    expect(html).toMatch(/<summary>How this works<\/summary><p[^>]*>The owner adds the ITS recruiter as a user/);
   });
 
   it("holds the plan and how people apply on their own tabs", () => {
@@ -307,6 +318,11 @@ describe("the customer drawer", () => {
     expect(html).toMatch(/<td>Dental Hygienist<\/td><td><span class="pill good sm">.*?open<\/span><\/td><td class="num">3<\/td><td class="num">2<\/td><td class="num">0<\/td>/);
     expect(html).toContain('<div class="daybars" role="img"');
     expect(html.match(/<div class="stat-row">/g)).toHaveLength(2);
+    // what the figures mean ("typical", response time) is the role page's closed disclosure, here too
+    expect(html).toMatch(/<details class="more"><summary>What these figures mean<\/summary>/);
+    expect(html).not.toMatch(/<details class="more" open/);
+    expect(text(html)).toContain("Response time is clock hours from your request to a recruiter picking it up");
+    expect(text(html)).toContain("Counts and days only; no candidate is named here.");
   });
 
   it("S7-1: the Overview says whether applicants see their match score (on unless ITS turned it off), and How people apply holds the switch with its reason", async () => {
@@ -322,6 +338,10 @@ describe("the customer drawer", () => {
     expect(words).toContain("Applicants' match score");
     expect(words).toContain("Other requirements fold into one line; the team's private notes never show.");
     expect(words).toContain("A lawyer reviews this before it is used with real applicants in New York City, Illinois, California or Colorado.");
+    // the legal review stays in view; what applicants see folds under "How this works"
+    expect(apply.indexOf("A lawyer reviews this")).toBeGreaterThan(-1);
+    expect(apply.indexOf("A lawyer reviews this")).toBeLessThan(apply.indexOf("<summary>How this works</summary>"));
+    expect(apply).toMatch(/<summary>How this works<\/summary><p[^>]*>After sending, each applicant of (<!-- -->)?Avon Dental/);
     expect(words).toContain("by Ada Admin: Waiting for counsel");
     expect(apply).toContain('aria-label="Applicants&#x27; match score"');
     // no reason box until the choice changes
@@ -396,16 +416,23 @@ describe("the Trial plan on the console (founder decision L-02 B)", () => {
   it("the list's plan cell says when each trial ends, and flags one that has ended", () => {
     const table = from(render(qc(), Customers()), '<section class="table-wrap"');
     const words = text(table);
-    expect(words).toContain("Sunrise Dental dental · 20-49 Confirmed Trial · Trial ended Oct 15, paused Trial ended");
-    expect(words).toContain("Maple Dental dental · 20-49 Confirmed Trial · Trial ends Oct 31");
+    // the plan's standing is left out when it only repeats the plan ("Trial", never "Trial · Trial")
+    expect(words).not.toContain("Trial · Trial");
+    expect(words).toContain("Sunrise Dental dental · 20-49 Confirmed Trial ended Oct 15, paused");
+    expect(words).toContain("Maple Dental dental · 20-49 Confirmed Trial ends Oct 31");
     expect(words).toContain("starts at the ITS check");
-    // the caution chip on the one that ended only
-    expect(table.match(/>Trial ended</g)).toHaveLength(1);
+    // the one that ended says so once, as a caution chip with its date (no second "Trial ended" chip repeating the line)
+    expect(table.match(/<span class="chip caution">ended Oct 15, paused<\/span>/g)).toHaveLength(1);
+    expect(table).not.toContain(">Trial ended<");
   });
 
   it("the Overview's Plan fact adds the trial, the people in use and each extension with its reason", () => {
-    const words = text(render(qc(), Customers("open=co7")));
-    expect(words).toContain("Trial · Trial Change plan Trial ended Oct 15, paused 3 of 3 people (invitations not yet answered count too) Extended by 14 days on Sep 25 by Ada Admin, to Oct 15: The kick-off call moved.");
+    const html = render(qc(), Customers("open=co7"));
+    const words = text(html);
+    expect(words).toContain("Trial Change plan ended Oct 15, paused 3 of 3 people Extended by 14 days on Sep 25 by Ada Admin, to Oct 15: The kick-off call moved.");
+    expect(words).not.toContain("Trial · Trial");
+    // what the people in use count is the seats line's tooltip
+    expect(html).toContain('<div class="small muted" title="Invitations not yet answered count too.">3 of 3 people</div>');
   });
 
   it("the Plan tab offers Extend the trial only for a Trial customer whose 30 days have started", () => {
@@ -414,6 +441,9 @@ describe("the Trial plan on the console (founder decision L-02 B)", () => {
     expect(words).toContain("Extend the trial The trial ended on October 15: new applications, new jobs and new AI interviews are paused. An extension counts from the later of the end and today.");
     expect(html).toContain('<input id="trial-days" class="input" type="number" inputMode="numeric" min="1" max="90" step="1" value="14"/>');
     expect(html).toContain('<label for="trial-why">Why (required, kept with the change)</label>');
+    // the card says once that the owners see the reason; the field's hint keeps only the rule
+    expect(words).toContain("The owners are told, and they see your reason in their activity history.");
+    expect(html).toContain('<span class="hint">At least 5 characters.</span>');
     // no reason yet: nothing to confirm
     expect(html).toContain('<button type="button" class="btn primary" disabled="">Extend the trial</button>');
     expect(text(render(qc(), Customers("open=co8&tab=plan")))).toContain("The trial ends on October 31.");
@@ -430,7 +460,7 @@ describe("the Trial plan on the console (founder decision L-02 B)", () => {
     expect(trialExtendedTo({ endsAt: "2026-10-15T19:00:00.000Z" }, 14, Date.parse("2026-10-20T00:00:00.000Z"))).toBe("2026-11-03T00:00:00.000Z");
     expect([0, 1, 90, 91, 1.5].map(extensionDaysOk)).toEqual([false, true, true, false, false]);
     expect(planChangedToast("Sunrise Dental", "Growth", true)).toEqual({ title: "Sunrise Dental is on Growth now.", detail: "The trial has ended; new applications are open again. The new limits apply at once. This month's usage stays; the reset date does not move." });
-    expect(seatsWords({ used: 2, limit: 3 })).toBe("2 of 3 people (invitations not yet answered count too)");
+    expect(seatsWords({ used: 2, limit: 3 })).toBe("2 of 3 people");
     expect(extensionLines(null)).toEqual([]);
   });
 });

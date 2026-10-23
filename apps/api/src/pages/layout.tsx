@@ -282,9 +282,8 @@ ul.checks .icon { margin-top: 4px; color: var(--primary); }
 .site { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; font-weight: 600; }
 .apply-panel { position: sticky; top: 24px; z-index: 5; }
 .apply-card { margin: 0; padding: 24px; border-radius: var(--r-panel); }
-.apply-card .btn { display: flex; width: 100%; margin-top: 18px; }
-.apply-card .apply-by { margin-top: 6px; font-size: 14.5px; }
-.apply-title { margin: 0 0 4px; color: var(--ink); font: 700 20px/1.25 var(--display); letter-spacing: -0.02em; }
+.apply-card .btn { display: flex; width: 100%; margin: 0; }
+.apply-card .apply-by { margin-bottom: 14px; font-size: 14.5px; }
 .points { display: grid; gap: 12px; margin: 20px 0 0; padding: 18px 0 0; border-top: 1px solid var(--line); list-style: none; }
 .points li { display: flex; align-items: flex-start; gap: 12px; color: var(--ink-2); font-size: 14.5px; line-height: 1.45; }
 .points .icon { width: 28px; height: 28px; padding: 6px; border-radius: 8px; background: var(--tint-2); color: var(--primary); }
@@ -301,7 +300,6 @@ ul.checks .icon { margin-top: 4px; color: var(--primary); }
   .apply-panel { top: auto; bottom: 12px; }
   .apply-panel .apply-card { padding: 6px; border-color: var(--line-2); border-radius: var(--r-pill); box-shadow: var(--sh-pop); }
   .apply-card > p, .apply-card > .points { display: none; }
-  .apply-card .btn { margin: 0; }
 }
 
 /* The signed-in preview's note (plan D1) */

@@ -17,7 +17,7 @@ import { type Compose, HistoryTab, MessagesTab, OverviewTab, ResumeTab, ScreenTa
 
 /**
  * The candidate panel (plan A10; founder decisions B3 and B6; Wave S1): a drawer with a sticky header (who, when they
- * applied, the role, Email, the stage button, More, next and previous), the decisions waiting for you under it (each one
+ * applied, the score, Email, the stage button, More, next and previous), the decisions waiting for you under it (each one
  * line and its buttons, the rest behind "Why"), then the sections, the Overview first. The page keeps
  * the panel's place in the address (`?open=<id>&tab=…`). Moving to the next person never carries a half-filled form
  * over (everything under the header is keyed by the person), and unsent text is never thrown away without asking.
@@ -26,7 +26,11 @@ import { type Compose, HistoryTab, MessagesTab, OverviewTab, ResumeTab, ScreenTa
 export type PanelProps = {
   id: string;
   roleId: string;
-  roleTitle: string | null;
+  /**
+   * The job's title. Not shown since 23 Oct 2026 (founder: cut labels that repeat what is on screen): the panel opens
+   * only over that job's own Candidates page, whose title names it. Optional, so callers may stop passing it.
+   */
+  roleTitle?: string | null;
   tab: PanelTab;
   onTab: (tab: PanelTab) => void;
   step: PanelStep | null;
@@ -164,7 +168,7 @@ export function CandidatePanel(props: PanelProps) {
     if (choice === "invite_screen") act.mutate({ action: "invite_screen" });
     if (choice === "record_outcome") props.onStep("outcome");
   };
-  const applied = a ? `Applied ${new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}${props.roleTitle ? ` · ${props.roleTitle}` : ""}` : undefined;
+  const applied = a ? `Applied ${new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : undefined;
   // The match score stays in sight on every section (founder decision B2); its breakdown is on the Overview. A score
   // with no AI interview in it says so beside it on every section too (R20-9), the full label on hover.
   const scored = a ? matchOf(a) ?? null : null;

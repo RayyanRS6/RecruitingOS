@@ -86,9 +86,9 @@ function detail(over: Record<string, unknown> = {}) {
   };
 }
 
-function panel(d: ReturnType<typeof detail>, tab: "overview" | "screen") {
+function panel(d: ReturnType<typeof detail>, tab: "overview" | "screen", me: typeof owner = owner) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
-  qc.setQueryData(["me"], owner);
+  qc.setQueryData(["me"], me);
   qc.setQueryData(["roles"], [{ id: "r1", title: "Dental Hygienist", status: "open", openedAt: at, counts: { total: 1 }, needsYou: 1, daysOpen: 7 }]);
   qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0 } });
   qc.setQueryData(["company"], { settings: { verifiedAt: at }, planKey: "starter", usage: {} });
@@ -103,6 +103,8 @@ describe("the company's questions on the AI interview tab (Wave S7)", () => {
     expect(html).toMatch(/<section class="match-section[^"]*" aria-label="Answers to your questions">/);
     expect(html).toContain("<h3>Answers to your questions</h3>");
     expect(words).toContain("2 of 3 answered (1 partly).");
+    // the count stands alone: each answer says where its words come from, and its part of the chat is its own disclosure
+    expect(words).not.toContain("Each answer is drafted from their own replies");
     // in the write-up's order, inside one numbered list
     const list = html.slice(html.indexOf("<ol"), html.indexOf("</ol>"));
     expect(list.indexOf("Tell us about a time you calmed a nervous patient.")).toBeLessThan(list.indexOf("Why this practice?"));
@@ -160,5 +162,14 @@ describe("the company's questions on the AI interview tab (Wave S7)", () => {
     expect(old).not.toContain("Answers to your questions");
     expect(old).not.toContain("Must-haves the résumé did not show");
     expect(old).toContain("Their answers When could you start? Monday");
+  });
+});
+
+describe("a recruiter's notes from a call on the AI interview tab (plan E3)", () => {
+  it("closed, it is the one button, not a card titled the same over it", () => {
+    const recruiter = { ...owner, memberships: [{ ...owner.memberships[0], role: "recruiter" }] };
+    const html = panel(detail({ stage: "screening", screens: [{ ...screen, status: "in_progress", completedAt: null }] }), "screen", recruiter);
+    expect(html).toMatch(/Add notes from a call<\/button>/);
+    expect(html).not.toContain("<h2>Notes from a call</h2>");
   });
 });

@@ -179,6 +179,9 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(html).not.toContain('name="noResume"');
     // every one of the four boxes is named by its own question and described by its hint, inside one named group (polish list)
     expect(html).toContain('<fieldset aria-describedby="no-resume-note"><legend class="sr-only">Four short questions about your work, instead of a resume</legend>');
+    // the group's note says what is enough; "no cover letter" is said once, in the lead (fewer words, 23 October 2026)
+    expect(html).toContain('<p class="meta" id="no-resume-note">Answer what you can; one answer is enough to apply.</p>');
+    expect(html).not.toContain("Nobody expects a cover letter.");
     for (const [key, label] of [["recentWork", "Your most recent job or work"], ["dayToDay", "What you did day to day"], ["skills", "Skills, licenses or tools that fit this job"], ["lookingFor", "What you are looking for in your next job"]]) {
       expect(html).toContain(`<label id="nr_${key}-label" for="nr_${key}">${label}</label><textarea id="nr_${key}" name="nr_${key}" rows="3" maxlength="1000" aria-labelledby="nr_${key}-label" aria-describedby="nr_${key}-hint">`);
       expect(html).toContain(`<small id="nr_${key}-hint">`);

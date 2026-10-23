@@ -23,7 +23,7 @@ import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, new
 import { InlineUndo } from "../components/InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "../components/use-undo";
 import { waitingOnCandidateRow } from "../hiring";
-import { WORDING_HINT, bulkUndoMillis, undoable } from "../telling";
+import { bulkUndoMillis, undoable } from "../telling";
 import { AI_INTERVIEW_CHIPS, ORDERS, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, aiInterviewAlert, aiInterviewCounts, appliedWhen, applyView, defaultView, emptyText, readingCounts, resumeOnlyChip, rowChips, scoreTitle, stripParts, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type RowChip, type TalentView } from "../talent-list";
 import { CandidatePanel } from "./candidate-panel/CandidatePanel";
 import { STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
@@ -54,8 +54,11 @@ type ActiveFilter = { id: string; label: string; remove: () => void };
 /** The words of a Match choice, as its dropdown chip shows them. */
 const readingLabel = (id: ReadingFilter) => READING_FILTERS.find((f) => f.id === id)?.label ?? READING_FILTERS[0].label;
 
-/** What an empty list says when the filters in force leave nobody (Wave S6); "Clear filters" sits under it. */
-const NO_MATCH = { title: "Nothing matches these filters", body: "Nobody here fits every filter that is on. Remove one above, or clear them all." };
+/**
+ * What an empty list says when the filters in force leave nobody (Wave S6): the title alone, since "Clear filters" sits
+ * under it and each filter's chip above removes it (founder, 23 Oct 2026: no line repeating them).
+ */
+const NO_MATCH: { title: string; body?: string } = { title: "Nothing matches these filters" };
 
 /** The page: the job's header (its own bottom margin trimmed, as on the job page), then each part 20px apart. */
 const PAGE = "stack gap-5 [&>.page-header]:mb-1";
@@ -351,7 +354,6 @@ export function People() {
             {/* The stages nobody is at, one click away with their counts (Wave S1). */}
             {/* A stage picked here moves onto the strip (and "More stages" may go): focus follows it to its tab. */}
             {strip.more.length ? <Menu label="More stages" ariaLabel="More stages" heading="Stages with nobody in them" items={strip.more.map((s) => ({ id: s.id, label: s.label, hint: String(s.count) }))} onSelect={(id) => { pickStage(id as TalentView["stage"]); requestAnimationFrame(() => document.getElementById(`talent-strip-tab-${id}`)?.focus()); }} /> : null}
-            {/* Beside the strip, not in it (plan E6): the people still in the visit that sent their application. */}
           </div>
           {/* The filters as pills, the search as a rounded field, Match and the order as dropdown pills on the right. */}
           <div className="flex flex-wrap items-center gap-2">
@@ -615,8 +617,9 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
         </div>
       ) : (
         <div className="stack gap-5">
-          <p className="small text-ink-2">Each person gets their own message, with their name. Untick anyone you will tell yourself.</p>
-          <Field label="Wording" htmlFor="bulk-wording" hint={wording === "each" ? "Each person gets the wording that fits their decision: after an interview, position filled, or the standard one." : WORDING_HINT[wording]}>
+          {/* kept: nobody sees the others' names or addresses. What a wording says is the preview below, so no hint under the field. */}
+          <p className="small text-ink-2">Each person gets their own message, with their name.</p>
+          <Field label="Wording" htmlFor="bulk-wording">
             <select id="bulk-wording" className="select" value={wording} onChange={(e) => setWording(e.target.value as DecisionWording | "each")}>
               <option value="each">The suggested wording for each person</option>
               {BULK_WORDINGS.map((w) => <option key={w} value={w}>{DECISION_WORDING_LABEL[w]} for everyone</option>)}
@@ -645,7 +648,6 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
           {policy === "not_sent" ? <Alert tone="caution">Under your settings no decision messages are sent. Tell each person yourself, then record it on their page.</Alert> : null}
           {policy === "needs_approval" ? <p className="small muted">Under your settings each message waits for approval before it goes out.</p> : null}
           {policy === "sends" && preview.data?.undoSeconds ? <p className="small muted">Each message waits {preview.data.undoSeconds} seconds before it goes, so you can undo the Send.</p> : null}
-          <p className="small muted">To add a personal line, send from that person's own page.</p>
           <Button variant="primary" icon="send" disabled={!picked.length || policy === "not_sent"} loading={send.isPending} onClick={() => send.mutate()}>{policy === "needs_approval" ? `Send ${picked.length} for approval` : `Send to ${picked.length} ${picked.length === 1 ? "person" : "people"}`}</Button>
         </div>
       )}

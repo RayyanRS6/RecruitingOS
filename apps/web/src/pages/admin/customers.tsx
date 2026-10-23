@@ -14,12 +14,15 @@ import { CustomerReportPanel } from "../AdminCustomerReport";
 import { type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
 import { activityWords, exactMoney, exactWhen, money, planStatusWords, planWords, trialWords, whenWords } from "./admin-words";
 import type { TrialStanding, TrialTerm } from "@ros/contracts";
-import { GLANCE, Outcomes } from "./outcomes";
+import { Outcomes } from "./outcomes";
 
 /*
  * The console's Customers section (redesign spec 3.2, Wave S6): every customer in a five-column list with filter pills,
  * a search box and a Sort chip, and one drawer per customer (`?open=<id>&tab=…`) whose tabs hold the ITS check, the
  * plan, how its people apply and its report. The hiring outcomes are the section's second part.
+ * Fewer words (founder, 23 Oct 2026): a fact is said once (the drawer's header carries the company's facts, a plan's
+ * standing is left out when it only repeats the plan), and an explanation staff need folds under "How this works";
+ * what the law asks for, what a change does to candidates and what the customer will see stay in view.
  */
 
 export const CUSTOMER_SORT = { company: (c: CustomerRow) => c.name, applicants: (c: CustomerRow) => c.applications, cost: (c: CustomerRow) => c.aiCostUsd, activity: (c: CustomerRow) => (c.lastActivityAt ? Date.parse(c.lastActivityAt) : null) };
@@ -152,17 +155,38 @@ export function waitingWords(createdAt: string, now: number = Date.now()): strin
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/**
+ * A customer's plan and where it stands with it: "Core · Design Partner pilot", "Starter · Active", and just "Trial" when
+ * the standing only repeats the plan's name. `quietActive` leaves "Active" out too (the list, where it is the usual case).
+ */
+export function planLine(c: Pick<CustomerRow, "planKey" | "status">, quietActive = false): string {
+  const plan = planWords(c.planKey);
+  const standing = planStatusWords(c.status);
+  return !standing || standing === plan || (quietActive && c.status === "active") ? plan : `${plan} · ${standing}`;
+}
+
+/**
+ * Where a Trial customer's 30 days stand, under its plan: a quiet line ("ends Oct 31", "starts at the ITS check"), or,
+ * once they ended and new applications are paused, the same words as a caution chip, so the warning and its date are one
+ * thing on screen instead of a chip repeating the line.
+ */
+function TrialStandingLine({ c }: { c: Pick<CustomerRow, "trial" | "timezone"> }) {
+  if (!c.trial) return null;
+  const words = trialWords(c.trial, c.timezone);
+  return c.trial.ended ? <Chip tone="caution">{words}</Chip> : <div className="small muted">{words}</div>;
+}
+
 /** A row's first line: 14 px in ink (redesign spec 3.3); its second lines are `.small.muted` (13 px, --ink-3). */
 const LINE = "text-sm text-ink";
 /** The company's name, which opens its drawer: a plain button that reads as the row's title (40 px tall under a finger). */
 const NAME = "inline-flex items-center border-0 bg-transparent p-0 text-left font-sans text-sm leading-snug font-semibold text-ink break-words transition-colors duration-150 ease-soft hover:text-primary hover:underline pointer-coarse:min-h-10";
-/** The cells' stacked lines: the first line, then the quieter ones and the chips, each on its own line. */
+/** Stacked lines in a table cell or a glance value: the first line, then the quieter ones and the chips, each on its own line. */
 const CELL = "grid justify-items-start gap-1";
 /** The fields and buttons under a card's explanation; a Segmented keeps its own width instead of stretching across. */
 const FORM = "mt-4 grid gap-3 [&>.segmented]:justify-self-start";
 /** A question to confirm (inside a caution alert), or a line with its button: the words, and the buttons on the right. */
 const CONFIRM = "flex flex-wrap items-center justify-between gap-x-4 gap-y-2";
-/** A card that only tells (the company's facts, how people apply): lavender-tinted, so the white cards that act stand out. */
+/** A card that only tells (where the company stands, how people apply): lavender-tinted, so the white cards that act stand out. */
 const TINTED = "border-line-tint bg-tint shadow-none";
 
 /**
@@ -235,6 +259,8 @@ export function Customers() {
         <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto">
           <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-none [&>input]:rounded-full [&>input]:pl-10">
             <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-ink-3" />
+            {/* `talent-search` is unstyled, kept only because admin-customers-ui.test.ts pins this class string; so the
+                pill shape and the icon's room come from the wrapper's [&>input] variants, not from utilities here */}
             <input className="input talent-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
           </div>
           <Menu label={sort ? `Sort: ${sortChoice(sort.key).label}` : "Sort"} heading="Sort customers" align="end" currentLabel="Now" items={CUSTOMER_SORT_CHOICES.map((c) => ({ id: c.id, label: c.label, current: sort?.key === c.id }))} onSelect={(id) => sortBy(id as CustomerSortKey, "chip")} />
@@ -258,7 +284,12 @@ export function Customers() {
               return a ? <li key={c.id}><strong>{c.name}</strong>: {allowanceChip(a)}, since {new Date(a.since).toLocaleDateString()}</li> : null;
             })}
           </ul>
-          <p className="mt-3 text-sm text-ink-2">Talk with each about topping up. Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the chat link by email when more are added or the month starts again. The owners were told too.</p>
+          {/* the one thing to do stays in view; the rule behind it folds */}
+          <p className="mt-3 text-sm text-ink-2">Talk with each about topping up.</p>
+          <details className="more mt-2">
+            <summary>How this works</summary>
+            <p className="small text-ink-2">Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the chat link by email when more are added or the month starts again. The owners were told too.</p>
+          </details>
         </Card>
       ) : null}
       {q.error ? <ErrorState message="Could not load customers." onRetry={() => q.refetch()} /> : (
@@ -304,10 +335,9 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
       </td>
       <td>
         <div className={CELL}>
-          <div className={LINE}>{planWords(c.planKey)}{c.status !== "active" ? ` · ${planStatusWords(c.status)}` : ""}</div>
+          <div className={LINE}>{planLine(c, true)}</div>
           {/* The Trial plan's 30 days (L-02 B): when they end, or that they ended and new applications are paused. */}
-          {c.trial ? <div className="small muted">{trialWords(c.trial, c.timezone)}</div> : null}
-          {c.trial?.ended ? <Chip tone="caution">Trial ended</Chip> : null}
+          <TrialStandingLine c={c} />
           {usage ? <div className="small muted">{usage.used}{usage.limit !== null ? ` of ${usage.limit}` : ""} chats this month</div> : null}
           {low ? <span title={allowanceChip(low)}><Chip tone="caution">{low.level === "used_up" ? "Used up" : "Running low"}</Chip></span> : null}
         </div>
@@ -328,11 +358,13 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
 
 /**
  * One customer (redesign spec 3.2): a 640 px drawer named by the company, its facts under the name, and five tabs: the
- * Overview, then the bodies of the four sheets the console had before (ITS check, Plan, How people apply, Report),
- * unchanged in what they do and say. Every "Change" on the Overview switches to its tab.
+ * Overview, then the bodies of the four sheets the console had before (ITS check, Plan, How people apply, Report), with
+ * the same actions; their words follow the fewer-words rule (23 Oct 2026). Every "Change" on the Overview switches to
+ * its tab. The header is the one place the company's facts are said, so a missing website is said there too ("no
+ * website given"): the ITS check asks staff to look at the website.
  */
 function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: CustomerRow; low: AllowanceAlert | undefined; tab: CustomerTab; onTab: (tab: CustomerTab) => void; onClose: () => void }) {
-  const sub = [company.vertical, `${company.sizeBand} employees`, company.settings.website || "", `signed up ${whenWords(company.createdAt)}`].filter(Boolean).join(" · ");
+  const sub = [company.vertical, `${company.sizeBand} employees`, company.settings.website || "no website given", `signed up ${whenWords(company.createdAt)}`].filter(Boolean).join(" · ");
   // The button pressed on the Overview goes with it: focus moves to the tab it opened.
   const switchTo = (next: CustomerTab) => {
     onTab(next);
@@ -358,10 +390,10 @@ function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: Custom
   );
 }
 
-/** A fact with its button on the right. */
+/** A fact with its button on the right (the whole width of its value, also inside a CELL stack). */
 function Fact(props: { children: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+    <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 justify-self-stretch">
       <span className="min-w-0">{props.children}</span>
       {props.action}
     </div>
@@ -379,22 +411,27 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
   const asks = c.recruiterAsks;
   return (
     <div className="stack gap-5">
-      {/* "At a glance" (screenshot 7): one card of rows, each label beside its fact, a hairline between them, outlined buttons */}
-      <Card className="p-5 sm:px-6">
-        <dl className={GLANCE}>
+      {/*
+        "At a glance" (screenshot 7): one card of the kit's glance rows, each label beside its fact (over it on a phone), a
+        hairline between them, outlined buttons. A value with more than one line stacks them (CELL), so a chip after a line
+        sits on its own line with a little room.
+      */}
+      <Card>
+        <dl className="glance">
           <dt>ITS check</dt>
           <dd>
             <Fact action={<Button size="sm" variant={verified ? "secondary" : "primary"} ariaLabel={verified ? "Change the ITS check" : undefined} onClick={() => onTab("check")}>{verified ? "Change" : "Confirm"}</Button>}>
-              {verified ? `Confirmed ${exactWhen(c.verifiedAt)}${c.verifiedBy?.name ? ` by ${c.verifiedBy.name}` : ""}` : `${waitingWords(c.createdAt)} (signed up ${exactWhen(c.createdAt)})`}
+              {/* the sign-up date is in the drawer's header; its exact time is the tooltip */}
+              {verified ? `Confirmed ${exactWhen(c.verifiedAt)}${c.verifiedBy?.name ? ` by ${c.verifiedBy.name}` : ""}` : <span title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt)}</span>}
             </Fact>
           </dd>
           <dt>Job boards</dt>
           <dd>{c.jobBoardsConfirmedAt ? "ITS can sign in" : "Not confirmed yet"}</dd>
           <dt>Plan</dt>
-          <dd>
-            <Fact action={<Button size="sm" variant="secondary" onClick={() => onTab("plan")}>Change plan</Button>}>{planWords(c.planKey)} · {planStatusWords(c.status)}</Fact>
-            {c.trial ? <div className="small muted">Trial {trialWords(c.trial, c.timezone)}</div> : null}
-            {c.seats && c.seats.limit !== null ? <div className="small muted">{seatsWords(c.seats)}</div> : null}
+          <dd className={CELL}>
+            <Fact action={<Button size="sm" variant="secondary" onClick={() => onTab("plan")}>Change plan</Button>}>{planLine(c)}</Fact>
+            <TrialStandingLine c={c} />
+            {c.seats && c.seats.limit !== null ? <div className="small muted" title={SEATS_NOTE}>{seatsWords(c.seats)}</div> : null}
             {extensionLines(c.trialTerm, c.timezone).map((line) => <div key={line.key} className="small muted">{line.text}</div>)}
             {c.screeningConversations ? <div className="small muted">{screeningLine(c.screeningConversations)}</div> : null}
             {low ? <Chip tone="caution">{allowanceChip(low)}</Chip> : null}
@@ -410,7 +447,7 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
           <dt>Jobs</dt>
           <dd>{plural(c.roles, "job", "jobs")} · {plural(c.applications, "applicant", "applicants")}</dd>
           <dt>Recruiter requests</dt>
-          <dd>
+          <dd className={CELL}>
             <div>{asks ? `${asks.used}${asks.limit !== null ? ` of ${asks.limit}` : ""} this month` : "None recorded"} · {c.escalations} in all</div>
             {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
             {c.recruiterAsks?.over ? <Chip tone="caution">{RECRUITER_ASKS_OVER_CHIP}</Chip> : null}
@@ -450,10 +487,13 @@ export function planChangedToast(company: string, plan: string, endedTrial = fal
   return { title: `${company} is on ${plan} now.`, detail: endedTrial ? `The trial has ended; new applications are open again. ${limits}` : limits };
 }
 
-/** "2 of 3 people (invitations not yet answered count too)": the Trial plan's people (founder decision L-02 B). */
+/** "2 of 3 people": the Trial plan's people (founder decision L-02 B); what counts is SEATS_NOTE, the line's tooltip. */
 export function seatsWords(seats: { used: number; limit: number | null }): string {
-  return `${seats.used}${seats.limit !== null ? ` of ${seats.limit}` : ""} people (invitations not yet answered count too)`;
+  return `${seats.used}${seats.limit !== null ? ` of ${seats.limit}` : ""} people`;
 }
+
+/** Why the people in use can be more than the team shows: the tooltip on the seats line. */
+export const SEATS_NOTE = "Invitations not yet answered count too.";
 
 /** Each extension of a trial, oldest first: "Extended by 14 days on Oct 20 by Sam, to Nov 13: the owner's kick-off moved." */
 export function extensionLines(term: TrialTerm | null | undefined, timeZone?: string | null): Array<{ key: string; text: string }> {
@@ -568,7 +608,8 @@ function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: T
       <p className="small muted">{trial.ended ? `The trial ended on ${trialDate(trial.endsAt ?? "", company.timezone)}: new applications, new jobs and new AI interviews are paused.` : `The trial ends on ${trialDate(trial.endsAt ?? "", company.timezone)}.`} An extension counts from the later of the end and today. The owners are told, and they see your reason in their activity history.</p>
       <div className={FORM}>
         <Field label="Days to add" htmlFor="trial-days" hint={`From 1 to ${TRIAL_EXTENSION_MAX_DAYS}.`}><input id="trial-days" className="input" type="number" inputMode="numeric" min={1} max={TRIAL_EXTENSION_MAX_DAYS} step={1} value={days} onChange={(e) => { setDays(e.target.value); setConfirming(false); }} /></Field>
-        <Field label="Why (required, kept with the change)" htmlFor="trial-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="trial-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
+        {/* the card's line above already says the owners see the reason, so the hint keeps only the rule */}
+        <Field label="Why (required, kept with the change)" htmlFor="trial-why" hint={`At least ${REASON_MIN} characters.`}><input id="trial-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
         {confirming ? (
           <Alert tone="caution"><div className={CONFIRM}><span>{trialExtensionQuestion(company.name, count, to, company.timezone)}</span><span className="row"><Button size="sm" variant="primary" loading={extend.isPending} onClick={() => extend.mutate()}>Yes, extend it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
         ) : <div className="row"><Button variant="primary" disabled={!ready} onClick={() => setConfirming(true)}>Extend the trial</Button></div>}
@@ -638,8 +679,13 @@ function CandidateScorePanel({ company }: { company: CustomerRow }) {
   });
   return (
     <Card title="Applicants' match score">
-      <p className="small muted">After sending, each applicant of {company.name} sees their match score on their application record: the number, and how it breaks down against the requirements on the job page. Other requirements fold into one line; the team's private notes never show. A lawyer reviews this before it is used with real applicants in New York City, Illinois, California or Colorado.</p>
+      {/* the legal review (counsel items 1 and 21) stays in view; what applicants see folds under "How this works" */}
+      <p className="small muted">A lawyer reviews this before it is used with real applicants in New York City, Illinois, California or Colorado.</p>
       {setBy ? <p className="small muted mt-1.5">Last set {exactWhen(setBy.at)}{setBy.by.name ? ` by ${setBy.by.name}` : ""}: {setBy.reason}</p> : null}
+      <details className="more mt-3">
+        <summary>How this works</summary>
+        <p className="small text-ink-2">After sending, each applicant of {company.name} sees their match score on their application record: the number, and how it breaks down against the requirements on the job page. Other requirements fold into one line; the team's private notes never show.</p>
+      </details>
       <div className={FORM}>
         <Segmented value={choice} onChange={setChoice} ariaLabel="Applicants' match score" options={[{ value: "shown", label: "Show it" }, { value: "hidden", label: "Don't show it" }]} />
         {choice !== current ? (
@@ -686,11 +732,13 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
   });
   return (
     <div className="stack gap-4">
-      {/* what is known about the company: a tinted card; the cards that act on it stay white */}
+      {/*
+        where the company stands: a tinted card; the cards that act on it stay white. Its facts (kind, size, website, when
+        it signed up) are the drawer's header, in view above every tab, so they are not said again here.
+      */}
       <Card title="The company" className={TINTED}>
         <div className="grid gap-1.5">
-          <p className="small">{company.name} · {company.vertical} · {company.sizeBand} employees · {company.settings.website || "no website given"} · signed up {new Date(company.createdAt).toLocaleDateString()}</p>
-          <p className="small muted">{verified ? `Confirmed ${new Date(company.verifiedAt ?? "").toLocaleString()}${company.verifiedBy?.name ? ` by ${company.verifiedBy.name}` : ""}.` : "Not confirmed yet: its careers page, job pages and Google listing are offline, and its emails to candidates wait. It can draft and approve roles."}</p>
+          <p className="text-sm text-ink-2">{verified ? `Confirmed ${new Date(company.verifiedAt ?? "").toLocaleString()}${company.verifiedBy?.name ? ` by ${company.verifiedBy.name}` : ""}.` : "Not confirmed yet: its careers page, job pages and Google listing are offline, and its emails to candidates wait. It can draft and approve roles."}</p>
           {company.heldMessages && !verified ? <p className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} held and will go out when you confirm.</p> : null}
           {company.heldMessages && verified ? (
             <div className={cn(CONFIRM, "mt-1")}>
@@ -710,7 +758,11 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
         </div>
       </Card>
       <Card title="Job-board access">
-        <p className="small muted">The owner adds the ITS recruiter as a user on the company's LinkedIn, Indeed and ZipRecruiter accounts. Record here once ITS can sign in to each; it ticks the owner's getting-started step.</p>
+        {/* the button says what it records; when to press it, and what it ticks for the owner, folds */}
+        <details className="more">
+          <summary>How this works</summary>
+          <p className="small text-ink-2">The owner adds the ITS recruiter as a user on the company's LinkedIn, Indeed and ZipRecruiter accounts. Record here once ITS can sign in to each; it ticks the owner's getting-started step.</p>
+        </details>
         <div className="row mt-3">
           {company.jobBoardsConfirmedAt
             ? <><Chip tone="good">ITS can sign in</Chip><Button size="sm" variant="secondary" loading={boards.isPending} onClick={() => boards.mutate(false)}>No longer confirmed</Button></>

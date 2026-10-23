@@ -12,12 +12,21 @@ function copy(text: string, what: string) {
 }
 
 /**
- * The job's address as an input-like row (screenshot 5's fields) with Copy and Open at its end; the Share tab's "Your job
- * link" draws the same row. On a phone the address takes the first line and the buttons wrap under it, at the right.
+ * The job's address as an input-like row (screenshot 5's fields) with Copy and Open at its end, here and in the Share
+ * tab's "Your job link". On a phone the address takes the first line and the buttons wrap under it, at the right.
+ * `share-link` is a hook only: publishing-ui.test.ts finds the row by it.
  */
-export const SHARE_LINK_ROW = "share-link flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5 rounded-xl border border-line-2 bg-surface py-1.5 pr-1.5 pl-3.5 shadow-xs";
-/** The address inside that row: one line, cut short with an ellipsis (the full address is its title). */
-export const SHARE_LINK_TEXT = "min-w-0 flex-1 basis-[calc(100%-1.5rem)] truncate text-[14px] text-ink sm:basis-0";
+export function JobAddress({ url }: { url: string }) {
+  return (
+    <div className="share-link flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5 rounded-xl border border-line-2 bg-surface py-1.5 pr-1.5 pl-3.5 shadow-xs">
+      <Icon name="link" size={16} className="text-ink-3" />
+      {/* one line, cut short with an ellipsis: the full address is its title */}
+      <span className="min-w-0 flex-1 basis-[calc(100%-1.5rem)] truncate text-[14px] text-ink sm:basis-0"><code title={url}>{url}</code></span>
+      <Button size="sm" icon="copy" onClick={() => copy(url, "the job's address")}>Copy</Button>
+      <a className="btn secondary sm" href={url} target="_blank" rel="noopener noreferrer"><Icon name="external" />Open<span className="sr-only"> the job page (opens in a new tab)</span></a>
+    </div>
+  );
+}
 
 /**
  * "Share it now" (plan D8): the job's address with Copy and Open, one button per place people share (email, a text
@@ -81,14 +90,9 @@ export function ShareJob(props: { roleId: string; roleTitle: string; companyName
   };
 
   return (
-    <div className="share stack gap-4">
-      <div className={SHARE_LINK_ROW}>
-        <Icon name="link" size={16} className="text-ink-3" />
-        <span className={SHARE_LINK_TEXT}><code title={share.jobUrl}>{share.jobUrl}</code></span>
-        <Button size="sm" icon="copy" onClick={() => copy(share.jobUrl, "the job's address")}>Copy</Button>
-        <a className="btn secondary sm" href={share.jobUrl} target="_blank" rel="noopener noreferrer"><Icon name="external" />Open<span className="sr-only"> the job page (opens in a new tab)</span></a>
-      </div>
-      {/* one secondary pill per place people share */}
+    <div className="stack gap-4">
+      <JobAddress url={share.jobUrl} />
+      {/* one secondary pill per place people share; `share-buttons` is a hook only (the tests find the group by it) */}
       <fieldset className="share-buttons flex min-w-0 flex-wrap gap-2" aria-label="Share the job">
         {SHARE_BUTTONS.map((b) => {
           const link = placeOf(b.key)?.link ?? null;
@@ -101,27 +105,25 @@ export function ShareJob(props: { roleId: string; roleTitle: string; companyName
           return <Button key={b.key} size="sm" icon={b.icon} disabled={make.isPending} onClick={() => void tap(b.key)}>{b.label}</Button>;
         })}
       </fieldset>
-      <p className="small muted -mt-1">Each place gets its own link, so you see where applicants come from.</p>
       {/* Away from the Share tab (the screen after approval, an empty applicant list): the way to its LinkedIn post. A
           plain link, so the page it leaves (a dialog included) is left behind and the Share tab opens at the post. */}
       {props.compact && d.role.status === "open" ? <p className="small"><a href={linkedInPostHref(props.roleId)}>Post on LinkedIn</a></p> : null}
       {props.compact ? null : (
         <details className="more">
           <summary>The message that goes with it</summary>
-          <p className="share-text rounded-xl border border-line bg-surface-2 px-4 py-3 text-[14px] whitespace-pre-wrap wrap-anywhere text-ink">{share.text}</p>
-          <p className="small muted mt-2">You see it in your own app before anything is sent, and can change it there.</p>
+          <p className="rounded-xl border border-line bg-surface-2 px-4 py-3 text-[14px] whitespace-pre-wrap wrap-anywhere text-ink">{share.text}</p>
         </details>
       )}
       {/* the ready-made places with a link of their own, one click away (Wave S1) */}
       <details className="more">
         <summary>Links for a referral, a school or a group</summary>
-        <ul className="share-places list-card divide-y divide-line" aria-label="Places with a link of their own">
+        <ul className="list-card divide-y divide-line" aria-label="Places with a link of their own">
           {SHARE_PLACES_TO_COPY.map((place) => {
             const row = placeOf(place);
             const label = row?.label ?? place;
             return (
-              <li key={place} className="share-place grid min-w-0 gap-1.5 px-4 py-3">
-                <div className="share-place-head flex flex-wrap items-center justify-between gap-2">
+              <li key={place} className="grid min-w-0 gap-1.5 px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <strong className="small text-ink">{label}</strong>
                   {row?.link ? (
                     <span className="row">

@@ -27,8 +27,8 @@ type FailuresAnswer = { failedRuns: FailedRun[]; failedJobs: FailedJob[]; failed
 type CspReport = { id: string; mode: string; surface: string; documentPath: string; violatedDirective: string; blockedOrigin: string | null; sourceFile: string | null; count: number; lastAt: string; reviewedAt: string | null; disposition: string | null };
 type CspAnswer = { mode: string; reports: CspReport[] };
 
-/** What a part says when it has nothing in it (redesign spec 3.2). */
-export const PROBLEMS_EMPTY = "None. When something goes wrong, it shows here and on the Overview.";
+/** What a part says when it has nothing in it: one word under the part's heading (the words on screen, 23 October). */
+export const PROBLEMS_EMPTY = "None.";
 
 /**
  * An alert this administrator may not acknowledge (21 Sep, item 2): one about a platform role they changed, or one that
@@ -162,7 +162,7 @@ function ProblemRow(props: { lead?: ReactNode; title: ReactNode; at?: string | n
   );
 }
 
-/** A part with nothing in it: the one sentence, with a quiet tick. */
+/** A part with nothing in it: "None.", with a quiet tick. */
 function Empty() {
   return (
     <p className="muted mt-2 flex items-center gap-2 text-[14px]">
@@ -239,7 +239,7 @@ function FailedWorkPart() {
         <Card title={`Failed workflow runs (${failedRuns.length})`}>
           <ul className={LIST}>
             {failedRuns.map((r, i) => (
-              <ProblemRow key={r.id} index={i} lead={<Chip tone="critical">Failed</Chip>} title={<button type="button" className="btn quiet sm -my-1.5 px-2.5 text-[15px] text-ink" onClick={() => setShownRun(r)}>{workflowWords(r.workflowKey)}</button>} at={r.updatedAt} detail={[r.currentStep ? `Step: ${plainCode(r.currentStep)}` : null, r.lastError ? r.lastError.slice(0, 160) : null].filter(Boolean).join(" · ")}>
+              <ProblemRow key={r.id} index={i} lead={<Chip tone="critical">Failed</Chip>} title={<Button size="sm" variant="quiet" className="-my-1.5 px-2.5 text-[15px] text-ink" onClick={() => setShownRun(r)}>{workflowWords(r.workflowKey)}</Button>} at={r.updatedAt} detail={[r.currentStep ? `Step: ${plainCode(r.currentStep)}` : null, r.lastError ? r.lastError.slice(0, 160) : null].filter(Boolean).join(" · ")}>
                 <div className="row">
                   <Button size="sm" variant="secondary" loading={retryRun.isPending && retryRun.variables === r.id} onClick={() => retryRun.mutate(r.id)}>Retry</Button>
                 </div>
@@ -300,12 +300,12 @@ function Suppressions() {
   const release = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/email-suppressions/${id}/release`, { reason: releaseReason }, reason), onSuccess: () => { toast("Released. Email to that address is allowed again."); setReleaseReason(""); qc.invalidateQueries({ queryKey: adminKeys.suppressions }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not release.") });
   const rows = q.data ?? [];
   return (
+    // the rule for releasing one is in the reason field's own label; the source of each address is under it in the table
     <Card title={q.isLoading ? "Email addresses we must not send to" : `Email addresses we must not send to (${rows.length})`}>
-      <p className="small muted">Hard bounces, spam complaints and repeated soft bounces land here from the provider's webhooks. Release one only after confirming the address by another channel; the release is audited with your reason.</p>
-      {q.isLoading ? <div className="mt-4"><Skeleton lines={3} /></div> : q.error ? <div className="mt-4"><ErrorState message="Could not load the addresses we must not send to." onRetry={() => q.refetch()} /></div> : rows.length ? (
-        <div className="stack mt-5 gap-4">
+      {q.isLoading ? <Skeleton lines={3} /> : q.error ? <ErrorState message="Could not load the addresses we must not send to." onRetry={() => q.refetch()} /> : rows.length ? (
+        <div className="stack gap-4">
           <div className="max-w-[520px]">
-            <Field label="How you confirmed the address (required to release)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
+            <Field label="How you confirmed the address by another channel (required to release)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
           </div>
           <Table head={["Address", "Reason", numHead("Times"), "Last", ""]} label="Email addresses we must not send to">
             {rows.map((s, i) => (
@@ -403,8 +403,13 @@ function SecurityPart() {
   const unreviewed = reports.filter((r) => !r.reviewedAt).length;
   return (
     <Card title={csp.data ? `Content-security reports (${unreviewed} not reviewed yet)` : "Content-security reports"}>
-      {csp.data ? <p className="mb-1.5 flex items-center gap-2 text-[14px] font-medium"><Icon name="shield" size={16} className="text-primary" />Policy: {wordFor(CSP_MODE_WORDS, csp.data.mode || "report-only")}</p> : null}
-      <p className="small muted mb-4">Browsers report what the policy would block. Review every unexplained report before enforcement is switched on (docs/readiness/18). Paths and origins only; never candidate data.</p>
+      {/* the policy's mode, and the rule that goes with it folded under it (one disclosure, as staff screens keep their rules) */}
+      {csp.data ? (
+        <details className="more mb-4">
+          <summary><Icon name="shield" size={16} className="text-primary" />Policy: {wordFor(CSP_MODE_WORDS, csp.data.mode || "report-only")}</summary>
+          <p className="small muted max-w-[75ch]">Browsers report what the policy would block. Review every unexplained report before enforcement is switched on (docs/readiness/18). Paths and origins only; never candidate data.</p>
+        </details>
+      ) : null}
       {csp.isLoading ? <Skeleton lines={3} /> : csp.error ? <ErrorState message="Could not load the content-security reports." onRetry={() => csp.refetch()} /> : reports.length ? (
         <ul className={LIST}>
           {reports.slice(0, 50).map((r, i) => (

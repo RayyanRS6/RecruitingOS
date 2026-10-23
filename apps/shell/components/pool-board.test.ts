@@ -80,27 +80,31 @@ function client() {
 }
 
 describe("the pool board on the Candidates page", () => {
-  it("offers to sort the pool from the list in one line and its button, with the Board / List switch, and says nothing is sent", () => {
+  it("offers to sort the pool from the list with its button and the Board / List switch; what it does and that nothing is sent is the button's title", () => {
     nav.search = "";
     const html = render(client(), createElement(People));
     const words = text(html);
-    // one line, then the switch and the button (Wave S1)
+    // the switch and the button (Wave S1); no sentence in the bar (founder, 23 Oct 2026): it is the button's title
     expect(html).toMatch(/<section class="sort-strip[^"]*" aria-label="Sort the pool">/);
-    expect(words).toContain("Groups everyone who finished applying, with a reason for each. Nothing moves until you apply it, and nothing is sent to anyone. Board List Sort the pool");
-    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>.*Sort the pool<\/button>/);
+    expect(words).toContain("Board List Sort the pool");
+    expect(words).not.toContain("Groups everyone who finished applying");
+    expect(html).toMatch(/<button type="button" class="btn primary" title="Groups everyone who finished applying, with a reason for each\. Nothing moves until you apply it, and nothing is sent to anyone\.">.*Sort the pool<\/button>/);
   });
 
   it("draws the board: header, counts, the summary with next steps naming people, three columns and the cards", () => {
     nav.search = "view=board";
     const html = render(client(), createElement(People));
     const words = text(html);
-    // the switch shows the board; the strip says when it was sorted, and that nothing moves until applied
+    // the switch shows the board; the bar says when it was sorted, the rest of the sentence (nothing moves until applied) on hover
     expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">Board<\/button>/);
-    expect(words).toMatch(/Sorted at \d{1,2}:\d{2}\s?(AM|PM) by fixed rules from the checked evidence\. Nothing moves until you apply it/);
-    expect(words).toContain("Sort again");
-    // the header: eyebrow, role, counts, the ways in
-    expect(html).toContain('<p class="eyebrow">Board</p>');
-    expect(html).toContain('<h2 id="board-title" tabindex="-1">Dental Hygienist</h2>');
+    expect(words).toMatch(/Board List Sorted at \d{1,2}:\d{2}\s?(AM|PM) Sort again/);
+    expect(words).not.toContain("by fixed rules");
+    expect(html).toMatch(/title="Sorted at \d{1,2}:\d{2}\s?(AM|PM) by fixed rules from the checked evidence\. Nothing moves until you apply it, and nothing is sent to anyone\.">Sorted at /);
+    // the header: the counts are the board's heading ("Board" to a screen reader), never the job's title again (the page's
+    // h1) and no eyebrow over it (founder, 23 Oct 2026); then the ways in
+    expect(html).not.toContain('<p class="eyebrow">Board</p>');
+    expect(html).toMatch(/<h2 id="board-title" tabindex="-1" class="[^"]*"><span class="sr-only">Board: <\/span><span>To sort: 1 shortlist · 1 longlist · 1 not moving forward · 1 already sorted or decided · 1 not on the board yet<\/span><\/h2>/);
+    expect(html).not.toMatch(/<h2[^>]*>Dental Hygienist<\/h2>/);
     expect(words).toContain("To sort: 1 shortlist · 1 longlist · 1 not moving forward · 1 already sorted or decided · 1 not on the board yet");
     expect(words).toContain("Ask about this pool");
     expect(words).toContain("Have a recruiter check this");
@@ -111,10 +115,12 @@ describe("the pool board on the Candidates page", () => {
     // the summary: two plain sentences, then the next steps naming people
     expect(words).toContain("What the pool looks like 2 of 4 show every must-have. The must-have shown least often is \"Periodontal charting\": 1 of 4 don't show it.");
     expect(words).toContain("Suggested next steps Interview Maria Reyes : Strong evidence on every must-have.");
-    // three columns with their lines and counts
-    expect(words).toContain("Shortlist 2 Good evidence on the must-haves");
-    expect(words).toContain("Longlist 1 Some evidence, or more to find out");
-    expect(words).toContain("Not moving forward 1 A must-have shown missing, or a low score on what is known");
+    // three columns with their counts; what puts someone in each is its heading's title, not a line under it (23 Oct 2026)
+    expect(html).toMatch(/<h3 id="board-col-shortlist" class="[^"]*" title="Good evidence on the must-haves">Shortlist(<!-- -->)? <span[^>]*>2<\/span><\/h3>/);
+    expect(html).toMatch(/<h3 id="board-col-longlist" class="[^"]*" title="Some evidence, or more to find out">Longlist(<!-- -->)? <span[^>]*>1<\/span><\/h3>/);
+    expect(html).toMatch(/<h3 id="board-col-not_moving_forward" class="[^"]*" title="A must-have shown missing, or a low score on what is known">Not moving forward(<!-- -->)? <span[^>]*>1<\/span><\/h3>/);
+    expect(words).toContain("Shortlist 2 MR Maria Reyes");
+    expect(words).not.toContain("Good evidence on the must-haves");
     // Maria: initials, name, band and score, Ready to apply and the confidence apart, the reason, the facts, two strengths and the gap with sources, the next step
     expect(html).toContain('<span class="avatar" aria-hidden="true">MR</span>');
     expect(html).toContain('class="board-card-name">Maria Reyes</button>');
@@ -132,7 +138,9 @@ describe("the pool board on the Candidates page", () => {
     expect(words).toContain("Done Shortlist");
     // the read-only lane "No AI interview yet" (R20-7): name, where they stand, when they applied; no score, never placed
     expect(html).toMatch(/<section class="board-col[^"]*" data-column="no_ai_interview" aria-labelledby="board-col-no-ai-interview">/);
-    expect(words).toContain("No AI interview yet 1 Scored after the AI interview: they join the board when they send it, and Review and apply never includes them. SL Sofia Lind Applied yesterday Invited (not started)");
+    expect(html).toMatch(/<h3 id="board-col-no-ai-interview" class="[^"]*" title="Scored after the AI interview: they join the board when they send it, and Review and apply never includes them\.">No AI interview yet/);
+    expect(words).toContain("No AI interview yet 1 SL Sofia Lind Applied yesterday Invited (not started)");
+    expect(words).not.toContain("Scored after the AI interview");
     expect(words).not.toContain("still applying");
   });
 
@@ -141,12 +149,19 @@ describe("the pool board on the Candidates page", () => {
     const html = render(client(), createElement(People));
     const words = text(html);
     expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Review and apply"/);
-    // groups with n/m and where they go, privately
-    expect(words).toContain("Shortlist 1/1 1 of 1 ticked Added to your Shortlist. Private, the candidate is not told.");
-    expect(words).toContain("Longlist 0/1 0 of 1 ticked Kept warm on your Longlist. Private, no email.");
-    // filed privately, with the day-5 safety net in one short line (founder decision D-03)
-    expect(words).toContain("Not moving forward 1/1 1 of 1 ticked Filed privately; nobody is emailed now. If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
-    expect(words).toContain("Untick anyone you want to decide yourself. Unticked people stay where they are.");
+    // groups with n/m, straight into their people; where each group goes, privately, is its heading's title, since the
+    // footer below says it for everyone ticked (founder, 23 Oct 2026: no line repeating it)
+    expect(words).toContain("Shortlist 1/1 1 of 1 ticked MR Maria Reyes");
+    expect(words).toContain("Longlist 0/1 0 of 1 ticked BO Ben Ortiz");
+    expect(words).toContain("Not moving forward 1/1 1 of 1 ticked LO Luis Ortega");
+    expect(html).toContain('title="Added to your Shortlist. Private, the candidate is not told.">Shortlist</h3>');
+    expect(html).toContain('title="Kept warm on your Longlist. Private, no email.">Longlist</h3>');
+    // filed privately, with the day-5 safety net (founder decision D-03), on hover and in the footer below
+    expect(html).toContain('title="Filed privately; nobody is emailed now. If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).">Not moving forward</h3>');
+    expect(words).not.toContain("Added to your Shortlist");
+    // "untick anyone" is the Apply button's title, not a line under the title
+    expect(words).not.toContain("Untick anyone");
+    expect(html).toMatch(/<button type="button" class="btn primary max-sm:flex-1" title="Untick anyone you want to decide yourself\. Unticked people stay where they are\."( aria-busy="false")?>Apply 2 decisions<\/button>/);
     // Maria and Luis start ticked; Ben, who needs your eye, does not
     expect(html).toContain('<input id="review-a1" type="checkbox" aria-describedby="review-a1-why" checked=""/>');
     expect(html).toContain('<input id="review-a4" type="checkbox" aria-describedby="review-a4-why" checked=""/>');
@@ -166,20 +181,22 @@ describe("the pool board on the Candidates page", () => {
 });
 
 describe("Ask about this pool", () => {
-  it("is a side panel with the assistant's mark, the intro, the questions as buttons and the box for later", () => {
+  it("is a side panel with the assistant's mark, where answers come from, and the questions as buttons straight under it", () => {
     const html = render(client(), createElement(AskPool, { roleId: "r1", board: board as never, onClose: () => undefined, onOpen: () => undefined, onShow: () => undefined }));
     const words = text(html);
     expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Ask about this pool"/);
     expect(html).toContain('<span class="ask-mark" aria-hidden="true">');
-    expect(words).toContain("Ask about this pool Answers come from the checked findings already on file. Pick a question. Each answer says what it looked at.");
+    // where answers come from stays under the title; no intro telling to pick one (founder, 23 Oct 2026)
+    expect(words).toContain("Ask about this pool Answers come from the checked findings already on file. Who is missing a must-have, and why?");
+    expect(words).not.toContain("Pick a question");
     expect(html).toContain('<fieldset class="ask-questions" aria-label="Questions you can ask">');
     expect(words).toContain("Who is missing a must-have, and why?");
     expect(words).toContain("Strongest evidence for \"Active CA RDH license\"");
     expect(words).toContain("Who might I be overlooking?");
     expect(words).toContain("Compare these");
-    // no box that does nothing: one line says typing a question is not available yet
+    // no box that does nothing, and no line about the box that is not there
     expect(html).not.toContain("<textarea");
-    expect(words).toContain("Typing your own question is not available yet. Pick one above, or bring in a recruiter.");
+    expect(words).not.toContain("Typing your own question");
   });
 
   it("answers with the people as chips that open their panel, why, the quotes, and what it looked at", () => {
@@ -259,6 +276,7 @@ describe("the board a recruiter is asked to check (F9)", () => {
     expect(words).toContain("Maria Reyes Shortlist 91/100 Match score 91. Interview");
     expect(words).toContain("Ben Ortiz Longlist 76/100 Needs a person's eye: The assistant was not confident. Read it yourself");
     expect(words).toContain("Sofia Lind No AI interview yet No score yet");
+    // people make every hiring decision: kept, since the team's request is their own (editable) words
     expect(words).toContain("The board only suggests. The team applies it themselves, privately, in Review and apply.");
   });
 });

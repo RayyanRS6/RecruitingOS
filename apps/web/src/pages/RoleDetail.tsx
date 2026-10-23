@@ -38,13 +38,16 @@ export function notOnThisJob(error: unknown, myRole: string | null | undefined):
   return myRole === "interviewer" && error instanceof ApiError && (error.status === 404 || error.status === 403);
 }
 
-/** What an interviewer sees on a job they are not on, or on its candidates: where their own interviews are. */
+/**
+ * What an interviewer sees on a job they are not on, or on its candidates: the title says so and the one button leads
+ * to their own interviews (no body line by default: the button already says where to go).
+ */
 export function NotOnThisJob(props: { title?: string; body?: string }) {
   return (
     <EmptyState
       icon="calendar"
       title={props.title ?? "You are not on this job"}
-      body={props.body ?? "You see the jobs you interview for. Your interviews are under Interviews."}
+      body={props.body}
       action={<Link to="/interviews" className="btn primary">Go to Interviews</Link>}
     />
   );
@@ -183,7 +186,6 @@ export function RoleDetail() {
         title={r.title}
         status={r.status}
         pulse={r.status === "open" && r.acceptingApplications}
-        companyName={companyName}
         // place · type · how it is worked · pay, and "Apply by …" (plan D7) while a closing date is set
         sub={jobFactsFor(r) ?? "No job details yet."}
         actions={
@@ -238,7 +240,7 @@ export function RoleDetail() {
                   {editPacket && REFINABLE.includes(r.status) ? <RoleRefine roleId={r.id} packet={editSource?.packet ?? p} whoPosts={r.whoPosts} /> : null}
                 </div>
                 <Card title="The basics" aside={<Chip>Version {shown!.version}</Chip>} className="p-5">
-                  <dl className={FACTS}>
+                  <dl className="glance">
                     <Fact term="Pay">{money(p)}</Fact>
                     <Fact term="Shown to candidates">{payShownLabel(shown!, p.compensation.discloseRange)}</Fact>
                     <Fact term="Work model">{workModelLabel(p.identity.remotePolicy)}</Fact>
@@ -247,8 +249,8 @@ export function RoleDetail() {
                   </dl>
                   <details className="more mt-4 border-t border-line pt-4">
                     <summary>Pay ceiling, reason and urgency</summary>
-                    <dl className={FACTS}>
-                      <Fact term="Ceiling">{p.compensation.basis === "hourly" ? `$${p.compensation.ceiling}/hr` : `$${p.compensation.ceiling.toLocaleString()}`} <span className="muted small font-normal">(never exceeded without your approval)</span></Fact>
+                    <dl className="glance">
+                      <Fact term="Ceiling">{p.compensation.basis === "hourly" ? `$${p.compensation.ceiling}/hr` : `$${p.compensation.ceiling.toLocaleString()}`} <span className="muted small">(never exceeded without your approval)</span></Fact>
                       <Fact term="Pay sources">{p.compensation.sources.map((s) => s.name).join("; ") || "owner-stated"}</Fact>
                       <Fact term="Reason">{REASON_WORD[p.business.reason] ?? p.business.reason.replace(/_/g, " ")}{p.business.reasonDetail ? ` · ${p.business.reasonDetail}` : ""}</Fact>
                       <Fact term="Urgency">{p.business.timeline.urgency}</Fact>
@@ -271,15 +273,20 @@ export function RoleDetail() {
               <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                 <Card title="Must-haves" aside={<CandidatesSeeThis />}>
                   <RequirementList items={p.requirements.mustHaves} empty="None listed." />
-                  <p className="small muted mt-4">{MUST_HAVES_SCORE_LINE}</p>
-                  <details className="more mt-2">
+                  {/* the rules behind the list, folded into the card's one disclosure (fewer words, 23 Oct 2026) */}
+                  <details className="more mt-4">
                     <summary>Where each one is checked</summary>
-                    <p className="small muted">The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the AI interview.</p>
+                    <div className="stack gap-2">
+                      <p className="small muted">The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the AI interview.</p>
+                      <p className="small muted">{MUST_HAVES_SCORE_LINE}</p>
+                    </div>
                   </details>
                   {editPacket ? <div className="row mt-4"><Button size="sm" icon="edit" onClick={() => openEditor("must-haves")}>Change the must-haves</Button></div> : null}
                 </Card>
                 <Card title="What we look for">
                   <ul className={ROWS}>{p.competencies.map((c) => <li key={c.key} className={cn(ROW, "grid gap-1")}><span className="flex flex-wrap items-center gap-x-2 gap-y-1"><strong>{c.name}</strong> <span className="sbar-tag">{importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip></span><span className="small muted">{c.definition}</span></li>)}</ul>
+                  {/* Kept visible for everyone, not only in the editor: how the levels weigh in the match score and the
+                      fairness rule (unknown is never counted against anyone). e2e match-panel.spec.ts reads it here. */}
                   <p className="small muted mt-4">{SCORE_WEIGHTS_LINE}</p>
                   {editPacket ? <div className="row mt-4"><Button size="sm" icon="edit" onClick={() => openEditor("skills")}>Change the skills or how much each counts</Button>{mayTryWeights ? <Button size="sm" onClick={() => setWeightsOpen(true)}>Try different weights</Button> : null}</div> : null}
                 </Card>
@@ -304,7 +311,7 @@ export function RoleDetail() {
                     <p className="small muted mb-3">After you decline: {SAFETY_NET_NOTE.charAt(0).toLowerCase()}{SAFETY_NET_NOTE.slice(1)}</p>
                     <ul className={ROWS}>{p.requirements.eligibility.map((e) => <li key={e.key} className={cn(ROW, "grid gap-1")}><span>{e.question} <Chip tone={e.knockout ? "needs" : "neutral"}>{e.knockout ? "required" : "asked"}</Chip></span><span className="small muted">{e.rationale}</span></li>)}</ul>
                   </Card>
-                  <Card title="Interview rounds"><p className="small text-ink-2">{p.interviews.plan.map((s) => s.title).join(", ")}.</p><p className="small muted mt-1.5">Who interviews in each round is on the Interview plan tab.</p><div className="row mt-4"><Button size="sm" onClick={() => pickTab("plan")}>Open the interview plan</Button></div></Card>
+                  <Card title="Interview rounds"><p className="small text-ink-2">{p.interviews.plan.map((s) => s.title).join(", ")}.</p><div className="row mt-4"><Button size="sm" onClick={() => pickTab("plan")}>Open the interview plan</Button></div></Card>
                   <Card title="How candidates are messaged"><p className="small text-ink-2">{p.communication.disclosureText}</p><p className="small muted mt-1.5">{p.communication.humanAlternativeText}</p></Card>
                   <Card title="Notices candidates see"><div className="row">{p.compliance.notices.map((n) => <Chip key={n}>{n.replace(/_/g, " ")}</Chip>)}</div><p className="small muted mt-3">Jurisdictions: {p.compliance.jurisdictions.join(", ") || "none"}</p></Card>
                 </div>
@@ -326,7 +333,6 @@ export function RoleDetail() {
                 <ul className={ROWS}>
                   {r.packetVersions.map((v) => <li key={v.version} className={cn(ROW, "text-sm text-ink-2")}><strong className="text-ink">Version {v.version}</strong> · {v.status} · {v.source.replace("_", " ")} · {new Date(v.createdAt).toLocaleString()} · {v.createdBy.name ?? v.createdBy.kind}{v.changeSummary ? ` · ${v.changeSummary}` : ""}</li>)}
                 </ul>
-                <p className="small muted mt-4">Every version is kept. Nothing is overwritten.</p>
               </Card>
             </div>
           ) : null}
@@ -347,14 +353,16 @@ function money(p: RolePacket): string {
   return formatPayRange(p.compensation);
 }
 
-/** The basics as label-over-value rows split by hairlines, like the side card's facts in screenshot 7. */
-const FACTS = "m-0 grid grid-cols-1";
+/**
+ * One fact of the basics: a term and its value straight inside the kit's `dl.glance` (screenshot 7's "at a glance":
+ * label and value rows split by hairlines, the label over the value on a phone).
+ */
 function Fact(props: { term: string; children: ReactNode }) {
   return (
-    <div className="grid gap-0.5 border-t border-line py-3 first:border-t-0 first:pt-0 last:pb-0">
-      <dt className="text-[12.5px] text-ink-3">{props.term}</dt>
-      <dd className="m-0 text-[14.5px] font-medium text-ink [overflow-wrap:anywhere]">{props.children}</dd>
-    </div>
+    <>
+      <dt>{props.term}</dt>
+      <dd>{props.children}</dd>
+    </>
   );
 }
 

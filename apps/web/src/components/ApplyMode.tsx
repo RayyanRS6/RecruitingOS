@@ -59,7 +59,6 @@ function ApplyModeForm(props: { view: RoleApplyModeView; roleId: string; choice:
           {roleChoices(view.companyDefault).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </Field>
-      {props.compact ? null : <p className="small muted">{APPLY_MODE_HELP[effective]}</p>}
       {changing ? (
         <>
           <Field label="Why (required, kept with the change)" htmlFor={`apply-mode-why-${props.roleId}`} hint={`At least ${REASON_MIN} characters.`}>
@@ -71,7 +70,16 @@ function ApplyModeForm(props: { view: RoleApplyModeView; roleId: string; choice:
           </div>
         </>
       ) : null}
-      {props.compact ? null : <p className="small muted border-t border-line pt-3">{APPLY_MODE_NOTE}</p>}
+      {/* what the chosen way does and the rules staff need, folded into one disclosure (docs/07, Words on screen) */}
+      {props.compact ? null : (
+        <details className="more">
+          <summary>How this works</summary>
+          <div className="stack gap-2">
+            <p className="small muted">{APPLY_MODE_HELP[effective]}</p>
+            <p className="small muted">{APPLY_MODE_NOTE}</p>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

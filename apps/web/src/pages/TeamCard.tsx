@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { type CSSProperties, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Icon, Skeleton } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Icon, IconButton, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { useNavigate, useRefresh } from "../nav";
 import { toast } from "../toast";
@@ -144,18 +144,20 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
 
         {/* The invitation comes first (screenshot 6): how many people the plan allows, then one row of fields. The
             fields are laid out by the width the card has (a container query), not the screen's, so they never squeeze
-            when Settings puts the card in its narrower right-hand column. */}
+            when Settings puts the card in its narrower right-hand column. What each role may do is under "Who can do
+            what" at the foot of the card. */}
         {canManage ? (
           <form className="stack gap-3 @container" onSubmit={(e) => { e.preventDefault(); if (!full) sendInvite.mutate(); }}>
-            {seatWords ? <p className="flex items-start gap-2.5 rounded-xl border border-line-tint bg-tint px-4 py-3 text-[13.5px] leading-snug text-ink-2"><Icon name="shield" size={16} className="mt-px text-primary" />{seatWords}</p> : null}
+            {/* the people in use: a standing fact in the kit's info look, not a live region */}
+            {seatWords ? <p className="alert info">{seatWords}</p> : null}
             {full && seats ? <Alert tone="caution">{seatsFullWords(seats)}</Alert> : null}
+            {/* the Invite button's class string is pinned by tests (team-card-ui, settings-ui), so the grid places it */}
             <div className="grid items-end gap-3 @md:grid-cols-2 @xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_10.5rem_auto] [&>.btn]:justify-self-start">
               <Field label="Invite by email" htmlFor="inv"><input id="inv" className="input" type="email" required value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} /></Field>
               <Field label="Name (optional)" htmlFor="invname"><input id="invname" className="input" type="text" value={invite.name} onChange={(e) => setInvite({ ...invite, name: e.target.value })} /></Field>
               <Field label="Role" htmlFor="invrole"><select id="invrole" className="select" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>{grantable(myRole).map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}</select></Field>
               <Button type="submit" variant="primary" loading={sendInvite.isPending} disabled={full}>Invite</Button>
             </div>
-            <p className="small muted">{ROLES.find((r) => r.value === invite.role)?.help}</p>
           </form>
         ) : null}
         {inviteLink ? <p className="small muted">Development mode: <a href={inviteLink}>invitation link</a></p> : null}
@@ -166,7 +168,8 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
             card's own width (a container query), so a narrow card stacks each row like a phone does. */}
         {members.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team." onRetry={() => members.refetch()} /> : (
           <div className="grid divide-y divide-line rounded-xl border border-line @container">
-            <div aria-hidden="true" className={`hidden px-4 py-2.5 font-mono text-[11px] uppercase leading-[1.4] tracking-[0.12em] text-ink-3 ${TEAM_COLUMNS}`}>
+            {/* the column headings, in the kit's eyebrow type, only once the columns line up */}
+            <div aria-hidden="true" className={`eyebrow hidden px-4 py-2.5 ${TEAM_COLUMNS}`}>
               <span>Name</span><span>Role</span><span>Availability</span><span />
             </div>
             {list.map((m, i) => {
@@ -177,7 +180,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
               const offerSignOut = !self && maySignOut(myRole, m.role) && signingOut !== m.userId;
               const offerLeave = self && !leaving;
               return (
-                <div key={m.userId} className="px-4 py-3.5 motion-safe:animate-enter" style={{ animationDelay: `${Math.min(i, 7) * 30}ms` }}>
+                <div key={m.userId} className="px-4 py-3.5 motion-safe:animate-enter motion-safe:[animation-delay:calc(var(--i)*30ms)]" style={{ "--i": Math.min(i, 7) } as CSSProperties}>
                   <div className={`flex flex-wrap items-center gap-x-3 gap-y-2.5 @xl:gap-y-1 ${TEAM_COLUMNS}`}>
                     <span className="flex min-w-0 basis-full items-center gap-3">
                       <Avatar name={nameOf(m)} />
@@ -200,7 +203,8 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
                       {self && !m.schedulable ? <a className="small" href="#setup-availability">Set your hours</a> : null}
                     </span>
                     <span className="ml-auto flex items-center justify-end @xl:ml-0">
-                      {canTouch && removing !== m.userId ? <button type="button" className="icon-btn" title="Remove" onClick={() => { setRemoving(m.userId); setRoleChange(null); setSigningOut(null); }}><Icon name="x" size={16} /><span className="sr-only">Remove</span></button> : null}
+                      {/* the round Remove button names the person, so a screen reader hears whose row it is */}
+                      {canTouch && removing !== m.userId ? <IconButton icon="x" label={`Remove ${nameOf(m)}`} onClick={() => { setRemoving(m.userId); setRoleChange(null); setSigningOut(null); }} /> : null}
                     </span>
                     {/* the person's other actions, in words, lined up under their name on a wide card */}
                     {offerSignOut || offerLeave ? (

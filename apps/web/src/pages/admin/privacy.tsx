@@ -111,8 +111,9 @@ export function PrivacySection({ view, onView }: SectionProps) {
   return (
     <Tabs label="Privacy requests" value={part} onChange={onView} items={items}>
       <div className="stack gap-4">
+        {/* the open list's figures on the left (the closed list has none: its tab says what it is); the actions on the right */}
         <div className="flex flex-wrap items-center gap-3">
-          <p className="min-w-0 flex-[1_1_240px] text-[14px] text-ink-2">{q.data ? summaryLine(openRows, part) : " "}</p>
+          {part === "open" ? <p className="min-w-0 flex-[1_1_240px] text-[14px] text-ink-2">{q.data ? summaryLine(openRows) : " "}</p> : null}
           {part === "open" ? (
             <Menu
               label={`Sort: ${PRIVACY_SORTS.find((c) => c.key === chosen.key && c.dir === chosen.dir)?.label ?? "Received, newest first"}`}
@@ -126,7 +127,7 @@ export function PrivacySection({ view, onView }: SectionProps) {
               }}
             />
           ) : null}
-          <Button size="sm" variant="primary" icon="plus" onClick={() => setRecording(true)}>Record a request from the privacy mailbox</Button>
+          <Button size="sm" variant="primary" icon="plus" className="ml-auto" onClick={() => setRecording(true)}>Record a request from the privacy mailbox</Button>
         </div>
         {q.error ? (
           <ErrorState message="Could not load privacy requests." onRetry={() => q.refetch()} />
@@ -167,8 +168,7 @@ export function PrivacySection({ view, onView }: SectionProps) {
 }
 
 /** One quiet line over the open list: how many, how many are overdue, how many are due soon. */
-function summaryLine(openRows: DataRequest[], part: string): string {
-  if (part !== "open") return "Requests that were done or declined. Open one to read what was done.";
+function summaryLine(openRows: DataRequest[]): string {
   if (openRows.length === 0) return "Nothing is waiting.";
   const left = openRows.map((r) => privacyDaysLeft(r));
   const overdue = left.filter((d) => d < 0).length;
@@ -209,7 +209,10 @@ function DueWords({ r }: { r: DataRequest }) {
 
 const EMPTY_FORM = { companyId: "", requesterEmail: "", kind: "access", details: "" };
 
-/** "Record a request from the privacy mailbox": today's four fields in a dialog. What is sent is unchanged. */
+/**
+ * "Record a request from the privacy mailbox": today's four fields in a dialog. What is sent is unchanged. The requester
+ * is not verified by recording: the drawer's "Verify the requester" step stays open until someone confirms the sender.
+ */
 function RecordRequestDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [form, setForm] = useState(EMPTY_FORM);
@@ -229,7 +232,6 @@ function RecordRequestDialog({ onClose }: { onClose: () => void }) {
       open
       onClose={onClose}
       title="Record a request from the privacy mailbox"
-      sub="Only requests from the shared privacy mailbox. Verification stays pending until you confirm the sender."
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
@@ -295,32 +297,35 @@ function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void
   return (
     <Drawer open onClose={onClose} title={title} sub={`Received ${exactWhen(r.createdAt)} · from the ${sourceWords(r.channel)} · reference ${r.id.slice(0, 8)}`}>
       <div className="stack gap-4">
-        <dl className="kv rounded-2xl border border-line bg-surface p-5 shadow-xs">
-          <dt>Status</dt>
-          <dd><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{privacyStatusWords(r.status)}</Chip></dd>
-          <dt>Verified</dt>
-          <dd><Chip tone={verificationTone(r.verificationStatus)}>{verificationWords(r.verificationStatus)}</Chip></dd>
-          <dt>Assigned</dt>
-          <dd>
-            <div className="row">
-              <span>{assignedWords(r.assignedTo, me.data?.user.id)}</span>
-              {!closedReq ? <Button size="sm" variant="secondary" onClick={() => act.mutate({ path: "assign", body: { userId: "me" } })}>Assign to me</Button> : null}
-            </div>
-          </dd>
-          <dt>Due</dt>
-          <dd>{exactWhen(r.slaDueAt)}{closedReq ? null : left < 0 ? <> · <Chip tone="critical">overdue</Chip></> : ` · ${left === 0 ? "due today" : `${days(left)} left`}`}</dd>
-          <dt>From</dt>
-          <dd>{r.requesterEmail}</dd>
-          <dt>Candidate record</dt>
-          <dd>{r.candidateId ? "linked" : "not linked"}</dd>
-          <dt>What they wrote</dt>
-          <dd className="whitespace-pre-wrap">{r.details ?? "none"}</dd>
-          {r.verificationNote ? <><dt>How it was verified</dt><dd>{r.verificationNote}</dd></> : null}
-          {r.escalationId ? <><dt>Escalation</dt><dd><a href={`/recruiter/queue/${r.escalationId}`}>open in the queue</a></dd></> : null}
-        </dl>
+        {/* where it stands at a glance: the kit's label and value rows, on a card like the steps under it */}
+        <Card>
+          <dl className="glance">
+            <dt>Status</dt>
+            <dd><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{privacyStatusWords(r.status)}</Chip></dd>
+            <dt>Verified</dt>
+            <dd><Chip tone={verificationTone(r.verificationStatus)}>{verificationWords(r.verificationStatus)}</Chip></dd>
+            <dt>Assigned</dt>
+            <dd>
+              <div className="row">
+                <span>{assignedWords(r.assignedTo, me.data?.user.id)}</span>
+                {!closedReq ? <Button size="sm" variant="secondary" onClick={() => act.mutate({ path: "assign", body: { userId: "me" } })}>Assign to me</Button> : null}
+              </div>
+            </dd>
+            <dt>Due</dt>
+            <dd>{exactWhen(r.slaDueAt)}{closedReq ? null : left < 0 ? <> · <Chip tone="critical">overdue</Chip></> : ` · ${left === 0 ? "due today" : `${days(left)} left`}`}</dd>
+            <dt>From</dt>
+            <dd>{r.requesterEmail}</dd>
+            <dt>Candidate record</dt>
+            <dd>{r.candidateId ? "linked" : "not linked"}</dd>
+            <dt>What they wrote</dt>
+            <dd className="whitespace-pre-wrap">{r.details ?? "none"}</dd>
+            {r.verificationNote ? <><dt>How it was verified</dt><dd>{r.verificationNote}</dd></> : null}
+            {r.escalationId ? <><dt>Escalation</dt><dd><a href={`/recruiter/queue/${r.escalationId}`}>open in the queue</a></dd></> : null}
+          </dl>
+        </Card>
         {!closedReq && !verified ? (
           <Card title="Verify the requester">
-            <Field label="How you verified (for example: replied from the applying address on 18 Sep)" htmlFor="pr-method"><input id="pr-method" className="input" value={method} onChange={(e) => setMethod(e.target.value)} /></Field>
+            <Field label="How you verified" htmlFor="pr-method"><input id="pr-method" className="input" value={method} onChange={(e) => setMethod(e.target.value)} placeholder="Replied from the applying address on 18 Sep" /></Field>
             <div className="row mt-4"><Button size="sm" variant="primary" disabled={method.length < 3} loading={act.isPending} onClick={() => act.mutate({ path: "verify", body: { method, outcome: "verified" } })}>Verified</Button><Button size="sm" variant="destructive" disabled={method.length < 3} onClick={() => act.mutate({ path: "verify", body: { method, outcome: "failed" } })}>Could not verify</Button></div>
           </Card>
         ) : null}

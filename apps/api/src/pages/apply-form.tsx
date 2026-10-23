@@ -241,7 +241,7 @@ function NoResumeFold(props: { guided: (key: NoResumeKey) => string; open: boole
       <summary>No resume? Answer four short questions instead</summary>
       <fieldset aria-describedby="no-resume-note">
         <legend class="sr-only">Four short questions about your work, instead of a resume</legend>
-        <p class="meta" id="no-resume-note">Answer what you can; one answer is enough to apply. Nobody expects a cover letter.</p>
+        <p class="meta" id="no-resume-note">Answer what you can; one answer is enough to apply.</p>
         {NO_RESUME_QUESTIONS.map((q) => (
           <div>
             <label id={`nr_${q.key}-label`} for={`nr_${q.key}`}>{q.label}</label>
@@ -395,17 +395,17 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
       ) : (
         <section class="card resume-card" aria-labelledby="resume-title">
           <h2 id="resume-title">Start with your resume</h2>
-          <p>Software reads your resume and fills in this form for you, usually in about 20 seconds. You check every detail before you send, and people at {props.company.name} make every hiring decision.</p>
-          {/* The notice at collection comes before the file is chosen: with script, choosing it starts the reading. */}
+          {/* The notice at collection comes before the file is chosen: with script, choosing it starts the reading. It is
+              the card's one explanation (what reads the file, the person instead, filling the form in by hand); the
+              "about 20 seconds" is said when the reading starts, and "people decide" in "Before you send". */}
           <p class="notice" id="resume-notice">{RESUME_READ_NOTICE} See <a href="/privacy">how we handle your information</a>. Rather not? Fill in the form below yourself, or email <ContactLink contact={props.company.contact} /> and a person will help. If you do not send your application, the file and what was read from it are deleted within a day.</p>
           <ResumeInput kept={kept} resumeLost={!!props.state?.resumeLost} />
           <ReadButton read={props.links.read} preview={!!props.preview} />
           <NoResumeFold guided={guided} open={noResumeOpen} invalid={missing.has("noResume")} />
-          <p class="meta">Or fill in the form below yourself.</p>
         </section>
       )}
+      {/* After a reading, the line above ("We read …") and each field's "From your resume — check it" say what to do. */}
       <h2 id="details-title">{checking ? "Check your details" : "Your details"}</h2>
-      {checking ? <p class="meta">We filled these in from your resume. Check each one and change anything that is not right.</p> : null}
       <label for="firstName">First name</label>
       <Tag id="firstName-tag" text={tagOf("firstName")} />
       <input id="firstName" type="text" name="firstName" required autocomplete="given-name" value={v.firstName ?? ""} aria-invalid={invalid("firstName")} aria-describedby={described("firstName")} />
@@ -445,7 +445,6 @@ function ReuseFold(props: { company: string; action: string }) {
         <label for="reuse-email">The address you applied with</label>
         <input id="reuse-email" type="email" name="email" autocomplete="email" required />
         <button class="btn secondary" type="submit">Send me a link</button>
-        <p class="meta">If you applied to {props.company} before, we email a link to the address on file. It opens this form with your saved details, for you to check.</p>
       </form>
     </details>
   );
@@ -462,8 +461,9 @@ export function ApplyFormPage(props: ApplyFormProps) {
       {preview ? <PreviewNote preview={preview} /> : null}
       {props.flow === "one_visit" ? <Journey steps={["details", "chat", "review"]} current="details" /> : null}
       <p class="back"><a href={props.links.job}><Icon name="arrow-left" />Back to the job</a></p>
-      {/* The facts of the job stay in view while applying (Wave 0 item 0.8), pay included wherever the page must show it. */}
-      <p class="eyebrow">{props.company.name}</p>
+      {/* The facts of the job stay in view while applying (Wave 0 item 0.8), pay included wherever the page must show it.
+          No eyebrow above the title (fewer words, 23 October 2026): in the one-visit flow, the only one in use since
+          20 October 2026 (`APPLY_FLOW`), the lead right below names the employer. */}
       <h1>Apply: {props.packet.identity.title}</h1>
       <JobFacts packet={props.packet} pay={publicPay(props.packet, props.notices)} />
       {/* One line on how long it takes (plan E8); the resume field and "No resume?" right below say what to send. */}
@@ -785,7 +785,6 @@ export function ReadingPage(props: { company: { name: string }; title: string; f
   return (
     <Layout title={`Reading your resume: ${props.title} at ${props.company.name}`} extraCss={`${JOURNEY_CSS}${APPLY_CSS}`}>
       {props.flow === "one_visit" ? <Journey steps={["details", "chat", "review"]} current="details" /> : null}
-      <p class="eyebrow">{props.company.name}</p>
       <h1>Reading your resume</h1>
       <div class="card reading" role="status" id="read-status">
         <p><strong>{props.still ? `Still reading ${props.filename}…` : `Reading ${props.filename}…`}</strong></p>
@@ -1357,7 +1356,7 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
   const minutes = props.packet.screening.maxMinutes;
   return (
     <Layout title="Check your email">
-      <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
+      <JobTrail company={props.company} role={props.role} title={props.packet.identity.title} />
       <h1>Thanks for applying</h1>
       <div class="card" role="status">
         <p><strong>Check your email.</strong> Your own link to this application goes to {props.to ?? "the email address you gave"}.</p>
@@ -1374,6 +1373,15 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>
   );
+}
+
+/**
+ * The way back to the job above the receipt and the waiting room. A trail with a parent link stays; the company's name
+ * after it does not, since the page's own lines name the company (fewer words, 23 October 2026: the AI interview page
+ * that follows has no "Company · Job" eyebrow either).
+ */
+function JobTrail(props: { company: { slug: string }; role: { id: string }; title: string }) {
+  return <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.title}</a></p>;
 }
 
 /**
@@ -1407,7 +1415,7 @@ function WaitingRoom(props: { company: { slug: string; name: string }; role: { i
   const base = receiptPath(props.company.slug, props.role.id);
   return (
     <Layout title="Preparing your AI interview" extraCss={WAIT_CSS}>
-      <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
+      <JobTrail company={props.company} role={props.role} title={props.packet.identity.title} />
       <h1>Thanks for applying</h1>
       <div class="card wait" role="status" aria-live="polite">
         {/* Shown by the script only: without it nothing on the page moves by itself. */}

@@ -183,20 +183,25 @@ export function SendDecisionStep({ a, roleId, onClose, onSent }: { a: Applicatio
   const d = base.data;
   const choices = wordingChoices(d.wordings);
   const fixed = choices.length <= 1;
+  const eligibility = d.wording === "eligibility";
   const sendable = !!d.to && d.policy !== "not_sent" && !refused && !checking && !!shown;
   return (
     <div className="stack gap-3">
       <p className="small muted">{sendPolicyLine({ to: d.to, policy: d.policy, undoSeconds: d.undoSeconds })}</p>
       {fixed ? (
-        <p className="small">Wording: <strong>{choices[0]?.label ?? DECISION_WORDING_LABEL[d.wording]}</strong>. <span className="muted">{WORDING_HINT[d.wording]}</span></p>
+        // one wording: its description is the name's tooltip, as on the option rows; it stays on screen only for the
+        // eligibility wording, where it says why there is no choice
+        <p className="small">Wording: <strong title={eligibility ? undefined : WORDING_HINT[d.wording]}>{choices[0]?.label ?? DECISION_WORDING_LABEL[d.wording]}</strong>.{eligibility ? <> <span className="muted">{WORDING_HINT[d.wording]}</span></> : null}</p>
       ) : (
-        // each approved wording a card to pick, tinted once picked
+        // each approved wording the kit's option row, "Suggested" as its tag; the exact message shows below the choice, so
+        // a wording's one-line description is only its tooltip. The legend's look comes from here: a test pins it bare.
         <fieldset className="grid gap-2 [&>legend]:mb-2 [&>legend]:font-semibold">
           <legend className="small">Which approved wording?</legend>
           {choices.map((c) => (
-            <label key={c.id} className="check data-[checked=true]:border-line-tint data-[checked=true]:bg-tint" data-checked={chosen === c.id ? "true" : undefined}>
+            <label key={c.id} className="option-row" title={c.hint}>
               <input type="radio" name={`wording-${a.id}`} value={c.id} checked={chosen === c.id} onChange={() => setWording(c.id)} aria-label={c.text} />
-              <span><strong>{c.text}</strong><br /><span className="small muted">{c.hint}</span></span>
+              {c.label}
+              {c.suggested ? <span className="option-tag" aria-hidden="true">Suggested</span> : null}
             </label>
           ))}
         </fieldset>
@@ -215,7 +220,8 @@ export function SendDecisionStep({ a, roleId, onClose, onSent }: { a: Applicatio
       {refused ? <Alert tone="critical">{refused}</Alert> : null}
       {custom && preview.error && !refused ? <ErrorState message={preview.error instanceof ApiError ? preview.error.message : "Could not show the message with your changes."} onRetry={() => preview.refetch()} /> : null}
       {shown && !refused ? (
-        // the email as it goes: on the paper ground inside the card, like a letter
+        // the email as it goes: on the paper ground inside the card, like a letter (`message-preview`: only a hook for the
+        // talent-actions e2e spec)
         <div className="card message-preview grid gap-1.5 rounded-xl bg-ground p-4 shadow-none" aria-busy={checking || undefined}>
           {/* only this short line is live, so the whole message is not read out again after each check */}
           <p className="small muted" aria-live="polite">What {a.candidate.firstName} gets{checking ? " (checking your line…)" : ""}</p>

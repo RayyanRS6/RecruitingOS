@@ -7,7 +7,7 @@ import { Alert, Button, Card, Chip, cn, Field, Pill, type Tone } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { useSearchParams } from "../nav";
 import { ACCESS_DAYS, accessWords } from "../recruiter-access";
-import { RECENT_DAYS, REOPEN_MIN, STATE_WORDS, aboutWords, askedByWords, latestAnswer, pickedUpWords, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, type RequestState } from "../recruiter-requests";
+import { REOPEN_MIN, STATE_WORDS, aboutWords, askedByWords, latestAnswer, pickedUpWords, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, type RequestState } from "../recruiter-requests";
 import { TODAY_REFRESH } from "../today";
 import { toast } from "../toast";
 import { useAskRole } from "./use-ask-role";
@@ -43,7 +43,6 @@ export function RecruiterRequests() {
   return (
     <div id="recruiter-requests">
       <Card title="Your recruiter requests" aside={open ? <Pill size="sm" tone="accent">{open} open</Pill> : null} className="max-sm:p-5">
-        <p className="small muted mb-3">What your team asked ITS recruiters. Answers stay here {RECENT_DAYS} days.</p>
         <ul aria-label="Your recruiter requests" className={cn("divide-y divide-line", current.length > 0 && "border-t border-line")}>
           {current.map((r) => <RequestItem key={r.id} r={r} linked={r.id === linked} staff={who.staff} />)}
         </ul>
@@ -136,7 +135,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
       {expanded ? <RequestThread thread={r.thread} /> : null}
       {mode === "note" ? (
         <div className="stack mt-3 gap-2">
-          <Field label="Your note for the recruiter" htmlFor={fieldId} hint={r.recruiterName ? `${r.recruiterName} is told there is a new note and reads it with your request.` : "The recruiter who picks the request up reads it with your request."}>
+          <Field label="Your note for the recruiter" htmlFor={fieldId}>
             <textarea id={fieldId} className="textarea" value={text} onChange={(e) => setText(e.target.value)} />
           </Field>
           <div className="row"><Button size="sm" variant="primary" disabled={!text.trim()} loading={note.isPending} onClick={() => note.mutate()}>Send note</Button><Button size="sm" variant="quiet" onClick={() => setMode(null)}>Cancel</Button></div>
@@ -144,7 +143,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
       ) : null}
       {mode === "reopen" ? (
         <div className="stack mt-3 gap-2">
-          <Field label="What is still missing?" htmlFor={fieldId} hint="The recruiter reads this first.">
+          <Field label="What is still missing?" htmlFor={fieldId}>
             <textarea id={fieldId} className="textarea" value={text} onChange={(e) => setText(e.target.value)} />
           </Field>
           <p className="small muted">{reopenHint(r.recruiterName, accessWords(r.scope), ACCESS_DAYS)}</p>

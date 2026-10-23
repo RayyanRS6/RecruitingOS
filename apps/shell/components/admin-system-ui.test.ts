@@ -204,6 +204,9 @@ describe("System and settings: Costs", () => {
     expect(html).not.toContain("co1aaaaa<");
     expect(text(html)).toContain("Spent so far this month: $0.01");
     expect(text(html)).toContain(`Counted from ${since}.`);
+    // no helper line about prices (23 October): "at list prices" rides on the exact total's tooltip
+    expect(text(html)).not.toContain("the fake provider is free");
+    expect(html).toContain('title="$0.0143 at list prices"');
     // the tokens: a second table of five, folded
     expect(html).toMatch(/<details class="more"><summary>Details: tokens in and out<\/summary>/);
     expect(html).toContain('<th scope="col" class="num">Tokens in</th>');
@@ -219,6 +222,8 @@ describe("System and settings: Costs", () => {
     expect(all).toContain('aria-pressed="true">All time</button>');
     expect(all).toMatch(/<td colspan="5" class="table-empty">No model spend recorded yet\.<\/td>/i);
     expect(text(all)).toContain("Total model spend recorded: $0.00");
+    // all time counts from no date, so no line says one
+    expect(text(all)).not.toContain("Counted from");
   });
 
   it("says so with a way to try again when the costs cannot load", () => {
@@ -244,6 +249,13 @@ describe("System and settings: Queue health and the Business calendar", () => {
     const html = render(client([[["admin", "queue"], { queued: 0, failed: 1, oldestQueuedAt: null, waitingRuns: 2, definitions: ["application_intake", "screen"] }]]), createElement(Queue));
     const words = text(html);
     for (const fact of ["Jobs waiting to run 0", "Oldest waiting job none", "Jobs that failed 1", "Workflow runs waiting 2", "refresh every 5 seconds"]) expect(words).toContain(fact);
+    // each figure stays a dt and its dd, in the kit's stat cells; that they refresh is the mark beside the title (its
+    // words its name and tooltip), not a line of its own (23 October)
+    expect(html).toContain('<dt class="stat-cell-label">Jobs that failed</dt><dd class="stat-cell-value text-critical">1</dd>');
+    // valid list markup (axe definition-list and dlitem): each pair sits in one div straight under the dl, never two deep
+    expect(html).toMatch(/<dl class="stat-strip[^"]*">(?:<div class="stat-cell[^"]*"><dt class="stat-cell-label">[^<]*<\/dt><dd class="stat-cell-value[^"]*">[^<]*<\/dd><\/div>){4}<\/dl>/);
+    expect(html).toContain('<span class="icon-label" title="These figures refresh every 5 seconds.">');
+    expect(html).not.toMatch(/<p(?: [^>]*)?>(?:(?!<\/p>).)*refresh every 5 seconds/);
     expect(html).toMatch(/<details class="more"><summary>Workflows the system can run \(2\)<\/summary>/);
     expect(words).toContain("Reading a new application");
   });
@@ -253,6 +265,12 @@ describe("System and settings: Queue health and the Business calendar", () => {
     expect(html).toContain(`<input id="cal-eff" class="input" type="date" value="${dayKey(new Date())}"/>`);
     expect(html).toContain('<select id="cal-tz" class="select">');
     expect(text(html)).toContain("Publish version");
+    // fewer words (23 October): how windows join is shown by the coverage field's example, not a hint under it; the rule
+    // about deadlines already set stays, the line explaining what the calendar is for goes
+    expect(html).toContain('placeholder="2026-10-05 2026-10-09 09:00-12:00+13:00-15:00 Conference week"');
+    expect(text(html)).not.toContain("Join several windows with +");
+    expect(text(html)).toContain("Deadlines already set keep their values unless you recalculate them below.");
+    expect(text(html)).not.toContain("Service-level clocks count only open hours.");
   });
 });
 
@@ -267,11 +285,17 @@ describe("System and settings: Administrators", () => {
     expect(words).toContain("Revoke");
     expect(html).not.toContain(">platform admin<");
     expect(html).toContain('<select id="pr-role" class="select">');
+    // who is told of a grant is the eye beside "Grant a platform role" (its words its name and tooltip), not a paragraph
+    expect(html).toContain('<span class="icon-label" title="Every other administrator and the ITS queue mailbox are told, and another administrator must acknowledge the alert.">');
+    expect(words).not.toContain("You cannot grant yourself a role");
   });
 
   it("signs someone out everywhere by the address they sign in with, with a reason and a confirmation", () => {
     const html = render(client([[["admin", "platform-roles"], { grants: [], activeAdmins: 1, bootstrap: { configured: 0, ignored: false } }]]), createElement(Administrators));
     expect(text(html)).toContain("Sign someone out everywhere");
+    // the one rule that changes what to do first stays; the paragraph about when to use it is gone (23 October)
+    expect(text(html)).toContain("For a lost second-factor device, reset it in the identity service first.");
+    expect(text(html)).not.toContain("Use it after a lost or stolen phone");
     expect(html).toContain('id="so-email"');
     expect(html).toContain('id="so-reason"');
     expect(html.slice(html.indexOf('id="so-reason"'))).toMatch(/<button[^>]*disabled/);

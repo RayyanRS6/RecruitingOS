@@ -205,6 +205,8 @@ describe("the role report and the ITS controls", () => {
     expect(html).toContain("<option value=\"default\" selected=\"\">The company&#x27;s default (apply and talk in one visit)</option>");
     expect(html).toContain("<option value=\"form_then_screen\">Form now, conversation later</option>");
     expect(text(html)).toContain("always uses the later path");
+    // the rules staff need are folded into one disclosure, not paragraphs on the card (fewer words, 23 October 2026)
+    expect(html).toMatch(/<details class="more"><summary>How this works<\/summary>.*always uses the later path.*<\/details>/);
   });
 
   it("warns an owner on Today at 80% of the month's screening conversations, with a way to ask ITS", () => {

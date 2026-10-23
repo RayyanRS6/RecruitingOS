@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Chip, Drawer, EmptyState, ErrorState, Skeleton } from "@ros/ui";
 import { api, type BoardView, type RolePacket } from "../../api/client";
 import type { EditorFocus } from "../../skills-form";
-import { INTERVIEW_ONLY_LINE, INTRO, LEAVE_OUT_HINT, NOBODY_SCORED, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows, type WeightLevel, type WeightRow } from "../../weights-preview";
+import { INTERVIEW_ONLY_LINE, NOBODY_SCORED, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows, type WeightLevel, type WeightRow } from "../../weights-preview";
 
 /**
  * "Try different weights" (founder decision L-07 A, preview only), opened from the job's Scoring tab and the More menu
@@ -14,6 +14,9 @@ import { INTERVIEW_ONLY_LINE, INTRO, LEAVE_OUT_HINT, NOBODY_SCORED, PREVIEW_LABE
  * worked out here from the board the Candidates page also reads (the same request, shared through its key), with the
  * real score's own sums (weights-preview.ts). Nothing is posted, stored or logged, and the real scores never change.
  * "Use these weights" closes this and opens the job's editor, where saving makes a new version of the job.
+ *
+ * Fewer words (23 Oct 2026): no line under the title (the banner says it is a preview that saves nothing), the
+ * interview-only note only when a skill is left out for that reason, and what "Use these weights" does under it.
  */
 export function WeightsPreview(props: { roleId: string; packet: RolePacket; onClose: () => void; onUse: (focus: EditorFocus) => void }) {
   const { roleId } = props;
@@ -36,24 +39,25 @@ export function WeightsPreview(props: { roleId: string; packet: RolePacket; onCl
   );
   const musts = rows.filter((r) => r.mustHave);
   const skills = rows.filter((r) => !r.mustHave);
+  // A skill checked only in the team's own interviews is not in the score, so it is not listed: said only when one is.
+  const interviewOnly = props.packet.competencies.some((c) => c.evaluatedIn === "interview");
   return (
-    <Drawer open size="lg" title="Try different weights" sub={INTRO} banner={<Alert tone="info">{PREVIEW_LABEL}</Alert>} onClose={props.onClose}>
+    <Drawer open size="lg" title="Try different weights" banner={<Alert tone="info">{PREVIEW_LABEL}</Alert>} onClose={props.onClose}>
       {/* Two panes on a desk (the drawer is wide enough from md): the weights on the left, the order they give on the right. */}
       <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2">
         <div className="stack gap-4">
-          {musts.length ? <div className={SET}><fieldset className="weights-set"><legend>Must-haves</legend>{musts.map(field)}</fieldset></div> : null}
-          {skills.length ? <div className={SET}><fieldset className="weights-set"><legend>Skills we look for</legend>{skills.map(field)}</fieldset></div> : null}
-          <p className="small muted">{INTERVIEW_ONLY_LINE}</p>
+          {/* each group a card of its own, the kit's eyebrow naming it (`weights-set`: a hook the tests find the groups by) */}
+          {musts.length ? <div className="card p-4"><fieldset className="weights-set grid gap-3"><legend className="eyebrow">Must-haves</legend>{musts.map(field)}</fieldset></div> : null}
+          {skills.length ? <div className="card p-4"><fieldset className="weights-set grid gap-3"><legend className="eyebrow">Skills we look for</legend>{skills.map(field)}</fieldset></div> : null}
+          {interviewOnly ? <p className="small muted">{INTERVIEW_ONLY_LINE}</p> : null}
           <div className="row"><Button size="sm" disabled={!changed.length} onClick={() => setLevels(jobLevels(rows))}>Back to the job's weights</Button></div>
           {changed.length ? (
-            <div className="stack gap-2 rounded-xl border border-line-tint bg-tint p-3.5">
-              <ul className="small grid list-disc gap-1 pl-[18px]">{changed.map((r, i) => <li key={r.id}>{words[i]}</li>)}</ul>
-              <p className="small muted">{LEAVE_OUT_HINT}</p>
-            </div>
+            <ul className="small grid list-disc gap-1 rounded-xl border border-line-tint bg-tint py-3.5 pr-3.5 pl-8">{changed.map((r, i) => <li key={r.id}>{words[i]}</li>)}</ul>
           ) : null}
           <div className="row"><Button size="sm" variant="primary" disabled={!changed.length} title={changed.length ? undefined : "Change a weight first"} onClick={() => props.onUse(focusFor(rows, levels))}>Use these weights</Button></div>
           <p className="small muted">{USE_WEIGHTS_LINE}</p>
         </div>
+        {/* `weights-status` and `weights-order` are hooks the tests pin byte for byte, so the status line is styled from here */}
         <div className="stack gap-3 [&>.weights-status]:text-[14px] [&>.weights-status]:text-ink-2">
           {board.isLoading ? <Skeleton lines={5} /> : board.error || !order ? (
             <ErrorState message="Could not load the candidates' scores just now." onRetry={() => board.refetch()} />
@@ -91,6 +95,3 @@ export function WeightsPreview(props: { roleId: string; packet: RolePacket; onCl
     </Drawer>
   );
 }
-
-/** Each group of weights as a card of its own: a mono label over its rows (the fieldset's legend names the group). */
-const SET = "rounded-2xl border border-line bg-surface p-4 shadow-xs [&_legend]:font-mono [&_legend]:text-[11px] [&_legend]:tracking-[0.14em] [&_legend]:text-ink-2 [&_legend]:uppercase [&_.weights-set]:grid [&_.weights-set]:gap-3";

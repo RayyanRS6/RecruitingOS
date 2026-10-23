@@ -294,15 +294,19 @@ describe("the apply form: résumé first, check your details, questions from the
     const main = html.slice(html.indexOf("<main>"));
     // the steps header comes first, the details step current
     expect(main.startsWith('<main><nav class="journey" aria-label="Your application"><ol aria-label="Your application steps"><li class="current" aria-current="step">Details</li><li>Chat</li><li>Review & send</li></ol></nav>')).toBe(true);
-    // the résumé card comes before every detail, with the line about software reading it and the reading button
+    // the résumé card comes before every detail, with the reading button
     expect(html.indexOf("<h2 id=\"resume-title\">Start with your resume</h2>")).toBeLessThan(html.indexOf('name="firstName"'));
-    expect(html).toContain("Software reads your resume and fills in this form for you, usually in about 20 seconds. You check every detail before you send, and people at Details Dental make every hiring decision.");
     expect(html).toContain(`<button class="btn secondary" type="submit" formaction="/careers/${slug}/jobs/${roleId}/apply/read" formnovalidate="" data-read="yes">Read my resume</button>`);
-    // the notice at collection is on the card itself, before the file is chosen: the AI reads it, the privacy page, a
-    // person instead, and what happens to an unsent reading
+    // the notice at collection is on the card itself, before the file is chosen, right under its heading: the AI reads it,
+    // the privacy page, a person instead, and what happens to an unsent reading
     const card = html.slice(html.indexOf('<h2 id="resume-title">'), html.indexOf('name="resume"'));
-    expect(card).toContain(`<p class="notice" id="resume-notice">${RESUME_READ_NOTICE} See <a href="/privacy">how we handle your information</a>. Rather not? Fill in the form below yourself, or email `);
+    expect(card).toContain(`<h2 id="resume-title">Start with your resume</h2><p class="notice" id="resume-notice">${RESUME_READ_NOTICE} See <a href="/privacy">how we handle your information</a>. Rather not? Fill in the form below yourself, or email `);
     expect(card).toContain("and a person will help. If you do not send your application, the file and what was read from it are deleted within a day.</p>");
+    // fewer words (23 October 2026): the notice is the card's one explanation; the line that said the same in other words
+    // and the "Or fill in the form below yourself." under the card are gone ("people decide" stays in "Before you send")
+    expect(html).not.toContain("Software reads your resume and fills in this form for you");
+    expect(html).not.toContain("Or fill in the form below yourself.</p>");
+    expect(html).toContain("<li>People at Details Dental make every hiring decision.</li>");
     expect(html).toContain(`<form method="post" action="/careers/${slug}/jobs/${roleId}/apply" enctype="multipart/form-data"`);
     // the Send button is still the one plum button, and Enter before a file is chosen is handled by the server
     expect(html).toContain('<button class="btn" type="submit">Send my application</button>');
@@ -321,6 +325,8 @@ describe("the apply form: résumé first, check your details, questions from the
     expect(html).toMatch(/<input id="q_cq_years" type="number" name="q_cq_years" inputmode="decimal" step="any" min="0" max="50" value=""\/><span>years<\/span>/);
     // "Applied here before?" asks for the emailed link (S7-F), outside the application form
     expect(html).toContain(`<form method="post" action="/careers/${slug}/jobs/${roleId}/apply/reuse">`);
+    // its summary, label and button say it all: no line under the button repeating them (23 October 2026)
+    expect(html).toContain('<button class="btn secondary" type="submit">Send me a link</button></form></details>');
     // nothing is marked before anything was read
     expect(html).not.toContain(FROM_RESUME_TAG);
     expect(html).not.toContain(SUGGESTED_FROM_RESUME_TAG);
@@ -333,7 +339,8 @@ describe("the apply form: résumé first, check your details, questions from the
     const html = decode(await r.text());
     expect(html).toContain('<h2 id="resume-title">Your resume</h2>');
     expect(html).toContain("We read dana-resume.txt and filled in your details below. It stays attached to your application.");
-    expect(html).toContain('<h2 id="details-title">Check your details</h2>');
+    // the heading goes straight to the fields: the line above and each field's mark already say to check them (23 October 2026)
+    expect(html).toContain('<h2 id="details-title">Check your details</h2><label for="firstName">First name</label>');
     // the form says it showed the reading, so a form sent back says so again
     expect(inputValue(html, "readShown")).toBe("yes");
     // the empty fields are filled and marked; what the candidate typed stays as typed, unmarked

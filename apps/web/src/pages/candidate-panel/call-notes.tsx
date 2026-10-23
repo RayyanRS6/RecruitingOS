@@ -15,7 +15,8 @@ import { CARD, LEAD, STEP, Why } from "./why";
  * default the notes finish the screening, so the scorecard is written from them. They are kept and shown as the
  * recruiter's notes, never as the candidate's own words, and are never used to say a must-have is not met. Shown to
  * recruiters only (the company's own, or ITS under a grant); the API checks it too. When the candidate asked for a
- * person it waits at the top of the panel as a step; otherwise it is a section card on the AI interview tab.
+ * person it waits at the top of the panel as a step; otherwise it is a button on the AI interview tab that opens it
+ * as a section card.
  */
 export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; roleId: string; prominent: boolean }) {
   const [open, setOpen] = useState(prominent);
@@ -43,17 +44,13 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
   });
   const first = a.candidate.firstName;
   const look = prominent ? STEP : CARD;
-  if (!open) {
-    return (
-      <Card title="Notes from a call" className={look}>
-        <p className="small muted">Talked with {first} by phone? Add what you learned.</p>
-        <div className="row"><Button size="sm" icon="edit" onClick={() => setOpen(true)}>Add notes from a call</Button></div>
-      </Card>
-    );
-  }
+  // Closed, the one button says what it does (a card titled the same over it said it twice, as on the Messages tab);
+  // open, the card's title heads the form.
+  if (!open) return <div className="row"><Button size="sm" icon="edit" onClick={() => setOpen(true)}>Add notes from a call</Button></div>;
   return (
     <Card needsYou={prominent} lift={prominent} title={prominent ? `${first} asked to talk to a person` : "Notes from a call"} className={look}>
-      <p className={LEAD}>{prominent ? "Call or email them, then add what you learned here." : `Add what you learned on the call with ${first}.`}</p>
+      {/* the step a candidate's request opened says what to do first; the plain card's title already does */}
+      {prominent ? <p className={LEAD}>Call or email them, then add what you learned here.</p> : null}
       <Why>
         {prominent ? <span>{first} chose a person instead of the assistant. Add what you learned under each question where it fits.</span> : null}
         <span>Your notes are kept as yours and labelled as notes from a call. They are never shown or quoted as {first}'s own words, never used to say a must-have is not met, and {first} does not see them.</span>

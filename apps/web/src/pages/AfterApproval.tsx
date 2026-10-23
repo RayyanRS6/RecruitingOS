@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Dialog, Icon, Skeleton, cx } from "@ros/ui";
+import { Alert, Button, Dialog, Icon, IconChip, Skeleton, cx } from "@ros/ui";
 import { api, type PostingsResponse } from "../api/client";
 import { ShareJob } from "../components/ShareJob";
 import { scrollBehavior } from "../motion";
@@ -33,7 +33,7 @@ export function StatusPill({ s }: { s: StatusChip }) {
 function DestinationRow({ d }: { d: Destination }) {
   return (
     <li className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-line py-3.5 first:border-t-0">
-      <span className="inline-flex size-9 flex-none items-center justify-center rounded-xl bg-tint-2 text-primary" aria-hidden="true"><Icon name={d.icon} size={16} /></span>
+      <IconChip icon={d.icon} size="sm" />
       <div className="grid min-w-0 flex-[1_1_14rem] gap-0.5">
         <span className="text-[15px] font-semibold text-ink">{d.name}</span>
         <span className="text-[13px] text-ink-2 [overflow-wrap:anywhere]">{d.detail}</span>
@@ -44,7 +44,8 @@ function DestinationRow({ d }: { d: Destination }) {
           </span>
         ) : null}
       </div>
-      <span className="flex-none max-sm:pl-12"><StatusPill s={d.status} /></span>
+      {/* under the words on a phone: the chip's 32px and the 12px gap */}
+      <span className="flex-none max-sm:pl-11"><StatusPill s={d.status} /></span>
     </li>
   );
 }
@@ -105,19 +106,17 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
         {sharing ? (
           <section ref={shareRef} aria-label="Share it now" className="stack gap-2 rounded-2xl border border-line-tint bg-tint p-4">
             <h3 className="eyebrow">Share it now</h3>
-            <p className="small muted">The quickest first applicants often come from people who already know you.</p>
             <ShareJob roleId={props.roleId} roleTitle={props.roleTitle} companyName={props.companyName} compact />
           </section>
         ) : null}
         <section aria-label="Where it is going" className="stack gap-2">
           <h3 className="eyebrow">{props.editWhileOpen ? "Where the job is" : "Where it is going"}</h3>
+          {/* each place's status says where it stands (a tick only once checked, a spinner while under way); the list
+              asks again by itself while it is open */}
           {q.isLoading || !d ? <Skeleton lines={4} /> : (
-            <>
-              <ul className="rounded-2xl border border-line bg-surface px-4" aria-busy={preparing || undefined}>
-                {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} />)}
-              </ul>
-              <p className="small muted">Nothing is marked as up until it has been checked. This list keeps itself current while it is open.</p>
-            </>
+            <ul className="rounded-2xl border border-line bg-surface px-4" aria-busy={preparing || undefined}>
+              {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} />)}
+            </ul>
           )}
           {noBoards ? <p className="small muted">{noBoards}</p> : null}
           {outdated ? <Alert tone="info">{outdated}</Alert> : null}
@@ -131,9 +130,10 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
           </Alert>
         ) : null}
         {q.error ? <Alert tone="critical">Could not read where the job stands. The Share tab shows it too.</Alert> : null}
-        <p className="small muted">
-          {props.canManage ? <>Change the boards, the closing date or the links on the <button type="button" className="link-btn" onClick={() => goTo("posting")}>Share tab</button>.</> : "Only an owner or an admin changes where the job is posted. The Share tab shows where it stands."}
-        </p>
+        {/* the way to change where it goes, for those who may; nobody else is offered anything to change here */}
+        {props.canManage ? (
+          <p className="small muted">Change the boards, the closing date or the links on the <button type="button" className="link-btn" onClick={() => goTo("posting")}>Share tab</button>.</p>
+        ) : null}
       </div>
     </Dialog>
   );

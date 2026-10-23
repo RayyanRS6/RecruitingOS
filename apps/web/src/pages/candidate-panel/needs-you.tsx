@@ -19,13 +19,14 @@ import { FinalistCard, HireStep, OfferStep, WaitingOnCandidateCard } from "./hir
 import { useCandidateAction, useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
 import { NotesSummary } from "./notes";
 import { TellCard } from "./telling";
-import { LEAD, STEP, Why } from "./why";
+import { LEAD, STEP, SUGGESTED, Why } from "./why";
 
 /**
  * The area under the panel's header (plan A10; founder decision Q23): everything that waits on a person about this
  * candidate, then the step a stage choice opened. Each card is the same decision it always was, said in one short line
  * with its buttons (Wave S1); the longer words are one click away under "Why". Each one is a compact "Your next step"
- * card (the lavender-to-peach wash, its title, a line and a plum pill), under one label (coral-dotted while one waits on you).
+ * card (the lavender-to-peach wash, its title, a line and a plum pill), straight under the tabs: no label over them
+ * (founder, 23 Oct 2026: fewer words), the wash and the display titles set them apart from the section cards below.
  */
 
 type Props = { a: ApplicationDetail; roleId: string; myRole: string | null; myUserId: string | null; step: PanelStep | null; setStep: (step: PanelStep | null, opts?: { roundKey?: string }) => void; roundKey?: string; onTab?: (tab: PanelTab) => void };
@@ -37,14 +38,6 @@ const FINALIST = ["finalist", "reference_check"];
 const INTERVIEW_READY = ["interview_recommended", "interview_complete"];
 /** Why the same round is proposed again (founder decision L-12): our interviewer missed it, and the invitation apologises. */
 const MISSED_BY_US_LINE = "Our interviewer missed it. The new invitation says sorry.";
-/** The assistant's suggested line, kept apart from the person's own words until they keep it. */
-const SUGGESTED = "grid gap-2 rounded-xl border border-line-tint bg-tint px-4 py-3";
-/**
- * The coral "live" dot on the eyebrow (the kit's `eyebrow live` look), only while a card there waits on you: a card that
- * waits on nobody (declined on an eligibility answer, a message waiting for someone else, a parked Cancelled card) leaves
- * a plain label.
- */
-const LIVE_DOT = "[&:has(>.needs-you)>.eyebrow]:before:size-1.5 [&:has(>.needs-you)>.eyebrow]:before:flex-none [&:has(>.needs-you)>.eyebrow]:before:rounded-full [&:has(>.needs-you)>.eyebrow]:before:bg-accent [&:has(>.needs-you)>.eyebrow]:before:shadow-[0_0_0_3px_var(--accent-soft)]";
 
 export function NeedsYou(props: Props) {
   const { a, roleId, step, setStep } = props;
@@ -90,10 +83,9 @@ export function NeedsYou(props: Props) {
   if (!cards.length) return null;
   return (
     // Rises in once, filled backwards only: afterwards the section is no containing block or layer for the sheets drawn
-    // inside its cards. A long word or address breaks anywhere, so it never pushes a phone's screen sideways.
-    <section className={`mb-1 grid gap-3 wrap-anywhere motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards] ${LIVE_DOT}`} aria-label="What needs you">
-      {/* the hero card's eyebrow, once over the cards; decorative (the section is named for screen readers) */}
-      <p className="eyebrow" aria-hidden="true">What needs you</p>
+    // inside its cards. A long word or address breaks anywhere, so it never pushes a phone's screen sideways. Named for
+    // screen readers only; on screen the cards' wash says it.
+    <section className="mb-1 grid gap-3 wrap-anywhere motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]" aria-label="What needs you">
       {cards}
     </section>
   );
@@ -257,7 +249,8 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
   return (
     <Card needsYou lift title="Approve an interview" className={STEP}>
       {missedByUs ? <p className="small">{MISSED_BY_US_LINE}</p> : null}
-      <p className={LEAD}>Times go out to {a.candidate.firstName} once you approve.{filled && filled.roundKey === chosenRoundKey ? " Filled in from your interview plan." : ""}</p>
+      {/* what the plan filled in is said once, under "Why" (`interviewDraftLine`), not again on this line */}
+      <p className={LEAD}>Times go out to {a.candidate.firstName} once you approve.</p>
       <Why>
         <span>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</span>
         {filled && filled.roundKey === chosenRoundKey ? <span className="rounded-xl bg-surface-2 px-3 py-2 text-ink-2">{interviewDraftLine(filled)}</span> : null}
@@ -265,20 +258,22 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
       {a.interviewPlan.length === 0 ? <Alert tone="caution">This job has no interview rounds yet. Add them on the job's Interview plan tab.</Alert> : (
         <>
           <Field label="Round" htmlFor="iv-round"><select ref={first} id="iv-round" className="select" value={chosenRoundKey ?? ""} onChange={(e) => { setRoundKey(e.target.value); setInterviewers(null); }}>{a.interviewPlan.map((r) => <option key={r.key} value={r.key}>{r.title} · {r.durationMinutes} min · {r.format.replace("_", " ")}</option>)}</select></Field>
-          {/* each interviewer a row to tick, tinted once ticked */}
+          {/* each interviewer the kit's option row (tinted once ticked, ringed under the keyboard), their calendar's state at its end */}
           <fieldset className="grid gap-2">
             <legend className="small muted mb-2">Interviewers</legend>
             {members.isLoading || currentPlan.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team, so nobody can be picked yet." onRetry={() => members.refetch()} /> : activeMembers.map((m) => (
-              <label key={m.userId} className="check flex-wrap items-center">
+              <label key={m.userId} className="option-row flex-wrap">
                 <input type="checkbox" checked={chosenInterviewers.includes(m.userId)} onChange={(e) => setInterviewers(e.target.checked ? [...chosenInterviewers, m.userId] : chosenInterviewers.filter((x) => x !== m.userId))} />
-                {m.name ?? m.email} <Chip tone={m.schedulable ? "good" : "caution"}>{m.schedulable ? "availability known" : "no calendar or hours yet"}</Chip>
+                <span className="min-w-0 wrap-anywhere">{m.name ?? m.email}</span>
+                <Chip tone={m.schedulable ? "good" : "caution"} className="ml-auto">{m.schedulable ? "availability known" : "no calendar or hours yet"}</Chip>
               </label>
             ))}
           </fieldset>
           {chosenInterviewers.length && (members.data ?? []).some((m) => chosenInterviewers.includes(m.userId) && !m.schedulable) ? <Alert tone="caution">An interviewer has neither a connected calendar nor declared hours. Times cannot be offered until they add one in Settings; they will be asked.</Alert> : null}
           {link.offerCalendar ? <Field label="Meeting link" htmlFor="iv-link"><select id="iv-link" className="select" value={link.mode} onChange={(e) => setLinkPicked(e.target.value as LinkChoice)}><option value="calendar">Create it with the calendar event</option><option value="pasted">I'll paste a link</option></select></Field> : null}
+          {/* "(optional)" says it may stay empty; a video round without a link says what that means on the line below */}
           {link.mode === "pasted" ? (
-            <Field label={link.urlRequired ? "Link" : "Meeting link (optional)"} htmlFor="iv-url" hint={link.urlRequired ? undefined : "For a video call, paste its link. Leave it empty for an interview in person."}>
+            <Field label={link.urlRequired ? "Link" : "Meeting link (optional)"} htmlFor="iv-url">
               <input id="iv-url" className="input" type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" />
             </Field>
           ) : null}
@@ -288,7 +283,8 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
           <details className="more">
             <summary>{line.trim() ? "Your personal line (it goes with the times)" : "Add a personal line (optional)"}</summary>
             <div className="stack gap-3">
-              <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`It goes with the times, under your name: one or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
+              {/* the hint states the length the box stops at (else typing stops without a word) and the rule the line is checked against */}
+              <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`One or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
                 <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => { setLine(e.target.value); if (!e.target.value.trim()) setKept(null); }} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
               </Field>
               {suggestion?.line && !kept ? (
@@ -346,7 +342,6 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
       <p className={LEAD}>Recorded with your name. {outcomeNoticeText(activeInterviews(a.interviews))}</p>
       <Why>You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</Why>
       <div className="row">
-        <span className="small">Hired them?</span>
         <Button size="sm" onClick={onHire}>Open the hire sheet</Button>
       </div>
       {pastDecision ? null : (

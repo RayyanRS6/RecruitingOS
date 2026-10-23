@@ -3,14 +3,14 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CHOICE_OPTIONS_MAX, COMPANY_QUESTIONS_LABEL, PACKET_VISIBILITY_LABEL, QUICK_QUESTIONS_LABEL, QUICK_QUESTIONS_MAX, WRITTEN_QUESTIONS_LABEL, WRITTEN_QUESTIONS_MAX } from "@ros/contracts";
-import { Alert, Button, Card, Chip, Field, IconButton } from "@ros/ui";
+import { Alert, Button, Card, Chip, Field, IconButton, IconLabel } from "@ros/ui";
 import { api, ApiError, type NewVersionResponse, type WhoPosts } from "../../api/client";
 import { savedVersionToast } from "../../publishing";
 import { toast } from "../../toast";
 import { moveRow } from "../new-role/packet-form";
 import { ORDINAL } from "../RolePlan";
 import {
-  APPLICANT_QUESTIONS_LEDE, FAIRNESS_LINE, QUICK_HINT, QUICK_KINDS, SCREENING_FALLBACK_LINE, WRITTEN_HINT,
+  APPLICANT_QUESTIONS_LEDE, FAIRNESS_LINE, LOOK_FOR_USE, QUICK_HINT, QUICK_KINDS, SCREENING_FALLBACK_LINE,
   eligibilityList, newQuickRow, newWrittenRow, questionsOf, questionsPayload, questionsProblem, quickAnswerWords, quickRowsFrom, refusalsByRow, withKind, writtenList, writtenRowsFrom, writtenSource,
   type PacketWithQuestions, type QuickKind, type QuickRow, type WrittenRow,
 } from "./applicant-questions";
@@ -39,7 +39,8 @@ export function ApplicantQuestions(props: {
   const source = writtenSource(p);
   const base = props.editBase;
   return (
-    <Card title={COMPANY_QUESTIONS_LABEL} aside={<Chip>{PACKET_VISIBILITY_LABEL.asked}</Chip>}>
+    // the eye: candidates are asked these (its words are its accessible name and tooltip, as on the job's other cards)
+    <Card title={COMPANY_QUESTIONS_LABEL} aside={<IconLabel icon="eye" label={PACKET_VISIBILITY_LABEL.asked} className="self-center" />}>
       <div className="stack gap-5">
         <p className="small muted max-w-[80ch]">{APPLICANT_QUESTIONS_LEDE}</p>
         {editing && base ? (
@@ -67,7 +68,7 @@ export function ApplicantQuestions(props: {
                     </li>
                   ))}
                 </ol>
-              ) : <p className="small muted">None yet. Applicants send their details and go straight to the chat.</p>}
+              ) : <p className="small muted">None yet.</p>}
             </div>
             <div className="stack gap-2">
               <h3 className={LIST_HEADING}>{WRITTEN_QUESTIONS_LABEL}</h3>
@@ -86,7 +87,6 @@ export function ApplicantQuestions(props: {
                 </ol>
               ) : <p className="small muted">None yet.</p>}
             </div>
-            <p className="small muted max-w-[80ch]">{FAIRNESS_LINE}</p>
             {base || props.onEditEligibility ? (
               <div className="row">
                 {base ? <Button size="sm" icon="edit" onClick={() => setEditing(true)}>Change these questions</Button> : null}
@@ -141,14 +141,15 @@ export function QuestionsEditor(props: { roleId: string; baseVersion: number; pa
         <legend className={LEGEND}>{`${QUICK_QUESTIONS_LABEL} (up to ${QUICK_QUESTIONS_MAX})`}</legend>
         <span className="hint">{QUICK_HINT}</span>
         <QuickRows rows={quick} onChange={setQuick} refusals={refusals} />
-        <span className="small muted">{quickFilled >= QUICK_QUESTIONS_MAX ? `That is the most there can be (${QUICK_QUESTIONS_MAX}).` : null}</span>
+        {quickFilled >= QUICK_QUESTIONS_MAX ? <span className="small muted">{`That is the most there can be (${QUICK_QUESTIONS_MAX}).`}</span> : null}
       </fieldset>
+      {/* "What a good answer shows" says in its own label that only the team sees it, and in its tooltip that the chat
+          reads it (LOOK_FOR_USE) */}
       <fieldset className="field gap-2">
         <legend className={LEGEND}>{`${WRITTEN_QUESTIONS_LABEL} (up to ${WRITTEN_QUESTIONS_MAX})`}</legend>
-        <span className="hint">{WRITTEN_HINT}</span>
         {writtenSource(props.packet) === "screening" ? <p className="small muted">{SCREENING_FALLBACK_LINE}</p> : null}
         <WrittenRows rows={written} onChange={setWritten} refusals={refusals} />
-        <span className="small muted">{writtenFilled > WRITTEN_QUESTIONS_MAX ? `Keep at most ${WRITTEN_QUESTIONS_MAX}; take ${writtenFilled - WRITTEN_QUESTIONS_MAX} out.` : null}</span>
+        {writtenFilled > WRITTEN_QUESTIONS_MAX ? <span className="small muted">{`Keep at most ${WRITTEN_QUESTIONS_MAX}; take ${writtenFilled - WRITTEN_QUESTIONS_MAX} out.`}</span> : null}
       </fieldset>
       <p className="small muted">{FAIRNESS_LINE}</p>
       {problem ? <Alert tone="caution">{problem}</Alert> : null}
@@ -218,7 +219,7 @@ function WrittenRows({ rows, onChange, refusals }: { rows: WrittenRow[]; onChang
         return (
           <div key={r.key ?? `new-${i}`} className={EDIT_ROW}>
             <Field label={`${i + 1}. Question`} htmlFor={`wq-q-${i}`}><input id={`wq-q-${i}`} className="input" value={r.question} maxLength={400} onChange={(e) => update(i, { question: e.target.value })} placeholder="e.g. Tell us about a time you calmed a nervous patient." /></Field>
-            <Field label={`What a good answer shows (${PACKET_VISIBILITY_LABEL.internal.toLowerCase()})`} htmlFor={`wq-look-${i}`}><input id={`wq-look-${i}`} className="input" value={r.lookFor} maxLength={400} onChange={(e) => update(i, { lookFor: e.target.value })} placeholder="e.g. A real example: what they noticed, what they did, how it ended" /></Field>
+            <Field label={`What a good answer shows (${PACKET_VISIBILITY_LABEL.internal.toLowerCase()})`} htmlFor={`wq-look-${i}`}><input id={`wq-look-${i}`} className="input" title={LOOK_FOR_USE} value={r.lookFor} maxLength={400} onChange={(e) => update(i, { lookFor: e.target.value })} placeholder="e.g. A real example: what they noticed, what they did, how it ended" /></Field>
             {refused ? <Alert tone="critical">{refused}</Alert> : null}
             <div className={ROW_FOOT}>
               <label className={REQUIRED}><input type="checkbox" checked={r.required} onChange={(e) => update(i, { required: e.target.checked })} /> Every applicant must answer it (they can still skip, and say why)</label>

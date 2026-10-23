@@ -3,23 +3,24 @@
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IntakeFacts, IntakePayCard, IntakeQuestion, IntakeSessionSummary, IntakeSessionView, PlanRoom } from "@ros/contracts";
-import { Alert, Button, Eyebrow, Field, Icon } from "@ros/ui";
+import { Alert, Button, Field, Icon } from "@ros/ui";
 import { api, ApiError, type IntakeStartResponse, type IntakeTurnResponse } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
 import { writeDraftClosingDate } from "../../publishing";
 import { browserStorage } from "../../start-hire";
 import { toast } from "../../toast";
 import { AssistantMark } from "./Conversation";
-import { OPTION_LABEL, OPTION_ROW, OPTION_TAG, OPTIONS, OWN_CHIP, OWN_CHIP_X, OWN_CHIPS } from "./look";
+import { OPTION_ROW_TAGGED, OPTION_WORDS, OPTIONS, OWN_CHIP, OWN_CHIP_X, OWN_CHIPS } from "./look";
+import { OriginMark } from "./marks";
 import { PayFields } from "./PayCard";
 import {
-  BELOW_CHOICES, DEAL_BREAKERS_MAX, EMPLOYMENT_CHOICES, EXPERIENCE_CHOICES, MUST_HAVES_MAX, OWN_QUESTIONS_MAX, QUICK_STEPS, STEP_HINT, STEP_LABEL, STEP_QUESTION, WORK_MODEL_CHOICES,
+  BELOW_CHOICES, DEAL_BREAKERS_MAX, EMPLOYMENT_CHOICES, EXPERIENCE_CHOICES, MUST_HAVES_MAX, OWN_QUESTIONS_MAX, QUICK_STEPS, STEP_HINT, STEP_QUESTION, WORK_MODEL_CHOICES,
   addItem, allMustHaves, clearQuickStart, closingDateAsked, emptyQuickState, enterMovesOn, experienceMustHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, mustHavesRoom, offeredQuestions, openDealBreakers,
   quickStartDraftKey, quickStartPatch, readQuickStart, reviewRows, skippedAnswers, stepProblem, suggestedMustHaves, todayDay, toggleItem, writeQuickStart,
   type QuickAnswers, type QuickScope, type QuickState,
 } from "./quick-start";
 import { GENERAL_QUESTIONS } from "./quick-starts";
-import { AI_NOTE, SUGGESTING_QUESTIONS, SUGGESTING_SKILLS, adoptSuggestion, aiSuggestFor, fetchSuggestions, suggestBody, suggestKey, suggestQueryKey, suggestView, wantsAiSuggestions, type AiSuggest, type SuggestView } from "./quick-suggest";
+import { SUGGESTING_QUESTIONS, SUGGESTING_SKILLS, adoptSuggestion, aiSuggestFor, fetchSuggestions, suggestBody, suggestKey, suggestQueryKey, suggestView, wantsAiSuggestions, type AiSuggest, type SuggestView } from "./quick-suggest";
 import { NEW_ROLE_FRESH_HREF, errorWords, startHireHref, type RecruiterAction } from "./rules";
 import { RoomAlert } from "./StartView";
 
@@ -43,13 +44,12 @@ const SUGGEST_UNTIL = QUICK_STEPS.indexOf("questions");
  * the assistant suggests must-haves and questions from the answers so far (quick-suggest.ts, Wave S3 G3): once per set
  * of answers, in the background from the pay step on, never holding anyone up, and nothing shown when it fails.
  */
-export function QuickStart({ companyName, scope }: { companyName: string | null; scope: QuickScope | null }) {
+export function QuickStart({ scope }: { scope: QuickScope | null }) {
   const qc = useQueryClient();
   const nav = useNavigate();
   const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<CompanyLite>("/api/v1/companies/current") });
   const drafts = useQuery({ queryKey: ["intake", "mine"], queryFn: () => api.get<{ sessions: IntakeSessionSummary[]; room: PlanRoom }>("/api/v1/intake/sessions?mine=1") });
   const vertical = company.data?.vertical ?? null;
-  const name = companyName ?? company.data?.name ?? null;
 
   // The first draw is the first step, the same on the server and in the browser; what this browser kept comes after.
   // Kept per company and per person: with nobody known (never on this page in practice) nothing is kept at all. The
@@ -230,21 +230,20 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
   };
 
   const primary = step === "review" ? "Write the job post" : state.fromReview ? "Back to review" : "Next";
+  const hint = STEP_HINT[step];
 
   return (
+    // .start is a hook only: the frame (AppShell) gives a page holding it 1440px
     <div className="start mx-auto grid w-full max-w-[760px] gap-4">
-      {/* One question a screen, in a form card (screenshot 5): where it is in the ten steps, a thin plum-to-coral bar, the
-          question, the answers, then Back on the left and Next on the right. */}
+      {/* One question a screen, in a form card (screenshot 5): where it is in the ten steps over a thin plum-to-coral
+          bar, the question (bare h1, as tests pin it), the answers, then Back on the left and Next on the right. */}
       <div className="card grid gap-5 rounded-[20px] p-5 sm:p-8 md:[&>h1]:text-[38px] [&>h1:focus-visible]:rounded-md [&>h1:focus-visible]:outline-offset-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <Eyebrow>{name ? `New job · ${name}` : "New job"}</Eyebrow>
-          <p className="text-[12.5px] font-medium tabular-nums text-ink-3" aria-live="polite">Step {state.step + 1} of {QUICK_STEPS.length} · {STEP_LABEL[step]}</p>
-        </div>
-        <div aria-hidden="true" className="-mt-2 h-1 overflow-hidden rounded-full bg-surface-3">
+        <p className="text-[12.5px] font-medium tabular-nums text-ink-3" aria-live="polite">Step {state.step + 1} of {QUICK_STEPS.length}</p>
+        <div aria-hidden="true" className="-mt-3 h-1 overflow-hidden rounded-full bg-surface-3">
           <div className="h-full origin-left scale-x-(--done) rounded-full bg-linear-to-r from-primary to-accent transition-transform duration-300 ease-soft" style={{ "--done": String((state.step + 1) / QUICK_STEPS.length) } as CSSProperties} />
         </div>
         <h1 ref={heading} tabIndex={-1}>{STEP_QUESTION[step]}</h1>
-        <p className="-mt-2 text-[15px] text-ink-2">{STEP_HINT[step]}</p>
+        {hint ? <p className="-mt-2 text-[15px] text-ink-2">{hint}</p> : null}
         {full && room ? <RoomAlert room={room} ask={limit?.ask ?? null} /> : null}
         <form className="grid gap-4" onSubmit={onSubmit} onKeyDown={onKeyDown} noValidate>
           {/* each step's answers fade in as the step opens */}
@@ -264,20 +263,26 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
             ) : (
               <Button variant="ghost" icon="arrow-left" onClick={back}>{state.fromReview ? "Review" : "Back"}</Button>
             )}
-            <Button type="submit" variant="primary" iconEnd={step === "review" ? "sparkle" : "arrow-right"} loading={write.isPending} disabled={step === "review" && full}>{primary}</Button>
+            {/* Enter on a field moves on too (onKeyDown above): said as the button's tooltip, never as a line */}
+            <Button type="submit" variant="primary" iconEnd={step === "review" ? "sparkle" : "arrow-right"} loading={write.isPending} disabled={step === "review" && full} title="Press Enter to go on.">{primary}</Button>
           </div>
         </form>
       </div>
+      {/* where the answers are kept (a data notice: they hold the private most-you-would-pay), and the way to clear them */}
       <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-center text-[12.5px] text-ink-3">
-        <Icon name="check" size={14} className="text-good" /> Press Enter to go on. Your answers are kept in this browser.
+        <Icon name="check" size={14} className="text-good" /> Your answers are kept in this browser.
         {hasAnswers(a) || state.step > 0 ? <> <button type="button" className="link-btn" onClick={startOver}>Start over</button></> : null}
       </p>
     </div>
   );
 }
 
-/** A group of choices, one or several, as rows to tick (the question card's look). */
-function Choices(props: { legend: string; name: string; multi?: boolean; options: ReadonlyArray<{ value: string; label: string; note?: string }>; checked: (value: string) => boolean; onPick: (value: string) => void; disabled?: boolean }) {
+/**
+ * A group of choices, one or several, as rows to tick (the kit's option rows, as on the question card). An offered
+ * answer's `origin` is the mark at its row's end: our hiring guide or the pasted job ad as an icon, and the assistant's
+ * in words, "AI suggestion" with the sparkle (an AI-use notice: these steps carry no other AI line).
+ */
+function Choices(props: { legend: string; name: string; multi?: boolean; options: ReadonlyArray<{ value: string; label: string; origin?: "playbook" | "assistant" | "ad" }>; checked: (value: string) => boolean; onPick: (value: string) => void; disabled?: boolean }) {
   return (
     <fieldset className="min-w-0">
       <legend className="sr-only">{props.legend}</legend>
@@ -285,10 +290,10 @@ function Choices(props: { legend: string; name: string; multi?: boolean; options
         {props.options.map((o) => {
           const on = props.checked(o.value);
           return (
-            <label key={o.value} className={OPTION_ROW} data-checked={on ? "true" : undefined}>
+            <label key={o.value} className={o.origin === "assistant" ? OPTION_ROW_TAGGED : "option-row"}>
               <input type={props.multi ? "checkbox" : "radio"} name={props.name} value={o.value} aria-label={o.label} checked={on} disabled={props.disabled} onChange={() => props.onPick(o.value)} />
-              <span className={OPTION_LABEL}>{o.label}</span>
-              {o.note ? <span className={OPTION_TAG}>{o.note}</span> : null}
+              <span className={OPTION_WORDS}>{o.label}</span>
+              <OriginMark origin={o.origin} aiInWords />
             </label>
           );
         })}
@@ -297,12 +302,17 @@ function Choices(props: { legend: string; name: string; multi?: boolean; options
   );
 }
 
-/** "Add your own": a box and Add; Enter adds the words, or moves on when the box is empty. The items added sit above it as chips. */
-function AddOwn(props: { id: string; label: string; placeholder: string; items: readonly string[]; max: number; onAdd: (text: string) => void; onRemove: (text: string) => void; disabled?: boolean }) {
+/**
+ * "Add your own": a box and Add; Enter adds the words, or moves on when the box is empty. The items added sit above it as
+ * chips. The label is for screen readers only, unless `showLabel` says where the words go (the screening step's own
+ * questions are asked in the AI interview, not on the form).
+ */
+function AddOwn(props: { id: string; label: string; showLabel?: boolean; placeholder: string; items: readonly string[]; max: number; onAdd: (text: string) => void; onRemove: (text: string) => void; disabled?: boolean }) {
   const [text, setText] = useState("");
   const add = () => { props.onAdd(text); setText(""); };
   return (
-    <div className="grid min-w-0 gap-2">
+    <div className={props.showLabel ? "field" : "grid min-w-0 gap-2"}>
+      <label htmlFor={props.id} className={props.showLabel ? undefined : "sr-only"}>{props.label}</label>
       {props.items.length ? (
         <ul className={OWN_CHIPS} aria-label="Added by you">
           {props.items.map((t) => (
@@ -314,7 +324,6 @@ function AddOwn(props: { id: string; label: string; placeholder: string; items: 
         </ul>
       ) : null}
       <div className="flex min-w-0 items-center gap-2">
-        <label htmlFor={props.id} className="sr-only">{props.label}</label>
         <input
           id={props.id}
           className="input"
@@ -402,7 +411,7 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
       return (
         <>
           {suggested.length ? (
-            <Choices legend={STEP_QUESTION.musts} name="qs-musts" multi options={[...guide.map((s) => ({ value: s, label: s, note: "Our hiring guide" })), ...ai.map((s) => ({ value: s, label: s, note: AI_NOTE })), ...fromAd.map((s) => ({ value: s, label: s, note: "Your job ad" }))]} checked={(v) => a.mustHaves.some((m) => m.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ mustHaves: toggleItem(a.mustHaves, v) })} />
+            <Choices legend={STEP_QUESTION.musts} name="qs-musts" multi options={[...guide.map((s) => ({ value: s, label: s, origin: "playbook" as const })), ...ai.map((s) => ({ value: s, label: s, origin: "assistant" as const })), ...fromAd.map((s) => ({ value: s, label: s, origin: "ad" as const }))]} checked={(v) => a.mustHaves.some((m) => m.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ mustHaves: toggleItem(a.mustHaves, v) })} />
           ) : null}
           {suggest.kind === "waiting" ? <Suggesting words={SUGGESTING_SKILLS} /> : null}
           <AddOwn id="qs-must-own" label="Add a must-have" placeholder={suggested.length ? "Add your own…" : "e.g. Two years in a busy dental office"} items={own} max={room} onAdd={(t) => set({ mustHaves: addItem(a.mustHaves, t, room) })} onRemove={(t) => set({ mustHaves: a.mustHaves.filter((m) => m !== t) })} />
@@ -432,14 +441,16 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
                 {a.dealBreakers.map((d) => {
                   const on = isOpen(d);
                   return (
-                    <label key={d} className={OPTION_ROW} data-checked={on ? "true" : undefined}>
+                    // the word at the end says what the tick does: counted as a must-have, or used to judge nobody
+                    <label key={d} className={OPTION_ROW_TAGGED}>
                       <input type="checkbox" checked={on} aria-label={`Count "${d}" openly as a must-have`} disabled={!on && roomLeft <= 0} onChange={() => set({ dealBreakersPrivate: toggleItem(a.dealBreakersPrivate, d) })} />
-                      <span className={OPTION_LABEL}>{d}</span>
-                      <span className={OPTION_TAG}>{on ? "Must-have" : "Not used to judge"}</span>
+                      <span className={OPTION_WORDS}>{d}</span>
+                      <span className="option-tag">{on ? "Must-have" : "Not used to judge"}</span>
                     </label>
                   );
                 })}
               </div>
+              {/* how applicants are judged (Q19), kept like the Edit form's matching line */}
               <p className="small muted">Everyone is checked openly against must-haves. An unticked one is not used to judge anyone.</p>
             </fieldset>
           ) : null}
@@ -452,9 +463,9 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
       const fromAi = (q: string) => suggest.kind === "ai" && suggest.questions.some((x) => sameText(x, q)) && !GENERAL_QUESTIONS.some((g) => sameText(g, q));
       return (
         <>
-          <Choices legend={STEP_QUESTION.questions} name="qs-questions" multi options={suggested.map((q) => ({ value: q, label: q, ...(fromAi(q) ? { note: AI_NOTE } : {}) }))} checked={(v) => !a.questionsOff.some((x) => x.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ questionsOff: toggleItem(a.questionsOff, v) })} />
+          <Choices legend={STEP_QUESTION.questions} name="qs-questions" multi options={suggested.map((q) => ({ value: q, label: q, ...(fromAi(q) ? { origin: "assistant" as const } : {}) }))} checked={(v) => !a.questionsOff.some((x) => x.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ questionsOff: toggleItem(a.questionsOff, v) })} />
           {suggest.kind === "waiting" ? <Suggesting words={SUGGESTING_QUESTIONS} /> : null}
-          <AddOwn id="qs-question-own" label="Add a question for the AI interview" placeholder="Add your own question…" items={a.ownQuestions} max={OWN_QUESTIONS_MAX} onAdd={(t) => set({ ownQuestions: addItem(a.ownQuestions, t, OWN_QUESTIONS_MAX) })} onRemove={(t) => set({ ownQuestions: a.ownQuestions.filter((q) => q !== t) })} />
+          <AddOwn id="qs-question-own" label="Add a question for the AI interview" showLabel placeholder="Add your own question…" items={a.ownQuestions} max={OWN_QUESTIONS_MAX} onAdd={(t) => set({ ownQuestions: addItem(a.ownQuestions, t, OWN_QUESTIONS_MAX) })} onRemove={(t) => set({ ownQuestions: a.ownQuestions.filter((q) => q !== t) })} />
         </>
       );
     }

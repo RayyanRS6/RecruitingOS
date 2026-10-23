@@ -2,7 +2,7 @@
 
 import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, cn, Drawer, ErrorState, Field, Menu, numHead, Segmented, Skeleton, Table, Tabs, Timeline, useTableSort } from "@ros/ui";
+import { Alert, Button, Card, Chip, cn, Drawer, ErrorState, Field, IconLabel, Menu, numHead, Segmented, Skeleton, Table, Tabs, Timeline, useTableSort } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { toast } from "../../toast";
 import { dayKey } from "../candidate-panel/helpers";
@@ -29,15 +29,36 @@ function Raw(props: { value: unknown }) {
 /** One plain part of a drawer: a small heading over its content, on its own card (the reference console's side card). */
 function DrawerPart(props: { title: string; children: ReactNode }) {
   return (
-    <section className="stack gap-3 rounded-2xl border border-line bg-surface p-5 shadow-xs">
+    <Card className="stack">
       <h3 className="eyebrow">{props.title}</h3>
       {props.children}
-    </section>
+    </Card>
   );
 }
 
-/** The facts at the top of a drawer: the "at a glance" card. */
-const FACTS = "kv rounded-2xl border border-line bg-surface p-5 shadow-xs";
+/** The facts at the top of a drawer: the kit's "at a glance" rows (dt and dd pairs straight inside), on a card. */
+function Facts(props: { children: ReactNode }) {
+  return (
+    <Card>
+      <dl className="glance">{props.children}</dl>
+    </Card>
+  );
+}
+
+/**
+ * One figure of Queue health: the kit's stat cell, its label and number kept a dt and its dd. The pair sits straight in
+ * the cell (a dl allows one div between it and its dt/dd, never two), so the cell itself stacks them, as stat-cell-text
+ * would.
+ */
+function Figure(props: { label: string; children: ReactNode; className?: string }) {
+  return (
+    <div className="stat-cell flex-col items-start justify-center gap-0.5">
+      <dt className="stat-cell-label">{props.label}</dt>
+      <dd className={cn("stat-cell-value", props.className)}>{props.children}</dd>
+    </div>
+  );
+}
+
 /** A toolbar over a list: filters on the left, a note or a control on the right, wrapping on a phone. */
 const TOOLBAR = "flex flex-wrap items-center justify-between gap-3";
 /**
@@ -48,12 +69,11 @@ const TOOLBAR = "flex flex-wrap items-center justify-between gap-3";
  */
 const ROW_ENTER = "motion-safe:animate-enter motion-safe:[animation-delay:calc(var(--i)*30ms)]";
 const stagger = (i: number) => ({ "--i": Math.min(i, 7) }) as CSSProperties;
-/** A row's name that opens its drawer: the row's title in ink, a quiet pill under the mouse, its text in line with the column. */
-const NAME_BUTTON = "btn quiet sm -ml-2.5 justify-start px-2.5 text-left text-ink";
-/** One figure of a stat box: what it counts (small) over the number (large, tabular), on the card's surface. */
-const FIGURE = "grid content-start gap-1 bg-surface px-4 py-3.5";
-const FIGURE_LABEL = "text-[13px] text-ink-2";
-const FIGURE_VALUE = "font-display text-[28px] font-bold leading-[1.1] tracking-[-0.02em] text-ink tabular-nums";
+/**
+ * Where a row's name that opens its drawer sits (a quiet small Button): the row's title in ink, its text in line with the
+ * column, the button's pill showing only under the mouse.
+ */
+const NAME_BUTTON = "-ml-2.5 justify-start px-2.5 text-left text-ink";
 
 /** A customer's name from the customers list the console already reads (no API change); an unknown id reads as a short id. */
 function useCustomerNames(): (companyId: string | null) => string {
@@ -155,7 +175,7 @@ export function Runs({ initialShow = "" }: { initialShow?: string }) {
           {/* no entrance here: newest change first, so a retried run moves to the top and the rows it passes would rise in again */}
           {(q.data ?? []).map((r) => (
             <tr key={r.id}>
-              <td><button type="button" className={NAME_BUTTON} onClick={() => setOpened(r)}>{workflowWords(r.workflowKey)}</button></td>
+              <td><Button size="sm" variant="quiet" className={NAME_BUTTON} onClick={() => setOpened(r)}>{workflowWords(r.workflowKey)}</Button></td>
               <td><Chip tone={runTone(r.status)}>{runStatusWords(r.status)}</Chip></td>
               <td className="text-ink-2">{codeWords(r.currentStep)}</td>
               <td className="nowrap text-ink-2"><span title={exactWhen(r.updatedAt)}>{whenShort(r.updatedAt)}</span></td>
@@ -180,24 +200,26 @@ export function RunDrawer(props: { row: RunRow; onClose: () => void }) {
   const retry = useRetryRun();
   const customerName = useCustomerNames();
   const run = q.data ? { ...row, ...q.data.run } : row;
+  // the status is a chip in the facts just below, so the line under the title leaves it out
   return (
     <Drawer
       open
       onClose={props.onClose}
       title={workflowWords(run.workflowKey)}
-      sub={`${runStatusWords(run.status)} · step: ${codeWords(run.currentStep)} · updated ${exactWhen(run.updatedAt)}`}
+      sub={`Step: ${codeWords(run.currentStep)} · updated ${exactWhen(run.updatedAt)}`}
       actions={run.status === "failed" ? <Button size="sm" variant="primary" loading={retry.isPending} onClick={() => retry.mutate(run.id)}>Retry</Button> : null}
     >
       <div className="stack gap-4">
-        <dl className={FACTS}>
+        <Facts>
           <dt>Customer</dt><dd>{customerName(run.companyId)}</dd>
           <dt>About</dt><dd>{codeWords(run.subject.type)} <span className="small muted">{run.subject.id.slice(0, 8)}</span></dd>
           <dt>Status</dt><dd><Chip tone={runTone(run.status)}>{runStatusWords(run.status)}</Chip></dd>
           {run.wait ? <><dt>Waiting on</dt><dd>{waitWords(run.wait)}</dd></> : null}
           <dt>Attempts</dt><dd>{run.attempts}</dd>
           {run.lastError ? <><dt>Error</dt><dd className="text-critical [overflow-wrap:anywhere]">{run.lastError}</dd></> : null}
-          <dt>Workflow</dt><dd className="small muted">{run.workflowKey}</dd>
-        </dl>
+          {/* the code, quieter than the facts (utilities: the glance's own dd rule outranks .small and .muted) */}
+          <dt>Workflow</dt><dd className="text-[13px] text-ink-3">{run.workflowKey}</dd>
+        </Facts>
         {q.error ? <ErrorState message="Could not load this run." onRetry={() => q.refetch()} /> : !q.data ? <Skeleton lines={6} /> : (
           <>
             <DrawerPart title="What happened">
@@ -281,7 +303,7 @@ export function AiRuns() {
         {s.apply(q.data ?? [], { when: (r) => Date.parse(r.createdAt), cost: (r) => Number(r.costUsd), latency: (r) => r.latencyMs }).map((r) => (
           <tr key={r.id}>
             <td className="nowrap text-ink-2"><span title={exactWhen(r.createdAt)}>{whenShort(r.createdAt)}</span></td>
-            <td><button type="button" className={NAME_BUTTON} onClick={() => setOpened(r)}>{codeWords(r.task)}</button></td>
+            <td><Button size="sm" variant="quiet" className={NAME_BUTTON} onClick={() => setOpened(r)}>{codeWords(r.task)}</Button></td>
             <td className="small">{r.model}</td>
             <td><Chip tone={r.status === "ok" ? "good" : "critical"}>{aiStatusWords(r.status)}</Chip></td>
             <td className="num"><span title={exactMoney(Number(r.costUsd), 5)}>{money(Number(r.costUsd))}</span><div className="small muted">{r.latencyMs} ms</div></td>
@@ -300,10 +322,11 @@ export function AiRunDrawer(props: { row: AiRunRow; onClose: () => void }) {
   const customerName = useCustomerNames();
   const run = q.data ? { ...row, ...q.data.run } : row;
   const detail = q.data?.run;
+  // the line under the title is when it ran; its status is a chip in the facts just below
   return (
-    <Drawer open onClose={props.onClose} title={codeWords(run.task)} sub={`${aiStatusWords(run.status)} · ${exactWhen(run.createdAt)}`}>
+    <Drawer open onClose={props.onClose} title={codeWords(run.task)} sub={exactWhen(run.createdAt)}>
       <div className="stack gap-4">
-        <dl className={FACTS}>
+        <Facts>
           <dt>Customer</dt><dd>{customerName(run.companyId)}</dd>
           <dt>Agent</dt><dd>{codeWords(run.agent)}</dd>
           <dt>Model</dt><dd>{run.model}{detail?.modelVersion ? <span className="small muted"> ({detail.modelVersion})</span> : null}</dd>
@@ -314,7 +337,7 @@ export function AiRunDrawer(props: { row: AiRunRow; onClose: () => void }) {
           <dt>Time taken</dt><dd>{run.latencyMs} ms</dd>
           <dt>Confidence</dt><dd>{run.confidence ? codeWords(run.confidence) : "Not given"}</dd>
           {detail?.error ? <><dt>Error</dt><dd className="text-critical [overflow-wrap:anywhere]">{detail.error}</dd></> : null}
-        </dl>
+        </Facts>
         {q.error ? <ErrorState message="Could not load this AI run." onRetry={() => q.refetch()} /> : !q.data ? <Skeleton lines={4} /> : (
           <>
             <DrawerPart title="Result">
@@ -382,9 +405,10 @@ export function Costs({ initialPeriod = "month" }: { initialPeriod?: CostPeriod 
     <div className="stack gap-4">
       <div className={TOOLBAR}>
         <Segmented ariaLabel="Which spend" value={period} onChange={setPeriod} options={[{ value: "month", label: "This month" }, { value: "all", label: "All time" }]} />
-        {rows ? <p className="text-[14px] text-ink-2">{period === "month" ? "Spent so far this month" : "Total model spend recorded"}: <strong className="ml-1 font-display text-2xl font-bold tracking-[-0.02em] text-ink tabular-nums" title={exactMoney(total)}>{money(total)}</strong></p> : null}
+        {/* "at list prices" rides on the exact figure's tooltip */}
+        {rows ? <p className="text-[14px] text-ink-2">{period === "month" ? "Spent so far this month" : "Total model spend recorded"}: <strong className="ml-1 font-display text-2xl font-bold tracking-[-0.02em] text-ink tabular-nums" title={`${exactMoney(total)} at list prices`}>{money(total)}</strong></p> : null}
       </div>
-      <p className="small muted -mt-1">At list prices; the fake provider is free.{period === "month" && since ? ` Counted from ${since}.` : ""}</p>
+      {period === "month" && since ? <p className="small muted -mt-1">{`Counted from ${since}.`}</p> : null}
       {q.error ? <ErrorState message="Could not load costs." onRetry={() => q.refetch()} /> : (
         <>
           <Table
@@ -440,15 +464,15 @@ export function Queue() {
   // A failed load says so instead of loading for ever; a failed refresh keeps the last figures on screen.
   if (!q.data) return q.error ? <ErrorState message="Could not load the queue." onRetry={() => q.refetch()} /> : <Skeleton lines={3} />;
   return (
-    <Card title="Queue health">
-      {/* the four figures as the reference console's stat cells: one box split by hairlines (each pair stays a dt and its dd) */}
-      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line lg:grid-cols-4">
-        <div className={FIGURE}><dt className={FIGURE_LABEL}>Jobs waiting to run</dt><dd className={FIGURE_VALUE}>{q.data.queued}</dd></div>
-        <div className={FIGURE}><dt className={FIGURE_LABEL}>Oldest waiting job</dt><dd className="text-[15px] font-semibold text-ink">{q.data.oldestQueuedAt ? exactWhen(q.data.oldestQueuedAt) : "none"}</dd></div>
-        <div className={FIGURE}><dt className={FIGURE_LABEL}>Jobs that failed</dt><dd className={cn(FIGURE_VALUE, q.data.failed > 0 && "text-critical")}>{q.data.failed}</dd></div>
-        <div className={FIGURE}><dt className={FIGURE_LABEL}>Workflow runs waiting</dt><dd className={FIGURE_VALUE}>{q.data.waitingRuns}</dd></div>
+    // that the figures are live is said by the mark beside the title (its words are its name and tooltip)
+    <Card title="Queue health" aside={<IconLabel icon="activity" label="These figures refresh every 5 seconds." />}>
+      {/* the four figures as the kit's stat cells: one box split by hairlines (each pair stays a dt and its dd) */}
+      <dl className="stat-strip mb-4">
+        <Figure label="Jobs waiting to run">{q.data.queued}</Figure>
+        <Figure label="Oldest waiting job" className="font-sans text-[15px] font-semibold tracking-normal">{q.data.oldestQueuedAt ? exactWhen(q.data.oldestQueuedAt) : "none"}</Figure>
+        <Figure label="Jobs that failed" className={q.data.failed > 0 ? "text-critical" : undefined}>{q.data.failed}</Figure>
+        <Figure label="Workflow runs waiting">{q.data.waitingRuns}</Figure>
       </dl>
-      <p className="small muted mt-3 mb-4 flex items-center gap-2"><span className="dot good pulse" aria-hidden="true" />These figures refresh every 5 seconds.</p>
       <details className="more">
         <summary>Workflows the system can run ({q.data.definitions.length})</summary>
         <ul className="list-disc space-y-1 pl-5 text-[14px] marker:text-ink-3">
@@ -530,7 +554,7 @@ export function CalendarAdmin() {
   return (
     <div className="stack gap-5">
       <Card title={`In force: ${q.data.description}`}>
-        <p className="small max-w-[75ch] text-ink-2">{q.data.version ? `Version ${q.data.version}, effective ${q.data.effectiveFrom}.` : "Built-in default; no version published yet."}{q.data.upcoming.length ? ` Upcoming: ${q.data.upcoming.map((u) => `v${u.version} from ${u.effectiveFrom}`).join(", ")}.` : ""} Service-level clocks count only open hours. Deadlines already set keep their values unless you recalculate them below.</p>
+        <p className="small max-w-[75ch] text-ink-2">{q.data.version ? `Version ${q.data.version}, effective ${q.data.effectiveFrom}.` : "Built-in default; no version published yet."}{q.data.upcoming.length ? ` Upcoming: ${q.data.upcoming.map((u) => `v${u.version} from ${u.effectiveFrom}`).join(", ")}.` : ""} Deadlines already set keep their values unless you recalculate them below.</p>
       </Card>
       <Card title="Publish a new version">
         <div className="stack gap-5">
@@ -548,15 +572,16 @@ export function CalendarAdmin() {
           <Field label="Holidays (one per line: date, name)" htmlFor="cal-hol"><textarea id="cal-hol" className="textarea" rows={6} value={holidays} onChange={(e) => setHolidays(e.target.value)} placeholder="2026-11-26 Thanksgiving Day" /></Field>
           <div className="grid-2">
             <Field label="ITS closures (one per line: first day, last day, name)" htmlFor="cal-clo"><textarea id="cal-clo" className="textarea" rows={3} value={closures} onChange={(e) => setClosures(e.target.value)} placeholder="2026-12-24 2026-12-31 Year-end closure" /></Field>
-            <Field label="Temporary coverage changes (one per line: first day, last day, hours or 'closed', reason)" hint="Join several windows with +, for example 09:00-12:00+13:00-15:00." htmlFor="cal-cov"><textarea id="cal-cov" className="textarea" rows={3} value={coverage} onChange={(e) => setCoverage(e.target.value)} placeholder="2026-10-05 2026-10-09 09:00-12:00 Conference week" /></Field>
+            {/* the placeholder's example shows how several windows join (with +) */}
+            <Field label="Temporary coverage changes (one per line: first day, last day, hours or 'closed', reason)" htmlFor="cal-cov"><textarea id="cal-cov" className="textarea" rows={3} value={coverage} onChange={(e) => setCoverage(e.target.value)} placeholder="2026-10-05 2026-10-09 09:00-12:00+13:00-15:00 Conference week" /></Field>
           </div>
           <Field label="Note for the audit record" htmlFor="cal-note"><input id="cal-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why this change" /></Field>
           <div><Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Publish version</Button></div>
         </div>
       </Card>
-      <Card title="Recalculate open deadlines">
+      {/* who sees a change: an eye beside the title, its words as its name and tooltip */}
+      <Card title="Recalculate open deadlines" aside={<IconLabel icon="eye" label="Every changed deadline is audited and the customer sees the change on their request." />}>
         <div className="stack max-w-[620px] gap-4">
-          <p className="small muted">Only on request. Every changed deadline is audited and the customer sees the change on their request.</p>
           <Field label="Reason" htmlFor="cal-reason"><input id="cal-reason" className="input" value={recalcReason} onChange={(e) => setRecalcReason(e.target.value)} placeholder="Holiday closure added after these requests were opened" /></Field>
           <div><Button variant="secondary" loading={recalc.isPending} disabled={recalcReason.trim().length < 5} onClick={() => recalc.mutate()}>Recalculate all open deadlines</Button></div>
         </div>
@@ -625,9 +650,10 @@ export function Administrators() {
           ))}
         </Table>
       </Card>
-      <Card title="Grant a platform role">
-        <p className="small muted max-w-[75ch]">The person must already have signed in with Microsoft 365 and a second factor. You cannot grant yourself a role. Every other administrator and the ITS queue mailbox are told, and another administrator must acknowledge the alert.</p>
-        <div className="stack mt-5 max-w-[520px] gap-4">
+      {/* who is told: an eye beside the title (its words are its name and tooltip). The API's own errors say when the person
+          has not signed in with Microsoft 365 and a second factor yet, or when someone tries to grant themselves a role. */}
+      <Card title="Grant a platform role" aside={<IconLabel icon="eye" label="Every other administrator and the ITS queue mailbox are told, and another administrator must acknowledge the alert." />}>
+        <div className="stack max-w-[520px] gap-4">
           <Field label="Staff email" htmlFor="pr-email"><input id="pr-email" className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           <Field label="Role" htmlFor="pr-role"><select id="pr-role" className="select" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="its_recruiter">ITS recruiter</option><option value="platform_admin">Platform administrator</option></select></Field>
           <Field label="Reason" htmlFor="pr-reason"><input id="pr-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
@@ -656,8 +682,9 @@ export function SignOutEverywhere() {
   });
   return (
     <Card title="Sign someone out everywhere">
-      <p className="small muted max-w-[75ch]">Use it after a lost or stolen phone or laptop, or when someone leaves. Every place they are signed in ends at once; nothing else about them changes. For a lost second-factor device, reset it in the identity service first.</p>
-      <div className="stack mt-5 max-w-[520px] gap-4">
+      {/* the one rule that changes what to do first; the confirmation says the rest ("Sign … out of every device?") */}
+      <p className="small muted max-w-[75ch]">For a lost second-factor device, reset it in the identity service first.</p>
+      <div className="stack mt-4 max-w-[520px] gap-4">
         <Field label="Email they sign in with" htmlFor="so-email"><input id="so-email" className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
         <Field label="Reason" htmlFor="so-reason"><input id="so-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
         {confirming ? (

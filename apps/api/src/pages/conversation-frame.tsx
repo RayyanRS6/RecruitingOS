@@ -66,7 +66,6 @@ details.earlier > summary, details.own-words > summary { padding: 9px 0; color: 
 .reply > label { grid-column: 1 / -1; margin: 0 0 2px; color: var(--ink-2); font-size: 13px; font-weight: 600; }
 .reply > textarea { grid-column: 1 / -1; width: 100%; min-height: 88px; margin: 0; padding: 4px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; resize: vertical; }
 .reply > textarea:focus, .reply > textarea:focus-visible { outline: 2px solid transparent; outline-offset: 0; }
-.reply > small { grid-column: 1; margin: 8px 0 0; color: var(--ink-3); font-size: 12.5px; line-height: 1.45; }
 .reply > .actions { grid-column: 2; justify-content: flex-end; margin: 8px 0 0; }
 .reply > .actions > :first-child { min-width: 0; }
 .link-action { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: 14.5px; font-weight: 600; line-height: 1.3; text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: var(--line-strong); text-underline-offset: 4px; cursor: pointer; }
@@ -97,8 +96,7 @@ ${FOOT_CSS}
 @media (max-width: 600px) {
   h1.question { font-size: 24px; }
   .reply { grid-template-columns: minmax(0, 1fr); padding: 12px 12px 12px 14px; }
-  .reply > small, .reply > .actions { grid-column: 1; }
-  .reply > .actions { justify-content: flex-start; }
+  .reply > .actions { grid-column: 1; justify-content: flex-start; }
 }
 `;
 
@@ -143,10 +141,11 @@ function AiLine(props: { companyName: string }) {
 }
 
 /**
- * Every page of the conversation: the AI line, the company and the job, the page, the line that says an answer is on its
- * way (empty until a button is pressed), the AI notice, the privacy link, and the script that stops a second press. The
- * AI line on top already says it is the company's AI assistant, so the notice's full text (and `aiMore`, the role's own
- * AI wording on the introduction) sits one click away under "How AI is used" (founder brief, 14 October 2026).
+ * Every page of the conversation: the AI line, the page, the line that says an answer is on its way (empty until a
+ * button is pressed), the AI notice, the privacy link, and the script that stops a second press. The AI line on top
+ * already says it is the company's AI assistant, so the notice's full text (and `aiMore`, the role's own AI wording on
+ * the introduction) sits one click away under "How AI is used" (founder brief, 14 October 2026). No "Company · Job"
+ * eyebrow (fewer words, 23 October 2026): the AI line names the company, and the browser tab names the job.
  *
  * Wave S7 (S7-0, nothing passes them yet): `header` is drawn directly under the AI line, which stays the first thing on
  * the page (the steps header, pages/journey.tsx); `extraCss` is a page's own styles, added to the conversation's in the
@@ -158,7 +157,6 @@ export function ConversationPage(props: { view: ConversationView; title: string;
     <Layout title={`${props.title}: ${view.roleTitle} at ${view.companyName}`} extraCss={props.extraCss ? `${SCREEN_CSS}${props.extraCss}` : SCREEN_CSS}>
       <AiLine companyName={view.companyName} />
       {props.header ? props.header : null}
-      <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
       {props.children}
       {/* `busyNote` (the chat's "Reading your reply…"): what the line says while an answer is on its way. */}
       <p class="sending" id="sending" role="status" data-wait={props.busyNote ?? undefined} />
@@ -281,8 +279,7 @@ function TypedAnswer(props: { action: string; about: string; submit: string; ski
   return (
     <form method="post" action={props.action} class="reply">
       <label for="message">{props.label ?? "Your answer"}<span class="sr-only"> to: {props.about}</span></label>
-      <textarea id="message" name="message" rows={4} maxlength={2000} required autofocus={props.autofocus} aria-describedby="message-hint">{props.value ?? ""}</textarea>
-      <small id="message-hint">In your own words. A few sentences is plenty, and there are no wrong answers.</small>
+      <textarea id="message" name="message" rows={4} maxlength={2000} required autofocus={props.autofocus}>{props.value ?? ""}</textarea>
       <div class="actions">
         <button class="btn" type="submit">{props.submit}</button>
         {props.skip ? <SkipButton keepsAnswer={props.keepsAnswer} /> : null}

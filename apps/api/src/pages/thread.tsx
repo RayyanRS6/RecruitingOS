@@ -119,7 +119,8 @@ export function MessageThread(props: { messages: ThreadMessage[]; more: boolean;
   return (
     <section aria-labelledby="messages">
       <h2 id="messages">Messages about your application</h2>
-      <p class="meta">What we sent you and what you wrote back, oldest first{props.more ? `; the latest ${THREAD_LIMIT} are shown` : ""}. To write to the team, reply to any of our emails.</p>
+      {/* There is no reply box here (the link never expires; an email's address proves who wrote), so the line says how to write. */}
+      <p class="meta">{props.more ? `The latest ${THREAD_LIMIT} are shown. ` : ""}To write to the team, reply to any of our emails.</p>
       <ol class="thread">
         {props.messages.map((m) => {
           const who = m.from === "candidate" ? "You" : props.companyName;

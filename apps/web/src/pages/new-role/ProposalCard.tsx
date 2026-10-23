@@ -1,8 +1,8 @@
 "use client";
 
-import { PACKET_VISIBILITY_LABEL, type PacketRevisionProposal } from "@ros/contracts";
+import type { PacketRevisionProposal } from "@ros/contracts";
 import { Button, Icon } from "@ros/ui";
-import { SEEN_TAG } from "./look";
+import { SeenBy } from "./marks";
 import { changeLine, proposalSections, takesEffectWords } from "./refine-api";
 import type { SectionId } from "./rules";
 
@@ -35,7 +35,7 @@ const SHOWN = 8;
  * A change the assistant proposes (plan C10): its summary, every changed field with what it was and what it would be
  * (and who sees it), anything it would not do and why, what the wording check would flag, and what Confirm does. Nothing
  * changes until the person presses Confirm or Keep as is. `onShow` takes the reader to the changed parts of the draft.
- * The changed fields are rows like a table's (screenshot 4): the field, what changes, who sees it.
+ * The changed fields are rows like a table's (screenshot 4): the field, what changes, and who sees it (the eye or the lock).
  */
 export function ProposalCard(props: { proposal: PacketRevisionProposal; onConfirm: () => void; onKeep: () => void; onShow?: () => void; confirming: boolean; keeping?: boolean }) {
   const p = props.proposal;
@@ -48,10 +48,11 @@ export function ProposalCard(props: { proposal: PacketRevisionProposal; onConfir
       {changes.length ? (
         <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line" aria-label="What would change">
           {changes.slice(0, SHOWN).map((c) => (
-            <li key={`${c.path}-${c.kind}`} className="grid min-w-0 gap-1 px-3.5 py-3 text-[14px] sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto] sm:items-center sm:gap-4">
+            // on a phone the field and its eye or lock share the first line, the change goes under them
+            <li key={`${c.path}-${c.kind}`} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3.5 py-3 text-[14px] sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto] sm:gap-4">
               <span className="min-w-0 font-semibold text-ink wrap-anywhere">{c.label}</span>
-              <span className="min-w-0 text-ink-2 wrap-anywhere">{changeLine(c)}</span>
-              <span className={`${SEEN_TAG} justify-self-start`}>{PACKET_VISIBILITY_LABEL[c.visibility]}</span>
+              <span className="min-w-0 text-ink-2 wrap-anywhere max-sm:col-span-full">{changeLine(c)}</span>
+              <SeenBy v={c.visibility} className="justify-self-end max-sm:col-start-2 max-sm:row-start-1" />
             </li>
           ))}
           {changes.length > SHOWN ? <li className="px-3.5 py-2.5 text-[13px] text-ink-3">and {changes.length - SHOWN} more {changes.length - SHOWN === 1 ? "change" : "changes"}</li> : null}

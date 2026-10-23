@@ -49,12 +49,13 @@ export function Updates() {
   });
 
   // Screenshot 4's look: the header, a bar with the filter pills and the bulk action, then one bordered list of rows.
+  // The way back up to Home is the eyebrow on a phone only: from 900px the frame's bar shows "Home / Updates" (AppShell's
+  // parentTrail), so the eyebrow would repeat it (founder, 23 October 2026: fewer words).
   return (
-    <div className="stack gap-5">
+    <div className="stack gap-5 min-[900px]:[&_.page-header>.eyebrow]:hidden">
       <PageHeader
         eyebrow={<Link to="/" className="font-normal text-ink-2 underline decoration-line-strong underline-offset-2 transition-colors ease-soft hover:text-primary pointer-coarse:inline-flex pointer-coarse:min-h-10 pointer-coarse:items-center">Home</Link>}
         title="Updates"
-        sub="Everything the assistant told you, newest first."
         actions={<Link to="/setup#setup-notifications" className="btn secondary">Email alerts</Link>}
       />
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -65,8 +66,8 @@ export function Updates() {
         <ErrorState message="Could not load your updates." onRetry={() => q.refetch()} />
       ) : !items.length ? (
         filter === "unread"
-          ? <EmptyState icon="check-circle" title="Nothing unread" body="You have seen every update. The earlier ones are under All." />
-          : <EmptyState title="No updates yet" body="When the assistant does something for you, or something needs you, it shows here." />
+          ? <EmptyState icon="check-circle" title="Nothing unread" body="The earlier ones are under All." />
+          : <EmptyState title="No updates yet" />
       ) : (
         <ul aria-label="Updates" className="list-card">
           {items.map((n, i) => <UpdateRow key={n.id} n={n} order={i} busy={mark.isPending && mark.variables?.id === n.id} onMark={(read) => mark.mutate({ id: n.id, read })} />)}

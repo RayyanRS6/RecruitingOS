@@ -2,16 +2,17 @@
 
 import { useState } from "react";
 import type { IntakePayCard } from "@ros/contracts";
-import { Alert, Button, Field, Icon, Segmented } from "@ros/ui";
+import { Alert, Button, Icon, Segmented } from "@ros/ui";
+import { SeenField } from "./marks";
 import { marketRange, marketSource, payFormFrom, payPayload, payProblem, type PayForm } from "./rules";
 
 const UNIT = { hourly: "an hour", salary: "a year" } as const;
 const VIA: Record<string, string> = { typed: "typed in the conversation", pay_card: "set on the pay card", edited: "changed in the draft", confirmed: "confirmed as still right" };
 
 /**
- * The pay boxes (plan C8), on a question card and on the draft's pay card: hourly or salary, the market figure for the
- * job and place with its source and year (or a plain line saying there is none), the range candidates see, and the most
- * the owner would pay, which only the team sees.
+ * The pay boxes (plan C8), on a question card, a quick start step and the draft's pay card: hourly or salary, the market
+ * figure for the job and place with its source and year (or a plain line saying there is none), the range candidates
+ * see, and the most the owner would pay, which only the team sees (the eye and the lock beside each box's label).
  */
 export function PayFields({ form, onChange, card, idBase }: { form: PayForm; onChange: (form: PayForm) => void; card: IntakePayCard; idBase: string }) {
   const range = marketRange(card);
@@ -36,15 +37,15 @@ export function PayFields({ form, onChange, card, idBase }: { form: PayForm; onC
         ) : null}
       </div>
       <div className="grid gap-3 @md:grid-cols-3">
-        <Field label={`Lowest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-min`} hint="Candidates see this.">
+        <SeenField label={`Lowest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-min`} seen="public">
           <input id={`${idBase}-min`} className="input" inputMode="decimal" value={form.min} onChange={(e) => onChange({ ...form, min: e.target.value })} placeholder={form.basis === "salary" ? "e.g. 60,000" : "e.g. 24"} />
-        </Field>
-        <Field label={`Highest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-max`} hint="Candidates see this.">
+        </SeenField>
+        <SeenField label={`Highest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-max`} seen="public">
           <input id={`${idBase}-max`} className="input" inputMode="decimal" value={form.max} onChange={(e) => onChange({ ...form, max: e.target.value })} placeholder={form.basis === "salary" ? "e.g. 70,000" : "e.g. 28"} />
-        </Field>
-        <Field label="The most you would pay" htmlFor={`${idBase}-ceiling`} hint="Only your team sees this. Optional.">
+        </SeenField>
+        <SeenField label="The most you would pay" htmlFor={`${idBase}-ceiling`} seen="internal" hint="Optional.">
           <input id={`${idBase}-ceiling`} className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => onChange({ ...form, ceiling: e.target.value })} />
-        </Field>
+        </SeenField>
       </div>
     </div>
   );
@@ -78,7 +79,8 @@ export function PayCard({ card, onSave, saving, error }: { card: IntakePayCard; 
       ) : card.stated.min !== null ? (
         <p className="small font-medium text-caution">Is this still right? Pay read from an ad or an earlier role is used only once you confirm it.</p>
       ) : (
-        <p className="small muted">Pay is always shown on the job ad. Set it here, or tell the assistant.</p>
+        // pay transparency (a required notice; founder decision Q9), said before any pay is set
+        <p className="small muted">Pay is always shown on the job ad.</p>
       )}
       {/* Below a figure for a broader group of jobs is worth knowing, not a warning (polish list). */}
       {card.belowMarket ? <Alert tone={card.benchmark?.approximate ? "info" : "caution"}>{card.summary}</Alert> : null}

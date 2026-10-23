@@ -42,7 +42,6 @@ const LinkRequestForm = z.object({ email: z.email().max(254) });
 function LinkRequestPage(props: { error?: string; email?: string }) {
   return (
     <Layout title="Get your application link again" extraCss={CARD_PAGE_CSS}>
-      <p class="eyebrow">Your application</p>
       <h1>Lost your link?</h1>
       <p class="lead">Type the email address you applied with. If we have an application from it, we email your link there, never to this page.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
@@ -61,7 +60,6 @@ function LinkRequestPage(props: { error?: string; email?: string }) {
 function LinkRequestSent() {
   return (
     <Layout title="Check your email" extraCss={CARD_PAGE_CSS}>
-      <p class="eyebrow">Your application</p>
       <h1>Check your email</h1>
       <div class="card" role="status">
         <p><strong>If we have an application from that address, your link is on its way.</strong></p>
@@ -446,7 +444,6 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
   if (score.state === "reviewing") {
     return (
       <section class="card" id="score" aria-labelledby="score-h" role="status">
-        <p class="eyebrow">Your match score</p>
         <h2 id="score-h">Working out your match score…</h2>
         <p>This usually takes under a minute. <a href={`${props.statusPath}#score`}>Check again</a> in a moment, or come back to it later from the link in your email.</p>
       </section>
@@ -457,7 +454,8 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
       <section class="card" id="score" aria-labelledby="score-h">
         <p class="eyebrow">Your match score</p>
         <h2 id="score-h">{score.state === "after_chat" ? "Shown once your AI interview is sent" : "Not ready yet"}</h2>
-        <p>{score.state === "after_chat" ? "Your match score is worked out from what you send, so it shows here after your AI interview." : "Your match score shows here once it is ready."} The hiring team reads every application themselves either way.</p>
+        {/* "Not ready yet" under its eyebrow says it all; the AI-interview case says why it waits. */}
+        <p>{score.state === "after_chat" ? "Your match score is worked out from what you send, so it shows here after your AI interview. " : null}The hiring team reads every application themselves either way.</p>
       </section>
     );
   }
@@ -494,7 +492,7 @@ function AnswersSection(props: { sent: SentAnswers; companyName: string; timeZon
   return (
     <section id="answers" aria-labelledby="answers-h">
       <h2 id="answers-h">Your answers</h2>
-      <p class="meta">What you sent to {props.companyName}, as they read it. {CORRECTION_LINE}</p>
+      <p class="meta">{CORRECTION_LINE}</p>
       <div class="card">
         <h3>Your details</h3>
         <dl class="details">
@@ -538,14 +536,16 @@ function AnswersSection(props: { sent: SentAnswers; companyName: string; timeZon
   );
 }
 
-/** "The job" (redesign spec C8): the job as it was when they applied, what the team looks for, and its page while it is public. */
-function JobSection(props: { packet: RolePacket; companyName: string; href: string | null }) {
+/**
+ * "The job" (redesign spec C8): the job's facts as they were when they applied, what the team looks for, and its page
+ * while it is public. Not its title and employer again: the page's heading and eyebrow say them.
+ */
+function JobSection(props: { packet: RolePacket; href: string | null }) {
   const { packet } = props;
   const mustHaves = packet.requirements.mustHaves.map((m) => m.text.trim()).filter(Boolean);
   return (
     <section class="card" id="job" aria-labelledby="job-h">
       <h2 id="job-h">The job</h2>
-      <p><strong>{packet.identity.title}</strong> at {props.companyName}</p>
       <JobFacts packet={packet} pay="" small schedule={false} />
       {mustHaves.length ? <><h3>What the team is looking for</h3><ul>{mustHaves.map((t) => <li>{t}</li>)}</ul></> : null}
       {props.href ? <p><a href={props.href}>See the job page</a></p> : null}
@@ -564,7 +564,7 @@ function OtherApplications(props: { others: OtherApplication[]; companyName: str
   return (
     <section id="applications" aria-labelledby="applications-h">
       <h2 id="applications-h">Your applications at {props.companyName}</h2>
-      <p class="meta">Your other applications here. Each has its own page: open it from the email we sent you about it, or <a href="/c/link-request">get your links again</a> by email.</p>
+      <p class="meta">Each has its own page: open it from the email we sent you about it, or <a href="/c/link-request">get your links again</a> by email.</p>
       <ul class="apps">
         {props.others.map((o) => (
           <li class="card">
@@ -666,7 +666,9 @@ candidatePages.get("/c/status/:token", async (c) => {
   ];
   return c.html(
     <Layout title={`Your application at ${company?.name ?? ""}`} extraCss={STATUS_CSS}>
-      <p class="eyebrow">{company?.name ? `${company.name} · ` : ""}Your application</p>
+      {/* The employer's name, the one place it is said above the job's title (candidate pages have no frame); never
+          "· Your application", which only described the page (fewer words, 23 October 2026). */}
+      {company?.name ? <p class="eyebrow">{company.name}</p> : null}
       <h1>{role?.title}</h1>
       <ProgressLine steps={progress.steps} current={progress.current} />
       <JumpLinks items={jump} />
@@ -678,7 +680,9 @@ candidatePages.get("/c/status/:token", async (c) => {
         {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
         {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
         {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
-        {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
+        {/* The line above already says the team would like to interview them: the card is the time to pick and its button. */}
+        {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
+        {/* "What to prepare:" names the round's topics (its purpose); the sentence after it is the one thing to bring, kept. */}
         {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
         {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
       </div>
@@ -698,7 +702,7 @@ candidatePages.get("/c/status/:token", async (c) => {
       <ScoreSection score={record.score} companyName={companyName} chatSent={!!record.sent.chat} statusPath={`/c/status/${app.statusToken}`} />
       <AnswersSection sent={record.sent} companyName={companyName} timeZone={companyZone} details={{ email: cand?.email ?? null, location: cand?.locationText ?? null, workSummary: app.answers.workSummary ?? null, resume: !!app.resumeDocumentId }} />
       <LearnedFactsSection facts={record.facts} statusToken={app.statusToken} companyName={companyName} timeZone={cand?.location?.timezone ?? companyZone} saved={c.req.query("facts") ?? null} />
-      {record.packet ? <JobSection packet={record.packet} companyName={companyName} href={jobHref} /> : null}
+      {record.packet ? <JobSection packet={record.packet} href={jobHref} /> : null}
       <OtherApplications others={record.others} companyName={companyName} timeZone={companyZone} />
       <h2 id="choices">Your choices</h2>
       {smsEnabled || smsOn ? (
@@ -855,7 +859,6 @@ candidatePages.post("/c/status/:token/new-link", rateLimit(POLICIES.withdraw), a
   c.header("Cache-Control", "no-store");
   return c.html(
     <Layout title="Check your email" extraCss={CARD_PAGE_CSS}>
-      <p class="eyebrow">Your application</p>
       <h1>Your new link is on its way</h1>
       <div class="card" role="status">
         <p><strong>The link you used no longer works.</strong></p>

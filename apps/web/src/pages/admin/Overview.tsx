@@ -21,6 +21,9 @@ import { costsSinceKey, monthStartIn } from "./system";
  * card whose search reaches any customer's drawer in one click; the month's AI spend with the top three customers; and
  * one line on the system. Each source is read on its own (the same queries as the sections, so one answer serves both),
  * and a source that fails says so on its own row with "Try again" while the others still show.
+ * Fewer words (founder, 23 Oct 2026): the counts live in the stat strip, so the card titles under it carry none (the
+ * greeting keeps "N things need you.", the state to act on), and "Nothing needs you right now." is the list's own row,
+ * not a second line under the title.
  */
 
 type FailuresDto = { failedRuns: Array<{ id: string }>; failedJobs: Array<{ id: number; createdAt?: string }>; failedAi: Array<{ id: string; createdAt?: string }>; alerts: AlertRow[]; pendingDeletions: Array<{ id: string }> };
@@ -244,7 +247,7 @@ export function Overview() {
   const queue = useQuery({ queryKey: adminKeys.queue, queryFn: () => api.get<QueueDto>("/api/v1/admin/queue", why), refetchInterval: 30_000 });
   // "This month" starts on the 1st in the business calendar's time zone; the costs wait for the calendar's answer.
   const since = monthStart(calendar.data?.current.timeZone);
-  const costs = useQuery({ queryKey: costsSinceKey(since),queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
+  const costs = useQuery({ queryKey: costsSinceKey(since), queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
   const isClient = useIsClient();
 
   const sources = [
@@ -265,17 +268,16 @@ export function Overview() {
   return (
     <div className="min-w-0">
       <PageHeader
-        eyebrow="ITS · Console"
         title={`Good ${partOfDay(isClient)}${first ? `, ${first}` : ""}.`}
-        sub={settled ? (rows.length ? `${count(rows.length, "thing needs", "things need")} you.` : failed.length ? "Some things could not be checked." : "Nothing needs you right now.") : undefined}
+        sub={settled && rows.length ? `${count(rows.length, "thing needs", "things need")} you.` : undefined}
         actions={<Link to="/recruiter/queue" className="btn secondary">Open the recruiter queue</Link>}
       />
 
       <div className="stack gap-6">
         {/*
-          Screenshot 7's row of stat cards, from figures this page already shows (the count beside "Needs attention", the
+          Screenshot 7's row of stat cards: the page's counts, said here once (how many things need attention, the
           customers, the companies waiting for the ITS check); a figure still loading shows a quiet bar, one that could not
-          be read is left out. The last, tinted cell is the console's rule, moved up from the foot of the page.
+          be read is left out. The last, tinted cell is the console's rule staff must know, said once.
         */}
         <StatStrip label="At a glance">
           <StatCell icon="alert" tone={settled && !rows.length ? "lavender" : "peach"} label="Needs attention" value={settled ? rows.length : PENDING} />
@@ -289,7 +291,7 @@ export function Overview() {
         </StatStrip>
 
         {/* The wide list (screenshot 7): a header strip, then the kit's rows, edge to edge, each with its one button. */}
-        <Card title={settled ? `Needs attention (${rows.length})` : "Needs attention"} className={LIST_CARD}>
+        <Card title="Needs attention" className={LIST_CARD}>
           {loading.length === sources.length ? (
             <div className="px-5 py-5 sm:px-6">
               <Skeleton lines={3} />
@@ -332,7 +334,6 @@ export function Overview() {
                   <span className="list-row-lead"><IconChip icon="check-circle" tone="good" size="sm" /></span>
                   <span className="list-row-main">
                     <span className={ROW_TITLE}>Nothing needs you right now.</span>
-                    <span className="list-row-meta">Everything below is up to date.</span>
                   </span>
                 </li>
               ) : null}
@@ -355,11 +356,17 @@ export function Overview() {
   );
 }
 
-/** A card whose rows run edge to edge under a header strip (the kit's card title, given room and a line under it). */
+/**
+ * A card whose rows run edge to edge under a header strip (the kit's card title, given room and a line under it). The
+ * kit has no such card yet, so the strip is placed from here; it is placement only, the title keeps the kit's look.
+ */
 const LIST_CARD = "overflow-hidden p-0 [&>.card-title]:m-0 [&>.card-title]:items-center [&>.card-title]:border-b [&>.card-title]:border-line [&>.card-title]:px-5 [&>.card-title]:py-4 sm:[&>.card-title]:px-6";
 /** One row of the list card: the kit's row (icon chip, words, the row's one button), its sides in line with the header strip. */
 const ROW = "list-row px-5 sm:px-6 motion-safe:animate-enter";
-/** A row's title: the kit's (15 px semibold), wrapping instead of cut short, so a sentence or a name is whole on a phone. */
+/**
+ * A row's title: the kit's (15 px semibold). The kit wraps it on a phone only; these rows are sentences and names that
+ * must be whole at every width, so they wrap on a desk too instead of ending in "…".
+ */
 const ROW_TITLE = "list-row-title whitespace-normal [overflow-wrap:anywhere]";
 
 /** A stat cell's figure while it is being read: a quiet bar, so no 0 shows before the answer. */
@@ -368,7 +375,11 @@ const PENDING = <span className="skeleton my-1 h-6 w-12" aria-hidden="true" />;
 /** Rows arrive one after another, 30 ms apart, the ninth and later with the eighth. */
 const enterDelay = (i: number): CSSProperties => ({ animationDelay: `${Math.min(i, 7) * 30}ms` });
 
-/** "See all costs", with an arrow that nudges toward it; the whole line, arrow included, follows the link (40 px under a finger). */
+/**
+ * "See all costs", with an arrow that nudges toward it; the whole line, arrow included, follows the link (40 px under a
+ * finger). The link's own class, `console-more`, is unstyled: a hook console-overview.test.ts pins, so the look sits on
+ * the line around it.
+ */
 function MoreLink({ to, children }: { to: string; children: string }) {
   return (
     <p className="text-link relative mt-4 w-fit pointer-coarse:min-h-10 [&>a]:after:absolute [&>a]:after:inset-0">
@@ -384,15 +395,16 @@ function CustomersCard({ rows, error, retry }: { rows: CustomerRow[] | undefined
   const matches = rows ? customerMatches(rows, typed) : [];
   const seeAll = typed.trim() ? `/admin/customers?q=${encodeURIComponent(typed.trim())}` : "/admin/customers";
   return (
-    <Card title={rows ? `Customers (${rows.length})` : "Customers"}>
+    // the count is the stat strip's, above; the "See all" link at the foot says it again where it is followed
+    <Card title="Customers">
       {!rows ? (
         error ? <ErrorState message="Could not load customers." onRetry={retry} /> : <Skeleton lines={4} />
       ) : (
         <>
           {rows.length ? (
-            <div className="relative [&>input]:rounded-full [&>input]:pl-10">
+            <div className="relative">
               <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-ink-3" />
-              <input className="input" type="search" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
+              <input className="input rounded-full pl-10" type="search" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
             </div>
           ) : null}
           {/* the businesses as an inset box of the kit's rows inside the card (screenshot 7) */}
@@ -430,11 +442,18 @@ function CostsCard({ rows, error, retry, since, names }: { rows: CostRow[] | und
         error ? <ErrorState message="Could not load costs." onRetry={retry} /> : <Skeleton lines={4} />
       ) : (
         <>
-          {/* the big figure: its paragraph takes the display face, size and colour from this box */}
-          <div className="font-display text-[40px] leading-none font-bold tracking-[-0.03em] text-ink tabular-nums">
-            <p className="console-figure">{money(sum.total)}</p>
+          {/*
+            the big figure: its paragraph (`console-figure`, kept bare as the test's hook) takes the display face, size and
+            colour from this box. The card's title says what it is; "at list prices" changes what it means (not the billed
+            amount), so it stays in view on the figure's baseline (System › Costs has it only as a tooltip). The start date
+            is the tooltip.
+          */}
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <div className="font-display text-[40px] leading-none font-bold tracking-[-0.03em] text-ink tabular-nums" title={`AI spend since ${from}`}>
+              <p className="console-figure">{money(sum.total)}</p>
+            </div>
+            <span className="small muted">at list prices</span>
           </div>
-          <p className="mt-2 text-[13px] text-ink-3">{`AI spend since ${from}, at list prices`}</p>
           {sum.top.length ? (
             <ul className="mt-4 divide-y divide-line border-y border-line" aria-label="Customers who spent most this month">
               {sum.top.map((t) => (

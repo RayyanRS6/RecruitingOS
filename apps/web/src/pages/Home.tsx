@@ -103,7 +103,6 @@ export function Home() {
   return (
     <div className="stack gap-6 md:gap-8 [&>.page-header]:mb-0 [&_.page-header-row>h1]:text-[36px] sm:[&_.page-header-row>h1]:text-[44px] md:[&_.page-header-row>h1]:text-[52px]">
       <PageHeader
-        eyebrow="Your desk"
         title={`Good ${greeting(isClient)}${name ? `, ${name}` : ""}`}
         sub={brief.data && !brief.error ? homeHeadline(needs, { firstRun }) : undefined}
         actions={
@@ -385,18 +384,12 @@ function GettingStartedCard({ card, onSentToRecruiter }: { card: BriefCard; onSe
   const hide = card.actions.find((a) => a.method === "POST");
   const unverified = setup?.verified === false;
   const { line, rest } = cardLine(card.body);
-  // Screenshot 1's "Your next step" hero: the lavender-to-peach wash, a coral-dot eyebrow while a step is still to do, the
-  // title in display type, then the steps as a short checklist with the next one raised; the done ones stay folded.
+  // Screenshot 1's "Your next step" hero, Home's one next step: the lavender-to-peach wash and the kit's hero title (Card
+  // hero), the word for ITS's check beside it, then the steps as a short checklist with the next one raised; the done
+  // ones stay folded.
   return (
-    <Card needsYou className="max-sm:p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="grid min-w-0 gap-2.5">
-          {next ? <p className="eyebrow live">Your next step</p> : null}
-          <h2 className="font-display text-[28px] font-bold leading-[1.08] tracking-[-0.035em] text-ink [overflow-wrap:anywhere] md:text-[34px]">{card.title}</h2>
-        </div>
-        {unverified ? <Pill size="sm" tone="caution">Waiting for ITS</Pill> : null}
-      </div>
-      {line ? <p className="mt-2.5 max-w-[62ch] text-[15px] text-ink-2">{line}</p> : null}
+    <Card needsYou hero title={card.title} aside={unverified ? <Pill size="sm" tone="caution">Waiting for ITS</Pill> : null} className="max-sm:p-5">
+      {line ? <p className="max-w-[62ch] text-[15px] text-ink-2">{line}</p> : null}
       {rest ? (
         <details className="more mt-3">
           <summary>{unverified ? "What waits until then" : "Why"}</summary>

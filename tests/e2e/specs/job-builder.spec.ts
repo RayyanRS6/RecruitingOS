@@ -25,8 +25,9 @@ test.describe("the job builder", () => {
     await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 60_000 });
     expect(page.url()).not.toContain("hygienist");
 
-    // the header: drafting, the title, a Draft pill, and Ask for approval greyed with what is missing
-    await expect(page.getByText(/^Drafting · Brightline Builder/)).toBeVisible();
+    // the header: the title, a Draft pill (no "Drafting · company" eyebrow since 23 October 2026), and Ask for approval
+    // greyed with what is missing
+    await expect(page.getByText(/^Drafting · /)).toHaveCount(0);
     await expect(page.getByRole("heading", { level: 1 })).toContainText(/Hygienist/i);
     const ask = page.getByRole("button", { name: "Ask for approval" });
     await expect(ask).toHaveAttribute("aria-disabled", "true");
@@ -49,10 +50,11 @@ test.describe("the job builder", () => {
     // the picks come back as one summary message, then the assistant's next turn
     await expect(page.getByText("Your answers").first()).toBeVisible({ timeout: 60_000 });
 
-    // the draft beside the conversation: what we know, who sees each part
+    // the draft beside the conversation: what we know, who sees each part (the eye and the lock, their words as the
+    // tooltip and for screen readers since 23 October 2026)
     await expect(page.getByText("What we know")).toBeVisible();
-    await expect(page.getByText("Candidates see this").first()).toBeVisible();
-    await expect(page.getByText("Only your team sees this").first()).toBeVisible();
+    await expect(page.getByTitle("Candidates see this").first()).toBeVisible();
+    await expect(page.getByTitle("Only your team sees this").first()).toBeVisible();
     // the must-haves are listed on the job page (plan D10): the panel says candidates see them
     await expect(page.getByText("What we're looking for").first()).toBeVisible();
     await expect(page.getByText("Used to review applications; not on the job page")).toHaveCount(0);

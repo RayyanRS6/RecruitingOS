@@ -77,7 +77,8 @@ export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: strin
       <div className="grid min-w-0 gap-3">
         {suggestions.length ? (
           <div className="grid min-w-0 gap-2">
-            <p className="small muted">{check.data?.summary ?? "Suggestions about the requirements."} They only suggest; nothing changes unless you tap a fix.</p>
+            {/* the check's own count line ("2 suggestions below. Nothing changes unless you apply a fix.") */}
+            {check.data?.summary ? <p className="small muted">{check.data.summary}</p> : null}
             {suggestions.map((s) => <SuggestionCard key={s.id} s={s} onFix={(id) => fix.mutate(id)} fixing={fix.isPending ? fix.variables ?? null : null} onDismiss={(id) => setDismissed([...dismissed, id])} />)}
           </div>
         ) : null}
@@ -87,7 +88,7 @@ export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: strin
         {question ? <Alert tone="info">{question}</Alert> : null}
         {proposal ? <ProposalCard proposal={proposal} onConfirm={() => confirm.mutate(proposal)} onKeep={() => keepAsIs.mutate(proposal)} confirming={confirm.isPending} keeping={keepAsIs.isPending} /> : null}
         {problem ? <Alert tone="critical">{problem}</Alert> : null}
-        <Composer value={text} onChange={setText} onSend={(t) => revise.mutate(t)} sending={revise.isPending} disabled={!!proposal} changeMax={CHANGE_REQUEST_MAX} label="Ask for a change to this role" placeholder="Ask me to change anything: make it warmer, drop the weekend requirement…" hint="A change is shown to you before it is saved." />
+        <Composer value={text} onChange={setText} onSend={(t) => revise.mutate(t)} sending={revise.isPending} disabled={!!proposal} changeMax={CHANGE_REQUEST_MAX} label="Ask for a change to this role" placeholder="Ask me to change anything: make it warmer, drop the weekend requirement…" />
       </div>
     </Card>
   );

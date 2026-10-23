@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IntakeAnswer, IntakeFactsPatch, IntakeSessionView, PacketRevisionProposal, PlanRoom, RequirementsCheck } from "@ros/contracts";
-import { Alert, Button, EmptyState, ErrorState, Eyebrow, Icon, Menu, Pill, ProgressSteps, Skeleton, SplitView } from "@ros/ui";
+import { Alert, Button, EmptyState, ErrorState, Icon, Menu, Pill, ProgressSteps, Skeleton, SplitView } from "@ros/ui";
 import { api, ApiError, type IntakeApprovalResponse, type IntakeTurnReply, type IntakeTurnResponse, type Me } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
 import { dockFocusDue, focusLost } from "../../focus-after";
@@ -330,11 +330,12 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
 
   if (session.isLoading) return <Skeleton lines={6} />;
   if (session.error || !view) {
-    if (session.error instanceof ApiError && session.error.status === 404) return <EmptyState icon="roles" title="We could not find that draft" body="It may have been discarded. You can start a new role." action={<Link to={NEW_ROLE_FRESH_HREF} className="btn primary">Start a new role</Link>} />;
+    // A draft that is gone or set aside: the title, and the one way on (the button says what to do).
+    if (session.error instanceof ApiError && session.error.status === 404) return <EmptyState icon="roles" title="We could not find that draft" action={<Link to={NEW_ROLE_FRESH_HREF} className="btn primary">Start a new role</Link>} />;
     return <ErrorState message={errorWords(session.error, "Could not load this draft.")} onRetry={() => session.refetch()} />;
   }
-  if (view.status === "compiled") return <EmptyState icon="roles" title="This draft is now a role" body="It was sent for approval. Open the role to see where it stands." action={view.roleId ? <Link to={`/roles/${view.roleId}`} className="btn primary">Open the role</Link> : undefined} />;
-  if (view.status !== "active") return <EmptyState icon="roles" title="This draft was set aside" body="It stays in your records, but it no longer continues. Start a new role to hire." action={<Link to={NEW_ROLE_FRESH_HREF} className="btn primary">Start a new role</Link>} />;
+  if (view.status === "compiled") return <EmptyState icon="roles" title="This draft is now a role" body="It was sent for approval." action={view.roleId ? <Link to={`/roles/${view.roleId}`} className="btn primary">Open the role</Link> : undefined} />;
+  if (view.status !== "active") return <EmptyState icon="roles" title="This draft was set aside" action={<Link to={NEW_ROLE_FRESH_HREF} className="btn primary">Start a new role</Link>} />;
 
   const title = draftTitle(view);
   const hasDraft = view.readiness.hasDraft;
@@ -422,23 +423,20 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       disabled={busy && !send.isPending && !revise.isPending}
       label={asks ? "Ask for a change to the draft" : "Message to the assistant"}
       placeholder={composerPlaceholder({ started: true, hasDraft: asks })}
-      hint={asks ? "A change is shown to you before it is saved." : view.readiness.draftBlocker ?? "Tap the answers, or type your own."}
       changeMax={asks ? CHANGE_REQUEST_MAX : undefined}
     />
   );
 
   return (
+    // .builder is a hook only: the frame (AppShell) gives a page holding it 1440px
     <div className="builder grid gap-5">
-      {/* The page's head (screenshot 1): eyebrow, the title with its Draft pill, and on the right More and the primary
-          "Ask for approval". Whenever the head wraps (a phone, a tablet, a narrow window), the actions sit on their own
-          line at its right end, so the menu and the tooltip open inside the screen. */}
-      <header className="flex flex-wrap items-end gap-x-6 gap-y-4">
-        <div className="grid min-w-0 flex-1 basis-[min(100%,26rem)] gap-2">
-          <Eyebrow>{companyName ? `Drafting · ${companyName}` : "Drafting"}</Eyebrow>
-          <div className="flex min-w-0 items-center gap-3 [&>h1]:min-w-0 [&>h1]:wrap-anywhere md:[&>h1]:text-[40px]">
-            <h1 className={title ? undefined : "text-ink-3"}>{title ?? "Untitled role"}</h1>
-            <Pill size="sm" tone="caution">Draft</Pill>
-          </div>
+      {/* The page's head (screenshot 1): the title with its Draft pill (the h1 stays bare, as tests pin it), and on the
+          right More and the primary "Ask for approval". Whenever the head wraps (a phone, a tablet, a narrow window),
+          the actions sit on their own line at its right end, so the menu and the tooltip open inside the screen. */}
+      <header className="flex flex-wrap items-center gap-x-6 gap-y-4">
+        <div className="flex min-w-0 flex-1 basis-[min(100%,26rem)] items-center gap-3 [&>h1]:min-w-0 [&>h1]:wrap-anywhere md:[&>h1]:text-[40px]">
+          <h1 className={title ? undefined : "text-ink-3"}>{title ?? "Untitled role"}</h1>
+          <Pill size="sm" tone="caution">Draft</Pill>
         </div>
         <div className="ml-auto flex w-full items-center justify-end gap-2 sm:w-auto">
           <Menu

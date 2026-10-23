@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "../nav";
-import { Alert, Button, ErrorState, Eyebrow, Field, Icon, Skeleton } from "@ros/ui";
+import { Alert, Button, ErrorState, Field, Icon, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 
 const ERRORS: Record<string, string> = {
@@ -54,12 +54,8 @@ export function Login() {
           <span aria-hidden="true" className="grid size-12 place-items-center rounded-[14px] bg-primary text-on-primary shadow-primary">
             <Icon name="bars" size={24} />
           </span>
-          <div className="mt-6">
-            <Eyebrow>Sign in</Eyebrow>
-          </div>
           {/* the name as the logo writes it: "OS" in coral, which is large text at this size (AA from 18.66px bold) */}
-          <h1 className="mt-2 font-display text-[34px] font-bold leading-[1.05] tracking-[-0.035em] text-ink">Recruiting <span className="text-accent">OS</span></h1>
-          <p className="mt-3 max-w-[34ch] text-[15px] text-ink-2">A recruiting department for companies too small to have one.</p>
+          <h1 className="mt-6 font-display text-[34px] font-bold leading-[1.05] tracking-[-0.035em] text-ink">Recruiting <span className="text-accent">OS</span></h1>
         </div>
         <div className="stack mt-8 gap-4">
           {error ? <Alert tone="critical">{error}</Alert> : null}
@@ -83,7 +79,7 @@ export function Login() {
               </div>
             ) : (
               <form onSubmit={(e) => { e.preventDefault(); send.mutate(); }} className="stack gap-3">
-                <Field label="Or use your work email" htmlFor="email" hint="No password. We email you a link.">
+                <Field label="Or use your work email" htmlFor="email">
                   <input id="email" className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
                 </Field>
                 <Button type="submit" variant="primary" loading={send.isPending} block>Email me a sign-in link</Button>

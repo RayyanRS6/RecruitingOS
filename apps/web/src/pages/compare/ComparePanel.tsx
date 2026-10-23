@@ -12,12 +12,10 @@ import { overallLabel } from "../candidate-panel/assessment";
 import { REC_LABEL } from "../candidate-panel/helpers";
 import { COMPARE_MAX, COMPARE_ORDERS, cellFigures, criterionCell, hasTeamNotes, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView, type CompareOrder, type CompareView } from "./compare-view";
 
-/** One person in the picker: an outlined pill with the tick, name, stage and score; ticked, it turns lavender. */
-const PICK = "inline-flex min-h-10 max-w-full cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 rounded-[20px] border border-line-2 bg-surface py-1 ps-3 pe-2 text-[14px] font-medium text-ink transition-colors duration-150 ease-soft has-checked:border-primary has-checked:bg-tint has-disabled:cursor-not-allowed has-disabled:opacity-55 not-has-checked:hover:bg-surface-2";
 /** A cell's small figures (% met, points it cost, what the score rests on). */
 const FIGURES = "text-[12px] leading-snug text-ink-3 tabular-nums";
-/** A cell: its finding, a bar and the figures stacked, wide enough to read beside four others; a long chip wraps. */
-const CELL = "grid min-w-[120px] gap-1.5 [&_.chip]:w-fit [&_.chip]:max-w-[220px] [&_.chip]:whitespace-normal";
+/** A cell: its finding, a bar and the figures stacked, wide enough to read beside four others. */
+const CELL = "grid min-w-[120px] gap-1.5";
 /** Their words or a note behind a click: the summary in the secondary ink, a hand under the mouse. */
 const MORE = "small text-ink-2 [&>summary]:cursor-pointer [&>summary]:font-medium [&>summary]:text-ink-2 [&[open]>summary]:mb-1";
 
@@ -25,7 +23,8 @@ const MORE = "small text-ink-2 [&>summary]:cursor-pointer [&>summary]:font-mediu
  * Compare (docs/spec/21 F10; founder decision B2): tick up to five people, then see them side by side: each one's
  * match score with what it rests on, then every must-have and skill as a line with what was found, how much of it was
  * met and the points it cost, their words one click away. Columns stay in the order chosen unless "Highest score first"
- * is picked. Opened from the Talent page's Compare and from the board's "Compare these" (`initial`).
+ * is picked. Opened from the Talent page's Compare and from the board's "Compare these" (`initial`). The title's aside
+ * counts the ticks against the limit ("2 of 5 chosen"), so no line under the title repeats it (founder, 23 Oct 2026).
  */
 export function ComparePanel({ roleId, candidates, initial }: { roleId: string; candidates: Array<{ id: string; name: string; stageLabel: string; score?: number | null; interview?: InterviewInScore | null; basis?: string | null }>; initial?: string[] }) {
   const start = (initial ?? []).slice(0, COMPARE_MAX);
@@ -34,13 +33,13 @@ export function ComparePanel({ roleId, candidates, initial }: { roleId: string; 
   const q = useQuery({ queryKey: ["compare", roleId, (ids ?? []).join(",")], queryFn: () => api.get<CompareView>(`/api/v1/roles/${roleId}/compare?ids=${(ids ?? []).join(",")}`), enabled: !!ids?.length });
   return (
     <Card title="Compare candidates" aside={<span className="small muted">{picked.length} of {COMPARE_MAX} chosen</span>}>
-      <p className="small muted">Tick up to five people, then compare.</p>
-      <div className="mt-3 flex flex-wrap gap-2">
+      {/* each person a tick row (the kit's option-row): the name, their stage and the score */}
+      <div className="flex flex-wrap gap-2">
         {candidates.map((c) => {
           // R20-9: a score with no AI interview in it says so beside the badge, the full label on hover, as on the list
           const resumeOnly = resumeOnlyChip(c);
           return (
-            <label key={c.id} className={PICK}>
+            <label key={c.id} className="option-row max-w-full flex-wrap gap-x-2.5 gap-y-1">
               <input type="checkbox" checked={picked.includes(c.id)} disabled={!picked.includes(c.id) && picked.length >= COMPARE_MAX} onChange={(e) => setPicked((p) => togglePick(p, c.id, e.target.checked))} />
               <span>{c.name} <span className="muted font-normal">({c.stageLabel})</span></span>
               {c.score !== undefined && c.score !== null ? <ScoreBadge score={c.score} size="sm" /> : null}
@@ -98,12 +97,17 @@ export function CompareTable({ data }: { data: CompareView }) {
   const cands = orderCandidates(data.candidates, order);
   const notes = versionNotes(cands);
   const withNotes = hasTeamNotes(cands);
+  // The chosen order needs no words (the switch shows it); "Highest score first" says how like is ranked with like and
+  // that a score never decides. The switch comes first, so it stays put when the line appears.
+  const line = order === "score" ? orderLine(order, cands.length, mixedScores(cands)) : null;
   return (
     <div className="mt-4 grid gap-3">
-      <div className="row justify-between">
-        <span className="small muted">{orderLine(order, cands.length, mixedScores(cands))}</span>
-        {cands.length > 1 ? <Segmented value={order} onChange={setOrder} options={COMPARE_ORDERS.map((o) => ({ value: o.value, label: o.label }))} ariaLabel="Order of the columns" /> : null}
-      </div>
+      {cands.length > 1 || line ? (
+        <div className="row">
+          {cands.length > 1 ? <Segmented value={order} onChange={setOrder} options={COMPARE_ORDERS.map((o) => ({ value: o.value, label: o.label }))} ariaLabel="Order of the columns" /> : null}
+          {line ? <span className="small muted">{line}</span> : null}
+        </div>
+      ) : null}
       <Table head={["What we checked", ...cands.map((c) => c.name)]} label="Candidates compared" pinFirst>
         <tr>
           <th scope="row" className="small muted">Match score</th>
@@ -115,7 +119,8 @@ export function CompareTable({ data }: { data: CompareView }) {
                   <span className="row gap-1.5"><ScoreBadge score={s.score} size="sm" />{s.band ? <span className="small">{s.band}</span> : null}</span>
                   {s.coverage ? <span className={FIGURES}>{s.coverage}</span> : null}
                   {s.basis ? <span className={FIGURES}>{s.basis}</span> : null}
-                  {s.missing.map((x) => <Chip key={x} tone="critical">{x}</Chip>)}
+                  {/* a long "Missing must-have: …" wraps inside its cell */}
+                  {s.missing.map((x) => <Chip key={x} tone="critical" className="w-fit max-w-[220px] whitespace-normal">{x}</Chip>)}
                 </div>
               </td>
             );

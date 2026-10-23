@@ -3,21 +3,20 @@
 import { useEffect, useRef } from "react";
 import type { IntakePayCard, IntakeQuestion } from "@ros/contracts";
 import { AutoTextarea, Avatar, Button, Icon, IconButton } from "@ros/ui";
-import { OPTION_LABEL, OPTION_ROW, OPTION_TAG, OPTIONS, OWN_CHIP, OWN_CHIP_X, OWN_CHIPS, TEAM_CHIP } from "./look";
+import { OPTION_WORDS, OPTIONS, OWN_CHIP, OWN_CHIP_X, OWN_CHIPS, TEAM_CHIP } from "./look";
+import { OriginMark } from "./marks";
 import { PayFields } from "./PayCard";
 import {
   SOMEONE_NEW, addOwn, answerOf, goTo, isAnswered, nextLabel, payFormFrom, pickHint, picksOne, removeOwn, setDraft, setPayForm, togglePick,
   type CardState,
 } from "./rules";
 
-/** Where an offered answer came from, said quietly beside it: the assistant's own ideas are marked as suggestions. */
-const ORIGIN: Record<string, string> = { playbook: "Our hiring guide", benchmark: "Market data", owner: "Your words", assistant: "Suggestion", team: "" };
-
 /**
  * The question card docked where the message box is (plan C6, C15): one question at a time with "1 of 3" and arrows,
- * the answers as rows to tick, "Add your own…", a "Why we ask" line, and Next (Send on the last card). Team questions
- * offer the team as chips, plus "Someone not on the team yet" with a box for their name. "Or type your own answer…"
- * puts the message box back. Every answer is the person's choice; nothing is ticked for them.
+ * the answers as rows to tick (where each came from is a mark at the row's end: the sparkle for the assistant's own
+ * ideas), "Add your own…", a "Why we ask" line, and Next (Send on the last card). Team questions offer the team as
+ * chips, plus "Someone not on the team yet" with a box for their name. "Or type your own answer…" puts the message box
+ * back. Every answer is the person's choice; nothing is ticked for them.
  */
 export function QuestionCard(props: {
   questions: IntakeQuestion[];
@@ -61,7 +60,7 @@ export function QuestionCard(props: {
         </span>
         <IconButton icon="x" label="Close the questions" size="sm" onClick={props.onClose} />
       </div>
-      {/* a new question fades in where the last one was */}
+      {/* a new question fades in where the last one was; .qcard-prompt is a hook only: the Builder moves the focus to it */}
       <div key={q.id} className="grid min-w-0 gap-3 motion-safe:animate-fade">
         <h2 ref={heading} tabIndex={-1} className="qcard-prompt font-display text-[19px] font-bold leading-snug tracking-[-0.02em] focus:outline-none">{q.prompt}</h2>
         {q.mode === "pay" ? (
@@ -99,7 +98,6 @@ export function QuestionCard(props: {
                 onEnter={next}
               />
             ) : null}
-            <p className="small muted">You can invite them to the team later from Setup; they are not told anything now.</p>
           </fieldset>
         ) : (
           <fieldset className="grid min-w-0 gap-3">
@@ -108,10 +106,10 @@ export function QuestionCard(props: {
               {q.options.map((o) => {
                 const checked = a.selected.includes(o.value);
                 return (
-                  <label key={o.value} className={OPTION_ROW} data-checked={checked ? "true" : undefined}>
+                  <label key={o.value} className="option-row">
                     <input type={one ? "radio" : "checkbox"} name={name} value={o.value} aria-label={o.label} checked={checked} onChange={() => onState(togglePick(state, q, o.value))} />
-                    <span className={OPTION_LABEL}>{o.label}</span>
-                    {ORIGIN[o.origin] ? <span className={OPTION_TAG}>{ORIGIN[o.origin]}</span> : null}
+                    <span className={OPTION_WORDS}>{o.label}</span>
+                    <OriginMark origin={o.origin} />
                   </label>
                 );
               })}

@@ -151,30 +151,29 @@ export function Setup() {
       {ACTION_MORE[p.actionType] ? <details className="more mt-1.5"><summary>What each choice does</summary><p className="small muted">{ACTION_MORE[p.actionType]}</p></details> : null}
       {p.actionType === "message.still_reviewing" ? <p className="small muted mt-1.5">{STILL_REVIEWING_NOTE[p.level] ?? STILL_REVIEWING_NOTE.human_only}</p> : null}
       {loosening?.row.actionType === p.actionType ? (
-        <div className="mt-2.5">
-          <Alert tone="caution">
-            <div className="stack gap-2">
-              <span>{looseningQuestion(actionLabel(p.actionType), p.level, loosening.to)}</span>
-              <div className="row"><Button size="sm" variant="primary" loading={setPolicy.isPending} onClick={() => setPolicy.mutate({ actionType: p.actionType, level: loosening.to, approverRoles: p.approverRoles })}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setLoosening(null)}>Keep it as it is</Button></div>
-            </div>
-          </Alert>
-        </div>
+        <Alert tone="caution" className="mt-2.5">
+          <div className="stack gap-2">
+            <span>{looseningQuestion(actionLabel(p.actionType), p.level, loosening.to)}</span>
+            <div className="row"><Button size="sm" variant="primary" loading={setPolicy.isPending} onClick={() => setPolicy.mutate({ actionType: p.actionType, level: loosening.to, approverRoles: p.approverRoles })}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setLoosening(null)}>Keep it as it is</Button></div>
+          </div>
+        </Alert>
       ) : null}
     </div>
   );
 
   return (
+    // the page header's own bottom margin is meant for a page without tabs; here the tab strip follows closely
     <div className="stack gap-5 [&>.page-header]:mb-3">
-      <PageHeader eyebrow={c.name} title="Settings" sub="Your company, team, alerts and hiring rules." />
+      <PageHeader title="Settings" />
 
       {reauthOutcome === "ok" ? <Alert tone="info">Thanks, that is confirmed. For the next ten minutes you can change the rules and the candidate notices, and make someone an admin or an owner.</Alert> : reauthOutcome === "mismatch" ? <Alert tone="critical">That sign-in was a different account. Confirm with the account you are signed in as.</Alert> : reauthOutcome === "failed" ? <Alert tone="critical">The confirmation did not complete. Try again.</Alert> : null}
       {reauthNeeded ? <ReauthPrompt returnTo={settingsHref(active)} /> : null}
 
       {/* On a wide screen the tabs stand as a column card on the left and the chosen tab's cards on the right
-          (screenshot 6); narrower, the tabs run across the top as before. */}
+          (screenshot 6); narrower, the same card sits above them with the five tabs wrapped onto as few lines as fit. */}
       <div className={SETTINGS_LAYOUT}>
         <div className={SETTINGS_NAV}>
-          <Tabs items={tabs.map((t) => ({ id: t.id, label: t.label }))} label="Settings" value={active} onChange={pick} idBase={TABS_ID} />
+          <Tabs items={tabs.map((t) => ({ id: t.id, label: t.label }))} label="Settings" value={active} onChange={pick} idBase={TABS_ID} orientation="vertical" />
         </div>
 
         {panel("company", <>
@@ -192,13 +191,12 @@ export function Setup() {
 
         {panel("rules", <>
           <Section id="setup-rules">
-            <Card title="What the AI may do on its own" className={LEAD_CARD}>
-              <p className="small muted">Choose how much the AI does without asking you.</p>
+            <Card title="What the AI may do on its own" className={CARD}>
               <details className="more mb-4">
                 <summary>How this works</summary>
                 <p className="small muted">What the product does today, and how much of it may happen without a person. Some decisions always stay with a person, and approving a job always waits for a person; those offer only the choices allowed. Work the product does the same way for everyone says what it does, with nothing to choose. Letting something happen with less checking asks you first, and every change is recorded.</p>
               </details>
-              {!canManagePolicy && myRole ? <div className="mb-4"><Alert tone="info">Only owners and admins change these rules. Ask one of them if something should work differently.</Alert></div> : null}
+              {!canManagePolicy && myRole ? <Alert tone="info" className="mb-4">Only owners and admins change these rules.</Alert> : null}
               {policies.isLoading ? <Skeleton lines={6} /> : groups.map((g) => (
                 <div key={g} className="mb-5">
                   <h3 className="mb-1 text-[15px]">{g}</h3>
@@ -216,13 +214,12 @@ export function Setup() {
               {rules.later.length ? (
                 <details className="more mt-2">
                   <summary>Coming later ({rules.later.length})</summary>
-                  <p className="small muted mb-1.5">Planned, not in the product yet, so there is nothing to choose. When one arrives it moves up into the list above, with its choices.</p>
                   <ul className="small list-disc pl-[18px] text-ink-2">
                     {rules.later.map((p) => <li key={p.actionType}>{actionLabel(p.actionType)}</li>)}
                   </ul>
                 </details>
               ) : null}
-              {setPolicy.error ? <div className="mt-3"><Alert tone="critical">{setPolicy.error instanceof ApiError ? setPolicy.error.message : "Could not save."}</Alert></div> : null}
+              {setPolicy.error ? <Alert tone="critical" className="mt-3">{setPolicy.error instanceof ApiError ? setPolicy.error.message : "Could not save."}</Alert> : null}
             </Card>
           </Section>
           <Section id="setup-boards"><JobBoardsCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
@@ -233,20 +230,18 @@ export function Setup() {
           <Section id="setup-sessions"><YourSessions /></Section>
           <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
           <Section id="setup-services">
-            <Card title="Connected services" className={PLAIN_CARD}>
-              {/* a long state may wrap inside its pill, so the explanations keep room and the table never scrolls sideways */}
-              <div className="[&_.pill]:whitespace-normal">
-                <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
-                  {c.integrations.map((i) => (
-                    <tr key={`${i.kind}-${i.provider}`}>
-                      <td className="font-semibold">{SERVICE_KIND_LABEL[i.kind] ?? i.kind.replace(/_/g, " ")}</td>
-                      <td>{SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " ")}</td>
-                      <td><Pill size="sm" tone={SERVICE_STATE_TONE[i.status] ?? "neutral"}>{SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " ")}</Pill></td>
-                      <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its")}</td>
-                    </tr>
-                  ))}
-                </Table>
-              </div>
+            <Card title="Connected services" className={CARD}>
+              <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
+                {c.integrations.map((i) => (
+                  <tr key={`${i.kind}-${i.provider}`}>
+                    <td className="font-semibold">{SERVICE_KIND_LABEL[i.kind] ?? i.kind.replace(/_/g, " ")}</td>
+                    <td>{SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " ")}</td>
+                    {/* a long state wraps inside its pill, so the explanations keep room and the table never scrolls sideways */}
+                    <td><Pill size="sm" tone={SERVICE_STATE_TONE[i.status] ?? "neutral"} className="wrap">{SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " ")}</Pill></td>
+                    <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its")}</td>
+                  </tr>
+                ))}
+              </Table>
               <p className="small muted mt-3">AI provider: <strong className="text-ink-2">{c.ai.provider}</strong>{c.ai.provider === "fake" ? " (deterministic stand-in for development; production refuses to start with it)" : ""}.</p>
             </Card>
           </Section>
@@ -261,37 +256,22 @@ export function Setup() {
 const TABS_ID = "settings";
 
 /*
- * Settings' look (screenshot 6). The grid: the tab strip's wrapper first, then the five panel wrappers, of which only the
+ * Settings' layout (screenshot 6). The grid: the tab strip's card first, then the five panel wrappers, of which only the
  * chosen one shows (hidden ones take no cell), so on a wide screen (xl, where the right column still leaves a card about
- * 660px) the strip is the left column and the panel the right. Narrower, the tabs run across the top.
+ * 660px) the strip is the left column and the panel the right, its top level with the strip's (no panel padding there).
+ * Narrower, the strip's card sits above the panel.
  */
 const SETTINGS_LAYOUT = "grid grid-cols-[minmax(0,1fr)] items-start gap-0 xl:grid-cols-[13.5rem_minmax(0,1fr)] xl:gap-6 xl:[&>div>.tab-panel]:pt-0";
 
 /*
- * The tab strip, untouched in markup and keys (the kit's Tabs: Left and Right arrows, Home, End), drawn on a wide screen
- * as an inner navigation card: one row per tab, the chosen one on lavender with the kit's selected bar turned into a
- * short bar on its left edge (the kit paints that bar in the system's highlight colour in Windows high contrast).
+ * The tab strip: the kit's vertical tabs (`orientation="vertical"`: rows, the chosen one tinted with a plum bar, Up and
+ * Down as well as Left and Right) on the kit's side-card surface, kept in view on a wide screen. Narrower than that the
+ * rows flow side by side and wrap, so all five tabs show at once on a phone instead of a column of five rows.
  */
-const SETTINGS_NAV = [
-  "min-w-0 xl:sticky xl:top-6 xl:rounded-2xl xl:border xl:border-line xl:bg-surface xl:p-2 xl:shadow-xs",
-  "xl:[&_.tabs]:flex-col xl:[&_.tabs]:gap-0.5 xl:[&_.tabs]:overflow-visible xl:[&_.tabs]:shadow-none",
-  "xl:[&_.tab]:min-h-10 xl:[&_.tab]:w-full xl:[&_.tab]:justify-start xl:[&_.tab]:rounded-xl xl:[&_.tab]:px-3 xl:[&_.tab]:py-2 xl:[&_.tab]:text-[14px] xl:[&_.tab]:transition-colors xl:[&_.tab]:duration-150 xl:[&_.tab-label]:items-start",
-  "xl:[&_.tab]:after:inset-y-2.5 xl:[&_.tab]:after:left-0 xl:[&_.tab]:after:right-auto xl:[&_.tab]:after:h-auto xl:[&_.tab]:after:w-[3px]",
-  "xl:[&_.tab[aria-selected=true]]:bg-tint xl:[&_.tab[aria-selected=true]]:text-primary xl:[&_.tab[aria-selected=false]]:hover:bg-surface-2",
-].join(" ");
+const SETTINGS_NAV = "side-card min-w-0 p-2 xl:sticky xl:top-6 max-xl:[&>.tabs]:flex max-xl:[&>.tabs]:flex-wrap max-xl:[&>.tabs]:gap-1";
 
-/*
- * The cards' two looks. A card that opens with a lead sentence (its first paragraph) shows its title as a mono eyebrow and
- * that sentence as its display line, like screenshot 6's "People with access". A card that opens with facts, a table or a
- * form keeps the kit's display title, so no card is left without a heading of display size. Both get the phone padding.
- */
-const PLAIN_CARD = "max-sm:px-4 max-sm:py-5";
-const LEAD_CARD = [
-  PLAIN_CARD,
-  "[&>.card-title]:mb-2 [&>.card-title]:items-center",
-  "[&>.card-title_h2]:font-mono [&>.card-title_h2]:text-[11px] [&>.card-title_h2]:font-normal [&>.card-title_h2]:uppercase [&>.card-title_h2]:leading-[1.4] [&>.card-title_h2]:tracking-[0.14em] [&>.card-title_h2]:text-ink-2",
-  "[&>p:first-of-type]:mb-3 [&>p:first-of-type]:max-w-[62ch] [&>p:first-of-type]:font-display [&>p:first-of-type]:text-[18px] [&>p:first-of-type]:font-semibold [&>p:first-of-type]:leading-snug [&>p:first-of-type]:tracking-[-0.015em] [&>p:first-of-type]:text-ink",
-].join(" ");
+/** Every Settings card: the kit's card, with less padding on a phone. */
+const CARD = "max-sm:px-4 max-sm:py-5";
 
 /** One card's place on its tab: old links jump here by id (#setup-notifications), stop short of the top edge and take focus. */
 function Section({ id, children }: { id: string; children: ReactNode }) {
@@ -312,8 +292,7 @@ function ShortcutCard() {
     toast(next ? `${START_HIRE_KEY} starts a hire again.` : `${START_HIRE_KEY} no longer starts a hire.`, kept ? undefined : "This browser would not save the choice, so it lasts until you reload the page.");
   };
   return (
-    <Card title="Keyboard shortcut" className={LEAD_CARD}>
-      <p className="small muted">Press {START_HIRE_KEY} on any page to start a hire.</p>
+    <Card title="Keyboard shortcut" className={CARD}>
       <label className="check w-fit">
         <input type="checkbox" checked={on} onChange={(e) => change(e.target.checked)} />
         Press {START_HIRE_KEY} to start a hire
@@ -436,9 +415,8 @@ function MyAvailability() {
   const connected = !!c && c.status !== "not_connected";
   const calParam = params.get("calendar");
   return (
-    <Card title="My availability for interviews" className={LEAD_CARD}>
-      {calParam === "connected" ? <div className="mb-3"><Alert tone="info">Calendar connected. Interviews now use your real free time.</Alert></div> : calParam && calParam !== "connected" ? <div className="mb-3"><Alert tone="critical">The calendar connection did not complete ({calParam.replace(/_/g, " ")}). Try again.</Alert></div> : null}
-      <p className="small muted">When you can interview. Candidates are offered times from here.</p>
+    <Card title="My availability for interviews" className={CARD}>
+      {calParam === "connected" ? <Alert tone="info" className="mb-3">Calendar connected. Interviews now use your real free time.</Alert> : calParam && calParam !== "connected" ? <Alert tone="critical" className="mb-3">The calendar connection did not complete ({calParam.replace(/_/g, " ")}). Try again.</Alert> : null}
       <div className="stack gap-6">
         <div className="rounded-xl border border-line bg-surface-2/50 p-4">
           <h3 className="mb-2 text-[15px]">Calendar</h3>
@@ -449,7 +427,7 @@ function MyAvailability() {
             </div>
           ) : connectable ? (
             <div className="row justify-between gap-3">
-              <span className="small muted">Not connected. Until you connect, your hours below are used.</span>
+              <span className="small muted">Not connected.</span>
               <a className="btn primary sm" href="/api/v1/integrations/calendar/google/connect">Connect Google Calendar</a>
             </div>
           ) : <p className="small muted">{CALENDAR_OFF_LINE}</p>}
@@ -500,8 +478,7 @@ function RecruiterAccess({ canRevoke }: { canRevoke: boolean }) {
   const active = (q.data ?? []).filter((g) => g.active);
   const past = (q.data ?? []).filter((g) => !g.active).slice(0, 10);
   return (
-    <Card title="ITS recruiter access" className={LEAD_CARD}>
-      <p className="small muted">Which ITS recruiters can see your hiring, and until when.</p>
+    <Card title="ITS recruiter access" className={CARD}>
       <details className="more">
         <summary>How this works</summary>
         <p className="small muted">A recruiter gets access when your team asks for one, and also when the system brings one in on its own: a candidate asks for a person, or something gets stuck. A request about one candidate or one job gives access to that alone; all of your hiring only when someone on your team chose that. Access ends a day after the request is resolved, or after {ACCESS_DAYS} days at most, and you are told when a recruiter starts. Reopening an answered request gives fresh access, listed here like any other. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
@@ -563,8 +540,7 @@ function AuditHistory() {
   const s = useTableSort<"when" | "who">({ key: "when", dir: "descending" });
   if (q.error) return null;
   return (
-    <Card title="Audit history" aside={<a className="btn secondary sm" href="/api/v1/companies/current/audit.csv">Download as a spreadsheet</a>} className={LEAD_CARD}>
-      <p className="small muted">Who did what in your workspace, newest first.</p>
+    <Card title="Audit history" aside={<a className="btn secondary sm" href="/api/v1/companies/current/audit.csv">Download as a spreadsheet</a>} className={CARD}>
       <details className="more">
         <summary>How this works</summary>
         <p className="small muted">It lists recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown; the spreadsheet has everything, and downloading it is recorded too.</p>
@@ -592,8 +568,7 @@ function YourSessions() {
   const browser = (ua: string | null) => (!ua ? "unknown device" : /iphone|ipad/i.test(ua) ? "iPhone or iPad" : /android/i.test(ua) ? "Android" : /macintosh/i.test(ua) ? "Mac" : /windows/i.test(ua) ? "Windows" : /node|vitest/i.test(ua) ? "a test client" : "a browser");
   const PROVIDER: Record<string, string> = { google: "Google", azure: "Microsoft", magic_link: "email link", email: "email link" };
   return (
-    <Card title="Your sessions" aside={rows.length > 1 ? <Button size="sm" variant="secondary" loading={revokeOthers.isPending} onClick={() => revokeOthers.mutate()}>Sign out everywhere else</Button> : null} className={LEAD_CARD}>
-      <p className="small muted">Every place you are signed in. Sign out any you do not recognise.</p>
+    <Card title="Your sessions" aside={rows.length > 1 ? <Button size="sm" variant="secondary" loading={revokeOthers.isPending} onClick={() => revokeOthers.mutate()}>Sign out everywhere else</Button> : null} className={CARD}>
       <details className="more">
         <summary>How this works</summary>
         <p className="small muted">Each place's internet address is shown only as a short code, never in full.</p>
@@ -709,11 +684,12 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
   const trial = canEdit ? trialRow(c.trial, c.timezone) : null;
   const trialLine = trialPlanLine(c.trial, c.timezone);
   return (
-    <Card title="Company" aside={canEdit && !editing ? <Button size="sm" variant="secondary" onClick={() => { setForm(formOf(c, notices.data ?? [])); setEditing(true); }}>Edit</Button> : null} className={PLAIN_CARD}>
+    <Card title="Company" aside={canEdit && !editing ? <Button size="sm" variant="secondary" onClick={() => { setForm(formOf(c, notices.data ?? [])); setEditing(true); }}>Edit</Button> : null} className={CARD}>
       {!editing || !f ? (
         <>
-          {trial ? <div className="mb-4"><Alert tone="caution">{trial.level === "ended" ? trial.body : `${trial.title}. ${trial.body}`}</Alert></div> : null}
-          <dl className={COMPANY_FACTS}>
+          {trial ? <Alert tone="caution" className="mb-4">{trial.level === "ended" ? trial.body : `${trial.title}. ${trial.body}`}</Alert> : null}
+          {/* the company's facts as the kit's quiet label and value rows (screenshot 7's "at a glance") */}
+          <dl className="glance">
             <dt>Name</dt><dd>{c.name}</dd>
             <dt>ITS check</dt><dd>{companyCheckOf(c) === "waiting" ? <Chip tone="caution">ITS is confirming your company</Chip> : <Chip tone="good">Confirmed</Chip>}</dd>
             <dt>Careers page</dt><dd><a href={`/careers/${c.slug}`} target="_blank" rel="noreferrer">/careers/{c.slug}</a>{companyCheckOf(c) === "waiting" ? <span className="small muted"> · {CAREERS_PAGE_WAITS}</span> : null}</dd>
@@ -725,7 +701,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
           {/* The rest of the company's details, one click away. The plan and its usage stay on view: "See usage" links land here. */}
           <details className="more mt-4">
             <summary>Type, size, hours and notices</summary>
-            <dl className={COMPANY_FACTS}>
+            <dl className="glance">
               <dt>Business type</dt><dd>{VERTICALS.find(([v]) => v === c.vertical)?.[1] ?? c.vertical.replace(/_/g, " ")}</dd>
               <dt>Size</dt><dd>{c.sizeBand} employees</dd>
               <dt>Time zone</dt><dd>{c.timezone}</dd>
@@ -738,17 +714,17 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
         <div className="stack gap-4">
           <Field label="Company name" htmlFor="co-name"><input id="co-name" className="input" value={f.name} onChange={(e) => set({ name: e.target.value })} /></Field>
           <div className="grid-2">
-            <Field label="Website" htmlFor="co-web" hint="Shown to candidates and search engines"><input id="co-web" className="input" placeholder="acme.com" value={f.website} onChange={(e) => set({ website: e.target.value })} /></Field>
-            <Field label="Time zone" htmlFor="co-tz" hint="Closing dates end at midnight here"><select id="co-tz" className="select" value={f.timezone} onChange={(e) => set({ timezone: e.target.value })}>{[...new Set([f.timezone, ...ZONES])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field>
+            <Field label="Website" htmlFor="co-web"><input id="co-web" className="input" placeholder="acme.com" value={f.website} onChange={(e) => set({ website: e.target.value })} /></Field>
+            <Field label="Time zone" htmlFor="co-tz"><select id="co-tz" className="select" value={f.timezone} onChange={(e) => set({ timezone: e.target.value })}>{[...new Set([f.timezone, ...ZONES])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field>
             <Field label="Size" htmlFor="co-size"><select id="co-size" className="select" value={f.sizeBand} onChange={(e) => set({ sizeBand: e.target.value })}>{SIZE_BANDS.map((s) => <option key={s} value={s}>{s} employees</option>)}</select></Field>
           </div>
           <Field label="Locations (one per line, as City, ST)" htmlFor="co-loc"><textarea id="co-loc" className="input" rows={2} value={f.locations} onChange={(e) => set({ locations: e.target.value })} /></Field>
-          <Field label="Careers page introduction" htmlFor="co-intro" hint="The first line candidates read on your careers page"><textarea id="co-intro" className="input" rows={2} maxLength={1000} value={f.intro} onChange={(e) => set({ intro: e.target.value })} /></Field>
+          <Field label="Careers page introduction" htmlFor="co-intro"><textarea id="co-intro" className="input" rows={2} maxLength={1000} value={f.intro} onChange={(e) => set({ intro: e.target.value })} /></Field>
           <Field label="Benefits summary" htmlFor="co-ben" hint="Shown on job pages where a job describes none of its own; some states ask for it on every job ad"><textarea id="co-ben" className="input" rows={2} maxLength={2000} value={f.benefits} onChange={(e) => set({ benefits: e.target.value })} /></Field>
           {/* Rarely changed, so folded: the hours candidates may be texted, and the legal wording of the notices. */}
           <details className="more">
             <summary>Contact hours for texts</summary>
-            <p className="small muted">When candidates may be texted. The law already keeps texts between 8:00 and 21:00 local time; your hours can only narrow that.</p>
+            <p className="small muted">The law already keeps texts between 8:00 and 21:00 local time; your hours can only narrow that.</p>
             <label className="small my-2 flex min-h-10 w-fit cursor-pointer items-center gap-2.5 text-ink"><input type="checkbox" checked={f.hoursOn} onChange={(e) => set({ hoursOn: e.target.checked })} /> Set our own contact hours</label>
             {f.hoursOn ? (
               <div className="row small gap-x-3 gap-y-2">
@@ -772,6 +748,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
               ))}
             </div>
           </details>
+          {/* kept: the plan is shown on the card but has no field here, and this says who changes it */}
           <p className="small muted">The plan, the pilot term and the allowances are set by Identified Talent Solutions; ask them to change those.</p>
           <div className="row border-t border-line pt-4"><Button variant="primary" loading={save.isPending} onClick={() => save.mutate(f)}>Save changes</Button><Button variant="quiet" onClick={() => { setEditing(false); setForm(null); }}>Cancel</Button></div>
         </div>
@@ -779,12 +756,6 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
     </Card>
   );
 }
-
-/*
- * The company's facts as quiet rows (screenshot 7's "at a glance"): a hairline between rows from a tablet up; on a phone
- * the kit's list stacks each name tight over its value, with room before the next name.
- */
-const COMPANY_FACTS = "kv text-[14.5px] sm:gap-0 sm:[&>*]:border-t sm:[&>*]:border-line sm:[&>*]:py-3 sm:[&>:nth-child(-n+2)]:border-t-0 sm:[&>:nth-child(-n+2)]:pt-0 sm:[&>dt]:pr-4";
 
 function fieldLabel(f: string): string {
   return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", boardPosting: "who posts on job boards", zipRecruiterPlan: "ZipRecruiter plan", about: "about the company", newTimesAfterCancel: "automatic new times after a cancellation" } as Record<string, string>)[f] ?? f;
@@ -808,8 +779,7 @@ type PublicProfile = { hiringContact: { email: string; name: string | null } | n
 
 function CompanyProfileCard({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
   return (
-    <Card title="How candidates see you" className={LEAD_CARD}>
-      <p className="small muted">What candidates see on your careers page and every job page.</p>
+    <Card title="How candidates see you" className={CARD}>
       <div className="mt-1 grid divide-y divide-line [&>*]:py-5 [&>:first-child]:pt-2 [&>:last-child]:pb-0">
         <LogoPicker company={c} canEdit={canEdit} />
         <AboutText company={c} canEdit={canEdit} />
@@ -852,7 +822,7 @@ function HiringContactField({ canEdit }: { canEdit: boolean }) {
       <h3 className="text-[15px]">Who candidates can write to before they apply</h3>
       {q.isLoading ? <Skeleton lines={1} /> : shown ? (
         <p className="small text-ink-2">
-          Candidates see: {shown.name ? `${shown.name}, ` : ""}{shown.email}. {shown.kind === "its" ? "This is the ITS inbox that answers for your company; set your own address to have them write to you." : "Your own address, set here."}
+          Candidates see: {shown.name ? `${shown.name}, ` : ""}{shown.email}.{shown.kind === "its" ? " This is the ITS inbox that answers for your company." : null}
         </p>
       ) : null}
       {canEdit ? (form ? (
@@ -907,17 +877,19 @@ function LogoPicker({ company: c, canEdit }: { company: Company; canEdit: boolea
     onError: (e) => setProblem(e instanceof ApiError ? e.message : "Could not take the logo off."),
   });
   const shown = preview ?? c.settings.logoUrl ?? null;
+  // Beside the picture only what waits on the person (an unsaved choice) or what candidates get without one.
+  const note = preview ? "This is how it will look. Save it to use it." : shown ? null : "No logo yet: job pages show your company's name.";
   return (
     <div className="stack gap-2.5">
       <h3 className="text-[15px]">Logo</h3>
       <div className="row gap-4">
         {/* the picture at the size the careers page shows it, on a quiet tile; no logo yet, the company's initial */}
         <span className="inline-flex min-h-[72px] min-w-[72px] max-w-[240px] shrink-0 items-center justify-center rounded-2xl border border-line bg-surface-2 p-2 [&_img]:max-h-14 [&_img]:w-auto [&_img]:max-w-full [&_img]:object-contain">{shown ? <img src={shown} alt={preview ? "The logo you chose, not saved yet" : `${c.name} logo`} /> : <Avatar name={c.name} tone="ink" shape="square" size="xl" letters={1} />}</span>
-        <span className="small muted min-w-0 flex-[1_1_200px]">{preview ? "This is how it will look. Save it to use it." : shown ? "Shown at the top of your careers page and job pages." : "No logo yet: job pages show your company's name."}</span>
+        {note ? <span className="small muted min-w-0 flex-[1_1_200px]">{note}</span> : null}
       </div>
       {canEdit ? (
         <>
-          <Field label={shown && !preview ? "Choose a different picture" : "Choose a picture"} htmlFor="co-logo-file" hint="PNG, JPG or WebP, up to 2 MB. A wide logo on a plain background looks best.">
+          <Field label={shown && !preview ? "Choose a different picture" : "Choose a picture"} htmlFor="co-logo-file" hint="PNG, JPG or WebP, up to 2 MB.">
             <input id="co-logo-file" className="input" type="file" accept={LOGO_TYPES.join(",")} onChange={(e) => choose(e.target.files?.[0] ?? null)} />
           </Field>
           <div className="row">
@@ -977,8 +949,9 @@ function AboutText({ company: c, canEdit }: { company: Company; canEdit: boolean
         <>
           {editing.drafted ? <Alert tone="info">Drafted by the assistant (AI) from what you told us about the company. Read every word and change anything that is not right: nothing shows on job pages until you approve it.</Alert> : null}
           {wording && editing.text.includes(wording.text) ? <Alert tone="caution">Check this wording: "{wording.text}". {wording.reason} {wording.alternative}</Alert> : null}
-          <Field label="What candidates read about the company" htmlFor="co-about" hint={`A few sentences: what you do, who you serve, what it is like to work there. Up to ${ABOUT_MAX} characters.`}>
-            <textarea id="co-about" className="textarea" rows={6} maxLength={ABOUT_MAX + 200} value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
+          {/* what to write is the empty box's example; the limit stays on view */}
+          <Field label="What candidates read about the company" htmlFor="co-about" hint={`Up to ${ABOUT_MAX} characters.`}>
+            <textarea id="co-about" className="textarea" rows={6} maxLength={ABOUT_MAX + 200} placeholder="What you do, who you serve, what it is like to work there." value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
           </Field>
           <div className="row">
             <Button variant="primary" size="sm" loading={save.isPending} onClick={approve}>Approve and show it</Button>
@@ -988,7 +961,7 @@ function AboutText({ company: c, canEdit }: { company: Company; canEdit: boolean
       ) : approved ? (
         <>
           <p className="max-w-[68ch] whitespace-pre-wrap rounded-r-xl border-l-2 border-primary bg-tint px-4 py-3 text-ink-2">{approved.text}</p>
-          <p className="small muted">Approved{approved.approvedBy?.name ? ` by ${approved.approvedBy.name}` : ""} on {new Date(approved.approvedAt).toLocaleDateString()}. Shown on your careers page and every job page.</p>
+          <p className="small muted">Approved{approved.approvedBy?.name ? ` by ${approved.approvedBy.name}` : ""} on {new Date(approved.approvedAt).toLocaleDateString()}.</p>
           {canEdit ? (
             <div className="row">
               <Button size="sm" onClick={() => setEditing({ text: approved.text, drafted: false })}>Change it</Button>
@@ -998,7 +971,7 @@ function AboutText({ company: c, canEdit }: { company: Company; canEdit: boolean
         </>
       ) : (
         <>
-          <p className="small muted">Nothing yet. Job pages show the job without an "about the company" part until someone approves one.</p>
+          <p className="small muted">Nothing yet.</p>
           {canEdit ? (
             <div className="row">
               <Button size="sm" variant="primary" icon="sparkle" loading={draft.isPending} onClick={() => draft.mutate()}>Draft it with the assistant</Button>
@@ -1030,8 +1003,7 @@ function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boo
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save."),
   });
   return (
-    <Card title="Job boards" className={LEAD_CARD}>
-      <p className="small muted">Every job goes on your careers page and Google.</p>
+    <Card title="Job boards" className={CARD}>
       <div className="stack gap-4">
         <Field label="Who posts your jobs on the boards">
           {canEdit ? (
@@ -1046,6 +1018,7 @@ function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boo
         <details className="more">
           <summary>How this works</summary>
           <div className="stack small muted gap-1.5">
+            <p>Every job goes on your careers page and Google.</p>
             <p>LinkedIn, Indeed and ZipRecruiter are ticked on each job, and nothing is called up on a board until its address has been checked.</p>
             <p>{whoPosts === "its" ? "An ITS recruiter posts each job from your company's own board accounts and takes it down when the job closes. You see who has it on the job's Share tab." : "Each job's Share tab has the words to paste, the board's own apply link and the steps. You record the listing's address there once it is up."}</p>
             <p>Posting on ZipRecruiter needs a paid plan of your own, so it is offered on a job only once you say you have one.</p>
@@ -1109,22 +1082,20 @@ function NewTimesCard({ company: c, canEdit, onReauthRequired }: { company: Comp
     if (!on && saved.auto && pending > 0) setAsking({ pending, choice: null });
     else save.mutate({ auto: on, workingDays: saved.workingDays });
   };
-  // The card's explanation and, when it is on, what the setting does: the first sentence of each on view, the rest under
-  // "How this works". When it is off the setting says it in two short sentences, both on view.
-  const intro = leadAndRest(NEW_TIMES_SETUP.intro);
+  // What the setting does, when it is on: its first sentence on view, the rest under "How this works" with the card's
+  // explanation (what a candidate who cancels chooses). When it is off the setting says it in two short sentences, both on view.
   const setting = saved.auto ? leadAndRest(newTimesSettingText(saved)) : { lead: newTimesSettingText(saved), rest: "" };
   const howItWorks = (
     <details className="more mt-4">
       <summary>How this works</summary>
       <div className="stack small muted gap-1.5">
-        {intro.rest ? <p>{intro.rest}</p> : null}
+        <p>{NEW_TIMES_SETUP.intro}</p>
         {setting.rest ? <p>{setting.rest}</p> : null}
       </div>
     </details>
   );
   return (
-    <Card title={NEW_TIMES_SETUP.title} className={LEAD_CARD}>
-      <p className="small muted">{intro.lead}</p>
+    <Card title={NEW_TIMES_SETUP.title} className={CARD}>
       {canEdit ? (
         <div className="stack gap-4">
           <div className="stack gap-1.5">

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "../nav";
-import { Alert, Button, Eyebrow, Field } from "@ros/ui";
+import { Alert, Button, Field } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { VERTICALS, ZONE_CHOICES, browserTimeZone, snapTimeZone, verticalHint } from "../company-setup";
 import { browserStorage } from "../start-hire";
@@ -23,10 +23,15 @@ export function CompanySetup() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  // The zone taken from the computer, so the field can say it is a guess to check while it is still the one chosen.
+  const [guessedZone, setGuessedZone] = useState("");
   // The computer's own zone is read after the first render: the server that renders the page first has its own clock.
   useEffect(() => {
     const zone = snapTimeZone(browserTimeZone());
-    if (zone) setForm((f) => (f.timezone ? f : { ...f, timezone: zone }));
+    if (zone) {
+      setGuessedZone(zone);
+      setForm((f) => (f.timezone ? f : { ...f, timezone: zone }));
+    }
   }, []);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,17 +59,13 @@ export function CompanySetup() {
     nav("/login", { replace: true });
   };
   return (
-    // The application card of screenshot 5, alone on the page's glow: what this is, then the form, Sign out at the top.
+    // The application card of screenshot 5, alone on the page's glow: the title with Sign out beside it, then the form.
     <main className="mx-auto w-full max-w-[620px] px-4 py-10 sm:py-16">
       <div className="rounded-[20px] border border-line bg-surface px-5 py-7 shadow-sm motion-safe:animate-enter sm:px-9 sm:py-9">
         <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <Eyebrow>Getting started</Eyebrow>
-            <h1 className="mt-2 text-[30px] sm:text-[34px]">Tell us about your company</h1>
-          </div>
+          <h1 className="min-w-0 text-[30px] sm:text-[34px]">Tell us about your company</h1>
           <Button variant="quiet" size="sm" loading={leaving} onClick={signOut}>Sign out</Button>
         </div>
-        <p className="mt-3 max-w-[56ch] text-[15px] text-ink-2">Two minutes. This shapes every role you open: how it is drafted, the notices candidates see, and where jobs get posted.</p>
         <form onSubmit={submit} className="stack mt-7 gap-5 border-t border-line pt-7">
           <Field label="Company name" htmlFor="name"><input id="name" className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
           <Field label="Your name" htmlFor="owner"><input id="owner" className="input" value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} /></Field>
@@ -81,9 +82,11 @@ export function CompanySetup() {
           </Field>
           <div className="grid gap-5 sm:grid-cols-2">
             <Field label="City" htmlFor="city"><input id="city" className="input" required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
-            <Field label="State" htmlFor="region" hint="Two letters, for example TX"><input id="region" className="input" required minLength={2} maxLength={2} value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></Field>
+            {/* two letters: the box takes no more, and its example shows the form */}
+            <Field label="State" htmlFor="region"><input id="region" className="input" required minLength={2} maxLength={2} placeholder="TX" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></Field>
           </div>
-          <Field label="Time zone" htmlFor="timezone" hint="Interview times and the hours candidates may be texted use this. We started from your computer's setting.">
+          {/* the zone sets the hours candidates may be texted, so a pre-filled guess says so until the owner changes it */}
+          <Field label="Time zone" htmlFor="timezone" hint={guessedZone && form.timezone === guessedZone ? "We started from your computer's setting." : undefined}>
             <select id="timezone" className="select" required value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })}>
               <option value="" disabled>Choose a time zone</option>
               {ZONE_CHOICES.map((z) => <option key={z.value} value={z.value}>{z.label}</option>)}
@@ -92,8 +95,8 @@ export function CompanySetup() {
           <Field label="Website (optional)" htmlFor="web"><input id="web" className="input" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} /></Field>
           {error ? <Alert tone="critical">{error}</Alert> : null}
           {/* the one main action, at the end of the form: a pill on the right, the full width on a phone */}
-          <div className="flex justify-end pt-1 max-sm:[&>.btn]:w-full">
-            <Button type="submit" variant="primary" loading={busy} iconEnd="arrow-right">Create my hiring workspace</Button>
+          <div className="flex justify-end pt-1">
+            <Button type="submit" variant="primary" loading={busy} iconEnd="arrow-right" className="max-sm:w-full">Create my hiring workspace</Button>
           </div>
         </form>
       </div>

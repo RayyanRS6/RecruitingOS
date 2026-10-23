@@ -41,13 +41,16 @@ export function NotesTab({ applicationId, firstName }: { applicationId: string; 
   const view = q.data;
   const others = othersNotes(view);
   return (
-    // the privacy note's mark is the lock: it takes the place of the alert's own mark (hidden here), not a second icon beside it
-    <div className="stack gap-4 [&>.alert]:before:hidden">
-      <Alert tone="info">
+    <div className="stack gap-4">
+      {/* the privacy note's mark is the lock: it takes the place of the alert's own mark (hidden), not a second icon beside it */}
+      <Alert tone="info" className="before:hidden">
         <div className="grid gap-2">
-          <span className="[&>.icon]:absolute [&>.icon]:top-4 [&>.icon]:left-[17px] [&>.icon]:text-primary"><Icon name="lock" size={16} /><span><strong>{firstSentence(view.privacy).line}</strong> {NOTES_REMINDER_SHORT}</span></span>
+          <span><Icon name="lock" size={16} className="absolute top-4 left-[17px] text-primary" /><span><strong>{firstSentence(view.privacy).line}</strong> {NOTES_REMINDER_SHORT}</span></span>
+          {/* who reads the notes, by role, sits with the privacy words under the one disclosure that says "who sees it",
+              instead of a second line at the foot of the tab (founder, 23 Oct 2026: fewer words) */}
           <Why label="What to write, and who sees it">
             <span>{view.privacy}</span>
+            <span>{whoReadsLine(view.canRead)}</span>
             <span>{NOTES_REMINDER}</span>
           </Why>
         </div>
@@ -58,7 +61,6 @@ export function NotesTab({ applicationId, firstName }: { applicationId: string; 
           {others.length ? <ul className="grid gap-3">{others.map((n) => <NoteItem key={n.id} n={n} />)}</ul> : <p className="small muted">Nobody else has written a note on {firstName} yet.</p>}
         </Card>
       ) : null}
-      <p className="small muted">{whoReadsLine(view.canRead)}</p>
     </div>
   );
 }

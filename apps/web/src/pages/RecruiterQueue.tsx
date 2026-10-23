@@ -3,7 +3,7 @@
 import { type CSSProperties, Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useRefresh, useSearchParams } from "../nav";
-import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, IconChip, type IconName, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
+import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, IconChip, IconLabel, type IconName, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
 import type { EscalationThreadEntry } from "@ros/contracts";
 import { api, ApiError, type Me, type PostingTaskDetail } from "../api/client";
 import { POSTING_TASK_BEFORE_ACCEPT, isPostingTaskKind, queueKindLabel } from "../publishing";
@@ -95,14 +95,17 @@ export function queueCounts(queued: readonly Preview[], done: readonly Preview[]
   return { all: count("all"), waiting: count("waiting"), yours: count("yours"), overdue: count("overdue"), done: done ? count("done") : null };
 }
 
-/** What an empty list says, with its one way back. A truly empty queue says what will appear and offers nothing. */
-export function queueEmpty(view: QueueView, anyAtAll: boolean): { title: string; body: string; action: "all" | "clear" | null } {
-  if (view.q.trim()) return { title: "No requests from a company by that name", body: `Nothing here matches "${view.q.trim()}".`, action: "clear" };
-  if (view.show === "waiting") return { title: "Nobody is waiting", body: "Every request in the queue has a recruiter.", action: "all" };
-  if (view.show === "yours") return { title: "Nothing is yours right now", body: "Requests you accept show here.", action: "all" };
-  if (view.show === "overdue") return { title: "Nothing overdue", body: "Every request is within its reply-by time.", action: "all" };
-  if (view.show === "done") return { title: "Nothing done yet", body: "Requests show here once they are resolved.", action: "all" };
-  return anyAtAll ? { title: "Nothing to show", body: "Try another view.", action: "all" } : { title: "Queue is empty", body: "Requests appear here.", action: null };
+/**
+ * What an empty list says: one line, and its one way back (the words on screen, 23 October: no second line explaining
+ * it). A truly empty queue offers nothing.
+ */
+export function queueEmpty(view: QueueView, anyAtAll: boolean): { title: string; action: "all" | "clear" | null } {
+  if (view.q.trim()) return { title: "No requests from a company by that name", action: "clear" };
+  if (view.show === "waiting") return { title: "Nobody is waiting", action: "all" };
+  if (view.show === "yours") return { title: "Nothing is yours right now", action: "all" };
+  if (view.show === "overdue") return { title: "Nothing overdue", action: "all" };
+  if (view.show === "done") return { title: "Nothing done yet", action: "all" };
+  return anyAtAll ? { title: "Nothing to show", action: "all" } : { title: "Queue is empty", action: null };
 }
 
 /** The second line of a row: the expertise needed and the time left, or, once done, when it was asked. */
@@ -190,7 +193,8 @@ export function RecruiterQueue() {
 
   return (
     <div>
-      <PageHeader eyebrow="ITS recruiters" title="Recruiter queue" sub="Requests from customers, and ones Recruiting OS raised automatically: urgent ones first, then the soonest deadline." />
+      {/* the title alone (23 October: no eyebrow, no line describing the page); the queue's rules stay folded below */}
+      <PageHeader title="Recruiter queue" />
       {/* a size container: the list and the open request go side by side from 48rem of room (@3xl), as the old wrapping
           layout did (a 300px list beside a 440px request), whether the rail is open or folded */}
       <div className="stack gap-5 @container">
@@ -214,7 +218,7 @@ export function RecruiterQueue() {
         {/* the list, and with the room for both the open request beside it (one under the other below that) */}
         <div className={cn("grid items-start gap-5", id && "@3xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]")}>
           <div className="stack min-w-0">
-            {current.isLoading ? <Skeleton lines={4} /> : current.error ? <ErrorState message={view.show === "done" ? "Could not load the requests that are done." : "Could not load the queue."} onRetry={() => current.refetch()} /> : shown.length === 0 ? <EmptyState icon="inbox" title={empty.title} body={empty.body} action={emptyAction} /> : (
+            {current.isLoading ? <Skeleton lines={4} /> : current.error ? <ErrorState message={view.show === "done" ? "Could not load the requests that are done." : "Could not load the queue."} onRetry={() => current.refetch()} /> : shown.length === 0 ? <EmptyState icon="inbox" title={empty.title} action={emptyAction} /> : (
               <ul className="list" aria-label="Requests">
                 {shown.map((e, i) => {
                   const st = queueStatusWord(e);
@@ -260,11 +264,8 @@ const BUBBLE: Record<Side, string> = { left: "bubble assistant", right: "bubble 
 function Message(props: { side: Side; label: ReactNode; mark?: { icon: IconName; tone: "peach" | "lavender" }; children: ReactNode }) {
   return (
     <li className={cn("flex min-w-0 items-start gap-2.5 motion-safe:animate-enter", props.side === "right" && "flex-row-reverse", props.side === "note" && "justify-center")}>
-      {props.mark ? (
-        <span className={cn("icon-chip mt-[22px] size-7 rounded-lg", props.mark.tone)} aria-hidden="true">
-          <Icon name={props.mark.icon} size={14} />
-        </span>
-      ) : null}
+      {/* the kit's icon chip, a little smaller than its sm size, level with the bubble under the label */}
+      {props.mark ? <IconChip icon={props.mark.icon} tone={props.mark.tone} size="sm" className="mt-[22px] size-7 rounded-lg" /> : null}
       <div className={cn("grid min-w-0 gap-1", props.side === "right" ? "justify-items-end" : props.side === "note" ? "justify-items-center text-center" : "justify-items-start")}>
         <p className="text-[12px] text-ink-3">{props.label}</p>
         {props.children}
@@ -277,12 +278,6 @@ function Message(props: { side: Side; label: ReactNode; mark?: { icon: IconName;
 const THREAD = "grid gap-4 rounded-2xl border border-line bg-ground p-3 sm:p-4";
 
 /**
- * A card whose title has something beside it (pills, a button): a long title takes the card's width and what is beside
- * it goes under it, instead of squeezing the title into a narrow column (a phone, or the request beside the list).
- */
-const WRAP_TITLE = "[&>.card-title]:flex-wrap [&>.card-title]:gap-y-2";
-
-/**
  * The draft a request is about (plan C12), as the customer was promised: who started it, what is known so far, the whole
  * conversation with the assistant (a pasted job ad folded away), and the draft written beside it. "Open the draft" goes
  * into the customer's workspace on that draft, where the recruiter can carry on.
@@ -291,7 +286,7 @@ function DraftHandover({ draft, onOpen, opening }: { draft: HandedOverDraft; onO
   const facts = draftFactLines(draft.facts);
   const title = draft.draftPacket?.identity?.title ?? (typeof draft.facts.title === "string" ? draft.facts.title : null);
   return (
-    <Card className={WRAP_TITLE} title={`The draft they asked about: ${title ?? "Untitled role"}`} aside={onOpen ? <Button size="sm" variant="primary" loading={opening} onClick={onOpen}>Open the draft</Button> : null}>
+    <Card title={`The draft they asked about: ${title ?? "Untitled role"}`} aside={onOpen ? <Button size="sm" variant="primary" loading={opening} onClick={onOpen}>Open the draft</Button> : null}>
       <p className="small muted">Started by {draft.startedBy ?? "someone on their team"} · {draft.status === "active" ? "still being drafted" : draft.status === "compiled" ? "now a role" : "set aside"}. This is how it stood when they asked.</p>
       {facts.length ? <dl className="kv mt-3">{facts.map((f) => <Fragment key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></Fragment>)}</dl> : <p className="small muted mt-2">Nothing settled yet.</p>}
       {draft.missingFacts.length ? <p className="small mt-3 text-caution">Still missing: {draft.missingFacts.map((m) => m.replace(/_/g, " ")).join(", ")}</p> : null}
@@ -349,9 +344,9 @@ function PostingTaskPanel({ id, task, status, onChanged }: { id: string; task: P
   const open = status !== "resolved" && status !== "cancelled";
   const board = task.board.name;
   return (
-    <Card className={WRAP_TITLE} title={task.label} aside={<Pill size="sm" tone={POSTING_STATE_TONE[p.status] ?? "neutral"}>{p.stateLabel}</Pill>}>
-      <p className="small muted">{task.companyName} · {task.role.title}{task.role.currentPacketVersion ? ` · version ${task.role.currentPacketVersion}` : ""}</p>
-      <p className="mt-3 whitespace-pre-wrap">{task.whatToDo}</p>
+    // the company and the job are in the request's title above; the ad's version goes with the package it versions
+    <Card title={task.label} aside={<Pill size="sm" tone={POSTING_STATE_TONE[p.status] ?? "neutral"}>{p.stateLabel}</Pill>}>
+      <p className="whitespace-pre-wrap">{task.whatToDo}</p>
       {p.externalUrl ? <p className="small mt-2 [overflow-wrap:anywhere]">On {board}: <a href={p.externalUrl} target="_blank" rel="noreferrer">{p.externalUrl}</a></p> : null}
       {p.verificationError ? <p className="small mt-2 text-critical">The last check of the address did not pass: {p.verificationError}</p> : null}
       {p.showsOldVersion ? <p className="small mt-2 text-caution">The listing shows an earlier version{p.boardVersion ? ` (version ${p.boardVersion})` : ""}.</p> : null}
@@ -363,7 +358,7 @@ function PostingTaskPanel({ id, task, status, onChanged }: { id: string; task: P
       ) : null}
       {task.package ? (
         <details className="more mt-4" open={task.kind !== "take_down_job"}>
-          <summary>The posting package (the job ad to paste)</summary>
+          <summary>The posting package (the job ad to paste){task.role.currentPacketVersion ? ` · version ${task.role.currentPacketVersion}` : ""}</summary>
           <pre className="mb-3">{task.package.text}</pre>
           <Button size="sm" icon="copy" onClick={() => copy(task.package!.text, "the posting package")}>Copy the package</Button>
         </details>
@@ -374,7 +369,7 @@ function PostingTaskPanel({ id, task, status, onChanged }: { id: string; task: P
           {task.kind === "post_job" || task.kind === "update_job" ? (
             <div className={FIELD_ROW}>
               <div className={FIELD_GROW}>
-                <Field label={p.externalUrl ? "A different public address for the listing" : "The listing's public address"} htmlFor={`task-url-${id}`} hint="The full https:// link to the job on the board. It is checked before anything is called live.">
+                <Field label={p.externalUrl ? "A different public address for the listing" : "The listing's public address"} htmlFor={`task-url-${id}`}>
                   <input id={`task-url-${id}`} className="input" inputMode="url" value={url} onChange={(ev) => setUrl(ev.target.value)} placeholder="https://" />
                 </Field>
               </div>
@@ -456,7 +451,7 @@ function EscalationDetail({ id }: { id: string }) {
   const aboutRole = ctx.role?.title ?? e.roleTitle;
   return (
     <div className="stack gap-4">
-      <Card className={WRAP_TITLE} title={`${queueKindLabel(e.kind)} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row justify-end gap-1.5"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{URGENCY_WORD[e.urgency]}</Pill><Pill size="sm" tone={st.tone}>{st.label}</Pill></div>}>
+      <Card title={`${queueKindLabel(e.kind)} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row justify-end gap-1.5"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{URGENCY_WORD[e.urgency]}</Pill><Pill size="sm" tone={st.tone}>{st.label}</Pill></div>}>
         {e.accessGranted && ctx.candidate?.name ? <p className="mb-2"><strong>About:</strong> {ctx.candidate.name}{aboutRole ? ` · ${aboutRole}` : ""}</p> : null}
         {hasActions ? (
           <div className="row mb-4">
@@ -469,7 +464,8 @@ function EscalationDetail({ id }: { id: string }) {
         <p>{e.summary}</p>
         <p className="small muted mt-1.5">Needs {e.requiredExpertise} · {remainingText(e)}{e.slaDueAt ? ` · respond by ${new Date(e.slaDueAt).toLocaleString()}` : ""}{e.firstResponseAt ? ` · first response ${new Date(e.firstResponseAt).toLocaleString()}` : ""}</p>
         {e.grant ? <p className="small mt-2 text-ink-2">Your access covers {e.grant.scope.applicationId ? "this candidate" : e.grant.scope.roleId ? "this role" : "this customer"} and ends {new Date(e.grant.expiresAt).toLocaleString()}.</p> : null}
-        {e.reopenedCount ? <p className="small mt-2"><Chip tone="caution">Reopened{e.reopenedCount > 1 ? ` ${e.reopenedCount} times` : ""}</Chip> The customer said an earlier answer did not solve it; their reason is in the conversation below.</p> : null}
+        {/* their reason is the "reopened it" message in the conversation below */}
+        {e.reopenedCount ? <div className="mt-2"><Chip tone="caution">Reopened{e.reopenedCount > 1 ? ` ${e.reopenedCount} times` : ""}</Chip></div> : null}
         {e.accessGranted && e.thread?.length ? (
           <div className="mt-5 grid gap-2">
             <p className="eyebrow">The conversation</p>
@@ -489,8 +485,8 @@ function EscalationDetail({ id }: { id: string }) {
         <>
           <PostingTaskPanel id={e.id} task={e.postingTask} status={e.status} onChanged={refresh} />
           {stillOpen ? (
-            <Card title="Cannot do it?">
-              <Field label="Say why, and what the customer should know" hint="The customer's owners and admins read this in full, on the job's Share tab and in their updates; the board stays as it is and is theirs to post or to ask ITS again." htmlFor="task-res"><textarea id="task-res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} placeholder="e.g. The company's LinkedIn page has no job slots left; they need to buy one first." /></Field>
+            <Card title="Cannot do it?" aside={<IconLabel icon="eye" label="The customer's owners and admins read this in full, on the job's Share tab and in their updates." />}>
+              <Field label="Say why, and what the customer should know" htmlFor="task-res"><textarea id="task-res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} placeholder="e.g. The company's LinkedIn page has no job slots left; they need to buy one first." /></Field>
               <div className="row mt-4">
                 <Button loading={resolve.isPending} disabled={!resolution.trim()} onClick={() => resolve.mutate()}>Close the task with this note</Button>
                 <Button variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Give it back to the queue</Button>
@@ -548,15 +544,19 @@ function EscalationDetail({ id }: { id: string }) {
               <div className="stack gap-6">
                 {stillOpen ? (
                   <section aria-labelledby="answer-write" className="stack gap-3">
-                    <h3 id="answer-write" className="text-[15px]">Write to the customer</h3>
-                    <Field label="A question or an update, without resolving the request" hint="The person who asked and the owners read it in full on Today." htmlFor="reply"><textarea id="reply" className="textarea" value={reply} onChange={(ev) => setReply(ev.target.value)} /></Field>
+                    {/* who reads it: an eye with the words as its name and tooltip, beside the heading */}
+                    <div className="flex items-center gap-2">
+                      <h3 id="answer-write" className="text-[15px]">Write to the customer</h3>
+                      <IconLabel icon="eye" label="The person who asked and the owners read it in full on Today." />
+                    </div>
+                    <Field label="A question or an update, without resolving the request" htmlFor="reply"><textarea id="reply" className="textarea" value={reply} onChange={(ev) => setReply(ev.target.value)} /></Field>
                     <div><Button variant="secondary" loading={write.isPending} disabled={!reply.trim()} onClick={() => write.mutate()}>Send</Button></div>
                   </section>
                 ) : null}
                 <section aria-labelledby="answer-resolve" className={cn("stack gap-3", stillOpen && "border-t border-line pt-6")}>
                   <h3 id="answer-resolve" className="text-[15px]">Resolve</h3>
                   <Field label="What you did or advised (the customer reads this in full)" htmlFor="res"><textarea id="res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} /></Field>
-                  <Field label="Minutes spent" hint="Recorded to size recruiter capacity and pricing." htmlFor="mins"><input id="mins" className="input max-w-[160px]" type="number" min={0} max={1440} value={minutes} onChange={(ev) => setMinutes(ev.target.value)} /></Field>
+                  <Field label="Minutes spent" htmlFor="mins"><input id="mins" className="input max-w-[160px]" type="number" min={0} max={1440} value={minutes} onChange={(ev) => setMinutes(ev.target.value)} /></Field>
                   <div><Button variant="primary" loading={resolve.isPending} disabled={!resolution.trim()} onClick={() => resolve.mutate()}>Mark resolved</Button></div>
                 </section>
               </div>

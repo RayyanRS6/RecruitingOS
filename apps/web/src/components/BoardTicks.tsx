@@ -38,7 +38,7 @@ export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; r
     <fieldset className="grid min-w-0 gap-3">
       <legend className="sr-only">Where the job is posted</legend>
       {/* one bordered list of rows (screenshot 6): the tick, the board, a pale chip; a board that cannot be ticked says why under it */}
-      <div className="grid divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
+      <div className="list-card divide-y divide-line overflow-hidden">
         <label className={ROW}><input type="checkbox" checked disabled /> Your careers page <Chip>always</Chip></label>
         <label className={ROW}><input type="checkbox" checked disabled /> Google <Chip>always</Chip></label>
         {props.boards.map((b) => (

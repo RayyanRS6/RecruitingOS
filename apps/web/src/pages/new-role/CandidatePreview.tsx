@@ -18,7 +18,8 @@ export function CandidatePreview(props: { open: boolean; onClose: () => void; pa
   const q = useQuery({ queryKey: ["job-preview", props.path], queryFn: () => api.get<JobPreview>(props.path), enabled: props.open, staleTime: 0 });
   const p = q.data;
   return (
-    <Drawer open={props.open} onClose={props.onClose} title="What candidates will see" sub={p?.banner ?? "A preview of the job page. Nothing is public until the role is approved."} size="lg">
+    // the server's banner says which version this is and that it is not public; nothing stands in for it while loading
+    <Drawer open={props.open} onClose={props.onClose} title="What candidates will see" sub={p?.banner} size="lg">
       {q.isLoading ? <Skeleton lines={6} /> : q.error || !p ? <ErrorState message={errorWords(q.error, "Could not load the preview.")} onRetry={() => q.refetch()} /> : (
         <>
           {/* The real page, drawn by the public pages' own components (plan D1); never public, never indexed. */}

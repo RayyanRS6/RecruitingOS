@@ -3,7 +3,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { IntakeSessionSummary, PlanRoom } from "@ros/contracts";
-import { Alert, Button, Eyebrow, Icon, IconChip, Skeleton } from "@ros/ui";
+import { Alert, Button, Icon, IconChip, Skeleton } from "@ros/ui";
 import { api } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
 import { AskRecruiter } from "../../components/AskRecruiter";
@@ -57,7 +57,7 @@ export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }
  * starting a second one; "Start a different role" comes here with ?new=1 to begin another. When the plan has no room
  * the page says so before anything is typed, with the roles holding the places.
  */
-export function StartView({ fresh, companyName, scope = null }: { fresh: boolean; companyName: string | null; scope?: QuickScope | null }) {
+export function StartView({ fresh, scope = null }: { fresh: boolean; scope?: QuickScope | null }) {
   const nav = useNavigate();
   const drafts = useQuery({ queryKey: ["intake", "mine"], queryFn: () => api.get<{ sessions: IntakeSessionSummary[]; room: PlanRoom }>("/api/v1/intake/sessions?mine=1") });
   const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<CompanyLite>("/api/v1/companies/current") });
@@ -85,30 +85,26 @@ export function StartView({ fresh, companyName, scope = null }: { fresh: boolean
   const full = !!room && !room.ok;
   const quick = quickStartsFor(company.data?.vertical);
   const others = fresh ? drafts.data?.sessions ?? [] : [];
-  const name = companyName ?? company.data?.name ?? null;
 
   return (
+    // .start is a hook only: the frame (AppShell) gives a page holding it 1440px
     <div className="start mx-auto grid w-full max-w-[880px] gap-6">
-      <header className="grid gap-2.5 md:[&>h1]:text-[44px]">
-        <Eyebrow>{name ? `New job · ${name}` : "New job"}</Eyebrow>
+      {/* the bare h1, as tests pin it, at the page's large size */}
+      <header className="md:[&>h1]:text-[44px]">
         <h1>Who are you hiring?</h1>
-        <p className="max-w-[60ch] text-[15.5px] text-ink-2">Two ways to start. The assistant drafts the job; you decide.</p>
       </header>
       {full && room ? <RoomAlert room={room} ask={planAsk?.ask ?? null} /> : null}
       {sent ? null : (
-        // "Your next step" (screenshot 1's hero): the quick questions are the main way in
-        <section className="card needs-you grid gap-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-end" aria-labelledby="start-quick-h">
-          <div className="grid justify-items-start gap-2">
-            <IconChip icon="sparkles" tone="peach" />
-            <h2 id="start-quick-h" className="mt-2 font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] md:text-[30px]">Answer a few quick questions</h2>
-            <p className="max-w-[52ch] text-[15px] text-ink-2">Ten short steps, one at a time. Then the assistant writes the job post.</p>
+        // "Your next step" (screenshot 1's hero): the quick questions are the main way in. The kit's Card markup with its
+        // hero title, written out only so the section keeps its name (aria-labelledby).
+        <section className="card needs-you hero" aria-labelledby="start-quick-h">
+          <div className="card-title">
+            <h2 id="start-quick-h">Answer a few quick questions</h2>
           </div>
-          <div className="row">
-            <Button variant="primary" iconEnd="arrow-right" disabled={full} onClick={() => nav(QUICK_START_HREF)}>{quickKept ? "Continue the quick questions" : "Start the quick questions"}</Button>
-          </div>
+          <Button variant="primary" iconEnd="arrow-right" disabled={full} onClick={() => nav(QUICK_START_HREF)}>{quickKept ? "Continue the quick questions" : "Start the quick questions"}</Button>
         </section>
       )}
-      {/* The guided conversation (screenshot 3): the big box, the roles to start from, and the honest line at its foot */}
+      {/* The guided conversation (screenshot 3): the big box, the roles to start from, and the AI line at its foot */}
       <div className="card grid gap-4 border-line-tint bg-linear-170 from-tint/70 via-surface via-45% to-surface p-5 sm:p-6">
         <div className="flex min-w-0 items-center gap-3">
           <IconChip icon="message-circle" />
@@ -131,7 +127,6 @@ export function StartView({ fresh, companyName, scope = null }: { fresh: boolean
             disabled={full}
             label="Describe the role, or paste a job ad"
             placeholder={composerPlaceholder({ started: false, hasDraft: false })}
-            hint={<span><Icon name="paperclip" size={14} /> Paste a job ad: up to 20,000 characters.</span>}
           />
         )}
         {notARole ? (
@@ -142,17 +137,16 @@ export function StartView({ fresh, companyName, scope = null }: { fresh: boolean
         ) : null}
         {problem ? <Alert tone="critical">{problem}</Alert> : null}
         {quick.length && !sent ? (
-          <div className="grid gap-2">
-            <span className="text-[12.5px] text-ink-3">Roles our hiring guide knows:</span>
-            <ul className="flex flex-wrap gap-2" aria-label="Start from a role our hiring guide knows">
-              {quick.map((q) => (
-                <li key={q.label}>
-                  <button type="button" className="suggestion disabled:cursor-not-allowed disabled:opacity-50" disabled={full} onClick={() => { setText(q.text); clearProblem(); box.current?.focus(); }}>{q.label}</button>
-                </li>
-              ))}
-            </ul>
-          </div>
+          // a tap fills the box with a first sentence to finish; the list's name says where the roles come from
+          <ul className="flex flex-wrap gap-2" aria-label="Start from a role our hiring guide knows">
+            {quick.map((q) => (
+              <li key={q.label}>
+                <button type="button" className="suggestion disabled:cursor-not-allowed disabled:opacity-50" disabled={full} onClick={() => { setText(q.text); clearProblem(); box.current?.focus(); }}>{q.label}</button>
+              </li>
+            ))}
+          </ul>
         ) : null}
+        {/* the AI-use line (required): who drafts, and that a person decides */}
         <p className="flex items-start gap-1.5 border-t border-line pt-3.5 text-[12.5px] leading-snug text-ink-3"><Icon name="sparkle" size={14} className="mt-px text-accent" /> You are talking with an AI assistant. It drafts; you decide. Nothing is posted or sent to anyone until someone approves the role.</p>
       </div>
       {others.length ? (

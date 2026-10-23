@@ -10,28 +10,30 @@ import { RoomAlert } from "./StartView";
 import { useStartDraft } from "./use-start-draft";
 
 /**
- * Home's "Who are you hiring?" box (plan C4, founder decision Q5: labelled, and it hands off), kept compact: one line,
- * the box and its button. What is typed here starts a draft and opens the job builder on it, where an AI assistant asks
- * a few questions (the job builder says so); Home itself keeps no conversation. Shown only to people who may start a hire.
- * It looks like screenshot 3's guided conversation: a chat mark, an eyebrow over the title, a soft wash, the message box.
+ * Home's "Who are you hiring?" box (plan C4, founder decision Q5: labelled, and it hands off), kept compact: the title,
+ * the box and its button; the example inside the box shows what to type (founder, 23 October 2026: fewer words). What is
+ * typed here starts a draft and opens the job builder on it, where an AI assistant asks a few questions and the job is
+ * approved before anything is posted (the job builder says so); Home itself keeps no conversation. Shown only to people
+ * who may start a hire. It looks like screenshot 3's guided conversation: a chat mark beside the title, a soft wash, the
+ * message box. The title and the link are the Card's own title and aside, so the kit sizes the title (19px, as on every
+ * card that is not a page's one next step); the mark is hidden from screen readers, so the heading's name stays
+ * "Who are you hiring?".
  */
 export function TodayStart() {
   const [text, setText] = useState("");
   const { start, pending, notARole, problem, limit, clearProblem } = useStartDraft();
   return (
-    <Card className="border-line-tint bg-linear-150 from-tint/70 via-surface via-55% to-peach/60 max-sm:p-5">
-      <div className="flex flex-wrap items-start gap-x-3.5 gap-y-2">
-        <span aria-hidden="true" className="grid size-10 flex-none place-items-center rounded-full border border-line-2 bg-surface text-ink-2 shadow-xs">
+    <Card
+      title={<>
+        <span aria-hidden="true" className="mr-3.5 inline-grid size-10 place-items-center rounded-full border border-line-2 bg-surface align-middle text-ink-2 shadow-xs">
           <Icon name="message-circle" size={18} />
         </span>
-        <div className="grid min-w-0 flex-[1_1_180px] gap-1">
-          <p className="eyebrow">New job</p>
-          <h2 className="text-[22px] font-semibold leading-tight tracking-[-0.02em] text-ink">Who are you hiring?</h2>
-        </div>
-        <Link to={START_HIRE_HREF} className="text-link self-center pointer-coarse:min-h-10">Open the job builder</Link>
-      </div>
-      <p className="mt-3 text-sm text-ink-2 sm:pl-[54px]">Describe the job, or paste a job ad. Nothing is posted until someone approves it.</p>
-      <div className="mt-4 grid gap-3">
+        Who are you hiring?
+      </>}
+      aside={<Link to={START_HIRE_HREF} className="text-link pointer-coarse:min-h-10">Open the job builder</Link>}
+      className="border-line-tint bg-linear-150 from-tint/70 via-surface via-55% to-peach/60 max-sm:p-5"
+    >
+      <div className="grid gap-3">
         {limit?.room && !limit.room.ok ? <RoomAlert room={limit.room} ask={limit.ask} /> : null}
         {notARole ? (
           // the job builder's own chat look (Conversation.tsx): the assistant's mark, then its white bubble

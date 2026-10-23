@@ -8,7 +8,7 @@ import { overallLabel } from "./assessment";
 import { resumeOnlyChip } from "../../talent-list";
 import { firstSentence, notReadYetWords } from "./helpers";
 import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, basisLine, cappedLine, confidenceChip, coverageLine, leftOut, matchBars, matchCardState, missingMustHaves, nextStepAction, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
-import { CARD, LABEL, QUOTE, Why } from "./why";
+import { CARD, QUOTE, Why } from "./why";
 
 /**
  * The match score on the candidate panel's Overview (founder decision B2; docs/spec/22 section 5), split the Kanvis way
@@ -58,6 +58,7 @@ export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?:
       </div>
       {basis || line ? (
         <div className="grid gap-1">
+          {/* `match-basis`: only a hook for telling-hiring-ui.test.ts */}
           {basis ? <p className="small muted match-basis">{basis}</p> : null}
           {line ? <p className={COVERAGE}>{line}</p> : null}
         </div>
@@ -102,7 +103,7 @@ export function NextStepLine({ a, onAction }: { a: ApplicationDetail; onAction?:
   const { line, rest } = firstSentence(next.reason);
   return (
     <div className={PART}>
-      <h3 className={LABEL}>Suggested next step</h3>
+      <h3 className="eyebrow">Suggested next step</h3>
       <div className="row justify-between">
         <p className="small min-w-0 flex-[1_1_220px]"><strong>{next.label}</strong>{line ? <> · <span className={next.needsYourEye ? "text-caution" : undefined}>{line}</span></> : null}</p>
         {action ? <Button size="sm" onClick={() => onAction?.(action)}>{action.label}</Button> : null}
@@ -135,14 +136,14 @@ export function ScoreBreakdown({ a }: { a: ApplicationDetail }) {
       </div>
       {bars ? (
         <div className={PART}>
-          <h3 className={LABEL}>{bars.costly.length ? "What cost points" : "The breakdown"}</h3>
+          <h3 className="eyebrow">{bars.costly.length ? "What cost points" : "The breakdown"}</h3>
           <ScoreBars label="Requirements, the ones that cost the most points first" items={bars.costly.map(barItem)} folded={bars.full.map(barItem)} foldedLabel={bars.foldedLabel ?? undefined} />
         </div>
       ) : null}
       <LeftOut m={m} />
       {confidence || look.lowConfidence ? (
         <div className={PART}>
-          <h3 className={LABEL}>How sure the AI is</h3>
+          <h3 className="eyebrow">How sure the AI is</h3>
           {confidence ? <p className="small"><Chip tone={confidence.tone}>{confidence.label}</Chip> {confidence.title}</p> : null}
           {look.lowConfidence ? <p className="small muted"><strong>{LOW_CONFIDENCE_LABEL}.</strong> {LOW_CONFIDENCE_TEXT}</p> : null}
         </div>
@@ -177,7 +178,7 @@ function LeftOut({ m }: { m: Parameters<typeof leftOut>[0] }) {
   if (!out) return null;
   return (
     <div className={PART}>
-      <h3 className={LABEL}>{out.heading}</h3>
+      <h3 className="eyebrow">{out.heading}</h3>
       <ul className="small grid list-disc gap-1 pl-5 marker:text-ink-3">
         {out.items.map((u) => <li key={`${u.tag}:${u.key}`}>{u.label} <span className={u.tag === "Must-have" ? "sbar-tag must" : "sbar-tag"}>{u.tag}</span></li>)}
       </ul>

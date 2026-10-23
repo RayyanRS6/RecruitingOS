@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "../nav";
-import { Alert, Button, EmptyState, ErrorState, Icon, IconChip, Menu, PageHeader, Pill, Skeleton } from "@ros/ui";
+import { Alert, Button, EmptyState, ErrorState, Icon, IconChip, IconLabel, Menu, PageHeader, Pill, Skeleton } from "@ros/ui";
 import { api, type IntakeSessionSummary, type Me, type RoleSummary } from "../api/client";
 import { activeCompanyOf, jobHref } from "../rail";
 import { canSeeTalent, canShareJob, canStartHire } from "../roles";
@@ -24,6 +24,9 @@ import { useStartDraft } from "./new-role/use-start-draft";
  * job's candidates once it has gone live, otherwise the job itself; the other view is one small link away, and a live
  * job offers "Post on LinkedIn" (the Share tab's LinkedIn card) once ITS has checked the company. The jobs still being
  * drafted follow, and the team's drafts (for owners and admins) are one click away.
+ *
+ * Fewer words (founder, 23 Oct 2026): the title stands alone (no company eyebrow, no line describing the page, no
+ * footnote); an empty filter is its title and its one way on; who can see a draft is a lock whose words are its name.
  */
 export function Roles() {
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });
@@ -37,8 +40,6 @@ export function Roles() {
   const company = activeCompanyOf(me.data);
   const myRole = company.role;
   const talent = canSeeTalent(myRole);
-  // The API gives an interviewer only the roles they interview for, without applicant counts.
-  const interviewer = myRole === "interviewer";
   // role.create: the same people who see "Start a hire" on Home and in the rail; only they reach the job builder.
   const mayStartHire = canStartHire(myRole);
   // "Post on LinkedIn" leads to the Share tab, for those who may share the job, once ITS has checked the company (the
@@ -94,7 +95,7 @@ export function Roles() {
   const hasAny = all.length > 0;
   return (
     <div className="stack gap-5 [&>.page-header]:mb-3">
-      <PageHeader eyebrow={company.name ?? undefined} title="Jobs" sub={interviewer ? "The jobs you interview for." : "Open a job to see who applied."} actions={mayStartHire ? startHire : null} />
+      <PageHeader title="Jobs" actions={mayStartHire ? startHire : null} />
       {again.limit?.room && !again.limit.room.ok ? <RoomAlert room={again.limit.room} ask={again.limit.ask} /> : null}
       {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
       {list && hasAny ? (
@@ -126,14 +127,14 @@ export function Roles() {
         </div>
       ) : null}
       {!isClient || roles.isLoading ? <Skeleton lines={4} /> : roles.error || !list ? <ErrorState message="Could not load your jobs." onRetry={() => roles.refetch()} /> : list.length === 0 ? (
+        // the body line only where it says what to do
         mayStartHire
           ? <EmptyState icon="roles" title="No jobs yet" body="Tell the assistant who you need. It drafts the job for your approval." action={startHire} />
-          : interviewer
-            ? <EmptyState icon="roles" title="No jobs yet" body="When you are put on an interview, its job shows here." />
-            : <EmptyState icon="roles" title="No jobs yet" body="When someone on your team opens a job, it shows here." />
+          : <EmptyState icon="roles" title="No jobs yet" />
       ) : shown.length === 0 ? (
-        // An empty filter says so, with one way on; the drafts below fill the Drafts view when there are some.
-        view.status === "drafts" && !view.q.trim() && mine.length ? null : <EmptyState icon="roles" title={empty.title} body={empty.body} action={emptyAction} />
+        // An empty filter says so in its title, with one way on (its button); the drafts below fill the Drafts view
+        // when there are some.
+        view.status === "drafts" && !view.q.trim() && mine.length ? null : <EmptyState icon="roles" title={empty.title} action={emptyAction} />
       ) : (
         // The jobs as one bordered table card (screenshot 4): a briefcase chip, the title over its one line of facts, the
         // badges and the row's own actions, then an arrow. The title's link covers the whole row, so the row opens the job
@@ -186,9 +187,11 @@ export function Roles() {
                 <span className="list-row-lead"><IconChip icon="file-text" tone="peach" /></span>
                 <span className="list-row-main">
                   <span className="list-row-title">{s.title ?? "Untitled job"}</span>
-                  <span className="list-row-meta">{s.hasDraft ? "Draft written; ask for approval when you are happy" : "Still being drafted"} · {DRAFT_SEEN_BY}</span>
+                  {/* "Still being drafted" is the section's heading, so only a written draft says more: what to do next */}
+                  {s.hasDraft ? <span className="list-row-meta">Draft written; ask for approval when you are happy</span> : null}
                 </span>
-                <span className="list-row-end"><Pill size="sm">Draft</Pill></span>
+                {/* who can see the draft (Q6): a lock whose words are its name and tooltip */}
+                <span className="list-row-end"><IconLabel icon="lock" label={DRAFT_SEEN_BY} /><Pill size="sm">Draft</Pill></span>
                 <Icon name="arrow-right" className="chev max-sm:hidden" />
               </Link>
             ))}
@@ -198,8 +201,7 @@ export function Roles() {
       {showDrafts && others.length ? (
         <details className="more">
           <summary>Drafts on your team ({others.length})</summary>
-          <section className="stack gap-3" aria-label="Drafts others on your team started">
-            <p className="small muted">Open one to help, or take it over if they are away or have left.</p>
+          <section aria-label="Drafts others on your team started">
             <div className="list-card">
               {others.map((s) => (
                 <Link key={s.id} to={startHireHref(s.id)} className="list-row">
@@ -216,8 +218,6 @@ export function Roles() {
           </section>
         </details>
       ) : null}
-      {/* a quiet footnote under the table, as in screenshot 4 */}
-      <p className="small muted flex items-center gap-2"><Icon name="life-buoy" size={16} />Stuck? Bring in a recruiter from any job.</p>
     </div>
   );
 }
@@ -228,9 +228,9 @@ export function Roles() {
  */
 const ROW = "list-row relative hover:bg-surface-2/60 motion-safe:animate-enter has-[.list-row-title:focus-visible]:outline-2 has-[.list-row-title:focus-visible]:-outline-offset-2 has-[.list-row-title:focus-visible]:outline-focus";
 /**
- * The row's title link: the kit's row title, its press area stretched over the row (the small links sit above it), its
- * own ring left to the row. On a phone a long title wraps instead of being cut short.
+ * The row's title link: the kit's row title (which wraps on a phone instead of being cut short), its press area
+ * stretched over the row (the small links sit above it), its own ring left to the row.
  */
-const TITLE_LINK = "list-row-title after:absolute after:inset-0 focus-visible:outline-hidden max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]";
+const TITLE_LINK = "list-row-title after:absolute after:inset-0 focus-visible:outline-hidden";
 /** Rows appear one after another on first draw, 30ms apart, the ninth and later with the eighth (docs/07 Motion). */
 const stagger = (i: number) => `${Math.min(i, 7) * 30}ms`;

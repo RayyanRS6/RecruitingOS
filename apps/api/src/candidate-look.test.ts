@@ -256,6 +256,15 @@ describe("candidate pages: the look, page by page", () => {
     const html = await page(`/careers/${slug}`);
     expect(html).toContain('<ul class="roles"><li class="card role">');
     expect(html).toMatch(/<a class="btn secondary" href="\/careers\/[^"]+\/jobs\/[^"]+">View and apply<span class="sr-only">: [^<]+<\/span><svg class="icon"/);
+    // fewer words (23 October 2026): the logo alone above the heading, no "Careers" eyebrow, and no default slogan as the
+    // lead when the company wrote no introduction of its own (the link preview's text may still carry it)
+    const main = html.slice(html.indexOf("<main"));
+    expect(main).toContain('<div class="careers-head"><div class="company"><span class="logo" aria-hidden="true">LD</span></div><h1>Work with <span>Look Dental</span></h1></div>');
+    expect(main).not.toContain('<p class="eyebrow">');
+    expect(main).not.toContain("We respond to every applicant and keep the process short.");
+    // the privacy page leads with its title, no eyebrow above it
+    const privacy = await page("/privacy");
+    expect(privacy.slice(privacy.indexOf("<main")).startsWith("<main><h1>How we handle your information</h1>")).toBe(true);
   });
 
   it("the job page: the company beside its initials, the facts as pills with icons and spoken names, an Apply button at the top and one in the panel that stays on a phone's screen, the notices before the panel", async () => {
@@ -295,6 +304,21 @@ describe("candidate pages: the look, page by page", () => {
     expect(CSS).toContain("@media (hover: hover) and (pointer: fine) { .btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); } }");
     expect(CSS).not.toMatch(/backdrop-filter|filter:\s*blur|transition:[^;]*width/);
     expect(html.lastIndexOf(">Apply now<")).toBeGreaterThan(panel);
+    // the panel opens on its button (fewer words, 23 October 2026): no second job title, and no "We confirm by email."
+    // (the steps say it); a closing date, when there is one, comes first
+    expect(html.slice(panel)).toMatch(/^<div class="apply-panel"><div class="card apply-card"><a class="btn go" /);
+    expect(html).not.toContain('class="apply-title"');
+    expect(CSS).not.toContain(".apply-title");
+    expect(html.slice(panel, html.indexOf('<ul class="points">', panel))).not.toContain("We confirm by email.");
+    const closesOn = new Date(Date.now() + 20 * 86_400_000).toISOString().slice(0, 10);
+    await container.db.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, roleId));
+    try {
+      const closing = await page(`/careers/${slug}/jobs/${roleId}`);
+      expect(closing.slice(closing.indexOf('<div class="apply-panel">'))).toMatch(/^<div class="apply-panel"><div class="card apply-card"><p class="apply-by"><svg class="icon"[^>]*>.*?<\/svg>Apply by [^<]+<\/p><a class="btn go" /);
+    } finally {
+      await container.db.update(roles).set({ applicationsCloseOn: null }).where(eq(roles.id, roleId));
+    }
+    expect(CSS).toContain(".apply-card .apply-by { margin-bottom: 14px;");
     // the AI and pay notices come first in reading order, in readable notice boxes
     const notices = [...html.matchAll(/<(p|div) class="notice">/g)].map((m) => m.index ?? 0);
     expect(notices.length).toBeGreaterThanOrEqual(2);
@@ -330,18 +354,31 @@ describe("candidate pages: the look, page by page", () => {
     }
   });
 
-  it("the form keeps the job's facts above it, under a back link and the employer's name", async () => {
+  it("the form keeps the job's facts above it, under a back link, and the lead names the employer", async () => {
     const html = await page(`/careers/${slug}/jobs/${roleId}/apply`);
     const head = html.slice(0, html.indexOf("<form"));
     expect(head).toMatch(/<p class="back"><a href="\/careers\/[^"]+\/jobs\/[^"]+"><svg class="icon"[^>]*>.*?<\/svg>Back to the job<\/a><\/p>/);
-    expect(head).toContain('<p class="eyebrow">Look Dental</p>');
+    // no eyebrow above the title (fewer words, 23 October 2026): the title follows the back link, and the lead names the employer
+    expect(head).not.toContain('<p class="eyebrow">');
+    expect(head).toMatch(/Back to the job<\/a><\/p><h1>Apply: /);
+    expect(head).toMatch(/<p class="lead">About \d+ minutes, including a short AI interview with Look Dental&#39;s AI assistant\./);
     expect(head).toContain('<ul class="facts">');
     expect(html).toContain('<button class="btn" type="submit">Send my application</button>');
   });
 
+  it("the receipt keeps the link back to the job above its title, without the company's name after it", async () => {
+    const html = await page(`/careers/${slug}/jobs/${roleId}/applied`);
+    // a trail with a parent link stays; the company is named in the page's own lines (fewer words, 23 October 2026)
+    expect(html).toMatch(/<p class="eyebrow"><a href="\/careers\/[^"]+\/jobs\/[^"]+">[^<]+<\/a><\/p><h1>Thanks for applying<\/h1>/);
+    expect(html).not.toContain("</a> · Look Dental");
+    expect(html).toContain("The hiring team at Look Dental reviews your application. People make every decision.");
+  });
+
   it("the status page: withdrawing and the future-roles choice are outlined secondary buttons; the screening link is the one plum button", async () => {
     const html = await page(`/c/status/${statusToken}`);
-    expect(html).toContain('<p class="eyebrow">Look Dental · Your application</p>');
+    // the employer's name above the job's title, the one place it is said there; never "· Your application" (fewer words, 23 October 2026)
+    expect(html).toContain('<p class="eyebrow">Look Dental</p><h1>');
+    expect(html).not.toContain("· Your application");
     expect(html).toContain('<button class="btn secondary" type="submit">Withdraw my application</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Send request</button>');

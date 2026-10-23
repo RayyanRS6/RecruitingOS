@@ -28,9 +28,6 @@ const STILL_IN_PROCESS = (a: ApplicationsWithCounts["applications"][number]) => 
 const PEOPLE = "people-list list-card divide-y divide-line";
 const PERSON = "flex min-h-12 flex-wrap items-center gap-x-2.5 gap-y-1 px-4 py-2.5 text-[14px]";
 
-/** The "Your next step" hero's display title, one step below Home's hero because it sits inside the job page. */
-const HERO_TITLE = "[&>.card-title]:mb-3 [&>.card-title>h2]:text-[26px] [&>.card-title>h2]:leading-[1.1] [&>.card-title>h2]:tracking-[-0.03em] md:[&>.card-title>h2]:text-[30px]";
-
 /** The outcomes a role closes with, in the team's words. */
 const ROLE_OUTCOMES: ReadonlyArray<[string, string]> = [
   ["filled_outside_platform", "Filled outside the platform"],
@@ -65,8 +62,10 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
   });
   if (closed) return <ClosingMessageCard roleId={roleId} preview={closed} onDone={onClose} />;
   return (
-    <Card needsYou title="Close this job" className={HERO_TITLE}>
-      <p className="text-[15px] text-ink-2">Say what happened. It is recorded with your name. The platform made no offer.</p>
+    // the job page's one next step: the kit sizes the hero title
+    <Card needsYou hero title="Close this job">
+      {/* kept: who the outcome is recorded against, and that the platform made no offer */}
+      <p className="text-[15px] text-ink-2">It is recorded with your name. The platform made no offer.</p>
       <div className="stack mt-5 max-w-[620px] gap-4">
         <Field label="Outcome" htmlFor="rc-outcome"><select id="rc-outcome" className="select" value={outcome} onChange={(e) => setOutcome(e.target.value)}>
           {ROLE_OUTCOMES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -137,7 +136,7 @@ export function ClosingMessageCard({ roleId, preview, onDone }: { roleId: string
   const words = closingSheetLines(p);
   const sendable = p.count > 0 && !p.waitingApprovalId && p.policy !== "not_sent";
   return (
-    <Card needsYou={sendable} lift title={`Tell the people ${p.roleTitle} left in process`} className={sendable ? HERO_TITLE : undefined}>
+    <Card needsYou={sendable} hero={sendable} lift title={`Tell the people ${p.roleTitle} left in process`}>
       <p className="text-[15px] text-ink-2">{words.lead}</p>
       {p.people.length ? (
         <ul className={cn(PEOPLE, "mt-4")} aria-label="Who gets the closing message">

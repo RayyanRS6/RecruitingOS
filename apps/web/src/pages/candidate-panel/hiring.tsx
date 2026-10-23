@@ -62,11 +62,13 @@ export function OfferStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId
   const valid = !!madeOn && madeOn <= bounds.max;
   return (
     <Card needsYou lift title="Offer made" className={STEP}>
-      <p className={LEAD}>Record the day you made it. Nothing is sent to {a.candidate.firstName}.</p>
+      {/* the date field below says what to record; the lead keeps only the private-decision state (B6) */}
+      <p className={LEAD}>Nothing is sent to {a.candidate.firstName}.</p>
       <Why>{offerStepText(a.candidate.firstName)}</Why>
       <div className="stack gap-3">
         <Field label="The day you made the offer" htmlFor="offer-day"><input ref={first} id="offer-day" className="input" type="date" max={bounds.max} value={madeOn} onChange={(e) => setMadeOn(e.target.value)} /></Field>
-        <Field label="Private note (kept internally, optional)" htmlFor="offer-note" hint="Only your team sees it. No pay, tax or bank details."><textarea id="offer-note" className="textarea" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+        {/* the label already says who sees it; the hint keeps the rule (the platform holds no pay, tax or banking details) */}
+        <Field label="Private note (kept internally, optional)" htmlFor="offer-note" hint="No pay, tax or bank details."><textarea id="offer-note" className="textarea" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         <div className="row">
           <Button variant="primary" size="sm" disabled={!valid} loading={record.isPending} onClick={() => record.mutate()}>Record the offer</Button>
           <Button variant="quiet" size="sm" onClick={onClose}>Cancel</Button>

@@ -19,7 +19,7 @@ import { CallNotesCard } from "./call-notes";
 import { MatchVerdict, NextStepLine, ScoreBreakdown } from "./match";
 import type { NextStepAction } from "./match-view";
 import { eligibilityAnswerWords, historyItems, panelQuestions, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, writeupLines, writeupOverviewLine, type Compose, type HistoryItem } from "./helpers";
-import { CARD, QUOTE, Why } from "./why";
+import { CARD, QUOTE, SUGGESTED, Why } from "./why";
 
 export type { Compose } from "./helpers";
 import { useCandidateAction, useRefreshCandidate } from "./hooks";
@@ -348,6 +348,7 @@ function ResumeViewer({ a, doc }: { a: ApplicationDetail; doc: ApplicationDetail
           <a href={v.open} target="_blank" rel="noopener noreferrer" className="btn secondary sm">Open in a new tab</a>
         </span>
       </div>
+      {/* `resume-frame`: only a hook for telling-hiring-ui.test.ts; VIEWER styles the frame */}
       <iframe src={v.frame} title={`Résumé: ${doc.filename}`} className="resume-frame" referrerPolicy="same-origin" />
       {full ? (
         // biome-ignore lint/a11y: a focus guard: Tab out of the framed file lands here and goes back to the top, so focus stays in the full-screen résumé (key presses inside the frame never reach this page)
@@ -466,7 +467,8 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
   };
   return (
     <div className="stack gap-4">
-      <Card title="Conversation" aside={thread.length ? <span className="small muted">Oldest first</span> : null} className={CARD}>
+      {/* oldest first: each message carries its time, so the order needs no label */}
+      <Card title="Conversation" className={CARD}>
         {thread.length ? (
           <ol className={THREAD} aria-label={`Messages with ${first}`}>
             {thread.map((m, i) => (
@@ -484,47 +486,48 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
                     <MessageBody parts={m.parts} />
                   </details>
                 ) : <MessageBody parts={m.parts} />}
+                {/* `msg-hidden-note`: only a hook for telling-hiring-ui.test.ts */}
                 {m.hiddenLinks ? <p className="small muted msg-hidden-note">{HIDDEN_LINK_NOTE}</p> : null}
               </li>
             ))}
           </ol>
         ) : <p className="muted small">No messages yet.</p>}
       </Card>
-      <Card title={`Write to ${first}`} className={CARD}>
-        {!open ? (
-          <div className="row">
-            <Button size="sm" icon="mail" disabled={!a.candidate.email} title={a.candidate.email ? "Your own words, sent under the hiring team's name with yours in the footer" : "No email address on file"} onClick={() => setOpen(true)}>Write to {first}</Button>
-            {lastSent ? <InlineUndo autoFocus undoUntil={lastSent.undoUntil} ariaLabel={`Undo your message to ${first}`} onUndo={async () => { await takeBack({ applicationId: a.id, roleId, communicationId: lastSent.communicationId, firstName: first, kind: "message" }); setLastSent(null); }} /> : null}
-            {!a.candidate.email ? <span className="small muted">No email address on file.</span> : null}
-          </div>
-        ) : (
-          <div className="stack gap-3">
-            <p className="small muted">To {preview.data?.to ?? a.candidate.email}, from {preview.data?.fromName ?? "the hiring team"}.{preview.data?.needsApproval ? " An owner or admin reads it before it goes out." : ""}</p>
-            <Why label="How sending works">Your own words, sent as {preview.data?.fromName ?? "the hiring team"} to {preview.data?.to ?? a.candidate.email}. {preview.data ? (preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them.") : ""}{preview.data?.needsApproval ? " An owner or admin reads your message before it goes out." : ""}{preview.data?.undoSeconds ? ` After Send you have ${preview.data.undoSeconds} seconds to undo it.` : ""}</Why>
-            <Field label="Subject (optional)" htmlFor="msg-subject"><input id="msg-subject" className="input" value={subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} maxLength={200} /></Field>
-            <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => { setCompose({ ...compose, text: e.target.value }); if (!e.target.value.trim()) setKept(null); }} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
-            {suggestion?.line && !kept ? (
-              <div className="grid gap-2 rounded-xl border border-line-tint bg-tint px-4 py-3">
-                <p className="small"><q>{suggestion.line}</q></p>
-                <p className="small muted">{suggestion.note}</p>
-                <div className="row"><Button size="sm" onClick={() => keepSuggestion(suggestion.line!)}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
-              </div>
-            ) : suggestion && !suggestion.line ? <p className="small muted">{suggestion.note}</p> : null}
-            {preview.data ? <div className="small muted whitespace-pre-wrap border-t border-line pt-3">{aiHelped && preview.data.aiFooter ? preview.data.aiFooter : preview.data.footer}</div> : null}
-            <div className="row">
-              <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
-              {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
-              <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
+      {/* Closed, the one button says what it does (a card titled the same over it said it twice); open, the card's title
+          heads the form. "How sending works" holds only what the line above it does not say. */}
+      {!open ? (
+        <div className="row">
+          <Button size="sm" icon="mail" disabled={!a.candidate.email} title={a.candidate.email ? "Your own words, sent under the hiring team's name with yours in the footer" : "No email address on file"} onClick={() => setOpen(true)}>Write to {first}</Button>
+          {lastSent ? <InlineUndo autoFocus undoUntil={lastSent.undoUntil} ariaLabel={`Undo your message to ${first}`} onUndo={async () => { await takeBack({ applicationId: a.id, roleId, communicationId: lastSent.communicationId, firstName: first, kind: "message" }); setLastSent(null); }} /> : null}
+          {!a.candidate.email ? <span className="small muted">No email address on file.</span> : null}
+        </div>
+      ) : (
+        <Card title={`Write to ${first}`} className={CARD}>
+          <p className="small muted">To {preview.data?.to ?? a.candidate.email}, from {preview.data?.fromName ?? "the hiring team"}.{preview.data?.needsApproval ? " An owner or admin reads it before it goes out." : ""}</p>
+          {preview.data ? <Why label="How sending works">{preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them."}{preview.data.undoSeconds ? ` After Send you have ${preview.data.undoSeconds} seconds to undo it.` : ""}</Why> : null}
+          <Field label="Subject (optional)" htmlFor="msg-subject"><input id="msg-subject" className="input" value={subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} maxLength={200} /></Field>
+          <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => { setCompose({ ...compose, text: e.target.value }); if (!e.target.value.trim()) setKept(null); }} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
+          {suggestion?.line && !kept ? (
+            <div className={SUGGESTED}>
+              <p className="small"><q>{suggestion.line}</q></p>
+              <p className="small muted">{suggestion.note}</p>
+              <div className="row"><Button size="sm" onClick={() => keepSuggestion(suggestion.line!)}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
             </div>
-            {aiHelped ? (
-              <div className="row gap-2">
-                <p className="small muted">{suggestedLineNote(lineStillWhole, "footer")}</p>
-                {lineStillWhole ? <Button size="sm" variant="quiet" onClick={takeOutLine}>Take out the assistant's line</Button> : null}
-              </div>
-            ) : null}
+          ) : suggestion && !suggestion.line ? <p className="small muted">{suggestion.note}</p> : null}
+          {preview.data ? <div className="small muted whitespace-pre-wrap border-t border-line pt-3">{aiHelped && preview.data.aiFooter ? preview.data.aiFooter : preview.data.footer}</div> : null}
+          <div className="row">
+            <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
+            {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
+            <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
           </div>
-        )}
-      </Card>
+          {aiHelped ? (
+            <div className="row gap-2">
+              <p className="small muted">{suggestedLineNote(lineStillWhole, "footer")}</p>
+              {lineStillWhole ? <Button size="sm" variant="quiet" onClick={takeOutLine}>Take out the assistant's line</Button> : null}
+            </div>
+          ) : null}
+        </Card>
+      )}
     </div>
   );
 }

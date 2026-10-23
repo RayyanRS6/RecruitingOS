@@ -27,8 +27,8 @@ describe("Settings' tabs and cards", () => {
     expect(on("notifications")).toEqual(["setup-notifications", "setup-availability", "setup-shortcut"]);
     expect(on("rules")).toEqual(["setup-rules", "setup-boards", "setup-new-times"]);
     expect(on("security")).toEqual(["setup-sessions", "setup-recruiters", "setup-services", "setup-audit"]);
-    // the tabs are drawn from the list, each panel with the strip's ids
-    expect(page).toContain("<Tabs items={tabs.map((t) => ({ id: t.id, label: t.label }))} label=\"Settings\" value={active} onChange={pick} idBase={TABS_ID} />");
+    // the tabs are drawn from the list, each panel with the strip's ids; they run down the side (the kit's vertical tabs)
+    expect(page).toContain("<Tabs items={tabs.map((t) => ({ id: t.id, label: t.label }))} label=\"Settings\" value={active} onChange={pick} idBase={TABS_ID} orientation=\"vertical\" />");
     for (const t of SETTINGS_TABS) expect(page).toContain(`{panel("${t.id}", `);
   });
 

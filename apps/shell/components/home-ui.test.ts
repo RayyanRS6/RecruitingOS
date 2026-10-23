@@ -78,6 +78,9 @@ describe("Home's top", () => {
     expect(html).toMatch(/<a href="\/roles\/new" class="btn primary"><svg[\s\S]*?<\/svg>Start a hire<\/a>/);
     expect(html).toContain(">Bring in a recruiter</button>");
     expect(html).not.toContain("Today");
+    // no eyebrow over the greeting (founder, 23 October 2026: fewer words)
+    expect(html).not.toContain("Your desk");
+    expect(html).toMatch(/<header class="page-header"><div class="page-header-row"><h1>/);
   });
 
   it("says all caught up when nothing needs you, and shows the quiet day's card on its own", () => {
@@ -182,7 +185,9 @@ describe("getting started", () => {
   it("keeps the steps still to do in view with their buttons, why behind a click, and the done ones folded", () => {
     const html = render();
     const words = text(html);
-    expect(html).toMatch(/<h2 class="[^"]*">Getting started<\/h2>/);
+    // Home's one next step: the kit's hero card (Card needsYou hero sizes the title), with no eyebrow over it
+    expect(html).toMatch(/<section class="card needs-you hero[^"]*"><div class="card-title"><h2>Getting started<\/h2>/);
+    expect(html).not.toContain("Your next step");
     expect(words).toContain("1 of 3 done.");
     expect(html).toContain('<ol aria-label="Steps to get started"');
     expect(html).toContain("<strong>Start your first role</strong>");
@@ -200,6 +205,8 @@ describe("getting started", () => {
     const waiting = { kind: "getting_started", title: "ITS is confirming your company", body: "ITS is confirming your company. This one-time check usually takes up to a business day. Until it is done, your careers page, job pages and Google listing stay offline.", actions: [], gettingStarted: { verified: false, heldMessages: 0, dismissible: false, steps: [] } };
     const html = render({ cards: [waiting] });
     expect(html).toContain(">Waiting for ITS</span>");
+    // the word sits beside the title, in the card's title row
+    expect(html).toMatch(/<div class="card-title"><h2>ITS is confirming your company<\/h2><span class="pill caution sm">/);
     expect(html).toContain("<summary>What waits until then</summary>");
     expect(text(html)).toContain("your careers page, job pages and Google listing stay offline.");
   });
@@ -234,7 +241,13 @@ describe("the rest of Home", () => {
   it("keeps the 'Who are you hiring?' box short, with the way to the job builder", () => {
     const html = render();
     expect(html).toContain("Who are you hiring?");
-    expect(text(html)).toContain("Describe the job, or paste a job ad. Nothing is posted until someone approves it.");
+    // the title, the box and its example say it (founder, 23 October 2026: fewer words); no eyebrow, no helper line
+    expect(html).toContain('placeholder="For example: a dental assistant for our Irvine office, full time, $24 to $28 an hour"');
+    expect(text(html)).not.toContain("Describe the job, or paste a job ad.");
+    expect(html).not.toContain(">New job</p>");
+    // the Card's own title (the kit sizes it) with the job builder link beside it; the chat mark is hidden from screen
+    // readers, so the heading's name is just the question
+    expect(html).toMatch(/<div class="card-title"><h2><span aria-hidden="true"[^>]*>.*?<\/span>Who are you hiring\?<\/h2><a [^>]*>Open the job builder<\/a><\/div>/);
     expect(html).toContain(">Open the job builder</a>");
     expect(html).toContain(">Start drafting</button>");
   });
