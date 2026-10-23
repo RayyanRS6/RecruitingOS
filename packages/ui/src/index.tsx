@@ -434,6 +434,7 @@ export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "xs" |
  */
 export function StatStrip(props: { children: ReactNode; label?: string }) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: a group of figures, not of form controls, so a fieldset would be the wrong element
     <div className="stat-strip" role="group" aria-label={props.label}>
       {props.children}
     </div>

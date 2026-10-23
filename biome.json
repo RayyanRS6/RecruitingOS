@@ -5,6 +5,7 @@
     "includes": ["**", "!**/node_modules", "!**/.next", "!**/dist", "!**/.data", "!**/report", "!**/test-results", "!**/results", "!packages/db/migrations"]
   },
   "formatter": { "enabled": false },
+  "css": { "parser": { "tailwindDirectives": true } },
   "assist": { "enabled": false },
   "linter": {
     "enabled": true,

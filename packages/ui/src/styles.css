@@ -271,7 +271,8 @@
 
   /* The frame's switch: from 900px the side rail, under it the top bar. `rail:` and `max-rail:` are written in rem like
      sm: md: lg:, so Tailwind sorts them between md and lg (an arbitrary min-[900px]: sorts before every rem breakpoint).
-     The kit's own 900px queries read it with theme(--breakpoint-rail). */
+     The kit's own 900px queries write the same 56.25rem (Biome's CSS linter does not know theme() inside @media);
+     weight-guard.test.ts checks they match this value. */
   --breakpoint-rail: 56.25rem;
 
   /* No blur utilities (slow on cheap devices), and only our own animations: Tailwind's ping, pulse and bounce loop forever. */
@@ -853,7 +854,7 @@
   /* Table wrapHeads: long headings wrap onto more lines (a figure column's too) instead of widening the table */
   .table-wrap.wrap-heads thead th { white-space: normal; }
   /* from the frame's rail breakpoint (900px), where the page has the height for a box that scrolls on its own */
-  @media (width >= theme(--breakpoint-rail)) {
+  @media (width >= 56.25rem) {
     .table-wrap.scroll { max-height: min(70vh, 640px); overflow: auto; }
     .table-wrap.scroll thead th { position: sticky; top: 0; z-index: 2; }
   }
@@ -905,7 +906,7 @@
   .split-pane { min-width: 0; }
   /* --sticky-top: the frame sets it when its top bar stays on screen */
   .split-secondary.keep-in-view { position: sticky; top: var(--sticky-top, 24px); }
-  @media (width < theme(--breakpoint-rail)) {
+  @media (width < 56.25rem) {
     .split, .split[data-ratio] { grid-template-columns: minmax(0, 1fr); gap: 16px; }
     .split-switch { display: inline-flex; justify-self: start; }
     .split[data-show="primary"] > .split-secondary, .split[data-show="secondary"] > .split-primary { display: none; }

@@ -316,7 +316,7 @@ describe("the quick start's lines on how answers are used", () => {
     const a = { ...emptyQuickAnswers(), title: "Delivery driver", dealBreakers: ["Cannot work Saturdays"] };
     const html = renderToStaticMarkup(createElement(StepBody, { step: "dealbreakers", a, set: () => undefined, vertical: "logistics", onEdit: () => undefined }));
     expect(html).toContain("Everyone is checked openly against must-haves. An unticked one is not used to judge anyone.");
-    expect(html).toMatch(/<label class="option-row flex-wrap gap-y-1\.5">[^]*?<span class="option-tag">Must-have<\/span><\/label>/);
+    expect(html).toMatch(/<label class="option-row flex-wrap gap-y-1\.5">[\s\S]*?<span class="option-tag">Must-have<\/span><\/label>/);
   });
 });
 

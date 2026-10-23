@@ -69,17 +69,17 @@ function mediaBody(css: string, query: string): string {
 function hoverFills(css: string): Array<{ selector: string; at: number }> {
   return [...css.matchAll(/([^{}]*:hover[^{}]*)\{([^{}]*)\}/g)].filter((m) => /(?:^|[;\s])background(?:-color)?\s*:/.test(m[2])).map((m) => ({ selector: m[1].trim(), at: m.index ?? 0 }));
 }
-const escape = (s: string) => s.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
+const escapeRe = (s: string) => s.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
 /** The declarations of the first rule whose selector is exactly `selector`. */
 function rule(css: string, selector: string): string {
-  const at = css.search(new RegExp(`(^|[\\n{}])\\s*${escape(selector)} \\{`));
+  const at = css.search(new RegExp(`(^|[\\n{}])\\s*${escapeRe(selector)} \\{`));
   expect(at, `no ${selector} rule`).toBeGreaterThanOrEqual(0);
   const open = css.indexOf("{", css.indexOf(selector, at));
   return css.slice(open + 1, css.indexOf("}", open));
 }
 /** Whether `selector` (a class, or a compound such as `.btn.primary`) is part of some rule's selector, not a value. */
 function selects(css: string, selector: string): boolean {
-  for (const m of css.matchAll(new RegExp(`${escape(selector)}(?![\\w-])`, "g"))) {
+  for (const m of css.matchAll(new RegExp(`${escapeRe(selector)}(?![\\w-])`, "g"))) {
     const after = css.slice((m.index ?? 0) + m[0].length);
     const brace = after.search(/[{}]/);
     if (brace >= 0 && after[brace] === "{" && !after.slice(0, brace).includes(";")) return true;
@@ -296,7 +296,7 @@ describe("the kit's component layer", () => {
     const sticky = app.indexOf(".table-wrap.scroll thead th {");
     expect(sticky).toBeGreaterThan(0);
     // a wide screen: from the frame's rail breakpoint (900px), the same switch as the side rail
-    expect(insideMedia(app, sticky, "(width >= theme(--breakpoint-rail))")).toBe(true);
+    expect(insideMedia(app, sticky, "(width >= 56.25rem)")).toBe(true);
     expect(rule(app, ".table-wrap.scroll thead th")).toContain("position: sticky; top: 0;");
     expect(rule(app, ".table-wrap.pin-first :is(th, td):first-child")).toContain("position: sticky; left: 0;");
     expect(rule(app, ".table-wrap.pin-first tbody :is(th, td):first-child")).toContain("background: var(--surface);");
@@ -423,16 +423,18 @@ describe("the kit's component layer", () => {
   });
 
   // Round 3 (23 October 2026): the small options screens had copied around, so the next screen reaches for the kit's.
-  it("names the frame's 900px switch as a breakpoint (rail:), in rem so it sorts between md and lg, and the kit's 900px queries read it", () => {
+  it("names the frame's 900px switch as a breakpoint (rail:), in rem so it sorts between md and lg, and the kit's 900px queries use the same value", () => {
     const theme = rule(app, "@theme inline");
-    expect(theme).toContain("--breakpoint-rail: 56.25rem;");
+    const rail = theme.match(/--breakpoint-rail:\s*([^;]+);/)?.[1];
+    expect(rail).toBe("56.25rem");
     expect(56.25 * 16).toBe(900);
     // Tailwind's own sm, md (48rem) and lg (64rem) are kept, so rail: falls between md: and lg: in the sheet
     expect(theme).not.toContain("--breakpoint-*");
-    // no pixel copy of the switch is left in the kit: the table's own scrolling box and the split view read the theme
+    // no pixel copy of the switch is left in the kit: the table's own scrolling box and the split view write the rail's
+    // value (not theme(), which Biome's CSS linter does not accept inside @media), so the two cannot drift apart
     expect(app).not.toMatch(/\b(899|900|901)px\b/);
-    expect(insideMedia(app, app.indexOf(".table-wrap.scroll {"), "(width >= theme(--breakpoint-rail))")).toBe(true);
-    expect(insideMedia(app, app.indexOf(".split-switch { display: inline-flex;"), "(width < theme(--breakpoint-rail))")).toBe(true);
+    expect(insideMedia(app, app.indexOf(".table-wrap.scroll {"), `(width >= ${rail})`)).toBe(true);
+    expect(insideMedia(app, app.indexOf(".split-switch { display: inline-flex;"), `(width < ${rail})`)).toBe(true);
   });
 
   it("draws PageHeader's hero title at Home's greeting size (36, 44 from 640px, 52 from 768px), the plain title as before", () => {
