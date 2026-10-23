@@ -1,13 +1,11 @@
 "use client";
 
 import { type KeyboardEvent, type ReactNode, useId, useRef, useState } from "react";
-import { cx, domId, type Move, nextIndex, tabIds } from "./helpers";
+import { cx, domId, nextIndex, type TabOrientation, tabIds, tabKeyMove } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
 /** `marker`: something new in this tab since the reader last opened it; a dot, announced as "new". */
 export type TabItem = { id: string; label: string; count?: number; icon?: IconName; disabled?: boolean; marker?: boolean };
-
-const KEY_MOVES: Record<string, Move> = { ArrowRight: "next", ArrowLeft: "prev", Home: "first", End: "last" };
 
 /**
  * Underlined tabs (docs/07), keyboard accessible the WAI-ARIA way: Tab reaches the chosen tab, the arrow keys, Home and
@@ -17,8 +15,10 @@ const KEY_MOVES: Record<string, Move> = { ArrowRight: "next", ArrowLeft: "prev",
  * The panel: pass `children` and the tabs wrap them in the chosen tab's panel; or, when the panel sits elsewhere (a
  * drawer's body, with the tabs in its header), give the same `idBase` to these tabs and to a <TabPanel>.
  * The `counts` variant puts each count above its label, for a stage strip ("6 New · 2 Shortlist").
+ * `orientation="vertical"` runs the tabs down the side as an inner nav (screenshot 6: rows, the chosen one tinted),
+ * says so to screen readers (aria-orientation) and lets Up and Down move too. Across is the default and renders as before.
  */
-export function Tabs(props: { items: TabItem[]; label: string; value?: string; defaultValue?: string; onChange?: (id: string) => void; idBase?: string; variant?: "underline" | "counts"; children?: ReactNode }) {
+export function Tabs(props: { items: TabItem[]; label: string; value?: string; defaultValue?: string; onChange?: (id: string) => void; idBase?: string; variant?: "underline" | "counts"; orientation?: TabOrientation; children?: ReactNode }) {
   const reactId = useId();
   const base = props.idBase ?? domId("tabs", reactId);
   const [own, setOwn] = useState(props.defaultValue ?? props.items.find((t) => !t.disabled)?.id ?? "");
@@ -33,7 +33,7 @@ export function Tabs(props: { items: TabItem[]; label: string; value?: string; d
     props.onChange?.(id);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, from: number) => {
-    const move = KEY_MOVES[e.key];
+    const move = tabKeyMove(e.key, props.orientation);
     if (!move) return;
     e.preventDefault();
     const to = nextIndex(props.items.length, from, move, (i) => !!props.items[i].disabled);
@@ -43,7 +43,8 @@ export function Tabs(props: { items: TabItem[]; label: string; value?: string; d
   };
   return (
     <>
-      <div role="tablist" aria-label={props.label} className={cx("tabs", props.variant === "counts" && "counts")} tabIndex={-1}>
+      {/* aria-orientation only when vertical: across is the role's default, and the markup tests pin stays as it was */}
+      <div role="tablist" aria-label={props.label} className={cx("tabs", props.variant === "counts" && "counts")} aria-orientation={props.orientation === "vertical" ? "vertical" : undefined} tabIndex={-1}>
         {props.items.map((t, i) => {
           const selected = i === chosen;
           const ids = tabIds(base, t.id);

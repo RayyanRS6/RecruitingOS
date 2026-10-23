@@ -10,7 +10,9 @@ import type { Me } from "../lib/session";
  * The signed-in frame's rail (Wave DS; plain words of 14 October 2026; the October 2026 redesign), rendered as the
  * server first sends it: the company chip, "Start a hire" only for the roles that may start one, Home, Jobs (with the
  * jobs in progress underneath, a live one opening on its Candidates), Candidates, Interviews and Settings, the fold to
- * icons on a job's pages, the highlight behind the current link, the bar above the page, and Sign out always there.
+ * icons on a job's pages, the highlight behind the current link, the bar above a page that sits under another (with
+ * the way back up), and Sign out always there. Since 23 October 2026 (founder: fewer words) the frame carries no slogan
+ * card, no label over the company's own links and no company name in the bar above the page.
  */
 const nav = vi.hoisted(() => ({ path: "/" }));
 vi.mock("next/navigation", () => ({
@@ -23,7 +25,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 
 // The shell's tsconfig leaves JSX to Next.js ("preserve"), so under the test runner it compiles to React.createElement.
 (globalThis as { React?: typeof React }).React = React;
-const { AppShell, CONSOLE_LINKS, RAIL_COLLAPSED_KEY, markMove, railCollapsedIn, rememberRailCollapsed, sectionTrail } = await import("./AppShell");
+const { AppShell, CONSOLE_LINKS, RAIL_COLLAPSED_KEY, markMove, parentTrail, railCollapsedIn, rememberRailCollapsed, sectionTrail } = await import("./AppShell");
 // The page-enter templates, one per section of the signed-in app (Next.js keys a template by the segment below it).
 const templates = {
   "(company)": (await import("../app/(app)/(company)/template")).default,
@@ -387,11 +389,27 @@ describe("the bar above the page", () => {
     expect(sectionTrail("/nothing-here")).toEqual([]);
   });
 
-  it("shows the company with a coral dot, adds no landmark, and leaves the page its 1040px column (wider where a page needs it)", () => {
+  it("links back up only from a page under another, naming the page when the rail knows it", () => {
+    const jobs = [{ id: "r-open", title: "Dental Hygienist" }];
+    const jobsUp = { label: "Jobs", href: "/roles" };
+    expect(parentTrail("/roles/r-open/talent", jobs)).toEqual({ parent: jobsUp, here: "Dental Hygienist" });
+    expect(parentTrail("/roles/new", jobs)).toEqual({ parent: jobsUp, here: "Start a hire" });
+    expect(parentTrail("/updates")).toEqual({ parent: { label: "Home", href: "/" }, here: "Updates" });
+    expect(parentTrail("/admin/customers")).toEqual({ parent: { label: "Console", href: "/admin" }, here: "Customers" });
+    // a job the rail does not list (or not yet) keeps the way back up without its name, so the bar never appears late
+    expect(parentTrail("/roles/r-closed", jobs)).toEqual({ parent: jobsUp, here: null });
+    expect(parentTrail("/roles/r-open")).toEqual({ parent: jobsUp, here: null });
+    // a section's own page: its heading says where it is, so there is no bar (the console's Overview is Console itself)
+    for (const path of ["/", "/roles", "/talent", "/people", "/interviews", "/interviews/i1", "/setup", "/recruiter/queue", "/recruiter/queue/q1", "/admin", "/nothing-here", ""]) expect(parentTrail(path, jobs), path).toBeNull();
+  });
+
+  it("draws the trail with its link back up and never the company (the rail's chip names it), adds no landmark, and leaves the page its 1040px column (wider where a page needs it)", () => {
     nav.path = "/roles/r-open/talent";
     const html = render(meAs("owner"), { roles });
-    expect(html).toMatch(/<span class="[^"]*truncate">Bright Dental<\/span><span aria-hidden="true" class="[^"]*bg-accent[^"]*"><\/span>/);
-    expect(html).toMatch(/<span class="[^"]*">Jobs<\/span><span aria-hidden="true">\/<\/span><span class="[^"]*">Dental Hygienist<\/span>/);
+    expect(html).toMatch(/<p class="[^"]*"><a href="\/roles" class="[^"]*">Jobs<\/a><span aria-hidden="true">\/<\/span><span class="[^"]*">Dental Hygienist<\/span><\/p>/);
+    // the company is named in the rail's chip and under the name in the phone's top bar, nowhere else (no coral dot)
+    expect(html.match(/Bright Dental/g)).toHaveLength(2);
+    expect(html).not.toMatch(/Bright Dental<\/span><span aria-hidden="true" class="[^"]*bg-accent/);
     expect(html.match(/<nav\b/g)).toHaveLength(1);
     expect(html.match(/<main\b/g)).toHaveLength(1);
     expect(html).not.toMatch(/<(header|aside|footer)\b/);
@@ -404,11 +422,45 @@ describe("the bar above the page", () => {
     expect(html).not.toMatch(/class="[^"]*(?<![\w-])(sm|md|lg|xl|2xl):/);
   });
 
-  it("leaves a quiet note at the foot of the full rail only (not folded, not on phones), out of the screen reader's way", () => {
-    nav.path = "/";
-    expect(render(meAs("owner"))).toMatch(/<div aria-hidden="true" class="hidden [^"]*min-\[900px\]:block"><span[^>]*>(?:(?!<\/span>)[\s\S])*<\/span><p[^>]*>People first\.<\/p>/);
-    nav.path = "/roles/r-open";
-    expect(render(meAs("owner"), { roles })).not.toContain("People first.");
+  it("draws no bar on a section's own page, so the page column opens on the page; a page under another gets its trail", () => {
+    for (const path of ["/", "/roles", "/talent", "/interviews", "/setup"]) {
+      nav.path = path;
+      const html = render(meAs("owner"), { roles });
+      expect(html, path).toMatch(/<div class="group\/page[^"]*"><main id="main"/);
+      expect(html, path).not.toContain('<span aria-hidden="true">/</span>');
+    }
+    nav.path = "/admin";
+    expect(render(admin())).toMatch(/<div class="group\/page[^"]*"><main id="main"/);
+    nav.path = "/admin/customers";
+    const section = render(admin());
+    expect(section).not.toMatch(/<div class="group\/page[^"]*"><main id="main"/);
+    expect(section).toMatch(/<a href="\/admin" class="[^"]*">Console<\/a><span aria-hidden="true">\/<\/span><span class="[^"]*">Customers<\/span>/);
+    // the bar adds no current-page mark: the rail's two links (Console and the section) keep the only ones
+    expect(section.match(/aria-current="page"/g)).toHaveLength(2);
+    nav.path = "/updates";
+    expect(render(meAs("owner"))).toMatch(/<a href="\/" class="[^"]*">Home<\/a><span aria-hidden="true">\/<\/span><span class="[^"]*">Updates<\/span>/);
+    // a job the rail has not listed yet: the way back up is there from the first draw, without the job's name
+    nav.path = "/roles/r-open/talent";
+    expect(render(meAs("owner"))).toMatch(/<p class="[^"]*"><a href="\/roles" class="[^"]*">Jobs<\/a><\/p>/);
+  });
+});
+
+describe("the rail's foot and labels (founder, 23 October 2026: fewer words)", () => {
+  it("ends the rail with who is signed in: no slogan card, and no label over the company's own links", () => {
+    for (const path of ["/", "/roles/r-open"]) {
+      nav.path = path;
+      const html = render(meAs("owner"), { roles });
+      for (const cut of ["People first.", "Suggestions help you think", "Your desk"]) expect(html, `${path}: ${cut}`).not.toContain(cut);
+      // the foot keeps its place at the bottom of the side rail, with the person's email and Sign out
+      expect(html, path).toMatch(/<div class="[^"]*min-\[900px\]:mt-auto[^"]*">(?:(?!<\/nav>)[\s\S])*dana@bright\.test(?:(?!<\/nav>)[\s\S])*>Sign out<\/span><\/button>/);
+    }
+  });
+
+  it("keeps the ITS staff's Recruiter and Admin labels, which tell their groups apart from the company's links", () => {
+    nav.path = "/admin";
+    const html = render(admin());
+    expect(html).toMatch(/<div class="[^"]*font-mono[^"]*">Recruiter<\/div>/);
+    expect(html).toMatch(/<div class="[^"]*font-mono[^"]*">Admin<\/div>/);
   });
 });
 

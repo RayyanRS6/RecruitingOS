@@ -9,7 +9,8 @@ import { middleware } from "../middleware";
  * The public welcome page (/welcome, October 2026 redesign, screenshot 2) as the server draws it, and the one change in
  * middleware.ts that sends someone without a session from the address of Home to it. The page is static: one main
  * heading, sections the header links to, every way in leading to the sign-in page (where an invitation is opened too),
- * and nothing to fill in, because there is no sign-up or pilot request behind it.
+ * and nothing to fill in, because there is no sign-up or pilot request behind it. Since 23 October 2026 (founder: fewer
+ * words) it carries no eyebrows over its headings, no strip of ticks and no taglines.
  */
 (globalThis as { React?: typeof React }).React = React;
 const page = await import("../app/(public)/welcome/page");
@@ -46,6 +47,49 @@ describe("the public welcome page", () => {
     for (const l of links.filter((x) => x.href?.startsWith("#"))) expect(html, l.href).toContain(` id="${l.href!.slice(1)}"`);
     expect(html).toMatch(/<section id="how-it-works" aria-labelledby="how-title"/);
     expect(html).toMatch(/<section id="for-owners" aria-labelledby="owners-title"/);
+  });
+
+  it("says it in few words: headings, their one paragraph or list, and the way in; no eyebrows, ticks or taglines", () => {
+    const words = text(html);
+    const cut = [
+      // the mono eyebrows over the hero and the sections, and over the owner band's card
+      "Your AI recruiting guide, from role to hire",
+      "End-to-end recruiting, without a recruiting team",
+      "For companies without a dedicated recruiter",
+      "A guide, not just a place to store resumes",
+      "AI assistance. Your judgment.",
+      "Your next hire, with help at every step",
+      // the strip of ticks under the hero, and the shield line under its button
+      "Less resume sifting",
+      "More focused candidate reviews",
+      "Guidance from role to hire",
+      "AI helps with the groundwork",
+      // the guide card's sub-line and footer line, the owner card's footer line, the closing card's sub-line
+      "Help at every stage of hiring",
+      "One place to guide your hiring journey",
+      "Less time sorting",
+      "Work through the next steps together",
+      // the footer's tagline
+      "AI recruiting guidance. From role to hire.",
+    ];
+    for (const line of cut) expect(words, line).not.toContain(line);
+    expect(html).not.toMatch(/class="eyebrow\b/);
+    // what carries the page stays: the guide card and its stages, the three steps, the owner band and its card, the
+    // review section and the closing call to action
+    const kept = [
+      "Your AI recruiting guide",
+      "Define the right role",
+      "Compare applicants",
+      "Know what to do next",
+      "Tell your guide who you need",
+      "Check the essentials before you meet",
+      "Choose your shortlist with context",
+      "You already have a full-time job.",
+      "You don’t have to figure out every step alone.",
+      "Help with the review. You make the hire.",
+      "You run the business. Get help with the hiring.",
+    ];
+    for (const line of kept) expect(words, line).toContain(line);
   });
 
   it("asks for nothing: no form, no field, no button", () => {

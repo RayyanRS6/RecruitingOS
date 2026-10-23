@@ -207,7 +207,8 @@ describe("the application's stylesheet", () => {
     // 23 October 2026, the redesign's foundation: tokens, base and the whole kit in one sheet, 10,723 bytes (it replaces
     // tokens.css, board.css and app-shell.css, whose ceilings were 12,000 + 2,350 + 820; the screens' own styling is
     // Tailwind utilities, built from the classes they use). After the review fixes (the alerts' marks as data: images,
-    // the hover variant, the touch targets): 11,173, ceiling unchanged.
+    // the hover variant, the touch targets): 11,173, ceiling unchanged. Round 2 (vertical tabs, option rows, dl.glance,
+    // .pill.wrap, IconLabel, wrapping card titles and row titles, the hero card's title): 11,740, ceiling unchanged.
     expect(gz(app)).toBeLessThanOrEqual(12_500);
   });
 });
@@ -227,6 +228,8 @@ describe("the kit's component layer", () => {
       for (const m of src.matchAll(/className=\{`([^`]+)`\}/g)) add(m[1].replace(/\$\{[^}]*\}/g, " "));
       for (const m of src.matchAll(/\bcx\(([^)]*)\)/g)) for (const s of m[1].matchAll(/"([^"]+)"/g)) add(s[1]);
       for (const m of src.matchAll(/className=\{[^}]*\?\s*"([^"]*)"\s*:\s*"([^"]*)"/g)) add(`${m[1]} ${m[2]}`);
+      // the kit's own string before a caller's className (round 2): withClass("eyebrow", props.className)
+      for (const m of src.matchAll(/\bwithClass\("([^"]+)"/g)) add(m[1]);
     }
     return words;
   };
@@ -236,7 +239,7 @@ describe("the kit's component layer", () => {
   it("styles every class the kit's components render", () => {
     const words = kitClasses();
     expect(words.size).toBeGreaterThan(100);
-    for (const w of ["btn", "table-wrap", "th-sort", "tab-label", "stat-cell", "menu-item", "toast-region", "drawer-head", "keep-in-view", "wide"]) expect(words.has(w), w).toBe(true);
+    for (const w of ["btn", "table-wrap", "th-sort", "tab-label", "stat-cell", "menu-item", "toast-region", "drawer-head", "keep-in-view", "wide", "eyebrow", "icon-label", "chip", "alert"]) expect(words.has(w), w).toBe(true);
     for (const w of words) if (!NO_RULE.has(w)) expect(selects(app, `.${w}`), `.${w} has no rule in styles.css`).toBe(true);
     // the variants chosen by a prop (a tone, a size), which the scan above cannot see as literals
     const variants = [
@@ -322,6 +325,98 @@ describe("the kit's component layer", () => {
     expect(rule(app, ".alert")).toContain('--alert-mark: url("data:image/svg+xml,');
     // under forced colours the mark keeps the text colour instead of vanishing with the backgrounds
     expect(mediaBody(app, "(forced-colors: active)")).toContain(".alert::before { forced-color-adjust: none; background: CanvasText; }");
+  });
+
+  /** Every `@media <query> {` block's body, joined (the phone rules sit in more than one). */
+  const mediaBodies = (query: string) => {
+    const out: string[] = [];
+    for (let at = app.indexOf(`@media ${query} {`); at >= 0; at = app.indexOf(`@media ${query} {`, at + 1)) out.push(mediaBody(app.slice(at), query));
+    return out.join("\n");
+  };
+
+  // Round 2 (spec 0d, 23 October 2026): fewer words, so the layout carries what the words used to.
+  it("lets a card's title and its aside wrap, and sizes the hero card's title itself, only when asked", () => {
+    const title = rule(app, ".card-title");
+    expect(title).toContain("flex-wrap: wrap;");
+    expect(title).toContain("gap: 8px 12px;");
+    expect(rule(app, ".card.hero > .card-title h2")).toContain("font-size: 26px;");
+    expect(app).toMatch(/@media \(min-width: 768px\) \{\s*\.card\.hero > \.card-title h2 \{ font-size: 30px; \}/);
+    // a needs-you card in a side panel or a report is no hero: its title keeps the card's 19px
+    expect(rule(app, ".card-title h2")).toContain("font-size: 19px;");
+    expect(app).not.toMatch(/\.needs-you[^{}]*\.card-title/);
+  });
+
+  it("leaves the kit's tests out of Tailwind's scan, so a word only a test writes adds no utility to the sheet", () => {
+    expect(app).toContain('@source ".";\n@source not "*.test.ts";');
+  });
+
+  it("shows a row's whole title on a phone instead of cutting it off, and keeps the ellipsis on a desk", () => {
+    expect(rule(app, ".list-row-title")).toContain("text-overflow: ellipsis; white-space: nowrap;");
+    expect(mediaBodies("(max-width: 640px)")).toMatch(/\.list-row-title \{ white-space: normal; overflow-wrap: anywhere; \}/);
+  });
+
+  it("draws an option row round a native radio or checkbox: 44px, tinted when chosen, one ring for the keyboard", () => {
+    const row = rule(app, ".option-row");
+    for (const d of ["min-height: 44px;", "border: 1px solid var(--line-2);", "border-radius: 12px;", "cursor: pointer;"]) expect(row).toContain(d);
+    // only the input counts: a selected <option> or a disabled button elsewhere in the row changes nothing
+    expect(rule(app, ".option-row:has(input:checked)")).toBe(" border-color: var(--primary); background: var(--tint); ");
+    expect(rule(app, '.option-row:has(input:is([type="radio"], [type="checkbox"]):disabled)')).toContain("opacity: 0.6;");
+    // the keyboard's focus rings the row (a mouse's click does not), and the control's own outline steps aside for it
+    expect(rule(app, ".option-row:has(input:focus-visible)")).toContain("box-shadow: var(--ring);");
+    expect(rule(app, ".option-row:has(input:focus-visible) input:focus-visible")).toBe(" outline: none; ");
+    expect(app).not.toMatch(/\.option-row:focus-within/);
+    // forced colours drop the ring (a shadow), so the row takes an outline there
+    expect(mediaBody(app, "(forced-colors: active)")).toContain(".option-row:has(input:focus-visible) { outline: 2px solid CanvasText; outline-offset: 2px; }");
+    // the mouse's edge skips a chosen or disabled row
+    const hover = app.indexOf(".option-row:not(:has(input:checked, input:disabled)):hover { border-color: var(--line-strong); }");
+    expect(hover).toBeGreaterThan(0);
+    expect(insideMedia(app, hover, "(hover: hover) and (pointer: fine)")).toBe(true);
+    expect(rule(app, ".option-tag")).toContain("margin-left: auto;");
+    expect(selects(app, ".option-row:has(input:checked) .option-tag")).toBe(true);
+    // the radio or checkbox itself is never redrawn
+    expect(app).not.toMatch(/\.option-row[^{]*input[^{]*\{[^}]*appearance/);
+  });
+
+  it("lists facts at a glance as hairline rows of label and value, stacked on a phone", () => {
+    expect(rule(app, "dl.glance")).toContain("grid-template-columns: fit-content(40%) minmax(0, 1fr);");
+    expect(rule(app, "dl.glance > :is(dt, dd)")).toContain("border-top: 1px solid var(--line);");
+    const dt = rule(app, "dl.glance > dt");
+    expect(dt).toContain("color: var(--ink-3);");
+    expect(dt).toContain("font-size: 13px;");
+    const dd = rule(app, "dl.glance > dd");
+    expect(dd).toContain("color: var(--ink);");
+    expect(dd).toContain("font-size: 15px;");
+    expect(mediaBodies("(max-width: 640px)")).toContain("dl.glance { grid-template-columns: minmax(0, 1fr); }");
+  });
+
+  it("lets a pill with a long sentence wrap (.pill.wrap) and gives IconLabel its muted mark", () => {
+    const wrap = rule(app, ".pill.wrap");
+    expect(wrap).toContain("white-space: normal;");
+    expect(wrap).toContain("border-radius: 12px;");
+    expect(rule(app, ".icon-label")).toContain("color: var(--ink-3);");
+  });
+
+  it("runs vertical tabs down the side as an inner nav: 40px rows, the chosen one tinted plum and marked by a bar", () => {
+    const V = '.tabs[aria-orientation="vertical"]';
+    expect(rule(app, V)).toContain("display: grid;");
+    const tab = rule(app, `${V} .tab`);
+    expect(tab).toContain("min-height: 40px;");
+    expect(tab).toContain("border-radius: 12px;");
+    expect(rule(app, `${V} .tab[aria-selected="true"]`)).toBe(" background: var(--tint); color: var(--primary); font-weight: 600; ");
+    // never colour alone: the underline becomes a 3px plum bar on the chosen row's left, in every mode
+    const bar = rule(app, `${V} .tab::after`);
+    for (const d of ["left: 0;", "width: 3px;", "transform: scaleY(0);"]) expect(bar).toContain(d);
+    expect(bar).not.toContain("display: none");
+    expect(rule(app, `${V} .tab[aria-selected="true"]::after`)).toBe(" transform: none; ");
+    expect(rule(app, ".tab::after")).toContain("background: var(--primary);");
+    // the mouse's fill waits for a mouse and skips a disabled tab (the check above covers every hover fill; this one is found)
+    expect(hoverFills(app).map((f) => f.selector)).toContain(`${V} .tab:not([aria-selected="true"], :disabled):hover`);
+    // Windows High Contrast drops the tint: the bar keeps the system highlight
+    const forced = mediaBody(app, "(forced-colors: active)");
+    expect(forced).toContain('.tab[aria-selected="true"]::after, .tab[aria-current="page"]::after { forced-color-adjust: none; background: Highlight; }');
+    expect(forced).not.toMatch(/\.tab[^{}]*::after \{[^}]*display: none/);
+    // the tabs across keep their underline
+    expect(rule(app, '.tab[aria-selected="true"]::after, .tab[aria-current="page"]::after')).toBe(" transform: scaleX(1); ");
   });
 });
 

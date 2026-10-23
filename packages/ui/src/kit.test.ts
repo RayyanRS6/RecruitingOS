@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { createElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { Button, EmptyState, ErrorState, IconChip, SectionHeader, Skeleton, StatCell, StatStrip } from "./index";
+import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Eyebrow, Icon, IconButton, IconChip, IconLabel, Pill, SectionHeader, Skeleton, StatCell, StatStrip } from "./index";
 
 /**
  * The kit's markup for the October 2026 redesign (docs/07): the layout helpers screens rely on (spec 5b) render the
@@ -84,6 +84,77 @@ describe("the layout helpers (spec 5b)", () => {
     const small = SectionHeader({ title: "Open roles", level: 3 }) as El;
     expect(tree(small).some((e) => e.type === "h3")).toBe(true);
     expect(byClass(small, "section-header-action")).toBeUndefined();
+  });
+});
+
+/**
+ * Round 2 (spec 0d, 23 October 2026): screens pass their own placement classes to the kit instead of copying its class
+ * strings, and a chip's words that only repeat what the screen shows become an icon with the words for screen readers.
+ */
+describe("the kit's round-2 contract", () => {
+  // [without className, with className, the kit's own string as tests and e2e specs pin it, the attribute order]
+  const cases: Array<[string, El, El, string, string[]]> = [
+    ["Button", Button({ children: "Save", variant: "primary" }) as El, Button({ children: "Save", variant: "primary", className: "ml-auto" }) as El, "btn primary", ["type", "className", "onClick", "disabled", "title", "aria-label", "aria-pressed", "aria-busy", "aria-keyshortcuts", "children"]],
+    ["IconButton", IconButton({ icon: "x", label: "Close", size: "sm" }) as El, IconButton({ icon: "x", label: "Close", size: "sm", className: "ml-auto" }) as El, "icon-btn sm", ["type", "className", "aria-label", "title", "onClick", "disabled", "children"]],
+    ["IconChip", IconChip({ icon: "briefcase" }) as El, IconChip({ icon: "briefcase", className: "ml-auto" }) as El, "icon-chip lavender md", ["className", "aria-hidden", "children"]],
+    ["Eyebrow", Eyebrow({ children: "AI interview" }) as El, Eyebrow({ children: "AI interview", className: "ml-auto" }) as El, "eyebrow", ["className", "children"]],
+    ["Alert", Alert({ children: "Saved." }) as El, Alert({ children: "Saved.", className: "ml-auto" }) as El, "alert neutral", ["className", "role", "children"]],
+    ["Pill", Pill({ children: "Live", tone: "good", size: "sm" }) as El, Pill({ children: "Live", tone: "good", size: "sm", className: "ml-auto" }) as El, "pill good sm", ["className", "title", "children"]],
+    ["Chip", Chip({ children: "New" }) as El, Chip({ children: "New", className: "ml-auto" }) as El, "chip neutral", ["className", "children"]],
+  ];
+
+  it("renders the kit's own class string and attribute order unchanged when no className is passed", () => {
+    for (const [name, plain, , kit, order] of cases) {
+      expect(plain.props.className, name).toBe(kit);
+      expect(Object.keys(plain.props), name).toEqual(order);
+    }
+    // the other tones keep their strings too
+    expect((Alert({ children: "Could not save.", tone: "critical" }) as El).props).toMatchObject({ className: "alert critical", role: "alert" });
+    expect((Chip({ children: "Must-have", tone: "accent" }) as El).props.className).toBe("chip accent");
+    expect((Button({ children: "Sign in", variant: "primary", block: true }) as El).props.className).toBe("btn primary wide");
+  });
+
+  it("appends a caller's classes after the kit's own, in the same place among the attributes", () => {
+    for (const [name, plain, extra, kit] of cases) {
+      expect(extra.props.className, name).toBe(`${kit} ml-auto`);
+      expect(Object.keys(extra.props), name).toEqual(Object.keys(plain.props));
+    }
+    // cn() joins them, so of two utilities of one kind the later wins
+    expect((Button({ children: "Save", className: "px-2 px-4" }) as El).props.className).toBe("btn secondary px-4");
+    // and a long status sentence wraps with the kit's own modifier
+    expect((Pill({ children: "Waiting on the candidate's answers since Monday", tone: "caution", className: "wrap" }) as El).props.className).toBe("pill caution wrap");
+  });
+
+  it("never loses a kit class word to tailwind-merge, whatever utilities a screen adds", () => {
+    const utilities = "block flex-wrap text-sm border border-solid rounded-full shadow-none p-2 wrap-anywhere outline-solid accent-current";
+    for (const kit of ["btn primary sm wide", "btn danger", "btn quiet", "icon-btn sm", "chip needs", "chip source", "pill accent solid sm", "pill info wrap", "alert caution", "icon-chip plum lg", "icon-chip neutral sm", "eyebrow", "icon-label"]) {
+      expect(cn(kit, utilities), kit).toBe(`${kit} ${utilities}`);
+    }
+  });
+
+  it("Card draws a hero-sized title only when asked (`hero`), so a needs-you card in a panel keeps the card's own size", () => {
+    const hero = Card({ children: "rows", needsYou: true, hero: true, lift: true, title: "Close this job" }) as El;
+    expect(hero.type).toBe("section");
+    expect(hero.props.className).toBe("card needs-you hero lift");
+    expect(tree(hero).find((e) => e.type === "h2")?.props.children).toBe("Close this job");
+    // without it, every class string is as before
+    expect((Card({ children: "rows", needsYou: true, lift: true, title: "Put on hold" }) as El).props.className).toBe("card needs-you lift");
+    expect((Card({ children: "rows", needsYou: true, title: "After the interview", className: "p-5" }) as El).props.className).toBe("card needs-you p-5");
+    expect((Card({ children: "rows" }) as El).props.className).toBe("card");
+  });
+
+  it("IconLabel shows only its icon; the words are the screen reader's text and the tooltip", () => {
+    const label = IconLabel({ icon: "eye", label: "Candidates see this" }) as El;
+    expect(label.type).toBe("span");
+    expect(label.props).toMatchObject({ className: "icon-label", title: "Candidates see this" });
+    const [icon, words] = kids(label);
+    expect(icon.type).toBe(Icon);
+    expect(icon.props).toMatchObject({ name: "eye", size: 16 });
+    // no label on the icon, so the icon hides itself from screen readers (it does not say the words twice)
+    expect(icon.props.label).toBeUndefined();
+    expect((Icon(icon.props as Parameters<typeof Icon>[0]) as El).props["aria-hidden"]).toBe("true");
+    expect(words.props).toMatchObject({ className: "sr-only", children: "Candidates see this" });
+    expect((IconLabel({ icon: "lock", label: "Only your team sees this", className: "ml-1" }) as El).props.className).toBe("icon-label ml-1");
   });
 });
 

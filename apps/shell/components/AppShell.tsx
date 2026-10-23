@@ -3,8 +3,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import NextLink from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Fragment, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Alert, Avatar, cx, Icon, IconChip, type IconName, initials, Kbd, Menu } from "@ros/ui";
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Alert, Avatar, cx, Icon, type IconName, initials, Kbd, Menu } from "@ros/ui";
 import { ApiError, api, type RoleSummary } from "@ros/web/src/api/client";
 import { NavLink } from "@ros/web/src/nav";
 import { otherCompanies, type RailRole, railCompact, railListsRoles, railRoles, teamRoleWord } from "@ros/web/src/rail";
@@ -50,8 +50,8 @@ export function rememberRailCollapsed(storage: Storage | null, collapsed: boolea
 }
 
 /**
- * Where the page sits, for the thin bar above it: the rail's own words (the section, then the job or console section
- * when there is one). Empty for a page the rail does not lead to. A job is named only when the rail lists it.
+ * Where the page sits, in the rail's own words (the section, then the job or console section when there is one).
+ * Empty for a page the rail does not lead to. A job is named only when the rail lists it.
  */
 export function sectionTrail(pathname: string, jobs: ReadonlyArray<Pick<RailRole, "id" | "title">> = []): string[] {
   const under = (base: string) => pathname === base || pathname.startsWith(`${base}/`);
@@ -73,6 +73,24 @@ export function sectionTrail(pathname: string, jobs: ReadonlyArray<Pick<RailRole
     return section ? ["Console", section.label] : ["Console"];
   }
   return [];
+}
+
+/** The section words that are pages of their own, so a page under them can link back up. */
+const SECTION_PAGES: Readonly<Record<string, string>> = { Home: "/", Jobs: "/roles", Console: "/admin" };
+
+/**
+ * The thin bar above a page that sits under another page (founder, 23 October 2026: a trail only where it has a link
+ * back up): the parent as a link, then the page's own word when the rail knows it ("Jobs / Dental Hygienist",
+ * "Console / Customers", "Home / Updates"). Null on a section's own page (Home, Jobs, Candidates, Settings, the
+ * console's Overview...), whose heading already says where it is. Decided from the address alone, so the bar never
+ * appears late: a job the rail does not list still gets "Jobs", without its name.
+ */
+export function parentTrail(pathname: string, jobs: ReadonlyArray<Pick<RailRole, "id" | "title">> = []): { parent: { label: string; href: string }; here: string | null } | null {
+  const [section, here = null] = sectionTrail(pathname, jobs);
+  const href = section ? SECTION_PAGES[section] : undefined;
+  const page = pathname.replace(/\/+$/, "") || "/";
+  if (!section || !href || href === page) return null;
+  return { parent: { label: section, href }, here };
 }
 
 /** A box inside the rail, in pixels from its top left corner (scrolled content included). */
@@ -169,7 +187,10 @@ function RailLink(props: { to: string; end?: boolean; icon: IconName; label: str
   );
 }
 
-/** A mono label over a group of links; the folded rail draws a hairline instead (the phone menu keeps the word). */
+/**
+ * A mono label over the ITS staff's groups of links (Recruiter, Admin), which it tells apart from the company's own
+ * links above them; the folded rail draws a hairline instead (the phone menu keeps the word).
+ */
 function SectionLabel({ children, folded, first }: { children: string; folded: boolean; first?: boolean }) {
   const look = first ? SECTION_FIRST : SECTION;
   return (
@@ -181,15 +202,18 @@ function SectionLabel({ children, folded, first }: { children: string; folded: b
 }
 
 /**
- * The signed-in frame (docs/07): the rail, a thin bar naming where the page sits, the staff-access notice, the
+ * The signed-in frame (docs/07): the rail, a thin bar with the way back up on a page that sits under another (a job,
+ * the job builder, Updates, a console section; none on a section's own page), the staff-access notice, the
  * development-mode notice, and the page.
  *
  * The rail, top to bottom: the name, the company chip (your role, a "Switch company" menu for someone in more than one
  * company, and a cog to Settings), "Start a hire" for the people who may start one (N opens it from anywhere outside a
  * text field, on a page with nothing changed), Home, Jobs with the jobs being worked on listed underneath (for members
- * only; a live job opens on its Candidates), Candidates, Interviews, Settings (Queue and Console for ITS staff, the
- * console's five sections listed under Console for platform administrators), a small note, and who is signed in with
- * Sign out and the light/dark theme switch. The current link sits on a lavender highlight that glides to the next one.
+ * only; a live job opens on its Candidates), Candidates, Interviews, Settings (Queue and Console for ITS staff under
+ * their Recruiter and Admin labels, the console's five sections listed under Console for platform administrators), and,
+ * at its foot, who is signed in with Sign out and the light/dark theme switch. No slogans and no label over the
+ * company's own links (founder, 23 October 2026: fewer words). The current link sits on a lavender highlight that
+ * glides to the next one.
  * On a job's own pages it folds to a column of icons; on every other page the button at its top folds it the same way
  * (founder answer F3), and this browser remembers the choice. Under 900px it becomes a top bar: Start a hire, Sign out
  * and the theme switch stay in it, and the links fold behind a Menu button. (The routes keep their old names: /,
@@ -349,9 +373,9 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
 
   const who = me.user.name ?? me.user.email;
   const roleWord = teamRoleWord(myRole, !!me.staffAccess);
-  // The company the page is about, in the bar above the page (and under the name in the phone's top bar).
+  // The company the page is about, under the name in the phone's top bar (wider screens have the rail's company chip).
   const workspace = companyName ? (active ? companyName : `${companyName} (recruiter access)`) : isStaff ? "ITS staff" : "No company";
-  const trail = sectionTrail(pathname, listed);
+  const trail = parentTrail(pathname, listed);
   const width = cx(foldedByChoice ? "max-w-[1280px]" : "max-w-[1040px]", "group-has-[.builder,.start,.pool-board,[data-wide]]/page:max-w-[1440px]");
   return (
     <div className={folded ? SHELL_FOLDED : SHELL} data-rail={folded ? "compact" : undefined} data-collapsed={foldedByChoice ? "true" : undefined}>
@@ -418,10 +442,10 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             {shortcutOn ? <Kbd decorative>{START_HIRE_KEY}</Kbd> : null}
           </NextLink>
         ) : null}
-        <div className="isolate col-span-2 hidden animate-fade flex-col gap-0.5 border-t border-line pt-3 data-[open=true]:flex min-[900px]:flex min-[900px]:animate-none min-[900px]:gap-1.5 min-[900px]:border-t-0 min-[900px]:pt-0" id="rail-links" data-open={menuOpen ? "true" : undefined}>
+        {/* pb: the links keep 16px clear of the foot when they fill the rail (the foot's mt-auto then has no room) */}
+        <div className="isolate col-span-2 hidden animate-fade flex-col gap-0.5 border-t border-line pt-3 data-[open=true]:flex min-[900px]:flex min-[900px]:animate-none min-[900px]:gap-1.5 min-[900px]:border-t-0 min-[900px]:pb-4 min-[900px]:pt-0" id="rail-links" data-open={menuOpen ? "true" : undefined}>
           {me.activeCompanyId ? (
             <>
-              <SectionLabel folded={folded} first>Your desk</SectionLabel>
               <RailLink to="/" end icon="home" label="Home" folded={folded} />
               <RailLink to="/roles" icon="roles" label="Jobs" folded={folded} />
               {listed.length ? (
@@ -480,16 +504,9 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             </>
           ) : null}
         </div>
-        {/* A quiet note at the foot of the full rail (the screenshots' "People first."): words only, nothing to do. */}
-        {folded ? null : (
-          <div aria-hidden="true" className="hidden rounded-2xl border border-line-tint bg-tint p-3.5 min-[900px]:mt-auto min-[900px]:block">
-            <IconChip icon="sparkles" tone="peach" size="sm" />
-            <p className="mt-2.5 text-[13.5px] font-semibold text-ink">People first.</p>
-            <p className="mt-0.5 text-[12.5px] leading-snug text-ink-2">Suggestions help you think. The call stays yours.</p>
-          </div>
-        )}
-        {/* Which AI company we use is shown in Settings, not here. Sign out stays reachable in the phone's top bar. */}
-        <div className={cx("flex items-center gap-1 max-[900px]:col-start-2 max-[900px]:row-start-2 max-[900px]:justify-self-end min-[900px]:flex-col min-[900px]:items-stretch min-[900px]:gap-2.5 min-[900px]:border-t min-[900px]:border-line min-[900px]:pt-4", folded ? "min-[900px]:mt-auto" : "min-[900px]:mt-4")}>
+        {/* The foot, at the bottom of the rail: who is signed in, Sign out and the theme switch. Which AI company we use
+            is shown in Settings, not here. Sign out stays reachable in the phone's top bar. */}
+        <div className="flex items-center gap-1 max-[900px]:col-start-2 max-[900px]:row-start-2 max-[900px]:justify-self-end min-[900px]:mt-auto min-[900px]:flex-col min-[900px]:items-stretch min-[900px]:gap-2.5 min-[900px]:border-t min-[900px]:border-line min-[900px]:pt-4">
           <div className={folded ? "hidden" : "hidden min-w-0 items-center gap-2.5 px-1 min-[900px]:flex"}>
             <Avatar name={who} tone="ink" size="sm" />
             <span className="grid min-w-0 leading-tight">
@@ -509,24 +526,25 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
         </div>
       </nav>
       <div className="group/page flex min-w-0 flex-col">
-        {/* Where the page sits and whose it is: words only, not a landmark (the rail and the page's own heading lead). */}
-        <div className="hidden h-16 shrink-0 border-b border-line bg-ground/95 min-[900px]:block">
-          <div className={cx("mx-auto flex h-full w-full items-center justify-between gap-6 px-10 text-[13px]", width)}>
-            <p className="flex min-w-0 items-center gap-2 text-ink-3">
-              {trail.map((word, i) => (
-                <Fragment key={`${i}-${word}`}>
-                  {i > 0 ? <span aria-hidden="true">/</span> : null}
-                  <span className={i === trail.length - 1 ? "truncate font-medium text-ink-2" : "shrink-0"}>{word}</span>
-                </Fragment>
-              ))}
-            </p>
-            <p className="flex min-w-0 shrink-0 items-center gap-2 font-medium text-ink-2">
-              <span className="max-w-[32ch] truncate">{workspace}</span>
-              <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-accent" />
+        {/* The way back up, on a page under another only (parentTrail): words and one link, not a landmark (the rail
+            and the page's own heading lead). The company is not repeated here: the rail's chip names it. Phones have
+            their own top bar. */}
+        {trail ? (
+          <div className="hidden h-16 shrink-0 border-b border-line bg-ground/95 min-[900px]:block">
+            <p className={cx("mx-auto flex h-full w-full min-w-0 items-center gap-2 px-10 text-[13px] text-ink-3", width)}>
+              <NextLink href={trail.parent.href} className="shrink-0 rounded-md font-medium text-ink-2 underline decoration-line-strong underline-offset-[3px] transition-colors duration-150 ease-soft hover:text-primary hover:decoration-current pointer-coarse:inline-flex pointer-coarse:min-h-10 pointer-coarse:items-center">
+                {trail.parent.label}
+              </NextLink>
+              {trail.here ? (
+                <>
+                  <span aria-hidden="true">/</span>
+                  <span className="truncate font-medium text-ink">{trail.here}</span>
+                </>
+              ) : null}
             </p>
           </div>
-        </div>
-        <main id="main" className={cx("mx-auto w-full min-w-0 flex-1 px-4 pb-16 pt-5 min-[640px]:px-6 min-[900px]:px-10 min-[900px]:pb-20 min-[900px]:pt-9", width)}>
+        ) : null}
+        <main id="main" className={cx("mx-auto w-full min-w-0 flex-1 px-4 pb-16 pt-5 min-[640px]:px-6 min-[900px]:px-10 min-[900px]:pb-20", trail ? "min-[900px]:pt-9" : "min-[900px]:pt-12", width)}>
           {me.staffAccess ? <div className="mb-4"><Alert tone="info">You are inside {me.staffAccess.companyName} through an escalation ({me.staffAccess.purpose}). Access is limited to that request and ends {new Date(me.staffAccess.expiresAt).toLocaleString()}. Every page you open is recorded for the customer.</Alert></div> : null}
           {me.ai.provider === "fake" ? <div className="mb-4"><Alert tone="caution">Development mode: the AI provider is a deterministic stand-in, so its drafts are rough.</Alert></div> : null}
           {children}

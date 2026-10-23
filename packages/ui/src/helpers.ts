@@ -120,6 +120,21 @@ export function nextIndex(count: number, from: number, move: Move, skip: (i: num
   return from;
 }
 
+/** Which way a row of tabs runs: across (underlined, the default) or down the side (an inner nav). */
+export type TabOrientation = "horizontal" | "vertical";
+
+/**
+ * The move a key makes in a row of tabs: Left and Right, Home and End always; Up and Down as well when the tabs run
+ * down the side. Any other key is not the tabs' to handle (null).
+ */
+export function tabKeyMove(key: string, orientation: TabOrientation = "horizontal"): Move | null {
+  if (key === "Home") return "first";
+  if (key === "End") return "last";
+  if (key === "ArrowRight" || (orientation === "vertical" && key === "ArrowDown")) return "next";
+  if (key === "ArrowLeft" || (orientation === "vertical" && key === "ArrowUp")) return "prev";
+  return null;
+}
+
 /** Typing a letter in an open menu moves to the next item whose label starts with it. */
 export function typeaheadIndex(labels: readonly string[], from: number, char: string): number {
   const c = char.toLocaleLowerCase();

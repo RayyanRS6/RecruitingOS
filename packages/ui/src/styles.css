@@ -6,11 +6,14 @@
  * entry (apps/shell/app/globals.css) imports Tailwind first and then this file. docs/07 describes the system.
  */
 
-/* Tailwind only scans the app it is built in (apps/shell); the pages and the kit live in other packages. */
+/* Tailwind only scans the app it is built in (apps/shell); the pages and the kit live in other packages. The kit's
+   tests are left out: a class word written only in a test must not add a utility to the sheet (the path is written
+   without "./" so it never opens a comment). */
 @source "../../../apps/web/src";
 @source "../../../apps/shell/app";
 @source "../../../apps/shell/components";
 @source ".";
+@source not "*.test.ts";
 
 /*
  * Tailwind clash audit (spec 0b.5, 23 October 2026). Tailwind makes a utility of every word in the sources that names
@@ -434,6 +437,12 @@
   .kv { display: grid; grid-template-columns: minmax(0, 160px) minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 14px; }
   .kv dt { color: var(--ink-3); }
   .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* At a glance (screenshot 7): label and value rows split by hairlines; dt and dd in pairs, straight inside the dl */
+  dl.glance { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); column-gap: 16px; margin: 0; }
+  dl.glance > :is(dt, dd) { padding-block: 10px; border-top: 1px solid var(--line); }
+  dl.glance > dt { color: var(--ink-3); font-size: 13px; line-height: 1.6; }
+  dl.glance > dd { margin: 0; min-width: 0; color: var(--ink); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+  dl.glance > dt:first-child, dl.glance > dt:first-child + dd { padding-top: 0; border-top: 0; }
   /* A section a link can land on (#share, #setup-team): it stops clear of a sticky top bar. */
   .setup-section { display: grid; min-width: 0; scroll-margin-top: 88px; }
   .setup-section:focus:not(:focus-visible) { outline: none; }
@@ -476,10 +485,17 @@
   /* Surfaces */
   .card { min-width: 0; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: var(--sh-inset), var(--sh-xs); }
   a.card { display: block; text-decoration: none; }
-  .card-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  /* the title and its aside share a line while they fit; a long title pushes the aside under it, never off the card */
+  .card-title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
   .card-title h2 { min-width: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; overflow-wrap: anywhere; }
   /* Something waiting for the reader: the "Your next step" wash, lavender to peach, edged in lavender. */
   .card.needs-you { padding: 28px; border-color: var(--line-tint); border-radius: 20px; background: linear-gradient(115deg, var(--tint) 0%, var(--surface) 58%, var(--peach) 135%); }
+  /* A page's one next step (Card hero): its title at the hero size. Only on request, so the needs-you cards in a side
+     panel or a report keep the 19px title. */
+  .card.hero > .card-title h2 { font-size: 26px; letter-spacing: -0.03em; line-height: 1.15; }
+  @media (min-width: 768px) {
+    .card.hero > .card-title h2 { font-size: 30px; }
+  }
   .card.lift, a.card, a.side-card { transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease); }
   .side-card { display: grid; align-content: start; gap: 4px; min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-xs); }
   .side-card > :is(h2, h3) { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
@@ -507,6 +523,11 @@
     .list-item, .list-row { flex-wrap: wrap; gap: 10px 12px; padding: 12px 14px; }
     .list-item-main, .list-row-main { flex: 1 1 150px; }
     .list-item-end, .list-row-end { margin-left: 0; justify-content: flex-start; }
+    /* a phone shows the whole title on more lines instead of cutting it off */
+    .list-row-title { white-space: normal; overflow-wrap: anywhere; }
+    dl.glance { grid-template-columns: minmax(0, 1fr); }
+    dl.glance > dt { padding-bottom: 2px; }
+    dl.glance > dd { padding-top: 0; border-top: 0; }
   }
 
   /* Figures: the strip of cells (screenshots 1 and 4), the report's figures and its 30 day bars */
@@ -535,6 +556,8 @@
   .icon-chip.good { background: var(--good-soft); color: var(--good); }
   .icon-chip.caution { background: var(--caution-soft); color: var(--caution); }
   .icon-chip.neutral { background: var(--surface-2); color: var(--ink-2); }
+  /* IconLabel: an icon whose words are for screen readers and the tooltip only */
+  .icon-label { display: inline-flex; flex: none; align-items: center; color: var(--ink-3); }
 
   /* Buttons: pills everywhere; 44px, or 36px when small */
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 20px; border: 1px solid transparent; border-radius: 9999px; font-family: var(--font-sans); font-size: 15px; font-weight: 600; line-height: 1.2; text-align: center; text-decoration: none; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), box-shadow 150ms var(--ease), transform 150ms var(--ease); }
@@ -577,6 +600,17 @@
   .check { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 14px; line-height: 1.45; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease); }
   .check > input { margin-top: 1px; }
   .check:has(> input:checked) { border-color: var(--line-tint); background: var(--tint); }
+  /* One choice of several: a bordered row around a native radio or checkbox, its words and an optional .option-tag at
+     the end ("Recommended"). The chosen row is tinted; while the keyboard is on its control the row carries the one
+     focus ring (the control's own outline steps aside; browsers without :has keep it). Only the input counts, never a
+     selected <option> or a disabled button elsewhere in the row. */
+  .option-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 14px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 14.5px; line-height: 1.4; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), box-shadow 150ms var(--ease); }
+  .option-row:has(input:checked) { border-color: var(--primary); background: var(--tint); }
+  .option-row:has(input:focus-visible) { border-color: var(--primary); box-shadow: var(--ring); }
+  .option-row:has(input:focus-visible) input:focus-visible { outline: none; }
+  .option-row:has(input:is([type="radio"], [type="checkbox"]):disabled) { opacity: 0.6; cursor: not-allowed; }
+  .option-tag { flex: none; margin-left: auto; padding: 1px 8px; border-radius: 9999px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .option-row:has(input:checked) .option-tag { background: var(--tint-2); color: var(--primary); }
   .dropzone { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 16px 18px; border: 1.5px dashed var(--line-strong); border-radius: 14px; background: var(--surface-2); color: var(--ink-2); font-size: 14px; transition: background-color 150ms var(--ease), border-color 150ms var(--ease); }
   .dropzone:focus-within, .dropzone[data-over="true"] { border-color: var(--primary); background: var(--tint); }
 
@@ -594,6 +628,10 @@
   .pill, .pill-button, .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 9999px; background: var(--surface-2); color: var(--ink-2); font-weight: 600; white-space: nowrap; }
   .pill { min-height: 26px; padding: 2px 10px; font-size: 12.5px; line-height: 1.4; }
   .pill.sm { gap: 5px; min-height: 22px; padding: 1px 8px; font-size: 12px; }
+  /* a status sentence that may be long: it wraps onto more lines, its mark beside the first */
+  .pill.wrap { align-items: flex-start; padding-block: 3px; border-radius: 12px; white-space: normal; overflow-wrap: anywhere; }
+  .pill.wrap > .dot { margin-top: 0.46em; }
+  .pill.wrap > .icon { margin-top: 0.14em; }
   .pill .icon, .chip .icon { width: 14px; height: 14px; }
   :is(.pill, .pill-button).good { background: var(--good-soft); color: var(--good); }
   :is(.pill, .pill-button).good .dot { background: var(--good-dot); }
@@ -804,6 +842,16 @@
   .tabs.counts .tab[data-empty="true"] .count { color: var(--ink-3); }
   .tab-panel { padding-top: 20px; }
   .tab-panel:focus-visible { outline-offset: 4px; }
+  /* Down the side (Tabs orientation="vertical", screenshot 6): an inner nav of 40px rows, the chosen one tinted plum
+     and marked by more than colour: the underline turns into a plum bar on its left, grown from its middle */
+  .tabs[aria-orientation="vertical"] { display: grid; align-content: start; gap: 2px; overflow: visible; box-shadow: none; }
+  .tabs[aria-orientation="vertical"] .tab { min-height: 40px; padding: 8px 12px; border-radius: 12px; white-space: normal; text-align: left; transition: background-color 150ms var(--ease), color 150ms var(--ease); }
+  .tabs[aria-orientation="vertical"] .tab::after { top: 10px; right: auto; bottom: 10px; left: 0; width: 3px; height: auto; transform: scaleY(0); }
+  .tabs[aria-orientation="vertical"] .tab[aria-selected="true"]::after { transform: none; }
+  .tabs[aria-orientation="vertical"] .tab[aria-selected="true"] { background: var(--tint); color: var(--primary); font-weight: 600; }
+  .tabs[aria-orientation="vertical"] .tab-label { align-items: flex-start; }
+  .tabs[aria-orientation="vertical"] .tab .count { margin-left: auto; }
+  .tabs[aria-orientation="vertical"] .tab:focus-visible { border-radius: 12px; }
 
   /* Two panes side by side; under 900px one at a time, with a switch above them */
   .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 24px; }
@@ -944,6 +992,8 @@
     .table tbody tr:hover > :is(td, th):not(.table-empty) { background: color-mix(in srgb, var(--surface-2) 60%, var(--surface)); }
     .th-sort:hover { color: var(--ink); }
     .tab:hover { color: var(--ink); }
+    .tabs[aria-orientation="vertical"] .tab:not([aria-selected="true"], :disabled):hover { background: var(--surface-2); }
+    .option-row:not(:has(input:checked, input:disabled)):hover { border-color: var(--line-strong); }
     .menu-item:hover { background: var(--tint); }
     .composer-send:not(:disabled):hover { background: var(--primary-hover); }
     .toast-action:hover { border-color: var(--line-strong); background: var(--tint); }
@@ -957,12 +1007,14 @@
   @media (prefers-reduced-motion: no-preference) {
     :is(.btn, .icon-btn, .pill-button, .toggle-chip, .segmented button, .suggestion, .composer-send, .toast-action):active:not(:disabled, [aria-disabled="true"]) { transform: scale(0.98); }
   }
-  /* Forced colours (Windows High Contrast) drop backgrounds: a pressed filter chip, the chosen segment and the chosen
-     tab's line keep the system highlight, and an alert's mark is drawn in the text colour. */
+  /* Forced colours (Windows High Contrast) drop backgrounds and shadows: a pressed filter chip, the chosen segment and
+     the chosen tab's line or bar keep the system highlight, an alert's mark is drawn in the text colour, and an option
+     row whose control stepped its outline aside takes the outline itself. */
   @media (forced-colors: active) {
     .toggle-chip[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; border-color: Highlight; color: HighlightText; }
     .segmented button:is(.on, [aria-pressed="true"]) { forced-color-adjust: none; background: Highlight; color: HighlightText; }
     .tab[aria-selected="true"]::after, .tab[aria-current="page"]::after { forced-color-adjust: none; background: Highlight; }
+    .option-row:has(input:focus-visible) { outline: 2px solid CanvasText; outline-offset: 2px; }
     .alert::before { forced-color-adjust: none; background: CanvasText; }
   }
 }

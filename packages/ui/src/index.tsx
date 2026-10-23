@@ -1,4 +1,5 @@
 import { Children, type ReactNode } from "react";
+import { cn } from "./cn";
 import { cx, initials, type StepState, STEP_STATE_TEXT, scoreBand, scoreLabel, type TableHead, type Tone } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
@@ -8,6 +9,14 @@ import { Icon, type IconName } from "./icons";
  * shell's loading screen does). Components that need state or document listeners live in their own "use client"
  * modules and are re-exported at the bottom.
  */
+
+/**
+ * The kit's own classes, then a caller's `className` (joined by cn, so a later utility wins). Without one the kit's
+ * string comes back untouched: tests pin those strings byte for byte.
+ */
+function withClass(kit: string, className: string | undefined): string {
+  return className ? cn(kit, className) : kit;
+}
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "quiet" | "destructive";
 
@@ -19,12 +28,13 @@ export type ChipTone = "lavender" | "peach" | "plum" | "good" | "caution" | "neu
  * actions that cannot be taken back ("quiet" and "destructive" are the earlier names for ghost and danger). `kbd` shows a
  * keyboard hint and announces it as the shortcut. `ariaPressed` makes it a toggle a screen reader hears as pressed or
  * not, for a choice shown only by its fill (left out, the button is a plain button). `block` fills the width (its class
- * is `wide`: Tailwind's `block` utility would turn the button into a plain block).
+ * is `wide`: Tailwind's `block` utility would turn the button into a plain block). `className` adds classes after the
+ * kit's (spacing, a placement), never a second look.
  */
-export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; ariaLabel?: string; ariaPressed?: boolean; block?: boolean }) {
+export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; ariaLabel?: string; ariaPressed?: boolean; block?: boolean; className?: string }) {
   const { variant = "secondary", size = "md" } = props;
   return (
-    <button type={props.type ?? "button"} className={cx("btn", variant, size === "sm" && "sm", props.block && "wide")} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.kbd}>
+    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.kbd}>
       {props.loading ? (
         <>
           <span className="spinner" aria-hidden="true" />
@@ -43,9 +53,9 @@ export function Button(props: { children: ReactNode; variant?: ButtonVariant; si
 }
 
 /** A button that is only an icon. The label is what a screen reader says and what the tooltip shows. */
-export function IconButton(props: { icon: IconName; label: string; onClick?: () => void; size?: "sm" | "md"; disabled?: boolean; type?: "button" | "submit" }) {
+export function IconButton(props: { icon: IconName; label: string; onClick?: () => void; size?: "sm" | "md"; disabled?: boolean; type?: "button" | "submit"; className?: string }) {
   return (
-    <button type={props.type ?? "button"} className={cx("icon-btn", props.size === "sm" && "sm")} aria-label={props.label} title={props.label} onClick={props.onClick} disabled={props.disabled}>
+    <button type={props.type ?? "button"} className={withClass(cx("icon-btn", props.size === "sm" && "sm"), props.className)} aria-label={props.label} title={props.label} onClick={props.onClick} disabled={props.disabled}>
       <Icon name={props.icon} size={props.size === "sm" ? 16 : 18} />
     </button>
   );
@@ -56,9 +66,15 @@ export function Kbd(props: { children: ReactNode; decorative?: boolean }) {
   return <kbd className="kbd" aria-hidden={props.decorative || undefined}>{props.children}</kbd>;
 }
 
-export function Card(props: { children: ReactNode; needsYou?: boolean; lift?: boolean; title?: ReactNode; aside?: ReactNode; className?: string }) {
+/**
+ * A card with an optional H2 title and an aside beside it. `needsYou` is the "Your next step" wash (something waits on
+ * the reader); `hero` draws the title at the hero size (26px, 30px from 768px) for a page's one next step, so screens
+ * never size it themselves; every other card's title, a needs-you one in a panel included, stays 19px. `lift` answers
+ * the mouse.
+ */
+export function Card(props: { children: ReactNode; needsYou?: boolean; hero?: boolean; lift?: boolean; title?: ReactNode; aside?: ReactNode; className?: string }) {
   return (
-    <section className={cx("card", props.needsYou && "needs-you", props.lift && "lift", props.className)}>
+    <section className={cx("card", props.needsYou && "needs-you", props.hero && "hero", props.lift && "lift", props.className)}>
       {props.title || props.aside ? (
         <div className="card-title">
           {props.title ? <h2>{props.title}</h2> : <span />}
@@ -70,9 +86,9 @@ export function Card(props: { children: ReactNode; needsYou?: boolean; lift?: bo
   );
 }
 
-export function Chip(props: { children: ReactNode; tone?: "neutral" | "accent" | "needs" | "good" | "caution" | "critical" | "source" | "info" | "warm"; icon?: IconName }) {
+export function Chip(props: { children: ReactNode; tone?: "neutral" | "accent" | "needs" | "good" | "caution" | "critical" | "source" | "info" | "warm"; icon?: IconName; className?: string }) {
   return (
-    <span className={`chip ${props.tone ?? "neutral"}`}>
+    <span className={withClass(cx("chip", props.tone ?? "neutral"), props.className)}>
       {props.icon ? <Icon name={props.icon} size={14} /> : null}
       {props.children}
     </span>
@@ -83,12 +99,13 @@ export function Chip(props: { children: ReactNode; tone?: "neutral" | "accent" |
  * A status pill: a dot and a word ("Live", "Draft", "On hold"). The word carries the meaning; the colour only helps a
  * glance. `solid` is for a finished state (Hired); `pulse` is for the one Live pill at the top of a page: a ring grows
  * from the dot and fades. Besides the five tones, `info` (lavender) and `warm` (peach, "Ready for your review").
+ * `className="wrap"` lets a long status sentence wrap onto more lines (`.pill.wrap`) instead of running off a phone.
  */
-export function Pill(props: { children: ReactNode; tone?: Tone | "info" | "warm"; dot?: boolean; solid?: boolean; pulse?: boolean; icon?: IconName; size?: "sm" | "md"; title?: string }) {
+export function Pill(props: { children: ReactNode; tone?: Tone | "info" | "warm"; dot?: boolean; solid?: boolean; pulse?: boolean; icon?: IconName; size?: "sm" | "md"; title?: string; className?: string }) {
   const tone = props.tone ?? "neutral";
   const mark = props.icon ? <Icon name={props.icon} size={14} /> : props.dot === false ? null : <span className={cx("dot", props.pulse && "pulse")} aria-hidden="true" />;
   return (
-    <span className={cx("pill", tone, props.solid && "solid", props.size === "sm" && "sm")} title={props.title}>
+    <span className={withClass(cx("pill", tone, props.solid && "solid", props.size === "sm" && "sm"), props.className)} title={props.title}>
       {mark}
       {props.children}
     </span>
@@ -157,11 +174,14 @@ export function Avatar(props: { name: string | null | undefined; size?: "sm" | "
   );
 }
 
-/** The small uppercase, letter-spaced label above a title ("Role · Bright Dental"). Written in normal case; CSS raises it. */
-export function Eyebrow(props: { children: ReactNode; icon?: IconName; as?: "p" | "div" | "span" }) {
+/**
+ * The small uppercase, letter-spaced label that names a section ("AI interview"). Written in normal case; CSS raises it.
+ * Not a decoration above a page's title: the founder's fewer-words rule (docs/07, "Words on screen") cut those.
+ */
+export function Eyebrow(props: { children: ReactNode; icon?: IconName; as?: "p" | "div" | "span"; className?: string }) {
   const Tag = props.as ?? "p";
   return (
-    <Tag className="eyebrow">
+    <Tag className={withClass("eyebrow", props.className)}>
       {props.icon ? <Icon name={props.icon} size={14} /> : null}
       {props.children}
     </Tag>
@@ -196,8 +216,21 @@ export function Field(props: { label: string; hint?: string; children: ReactNode
   );
 }
 
-export function Alert(props: { children: ReactNode; tone?: "info" | "caution" | "critical" | "neutral" }) {
-  return <div className={`alert ${props.tone ?? "neutral"}`} role={props.tone === "critical" ? "alert" : "status"}>{props.children}</div>;
+export function Alert(props: { children: ReactNode; tone?: "info" | "caution" | "critical" | "neutral"; className?: string }) {
+  return <div className={withClass(cx("alert", props.tone ?? "neutral"), props.className)} role={props.tone === "critical" ? "alert" : "status"}>{props.children}</div>;
+}
+
+/**
+ * An icon that says its words only to a screen reader and as a tooltip (the eye for "Candidates see this"): the same
+ * information as a chip with words, without the words on screen. The icon is hidden; the label is the text.
+ */
+export function IconLabel(props: { icon: IconName; label: string; className?: string }) {
+  return (
+    <span className={withClass("icon-label", props.className)} title={props.label}>
+      <Icon name={props.icon} size={16} />
+      <span className="sr-only">{props.label}</span>
+    </span>
+  );
 }
 
 /** Nothing here yet: one sentence on why, and at most one clear action. No illustrations. */
@@ -365,10 +398,10 @@ export function Stat(props: { n: number | string; label: string }) {
  * An icon on a soft rounded square (the briefcase beside a job, the sparkle in a message cell): lavender by default,
  * peach, plum or a signal tint; 32, 40 or 48 pixels. Decorative: the words beside it say what it stands for.
  */
-export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "sm" | "md" | "lg" }) {
+export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "sm" | "md" | "lg"; className?: string }) {
   const size = props.size ?? "md";
   return (
-    <span className={cx("icon-chip", props.tone ?? "lavender", size)} aria-hidden="true">
+    <span className={withClass(cx("icon-chip", props.tone ?? "lavender", size), props.className)} aria-hidden="true">
       <Icon name={props.icon} size={size === "sm" ? 16 : size === "lg" ? 22 : 18} />
     </span>
   );
@@ -447,7 +480,7 @@ export { cn } from "./cn";
 export { Icon, ICON_NAMES, type IconName } from "./icons";
 // The match score's breakdown (Wave F): bars per requirement, no hooks.
 export { barFigures, barTone, ScoreBar, type ScoreBarItem, ScoreBars } from "./score-bars";
-export { compareValues, cx, initials, nextSort, normalizeToast, numHead, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type SortDir, type SortKind, type SortValue, sortAnnouncement, sortRows, type StageChoice, stageMenuItems, type StepState, type TableHead, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
+export { compareValues, cx, initials, nextSort, normalizeToast, numHead, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type SortDir, type SortKind, type SortValue, sortAnnouncement, sortRows, type StageChoice, stageMenuItems, type StepState, type TableHead, type TabOrientation, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
 
 // The pieces below listen to the keyboard or keep state, which needs React hooks, so each lives in its own client
 // module: the rest of this file stays usable from server components.

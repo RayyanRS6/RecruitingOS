@@ -1,7 +1,10 @@
 import { Link } from "@ros/web/src/nav";
 import { BrandMark } from "../components/BrandMark";
 
-/** Unknown paths anywhere in the shell (the API and candidate pages return their own 404s): one card on the page's glow. */
+/**
+ * Unknown paths anywhere in the shell (the API and candidate pages return their own 404s): one card on the page's glow,
+ * with the mark, what happened and the way back. Nothing else (founder, 23 October 2026: fewer words).
+ */
 export default function NotFound() {
   return (
     <main className="grid min-h-screen place-items-center px-4 py-12">
@@ -10,8 +13,7 @@ export default function NotFound() {
           <BrandMark />
         </div>
         <h1 className="mt-8 font-display text-[30px] font-bold leading-[1.1] tracking-[-0.035em] text-ink">That page does not exist</h1>
-        <p className="mt-3 text-[15px] text-ink-2">It may have moved, or the link is old.</p>
-        <div className="mt-7">
+        <div className="mt-6">
           <Link to="/" className="btn primary">Go to Home</Link>
         </div>
       </div>

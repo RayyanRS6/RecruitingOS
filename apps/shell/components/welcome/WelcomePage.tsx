@@ -1,10 +1,15 @@
-import { Icon, type IconName } from "@ros/ui";
+import { type ChipTone, Icon, IconChip, type IconName } from "@ros/ui";
+import { BrandMark } from "../BrandMark";
 
 /**
  * The public welcome page (/welcome, October 2026 redesign, screenshot 2): what Recruiting OS is, for someone who is not
  * signed in. Static and server-drawn, with no script of its own. Every way in leads to the sign-in page, where an
  * invitation is opened too; there is no sign-up or pilot request here, so the page asks for nothing. The hero comes in
  * with a short CSS rise, 30 ms apart (motion-safe only, so nothing moves for someone who asked for less motion).
+ *
+ * Fewer words (founder, 23 October 2026): each section is its heading, its one paragraph or list, and its way in; no
+ * eyebrows over the headings, no strip of ticks, no taglines. The two-column sections line their heading up with the
+ * top of the list beside it.
  *
  * The copy promises only what the product does (no applicant AI opt-in exists, so none is promised): applicants are told
  * how AI is used and can ask for a person (the ai_use notice), a person makes every decision, and a failed or missing
@@ -18,24 +23,6 @@ import { Icon, type IconName } from "@ros/ui";
 /** The page's column: 16 px gutters on a phone, wider from a tablet up. Rules that span the column sit inside it. */
 const wrap = "mx-auto w-full max-w-[1000px] px-4 sm:px-6 md:px-10";
 
-/**
- * The logo, drawn like the rail's BrandMark (10 px tile, the kit's bars, the plum tile's shadow) but with the name at
- * 19 px bold: the coral "OS" is 3.7:1 on the light ground, which passes AA only as large text (bold from 18.66 px).
- * The footer's tile is coral, as in the screenshot.
- */
-function Wordmark(props: { tile: "plum" | "coral" }) {
-  return (
-    <span className="inline-flex items-center gap-2.5">
-      <span className={props.tile === "coral" ? "grid size-8 shrink-0 place-items-center rounded-[10px] bg-accent text-on-primary" : "grid size-8 shrink-0 place-items-center rounded-[10px] bg-primary text-on-primary shadow-primary"} aria-hidden="true">
-        <Icon name="bars" size={18} />
-      </span>
-      <span className="font-display text-[19px] font-bold leading-none tracking-[-0.02em] text-ink">
-        Recruiting <span className="text-accent">OS</span>
-      </span>
-    </span>
-  );
-}
-
 function Arrow() {
   return <Icon name="arrow-right" size={16} className="transition-transform duration-150 ease-soft motion-safe:group-hover:translate-x-0.5" />;
 }
@@ -44,13 +31,11 @@ function Arrow() {
  * The guide card is a picture of the journey, not a menu: its rows end in a status mark (the first stage done, the
  * others still open), never in an arrow that would look like a link.
  */
-const GUIDE: Array<{ chip: string; icon: IconName; title: string; meta: string; done: boolean }> = [
-  { chip: "icon-chip lavender sm", icon: "briefcase", title: "Define the right role", meta: "Skills, pay, location and must-haves", done: true },
-  { chip: "icon-chip peach sm", icon: "people", title: "Compare applicants", meta: "Relevant evidence, gaps and questions", done: false },
-  { chip: "icon-chip lavender sm", icon: "activity", title: "Know what to do next", meta: "From first review to final decision", done: false },
+const GUIDE: Array<{ tone: ChipTone; icon: IconName; title: string; meta: string; done: boolean }> = [
+  { tone: "lavender", icon: "briefcase", title: "Define the right role", meta: "Skills, pay, location and must-haves", done: true },
+  { tone: "peach", icon: "people", title: "Compare applicants", meta: "Relevant evidence, gaps and questions", done: false },
+  { tone: "lavender", icon: "activity", title: "Know what to do next", meta: "From first review to final decision", done: false },
 ];
-
-const TICKS = ["Less resume sifting", "More focused candidate reviews", "Guidance from role to hire"];
 
 const STEPS: Array<{ icon: IconName; title: string; body: string }> = [
   {
@@ -95,7 +80,7 @@ export function WelcomePage() {
         <div className={wrap}>
           <div className="flex h-16 items-center justify-between gap-3 border-b border-line md:grid md:grid-cols-[1fr_auto_1fr]">
             <a href="/" className="-ml-1 inline-flex min-h-10 items-center rounded-xl px-1 md:justify-self-start">
-              <Wordmark tile="plum" />
+              <BrandMark />
             </a>
             <nav aria-label="On this page" className="hidden md:block">
               <ul className="flex items-center gap-1 text-[13.5px] font-medium text-ink-2">
@@ -119,44 +104,34 @@ export function WelcomePage() {
       </header>
 
       <main>
-        {/* Hero: the promise on the left, a picture of the guide on the right */}
-        <section aria-labelledby="welcome-title" className={`${wrap} grid items-center gap-12 pb-16 pt-12 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] md:gap-10 md:pb-20 md:pt-16`}>
+        {/* Hero: the promise and its one way in on the left, a picture of the guide on the right, centred on each other */}
+        <section aria-labelledby="welcome-title" className={`${wrap} grid items-center gap-12 pb-14 pt-14 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] md:gap-10 md:pb-20 md:pt-20`}>
           <div>
-            <p className="eyebrow motion-safe:animate-enter">Your AI recruiting guide, from role to hire</p>
-            <h1 id="welcome-title" className="mt-5 font-display text-[40px] font-bold leading-[1.02] tracking-[-0.035em] text-ink sm:text-[48px] md:text-[56px] motion-safe:animate-enter [animation-delay:30ms]">
+            <h1 id="welcome-title" className="font-display text-[40px] font-bold leading-[1.02] tracking-[-0.035em] text-ink sm:text-[48px] md:text-[56px] motion-safe:animate-enter">
               Hiring, made <span className="block text-primary">more manageable.</span>
             </h1>
-            <p className="mt-6 max-w-[27rem] text-[15px] leading-[1.65] text-ink-2 motion-safe:animate-enter [animation-delay:60ms]">
+            <p className="mt-6 max-w-[27rem] text-[15px] leading-[1.65] text-ink-2 motion-safe:animate-enter [animation-delay:30ms]">
               No dedicated recruiter? No time to become one? Recruiting OS helps you define the role, make sense of applicants, and navigate every next step with AI. Spend less time sifting through resumes and more time on the right conversations.
             </p>
-            <div className="mt-8 motion-safe:animate-enter [animation-delay:90ms]">
+            <div className="mt-8 motion-safe:animate-enter [animation-delay:60ms]">
               <a href="/login" className="btn primary group">
                 Open your invitation
                 <Arrow />
               </a>
             </div>
-            <p className="mt-5 flex items-center gap-2 text-[13px] text-ink-2 motion-safe:animate-enter [animation-delay:120ms]">
-              <Icon name="shield" size={16} className="shrink-0 text-ink-3" />
-              AI helps with the groundwork. You choose whom to hire.
-            </p>
           </div>
 
           <div className="w-full max-w-[22rem] justify-self-center rounded-[20px] border border-line bg-surface shadow-pop md:-rotate-1 md:justify-self-end motion-safe:animate-enter [animation-delay:60ms]">
-            <div className="flex items-center gap-3 px-5 pb-4 pt-5">
+            <div className="flex items-center gap-3 px-5 py-4">
               <span className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-primary text-on-primary" aria-hidden="true">
                 <Icon name="bars" size={18} />
               </span>
-              <div className="min-w-0">
-                <p className="font-display text-[16px] font-semibold leading-tight tracking-[-0.01em] text-ink">Your AI recruiting guide</p>
-                <p className="mt-0.5 text-[12.5px] leading-snug text-ink-3">Help at every stage of hiring</p>
-              </div>
+              <p className="min-w-0 font-display text-[16px] font-semibold leading-tight tracking-[-0.01em] text-ink">Your AI recruiting guide</p>
             </div>
-            <ul className="divide-y divide-line border-y border-line">
+            <ul className="divide-y divide-line border-t border-line">
               {GUIDE.map((row) => (
                 <li key={row.title} className="flex items-center gap-3 px-5 py-3.5">
-                  <span className={row.chip} aria-hidden="true">
-                    <Icon name={row.icon} size={16} />
-                  </span>
+                  <IconChip icon={row.icon} tone={row.tone} size="sm" />
                   <div className="min-w-0 flex-1">
                     <p className="text-[14px] font-semibold leading-snug text-ink">{row.title}</p>
                     <p className="text-[12.5px] leading-snug text-ink-3">{row.meta}</p>
@@ -171,29 +146,13 @@ export function WelcomePage() {
                 </li>
               ))}
             </ul>
-            <p className="flex items-center gap-2 px-5 py-3.5 text-[12.5px] text-ink-2">
-              <Icon name="check-circle" size={15} className="shrink-0 text-primary" />
-              One place to guide your hiring journey
-            </p>
           </div>
         </section>
 
-        <div className="border-y border-line bg-surface-3/60">
-          <ul className={`${wrap} flex flex-wrap items-center justify-center gap-x-14 gap-y-2 py-3.5 text-[13.5px] font-medium text-ink`}>
-            {TICKS.map((tick) => (
-              <li key={tick} className="inline-flex items-center gap-2">
-                <Icon name="check" size={15} className="shrink-0 text-primary" />
-                {tick}
-              </li>
-            ))}
-          </ul>
-        </div>
-
         {/* How it works: three numbered steps */}
-        <section id="how-it-works" aria-labelledby="how-title" className={`${wrap} grid scroll-mt-6 gap-10 py-16 md:grid-cols-2 md:gap-12 md:py-24`}>
+        <section id="how-it-works" aria-labelledby="how-title" className={`${wrap} grid scroll-mt-6 gap-10 pb-16 pt-6 md:grid-cols-2 md:gap-12 md:pb-24 md:pt-8`}>
           <div className="md:pt-6">
-            <p className="eyebrow">End-to-end recruiting, without a recruiting team</p>
-            <h2 id="how-title" className="mt-4 font-display text-[32px] font-bold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[38px] md:text-[42px]">
+            <h2 id="how-title" className="font-display text-[32px] font-bold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[38px] md:text-[42px]">
               From {"“"}we need someone{"”"} <span className="block text-primary">to {"“"}I know who to call.{"”"}</span>
             </h2>
             <p className="mt-5 max-w-[25rem] text-[15px] leading-[1.65] text-ink-2">
@@ -204,9 +163,7 @@ export function WelcomePage() {
             {STEPS.map((step, i) => (
               <li key={step.title} className="flex gap-3 border-b border-line py-6 sm:gap-4">
                 <span className="w-5 shrink-0 pt-2 font-mono text-[11px] tracking-[0.08em] text-ink-3" aria-hidden="true">{`0${i + 1}`}</span>
-                <span className="icon-chip lavender sm" aria-hidden="true">
-                  <Icon name={step.icon} size={16} />
-                </span>
+                <IconChip icon={step.icon} tone="lavender" size="sm" />
                 <div className="min-w-0">
                   <h3 className="font-display text-[18px] font-semibold leading-snug tracking-[-0.015em] text-ink">{step.title}</h3>
                   <p className="mt-1.5 text-[14px] leading-[1.6] text-ink-2">{step.body}</p>
@@ -220,8 +177,7 @@ export function WelcomePage() {
         <section id="for-owners" aria-labelledby="owners-title" className="scroll-mt-6 bg-primary text-white dark:bg-tint-2">
           <div className={`${wrap} grid items-center gap-10 py-16 md:grid-cols-2 md:gap-12 md:py-20`}>
             <div>
-              <p className="eyebrow text-[#f4a68e]">For companies without a dedicated recruiter</p>
-              <h2 id="owners-title" className="mt-4 font-display text-[34px] font-bold leading-[1.04] tracking-[-0.035em] text-white sm:text-[40px] md:text-[44px]">
+              <h2 id="owners-title" className="font-display text-[34px] font-bold leading-[1.04] tracking-[-0.035em] text-white sm:text-[40px] md:text-[44px]">
                 You already have <span className="sm:block">a full-time job.</span>
               </h2>
               <p className="mt-5 max-w-[26rem] text-[15px] leading-[1.65] text-white/80">
@@ -232,17 +188,10 @@ export function WelcomePage() {
                 <Arrow />
               </a>
             </div>
-            <div className="overflow-hidden rounded-2xl border border-white/15 bg-black/20">
-              <div className="p-6 md:p-7">
-                <p className="eyebrow text-white/75">A guide, not just a place to store resumes</p>
-                <h3 className="mt-3 font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] text-white md:text-[30px]">You don{"’"}t have to figure out every step alone.</h3>
-                <p className="mt-4 text-[14px] leading-[1.65] text-white/80">
-                  What really matters for this role? Which experience is relevant? What should you ask next? Talk it through with your AI hiring guide and keep the role, applicants and decisions in one place.
-                </p>
-              </div>
-              <p className="flex items-center gap-2 border-t border-white/15 px-6 py-3.5 text-[13px] text-white/80 md:px-7">
-                <Icon name="clock" size={15} className="shrink-0 text-[#f4a68e]" />
-                Less time sorting. More time getting to know your shortlist.
+            <div className="rounded-2xl border border-white/15 bg-black/20 p-6 md:p-8">
+              <h3 className="font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] text-white md:text-[30px]">You don{"’"}t have to figure out every step alone.</h3>
+              <p className="mt-4 text-[14px] leading-[1.65] text-white/80">
+                What really matters for this role? Which experience is relevant? What should you ask next? Talk it through with your AI hiring guide and keep the role, applicants and decisions in one place.
               </p>
             </div>
           </div>
@@ -250,9 +199,8 @@ export function WelcomePage() {
 
         {/* The owner keeps the decision */}
         <section aria-labelledby="review-title" className={`${wrap} grid gap-10 py-16 md:grid-cols-2 md:gap-12 md:py-24`}>
-          <div>
-            <p className="eyebrow">AI assistance. Your judgment.</p>
-            <h2 id="review-title" className="mt-4 font-display text-[34px] font-bold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[40px] md:text-[44px]">
+          <div className="md:pt-5">
+            <h2 id="review-title" className="font-display text-[34px] font-bold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[40px] md:text-[44px]">
               Help with the review. <span className="block text-primary">You make the hire.</span>
             </h2>
           </div>
@@ -275,13 +223,9 @@ export function WelcomePage() {
             <span className="grid size-11 shrink-0 place-items-center rounded-full border border-line bg-surface text-primary shadow-xs" aria-hidden="true">
               <Icon name="sparkle" size={18} />
             </span>
-            <div className="min-w-0 flex-1">
-              <p className="eyebrow">Your next hire, with help at every step</p>
-              <h2 id="next-title" className="mt-3 font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] text-ink md:text-[30px]">
-                You run the business. <span className="block">Get help with the hiring.</span>
-              </h2>
-              <p className="mt-3 text-[14px] leading-[1.6] text-ink-2">Tell your AI guide who you need. Work through the next steps together.</p>
-            </div>
+            <h2 id="next-title" className="min-w-0 flex-1 font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] text-ink md:text-[30px]">
+              You run the business. <span className="block">Get help with the hiring.</span>
+            </h2>
             <a href="/login" className="btn primary group self-start md:self-center">
               Open your invitation
               <Arrow />
@@ -293,8 +237,7 @@ export function WelcomePage() {
       <footer>
         <div className={wrap}>
           <div className="flex flex-col items-center gap-4 border-t border-line py-8 text-[13px] text-ink-2 md:flex-row md:justify-between">
-            <Wordmark tile="coral" />
-            <p>AI recruiting guidance. From role to hire.</p>
+            <BrandMark tile="coral" />
             <div className="flex flex-wrap items-center justify-center gap-x-1 gap-y-1">
               <nav aria-label="Footer">
                 <ul className="flex items-center gap-1">

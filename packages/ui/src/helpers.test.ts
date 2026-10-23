@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GLYPHS, ICON_ALIASES, ICON_NAMES, resolveIcon } from "./glyphs";
-import { compareValues, cx, domId, holdPageScroll, initials, nextIndex, nextSort, normalizeToast, numHead, OWNER_STAGES, SCORE_BANDS, scoreBand, scoreLabel, sortAnnouncement, sortRows, stageMenuItems, tabIds, toastDuration, toastPayload, typeaheadIndex } from "./helpers";
+import { compareValues, cx, domId, holdPageScroll, initials, nextIndex, nextSort, normalizeToast, numHead, OWNER_STAGES, SCORE_BANDS, scoreBand, scoreLabel, sortAnnouncement, sortRows, stageMenuItems, tabIds, tabKeyMove, toastDuration, toastPayload, typeaheadIndex } from "./helpers";
 
 describe("avatar initials", () => {
   it("takes the first letters of the first and last names", () => {
@@ -122,6 +122,21 @@ describe("keyboard movement in tabs and menus", () => {
     expect(typeaheadIndex(labels, 0, "N")).toBe(5);
     expect(typeaheadIndex(labels, 5, "n")).toBe(0);
     expect(typeaheadIndex(labels, 1, "z")).toBe(1);
+  });
+  it("moves tabs with Left and Right, and with Up and Down too only when they run down the side", () => {
+    for (const orientation of ["horizontal", "vertical"] as const) {
+      expect(tabKeyMove("ArrowRight", orientation)).toBe("next");
+      expect(tabKeyMove("ArrowLeft", orientation)).toBe("prev");
+      expect(tabKeyMove("Home", orientation)).toBe("first");
+      expect(tabKeyMove("End", orientation)).toBe("last");
+      expect(tabKeyMove("Enter", orientation)).toBeNull();
+      expect(tabKeyMove("toString", orientation)).toBeNull();
+    }
+    expect(tabKeyMove("ArrowDown", "vertical")).toBe("next");
+    expect(tabKeyMove("ArrowUp", "vertical")).toBe("prev");
+    // across (the default) Up and Down stay the page's: they scroll it
+    expect(tabKeyMove("ArrowDown")).toBeNull();
+    expect(tabKeyMove("ArrowUp", "horizontal")).toBeNull();
   });
   it("ties each tab to its panel with ids that are safe in the page", () => {
     expect(tabIds("cand", "overview")).toEqual({ tab: "cand-tab-overview", panel: "cand-panel-overview" });
