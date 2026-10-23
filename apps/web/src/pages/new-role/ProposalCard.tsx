@@ -1,7 +1,7 @@
 "use client";
 
 import type { PacketRevisionProposal } from "@ros/contracts";
-import { Button, Icon } from "@ros/ui";
+import { Button, Eyebrow, Icon } from "@ros/ui";
 import { SeenBy } from "./marks";
 import { changeLine, proposalSections, takesEffectWords } from "./refine-api";
 import type { SectionId } from "./rules";
@@ -43,7 +43,7 @@ export function ProposalCard(props: { proposal: PacketRevisionProposal; onConfir
   const changes = p.diff.sections.flatMap((s) => s.changes.map((c) => ({ ...c, section: s.label })));
   return (
     <section className="grid min-w-0 gap-3 rounded-2xl border border-line-tint bg-surface p-4 shadow-sm motion-safe:animate-enter sm:p-5" aria-label="Proposed change">
-      <p className="eyebrow live">Proposed change, not saved yet</p>
+      <Eyebrow className="live">Proposed change, not saved yet</Eyebrow>
       <p className="text-[15px] font-medium leading-snug text-ink">{p.summary}</p>
       {changes.length ? (
         <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line" aria-label="What would change">

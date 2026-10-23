@@ -49,11 +49,13 @@ export function Updates() {
   });
 
   // Screenshot 4's look: the header, a bar with the filter pills and the bulk action, then one bordered list of rows.
-  // The way back up to Home is the eyebrow on a phone only: from 900px the frame's bar shows "Home / Updates" (AppShell's
-  // parentTrail), so the eyebrow would repeat it (founder, 23 October 2026: fewer words).
+  // The way back up to Home is the eyebrow on a phone only: from the frame's rail breakpoint (rail:, 900px) the frame's
+  // bar shows "Home / Updates" (AppShell's parentTrail), so the eyebrow would repeat it (founder, 23 October 2026: fewer
+  // words).
   return (
-    <div className="stack gap-5 min-[900px]:[&_.page-header>.eyebrow]:hidden">
+    <div className="stack gap-5">
       <PageHeader
+        className="rail:[&>.eyebrow]:hidden"
         eyebrow={<Link to="/" className="font-normal text-ink-2 underline decoration-line-strong underline-offset-2 transition-colors ease-soft hover:text-primary pointer-coarse:inline-flex pointer-coarse:min-h-10 pointer-coarse:items-center">Home</Link>}
         title="Updates"
         actions={<Link to="/setup#setup-notifications" className="btn secondary">Email alerts</Link>}

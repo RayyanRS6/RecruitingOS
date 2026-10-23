@@ -96,8 +96,11 @@ describe("the confirmation dialog", () => {
 describe("the status chips", () => {
   it("tick only what was checked; a spinner while something is under way; otherwise a dot", () => {
     const done = renderToStaticMarkup(createElement(StatusPill, { s: { label: "Up and checked", tone: "good", done: true, working: false } }));
-    expect(done).toContain('class="pill sm good"');
+    // the kit's Pill (its class order: tone, then size); the spinner is its `busy`
+    expect(done).toContain('<span class="pill good sm"><svg');
     expect(done).not.toContain("spinner");
+    // a tick wins over a spinner once it was checked
+    expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Up and checked", tone: "good", done: true, working: true } }))).not.toContain("spinner");
     expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Checking it is up", tone: "neutral", done: false, working: true } }))).toContain('<span class="spinner" aria-hidden="true"></span>Checking it is up');
     expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Waiting for ITS", tone: "neutral", done: false, working: false } }))).toContain('<span class="dot" aria-hidden="true"></span>Waiting for ITS');
   });

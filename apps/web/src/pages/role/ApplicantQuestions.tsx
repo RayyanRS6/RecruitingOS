@@ -8,7 +8,6 @@ import { api, ApiError, type NewVersionResponse, type WhoPosts } from "../../api
 import { savedVersionToast } from "../../publishing";
 import { toast } from "../../toast";
 import { moveRow } from "../new-role/packet-form";
-import { ORDINAL } from "../RolePlan";
 import {
   APPLICANT_QUESTIONS_LEDE, FAIRNESS_LINE, LOOK_FOR_USE, QUICK_HINT, QUICK_KINDS, SCREENING_FALLBACK_LINE,
   eligibilityList, newQuickRow, newWrittenRow, questionsOf, questionsPayload, questionsProblem, quickAnswerWords, quickRowsFrom, refusalsByRow, withKind, writtenList, writtenRowsFrom, writtenSource,
@@ -39,8 +38,9 @@ export function ApplicantQuestions(props: {
   const source = writtenSource(p);
   const base = props.editBase;
   return (
-    // the eye: candidates are asked these (its words are its accessible name and tooltip, as on the job's other cards)
-    <Card title={COMPANY_QUESTIONS_LABEL} aside={<IconLabel icon="eye" label={PACKET_VISIBILITY_LABEL.asked} className="self-center" />}>
+    // the eye: candidates are asked these (its words are its accessible name and tooltip, as on the job's other cards;
+    // the kit centres it in the title row)
+    <Card title={COMPANY_QUESTIONS_LABEL} aside={<IconLabel icon="eye" label={PACKET_VISIBILITY_LABEL.asked} />}>
       <div className="stack gap-5">
         <p className="small muted max-w-[80ch]">{APPLICANT_QUESTIONS_LEDE}</p>
         {editing && base ? (
@@ -54,13 +54,13 @@ export function ApplicantQuestions(props: {
                 <ol className={QUESTION_LIST}>
                   {eligibility.map((e, i) => (
                     <li key={e.key} className={QUESTION_ROW}>
-                      <span className={ORDINAL}>{i + 1}</span>
+                      <span className="ordinal mt-px">{i + 1}</span>
                       <span className="min-w-0 flex-1"><span className="mr-1">{e.question}</span> <Chip>Yes or no</Chip> {e.holds ? <Chip tone="needs">A "no" holds it for your decision</Chip> : null}</span>
                     </li>
                   ))}
                   {quick.map((q, i) => (
                     <li key={q.key} className={QUESTION_ROW}>
-                      <span className={ORDINAL}>{eligibility.length + i + 1}</span>
+                      <span className="ordinal mt-px">{eligibility.length + i + 1}</span>
                       <span className="grid min-w-0 flex-1 gap-1">
                         <span><span className="mr-1">{q.question}</span> <Chip>{quickAnswerWords(q)}</Chip> {q.required ? null : <Chip>They may skip it</Chip>}</span>
                         {q.help ? <span className="small muted">{q.help}</span> : null}
@@ -77,7 +77,7 @@ export function ApplicantQuestions(props: {
                 <ol className={QUESTION_LIST}>
                   {written.map((q, i) => (
                     <li key={q.key} className={QUESTION_ROW}>
-                      <span className={ORDINAL}>{i + 1}</span>
+                      <span className="ordinal mt-px">{i + 1}</span>
                       <span className="grid min-w-0 flex-1 gap-1">
                         <span><span className="mr-1">{q.question}</span> {q.required ? null : <Chip>They may skip it</Chip>}</span>
                         {q.lookFor ? <span className="small muted">What a good answer shows ({PACKET_VISIBILITY_LABEL.internal.toLowerCase()}): {q.lookFor}</span> : null}
@@ -238,7 +238,7 @@ function WrittenRows({ rows, onChange, refusals }: { rows: WrittenRow[]; onChang
 }
 
 /** The card's two lists: a small heading over the questions as numbered rows in one bordered box (screenshot 6); the
- * number beside each (ORDINAL) is the job page's own, from RolePlan.tsx. */
+ * number beside each is the kit's `ordinal`, as on the job page's other lists. */
 const LIST_HEADING = "text-[14px] font-semibold";
 const QUESTION_LIST = "overflow-hidden rounded-xl border border-line bg-surface";
 const QUESTION_ROW = "flex items-start gap-3 border-t border-line px-4 py-3 text-[14.5px] first:border-t-0";

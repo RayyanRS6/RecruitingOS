@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import type { IntakeFacts, IntakeFactsPatch, PacketVisibility } from "@ros/contracts";
-import { Alert, Avatar, Button, Icon } from "@ros/ui";
+import { Alert, Avatar, Button, Field, Icon } from "@ros/ui";
 import { TEAM_CHIP } from "./look";
-import { SeenField } from "./marks";
+import { SeenBy } from "./marks";
 import { EMPLOYMENT_WORD, REASON_WORD, WORK_MODEL_WORD } from "./rules";
 import { factsFormFrom, factsPatch, type FactsForm, type ListField, type TextField } from "./facts-form";
 
@@ -27,10 +27,10 @@ const LISTS: Array<{ field: ListField; label: string; hint?: string; seen: Packe
 ];
 
 /**
- * Edit mode of the draft panel (plan C7): the answers as plain fields, each marked with who sees it (an eye or a lock at
- * the end of its label row). Save sends only what changed, as one quiet edit: it goes into the conversation as a short
- * summary, the assistant does not reply, and the fairness check still applies to everything typed (anything refused is
- * said, with the reason).
+ * Edit mode of the draft panel (plan C7): the answers as plain fields, each marked with who sees it (an eye or a lock
+ * beside its label: the kit's Field `aside`). Save sends only what changed, as one quiet edit: it goes into the
+ * conversation as a short summary, the assistant does not reply, and the fairness check still applies to everything
+ * typed (anything refused is said, with the reason).
  */
 export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSave: (patch: IntakeFactsPatch) => void; saving: boolean; error: string | null; onCancel: () => void }) {
   const [start] = useState<FactsForm>(() => factsFormFrom(props.facts, props.team));
@@ -41,22 +41,22 @@ export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSav
   const deciders = props.team.filter((m) => DECIDERS.includes(m.role));
   return (
     <div className="grid min-w-0 gap-4">
-      <SeenField label="Job title" htmlFor="ed-title" seen="public"><input id="ed-title" className="input" value={form.text.title} onChange={(e) => text("title", e.target.value)} /></SeenField>
+      <Field label="Job title" htmlFor="ed-title" aside={<SeenBy v="public" />}><input id="ed-title" className="input" value={form.text.title} onChange={(e) => text("title", e.target.value)} /></Field>
       <div className="grid-2">
-        <SeenField label="Where the job is" htmlFor="ed-where" seen="public"><input id="ed-where" className="input" value={form.text.locationText} onChange={(e) => text("locationText", e.target.value)} placeholder="City, state" /></SeenField>
-        <SeenField label="Schedule" htmlFor="ed-schedule" seen="public"><input id="ed-schedule" className="input" value={form.text.schedule} onChange={(e) => text("schedule", e.target.value)} placeholder="e.g. Mon to Thu, 8 to 5" /></SeenField>
-        <SeenField label="Full or part time" htmlFor="ed-type" seen="public">
+        <Field label="Where the job is" htmlFor="ed-where" aside={<SeenBy v="public" />}><input id="ed-where" className="input" value={form.text.locationText} onChange={(e) => text("locationText", e.target.value)} placeholder="City, state" /></Field>
+        <Field label="Schedule" htmlFor="ed-schedule" aside={<SeenBy v="public" />}><input id="ed-schedule" className="input" value={form.text.schedule} onChange={(e) => text("schedule", e.target.value)} placeholder="e.g. Mon to Thu, 8 to 5" /></Field>
+        <Field label="Full or part time" htmlFor="ed-type" aside={<SeenBy v="public" />}>
           <select id="ed-type" className="select" value={form.text.employmentType} onChange={(e) => text("employmentType", e.target.value)}>
             <option value="">Not set yet</option>
             {Object.entries(EMPLOYMENT_WORD).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
-        </SeenField>
-        <SeenField label="Work model" htmlFor="ed-model" seen="public">
+        </Field>
+        <Field label="Work model" htmlFor="ed-model" aside={<SeenBy v="public" />}>
           <select id="ed-model" className="select" value={form.text.remotePolicy} onChange={(e) => text("remotePolicy", e.target.value)}>
             <option value="">Not set yet</option>
             {Object.entries(WORK_MODEL_WORD).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
-        </SeenField>
+        </Field>
       </div>
 
       {LISTS.map((l) => (
@@ -65,17 +65,17 @@ export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSav
 
       {/* why, when and what would not work out stay with the team; the benefits are on the job page */}
       <div className="grid-2">
-        <SeenField label="Why you're hiring" htmlFor="ed-reason" seen="internal">
+        <Field label="Why you're hiring" htmlFor="ed-reason" aside={<SeenBy v="internal" />}>
           <select id="ed-reason" className="select" value={form.text.reason} onChange={(e) => text("reason", e.target.value)}>
             <option value="">Not said yet</option>
             {Object.entries(REASON_WORD).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
-        </SeenField>
-        <SeenField label="In a few words (optional)" htmlFor="ed-reason-detail" seen="internal"><input id="ed-reason-detail" className="input" value={form.text.reasonDetail} onChange={(e) => text("reasonDetail", e.target.value)} placeholder="e.g. Maria is moving away in December" /></SeenField>
-        <SeenField label="Start by" htmlFor="ed-start" seen="internal"><input id="ed-start" type="date" className="input" value={form.text.targetStartDate} onChange={(e) => text("targetStartDate", e.target.value)} /></SeenField>
-        <SeenField label="Benefits" htmlFor="ed-benefits" seen="public"><input id="ed-benefits" className="input" value={form.text.benefits} onChange={(e) => text("benefits", e.target.value)} placeholder="e.g. Health, dental, 401(k), paid time off" /></SeenField>
+        </Field>
+        <Field label="In a few words (optional)" htmlFor="ed-reason-detail" aside={<SeenBy v="internal" />}><input id="ed-reason-detail" className="input" value={form.text.reasonDetail} onChange={(e) => text("reasonDetail", e.target.value)} placeholder="e.g. Maria is moving away in December" /></Field>
+        <Field label="Start by" htmlFor="ed-start" aside={<SeenBy v="internal" />}><input id="ed-start" type="date" className="input" value={form.text.targetStartDate} onChange={(e) => text("targetStartDate", e.target.value)} /></Field>
+        <Field label="Benefits" htmlFor="ed-benefits" aside={<SeenBy v="public" />}><input id="ed-benefits" className="input" value={form.text.benefits} onChange={(e) => text("benefits", e.target.value)} placeholder="e.g. Health, dental, 401(k), paid time off" /></Field>
       </div>
-      <SeenField label="What would not work out" htmlFor="ed-failure" seen="internal"><input id="ed-failure" className="input" value={form.text.whatFailureLooksLike} onChange={(e) => text("whatFailureLooksLike", e.target.value)} placeholder="e.g. Someone who needs a lot of direction" /></SeenField>
+      <Field label="What would not work out" htmlFor="ed-failure" aside={<SeenBy v="internal" />}><input id="ed-failure" className="input" value={form.text.whatFailureLooksLike} onChange={(e) => text("whatFailureLooksLike", e.target.value)} placeholder="e.g. Someone who needs a lot of direction" /></Field>
 
       <fieldset className="grid min-w-0 gap-2.5">
         <legend className="mb-2 p-0 text-[13px] font-semibold text-ink">Who interviews</legend>
@@ -94,7 +94,7 @@ export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSav
         <ListEditor id="ed-other-interviewers" label="Someone not on the team yet" seen="internal" max={6} placeholder="Name" items={form.otherInterviewers} onChange={(items) => setForm({ ...form, otherInterviewers: items })} />
       </fieldset>
 
-      <SeenField label="Who has the final say" htmlFor="ed-decider" seen="internal" hint="Their approval opens the role.">
+      <Field label="Who has the final say" htmlFor="ed-decider" aside={<SeenBy v="internal" />} hint="Their approval opens the role.">
         <select id="ed-decider" className="select" value={form.decisionMakerUserId || (newDecider ? NEW : "")} onChange={(e) => {
           const v = e.target.value;
           setNewDecider(v === NEW);
@@ -104,9 +104,9 @@ export function FactsEditor(props: { facts: IntakeFacts; team: TeamPick[]; onSav
           {deciders.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}
           <option value={NEW}>Someone not on the team yet</option>
         </select>
-      </SeenField>
+      </Field>
       {newDecider ? (
-        <SeenField label="Their name" htmlFor="ed-decider-name" seen="internal" hint="Invite them to the team later and approvals will go to them."><input id="ed-decider-name" className="input" value={form.decisionMakerName} onChange={(e) => setForm({ ...form, decisionMakerName: e.target.value })} /></SeenField>
+        <Field label="Their name" htmlFor="ed-decider-name" aside={<SeenBy v="internal" />} hint="Invite them to the team later and approvals will go to them."><input id="ed-decider-name" className="input" value={form.decisionMakerName} onChange={(e) => setForm({ ...form, decisionMakerName: e.target.value })} /></Field>
       ) : null}
 
       {props.error ? <Alert tone="critical">{props.error}</Alert> : null}
@@ -130,7 +130,7 @@ function ListEditor(props: { id: string; label: string; hint?: string; seen: Pac
   };
   const hint = props.items.length >= props.max ? `That is the most this list can hold (${props.max}).` : props.hint;
   return (
-    <SeenField label={props.label} htmlFor={props.id} seen={props.seen} hint={hint}>
+    <Field label={props.label} htmlFor={props.id} aside={<SeenBy v={props.seen} />} hint={hint}>
       <div className="grid min-w-0 gap-2">
         {props.items.length ? (
           <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
@@ -147,6 +147,6 @@ function ListEditor(props: { id: string; label: string; hint?: string; seen: Pac
           <Button size="sm" disabled={!draft.trim() || props.items.length >= props.max} onClick={add}>Add</Button>
         </div>
       </div>
-    </SeenField>
+    </Field>
   );
 }

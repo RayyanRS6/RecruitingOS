@@ -94,8 +94,8 @@ export function Roles() {
   // The chips, search and order only once there is a job to sort; "No jobs yet" stands alone.
   const hasAny = all.length > 0;
   return (
-    <div className="stack gap-5 [&>.page-header]:mb-3">
-      <PageHeader title="Jobs" actions={mayStartHire ? startHire : null} />
+    <div className="stack gap-5">
+      <PageHeader title="Jobs" actions={mayStartHire ? startHire : null} className="mb-3" />
       {again.limit?.room && !again.limit.room.ok ? <RoomAlert room={again.limit.room} ask={again.limit.ask} /> : null}
       {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
       {list && hasAny ? (

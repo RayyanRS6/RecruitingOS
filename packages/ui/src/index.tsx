@@ -26,15 +26,16 @@ export type ChipTone = "lavender" | "peach" | "plum" | "good" | "caution" | "neu
 /**
  * A button, a pill in every size. Primary is plum, secondary is outlined, ghost has no box, danger is for the few
  * actions that cannot be taken back ("quiet" and "destructive" are the earlier names for ghost and danger). `kbd` shows a
- * keyboard hint and announces it as the shortcut. `ariaPressed` makes it a toggle a screen reader hears as pressed or
- * not, for a choice shown only by its fill (left out, the button is a plain button). `block` fills the width (its class
- * is `wide`: Tailwind's `block` utility would turn the button into a plain block). `className` adds classes after the
- * kit's (spacing, a placement), never a second look.
+ * keyboard hint and announces it as the shortcut; `keyshortcuts` only announces one (aria-keyshortcuts, "Control+Enter"),
+ * with nothing drawn, for a shortcut the fewer-words rule took off the screen (put it in `title` too). `ariaPressed`
+ * makes it a toggle a screen reader hears as pressed or not, for a choice shown only by its fill (left out, the button is
+ * a plain button). `block` fills the width (its class is `wide`: Tailwind's `block` utility would turn the button into a
+ * plain block). `className` adds classes after the kit's (spacing, a placement), never a second look.
  */
-export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; ariaLabel?: string; ariaPressed?: boolean; block?: boolean; className?: string }) {
+export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; keyshortcuts?: string; ariaLabel?: string; ariaPressed?: boolean; block?: boolean; className?: string }) {
   const { variant = "secondary", size = "md" } = props;
   return (
-    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.kbd}>
+    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.keyshortcuts ?? props.kbd}>
       {props.loading ? (
         <>
           <span className="spinner" aria-hidden="true" />
@@ -70,11 +71,13 @@ export function Kbd(props: { children: ReactNode; decorative?: boolean }) {
  * A card with an optional H2 title and an aside beside it. `needsYou` is the "Your next step" wash (something waits on
  * the reader); `hero` draws the title at the hero size (26px, 30px from 768px) for a page's one next step, so screens
  * never size it themselves; every other card's title, a needs-you one in a panel included, stays 19px. `lift` answers
- * the mouse.
+ * the mouse. `flush` is a list card: no padding of its own, the title keeps the card's sides over a hairline, and the
+ * rows (`list-row`, `list-item`) run edge to edge, their words in line with the title. Nothing is clipped, so a row's
+ * menu still opens over what lies below. On a phone every other card has 16px sides and 20px above and below.
  */
-export function Card(props: { children: ReactNode; needsYou?: boolean; hero?: boolean; lift?: boolean; title?: ReactNode; aside?: ReactNode; className?: string }) {
+export function Card(props: { children: ReactNode; needsYou?: boolean; hero?: boolean; lift?: boolean; flush?: boolean; title?: ReactNode; aside?: ReactNode; className?: string }) {
   return (
-    <section className={cx("card", props.needsYou && "needs-you", props.hero && "hero", props.lift && "lift", props.className)}>
+    <section className={cx("card", props.needsYou && "needs-you", props.hero && "hero", props.lift && "lift", props.flush && "flush", props.className)}>
       {props.title || props.aside ? (
         <div className="card-title">
           {props.title ? <h2>{props.title}</h2> : <span />}
@@ -100,10 +103,12 @@ export function Chip(props: { children: ReactNode; tone?: "neutral" | "accent" |
  * glance. `solid` is for a finished state (Hired); `pulse` is for the one Live pill at the top of a page: a ring grows
  * from the dot and fades. Besides the five tones, `info` (lavender) and `warm` (peach, "Ready for your review").
  * `className="wrap"` lets a long status sentence wrap onto more lines (`.pill.wrap`) instead of running off a phone.
+ * `busy` turns the mark (the dot, or an icon) into the kit's spinner while the state is being worked on ("Reading");
+ * the spinner is hidden from screen readers, the word says it.
  */
-export function Pill(props: { children: ReactNode; tone?: Tone | "info" | "warm"; dot?: boolean; solid?: boolean; pulse?: boolean; icon?: IconName; size?: "sm" | "md"; title?: string; className?: string }) {
+export function Pill(props: { children: ReactNode; tone?: Tone | "info" | "warm"; dot?: boolean; solid?: boolean; pulse?: boolean; busy?: boolean; icon?: IconName; size?: "sm" | "md"; title?: string; className?: string }) {
   const tone = props.tone ?? "neutral";
-  const mark = props.icon ? <Icon name={props.icon} size={14} /> : props.dot === false ? null : <span className={cx("dot", props.pulse && "pulse")} aria-hidden="true" />;
+  const mark = props.busy ? <span className="spinner" aria-hidden="true" /> : props.icon ? <Icon name={props.icon} size={14} /> : props.dot === false ? null : <span className={cx("dot", props.pulse && "pulse")} aria-hidden="true" />;
   return (
     <span className={withClass(cx("pill", tone, props.solid && "solid", props.size === "sm" && "sm"), props.className)} title={props.title}>
       {mark}
@@ -177,8 +182,9 @@ export function Avatar(props: { name: string | null | undefined; size?: "sm" | "
 /**
  * The small uppercase, letter-spaced label that names a section ("AI interview"). Written in normal case; CSS raises it.
  * Not a decoration above a page's title: the founder's fewer-words rule (docs/07, "Words on screen") cut those.
+ * `as="h2"` or `"h3"` makes it the section's heading (screen readers list it), in the same small mono look.
  */
-export function Eyebrow(props: { children: ReactNode; icon?: IconName; as?: "p" | "div" | "span"; className?: string }) {
+export function Eyebrow(props: { children: ReactNode; icon?: IconName; as?: "p" | "div" | "span" | "h2" | "h3"; className?: string }) {
   const Tag = props.as ?? "p";
   return (
     <Tag className={withClass("eyebrow", props.className)}>
@@ -191,10 +197,12 @@ export function Eyebrow(props: { children: ReactNode; icon?: IconName; as?: "p" 
 /**
  * The top of a page: eyebrow, title, a status pill beside the title, actions on the right, and a line underneath
  * ("6 applicants · closes in 3 weeks"). `placeholderTitle` shows a title that is not chosen yet ("Untitled role") in grey.
+ * `hero` draws the title at the greeting size of Home (screenshot 1: 36px, 44px from 640px, 52px from 768px); the H1
+ * stays a bare <h1> either way. `className` adds placement classes after `page-header` (`mb-0`), never a second look.
  */
-export function PageHeader(props: { title: ReactNode; eyebrow?: ReactNode; status?: ReactNode; actions?: ReactNode; sub?: ReactNode; placeholderTitle?: boolean }) {
+export function PageHeader(props: { title: ReactNode; eyebrow?: ReactNode; status?: ReactNode; actions?: ReactNode; sub?: ReactNode; placeholderTitle?: boolean; hero?: boolean; className?: string }) {
   return (
-    <header className="page-header">
+    <header className={withClass(cx("page-header", props.hero && "hero"), props.className)}>
       {props.eyebrow ? <Eyebrow>{props.eyebrow}</Eyebrow> : null}
       <div className="page-header-row">
         <h1 className={props.placeholderTitle ? "placeholder" : undefined}>{props.title}</h1>
@@ -206,10 +214,20 @@ export function PageHeader(props: { title: ReactNode; eyebrow?: ReactNode; statu
   );
 }
 
-export function Field(props: { label: string; hint?: string; children: ReactNode; htmlFor?: string }) {
+/**
+ * A labelled field: the label, the control (children), an optional hint under it. `aside` is shown beside the label, on
+ * its line (an IconLabel such as the eye for "Candidates see this"); without it the markup is exactly as before.
+ */
+export function Field(props: { label: string; hint?: string; children: ReactNode; htmlFor?: string; aside?: ReactNode }) {
+  const label = <label htmlFor={props.htmlFor}>{props.label}</label>;
   return (
     <div className="field">
-      <label htmlFor={props.htmlFor}>{props.label}</label>
+      {props.aside ? (
+        <div className="field-head">
+          {label}
+          {props.aside}
+        </div>
+      ) : label}
       {props.children}
       {props.hint ? <span className="hint">{props.hint}</span> : null}
     </div>
@@ -290,9 +308,10 @@ export function ErrorState(props: { message: string; onRetry?: () => void }) {
   );
 }
 
-export function Segmented<T extends string>(props: { value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void; ariaLabel?: string }) {
+/** A row of choices of which one is on (`aria-pressed`). `className` adds placement classes after `segmented` (`w-full`). */
+export function Segmented<T extends string>(props: { value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void; ariaLabel?: string; className?: string }) {
   return (
-    <fieldset className="segmented" aria-label={props.ariaLabel}>
+    <fieldset className={withClass("segmented", props.className)} aria-label={props.ariaLabel}>
       {props.options.map((o) => (
         <button key={o.value} type="button" className={o.value === props.value ? "on" : ""} onClick={() => props.onChange(o.value)} aria-pressed={o.value === props.value}>
           {o.label}
@@ -340,9 +359,10 @@ export function Bubble(props: { from: "assistant" | "user" | "system"; children:
  * politely. `scroll` keeps the headings in view in a long list on a wide screen; `pinFirst` keeps the first column in
  * view while a wide table scrolls sideways. `loading` shows that many quiet rows under the headings while the rows are
  * on their way; `empty` is the one row shown when there are none (a filter that found nothing), the headings kept.
+ * `wrapHeads` lets long column headings wrap onto more lines (figure columns' included) instead of widening the table.
  * Hook-free: server components import it.
  */
-export function Table(props: { head: Array<string | TableHead>; children?: ReactNode; label?: string; scroll?: boolean; pinFirst?: boolean; loading?: number; empty?: ReactNode; announce?: string }) {
+export function Table(props: { head: Array<string | TableHead>; children?: ReactNode; label?: string; scroll?: boolean; pinFirst?: boolean; wrapHeads?: boolean; loading?: number; empty?: ReactNode; announce?: string }) {
   const cols: TableHead[] = props.head.map((h) => (typeof h === "string" ? { label: h } : h));
   const loading = props.loading && props.loading > 0 ? props.loading : 0;
   const showEmpty = !loading && props.empty !== undefined && Children.toArray(props.children).length === 0;
@@ -350,7 +370,7 @@ export function Table(props: { head: Array<string | TableHead>; children?: React
   const status = loading ? "Loading…" : props.announce || (showEmpty && typeof props.empty === "string" ? props.empty : "");
   return (
     // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling region must be reachable by keyboard (axe scrollable-region-focusable); the label names it for screen readers
-    <section className={cx("table-wrap", props.scroll && "scroll", props.pinFirst && "pin-first")} tabIndex={0} aria-label={props.label ?? `Table: ${cols.map((c) => c.label).filter(Boolean).join(", ")}`}>
+    <section className={cx("table-wrap", props.scroll && "scroll", props.pinFirst && "pin-first", props.wrapHeads && "wrap-heads")} tabIndex={0} aria-label={props.label ?? `Table: ${cols.map((c) => c.label).filter(Boolean).join(", ")}`}>
       <table className="table">
         <thead>
           <tr>
@@ -396,13 +416,14 @@ export function Stat(props: { n: number | string; label: string }) {
 
 /**
  * An icon on a soft rounded square (the briefcase beside a job, the sparkle in a message cell): lavender by default,
- * peach, plum or a signal tint; 32, 40 or 48 pixels. Decorative: the words beside it say what it stands for.
+ * peach, plum or a signal tint; 28 (`xs`, beside a line of text or a message), 32, 40 or 48 pixels. Decorative: the
+ * words beside it say what it stands for.
  */
-export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "sm" | "md" | "lg"; className?: string }) {
+export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "xs" | "sm" | "md" | "lg"; className?: string }) {
   const size = props.size ?? "md";
   return (
     <span className={withClass(cx("icon-chip", props.tone ?? "lavender", size), props.className)} aria-hidden="true">
-      <Icon name={props.icon} size={size === "sm" ? 16 : size === "lg" ? 22 : 18} />
+      <Icon name={props.icon} size={size === "xs" ? 14 : size === "sm" ? 16 : size === "lg" ? 22 : 18} />
     </span>
   );
 }

@@ -20,7 +20,7 @@ import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage"
 import { AfterApproval } from "./AfterApproval";
 import { JobHeader, JobMenu, JobTabs, jobFactsFor } from "./JobHeader";
 import { ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
-import { ActivityTab, CandidatesSeeThis, DIVIDED_ROW as ROW, DIVIDED_ROWS as ROWS, InterviewPlanTab, ORDINAL, PacketApprovalCard, PreferencesCard, RequirementList, catchUpInterval, waitingOnWorker, workModelLabel } from "./RolePlan";
+import { ActivityTab, CandidatesSeeThis, DIVIDED_ROW as ROW, DIVIDED_ROWS as ROWS, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, catchUpInterval, waitingOnWorker, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
 import { ReportTab } from "./RoleReport";
 import { ApplicantQuestions } from "./role/ApplicantQuestions";
@@ -181,8 +181,10 @@ export function RoleDetail() {
   const visibleTab: JobPageTab = tabItems.some((o) => o.id === tab) ? tab : "job";
 
   return (
-    <div className="stack gap-5 [&>.page-header]:mb-1">
+    <div className="stack gap-5">
+      {/* the header's own bottom margin trimmed to the stack's rhythm (the Candidates page does the same) */}
       <JobHeader
+        className="mb-1"
         title={r.title}
         status={r.status}
         pulse={r.status === "open" && r.acceptingApplications}
@@ -277,7 +279,7 @@ export function RoleDetail() {
                   <details className="more mt-4">
                     <summary>Where each one is checked</summary>
                     <div className="stack gap-2">
-                      <p className="small muted">The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the AI interview.</p>
+                      <p className="small muted">The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked.</p>
                       <p className="small muted">{MUST_HAVES_SCORE_LINE}</p>
                     </div>
                   </details>
@@ -292,7 +294,7 @@ export function RoleDetail() {
                 </Card>
                 <Card title="Nice-to-haves" aside={<CandidatesSeeThis />}><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
                 <Card title={`Screening questions (about ${p.screening.maxMinutes} minutes)`}>
-                  <ol className={ROWS}>{p.screening.questions.map((q, i) => <li key={q.key} className={cn(ROW, "flex items-start gap-3")}><span className={ORDINAL}>{i + 1}</span><span className="min-w-0 flex-1">{q.question} <Chip>{q.kind}</Chip></span></li>)}</ol>
+                  <ol className={ROWS}>{p.screening.questions.map((q, i) => <li key={q.key} className={cn(ROW, "flex items-start gap-3")}><span className="ordinal mt-px">{i + 1}</span><span className="min-w-0 flex-1">{q.question} <Chip>{q.kind}</Chip></span></li>)}</ol>
                 </Card>
               </div>
               {/* Wave S7: the quick questions on the form and the written questions in the chat, changed here. */}
@@ -366,8 +368,8 @@ function Fact(props: { term: string; children: ReactNode }) {
   );
 }
 
-// Lists inside a card as rows divided by hairlines, and the round number beside an ordered one, come from RolePlan.tsx
-// (ROWS, ROW, ORDINAL), so this page, the approval card and the questions card read alike.
+// Lists inside a card as rows divided by hairlines come from RolePlan.tsx (ROWS, ROW), so this page and the approval card
+// read alike; the number beside an ordered one is the kit's `ordinal`, as on the questions card.
 
 // The packet editor lives in RoleEditor.tsx; the approval card, the preferences card and the Interview plan and Activity
 // tabs in RolePlan.tsx; the header, the tab strip and the More menu in JobHeader.tsx (shared with the Candidates page).

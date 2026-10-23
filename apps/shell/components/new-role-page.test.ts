@@ -89,12 +89,13 @@ describe("the job builder", () => {
     expect(html).toContain(">Or describe it, or paste a job ad</h2>");
     expect(html).toMatch(/<textarea[^>]*aria-label="Describe the role, or paste a job ad"/);
     expect(html).not.toContain("up to 20,000 characters");
-    // the keys are no line on screen: a screen reader hears them with the box, a mouse sees them on Send
+    // the keys are no line on screen: at a desk the Send button announces Enter as its shortcut (the kit's
+    // keyshortcuts) and a mouse sees the keys as its tooltip; the box is described by them for screen readers only
+    expect(html).toMatch(/<button type="button" class="btn primary [^"]*"[^>]* title="Enter sends · Shift\+Enter for a new line"[^>]* aria-keyshortcuts="Enter">/);
     const keys = html.match(/<span class="sr-only" id="([^"]+)">Enter sends · Shift\+Enter for a new line<\/span>/);
     expect(keys).not.toBeNull();
     expect(html).toMatch(new RegExp(`<textarea[^>]*aria-describedby="${keys![1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
-    expect(html).toContain('title="Enter sends · Shift+Enter for a new line"');
-    expect(html.match(/>Enter sends · Shift\+Enter for a new line</g)).toHaveLength(1);
+    expect(html).not.toMatch(/<p[^>]*>Enter sends · Shift\+Enter for a new line</);
     // the roles our hiring guide knows: the list is named, with no line above it
     expect(html).toContain('aria-label="Start from a role our hiring guide knows"');
     expect(html).not.toContain("Roles our hiring guide knows:");
@@ -199,6 +200,28 @@ describe("the job builder", () => {
     expect(html).toContain(">Draft</button>");
   });
 
+  it("says what to do next in one small line under the message box, in the server's words, only while the draft cannot be written", () => {
+    nav.search = "session=s1";
+    const seed = (s: IntakeSessionView) => [[["me"], me("owner")], [["intake", "session", "s1"], { session: s }], [["members"], []]] as Array<[readonly unknown[], unknown]>;
+    // the question cards closed (none left): the message box is in the dock
+    const blocked = session({ questions: [], readiness: { ...session().readiness, draftBlocker: "Tell me the job title first, or say \"draft it\"." } });
+    const html = render(createElement(NewRole), seed(blocked));
+    const line = html.match(/<p class="px-1\.5 text-\[12\.5px\] leading-snug text-ink-3" id="([^"]+)">Tell me the job title first, or say &quot;draft it&quot;\.<\/p>/);
+    expect(line).not.toBeNull();
+    // read with the box by screen readers
+    expect(html).toMatch(new RegExp(`<textarea[^>]*aria-label="Message to the assistant" aria-describedby="${line![1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} [^"]+"`));
+    expect(html.match(/Tell me the job title first/g)).toHaveLength(1);
+    // the other blocker reads the same way
+    const cards = render(createElement(NewRole), seed(session({ questions: [] })));
+    expect(cards).toContain(">Answer the question cards first, or say &quot;draft it&quot;.</p>");
+    // once a draft may be written, the line goes (the "Write the draft" offer says it instead)
+    const ready = render(createElement(NewRole), seed(session({ questions: [], readiness: { ...session().readiness, mayDraft: true, draftBlocker: null } })));
+    expect(ready).not.toContain("or say &quot;draft it&quot;.</p>");
+    // with nothing blocking, the box is described by the keys alone (screen readers only)
+    expect(ready).toMatch(/<textarea[^>]*aria-describedby="[^" ]+"/);
+    expect(ready).toContain(">Write the draft</button>");
+  });
+
   it("once the draft is written, the box asks for changes and the draft shows what candidates will read", () => {
     nav.search = "session=s1";
     const draft = samplePacket();
@@ -211,8 +234,10 @@ describe("the job builder", () => {
     const check = { base: "dabc", version: null, summary: "One suggestion.", suggestions: [{ id: "c1", kind: "unprovable", title: "Hard to check before someone starts", path: "requirements.mustHaves[mh_chairside]", text: "Chairside experience in a dental office", why: "It can be shown in a short practical task instead.", fixes: [{ id: "c1-int", label: "Ask about it in the interview", op: "to_interview", after: null }], flagId: null }] };
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "session", "s1"], { session: written }], [["members"], []], [["intake", "check", "s1", checkSignature(draft)], check]]);
     expect(html).toContain("Ask me to change anything: make it warmer, drop the weekend requirement…");
-    // no helper line under the box: the proposal itself says it is not saved yet
+    // no helper line under the box: the proposal itself says it is not saved yet, and a blocker the server still sends
+    // is not said while the box asks for changes
     expect(html).not.toContain("A change is shown to you before it is saved.");
+    expect(html).not.toContain("Answer the question cards first");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Ask for approval/);
     expect(html).toContain(draft.description.publicJobDescription.slice(0, 40));
     expect(html).toContain("What we&#x27;re looking for");

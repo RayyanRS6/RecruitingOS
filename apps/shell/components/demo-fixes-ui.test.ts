@@ -138,7 +138,7 @@ describe("the interview approval's meeting link", () => {
     [["application", "a1"], maria],
     [["interview-plan", "r1"], plan],
     [["members"], [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", role: "owner", status: "active", schedulable: true, calendar }]],
-  ]), createElement(CandidatePanel, { id: "a1", roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: "interview", onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+  ]), createElement(CandidatePanel, { id: "a1", roleId: "r1", tab: "overview", onTab: () => undefined, step: "interview", onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
 
   it("without a working calendar, asks for the link instead of promising one the calendar cannot make", () => {
     const words = step(null);

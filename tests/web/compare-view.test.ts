@@ -48,8 +48,8 @@ describe("the comparison view", () => {
   it("keeps the order chosen, or puts the highest score first with no score last", () => {
     expect(orderCandidates([cy, ben, ana], "chosen").map((c) => c.name)).toEqual(["Cy", "Ben", "Ana"]);
     expect(orderCandidates([cy, ben, ana], "score").map((c) => c.name)).toEqual(["Ana", "Ben", "Cy"]);
-    expect(orderLine("chosen", 3)).toBe("3 people, in the order you chose them.");
-    expect(orderLine("score", 1)).toMatch(/^1 person, the highest match score first\. A score helps you read; it never decides\.$/);
+    // the order as chosen has no line (the switch shows it); "Highest score first" says how it ranks and that people decide
+    expect(orderLine(1)).toMatch(/^1 person, the highest match score first\. A score helps you read; it never decides\.$/);
   });
 
   it("tops each column with the score, its band, what it rests on and any missing must-have", () => {
@@ -86,7 +86,7 @@ describe("the comparison view", () => {
     // the line says why a lower number can come first, only when both kinds are compared
     expect(mixedScores([kit, ivo])).toBe(true);
     expect(mixedScores([ana, ben, cy])).toBe(false);
-    expect(orderLine("score", 2, true)).toBe("2 people, the highest match score first, scores with the AI interview in them before résumé-only ones. A score helps you read; it never decides.");
+    expect(orderLine(2, true)).toBe("2 people, the highest match score first, scores with the AI interview in them before résumé-only ones. A score helps you read; it never decides.");
   });
 
   it("shows, per requirement, what was found, how much was met and the points it cost", () => {

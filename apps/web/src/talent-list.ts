@@ -339,12 +339,15 @@ export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage" 
   return `Waiting on you ${a.daysInStage} ${a.daysInStage === 1 ? "day" : "days"}`;
 }
 
-/** The empty list's sentence for the view the person chose. */
-export function emptyText(view: TalentView, total: number): { title: string; body: string } {
+/**
+ * The empty list's title for the view the person chose, with a line under it where one says why or what to do. The plain
+ * "Nobody here" has none: on the Candidates page a filter is always in force when it shows, so the page draws "Nothing
+ * matches these filters" and "Clear filters" in its place (People.tsx NO_MATCH).
+ */
+export function emptyText(view: TalentView, total: number): { title: string; body?: string } {
   if (total === 0) return { title: "Nobody has applied yet", body: "Applicants appear here as soon as they apply. The Share tab has the job's links once it is live." };
   if (view.query.trim()) return { title: "Nobody matches", body: `Nobody here matches "${view.query.trim()}". Search looks at names, email addresses and where people came from.` };
-  if (view.stage === "no_ai_interview" && !view.aiInterview && !view.waiting && view.reading === "any") return { title: "Nobody here", body: "Nobody is waiting on an AI interview right now. People move to New once they send it, or if the team reviews them without it." };
   if (view.stage === "cancelled" && !view.cancelledReason && !view.waiting && view.reading === "any") return { title: "Nobody is under Cancelled", body: "Candidates who cancel an interview, or do not come to one, show here with what they chose." };
   if (view.waiting && view.stage === "all" && view.reading === "any") return { title: "Nobody is waiting on you", body: "Everyone has a next step under way. Choose All to see them." };
-  return { title: "Nobody here", body: "Nobody fits these filters right now. Clear one to see more people." };
+  return { title: "Nobody here" };
 }

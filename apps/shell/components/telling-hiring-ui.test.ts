@@ -54,7 +54,7 @@ function client(details: Array<ReturnType<typeof detail>>, extra: Array<[unknown
 }
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/\s+/g, " ");
-const panel = (qc: QueryClient, opts: { tab?: string; step?: string | null } = {}) => render(qc, createElement(CandidatePanel, { id: "a1", roleId: "r1", roleTitle: "Dental Hygienist", tab: (opts.tab ?? "overview") as never, onTab: () => undefined, step: (opts.step ?? null) as never, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+const panel = (qc: QueryClient, opts: { tab?: string; step?: string | null } = {}) => render(qc, createElement(CandidatePanel, { id: "a1", roleId: "r1", tab: (opts.tab ?? "overview") as never, onTab: () => undefined, step: (opts.step ?? null) as never, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
 
 describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
   const scored = detail({

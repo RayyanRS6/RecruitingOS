@@ -323,6 +323,15 @@ describe("the customer drawer", () => {
     expect(html).not.toMatch(/<details class="more" open/);
     expect(text(html)).toContain("Response time is clock hours from your request to a recruiter picking it up");
     expect(text(html)).toContain("Counts and days only; no candidate is named here.");
+    // the definitions speak of every role of the customer, never of "this role"
+    expect(text(html)).toContain("Every application across all roles, by where the person came from");
+    expect(text(html)).toContain("Your requests for an ITS recruiter across all roles:");
+    expect(text(html)).toContain("Emails and texts to candidates across all roles:");
+    expect(text(html)).not.toMatch(/(to|on|about) this role/);
+    // it defines only the figures on this panel: the must-haves and the AI interview are one role's cards
+    expect(html).toContain("<dt>Outcomes</dt>");
+    expect(html).not.toContain("<dt>The must-haves</dt>");
+    expect(html).not.toContain("<dt>The AI interview</dt>");
   });
 
   it("S7-1: the Overview says whether applicants see their match score (on unless ITS turned it off), and How people apply holds the switch with its reason", async () => {

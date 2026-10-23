@@ -389,9 +389,8 @@ export function appliedNote(r: { results?: ReadonlyArray<Pick<BatchResult["resul
 /* One-click questions (plan F10; founder decision B5)                                                            */
 /* ------------------------------------------------------------------------------------------------------------ */
 
+/** The panel's title. Free-text questions are not built (PIPELINE-19): the one-click questions are the only way in, and the panel says nothing about what is not there. */
 export const ASK_TITLE = "Ask about this pool";
-export const ASK_INTRO = "Pick a question. Each answer says what it looked at.";
-export const ASK_SOON = "Typing your own question is not available yet. Pick one above, or bring in a recruiter.";
 /** "Compare these" takes up to this many people (COMPARE_MAX in apps/api/src/routes/compare.ts). */
 export const COMPARE_MAX = 5;
 

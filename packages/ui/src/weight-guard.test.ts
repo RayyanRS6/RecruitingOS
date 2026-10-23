@@ -209,6 +209,8 @@ describe("the application's stylesheet", () => {
     // Tailwind utilities, built from the classes they use). After the review fixes (the alerts' marks as data: images,
     // the hover variant, the touch targets): 11,173, ceiling unchanged. Round 2 (vertical tabs, option rows, dl.glance,
     // .pill.wrap, IconLabel, wrapping card titles and row titles, the hero card's title): 11,740, ceiling unchanged.
+    // Round 3 (the rail breakpoint, PageHeader hero, Card flush and the phone padding of cards, Field aside, Table
+    // wrapHeads, IconChip xs, Pill busy, .ordinal, .inline-tag, .list-row-title.wrap): 12,106, ceiling unchanged.
     expect(gz(app)).toBeLessThanOrEqual(12_500);
   });
 });
@@ -251,7 +253,7 @@ describe("the kit's component layer", () => {
       ...["sm", "lg", "xl", "ink", "square"].map((v) => `.avatar.${v}`),
       ...["info", "caution", "critical"].map((v) => `.alert.${v}`),
       ...["assistant", "user", "system", "recruiter", "typing", "answers"].map((v) => `.bubble.${v}`),
-      ...["sm", "lg", "peach", "plum", "good", "caution", "neutral"].map((v) => `.icon-chip.${v}`),
+      ...["xs", "sm", "lg", "peach", "plum", "good", "caution", "neutral"].map((v) => `.icon-chip.${v}`),
       ...["done", "active", "failed"].map((v) => `.steps li[data-state="${v}"]`),
       ".pill.sm", ".pill.solid", ".icon-btn.sm", ".toast.good", ".toast.critical", ".toast.has-action", ".sheet.lg", ".dialog.lg", ".dialog-mark.good", ".menu-item.danger", ".tabs.counts", ".stat-cell.highlight", ".table-wrap.scroll", ".table-wrap.pin-first", ".table th.num .th-sort", ".table .skeleton", ".dot.pulse::after",
     ];
@@ -293,7 +295,8 @@ describe("the kit's component layer", () => {
   it("keeps headings and the first column in view on solid fills, sticky headings only on a wide screen", () => {
     const sticky = app.indexOf(".table-wrap.scroll thead th {");
     expect(sticky).toBeGreaterThan(0);
-    expect(insideMedia(app, sticky, "(min-width: 901px)")).toBe(true);
+    // a wide screen: from the frame's rail breakpoint (900px), the same switch as the side rail
+    expect(insideMedia(app, sticky, "(width >= theme(--breakpoint-rail))")).toBe(true);
     expect(rule(app, ".table-wrap.scroll thead th")).toContain("position: sticky; top: 0;");
     expect(rule(app, ".table-wrap.pin-first :is(th, td):first-child")).toContain("position: sticky; left: 0;");
     expect(rule(app, ".table-wrap.pin-first tbody :is(th, td):first-child")).toContain("background: var(--surface);");
@@ -417,6 +420,71 @@ describe("the kit's component layer", () => {
     expect(forced).not.toMatch(/\.tab[^{}]*::after \{[^}]*display: none/);
     // the tabs across keep their underline
     expect(rule(app, '.tab[aria-selected="true"]::after, .tab[aria-current="page"]::after')).toBe(" transform: scaleX(1); ");
+  });
+
+  // Round 3 (23 October 2026): the small options screens had copied around, so the next screen reaches for the kit's.
+  it("names the frame's 900px switch as a breakpoint (rail:), in rem so it sorts between md and lg, and the kit's 900px queries read it", () => {
+    const theme = rule(app, "@theme inline");
+    expect(theme).toContain("--breakpoint-rail: 56.25rem;");
+    expect(56.25 * 16).toBe(900);
+    // Tailwind's own sm, md (48rem) and lg (64rem) are kept, so rail: falls between md: and lg: in the sheet
+    expect(theme).not.toContain("--breakpoint-*");
+    // no pixel copy of the switch is left in the kit: the table's own scrolling box and the split view read the theme
+    expect(app).not.toMatch(/\b(899|900|901)px\b/);
+    expect(insideMedia(app, app.indexOf(".table-wrap.scroll {"), "(width >= theme(--breakpoint-rail))")).toBe(true);
+    expect(insideMedia(app, app.indexOf(".split-switch { display: inline-flex;"), "(width < theme(--breakpoint-rail))")).toBe(true);
+  });
+
+  it("draws PageHeader's hero title at Home's greeting size (36, 44 from 640px, 52 from 768px), the plain title as before", () => {
+    expect(rule(app, ".page-header.hero .page-header-row h1")).toBe(" font-size: 36px; ");
+    expect(mediaBodies("(min-width: 640px)")).toContain(".page-header.hero .page-header-row h1 { font-size: 44px; }");
+    const wide = mediaBodies("(min-width: 768px)");
+    expect(wide).toContain(".page-header.hero .page-header-row h1 { font-size: 52px; }");
+    // after the plain title's 40px in the same block, so the hero's size wins there
+    expect(wide.indexOf(".page-header.hero .page-header-row h1")).toBeGreaterThan(wide.indexOf(".page-header-row h1 { font-size: 40px; }"));
+    expect(rule(app, ".page-header-row h1")).toContain("font-size: 34px;");
+  });
+
+  it("pads every card 16px at the sides and 20px above and below on a phone, and runs a list card's (flush) rows edge to edge", () => {
+    expect(rule(app, ".card")).toContain("padding: 24px;");
+    const phone = mediaBodies("(max-width: 640px)");
+    // :not(.flush) outranks .card.needs-you's 28px and leaves the list card at 0
+    expect(phone).toContain(".card:not(.flush) { padding: 20px 16px; }");
+    expect(rule(app, ".card.flush")).toBe(" padding: 0; ");
+    const title = rule(app, ".card.flush > .card-title");
+    for (const d of ["margin: 0;", "padding: 16px 24px;", "border-bottom: 1px solid var(--line);"]) expect(title).toContain(d);
+    expect(rule(app, ".card.flush :is(.list-row, .list-item)")).toBe(" padding-inline: 24px; ");
+    expect(phone).toContain(".card.flush > .card-title, .card.flush :is(.list-row, .list-item) { padding-inline: 16px; }");
+    // nothing is clipped (a row's menu opens over what lies below): the end rows take the card's corners instead
+    expect(app).not.toMatch(/\.card\.flush[^{]*\{[^}]*overflow/);
+    expect(rule(app, ".card.flush > :last-child, .card.flush > :is(ul, ol):last-child > :last-child")).toContain("border-bottom-left-radius: 15px;");
+    // and it comes after the needs-you wash, so a needs-you list card is flush too
+    expect(app.indexOf(".card.flush {")).toBeGreaterThan(app.indexOf(".card.needs-you {"));
+  });
+
+  it("draws the small marks screens used to copy: the numbered circle, the inline tag, a row title that wraps, an IconLabel by a card's title", () => {
+    const ordinal = rule(app, ".ordinal");
+    for (const d of ["width: 24px; height: 24px;", "border-radius: 9999px;", "background: var(--tint-2);", "color: var(--primary);", "font-family: var(--font-mono); font-size: 11px;"]) expect(ordinal).toContain(d);
+    // Tailwind's `ordinal` utility (font-variant-numeric) would beat the kit's rule: switched off, like list-item
+    expect(app).toContain('@source not inline("ordinal");');
+    const tag = rule(app, ".inline-tag");
+    for (const d of ["background: var(--tint-2);", "color: var(--primary);", "font-family: var(--font-mono); font-size: 11px;", "white-space: nowrap;"]) expect(tag).toContain(d);
+    // a row title that must be whole wraps at every width, not only on a phone
+    expect(rule(app, ".list-row-title.wrap")).toBe(" white-space: normal; overflow-wrap: anywhere; ");
+    expect(app.indexOf(".list-row-title.wrap {")).toBeLessThan(app.indexOf("@media (max-width: 640px) {"));
+    expect(rule(app, ".card-title > .icon-label")).toBe(" align-self: center; ");
+  });
+
+  it("styles the other round-3 options: IconChip xs, Pill busy, Field aside, Table wrapHeads, an Eyebrow that is a heading", () => {
+    expect(rule(app, ".icon-chip.xs")).toContain("width: 28px; height: 28px;");
+    expect(rule(app, ".pill > .spinner")).toContain("width: 12px; height: 12px;");
+    expect(rule(app, ".field-head")).toContain("align-items: center;");
+    expect(selects(app, ".field-head > label")).toBe(true);
+    // a figure column's heading too (`.table .num` keeps figures on one line)
+    expect(rule(app, ".table-wrap.wrap-heads thead th")).toBe(" white-space: normal; ");
+    expect(rule(app, ".eyebrow:is(h2, h3)")).toContain("font-size: 11px;");
+    // it must come after the card's and the side card's own heading sizes, which share its specificity
+    for (const sel of [".card-title h2 {", ".side-card > :is(h2, h3) {", ".section-header h3 {"]) expect(app.indexOf(".eyebrow:is(h2, h3) {"), sel).toBeGreaterThan(app.indexOf(sel));
   });
 });
 

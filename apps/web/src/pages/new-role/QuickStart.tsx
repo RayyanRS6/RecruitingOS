@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IntakeFacts, IntakePayCard, IntakeQuestion, IntakeSessionSummary, IntakeSessionView, PlanRoom } from "@ros/contracts";
-import { Alert, Button, Field, Icon } from "@ros/ui";
+import { Alert, Button, Card, Field, Icon } from "@ros/ui";
 import { api, ApiError, type IntakeStartResponse, type IntakeTurnResponse } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
 import { writeDraftClosingDate } from "../../publishing";
@@ -236,8 +236,9 @@ export function QuickStart({ scope }: { scope: QuickScope | null }) {
     // .start is a hook only: the frame (AppShell) gives a page holding it 1440px
     <div className="start mx-auto grid w-full max-w-[760px] gap-4">
       {/* One question a screen, in a form card (screenshot 5): where it is in the ten steps over a thin plum-to-coral
-          bar, the question (bare h1, as tests pin it), the answers, then Back on the left and Next on the right. */}
-      <div className="card grid gap-5 rounded-[20px] p-5 sm:p-8 md:[&>h1]:text-[38px] [&>h1:focus-visible]:rounded-md [&>h1:focus-visible]:outline-offset-4">
+          bar, the question (bare h1, as tests pin it), the answers, then Back on the left and Next on the right. Roomier
+          than a card from 640px; the kit gives it its phone padding. */}
+      <Card className="grid gap-5 rounded-[20px] sm:p-8 md:[&>h1]:text-[38px] [&>h1:focus-visible]:rounded-md [&>h1:focus-visible]:outline-offset-4">
         <p className="text-[12.5px] font-medium tabular-nums text-ink-3" aria-live="polite">Step {state.step + 1} of {QUICK_STEPS.length}</p>
         <div aria-hidden="true" className="-mt-3 h-1 overflow-hidden rounded-full bg-surface-3">
           <div className="h-full origin-left scale-x-(--done) rounded-full bg-linear-to-r from-primary to-accent transition-transform duration-300 ease-soft" style={{ "--done": String((state.step + 1) / QUICK_STEPS.length) } as CSSProperties} />
@@ -267,7 +268,7 @@ export function QuickStart({ scope }: { scope: QuickScope | null }) {
             <Button type="submit" variant="primary" iconEnd={step === "review" ? "sparkle" : "arrow-right"} loading={write.isPending} disabled={step === "review" && full} title="Press Enter to go on.">{primary}</Button>
           </div>
         </form>
-      </div>
+      </Card>
       {/* where the answers are kept (a data notice: they hold the private most-you-would-pay), and the way to clear them */}
       <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-center text-[12.5px] text-ink-3">
         <Icon name="check" size={14} className="text-good" /> Your answers are kept in this browser.

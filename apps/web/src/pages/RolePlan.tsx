@@ -13,6 +13,7 @@ import { Link } from "../nav";
 import { autoActionsLine, isLegalReason, legalLines, previewHref, wordsList } from "../publishing";
 import { toast } from "../toast";
 import { actorWords, describeRoleEvent, roleWords } from "../role-words";
+import { evidencedInWords } from "./role/evidence";
 
 /**
  * The role page's approval card, preferences card, requirement lists, Interview plan tab and Activity tab
@@ -24,7 +25,6 @@ export function workModelLabel(policy: string | undefined): string {
   return WORK_MODEL[policy ?? ""] ?? "On site";
 }
 
-const EVIDENCE_LABEL: Record<string, string> = { resume: "résumé", application: "application", screen: "screen", interview: "interview" };
 const ROUND_FORMAT: Record<string, string> = { video: "video call", phone: "phone", onsite: "on site", working_session: "working session" };
 
 /** While the role page waits on the worker it reads the role again this often, and for this long at most. */
@@ -49,25 +49,27 @@ export function catchUpInterval(waiting: boolean, since: number | null, now: num
 
 /**
  * The mark on a part of the role that is on the job page (plan D10): the kit's eye, whose words (the job builder's
- * "Candidates see this") are its accessible name and tooltip. Centred in a card's title row; inside a sentence it sits
- * on the text's line.
+ * "Candidates see this") are its accessible name and tooltip. The kit centres it in a card's title row; inside a
+ * sentence it sits on the text's line.
  */
 export function CandidatesSeeThis() {
-  return <IconLabel icon="eye" label={PACKET_VISIBILITY_LABEL.public} className="self-center align-text-bottom" />;
+  return <IconLabel icon="eye" label={PACKET_VISIBILITY_LABEL.public} className="align-text-bottom" />;
 }
 
 /** The lock's words beside the must-haves on the approval card: their reasons are not on the job page. */
 export const WHY_STAYS_WITH_TEAM = "Why each one matters stays with your team.";
 
 /**
- * Lists inside a card as rows split by hairlines (screenshot 6's rows), and the number beside an ordered one. Shared by
- * the job page's tabs (RoleDetail.tsx) and its questions card (role/ApplicantQuestions.tsx), so they read alike.
+ * Lists inside a card as rows split by hairlines (screenshot 6's rows), shared by the job page's tabs (RoleDetail.tsx).
+ * The number beside an ordered one is the kit's `ordinal` class, here and on the questions card.
  */
 export const DIVIDED_ROWS = "grid grid-cols-1 gap-3";
 export const DIVIDED_ROW = "border-t border-line pt-3 first:border-t-0 first:pt-0";
-export const ORDINAL = "mt-px inline-flex size-6 flex-none items-center justify-center rounded-full bg-tint-2 font-mono text-[11px] text-primary";
 
-/** Must-haves and nice-to-haves with why they matter and where each is checked. */
+/**
+ * Must-haves and nice-to-haves with why they matter and where each is checked, in the editor's words for where
+ * (role/evidence.ts: the screening conversation is the "AI interview").
+ */
 export function RequirementList({ items, empty }: { items: Requirement[]; empty: string }) {
   if (!items.length) return <p className="muted">{empty}</p>;
   return (
@@ -76,7 +78,7 @@ export function RequirementList({ items, empty }: { items: Requirement[]; empty:
         <li key={m.key} className={cn(DIVIDED_ROW, "grid gap-0.5")}>
           <strong>{m.text}</strong>
           <span className="small muted">{m.rationale}</span>
-          <span className="small muted">Evidenced in: {(m.evidencedBy ?? []).map((e) => EVIDENCE_LABEL[e] ?? e).join(" / ") || "not set"}</span>
+          <span className="small muted">Evidenced in: {evidencedInWords(m.evidencedBy)}</span>
         </li>
       ))}
     </ul>
@@ -425,7 +427,7 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
       <ol className="rounded-xl border border-line">
         {d.rounds.map((r, n) => (
           <li key={r.key} className="flex items-start gap-3 border-t border-line px-4 py-4 first:border-t-0 motion-safe:animate-enter" style={{ animationDelay: `${Math.min(n, 7) * 30}ms` }}>
-            <span className={cn(ORDINAL, "mt-0.5")}>{n + 1}</span>
+            <span className="ordinal mt-0.5">{n + 1}</span>
             <div className="min-w-0 flex-1">
               <p><strong>{r.title}</strong> <span className="text-ink-2">· {r.durationMinutes} min · {ROUND_FORMAT[r.format] ?? r.format}</span></p>
               <p className="small muted">{r.purpose}</p>

@@ -230,6 +230,8 @@ describe("candidate pages: the look, page by page", () => {
     expect(iv.scheduleToken).toBeTruthy();
     const pick = await looksRight(`/c/schedule/${iv.scheduleToken}`);
     const slotId = pick.match(/name="slotId" value="([^"]+)"/)![1];
+    // an emailed link opens it and nothing else on it names the employer or the job, so the "Company · Job" eyebrow stays
+    expect(pick).toMatch(/<main><p class="eyebrow">Look Dental · [^<]+<\/p><h1>Pick a time for your /);
     // picking a time is the page's one job; asking for other times is one click away (founder brief, 14 October 2026)
     expect(pick).toMatch(/<details class="more"><summary>None of these work\?<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/none-work" class="card">/);
     // the zone shown is named in the line under the heading; another zone is one click away, still a plain GET form
@@ -240,6 +242,8 @@ describe("candidate pages: the look, page by page", () => {
     expect((await app.request(`/c/schedule/${iv.scheduleToken}`, form({ slotId, timezone: "America/Los_Angeles" }))).status).toBe(302);
     await container.drain();
     const confirmed = await looksRight(`/c/schedule/${iv.scheduleToken}/confirmed`);
+    // the employer and the job are said nowhere else on it either, so its eyebrow stays too
+    expect(confirmed).toMatch(/<main><p class="eyebrow">Look Dental · [^<]+<\/p><h1>You&#39;re confirmed<\/h1>/);
     // the choice is a group of real radio buttons with a legend, in the page's own styles, one click away under "I need to cancel"
     expect(confirmed).toMatch(/<details class="more"><summary>I need to cancel<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/cancel" class="card" id="cancel">/);
     expect(confirmed).toContain('<legend class="question-legend">If you cancel, what would you like next?</legend>');
@@ -376,8 +380,10 @@ describe("candidate pages: the look, page by page", () => {
 
   it("the status page: withdrawing and the future-roles choice are outlined secondary buttons; the screening link is the one plum button", async () => {
     const html = await page(`/c/status/${statusToken}`);
-    // the employer's name above the job's title, the one place it is said there; never "· Your application" (fewer words, 23 October 2026)
-    expect(html).toContain('<p class="eyebrow">Look Dental</p><h1>');
+    // the employer's name sits above the job's title: on a phone the next mention of the employer is far below the first
+    // screen (fewer words, 23 October 2026: an eyebrow only where nothing else near the top names them), with no "Your application"
+    expect(html.slice(html.indexOf("<main>")).startsWith('<main><p class="eyebrow">Look Dental</p><h1>')).toBe(true);
+    expect(html).toContain('<p class="meta">People on the hiring team at Look Dental make every decision about your application.</p>');
     expect(html).not.toContain("· Your application");
     expect(html).toContain('<button class="btn secondary" type="submit">Withdraw my application</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');

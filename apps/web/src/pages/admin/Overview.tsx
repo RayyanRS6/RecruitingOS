@@ -291,9 +291,11 @@ export function Overview() {
         </StatStrip>
 
         {/* The wide list (screenshot 7): a header strip, then the kit's rows, edge to edge, each with its one button. */}
-        <Card title="Needs attention" className={LIST_CARD}>
+        <Card title="Needs attention" flush>
           {loading.length === sources.length ? (
-            <div className="px-5 py-5 sm:px-6">
+            // in line with the flush card's title: 16px sides on a phone, 24px from 640px. A copy of the kit's flush padding,
+            // as the kit pads only a flush card's title and rows (exactly 640px wide, the kit's title still has 16px)
+            <div className="px-4 py-5 sm:px-6">
               <Skeleton lines={3} />
             </div>
           ) : (
@@ -302,7 +304,7 @@ export function Overview() {
                 <li key={r.key} className={ROW} style={enterDelay(i)}>
                   <span className="list-row-lead"><IconChip icon={r.urgent ? "alert" : "info"} tone={r.urgent ? "peach" : "lavender"} size="sm" /></span>
                   <span className="list-row-main">
-                    <span className={ROW_TITLE}>{r.text}</span>
+                    <span className="list-row-title wrap">{r.text}</span>
                     {r.sub ? <span className="list-row-meta">{r.sub}</span> : null}
                   </span>
                   <span className="list-row-end">
@@ -314,7 +316,7 @@ export function Overview() {
                 <li key={`failed-${s.key}`} className={ROW} style={enterDelay(rows.length + i)}>
                   <span className="list-row-lead"><IconChip icon="alert" tone="peach" size="sm" /></span>
                   <span className="list-row-main">
-                    <span className={ROW_TITLE}>{`Could not check ${s.thing}.`}</span>
+                    <span className="list-row-title wrap">{`Could not check ${s.thing}.`}</span>
                   </span>
                   <span className="list-row-end">
                     <Button size="sm" onClick={s.retry} ariaLabel={`Try again: ${s.thing}`}>Try again</Button>
@@ -333,7 +335,7 @@ export function Overview() {
                 <li className={ROW}>
                   <span className="list-row-lead"><IconChip icon="check-circle" tone="good" size="sm" /></span>
                   <span className="list-row-main">
-                    <span className={ROW_TITLE}>Nothing needs you right now.</span>
+                    <span className="list-row-title wrap">Nothing needs you right now.</span>
                   </span>
                 </li>
               ) : null}
@@ -357,17 +359,11 @@ export function Overview() {
 }
 
 /**
- * A card whose rows run edge to edge under a header strip (the kit's card title, given room and a line under it). The
- * kit has no such card yet, so the strip is placed from here; it is placement only, the title keeps the kit's look.
+ * One row of the "Needs attention" list card (Card flush): the kit's row (icon chip, words, the row's one button), which
+ * the flush card lines up with its title, rising in once. Its title is `list-row-title wrap`: the rows are sentences and
+ * names that must be whole at every width, never ending in "…".
  */
-const LIST_CARD = "overflow-hidden p-0 [&>.card-title]:m-0 [&>.card-title]:items-center [&>.card-title]:border-b [&>.card-title]:border-line [&>.card-title]:px-5 [&>.card-title]:py-4 sm:[&>.card-title]:px-6";
-/** One row of the list card: the kit's row (icon chip, words, the row's one button), its sides in line with the header strip. */
-const ROW = "list-row px-5 sm:px-6 motion-safe:animate-enter";
-/**
- * A row's title: the kit's (15 px semibold). The kit wraps it on a phone only; these rows are sentences and names that
- * must be whole at every width, so they wrap on a desk too instead of ending in "…".
- */
-const ROW_TITLE = "list-row-title whitespace-normal [overflow-wrap:anywhere]";
+const ROW = "list-row motion-safe:animate-enter";
 
 /** A stat cell's figure while it is being read: a quiet bar, so no 0 shows before the answer. */
 const PENDING = <span className="skeleton my-1 h-6 w-12" aria-hidden="true" />;
@@ -413,7 +409,7 @@ function CustomersCard({ rows, error, retry }: { rows: CustomerRow[] | undefined
               <li key={c.id} className="list-row">
                 <span className="list-row-lead"><Avatar name={c.name} shape="square" /></span>
                 <span className="list-row-main">
-                  <span className={ROW_TITLE}>{c.name}</span>
+                  <span className="list-row-title wrap">{c.name}</span>
                   <span className="list-row-meta">{customerLine(c)}</span>
                 </span>
                 <span className="list-row-end">

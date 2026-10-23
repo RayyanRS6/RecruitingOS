@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type { JobPreview } from "@ros/contracts";
-import { Alert, Drawer, ErrorState, Icon, Skeleton } from "@ros/ui";
+import { Alert, Drawer, ErrorState, Eyebrow, Icon, Skeleton } from "@ros/ui";
 import { api } from "../../api/client";
 import { previewPageHref } from "../../publishing";
 import { errorWords } from "./rules";
@@ -64,7 +64,7 @@ export function JobPreviewBody({ p }: { p: JobPreview }) {
       ) : null}
       <article className="grid min-w-0 gap-7" aria-label="Job page preview">
         <header className="grid gap-3">
-          <p className="eyebrow">Careers at {p.company.name}</p>
+          <Eyebrow>Careers at {p.company.name}</Eyebrow>
           <h1 className="font-display text-[34px] font-bold leading-[1.02] tracking-[-0.04em] text-ink wrap-anywhere sm:text-[42px]">{p.job.title}</h1>
           {/* the facts in one row between two hairlines */}
           <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-2 border-y border-line py-3 text-[13.5px] text-ink-2" aria-label="About this job">

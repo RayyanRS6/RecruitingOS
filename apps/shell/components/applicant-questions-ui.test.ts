@@ -50,8 +50,9 @@ describe("the questions card on the Scoring tab", () => {
     const t = text(html);
     expect(t).toContain("Questions every applicant answers");
     expect(t).toContain("Candidates are asked this");
-    // said by the eye beside the title: its words are its accessible name and tooltip (fewer words, 23 Oct 2026)
-    expect(html).toContain('<span class="icon-label self-center" title="Candidates are asked this">');
+    // said by the eye beside the title: its words are its accessible name and tooltip (fewer words, 23 Oct 2026); the
+    // kit centres it in the title row (`.card-title > .icon-label`), so it carries no placement class of its own
+    expect(html).toContain('<div class="card-title"><h2>Questions every applicant answers</h2><span class="icon-label" title="Candidates are asked this">');
     // "a person decides" is never cut
     expect(t).toContain("None of them turns anyone down: a person decides.");
     expect(t).toContain("Quick questions, on the application form");

@@ -99,7 +99,7 @@ export function CompareTable({ data }: { data: CompareView }) {
   const withNotes = hasTeamNotes(cands);
   // The chosen order needs no words (the switch shows it); "Highest score first" says how like is ranked with like and
   // that a score never decides. The switch comes first, so it stays put when the line appears.
-  const line = order === "score" ? orderLine(order, cands.length, mixedScores(cands)) : null;
+  const line = order === "score" ? orderLine(cands.length, mixedScores(cands)) : null;
   return (
     <div className="mt-4 grid gap-3">
       {cands.length > 1 || line ? (

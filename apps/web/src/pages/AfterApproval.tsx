@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Dialog, Icon, IconChip, Skeleton, cx } from "@ros/ui";
+import { Alert, Button, Dialog, Eyebrow, Icon, IconChip, Pill, Skeleton } from "@ros/ui";
 import { api, type PostingsResponse } from "../api/client";
 import { ShareJob } from "../components/ShareJob";
 import { scrollBehavior } from "../motion";
@@ -16,14 +16,12 @@ function copy(text: string, what: string) {
   navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}.`), () => toast("Could not copy. Select the text and copy it by hand."));
 }
 
-/** A status chip with a spinner while something is under way and a tick only once it was checked. */
-export function StatusPill({ s }: { s: StatusChip }) {
-  return (
-    <span className={cx("pill", "sm", s.tone)}>
-      {s.done ? <Icon name="check" size={14} /> : s.working ? <span className="spinner" aria-hidden="true" /> : <span className="dot" aria-hidden="true" />}
-      {s.label}
-    </span>
-  );
+/**
+ * A status chip: the kit's Pill with a tick only once it was checked, its spinner (`busy`) while something is under way,
+ * otherwise its dot. `className` places it.
+ */
+export function StatusPill({ s, className }: { s: StatusChip; className?: string }) {
+  return <Pill size="sm" tone={s.tone} icon={s.done ? "check" : undefined} busy={!s.done && s.working} className={className}>{s.label}</Pill>;
 }
 
 /**
@@ -45,7 +43,7 @@ function DestinationRow({ d }: { d: Destination }) {
         ) : null}
       </div>
       {/* under the words on a phone: the chip's 32px and the 12px gap */}
-      <span className="flex-none max-sm:pl-11"><StatusPill s={d.status} /></span>
+      <StatusPill s={d.status} className="flex-none max-sm:ml-11" />
     </li>
   );
 }
@@ -105,12 +103,12 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
       <div className="stack gap-5">
         {sharing ? (
           <section ref={shareRef} aria-label="Share it now" className="stack gap-2 rounded-2xl border border-line-tint bg-tint p-4">
-            <h3 className="eyebrow">Share it now</h3>
+            <Eyebrow as="h3">Share it now</Eyebrow>
             <ShareJob roleId={props.roleId} roleTitle={props.roleTitle} companyName={props.companyName} compact />
           </section>
         ) : null}
         <section aria-label="Where it is going" className="stack gap-2">
-          <h3 className="eyebrow">{props.editWhileOpen ? "Where the job is" : "Where it is going"}</h3>
+          <Eyebrow as="h3">{props.editWhileOpen ? "Where the job is" : "Where it is going"}</Eyebrow>
           {/* each place's status says where it stands (a tick only once checked, a spinner while under way); the list
               asks again by itself while it is open */}
           {q.isLoading || !d ? <Skeleton lines={4} /> : (

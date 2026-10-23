@@ -20,7 +20,8 @@ import { workModelLabel } from "./RolePlan";
  *
  * It draws what the page hands it. On the first draw (server and browser alike) a page hands it only what the server
  * also has: the rail's jobs list waits for useIsClient() (components/use-is-client.ts), so Candidates first says
- * "Candidates" on both sides and the job's title follows (Wave S2).
+ * "Candidates" on both sides and the job's title follows (Wave S2). `className` places the header (`mb-1`), passed on to
+ * the kit's PageHeader.
  */
 export function JobHeader(props: {
   title: ReactNode;
@@ -28,10 +29,7 @@ export function JobHeader(props: {
   pulse?: boolean;
   sub?: ReactNode;
   actions?: ReactNode;
-  /** @deprecated Not drawn since the eyebrow was cut; still accepted so the Candidates page compiles until it stops passing it. */
-  companyName?: string | null;
-  /** @deprecated Not drawn since the eyebrow was cut; still accepted so the Candidates page compiles until it stops passing it. */
-  noJob?: boolean;
+  className?: string;
 }) {
   const s = props.status ? roleStatus(props.status) : null;
   return (
@@ -40,6 +38,7 @@ export function JobHeader(props: {
       status={s ? <Pill tone={s.tone} pulse={props.pulse}>{s.label}</Pill> : undefined}
       sub={props.sub}
       actions={props.actions}
+      className={props.className}
     />
   );
 }

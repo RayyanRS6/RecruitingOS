@@ -106,12 +106,12 @@ export function DraftPanel(props: {
               <section className="grid gap-4 rounded-xl border border-line-tint bg-tint/60 p-4" aria-label="What we know and what is still missing">
                 {checklist.known.length ? (
                   <div className="grid gap-1">
-                    <h2 className="eyebrow">What we know</h2>
+                    <Eyebrow as="h2">What we know</Eyebrow>
                     <ul className="divide-y divide-line">{checklist.known.map((i) => <li key={i.key} className="flex items-start gap-2.5 py-2 text-[14px]"><Icon name="check-circle" size={16} className="mt-0.5 shrink-0 text-good" /><span className="min-w-0"><strong>{i.label}:</strong> {i.value}{i.note ? <span className="muted"> {i.note}</span> : null}</span></li>)}</ul>
                   </div>
                 ) : null}
                 <div className="grid gap-1">
-                  <h2 className="eyebrow">Still missing</h2>
+                  <Eyebrow as="h2">Still missing</Eyebrow>
                   <ul className="divide-y divide-line">{checklist.missing.map((i) => <li key={i.key} className="flex items-start gap-2.5 py-2 text-[14px]"><span className="mt-[3px] size-4 shrink-0 rounded-full border-[1.5px] border-dashed border-line-strong" aria-hidden="true" /><span className="min-w-0"><strong>{i.label}</strong>{i.value ? `: ${i.value}` : ""}{i.note ? <span className="muted"> {i.note}</span> : null}</span></li>)}</ul>
                 </div>
               </section>

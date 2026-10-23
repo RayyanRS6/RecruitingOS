@@ -182,8 +182,8 @@ const LINE = "text-sm text-ink";
 const NAME = "inline-flex items-center border-0 bg-transparent p-0 text-left font-sans text-sm leading-snug font-semibold text-ink break-words transition-colors duration-150 ease-soft hover:text-primary hover:underline pointer-coarse:min-h-10";
 /** Stacked lines in a table cell or a glance value: the first line, then the quieter ones and the chips, each on its own line. */
 const CELL = "grid justify-items-start gap-1";
-/** The fields and buttons under a card's explanation; a Segmented keeps its own width instead of stretching across. */
-const FORM = "mt-4 grid gap-3 [&>.segmented]:justify-self-start";
+/** The fields and buttons under a card's explanation (a Segmented in it takes className="justify-self-start", keeping its own width). */
+const FORM = "mt-4 grid gap-3";
 /** A question to confirm (inside a caution alert), or a line with its button: the words, and the buttons on the right. */
 const CONFIRM = "flex flex-wrap items-center justify-between gap-x-4 gap-y-2";
 /** A card that only tells (where the company stands, how people apply): lavender-tinted, so the white cards that act stand out. */
@@ -687,7 +687,7 @@ function CandidateScorePanel({ company }: { company: CustomerRow }) {
         <p className="small text-ink-2">After sending, each applicant of {company.name} sees their match score on their application record: the number, and how it breaks down against the requirements on the job page. Other requirements fold into one line; the team's private notes never show.</p>
       </details>
       <div className={FORM}>
-        <Segmented value={choice} onChange={setChoice} ariaLabel="Applicants' match score" options={[{ value: "shown", label: "Show it" }, { value: "hidden", label: "Don't show it" }]} />
+        <Segmented value={choice} onChange={setChoice} ariaLabel="Applicants' match score" options={[{ value: "shown", label: "Show it" }, { value: "hidden", label: "Don't show it" }]} className="justify-self-start" />
         {choice !== current ? (
           <>
             <Field label="Why (required, kept with the change)" htmlFor="candidate-score-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="candidate-score-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>

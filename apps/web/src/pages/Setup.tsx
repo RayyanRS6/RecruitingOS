@@ -162,15 +162,15 @@ export function Setup() {
   );
 
   return (
-    // the page header's own bottom margin is meant for a page without tabs; here the tab strip follows closely
-    <div className="stack gap-5 [&>.page-header]:mb-3">
-      <PageHeader title="Settings" />
+    <div className="stack gap-5">
+      {/* the header's own bottom margin is meant for a page without tabs; here the tab strip follows closely */}
+      <PageHeader title="Settings" className="mb-3" />
 
       {reauthOutcome === "ok" ? <Alert tone="info">Thanks, that is confirmed. For the next ten minutes you can change the rules and the candidate notices, and make someone an admin or an owner.</Alert> : reauthOutcome === "mismatch" ? <Alert tone="critical">That sign-in was a different account. Confirm with the account you are signed in as.</Alert> : reauthOutcome === "failed" ? <Alert tone="critical">The confirmation did not complete. Try again.</Alert> : null}
       {reauthNeeded ? <ReauthPrompt returnTo={settingsHref(active)} /> : null}
 
       {/* On a wide screen the tabs stand as a column card on the left and the chosen tab's cards on the right
-          (screenshot 6); narrower, the same card sits above them with the five tabs wrapped onto as few lines as fit. */}
+          (screenshot 6); narrower, the same column card sits above them. */}
       <div className={SETTINGS_LAYOUT}>
         <div className={SETTINGS_NAV}>
           <Tabs items={tabs.map((t) => ({ id: t.id, label: t.label }))} label="Settings" value={active} onChange={pick} idBase={TABS_ID} orientation="vertical" />
@@ -191,7 +191,7 @@ export function Setup() {
 
         {panel("rules", <>
           <Section id="setup-rules">
-            <Card title="What the AI may do on its own" className={CARD}>
+            <Card title="What the AI may do on its own">
               <details className="more mb-4">
                 <summary>How this works</summary>
                 <p className="small muted">What the product does today, and how much of it may happen without a person. Some decisions always stay with a person, and approving a job always waits for a person; those offer only the choices allowed. Work the product does the same way for everyone says what it does, with nothing to choose. Letting something happen with less checking asks you first, and every change is recorded.</p>
@@ -230,7 +230,7 @@ export function Setup() {
           <Section id="setup-sessions"><YourSessions /></Section>
           <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
           <Section id="setup-services">
-            <Card title="Connected services" className={CARD}>
+            <Card title="Connected services">
               <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
                 {c.integrations.map((i) => (
                   <tr key={`${i.kind}-${i.provider}`}>
@@ -265,13 +265,10 @@ const SETTINGS_LAYOUT = "grid grid-cols-[minmax(0,1fr)] items-start gap-0 xl:gri
 
 /*
  * The tab strip: the kit's vertical tabs (`orientation="vertical"`: rows, the chosen one tinted with a plum bar, Up and
- * Down as well as Left and Right) on the kit's side-card surface, kept in view on a wide screen. Narrower than that the
- * rows flow side by side and wrap, so all five tabs show at once on a phone instead of a column of five rows.
+ * Down as well as Left and Right) on the kit's side-card surface, kept in view on a wide screen. A column at every width,
+ * so what a screen reader hears (aria-orientation="vertical") is always what is drawn; never lay them out in a row.
  */
-const SETTINGS_NAV = "side-card min-w-0 p-2 xl:sticky xl:top-6 max-xl:[&>.tabs]:flex max-xl:[&>.tabs]:flex-wrap max-xl:[&>.tabs]:gap-1";
-
-/** Every Settings card: the kit's card, with less padding on a phone. */
-const CARD = "max-sm:px-4 max-sm:py-5";
+const SETTINGS_NAV = "side-card min-w-0 p-2 xl:sticky xl:top-6";
 
 /** One card's place on its tab: old links jump here by id (#setup-notifications), stop short of the top edge and take focus. */
 function Section({ id, children }: { id: string; children: ReactNode }) {
@@ -292,7 +289,7 @@ function ShortcutCard() {
     toast(next ? `${START_HIRE_KEY} starts a hire again.` : `${START_HIRE_KEY} no longer starts a hire.`, kept ? undefined : "This browser would not save the choice, so it lasts until you reload the page.");
   };
   return (
-    <Card title="Keyboard shortcut" className={CARD}>
+    <Card title="Keyboard shortcut">
       <label className="check w-fit">
         <input type="checkbox" checked={on} onChange={(e) => change(e.target.checked)} />
         Press {START_HIRE_KEY} to start a hire
@@ -415,7 +412,7 @@ function MyAvailability() {
   const connected = !!c && c.status !== "not_connected";
   const calParam = params.get("calendar");
   return (
-    <Card title="My availability for interviews" className={CARD}>
+    <Card title="My availability for interviews">
       {calParam === "connected" ? <Alert tone="info" className="mb-3">Calendar connected. Interviews now use your real free time.</Alert> : calParam && calParam !== "connected" ? <Alert tone="critical" className="mb-3">The calendar connection did not complete ({calParam.replace(/_/g, " ")}). Try again.</Alert> : null}
       <div className="stack gap-6">
         <div className="rounded-xl border border-line bg-surface-2/50 p-4">
@@ -478,7 +475,7 @@ function RecruiterAccess({ canRevoke }: { canRevoke: boolean }) {
   const active = (q.data ?? []).filter((g) => g.active);
   const past = (q.data ?? []).filter((g) => !g.active).slice(0, 10);
   return (
-    <Card title="ITS recruiter access" className={CARD}>
+    <Card title="ITS recruiter access">
       <details className="more">
         <summary>How this works</summary>
         <p className="small muted">A recruiter gets access when your team asks for one, and also when the system brings one in on its own: a candidate asks for a person, or something gets stuck. A request about one candidate or one job gives access to that alone; all of your hiring only when someone on your team chose that. Access ends a day after the request is resolved, or after {ACCESS_DAYS} days at most, and you are told when a recruiter starts. Reopening an answered request gives fresh access, listed here like any other. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
@@ -540,7 +537,7 @@ function AuditHistory() {
   const s = useTableSort<"when" | "who">({ key: "when", dir: "descending" });
   if (q.error) return null;
   return (
-    <Card title="Audit history" aside={<a className="btn secondary sm" href="/api/v1/companies/current/audit.csv">Download as a spreadsheet</a>} className={CARD}>
+    <Card title="Audit history" aside={<a className="btn secondary sm" href="/api/v1/companies/current/audit.csv">Download as a spreadsheet</a>}>
       <details className="more">
         <summary>How this works</summary>
         <p className="small muted">It lists recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown; the spreadsheet has everything, and downloading it is recorded too.</p>
@@ -568,7 +565,7 @@ function YourSessions() {
   const browser = (ua: string | null) => (!ua ? "unknown device" : /iphone|ipad/i.test(ua) ? "iPhone or iPad" : /android/i.test(ua) ? "Android" : /macintosh/i.test(ua) ? "Mac" : /windows/i.test(ua) ? "Windows" : /node|vitest/i.test(ua) ? "a test client" : "a browser");
   const PROVIDER: Record<string, string> = { google: "Google", azure: "Microsoft", magic_link: "email link", email: "email link" };
   return (
-    <Card title="Your sessions" aside={rows.length > 1 ? <Button size="sm" variant="secondary" loading={revokeOthers.isPending} onClick={() => revokeOthers.mutate()}>Sign out everywhere else</Button> : null} className={CARD}>
+    <Card title="Your sessions" aside={rows.length > 1 ? <Button size="sm" variant="secondary" loading={revokeOthers.isPending} onClick={() => revokeOthers.mutate()}>Sign out everywhere else</Button> : null}>
       <details className="more">
         <summary>How this works</summary>
         <p className="small muted">Each place's internet address is shown only as a short code, never in full.</p>
@@ -684,7 +681,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
   const trial = canEdit ? trialRow(c.trial, c.timezone) : null;
   const trialLine = trialPlanLine(c.trial, c.timezone);
   return (
-    <Card title="Company" aside={canEdit && !editing ? <Button size="sm" variant="secondary" onClick={() => { setForm(formOf(c, notices.data ?? [])); setEditing(true); }}>Edit</Button> : null} className={CARD}>
+    <Card title="Company" aside={canEdit && !editing ? <Button size="sm" variant="secondary" onClick={() => { setForm(formOf(c, notices.data ?? [])); setEditing(true); }}>Edit</Button> : null}>
       {!editing || !f ? (
         <>
           {trial ? <Alert tone="caution" className="mb-4">{trial.level === "ended" ? trial.body : `${trial.title}. ${trial.body}`}</Alert> : null}
@@ -779,7 +776,7 @@ type PublicProfile = { hiringContact: { email: string; name: string | null } | n
 
 function CompanyProfileCard({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
   return (
-    <Card title="How candidates see you" className={CARD}>
+    <Card title="How candidates see you">
       <div className="mt-1 grid divide-y divide-line [&>*]:py-5 [&>:first-child]:pt-2 [&>:last-child]:pb-0">
         <LogoPicker company={c} canEdit={canEdit} />
         <AboutText company={c} canEdit={canEdit} />
@@ -1003,7 +1000,7 @@ function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boo
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save."),
   });
   return (
-    <Card title="Job boards" className={CARD}>
+    <Card title="Job boards">
       <div className="stack gap-4">
         <Field label="Who posts your jobs on the boards">
           {canEdit ? (
@@ -1095,7 +1092,7 @@ function NewTimesCard({ company: c, canEdit, onReauthRequired }: { company: Comp
     </details>
   );
   return (
-    <Card title={NEW_TIMES_SETUP.title} className={CARD}>
+    <Card title={NEW_TIMES_SETUP.title}>
       {canEdit ? (
         <div className="stack gap-4">
           <div className="stack gap-1.5">

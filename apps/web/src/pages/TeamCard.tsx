@@ -138,7 +138,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
   const nameOf = (m: Member) => m.name ?? m.email;
 
   return (
-    <Card title="Team" className="max-sm:px-4 max-sm:py-5">
+    <Card title="Team">
       <div className="stack gap-5">
         {error ? <Alert tone="critical">{error}</Alert> : null}
 
@@ -186,7 +186,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
                       <Avatar name={nameOf(m)} />
                       <span className="grid min-w-0 leading-tight">
                         {/* the "(you)" tag stays whole beside a long name: only the name is cut short */}
-                        <span className="flex min-w-0 items-center gap-1.5"><span className="truncate text-[14.5px] font-semibold text-ink">{nameOf(m)}</span>{self ? <>{" "}<span className={YOU_TAG}>(you)</span></> : null}</span>
+                        <span className="flex min-w-0 items-center gap-1.5"><span className="truncate text-[14.5px] font-semibold text-ink">{nameOf(m)}</span>{self ? <>{" "}<span className="inline-tag">(you)</span></> : null}</span>
                         <span className="truncate pt-0.5 text-[13px] text-ink-3">{m.email}</span>
                       </span>
                     </span>
@@ -314,5 +314,3 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
  * can be booked, the Remove button. The words-buttons take a row of their own under these.
  */
 const TEAM_COLUMNS = "@xl:grid @xl:grid-cols-[minmax(0,1fr)_10rem_8rem_2.5rem] @xl:gap-x-3";
-/** "(you)" beside one's own name, as a small lavender tag that never shrinks. */
-const YOU_TAG = "shrink-0 rounded-md bg-tint-2 px-1.5 font-mono text-[11px] font-normal leading-[1.5] text-primary";

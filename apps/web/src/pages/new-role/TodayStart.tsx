@@ -31,7 +31,7 @@ export function TodayStart() {
         Who are you hiring?
       </>}
       aside={<Link to={START_HIRE_HREF} className="text-link pointer-coarse:min-h-10">Open the job builder</Link>}
-      className="border-line-tint bg-linear-150 from-tint/70 via-surface via-55% to-peach/60 max-sm:p-5"
+      className="border-line-tint bg-linear-150 from-tint/70 via-surface via-55% to-peach/60"
     >
       <div className="grid gap-3">
         {limit?.room && !limit.room.ok ? <RoomAlert room={limit.room} ask={limit.ask} /> : null}

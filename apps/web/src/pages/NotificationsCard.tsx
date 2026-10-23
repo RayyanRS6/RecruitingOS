@@ -40,7 +40,7 @@ export function NotificationsCard() {
   // go to and what each group covers wait under "How this works", where every keyboard, touch and screen reader user
   // reaches them; a group's label also carries its description as a tooltip, a second aid only.
   return (
-    <Card title="Email alerts" aside={<Link to="/updates" className="btn secondary sm">See all your updates</Link>} className="max-sm:p-5">
+    <Card title="Email alerts" aside={<Link to="/updates" className="btn secondary sm">See all your updates</Link>}>
       {q.isLoading ? <Skeleton lines={4} /> : notMember ? (
         <p className="small muted">Email alerts are for the people on this company's team.</p>
       ) : q.error || !view ? <ErrorState message="Could not load your email alerts." onRetry={() => q.refetch()} /> : (

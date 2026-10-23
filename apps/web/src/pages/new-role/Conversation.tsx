@@ -2,17 +2,20 @@
 
 import { type AnimationEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { IntakeMessage } from "@ros/contracts";
-import { cn, Icon } from "@ros/ui";
+import { cn, Icon, IconChip } from "@ros/ui";
 import { PANE_HEIGHT } from "./look";
 
 /** A line the page adds while it waits, or keeps for this visit (a change asked for and what became of it). */
 export type LocalLine = { key: string; role: "owner" | "assistant" | "system"; content: string; kind?: IntakeMessage["kind"] };
 
-/** The assistant's mark beside its messages: it is an AI assistant, and says so. A small peach chip with a sparkle. */
+/**
+ * The assistant's mark beside its messages: it is an AI assistant, and says so. The kit's small peach chip with a
+ * sparkle (IconChip xs, which is hidden from screen readers), inside the image that names it "Assistant".
+ */
 export function AssistantMark() {
   return (
-    <span className="icon-chip sm peach mt-0.5 size-7 rounded-[9px]" role="img" aria-label="Assistant">
-      <Icon name="sparkle" size={15} />
+    <span className="mt-0.5 flex flex-none" role="img" aria-label="Assistant">
+      <IconChip icon="sparkle" tone="peach" size="xs" />
     </span>
   );
 }

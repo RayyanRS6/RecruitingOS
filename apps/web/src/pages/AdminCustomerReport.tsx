@@ -18,8 +18,9 @@ const reason = { headers: { "x-admin-reason": "admin console: customer report" }
  * Counts only; no candidate names. The Report tab of the customer drawer (Wave S6); it was a sheet of its own before.
  * Its one line says when it was drawn up and that no candidate is named in it (the tab already says whose report it is).
  * What the figures mean ("typical", "average", response time, the decision counted) left the cards on 23 Oct 2026 for
- * the role page's closed disclosure, so the same disclosure closes this panel too (its words speak of one role; each
- * figure here adds the roles up the same way).
+ * the role page's closed disclosure, so the same disclosure closes this panel too, in its customer words ("across all
+ * roles" where the role page says "this role"; each figure here adds the roles up the same way), without the must-haves
+ * and the AI interview, which are one role's cards and not on this panel.
  */
 export function CustomerReportPanel({ companyId }: { companyId: string }) {
   const q = useQuery({ queryKey: ["admin", "customer-report", companyId], queryFn: () => api.get<CustomerReport>(`/api/v1/admin/customers/${companyId}/report`, reason) });
@@ -37,7 +38,7 @@ export function CustomerReportPanel({ companyId }: { companyId: string }) {
         ) : <p className="small muted">No roles yet.</p>}
       </Card>
       <ReportFigures report={q.data.report} />
-      <ReportDefinitions />
+      <ReportDefinitions scope="customer" />
     </div>
   );
 }

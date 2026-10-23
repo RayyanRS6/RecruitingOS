@@ -60,8 +60,8 @@ const readingLabel = (id: ReadingFilter) => READING_FILTERS.find((f) => f.id ===
  */
 const NO_MATCH: { title: string; body?: string } = { title: "Nothing matches these filters" };
 
-/** The page: the job's header (its own bottom margin trimmed, as on the job page), then each part 20px apart. */
-const PAGE = "stack gap-5 [&>.page-header]:mb-1";
+/** The page: the job's header (its own bottom margin trimmed to `mb-1`, as on the job page), then each part 20px apart. */
+const PAGE = "stack gap-5";
 /** Each person's result after a send, one line each. */
 const RESULTS = "grid list-disc gap-1.5 ps-5 text-[14px] leading-snug marker:text-ink-3";
 /** A group of ticks' heading, above the rows. */
@@ -279,7 +279,7 @@ export function People() {
     if (notOnThisJob(detail.error, myRole)) return <NotOnThisJob />;
     return (
       <div className={PAGE}>
-        <JobHeader title={role?.title ?? job?.title ?? "Candidates"} status={status} pulse={status === "open"} companyName={company.name} noJob={false} sub={facts ?? undefined} />
+        <JobHeader title={role?.title ?? job?.title ?? "Candidates"} status={status} pulse={status === "open"} sub={facts ?? undefined} className="mb-1" />
         <NotOnThisJob title="Candidates are for the hiring team" body="You see the people you interview under Interviews." />
       </div>
     );
@@ -291,9 +291,8 @@ export function People() {
         title={role?.title ?? job?.title ?? "Candidates"}
         status={status}
         pulse={status === "open"}
-        companyName={company.name}
-        noJob={!roleId}
         sub={sub}
+        className="mb-1"
         actions={
           <>
             {/* Another job's candidates: a dropdown with this job ticked and each job's status beside its title (Wave S6). */}
@@ -459,7 +458,6 @@ export function People() {
         <CandidatePanel
           id={panel.id}
           roleId={roleId}
-          roleTitle={role?.title ?? job?.title ?? null}
           tab={panel.tab}
           onTab={(tab) => showPanel({ ...panel, tab })}
           step={panel.step}

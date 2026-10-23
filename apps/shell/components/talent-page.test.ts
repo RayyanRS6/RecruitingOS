@@ -262,7 +262,7 @@ describe("the Candidates page", () => {
 
   it("keeps Previous and Next in place while the next person loads, so the button pressed keeps the focus", () => {
     // a2 is not loaded yet (nothing is fetched ahead for the neighbours)
-    const html = render(client([detail(maria)]), createElement(CandidatePanel, { id: "a2", roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+    const html = render(client([detail(maria)]), createElement(CandidatePanel, { id: "a2", roleId: "r1", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
     expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Candidate"/);
     expect(html).toContain('aria-label="Previous candidate (Alt+Up)"');
     expect(html).toContain('aria-label="Next candidate (Alt+Down)"');
@@ -465,7 +465,7 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
 
 describe("the steps a stage choice opens", () => {
   const panel = (step: "hold" | "decline" | "interview" | "hire", d = detail(maria)) =>
-    render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+    render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
 
   it("On hold asks for the day they come back, inside eight weeks", () => {
     const html = panel("hold");
@@ -486,7 +486,7 @@ describe("the steps a stage choice opens", () => {
   it("someone already at the interview step, with nothing in motion, can still have an interview approved", () => {
     const iv = (over: Record<string, unknown>) => ({ id: "iv1", roundKey: "r1", title: "Working interview", status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 1, outcome: null, decision: null, offeredSlots: [], createdAt: daysAgo(2), ...over });
     const at = (stage: string, interviews: unknown[], over: Record<string, unknown> = {}) => detail({ ...maria, stage }, { interviews, ...over });
-    const open = (d: ReturnType<typeof detail>, step: "interview" | null = null) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    const open = (d: ReturnType<typeof detail>, step: "interview" | null = null) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
     // an interview cancelled from the Interviews page
     const cancelled = open(at("interview_recommended", [iv({})]));
     expect(cancelled).toContain("The interview was cancelled");
@@ -508,7 +508,7 @@ describe("the steps a stage choice opens", () => {
 
   it("does not offer a new interview while a decision waits, one is in motion, or the role may not request one", () => {
     const iv = { id: "iv1", roundKey: "r1", title: "Working interview", status: "completed", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 1, outcome: "happened", decision: null, offeredSlots: [], createdAt: daysAgo(2) };
-    const open = (d: ReturnType<typeof detail>) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    const open = (d: ReturnType<typeof detail>) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
     // a finished interview nobody has decided about: the decision card, not a new interview
     const deciding = open(detail({ ...maria, stage: "interview_complete" }, { interviews: [iv], allowedActions: ["interview", "record_decision", "reject", "record_outcome", "set_mark"] }));
     expect(deciding).toContain("How did the interview go?");
@@ -554,7 +554,7 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
     return qc;
   };
   const iv = (over: Record<string, unknown> = {}) => ({ id: "iv1", roundKey: "r1", title: "Working interview", status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 2, outcome: null, decision: null, offeredSlots: [], createdAt: daysAgo(3), ...over });
-  const open = (d: ReturnType<typeof detail>, step: "hold" | null = null) => plain(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+  const open = (d: ReturnType<typeof detail>, step: "hold" | null = null) => plain(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
 
   it("sits right after Interviewing on the strip, split by what each person chose, each row saying where their new times stand", () => {
     nav.search = "ownerStage=cancelled";
@@ -639,7 +639,7 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
     const d = detail({ ...ana, cancelled: notChecked }, { interviews: [iv()], allowedActions: ["interview", "reject", "record_outcome", "set_mark", "send_new_times"] });
     const cards = client([d]);
     cards.setQueryData(["new-times-setting"], { auto: true, workingDays: 3, pending: 0, companyConfirmed: false });
-    const panel = plain(render(cards, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    const panel = plain(render(cards, createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
     expect(panel).toContain("ITS had not confirmed your company in time, so nothing was sent automatically. You can send new times once ITS confirms your company, or decide.");
     // the API refuses a send until then, so the card offers none
     expect(panel).not.toContain("Send new times");

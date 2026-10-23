@@ -148,10 +148,13 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html).toContain('<td>Invite to a screen</td><td class="num">2</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">1</td>');
     expect(html).toContain('<th scope="col" class="num">People</th>');
     expect(html).toContain('<td>Skills not a match</td><td class="num">1</td>');
-    // the two wide tables keep their first column in view; the others are plain
-    expect(html).toMatch(/<section class="table-wrap pin-first"[^>]*aria-label="Interviews by round">/);
-    expect(html).toMatch(/<section class="table-wrap pin-first"[^>]*aria-label="Suggestions and decisions">/);
+    // the two wide tables keep their first column in view; the others are plain. The tables of the cards that span both
+    // columns let long headings wrap (the kit's `wrapHeads`), so they fit without scrolling sideways
+    expect(html).toMatch(/<section class="table-wrap pin-first wrap-heads"[^>]*aria-label="Interviews by round">/);
+    expect(html).toMatch(/<section class="table-wrap pin-first wrap-heads"[^>]*aria-label="Suggestions and decisions">/);
+    expect(html).toMatch(/<section class="table-wrap wrap-heads"[^>]*aria-label="Time in each step">/);
     expect(html.match(/table-wrap pin-first/g)).toHaveLength(2);
+    expect(html.match(/wrap-heads/g)).toHaveLength(3);
     // the Report's fixed order means something: nothing sorts, so there is no sort button and nothing to announce
     expect(html).not.toContain("th-sort");
     expect(html).not.toContain("aria-sort");
@@ -173,9 +176,15 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(tab).not.toMatch(/<details class="more" open/);
     expect(tab).toContain("Counts and days only; nothing here ranks or scores a candidate.");
     expect(tab).toContain("Response time is clock hours from your request to a recruiter picking it up");
+    // a role's own tab speaks of "this role" (the console's customer report says "across all roles")
+    expect(tab).toContain("Every application to this role, by where the person came from");
+    expect(tab).toContain("Your requests for an ITS recruiter on this role:");
+    expect(tab).not.toContain("across all roles");
     // the AI interview's entry says what its card counts, then what its "typical" is
     expect(tab).toContain("How many people were offered it, started it and finished it, the typical time to finish, who chose a person instead, and the questions people chose not to answer.");
     expect(tab).toContain("is the middle value, from the first answer to sending.");
+    // a role's tab defines its own two cards last (the console's customer report has neither, so leaves both out)
+    expect(tab).toMatch(/<dt>Outcomes<\/dt><dd>[^<]*<\/dd><dt>The must-haves<\/dt><dd>[^<]*<\/dd><dt>The AI interview<\/dt>/);
   });
 });
 

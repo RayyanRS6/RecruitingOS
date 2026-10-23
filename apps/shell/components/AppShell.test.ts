@@ -173,18 +173,18 @@ describe("the rail", () => {
   it("folds to icons on a role's own pages, and in the job builder", () => {
     nav.path = "/roles/r-open/talent";
     let html = render(meAs("owner"), { roles });
-    expect(html).toMatch(/<div class="[^"]*min-\[900px\]:grid-cols-\[72px_minmax\(0,1fr\)\]" data-rail="compact">/);
+    expect(html).toMatch(/<div class="[^"]* rail:grid-cols-\[72px_minmax\(0,1fr\)\]" data-rail="compact">/);
     // folded: the icon alone on screen, the word kept for screen readers and shown as the link's tooltip
-    expect(html).toMatch(new RegExp(`<a href="/" class="[^"]*" title="Home"><svg${IN}</svg><span class="[^"]*min-\\[900px\\]:sr-only[^"]*">Home</span></a>`));
+    expect(html).toMatch(new RegExp(`<a href="/" class="[^"]*" title="Home"><svg${IN}</svg><span class="[^"]* rail:sr-only[^"]*">Home</span></a>`));
     expect(html).toMatch(/title="Start a hire \(press N\)"/);
     // the jobs under Jobs wait in the phone's menu; the side rail has no room for them
-    expect(html).toMatch(/<ul class="[^"]*min-\[900px\]:hidden[^"]*" aria-label="Jobs in progress">/);
+    expect(html).toMatch(/<ul class="[^"]* rail:hidden[^"]*" aria-label="Jobs in progress">/);
     nav.path = "/roles/new";
     expect(render(meAs("owner"), { roles })).toContain('data-rail="compact"');
     nav.path = "/roles";
     html = render(meAs("owner"), { roles });
     expect(html).not.toContain('data-rail="compact"');
-    expect(html).toMatch(/<div class="[^"]*min-\[900px\]:grid-cols-\[248px_minmax\(0,1fr\)\]">/);
+    expect(html).toMatch(/<div class="[^"]* rail:grid-cols-\[248px_minmax\(0,1fr\)\]">/);
     expect(html).not.toContain('title="Home"');
   });
 
@@ -258,8 +258,8 @@ describe("the rail", () => {
     const folded = render(admin());
     expect(folded).toContain('data-rail="compact"');
     expect(folded).toMatch(/<ul class="[^"]*" aria-label="Console sections">/);
-    expect(folded).not.toMatch(/<ul class="[^"]*min-\[900px\]:hidden[^"]*" aria-label="Console sections">/);
-    for (const l of CONSOLE_LINKS) expect(folded, l.label).toMatch(new RegExp(`<a href="${esc(l.to)}" class="[^"]*" title="${l.label}"><svg[^>]*>${IN}</svg><span class="[^"]*min-\\[900px\\]:sr-only[^"]*">${l.label}</span></a>`));
+    expect(folded).not.toMatch(/<ul class="[^"]*rail:hidden[^"]*" aria-label="Console sections">/);
+    for (const l of CONSOLE_LINKS) expect(folded, l.label).toMatch(new RegExp(`<a href="${esc(l.to)}" class="[^"]*" title="${l.label}"><svg[^>]*>${IN}</svg><span class="[^"]* rail:sr-only[^"]*">${l.label}</span></a>`));
   });
 
   it("keeps a long job name inside the rail, cut short with its count or word still in view", () => {
@@ -292,13 +292,13 @@ describe("the rail", () => {
     expect(menu).toBeGreaterThan(-1);
     expect(menu).toBeLessThan(html.indexOf('aria-label="Start a hire"'));
     // the Menu button sits in the top row, Start a hire in the second
-    expect(html).toMatch(/<button type="button" class="btn secondary sm [^"]*max-\[900px\]:row-start-1[^"]*" aria-expanded="false" aria-controls="rail-links">/);
-    expect(html).toMatch(/<a href="\/roles\/new" class="btn primary [^"]*max-\[900px\]:row-start-2[^"]*"/);
+    expect(html).toMatch(/<button type="button" class="btn secondary sm [^"]*max-rail:row-start-1[^"]*" aria-expanded="false" aria-controls="rail-links">/);
+    expect(html).toMatch(/<a href="\/roles\/new" class="btn primary [^"]*max-rail:row-start-2[^"]*"/);
     // the jobs, All jobs and (for an administrator) the console's sections: 32px in the side rail, 40px on a phone
-    for (const href of ["/roles/r-open/talent", "/roles/r-draft"]) expect(html, href).toMatch(new RegExp(`<a href="${esc(href)}" class="[^"]*\\bh-8\\b[^"]*max-\\[900px\\]:h-10\\b`));
-    expect(html).toMatch(/<a href="\/roles" class="[^"]*max-\[900px\]:h-10\b[^"]*"><span class="min-w-0 flex-1 truncate">All jobs<\/span><\/a>/);
+    for (const href of ["/roles/r-open/talent", "/roles/r-draft"]) expect(html, href).toMatch(new RegExp(`<a href="${esc(href)}" class="[^"]*\\bh-8\\b[^"]*max-rail:h-10\\b`));
+    expect(html).toMatch(/<a href="\/roles" class="[^"]*max-rail:h-10\b[^"]*"><span class="min-w-0 flex-1 truncate">All jobs<\/span><\/a>/);
     nav.path = "/admin";
-    expect(render(admin())).toMatch(/<a href="\/admin\/customers" class="[^"]*max-\[900px\]:h-10\b/);
+    expect(render(admin())).toMatch(/<a href="\/admin\/customers" class="[^"]*max-rail:h-10\b/);
   });
 
   it("remembers the folded rail on this browser, and never fails where storage cannot be read or written", () => {
@@ -416,10 +416,11 @@ describe("the bar above the page", () => {
     expect(html).toMatch(/<main id="main" class="[^"]*max-w-\[1040px\][^"]*">/);
     expect(html).toContain("group-has-[.builder,.start,.pool-board,[data-wide]]/page:max-w-[1440px]");
     expect(html).toContain("<p>page</p></main>");
-    // the page's gutter grows 16px, 24px (from 640px), 40px (from 900px): pixel breakpoints only, because Tailwind sorts
-    // its rem ones (sm:, md:) after min-[900px]: and sm:px-6 would then win on a wide screen
-    expect(html).toMatch(/<main id="main" class="[^"]*\bpx-4 [^"]*min-\[640px\]:px-6 min-\[900px\]:px-10\b/);
-    expect(html).not.toMatch(/class="[^"]*(?<![\w-])(sm|md|lg|xl|2xl):/);
+    // the page's gutter grows 16px, 24px (from sm:, 640px), 40px (from rail:, 900px): named breakpoints only, all in rem,
+    // so Tailwind sorts sm: before rail: and rail:px-10 wins on a wide screen; no pixel copy of a breakpoint
+    // (min-[900px]:, max-[900px]:, min-[640px]:), which would sort before every rem one
+    expect(html).toMatch(/<main id="main" class="[^"]*\bpx-4 [^"]*\bsm:px-6 rail:px-10\b/);
+    expect(html).not.toMatch(/class="[^"]*(?<![\w-])(min|max)-\[[\d.]+px\]:/);
   });
 
   it("draws no bar on a section's own page, so the page column opens on the page; a page under another gets its trail", () => {
@@ -452,7 +453,7 @@ describe("the rail's foot and labels (founder, 23 October 2026: fewer words)", (
       const html = render(meAs("owner"), { roles });
       for (const cut of ["People first.", "Suggestions help you think", "Your desk"]) expect(html, `${path}: ${cut}`).not.toContain(cut);
       // the foot keeps its place at the bottom of the side rail, with the person's email and Sign out
-      expect(html, path).toMatch(/<div class="[^"]*min-\[900px\]:mt-auto[^"]*">(?:(?!<\/nav>)[\s\S])*dana@bright\.test(?:(?!<\/nav>)[\s\S])*>Sign out<\/span><\/button>/);
+      expect(html, path).toMatch(/<div class="[^"]* rail:mt-auto[^"]*">(?:(?!<\/nav>)[\s\S])*dana@bright\.test(?:(?!<\/nav>)[\s\S])*>Sign out<\/span><\/button>/);
     }
   });
 

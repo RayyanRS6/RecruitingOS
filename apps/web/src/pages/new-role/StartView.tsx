@@ -3,7 +3,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { IntakeSessionSummary, PlanRoom } from "@ros/contracts";
-import { Alert, Button, Icon, IconChip, Skeleton } from "@ros/ui";
+import { Alert, Button, Card, Icon, IconChip, Skeleton } from "@ros/ui";
 import { api } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
 import { AskRecruiter } from "../../components/AskRecruiter";
@@ -104,8 +104,9 @@ export function StartView({ fresh, scope = null }: { fresh: boolean; scope?: Qui
           <Button variant="primary" iconEnd="arrow-right" disabled={full} onClick={() => nav(QUICK_START_HREF)}>{quickKept ? "Continue the quick questions" : "Start the quick questions"}</Button>
         </section>
       )}
-      {/* The guided conversation (screenshot 3): the big box, the roles to start from, and the AI line at its foot */}
-      <div className="card grid gap-4 border-line-tint bg-linear-170 from-tint/70 via-surface via-45% to-surface p-5 sm:p-6">
+      {/* The guided conversation (screenshot 3): the big box, the roles to start from, and the AI line at its foot, on a
+          soft wash (the kit's card padding, phone padding included) */}
+      <Card className="grid gap-4 border-line-tint bg-linear-170 from-tint/70 via-surface via-45% to-surface">
         <div className="flex min-w-0 items-center gap-3">
           <IconChip icon="message-circle" />
           <h2 className="min-w-0 font-display text-xl font-bold tracking-[-0.02em]">Or describe it, or paste a job ad</h2>
@@ -148,7 +149,7 @@ export function StartView({ fresh, scope = null }: { fresh: boolean; scope?: Qui
         ) : null}
         {/* the AI-use line (required): who drafts, and that a person decides */}
         <p className="flex items-start gap-1.5 border-t border-line pt-3.5 text-[12.5px] leading-snug text-ink-3"><Icon name="sparkle" size={14} className="mt-px text-accent" /> You are talking with an AI assistant. It drafts; you decide. Nothing is posted or sent to anyone until someone approves the role.</p>
-      </div>
+      </Card>
       {others.length ? (
         <section className="grid gap-3" aria-label="Your drafts in progress">
           <h2 className="font-display text-2xl font-bold tracking-[-0.025em]">Your drafts in progress</h2>

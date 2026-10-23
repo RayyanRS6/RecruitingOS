@@ -7,10 +7,10 @@ import { Alert, Button, cn, Drawer, Field, IconButton, IconLabel, Segmented } fr
 import { api, ApiError, type ClosingDateView, type EvidenceSource, type InterviewPlanView, type NewVersionResponse, type Requirement, type RolePacket, type WhoPosts } from "../api/client";
 import { ClosingDateField } from "../components/ClosingDate";
 import { liveEditWords, materialChangesOf, previewOfEdit, savedVersionToast, type MaterialChange } from "../publishing";
-import { CHECKED_IN, IMPORTANCE_CHOICES, IMPORTANCE_HINT, READ_FROM_NOW_ON, SCORE_WEIGHTS_LINE, SKILLS_MAX, SKILLS_MIN, applySkills, checkedInLabel, newSkillRow, removalWords, skillRowsFrom, skillUses, skillsProblem, type EditorFocus, type SkillRow } from "../skills-form";
+import { CHECKED_IN, IMPORTANCE_CHOICES, IMPORTANCE_HINT, READ_FROM_NOW_ON, SCORE_WEIGHTS_LINE, SKILLS_MAX, SKILLS_MIN, applySkills, newSkillRow, removalWords, skillRowsFrom, skillUses, skillsProblem, type EditorFocus, type SkillRow } from "../skills-form";
 import { toast } from "../toast";
 import { UnsavedPreview } from "./new-role/CandidatePreview";
-import { SeenField } from "./new-role/marks";
+import { EVIDENCE_CHOICES } from "./role/evidence";
 import {
   ELIGIBILITY_TYPES, QUESTION_KINDS, SCREENING_MAX, SCREENING_MIN, TONES, applyPacketForm, moveRow, packetFormFrom, packetFormProblem,
   type EligibilityRow, type PacketForm, type QuestionRow,
@@ -42,13 +42,6 @@ const EMPLOYMENT: Array<{ value: string; label: string }> = [
 ];
 const DECIDERS = ["owner", "admin", "hiring_manager"];
 const NEW_PERSON = "__someone_new";
-/** Where a must-have is checked; the screening conversation goes by the drawer's own name for it, "AI interview" (as in the skill rows). */
-const EVIDENCE: Array<{ value: EvidenceSource; label: string }> = [
-  { value: "resume", label: "résumé" },
-  { value: "application", label: "application" },
-  { value: "screen", label: checkedInLabel("screen") },
-  { value: "interview", label: "interview" },
-];
 const MAX_MUST_HAVES = 6;
 const MAX_NICE_TO_HAVES = 10;
 
@@ -99,11 +92,12 @@ function RequirementRows({ rows, onChange, idPrefix, max, addLabel }: { rows: Ro
         <div key={r.key ?? `new-${i}`} className={ROW_BOX}>
           <Field label={`${i + 1}. What they must bring`} htmlFor={`${idPrefix}-text-${i}`}><input id={`${idPrefix}-text-${i}`} className="input" value={r.text} onChange={(e) => update(i, { text: e.target.value })} placeholder="e.g. Active CA dental hygiene (RDH) license" /></Field>
           <Field label="Why it matters" htmlFor={`${idPrefix}-why-${i}`}><input id={`${idPrefix}-why-${i}`} className="input" value={r.rationale} onChange={(e) => update(i, { rationale: e.target.value })} placeholder="e.g. Required by law to practice" /></Field>
-          {/* a field's label as a legend (the group's name); the most a list holds is in its group's legend */}
+          {/* a field's label as a legend (the group's name); the most a list holds is in its group's legend. One tick per
+              place, in the words the job's "Evidenced in" uses (role/evidence.ts) */}
           <fieldset className="field">
             <legend className="label float-left w-full">Where we check it</legend>
             <div className="flex flex-wrap gap-2">
-              {EVIDENCE.map((ev) => (
+              {EVIDENCE_CHOICES.map((ev) => (
                 <label key={ev.value} className="option-row">
                   <input type="checkbox" checked={r.evidencedBy.includes(ev.value)} onChange={(e) => toggle(i, ev.value, e.target.checked)} /> {ev.label}
                 </label>
@@ -431,7 +425,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
                   <Field label="Pay maximum" htmlFor="max"><input id="max" className="input" inputMode="decimal" value={form.max} onChange={(e) => set({ max: e.target.value })} /></Field>
                 </div>
                 {/* the group's eye covers the range; the ceiling carries its own lock beside its label (the field's name stays its label) */}
-                <SeenField label="Ceiling (the most you would pay)" htmlFor="ceil" seen="internal"><input id="ceil" className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => set({ ceiling: e.target.value })} /></SeenField>
+                <Field label="Ceiling (the most you would pay)" htmlFor="ceil" aside={<IconLabel icon={TEAM_ONLY.icon} label={TEAM_ONLY.label} />}><input id="ceil" className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => set({ ceiling: e.target.value })} /></Field>
                 <Field label="Benefits" htmlFor="ed-benefits"><input id="ed-benefits" className="input" value={form.benefits} onChange={(e) => set({ benefits: e.target.value })} placeholder="e.g. Health, dental, 401(k), paid time off" /></Field>
               </RequirementGroup>
               {/* the score rule stays in sight here; how the weights compare folds under the skills; what a save does to people already read sits by the save */}

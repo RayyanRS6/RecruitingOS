@@ -242,8 +242,9 @@ describe("the strip and the row's words", () => {
     expect(emptyText(view(), 0).body).toContain("The Share tab has the job's links");
     expect(emptyText(view({ query: "zed" }), 3).body).toMatch(/Nobody here matches "zed"/);
     expect(emptyText(view({ waiting: true }), 3).title).toBe("Nobody is waiting on you");
-    expect(emptyText(view({ stage: "offer" }), 3).title).toBe("Nobody here");
-    expect(emptyText(view({ stage: "no_ai_interview" }), 3)).toEqual({ title: "Nobody here", body: "Nobody is waiting on an AI interview right now. People move to New once they send it, or if the team reviews them without it." });
+    // a column the filters leave empty: the title alone (the page shows "Nothing matches these filters" in its place)
+    expect(emptyText(view({ stage: "offer" }), 3)).toEqual({ title: "Nobody here" });
+    expect(emptyText(view({ stage: "no_ai_interview" }), 3)).toEqual({ title: "Nobody here" });
     expect(emptyText(view({ stage: "no_ai_interview", aiInterview: "closed" }), 3).title).toBe("Nobody here");
   });
 });

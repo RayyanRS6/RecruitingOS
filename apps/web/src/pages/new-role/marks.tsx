@@ -1,6 +1,5 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { PACKET_VISIBILITY_LABEL, type PacketVisibility } from "@ros/contracts";
 import { Icon, IconLabel, type IconName } from "@ros/ui";
 import { AI_NOTE } from "./quick-suggest";
@@ -11,24 +10,12 @@ import { AI_NOTE } from "./quick-suggest";
  * same information is there without the words on screen. One exception keeps its words: the quick start's "AI suggestion".
  */
 
-/** Who sees a part of the job: the eye when candidates see it or are asked it, the lock otherwise. */
+/**
+ * Who sees a part of the job: the eye when candidates see it or are asked it, the lock otherwise. Beside a field's label
+ * it is the kit's Field `aside` (`<Field label=… aside={<SeenBy v="public" />}>`), so the field's name stays its label.
+ */
 export function SeenBy({ v, className }: { v: PacketVisibility; className?: string }) {
   return <IconLabel icon={v === "public" || v === "asked" ? "eye" : "lock"} label={PACKET_VISIBILITY_LABEL[v]} className={className} />;
-}
-
-/**
- * A field with who sees its answer at the end of its label row: the kit's field, two columns wide so the mark sits beside
- * the label. The mark stays outside the label, so the field's name is still its label alone.
- */
-export function SeenField(props: { label: string; htmlFor: string; seen: PacketVisibility; hint?: string; children: ReactNode }) {
-  return (
-    <div className="field grid-cols-[minmax(0,1fr)_auto] items-center">
-      <label htmlFor={props.htmlFor}>{props.label}</label>
-      <SeenBy v={props.seen} />
-      <div className="col-span-full grid min-w-0">{props.children}</div>
-      {props.hint ? <span className="hint col-span-full">{props.hint}</span> : null}
-    </div>
-  );
 }
 
 /** Where an offered answer came from (an IntakeQuestion option's `origin`, or the quick start's job ad). */

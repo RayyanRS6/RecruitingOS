@@ -96,12 +96,12 @@ export function hasTeamNotes(cands: ReadonlyArray<Pick<CompareCandidateView, "no
 }
 
 /**
- * The line under the table: how the columns are ordered, and that people decide. `mixed`: some scores count the AI
- * interview and some are résumé-only (`mixedScores`), so the line says why a lower number can come first (R20-9).
+ * The line beside the order switch while "Highest score first" is on: how the columns are ranked, and that people
+ * decide. The order as chosen needs no line (the switch shows it). `mixed`: some scores count the AI interview and some
+ * are résumé-only (`mixedScores`), so the line says why a lower number can come first (R20-9).
  */
-export function orderLine(order: CompareOrder, count: number, mixed = false): string {
+export function orderLine(count: number, mixed = false): string {
   const who = count === 1 ? "1 person" : `${count} people`;
-  if (order !== "score") return `${who}, in the order you chose them.`;
   return `${who}, the highest match score first${mixed ? ", scores with the AI interview in them before résumé-only ones" : ""}. A score helps you read; it never decides.`;
 }
 

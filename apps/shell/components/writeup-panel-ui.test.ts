@@ -93,7 +93,7 @@ function panel(d: ReturnType<typeof detail>, tab: "overview" | "screen", me: typ
   qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0 } });
   qc.setQueryData(["company"], { settings: { verifiedAt: at }, planKey: "starter", usage: {} });
   qc.setQueryData(["application", d.id], d);
-  return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+  return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(CandidatePanel, { id: d.id, roleId: "r1", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
 }
 
 describe("the company's questions on the AI interview tab (Wave S7)", () => {

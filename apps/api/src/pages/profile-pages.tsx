@@ -261,10 +261,14 @@ function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string
     gone: { title: "This link has expired", text: "It was already used, or more than seven days went by and what was typed was deleted. Nothing was added to your application." },
   };
   const done = view.state === "ready" ? null : outcome[view.state];
+  // "Added" and "A person will be in touch" name the job and the employer in their own line, right under the heading.
+  const namesJob = view.state === "added" || view.state === "person";
   return (
     <Layout title={done ? done.title : "Please confirm"} extraCss={CARD_PAGE_CSS}>
-      {/* Kept through the fewer-words pass (23 October 2026): an emailed link opens this page, and nothing else on it names the employer and job. */}
-      <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
+      {/* The candidate pages' rule (fewer words, 23 October 2026): a "Company · Job" eyebrow only where nothing else on the
+          page names the employer or the job. An emailed link opens this page; the question ("this job"), "Nothing was
+          added" and "This link has expired" name neither, so they keep it. */}
+      {namesJob ? null : <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>}
       {done ? (
         <>
           <h1>{done.title}</h1>

@@ -132,7 +132,7 @@ function detail(over: Record<string, unknown> = {}) {
 }
 const panel = (qc: QueryClient, d: ReturnType<typeof detail>, tab: "overview" | "screen") => {
   qc.setQueryData(["application", d.id], d);
-  return render(qc, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+  return render(qc, createElement(CandidatePanel, { id: d.id, roleId: "r1", tab, onTab: () => undefined, step: null, onStep: () => undefined, ids: null, onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
 };
 
 describe("the candidate panel (plan E3, E10, E11)", () => {

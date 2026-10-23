@@ -264,8 +264,8 @@ const BUBBLE: Record<Side, string> = { left: "bubble assistant", right: "bubble 
 function Message(props: { side: Side; label: ReactNode; mark?: { icon: IconName; tone: "peach" | "lavender" }; children: ReactNode }) {
   return (
     <li className={cn("flex min-w-0 items-start gap-2.5 motion-safe:animate-enter", props.side === "right" && "flex-row-reverse", props.side === "note" && "justify-center")}>
-      {/* the kit's icon chip, a little smaller than its sm size, level with the bubble under the label */}
-      {props.mark ? <IconChip icon={props.mark.icon} tone={props.mark.tone} size="sm" className="mt-[22px] size-7 rounded-lg" /> : null}
+      {/* the kit's 28px icon chip, level with the bubble under the label */}
+      {props.mark ? <IconChip icon={props.mark.icon} tone={props.mark.tone} size="xs" className="mt-[22px]" /> : null}
       <div className={cn("grid min-w-0 gap-1", props.side === "right" ? "justify-items-end" : props.side === "note" ? "justify-items-center text-center" : "justify-items-start")}>
         <p className="text-[12px] text-ink-3">{props.label}</p>
         {props.children}

@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { createElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Eyebrow, Icon, IconButton, IconChip, IconLabel, Pill, SectionHeader, Skeleton, StatCell, StatStrip } from "./index";
+import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Eyebrow, Field, Icon, IconButton, IconChip, IconLabel, Kbd, PageHeader, Pill, SectionHeader, Segmented, Skeleton, StatCell, StatStrip, Table } from "./index";
 
 /**
  * The kit's markup for the October 2026 redesign (docs/07): the layout helpers screens rely on (spec 5b) render the
@@ -155,6 +155,120 @@ describe("the kit's round-2 contract", () => {
     expect((Icon(icon.props as Parameters<typeof Icon>[0]) as El).props["aria-hidden"]).toBe("true");
     expect(words.props).toMatchObject({ className: "sr-only", children: "Candidates see this" });
     expect((IconLabel({ icon: "lock", label: "Only your team sees this", className: "ml-1" }) as El).props.className).toBe("icon-label ml-1");
+  });
+});
+
+/**
+ * Round 3 (23 October 2026): the small options whose absence made screens build their own copies (a hand-sized greeting,
+ * a list card's header strip, a "(you)" tag, a numbered circle...). Each is additive: left out, the markup, the class
+ * strings and the attribute order are exactly as before, which tests and e2e specs pin.
+ */
+describe("the kit's round-3 options", () => {
+  it("PageHeader takes `hero` (Home's greeting size) and `className`; the H1 stays a bare <h1>", () => {
+    const plain = PageHeader({ title: "Good morning, Dana" }) as El;
+    expect(plain.type).toBe("header");
+    expect(plain.props.className).toBe("page-header");
+    expect(Object.keys(plain.props)).toEqual(["className", "children"]);
+    const hero = PageHeader({ title: "Good morning, Dana", hero: true, className: "mb-0" }) as El;
+    expect(hero.props.className).toBe("page-header hero mb-0");
+    expect(Object.keys(hero.props)).toEqual(Object.keys(plain.props));
+    expect((PageHeader({ title: "Jobs", className: "mb-3" }) as El).props.className).toBe("page-header mb-3");
+    for (const el of [plain, hero]) {
+      const h1 = tree(el).find((e) => e.type === "h1");
+      expect(h1?.props.className).toBeUndefined();
+      expect(h1?.props.children).toBe("Good morning, Dana");
+    }
+    // the grey title of a job not named yet keeps its one class
+    const unnamed = PageHeader({ title: "Untitled role", placeholderTitle: true, hero: true }) as El;
+    expect(tree(unnamed).find((e) => e.type === "h1")?.props.className).toBe("placeholder");
+  });
+
+  it("Segmented takes a `className` after its own", () => {
+    const options = [{ value: "all", label: "All" }, { value: "mine", label: "Mine" }];
+    const plain = Segmented({ value: "all", options, onChange: () => undefined, ariaLabel: "Show" }) as El;
+    expect(plain.type).toBe("fieldset");
+    expect(plain.props.className).toBe("segmented");
+    expect(Object.keys(plain.props)).toEqual(["className", "aria-label", "children"]);
+    const placed = Segmented({ value: "all", options, onChange: () => undefined, ariaLabel: "Show", className: "justify-self-start" }) as El;
+    expect(placed.props.className).toBe("segmented justify-self-start");
+    expect(Object.keys(placed.props)).toEqual(Object.keys(plain.props));
+    // the choices are untouched
+    expect(kids(placed).map((b) => [b.props.className, b.props["aria-pressed"]])).toEqual([["on", true], ["", false]]);
+  });
+
+  it("Button `keyshortcuts` announces a shortcut without drawing a key cap; `kbd` still draws and announces one", () => {
+    const send = Button({ children: "Send", variant: "primary", keyshortcuts: "Control+Enter", title: "Send (Ctrl+Enter)" }) as El;
+    expect(send.props["aria-keyshortcuts"]).toBe("Control+Enter");
+    expect(send.props.className).toBe("btn primary");
+    expect(tree(send).some((e) => e.type === Kbd)).toBe(false);
+    expect(Object.keys(send.props)).toEqual(Object.keys((Button({ children: "Save" }) as El).props));
+    const hinted = Button({ children: "Start a hire", kbd: "N" }) as El;
+    expect(hinted.props["aria-keyshortcuts"]).toBe("N");
+    expect(tree(hinted).find((e) => e.type === Kbd)?.props).toMatchObject({ decorative: true, children: "N" });
+    expect((Button({ children: "Save" }) as El).props["aria-keyshortcuts"]).toBeUndefined();
+  });
+
+  it("IconChip comes in 28px (`xs`) with a 14px icon; Eyebrow can be a section's H2 or H3", () => {
+    const xs = IconChip({ icon: "sparkles", tone: "peach", size: "xs" }) as El;
+    expect(xs.props).toMatchObject({ className: "icon-chip peach xs", "aria-hidden": "true" });
+    expect(kids(xs)[0].props).toMatchObject({ name: "sparkles", size: 14 });
+    for (const as of ["h2", "h3"] as const) {
+      const heading = Eyebrow({ children: "AI interview", as }) as El;
+      expect(heading.type).toBe(as);
+      expect(heading.props.className).toBe("eyebrow");
+    }
+    expect((Eyebrow({ children: "AI interview" }) as El).type).toBe("p");
+  });
+
+  it("Pill `busy` draws the spinner in the dot's place, hidden from screen readers; the word stays the text", () => {
+    const reading = Pill({ children: "Reading", tone: "info", size: "sm", busy: true }) as El;
+    expect(reading.props.className).toBe("pill info sm");
+    const [mark] = kids(reading);
+    expect(mark.props).toMatchObject({ className: "spinner", "aria-hidden": "true" });
+    expect(tree(reading).some((e) => e.props.className === "dot")).toBe(false);
+    expect([reading.props.children].flat()).toContain("Reading");
+    // it wins over an icon, and without it the dot is back
+    expect(kids(Pill({ children: "Reading", icon: "file-text", busy: true }) as El)[0].props.className).toBe("spinner");
+    expect(kids(Pill({ children: "Live", tone: "good" }) as El)[0].props.className).toBe("dot");
+  });
+
+  it("Card `flush` is a list card: the class only, the title and its aside drawn as on any card", () => {
+    const list = Card({ children: "rows", flush: true, title: "Needs attention", aside: "link" }) as El;
+    expect(list.props.className).toBe("card flush");
+    expect(byClass(list, "card-title")).toBeDefined();
+    expect(tree(list).find((e) => e.type === "h2")?.props.children).toBe("Needs attention");
+    expect((Card({ children: "rows", needsYou: true, hero: true, lift: true, flush: true, className: "mt-2" }) as El).props.className).toBe("card needs-you hero lift flush mt-2");
+    expect((Card({ children: "rows", title: "Team" }) as El).props.className).toBe("card");
+  });
+
+  it("Field `aside` sits beside the label on its line; without it the label is the field's first child as before", () => {
+    const plain = Field({ label: "Pay", htmlFor: "pay", hint: "Per hour", children: "input" }) as El;
+    expect(plain.props.className).toBe("field");
+    const [label, hint] = kids(plain);
+    expect(label.type).toBe("label");
+    expect(label.props).toEqual({ htmlFor: "pay", children: "Pay" });
+    expect(hint.props).toMatchObject({ className: "hint", children: "Per hour" });
+    expect(byClass(plain, "field-head")).toBeUndefined();
+
+    const seen = IconLabel({ icon: "eye", label: "Candidates see this" });
+    const beside = Field({ label: "Pay", htmlFor: "pay", aside: seen, children: "input" }) as El;
+    const [head] = kids(beside);
+    expect(head.type).toBe("div");
+    expect(head.props.className).toBe("field-head");
+    const [own, aside] = kids(head);
+    expect(own.type).toBe("label");
+    expect(own.props).toEqual({ htmlFor: "pay", children: "Pay" });
+    expect(aside).toBe(seen);
+    // the control follows the label's line, as it follows the bare label
+    expect([beside.props.children].flat()[1]).toBe("input");
+  });
+
+  it("Table `wrapHeads` adds `wrap-heads` to the box; left out, the box is as before", () => {
+    const plain = Table({ head: ["Job", "Applied"] }) as El;
+    expect(plain.props.className).toBe("table-wrap");
+    const wrapped = Table({ head: ["Job", { label: "Applicants who finished", num: true }], scroll: true, wrapHeads: true }) as El;
+    expect(wrapped.props.className).toBe("table-wrap scroll wrap-heads");
+    expect(Object.keys(wrapped.props)).toEqual(Object.keys(plain.props));
   });
 });
 

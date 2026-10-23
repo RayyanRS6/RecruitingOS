@@ -1,8 +1,9 @@
 /**
  * The job builder's look (October 2026 redesign, docs/07): the class strings its parts share that the kit has no class
  * for, written out in full so Tailwind finds them (never built from fragments). Pure strings; no behaviour, no words.
- * An answer to tick is the kit's `.option-row` (with `.option-tag` for a status word at its end), and who sees a part is
- * the `SeenBy` mark in marks.tsx.
+ * An answer to tick is the kit's `.option-row` (with `.option-tag` for a status word at its end), who sees a part is
+ * the `SeenBy` mark in marks.tsx (beside a field's label, the kit's `Field aside`), and the assistant's mark is the
+ * kit's `IconChip size="xs"` (Conversation's AssistantMark).
  */
 
 /**

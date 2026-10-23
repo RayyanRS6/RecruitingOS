@@ -26,11 +26,14 @@
  *   sticky     SplitView's sticky pane. Kit-internal and unpinned: renamed `keep-in-view`.
  *   table      <table class="table">: harmless (a table is display: table already).
  *   sr-only    the same rule in both: harmless.
+ *   ordinal    the kit's numbered circle (.ordinal, round 3). Harmful: the utility sets font-variant-numeric. Switched
+ *              off below; no screen uses Tailwind's ordinal figures.
  *   hidden, visible, fixed, flex, grid, filter, shrink, underline, resize: found only in prose, inline style values,
  *              prop values or icon names, never on an element's class: harmless (the unused utility costs a few bytes).
  * Screens: never give an element a hook class that is also a utility's name.
  */
 @source not inline("list-item");
+@source not inline("ordinal");
 
 /* Dark when the theme switch says so, or when the device prefers dark and no light theme was picked. */
 @custom-variant dark {
@@ -266,6 +269,11 @@
   --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
 
+  /* The frame's switch: from 900px the side rail, under it the top bar. `rail:` and `max-rail:` are written in rem like
+     sm: md: lg:, so Tailwind sorts them between md and lg (an arbitrary min-[900px]: sorts before every rem breakpoint).
+     The kit's own 900px queries read it with theme(--breakpoint-rail). */
+  --breakpoint-rail: 56.25rem;
+
   /* No blur utilities (slow on cheap devices), and only our own animations: Tailwind's ping, pulse and bounce loop forever. */
   --blur-*: initial;
   --animate-*: initial;
@@ -472,8 +480,14 @@
   .page-header-row h1.placeholder { color: var(--ink-3); }
   .page-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
   .page-header-sub { max-width: 70ch; color: var(--ink-2); font-size: 15px; font-variant-numeric: tabular-nums; }
+  /* PageHeader hero: Home's greeting (screenshot 1), 36px, 44px from 640px, 52px from 768px; the H1 stays bare */
+  .page-header.hero .page-header-row h1 { font-size: 36px; }
+  @media (min-width: 640px) {
+    .page-header.hero .page-header-row h1 { font-size: 44px; }
+  }
   @media (min-width: 768px) {
     .page-header-row h1 { font-size: 40px; }
+    .page-header.hero .page-header-row h1 { font-size: 52px; }
   }
   .section-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 16px; margin-bottom: 16px; }
   .section-header-text { display: grid; gap: 4px; min-width: 0; }
@@ -488,6 +502,8 @@
   /* the title and its aside share a line while they fit; a long title pushes the aside under it, never off the card */
   .card-title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
   .card-title h2 { min-width: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; overflow-wrap: anywhere; }
+  /* an IconLabel beside the title sits on the title's middle (it has no baseline of its own) */
+  .card-title > .icon-label { align-self: center; }
   /* Something waiting for the reader: the "Your next step" wash, lavender to peach, edged in lavender. */
   .card.needs-you { padding: 28px; border-color: var(--line-tint); border-radius: 20px; background: linear-gradient(115deg, var(--tint) 0%, var(--surface) 58%, var(--peach) 135%); }
   /* A page's one next step (Card hero): its title at the hero size. Only on request, so the needs-you cards in a side
@@ -496,9 +512,19 @@
   @media (min-width: 768px) {
     .card.hero > .card-title h2 { font-size: 30px; }
   }
+  /* A list card (Card flush): no padding of its own; the title keeps the card's sides over a hairline and the rows run
+     edge to edge, their words in line with it. Nothing is clipped (a row's menu opens over what lies below), so the
+     first and last rows, alone or in one list, take the card's corners, as in .list. */
+  .card.flush { padding: 0; }
+  .card.flush > .card-title { align-items: center; margin: 0; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  .card.flush :is(.list-row, .list-item) { padding-inline: 24px; }
+  .card.flush > :first-child, .card.flush > :is(ul, ol):first-child > :first-child { border-top-left-radius: 15px; border-top-right-radius: 15px; }
+  .card.flush > :last-child, .card.flush > :is(ul, ol):last-child > :last-child { border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; }
   .card.lift, a.card, a.side-card { transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease); }
   .side-card { display: grid; align-content: start; gap: 4px; min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-xs); }
   .side-card > :is(h2, h3) { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  /* an Eyebrow drawn as a heading (as="h2" or "h3") keeps its small mono size where a card or panel sizes its headings */
+  .eyebrow:is(h2, h3) { font-size: 11px; font-weight: 400; line-height: 1.4; letter-spacing: 0.14em; }
   .side-card .list-row { margin-inline: -8px; padding: 12px 8px; border-radius: 12px; }
   .side-card .list-row + .list-row { border-top: 0; box-shadow: 0 -1px 0 var(--line); }
   .list, .list-card { min-width: 0; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-inset), var(--sh-xs); }
@@ -512,6 +538,8 @@
   .list-row-lead { display: inline-flex; flex: none; }
   .list-item-main, .list-row-main { display: grid; flex: 1; gap: 2px; min-width: 0; }
   .list-row-title { overflow: hidden; color: var(--ink); font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  /* a title that must be whole (a sentence, a name) wraps at every width */
+  .list-row-title.wrap { white-space: normal; overflow-wrap: anywhere; }
   .list-item-main .sub, .list-row-meta { color: var(--ink-3); font-size: 13px; }
   .list-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
   .list-row-meta .icon { width: 14px; height: 14px; }
@@ -519,6 +547,9 @@
   /* the trailing arrow: `.chev`, or the older rows' last icon in `.list-item-end` (Home's and Jobs' chevrons) */
   .chev, .list-item-end > .icon:last-child { flex: none; color: var(--ink-3); transition: color 150ms var(--ease), transform 150ms var(--ease); }
   @media (max-width: 640px) {
+    /* A card has 16px sides and 20px above and below (a needs-you one too); a list card's title and rows take 16px sides. */
+    .card:not(.flush) { padding: 20px 16px; }
+    .card.flush > .card-title, .card.flush :is(.list-row, .list-item) { padding-inline: 16px; }
     /* The title keeps room for itself; badges, dates and the arrow move to a second line when they do not fit. */
     .list-item, .list-row { flex-wrap: wrap; gap: 10px 12px; padding: 12px 14px; }
     .list-item-main, .list-row-main { flex: 1 1 150px; }
@@ -549,6 +580,7 @@
   .daybars > span { flex: 1; min-width: 3px; border-radius: 3px 3px 1px 1px; background: var(--primary); }
   .daybars > span.zero { background: var(--line-2); }
   .icon-chip { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px; background: var(--tint-2); color: var(--primary); }
+  .icon-chip.xs { width: 28px; height: 28px; border-radius: 9px; }
   .icon-chip.sm { width: 32px; height: 32px; border-radius: 10px; }
   .icon-chip.lg { width: 48px; height: 48px; border-radius: 14px; }
   .icon-chip.peach { background: var(--peach); color: var(--accent-ink); }
@@ -558,6 +590,10 @@
   .icon-chip.neutral { background: var(--surface-2); color: var(--ink-2); }
   /* IconLabel: an icon whose words are for screen readers and the tooltip only */
   .icon-label { display: inline-flex; flex: none; align-items: center; color: var(--ink-3); }
+  /* The number beside a step or a question (1, 2, 3): a 24px lavender circle, plum mono figures */
+  .ordinal { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 9999px; background: var(--tint-2); color: var(--primary); font-family: var(--font-mono); font-size: 11px; font-weight: 400; line-height: 1; font-variant-numeric: tabular-nums; }
+  /* A small tag inside a line of text ("(you)" beside one's own name): lavender, plum mono, never squeezed */
+  .inline-tag { display: inline-block; flex: none; padding: 0 6px; border-radius: 6px; background: var(--tint-2); color: var(--primary); font-family: var(--font-mono); font-size: 11px; font-weight: 400; line-height: 1.5; white-space: nowrap; }
 
   /* Buttons: pills everywhere; 44px, or 36px when small */
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 20px; border: 1px solid transparent; border-radius: 9999px; font-family: var(--font-sans); font-size: 15px; font-weight: 600; line-height: 1.2; text-align: center; text-decoration: none; cursor: pointer; transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), box-shadow 150ms var(--ease), transform 150ms var(--ease); }
@@ -593,7 +629,9 @@
   input[type="checkbox"], input[type="radio"] { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--primary); cursor: pointer; }
   input[type="file"]::file-selector-button { margin-right: 12px; padding: 7px 14px; border: 1px solid var(--line-2); border-radius: 9999px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; transition: background-color 150ms var(--ease); }
   .field { display: grid; gap: 6px; min-width: 0; }
-  .field > label, .field > .label { color: var(--ink); font-size: 13px; font-weight: 600; }
+  .field > label, .field > .label, .field-head > label { color: var(--ink); font-size: 13px; font-weight: 600; }
+  /* Field aside: the label and what is shown beside it (an IconLabel) share one line */
+  .field-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
   .hint { color: var(--ink-2); font-size: 12.5px; }
   .field-error { display: flex; align-items: flex-start; gap: 6px; color: var(--critical); font-size: 12.5px; font-weight: 500; }
   .field-error .icon { width: 14px; height: 14px; margin-top: 2px; }
@@ -633,6 +671,9 @@
   .pill.wrap > .dot { margin-top: 0.46em; }
   .pill.wrap > .icon { margin-top: 0.14em; }
   .pill .icon, .chip .icon { width: 14px; height: 14px; }
+  /* Pill busy: the spinner in the dot's place, in the pill's own colour */
+  .pill > .spinner { width: 12px; height: 12px; border-width: 1.5px; }
+  .pill.wrap > .spinner { margin-top: 0.22em; }
   :is(.pill, .pill-button).good { background: var(--good-soft); color: var(--good); }
   :is(.pill, .pill-button).good .dot { background: var(--good-dot); }
   :is(.pill, .pill-button).caution { background: var(--caution-soft); color: var(--caution); }
@@ -809,7 +850,10 @@
   .table td.table-empty { padding: 32px 18px; color: var(--ink-2); text-align: left; }
   .table .skeleton { display: block; width: 72%; min-height: 12px; }
   .table .num .skeleton { margin-left: auto; }
-  @media (min-width: 901px) {
+  /* Table wrapHeads: long headings wrap onto more lines (a figure column's too) instead of widening the table */
+  .table-wrap.wrap-heads thead th { white-space: normal; }
+  /* from the frame's rail breakpoint (900px), where the page has the height for a box that scrolls on its own */
+  @media (width >= theme(--breakpoint-rail)) {
     .table-wrap.scroll { max-height: min(70vh, 640px); overflow: auto; }
     .table-wrap.scroll thead th { position: sticky; top: 0; z-index: 2; }
   }
@@ -853,7 +897,7 @@
   .tabs[aria-orientation="vertical"] .tab .count { margin-left: auto; }
   .tabs[aria-orientation="vertical"] .tab:focus-visible { border-radius: 12px; }
 
-  /* Two panes side by side; under 900px one at a time, with a switch above them */
+  /* Two panes side by side; under the rail breakpoint (900px) one at a time, with a switch above them */
   .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 24px; }
   .split[data-ratio="wide-primary"] { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
   .split[data-ratio="wide-secondary"] { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
@@ -861,7 +905,7 @@
   .split-pane { min-width: 0; }
   /* --sticky-top: the frame sets it when its top bar stays on screen */
   .split-secondary.keep-in-view { position: sticky; top: var(--sticky-top, 24px); }
-  @media (max-width: 899px) {
+  @media (width < theme(--breakpoint-rail)) {
     .split, .split[data-ratio] { grid-template-columns: minmax(0, 1fr); gap: 16px; }
     .split-switch { display: inline-flex; justify-self: start; }
     .split[data-show="primary"] > .split-secondary, .split[data-show="secondary"] > .split-primary { display: none; }

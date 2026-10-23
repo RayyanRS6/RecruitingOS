@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Eyebrow, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
 import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
 import { toast } from "../toast";
 import { interviewNewTimesText } from "../cancelled";
@@ -22,10 +22,12 @@ const when = (iso: string | null, tz: string | null) => (iso ? new Date(iso).toL
 /** The offered times still ahead: one that has passed can no longer be booked (the server refuses it too). */
 const aheadSlots = <S extends { startsAt: string }>(slots: readonly S[], now: number = Date.now()): S[] => slots.filter((s) => Date.parse(s.startsAt) > now);
 const INTERVIEW_SORT: Record<"candidate" | "round" | "when", (i: InterviewSummary) => SortValue> = { candidate: (i) => `${i.candidate.firstName} ${i.candidate.lastName}`, round: (i) => i.title, when: (i) => (i.startsAt ? Date.parse(i.startsAt) : null) };
-/** The side panel's cards sit a little tighter than a page's (screenshot 7's "at a glance" card). */
-const SHEET_CARD = "p-5 max-sm:p-4";
-/** The brief's parts: a small mono heading over a bulleted list. */
-const BRIEF_HEAD = "eyebrow mb-2 flex";
+/**
+ * The side panel's cards sit a little tighter than a page's (screenshot 7's "at a glance" card): 20px from sm: up; on a
+ * phone they keep the kit's card padding (20px above and below, 16px sides).
+ */
+const SHEET_CARD = "sm:p-5";
+/** The brief's parts: a small mono heading (Eyebrow as="h3") over a bulleted list. */
 const BRIEF_LIST = "small list-disc space-y-1.5 pl-5 marker:text-ink-3";
 
 /** Interviews across roles (docs/04): who, when, who is interviewing, and what needs a person. */
@@ -52,7 +54,7 @@ export function Interviews() {
         <>
           {/* the empty state's line only where it says what to do (founder, 23 October 2026: fewer words) */}
           {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews coming up" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : undefined} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Candidates</Link> : undefined} /> : (
-            <Card title={`Coming up (${upcoming.length})`} className="max-sm:p-4">
+            <Card title={`Coming up (${upcoming.length})`}>
               <Table head={[soon.col("candidate", "Candidate", "text"), soon.col("round", "Round", "text"), soon.col("when", "When", "date", { first: "ascending" }), "Interviewers", "Status", ""]} announce={soon.announce}>
                 {soon.apply(upcoming, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
@@ -69,7 +71,7 @@ export function Interviews() {
             </Card>
           )}
           {past.length ? (
-            <Card title={`Past (${past.length})`} className="max-sm:p-4">
+            <Card title={`Past (${past.length})`}>
               <Table head={[done.col("candidate", "Candidate", "text"), done.col("round", "Round", "text"), done.col("when", "When", "date"), "Outcome", "Decision", ""]} announce={done.announce}>
                 {done.apply(past, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
@@ -283,29 +285,29 @@ function BriefCard({ brief }: { brief: InterviewerBrief }) {
       <p className="small text-ink-2"><strong className="text-ink">What this round is for:</strong> {brief.round.purpose}</p>
       <div className="stack mt-4 gap-4">
         <div>
-          <h3 className={BRIEF_HEAD}>What to look for</h3>
+          <Eyebrow as="h3" className="mb-2 flex">What to look for</Eyebrow>
           <ul className={BRIEF_LIST}>
             {brief.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong>: {c.definition} <Chip tone={c.finding ? FINDING_TONE[c.finding] ?? "neutral" : "neutral"}>{c.finding ? FINDING_LABEL[c.finding] ?? c.finding : "not assessed yet"}</Chip>{c.note ? <span className="muted"> {c.note}</span> : null}</li>)}
           </ul>
         </div>
         {brief.questions.length ? (
           <div>
-            <h3 className={BRIEF_HEAD}>Questions the plan suggests</h3>
+            <Eyebrow as="h3" className="mb-2 flex">Questions the plan suggests</Eyebrow>
             <ul className={BRIEF_LIST}>{brief.questions.map((qn, i) => <li key={i}>{qn}</li>)}</ul>
           </div>
         ) : null}
         <div>
-          <h3 className={BRIEF_HEAD}>Must-haves and what we know</h3>
+          <Eyebrow as="h3" className="mb-2 flex">Must-haves and what we know</Eyebrow>
           <ul className={BRIEF_LIST}>
             {brief.mustHaves.map((m) => <li key={m.key}>{m.text} <Chip tone={MET_TONE[m.met] ?? "neutral"}>{MET_LABEL[m.met] ?? m.met}</Chip>{m.quote ? <span className="muted"> "{m.quote}"</span> : null}</li>)}
           </ul>
         </div>
         <div>
-          <h3 className={BRIEF_HEAD}>Strengths so far</h3>
+          <Eyebrow as="h3" className="mb-2 flex">Strengths so far</Eyebrow>
           {brief.strengths.length ? <ul className={BRIEF_LIST}>{brief.strengths.map((s, i) => <li key={i}>{s.claim}{s.quote ? <span className="muted"> "{s.quote}"</span> : null}</li>)}</ul> : <p className="small muted">None recorded yet.</p>}
         </div>
         <div>
-          <h3 className={BRIEF_HEAD}>Worth exploring</h3>
+          <Eyebrow as="h3" className="mb-2 flex">Worth exploring</Eyebrow>
           {brief.concerns.length ? <ul className={BRIEF_LIST}>{brief.concerns.map((s, i) => <li key={i}>{s.claim}{s.quote ? <span className="muted"> "{s.quote}"</span> : null}</li>)}</ul> : <p className="small muted">Nothing flagged yet.</p>}
         </div>
         {brief.screen?.answers.length ? (

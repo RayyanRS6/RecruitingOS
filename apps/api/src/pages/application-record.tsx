@@ -437,6 +437,9 @@ function ScoreBar(props: { row: CandidateScoreRow }) {
  * on ("From your résumé and your AI interview", or "From your résumé only" until the AI interview is in it; R20-9) and the bars: only the
  * job page's must-haves by name, every other requirement in one line; what nothing showed yet is listed as not shown,
  * never held against them. Nothing at all when ITS switched it off for the company.
+ *
+ * Every word here, the eyebrows included, stays exactly as drafted until counsel signs off: a block under counsel review
+ * is outside the fewer-words pass (23 October 2026). That pass had cut two of its lines; both are back, word for word.
  */
 function ScoreSection(props: { score: RecordScore; companyName: string; chatSent: boolean; statusPath: string }) {
   const { score } = props;
@@ -444,6 +447,7 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
   if (score.state === "reviewing") {
     return (
       <section class="card" id="score" aria-labelledby="score-h" role="status">
+        <p class="eyebrow">Your match score</p>
         <h2 id="score-h">Working out your match score…</h2>
         <p>This usually takes under a minute. <a href={`${props.statusPath}#score`}>Check again</a> in a moment, or come back to it later from the link in your email.</p>
       </section>
@@ -454,8 +458,7 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
       <section class="card" id="score" aria-labelledby="score-h">
         <p class="eyebrow">Your match score</p>
         <h2 id="score-h">{score.state === "after_chat" ? "Shown once your AI interview is sent" : "Not ready yet"}</h2>
-        {/* "Not ready yet" under its eyebrow says it all; the AI-interview case says why it waits. */}
-        <p>{score.state === "after_chat" ? "Your match score is worked out from what you send, so it shows here after your AI interview. " : null}The hiring team reads every application themselves either way.</p>
+        <p>{score.state === "after_chat" ? "Your match score is worked out from what you send, so it shows here after your AI interview." : "Your match score shows here once it is ready."} The hiring team reads every application themselves either way.</p>
       </section>
     );
   }
@@ -538,7 +541,8 @@ function AnswersSection(props: { sent: SentAnswers; companyName: string; timeZon
 
 /**
  * "The job" (redesign spec C8): the job's facts as they were when they applied, what the team looks for, and its page
- * while it is public. Not its title and employer again: the page's heading and eyebrow say them.
+ * while it is public. Not its title and employer again: the page's heading is the job, and the line on who decides names
+ * the employer.
  */
 function JobSection(props: { packet: RolePacket; href: string | null }) {
   const { packet } = props;
@@ -666,8 +670,9 @@ candidatePages.get("/c/status/:token", async (c) => {
   ];
   return c.html(
     <Layout title={`Your application at ${company?.name ?? ""}`} extraCss={STATUS_CSS}>
-      {/* The employer's name, the one place it is said above the job's title (candidate pages have no frame); never
-          "· Your application", which only described the page (fewer words, 23 October 2026). */}
+      {/* The employer's name above the job's title. The candidate pages' rule (fewer words, 23 October 2026): a company or
+          job eyebrow only where nothing else near the top names them. Here the heading is the job, and on a phone the next
+          mention of the employer sits below the progress line and the next-step card, so the name stays. */}
       {company?.name ? <p class="eyebrow">{company.name}</p> : null}
       <h1>{role?.title}</h1>
       <ProgressLine steps={progress.steps} current={progress.current} />

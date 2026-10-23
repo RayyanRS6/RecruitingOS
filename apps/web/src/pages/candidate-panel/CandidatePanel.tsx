@@ -26,11 +26,6 @@ import { type Compose, HistoryTab, MessagesTab, OverviewTab, ResumeTab, ScreenTa
 export type PanelProps = {
   id: string;
   roleId: string;
-  /**
-   * The job's title. Not shown since 23 Oct 2026 (founder: cut labels that repeat what is on screen): the panel opens
-   * only over that job's own Candidates page, whose title names it. Optional, so callers may stop passing it.
-   */
-  roleTitle?: string | null;
   tab: PanelTab;
   onTab: (tab: PanelTab) => void;
   step: PanelStep | null;

@@ -67,10 +67,14 @@ describe("Settings' tabs", () => {
     const html = page();
     expect(html).toContain("<h1>Settings</h1>");
     // the title alone (founder, 23 October 2026: fewer words): no company-name eyebrow above it, no line under it
-    expect(html).toContain('<header class="page-header"><div class="page-header-row"><h1>Settings</h1></div></header>');
+    // (the header's own margin trimmed with the kit's className, as the tab strip follows closely)
+    expect(html).toContain('<header class="page-header mb-3"><div class="page-header-row"><h1>Settings</h1></div></header>');
     expect(text(html)).not.toContain("Your company, team, alerts and hiring rules.");
-    // the strip runs down the side as the kit's vertical tabs (Up and Down move too)
-    expect(html).toContain('<div role="tablist" aria-label="Settings" class="tabs" aria-orientation="vertical"');
+    // the strip runs down the side as the kit's vertical tabs (Up and Down move too), a column at every width, so it is
+    // never laid out in a row while screen readers hear "vertical": the strip's wrapper is pinned whole (a layout utility
+    // added to it fails here), and no arbitrary variant anywhere on the page reaches into the tab list
+    expect(html).toContain('<div class="side-card min-w-0 p-2 xl:sticky xl:top-6"><div role="tablist" aria-label="Settings" class="tabs" aria-orientation="vertical"');
+    expect(html).not.toMatch(/\.tabs\]:|tablist\]\]:/);
     const tabs = [...html.matchAll(/role="tab" id="settings-tab-([a-z]+)"[^>]*aria-selected="(true|false)"/g)].map((m) => [m[1], m[2]]);
     expect(tabs).toEqual([["company", "true"], ["team", "false"], ["notifications", "false"], ["rules", "false"], ["security", "false"]]);
     expect(text(html)).toContain("Company Team Notifications Hiring rules Security");

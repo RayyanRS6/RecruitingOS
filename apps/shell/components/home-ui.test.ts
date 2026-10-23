@@ -78,9 +78,10 @@ describe("Home's top", () => {
     expect(html).toMatch(/<a href="\/roles\/new" class="btn primary"><svg[\s\S]*?<\/svg>Start a hire<\/a>/);
     expect(html).toContain(">Bring in a recruiter</button>");
     expect(html).not.toContain("Today");
-    // no eyebrow over the greeting (founder, 23 October 2026: fewer words)
+    // no eyebrow over the greeting (founder, 23 October 2026: fewer words); the greeting at the kit's hero size
+    // (PageHeader hero), its h1 still bare, and no margin of its own (the page's gap spaces it)
     expect(html).not.toContain("Your desk");
-    expect(html).toMatch(/<header class="page-header"><div class="page-header-row"><h1>/);
+    expect(html).toMatch(/<header class="page-header hero mb-0"><div class="page-header-row"><h1>/);
   });
 
   it("says all caught up when nothing needs you, and shows the quiet day's card on its own", () => {
@@ -99,6 +100,8 @@ describe("Needs you", () => {
     const html = render();
     const words = text(html);
     expect(html).toContain(">Needs you</h2>");
+    // one list card (the kit's Card flush), its rows edge to edge
+    expect(html).toMatch(/>Needs you<\/h2><\/div><\/div><section class="card flush"><ul class="divide-y divide-line">/);
     expect(words).toContain("Interview? Dental Hygienist Decision Maria shows every must-have.");
     expect(html).toContain('<summary aria-label="Why: Interview? Dental Hygienist">Why</summary>');
     expect(words).toContain("Her license is active in California.");
@@ -218,6 +221,8 @@ describe("your jobs", () => {
     expect(html).toContain('<h2 id="home-jobs">Your jobs</h2>');
     expect(html).toMatch(/<a href="\/roles" class="text-link[^"]*">All jobs<svg/);
     expect(html).toContain('<a href="/roles/r1/talent" class="list-row">');
+    // the whole title, wrapped onto more lines when long (the kit's list-row-title wrap), never cut short
+    expect(html).toContain('<span class="list-row-title wrap">Dental Hygienist</span>');
     // each with the word for its status (role-status.ts), so the colour never says it alone
     expect(text(html)).toContain(`Dental Hygienist 3 new · 2 to review ${roleStatus("open").label}`);
     expect(html).toContain('<a href="/roles/r3" class="list-row">');

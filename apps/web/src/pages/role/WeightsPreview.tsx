@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Chip, Drawer, EmptyState, ErrorState, Skeleton } from "@ros/ui";
+import { Alert, Button, Card, Chip, Drawer, EmptyState, ErrorState, Skeleton } from "@ros/ui";
 import { api, type BoardView, type RolePacket } from "../../api/client";
 import type { EditorFocus } from "../../skills-form";
 import { INTERVIEW_ONLY_LINE, NOBODY_SCORED, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows, type WeightLevel, type WeightRow } from "../../weights-preview";
@@ -46,9 +46,10 @@ export function WeightsPreview(props: { roleId: string; packet: RolePacket; onCl
       {/* Two panes on a desk (the drawer is wide enough from md): the weights on the left, the order they give on the right. */}
       <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2">
         <div className="stack gap-4">
-          {/* each group a card of its own, the kit's eyebrow naming it (`weights-set`: a hook the tests find the groups by) */}
-          {musts.length ? <div className="card p-4"><fieldset className="weights-set grid gap-3"><legend className="eyebrow">Must-haves</legend>{musts.map(field)}</fieldset></div> : null}
-          {skills.length ? <div className="card p-4"><fieldset className="weights-set grid gap-3"><legend className="eyebrow">Skills we look for</legend>{skills.map(field)}</fieldset></div> : null}
+          {/* each group the kit's Card, its padding fitted to the drawer, the kit's eyebrow naming it (`weights-set`: a hook
+              the tests find the groups by) */}
+          {musts.length ? <Card className="p-4"><fieldset className="weights-set grid gap-3"><legend className="eyebrow">Must-haves</legend>{musts.map(field)}</fieldset></Card> : null}
+          {skills.length ? <Card className="p-4"><fieldset className="weights-set grid gap-3"><legend className="eyebrow">Skills we look for</legend>{skills.map(field)}</fieldset></Card> : null}
           {interviewOnly ? <p className="small muted">{INTERVIEW_ONLY_LINE}</p> : null}
           <div className="row"><Button size="sm" disabled={!changed.length} onClick={() => setLevels(jobLevels(rows))}>Back to the job's weights</Button></div>
           {changed.length ? (

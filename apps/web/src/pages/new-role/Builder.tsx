@@ -423,6 +423,9 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       disabled={busy && !send.isPending && !revise.isPending}
       label={asks ? "Ask for a change to the draft" : "Message to the assistant"}
       placeholder={composerPlaceholder({ started: true, hasDraft: asks })}
+      // what to do next, in the server's words, only while the draft cannot be written yet ("Answer the question cards
+      // first, or say "draft it".")
+      hint={asks ? null : view.readiness.draftBlocker}
       changeMax={asks ? CHANGE_REQUEST_MAX : undefined}
     />
   );

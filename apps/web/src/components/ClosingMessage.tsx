@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Card, Chip, cn, ErrorState, Field, Skeleton } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, cn, ErrorState, Eyebrow, Field, Skeleton } from "@ros/ui";
 import { api, ApiError, type ApplicationsWithCounts, type ClosingMessagePreview, type ClosingMessageResult } from "../api/client";
 import { toast } from "../toast";
 import { CLOSING_SENDERS, closeRoleToast } from "../talent-actions";
@@ -72,7 +72,7 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
         </select></Field>
         <Field label="Reason (optional, kept internally)" htmlFor="rc-reason"><input id="rc-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
         <div>
-          <h3 className="eyebrow mb-2 flex">Still in process</h3>
+          <Eyebrow as="h3" className="mb-2 flex">Still in process</Eyebrow>
           {apps.isLoading ? <Skeleton lines={2} /> : apps.error ? <ErrorState message="Could not load who is still in process." onRetry={() => apps.refetch()} /> : still.length ? (
             <>
               <ul className={PEOPLE} aria-label="Still in process">
@@ -147,11 +147,13 @@ export function ClosingMessageCard({ roleId, preview, onDone }: { roleId: string
       ) : null}
       {words.notes.length ? <ul className="small muted mt-3 grid list-disc gap-1 pl-5">{words.notes.map((n) => <li key={n}>{n}</li>)}</ul> : null}
       {p.count > 0 && p.text ? (
-        <div className="card message-preview mt-4 rounded-xl p-4 shadow-none">
+        // the words as they go, in a quieter card of the kit's (`message-preview` adds no look: the hook name the candidate
+        // panel's message preview has too, where the e2e specs find the words by it)
+        <Card className="message-preview mt-4 rounded-xl p-4 shadow-none">
           <p className="mb-2 text-[13px] font-medium text-ink-2">What each of them gets, with their own name</p>
           <p className="small"><strong>{p.subject}</strong></p>
           <p className="small mt-1.5 whitespace-pre-wrap text-ink-2">{p.text}</p>
-        </div>
+        </Card>
       ) : null}
       {p.policy === "not_sent" ? <div className="mt-4"><Alert tone="caution">Under your settings no decision messages are sent. Tell each person yourself, then record it on their page.</Alert></div> : null}
       <div className="row mt-5">

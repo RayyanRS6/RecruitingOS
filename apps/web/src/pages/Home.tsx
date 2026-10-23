@@ -89,7 +89,7 @@ export function Home() {
       ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
     ]} />
   ) : empty ? (
-    <Card className="max-sm:p-5"><CardRow card={empty} level={2} onSentToRecruiter={setSentToRecruiter} /></Card>
+    <Card><CardRow card={empty} level={2} onSentToRecruiter={setSentToRecruiter} /></Card>
   ) : null;
   // "Your jobs" sits beside Needs you on a wide screen (screenshot 1's "Open roles"), and after it for the keyboard and
   // screen readers; on smaller screens it comes under it. The column is decided from what the first draw already knows
@@ -101,8 +101,11 @@ export function Home() {
   const showJobs = jobs.length > 0;
 
   return (
-    <div className="stack gap-6 md:gap-8 [&>.page-header]:mb-0 [&_.page-header-row>h1]:text-[36px] sm:[&_.page-header-row>h1]:text-[44px] md:[&_.page-header-row>h1]:text-[52px]">
+    <div className="stack gap-6 md:gap-8">
+      {/* The greeting at the kit's hero size (PageHeader hero); the page's gap spaces it, so no margin of its own. */}
       <PageHeader
+        hero
+        className="mb-0"
         title={`Good ${greeting(isClient)}${name ? `, ${name}` : ""}`}
         sub={brief.data && !brief.error ? homeHeadline(needs, { firstRun }) : undefined}
         actions={
@@ -157,7 +160,8 @@ function rowKeys(cards: BriefCard[]): Array<{ key: string; card: BriefCard }> {
 
 /**
  * "Needs you" (screenshot 1's "Applications to pick up"): the heading over one bordered list, a row per thing, five
- * rows, then the rest behind "Show N more" inside the same list. The list is the `card` the end-to-end tests look in.
+ * rows, then the rest behind "Show N more" inside the same list. The list is a list card (Card flush: no padding of its
+ * own, each row keeps its sides), the `card` the end-to-end tests look in.
  */
 function NeedsYou({ title, items }: { title: string; items: Array<{ key: string; node: ReactNode }> }) {
   const shown = items.slice(0, HOME_ROWS);
@@ -170,7 +174,7 @@ function NeedsYou({ title, items }: { title: string; items: Array<{ key: string;
   return (
     <section className="min-w-0">
       <SectionHeader title={title} />
-      <div className="card p-0">
+      <Card flush>
         {list(shown, 0)}
         {later.length ? (
           <details className="more border-t border-line [&>summary]:px-4 [&>summary]:py-3 sm:[&>summary]:px-5 [&[open]>summary]:mb-0">
@@ -178,7 +182,7 @@ function NeedsYou({ title, items }: { title: string; items: Array<{ key: string;
             <div className="border-t border-line">{list(later, shown.length)}</div>
           </details>
         ) : null}
-      </div>
+      </Card>
     </section>
   );
 }
@@ -388,7 +392,7 @@ function GettingStartedCard({ card, onSentToRecruiter }: { card: BriefCard; onSe
   // hero), the word for ITS's check beside it, then the steps as a short checklist with the next one raised; the done
   // ones stay folded.
   return (
-    <Card needsYou hero title={card.title} aside={unverified ? <Pill size="sm" tone="caution">Waiting for ITS</Pill> : null} className="max-sm:p-5">
+    <Card needsYou hero title={card.title} aside={unverified ? <Pill size="sm" tone="caution">Waiting for ITS</Pill> : null}>
       {line ? <p className="max-w-[62ch] text-[15px] text-ink-2">{line}</p> : null}
       {rest ? (
         <details className="more mt-3">
@@ -456,7 +460,7 @@ function YourJobs({ jobs }: { jobs: HomeJob[] }) {
             <Link key={j.id} to={j.href} className="list-row">
               <IconChip icon="briefcase" size="sm" />
               <span className="list-row-main">
-                <span className="list-row-title whitespace-normal [overflow-wrap:anywhere]">{j.title}</span>
+                <span className="list-row-title wrap">{j.title}</span>
                 <span className="list-row-meta">
                   {j.facts ? <span>{j.facts}</span> : null}
                   <Pill size="sm" tone={s.tone}>{s.label}</Pill>

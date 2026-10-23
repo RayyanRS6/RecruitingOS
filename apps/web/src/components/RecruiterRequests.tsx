@@ -42,7 +42,7 @@ export function RecruiterRequests() {
   const open = current.filter((r) => ["waiting", "working"].includes(requestState(r.status))).length;
   return (
     <div id="recruiter-requests">
-      <Card title="Your recruiter requests" aside={open ? <Pill size="sm" tone="accent">{open} open</Pill> : null} className="max-sm:p-5">
+      <Card title="Your recruiter requests" aside={open ? <Pill size="sm" tone="accent">{open} open</Pill> : null}>
         <ul aria-label="Your recruiter requests" className={cn("divide-y divide-line", current.length > 0 && "border-t border-line")}>
           {current.map((r) => <RequestItem key={r.id} r={r} linked={r.id === linked} staff={who.staff} />)}
         </ul>

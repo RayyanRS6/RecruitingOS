@@ -2,7 +2,7 @@
 
 import { Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Card, cn, EmptyState, ErrorState, Icon, numHead, OWNER_STAGES, PipelineBar, Pill, Skeleton, Stat, Table } from "@ros/ui";
+import { Alert, Card, EmptyState, ErrorState, Icon, numHead, OWNER_STAGES, PipelineBar, Pill, Skeleton, Stat, Table } from "@ros/ui";
 import { Link } from "../nav";
 import { ApiError, api, type Me, type ScreeningFunnel } from "../api/client";
 import { funnelLines } from "../screen-view";
@@ -97,8 +97,8 @@ export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<
       {!m.people || !m.byMustHave.length ? <p className="small muted">{m.byMustHave.length ? "Nobody has been read against the must-haves yet." : "This job lists no must-haves."}</p> : (
         <>
           <p className="small text-ink-2"><strong>{m.showEveryMustHave} of {plural(m.people, "person", "people")}</strong> {m.people === 1 ? "shows" : "show"} every must-have.</p>
-          <div className={cn("mt-3", WRAP_HEADINGS)}>
-            <Table head={["Must-have", numHead("Shown"), numHead("Partly shown"), numHead("Not met"), numHead("Not known yet"), numHead("People read against it")]} label="How the pool meets each must-have">
+          <div className="mt-3">
+            <Table head={["Must-have", numHead("Shown"), numHead("Partly shown"), numHead("Not met"), numHead("Not known yet"), numHead("People read against it")]} label="How the pool meets each must-have" wrapHeads>
               {m.byMustHave.map((x) => <tr key={x.key}><td>{x.label}</td><td className="num">{x.shown}</td><td className="num">{x.partly}</td><td className="num">{x.notShown}</td><td className="num">{x.unknown}</td><td className="num">{x.total}</td></tr>)}
             </Table>
           </div>
@@ -223,7 +223,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
             {r.timeInStage.waitingOnYou.count ? ` · typical wait ${days(r.timeInStage.waitingOnYou.medianDays)} · longest ${days(r.timeInStage.waitingOnYou.longestDays)}` : ""}.
           </p>
           {r.timeInStage.byStage.length ? (
-            <Table head={["Step", numHead("There now"), numHead("Longest so far"), numHead("Finished this step"), numHead("Typical stay"), numHead("Average stay")]} label="Time in each step">
+            <Table head={["Step", numHead("There now"), numHead("Longest so far"), numHead("Finished this step"), numHead("Typical stay"), numHead("Average stay")]} label="Time in each step" wrapHeads>
               {r.timeInStage.byStage.map((s) => <tr key={s.stage}><td>{s.label}</td><td className="num">{s.nowHere}</td><td className="num">{s.nowHere ? days(s.longestDays) : ""}</td><td className="num">{s.completed}</td><td className="num">{s.completed ? days(s.medianDays) : ""}</td><td className="num">{s.completed ? days(s.averageDays) : ""}</td></tr>)}
             </Table>
           ) : <p className="small muted">Nothing has moved yet.</p>}
@@ -243,7 +243,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
           </dl>
           {r.interviews.byRound.length ? (
             <div className="mt-4">
-              <Table head={["Round", numHead("All"), numHead("On the calendar"), numHead("Held"), numHead("Candidate did not show"), numHead("Interviewer did not show"), numHead("Cancelled")]} label="Interviews by round" pinFirst>
+              <Table head={["Round", numHead("All"), numHead("On the calendar"), numHead("Held"), numHead("Candidate did not show"), numHead("Interviewer did not show"), numHead("Cancelled")]} label="Interviews by round" pinFirst wrapHeads>
                 {r.interviews.byRound.map((x) => <tr key={x.roundKey}><td>{x.title}</td><td className="num">{x.total}</td><td className="num">{x.scheduled}</td><td className="num">{x.completed}</td><td className="num">{x.noShowCandidate}</td><td className="num">{x.noShowInterviewer}</td><td className="num">{x.cancelled}</td></tr>)}
               </Table>
             </div>
@@ -266,7 +266,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
 
         <Card title="What the assistant suggested, and what you decided" className={WIDE}>
           {r.recommendationsVsDecisions.rows.length ? (
-            <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to the AI interview"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst>
+            <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to the AI interview"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst wrapHeads>
               {r.recommendationsVsDecisions.rows.map((x) => <tr key={x.recommendation}><td>{x.label}</td><td className="num">{x.total}</td><td className="num">{x.invited}</td><td className="num">{x.interviewed}</td><td className="num">{x.shortlisted ?? 0}</td><td className="num">{x.declined}</td><td className="num">{x.held}</td><td className="num">{x.noActionYet}</td></tr>)}
             </Table>
           ) : <p className="small muted">No assessments yet.</p>}
@@ -334,38 +334,49 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
 }
 
 /**
- * A card whose table has many columns spans both columns once there are two, and its headings may wrap, so the table
- * fits the card without scrolling sideways at 1280px (the kit keeps a figures heading on one line). The two columns
- * start at a 56rem container: the job page's column at 1280px (952px) has them, at 1024px (696px) and in the admin's
- * 720px customer drawer the cards stack, so a half-width card never squeezes its label-and-value rows.
+ * A card whose table has many columns spans both columns once there are two, and its table takes the kit's `wrapHeads`
+ * (long headings wrap, a figures heading's too), so the table fits the card without scrolling sideways at 1280px. The
+ * two columns start at a 56rem container: the job page's column at 1280px (952px) has them, at 1024px (696px) and in the
+ * admin's 720px customer drawer the cards stack, so a half-width card never squeezes its label-and-value rows.
  */
-const WRAP_HEADINGS = "[&_thead_th]:whitespace-normal";
-const WIDE = cn("@4xl:col-span-2", WRAP_HEADINGS);
+const WIDE = "@4xl:col-span-2";
+
+/** Whose figures the definitions speak of: one role's (its Report tab) or every role of a customer (the admin console). */
+export type ReportScope = "role" | "customer";
 
 /**
  * What each figure means, in the words the weekly summary uses (docs/16-admin.md keeps the same table), as one closed
  * disclosure at the end of the Report tab (fewer words, 23 Oct 2026). It also holds what the report counts at all and
- * the definitions the cards once carried under their tables ("typical", "average", a day, response time).
+ * the definitions the cards once carried under their tables ("typical", "average", a day, response time). `scope`
+ * "customer" (the admin console's customer report) says "across all roles" where a role's own tab says "this role", and
+ * leaves out the must-haves and the AI interview, whose cards are on a role's own tab only.
  */
-export function ReportDefinitions() {
+export function ReportDefinitions({ scope = "role" }: { scope?: ReportScope }) {
+  // a role's own words, or "across all roles" for a customer's report
+  const roles = (one: string) => (scope === "customer" ? "across all roles" : one);
   return (
     <details className="more">
       <summary>What these figures mean</summary>
       <div className="stack gap-3">
         <p className="small muted">Counts and days only; nothing here ranks or scores a candidate.</p>
         <dl className="glance">
-          <dt>Who applied</dt><dd>Every application to this role, by where the person came from (the careers page, a job board's own link, a referral link, email) and by day in your time zone. A person who applies twice counts once.</dd>
+          <dt>Who applied</dt><dd>{`Every application ${roles("to this role")}, by where the person came from (the careers page, a job board's own link, a referral link, email) and by day in your time zone. A person who applies twice counts once.`}</dd>
           <dt>Where everyone is</dt><dd>How many people are at each stage right now (New, Longlist, Shortlist, Interviewing, Cancelled, On hold, Offer, Hired, Not moving forward), grouped into waiting on you, in process, not moving forward, and hired. Cancelled: candidates who cancelled an interview or did not come to one. Someone on hold waits on nobody until the hold ends. Longlist, Shortlist and On hold are your team's private marks; candidates never see them. "Not told yet" counts decisions nobody has told the candidate about.</dd>
           <dt>How long each step takes</dt><dd>For each step: how many people are there now and the longest anyone has been there; how many have finished the step and the typical and average number of days they spent in it. "Typical" is the middle value; "average" adds every stay up and divides. A day is 24 hours from the moment the step changed.</dd>
           <dt>Interviews</dt><dd>Interviews requested (times not yet picked), on the calendar, held, missed by the candidate, cancelled, rescheduled by the candidate, and held but not yet decided.</dd>
           <dt>Decisions waiting for you</dt><dd>Everything only a person can decide: candidates waiting on you, anyone held on an eligibility answer, and approvals nobody has answered.</dd>
           <dt>Suggestions and decisions</dt><dd>What the assistant suggested for each assessed candidate and the first thing a person did afterwards, putting them on the longlist or shortlist included. The assistant never decides.</dd>
           <dt>Overruled</dt><dd>Times a person kept someone the rules would have held, reviewed someone anyway, put someone on hold, or flagged an assessment as wrong.</dd>
-          <dt>Recruiter help</dt><dd>Your requests for an ITS recruiter on this role: open, resolved, past the promised response time, and the typical hours until a recruiter picked one up. Response time is clock hours from your request to a recruiter picking it up; the promised time counts business hours only.</dd>
-          <dt>Messages</dt><dd>Emails and texts to candidates about this role: sent, could not be sent, bounced, delivery unknown, waiting to go out; and how many candidates were affected.</dd>
+          <dt>Recruiter help</dt><dd>{`Your requests for an ITS recruiter ${roles("on this role")}: open, resolved, past the promised response time, and the typical hours until a recruiter picked one up. Response time is clock hours from your request to a recruiter picking it up; the promised time counts business hours only.`}</dd>
+          <dt>Messages</dt><dd>{`Emails and texts to candidates ${roles("about this role")}: sent, could not be sent, bounced, delivery unknown, waiting to go out; and how many candidates were affected.`}</dd>
           <dt>Outcomes</dt><dd>What people recorded: hires, withdrawals, declines, offers declined, closed without a hire, and the reasons candidates were declined. Offers happen outside the platform.</dd>
-          <dt>The must-haves</dt><dd>For each must-have, how many applicants' evidence shows it, partly shows it, shows it is not met in their own words, or does not say yet, from the same checked findings as the match score. When most people do not show one, a note asks whether it is stricter than the job needs; nobody is turned down because of it.</dd>
-          <dt>The AI interview</dt><dd>How many people were offered it, started it and finished it, the typical time to finish, who chose a person instead, and the questions people chose not to answer. "Typical" is the middle value, from the first answer to sending.</dd>
+          {/* one role's cards only: the console's customer report has neither, so it defines neither */}
+          {scope === "role" ? (
+            <>
+              <dt>The must-haves</dt><dd>For each must-have, how many applicants' evidence shows it, partly shows it, shows it is not met in their own words, or does not say yet, from the same checked findings as the match score. When most people do not show one, a note asks whether it is stricter than the job needs; nobody is turned down because of it.</dd>
+              <dt>The AI interview</dt><dd>How many people were offered it, started it and finished it, the typical time to finish, who chose a person instead, and the questions people chose not to answer. "Typical" is the middle value, from the first answer to sending.</dd>
+            </>
+          ) : null}
         </dl>
       </div>
     </details>

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { IntakePayCard, IntakeQuestion } from "@ros/contracts";
-import { AutoTextarea, Avatar, Button, Icon, IconButton } from "@ros/ui";
+import { AutoTextarea, Avatar, Button, Eyebrow, Icon, IconButton } from "@ros/ui";
 import { OPTION_WORDS, OPTIONS, OWN_CHIP, OWN_CHIP_X, OWN_CHIPS, TEAM_CHIP } from "./look";
 import { OriginMark } from "./marks";
 import { PayFields } from "./PayCard";
@@ -52,7 +52,7 @@ export function QuestionCard(props: {
   return (
     <section className="grid min-w-0 gap-3 rounded-2xl border border-line-tint bg-surface p-4 shadow-xs motion-safe:animate-enter sm:p-5" aria-label="Questions from the assistant">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="eyebrow live mr-auto min-w-0">{pickHint(q)}</span>
+        <Eyebrow as="span" className="live mr-auto min-w-0">{pickHint(q)}</Eyebrow>
         <span className="inline-flex items-center gap-1 text-[13px] font-medium tabular-nums text-ink-2">
           <IconButton icon="chevron-left" label="Previous question" size="sm" disabled={index === 0} onClick={() => onState(goTo(state, index - 1, total))} />
           <span className="min-w-12 text-center" aria-live="polite">{index + 1} of {total}</span>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BoardCard, BoardPlacement, BoardView, MatchScore, PoolSummary } from "../../apps/web/src/api/client";
 import {
-  ASK_INTRO, ASK_SOON, BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, NEEDS_EYE_WARNING, NO_DECLINE_HERE, POOL_CARD_NOTE, RECRUITER_CHECK, REVIEW_FOOT, REVIEW_SUB, SORT_TEXT,
+  BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, NEEDS_EYE_WARNING, NO_DECLINE_HERE, POOL_CARD_NOTE, RECRUITER_CHECK, REVIEW_FOOT, REVIEW_SUB, SORT_TEXT,
   answerPath, appliedNote, appliedToast, applyLabel, batchItems, boardOrder, boardPersonPath, boardSearch, cardChip, cardFacts, confidenceChip, countsLine, evidenceLines, headerCounts, extraWarnings, groupCount, initialReview, isTicked, laneRow,
   lookedAtLine, modeFrom, needsReason, poolCardView, previewByPerson, previewItems, readyCounts, readyLine, reasonLine, reviewFootNote, reviewRows, rowWarnings, scoreText, snapshotOf, snapshotPlace, snapshotScore,
   sortedText, summarySentences, tickable, togglePick, type ReviewState,
@@ -329,12 +329,8 @@ describe("one-click questions", () => {
     expect(togglePick(picked, "a", true)).toEqual(picked);
     expect(togglePick(picked, "c", false)).toEqual(["a", "b", "d", "e"]);
   });
-
-  it("says plainly where answers come from, and that typing a question is not available yet", () => {
-    // where answers come from is the panel's own line under its title; the intro is one short instruction
-    expect(ASK_INTRO).toBe("Pick a question. Each answer says what it looked at.");
-    expect(ASK_SOON).toBe("Typing your own question is not available yet. Pick one above, or bring in a recruiter.");
-  });
+  // where answers come from is the panel's own line under its title, and it has no intro or "not available yet" line
+  // (founder, 23 Oct 2026: fewer words); pool-board.test.ts checks the panel as drawn.
 });
 
 describe("Today's pool card and the board a recruiter checks", () => {
@@ -370,7 +366,7 @@ describe("Today's pool card and the board a recruiter checks", () => {
 
 describe("the words", () => {
   it("never borrow another product's verdict words", () => {
-    const words = [SORT_TEXT, ASK_INTRO, ASK_SOON, REVIEW_FOOT, REVIEW_SUB, POOL_CARD_NOTE, RECRUITER_CHECK, NEEDS_EYE_WARNING, NO_DECLINE_HERE, ...Object.values(GROUP_WORDS), ...BOARD_COLUMNS.flatMap((c) => [c.title, c.sub])].join(" ");
+    const words = [SORT_TEXT, REVIEW_FOOT, REVIEW_SUB, POOL_CARD_NOTE, RECRUITER_CHECK, NEEDS_EYE_WARNING, NO_DECLINE_HERE, ...Object.values(GROUP_WORDS), ...BOARD_COLUMNS.flatMap((c) => [c.title, c.sub])].join(" ");
     expect(words).not.toMatch(/Clear fit|Worth a look|Likely no|\bSolid\b|Long shot|Kanvis/i);
   });
 });

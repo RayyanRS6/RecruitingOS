@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import type { IntakePayCard } from "@ros/contracts";
-import { Alert, Button, Icon, Segmented } from "@ros/ui";
-import { SeenField } from "./marks";
+import { Alert, Button, Field, Icon, Segmented } from "@ros/ui";
+import { SeenBy } from "./marks";
 import { marketRange, marketSource, payFormFrom, payPayload, payProblem, type PayForm } from "./rules";
 
 const UNIT = { hourly: "an hour", salary: "a year" } as const;
@@ -12,7 +12,8 @@ const VIA: Record<string, string> = { typed: "typed in the conversation", pay_ca
 /**
  * The pay boxes (plan C8), on a question card, a quick start step and the draft's pay card: hourly or salary, the market
  * figure for the job and place with its source and year (or a plain line saying there is none), the range candidates
- * see, and the most the owner would pay, which only the team sees (the eye and the lock beside each box's label).
+ * see, and the most the owner would pay, which only the team sees (the eye and the lock beside each box's label, the
+ * kit's Field `aside`).
  */
 export function PayFields({ form, onChange, card, idBase }: { form: PayForm; onChange: (form: PayForm) => void; card: IntakePayCard; idBase: string }) {
   const range = marketRange(card);
@@ -37,15 +38,15 @@ export function PayFields({ form, onChange, card, idBase }: { form: PayForm; onC
         ) : null}
       </div>
       <div className="grid gap-3 @md:grid-cols-3">
-        <SeenField label={`Lowest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-min`} seen="public">
+        <Field label={`Lowest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-min`} aside={<SeenBy v="public" />}>
           <input id={`${idBase}-min`} className="input" inputMode="decimal" value={form.min} onChange={(e) => onChange({ ...form, min: e.target.value })} placeholder={form.basis === "salary" ? "e.g. 60,000" : "e.g. 24"} />
-        </SeenField>
-        <SeenField label={`Highest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-max`} seen="public">
+        </Field>
+        <Field label={`Highest${unit ? ` (${unit})` : ""}`} htmlFor={`${idBase}-max`} aside={<SeenBy v="public" />}>
           <input id={`${idBase}-max`} className="input" inputMode="decimal" value={form.max} onChange={(e) => onChange({ ...form, max: e.target.value })} placeholder={form.basis === "salary" ? "e.g. 70,000" : "e.g. 28"} />
-        </SeenField>
-        <SeenField label="The most you would pay" htmlFor={`${idBase}-ceiling`} seen="internal" hint="Optional.">
+        </Field>
+        <Field label="The most you would pay" htmlFor={`${idBase}-ceiling`} aside={<SeenBy v="internal" />} hint="Optional.">
           <input id={`${idBase}-ceiling`} className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => onChange({ ...form, ceiling: e.target.value })} />
-        </SeenField>
+        </Field>
       </div>
     </div>
   );

@@ -153,24 +153,25 @@ function Mark({ group }: { group: "main" | "job" | "console" }) {
   return <span data-mark={group} aria-hidden="true" className="absolute inset-0 -z-10 rounded-[inherit] bg-tint" />;
 }
 
-// The rail's looks. Phones and tablets (under 900px) get the top bar; "min-[900px]:" is the side rail. Whole class
-// strings only, so Tailwind finds them. The top bar's gutter is the page's (16px, 24px from 640px). Never mix a theme
-// breakpoint (sm:, md:) with min-[900px]: for one property: Tailwind sorts rem breakpoints after px ones, so sm: would win.
-const SHELL = "grid min-h-screen grid-cols-[minmax(0,1fr)] min-[900px]:grid-cols-[248px_minmax(0,1fr)]";
-const SHELL_FOLDED = "grid min-h-screen grid-cols-[minmax(0,1fr)] min-[900px]:grid-cols-[72px_minmax(0,1fr)]";
+// The rail's looks. Phones and tablets get the top bar (max-rail:, under 900px); rail: is the side rail, from 900px.
+// Whole class strings only, so Tailwind finds them. The top bar's gutter is the page's (16px, 24px from sm:). rail: is a
+// named breakpoint in rem (styles.css, --breakpoint-rail), so Tailwind sorts it after sm: and md: and before lg:, and
+// they mix safely on one property; never write the switch as min-[900px]:, which would sort before every rem one.
+const SHELL = "grid min-h-screen grid-cols-[minmax(0,1fr)] rail:grid-cols-[248px_minmax(0,1fr)]";
+const SHELL_FOLDED = "grid min-h-screen grid-cols-[minmax(0,1fr)] rail:grid-cols-[72px_minmax(0,1fr)]";
 const RAIL =
-  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-3 border-b border-line bg-surface px-4 py-3 min-[640px]:px-6 min-[900px]:sticky min-[900px]:top-0 min-[900px]:z-20 min-[900px]:flex min-[900px]:h-screen min-[900px]:flex-col min-[900px]:items-stretch min-[900px]:gap-0 min-[900px]:overflow-y-auto min-[900px]:overflow-x-hidden min-[900px]:border-b-0 min-[900px]:border-r min-[900px]:py-5";
+  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-3 border-b border-line bg-surface px-4 py-3 sm:px-6 rail:sticky rail:top-0 rail:z-20 rail:flex rail:h-screen rail:flex-col rail:items-stretch rail:gap-0 rail:overflow-y-auto rail:overflow-x-hidden rail:border-b-0 rail:border-r rail:py-5";
 // A current link's own hover leaves its highlight in view (the highlight sits under the link's background).
 const LINK =
   "relative flex h-10 items-center gap-3 rounded-xl px-3 text-[14px] font-medium text-ink-2 transition-colors duration-150 ease-soft hover:bg-surface-2 [&.active]:font-semibold [&.active]:text-primary [&.active]:hover:bg-transparent [&_.icon]:shrink-0 [&_.icon]:text-ink-3 [&.active_.icon]:text-primary";
-const LINK_FOLDED = `${LINK} min-[900px]:justify-center min-[900px]:px-0`;
+const LINK_FOLDED = `${LINK} rail:justify-center rail:px-0`;
 // 40px tall in the phone menu (a finger's target), 32px in the side rail's lists.
 const SUB_LINK =
-  "relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13.5px] text-ink-2 transition-colors duration-150 ease-soft hover:bg-surface-2 max-[900px]:h-10 [&.active]:font-semibold [&.active]:text-primary [&.active]:hover:bg-transparent [&_.icon]:shrink-0 [&_.icon]:text-ink-3 [&.active_.icon]:text-primary";
-const SUB_LINK_FOLDED = `${SUB_LINK} min-[900px]:h-10 min-[900px]:justify-center min-[900px]:rounded-xl min-[900px]:px-0`;
+  "relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13.5px] text-ink-2 transition-colors duration-150 ease-soft hover:bg-surface-2 max-rail:h-10 [&.active]:font-semibold [&.active]:text-primary [&.active]:hover:bg-transparent [&_.icon]:shrink-0 [&_.icon]:text-ink-3 [&.active_.icon]:text-primary";
+const SUB_LINK_FOLDED = `${SUB_LINK} rail:h-10 rail:justify-center rail:rounded-xl rail:px-0`;
 const SUB_LIST = "isolate my-0.5 ml-[22px] grid grid-cols-[minmax(0,1fr)] gap-px border-l border-line py-0.5 pl-2";
 const SECTION = "px-3 pb-1.5 pt-5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3";
-const SECTION_FIRST = "px-3 pb-1.5 pt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3 max-[900px]:pt-0";
+const SECTION_FIRST = "px-3 pb-1.5 pt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3 max-rail:pt-0";
 
 /** A link of the rail: icon and word; folded, the icon alone, the word kept for screen readers and in the tooltip. */
 function RailLink(props: { to: string; end?: boolean; icon: IconName; label: string; folded: boolean }) {
@@ -180,7 +181,7 @@ function RailLink(props: { to: string; end?: boolean; icon: IconName; label: str
         <>
           {active ? <Mark group="main" /> : null}
           <Icon name={props.icon} />
-          <span className={props.folded ? "min-w-0 truncate min-[900px]:sr-only" : "min-w-0 truncate"}>{props.label}</span>
+          <span className={props.folded ? "min-w-0 truncate rail:sr-only" : "min-w-0 truncate"}>{props.label}</span>
         </>
       )}
     </NavLink>
@@ -195,8 +196,8 @@ function SectionLabel({ children, folded, first }: { children: string; folded: b
   const look = first ? SECTION_FIRST : SECTION;
   return (
     <>
-      <div className={folded ? `${look} min-[900px]:hidden` : look}>{children}</div>
-      {folded ? <div aria-hidden="true" className="mx-3 my-3 hidden h-px bg-line min-[900px]:block" /> : null}
+      <div className={folded ? `${look} rail:hidden` : look}>{children}</div>
+      {folded ? <div aria-hidden="true" className="mx-3 my-3 hidden h-px bg-line rail:block" /> : null}
     </>
   );
 }
@@ -379,18 +380,18 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const width = cx(foldedByChoice ? "max-w-[1280px]" : "max-w-[1040px]", "group-has-[.builder,.start,.pool-board,[data-wide]]/page:max-w-[1440px]");
   return (
     <div className={folded ? SHELL_FOLDED : SHELL} data-rail={folded ? "compact" : undefined} data-collapsed={foldedByChoice ? "true" : undefined}>
-      <nav ref={rail} className={cx(RAIL, folded ? "min-[900px]:px-3" : "min-[900px]:px-4")} aria-label="Main">
-        <div className={folded ? "flex min-w-0 items-center max-[900px]:col-start-1 max-[900px]:row-start-1 min-[900px]:flex-col min-[900px]:gap-3" : "flex min-w-0 items-center justify-between gap-2 max-[900px]:col-start-1 max-[900px]:row-start-1 min-[900px]:pl-1"}>
-          <BrandMark textClassName={folded ? "min-[900px]:sr-only" : undefined} sub={<small className="truncate text-[12px] text-ink-3 min-[900px]:hidden">{workspace}</small>} />
+      <nav ref={rail} className={cx(RAIL, folded ? "rail:px-3" : "rail:px-4")} aria-label="Main">
+        <div className={folded ? "flex min-w-0 items-center max-rail:col-start-1 max-rail:row-start-1 rail:flex-col rail:gap-3" : "flex min-w-0 items-center justify-between gap-2 max-rail:col-start-1 max-rail:row-start-1 rail:pl-1"}>
+          <BrandMark textClassName={folded ? "rail:sr-only" : undefined} sub={<small className="truncate text-[12px] text-ink-3 rail:hidden">{workspace}</small>} />
           {foldedByPage ? null : (
-            <button type="button" className="icon-btn sm shrink-0 max-[900px]:hidden" aria-label="Fold the menu to icons" aria-pressed={collapsed} title={collapsed ? "Show the full menu" : "Fold the menu to icons"} onClick={toggleRail}>
+            <button type="button" className="icon-btn sm shrink-0 max-rail:hidden" aria-label="Fold the menu to icons" aria-pressed={collapsed} title={collapsed ? "Show the full menu" : "Fold the menu to icons"} onClick={toggleRail}>
               <Icon name={collapsed ? "chevron-right" : "chevron-left"} size={16} />
             </button>
           )}
         </div>
-        <div aria-hidden="true" className="my-4 hidden h-px bg-line min-[900px]:block" />
+        <div aria-hidden="true" className="my-4 hidden h-px bg-line rail:block" />
         {companyName ? (
-          <div className={folded ? "mb-4 hidden justify-center min-[900px]:flex" : "mb-4 hidden items-center gap-2.5 rounded-2xl border border-line bg-surface-2/60 py-2 pl-2 pr-1.5 min-[900px]:flex"}>
+          <div className={folded ? "mb-4 hidden justify-center rail:flex" : "mb-4 hidden items-center gap-2.5 rounded-2xl border border-line bg-surface-2/60 py-2 pl-2 pr-1.5 rail:flex"}>
             {/* the workspace's initial on coral-peach (spec 5), beside its name: decorative */}
             <span aria-hidden="true" className="grid size-9 shrink-0 select-none place-items-center rounded-xl bg-peach font-display text-[15px] font-bold leading-none text-accent-ink">
               {initials(companyName, 1)}
@@ -418,10 +419,10 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             </div>
           </div>
         ) : null}
-        {switchError ? <div className="col-span-2 min-[900px]:mb-3"><Alert tone="critical">{switchError}</Alert></div> : null}
+        {switchError ? <div className="col-span-2 rail:mb-3"><Alert tone="critical">{switchError}</Alert></div> : null}
         {/* The phone's Menu button comes before Start a hire, as it is drawn (top row, then the second), so Tab follows
             the bar from the top; the side rail does not show it. */}
-        <button ref={toggle} type="button" className="btn secondary sm max-[900px]:col-start-2 max-[900px]:row-start-1 max-[900px]:justify-self-end min-[900px]:hidden" aria-expanded={menuOpen} aria-controls="rail-links" onClick={() => setMenuFor(menuOpen ? null : pathname)}>
+        <button ref={toggle} type="button" className="btn secondary sm max-rail:col-start-2 max-rail:row-start-1 max-rail:justify-self-end rail:hidden" aria-expanded={menuOpen} aria-controls="rail-links" onClick={() => setMenuFor(menuOpen ? null : pathname)}>
           <Icon name={menuOpen ? "x" : "menu"} size={16} />
           Menu
         </button>
@@ -430,26 +431,26 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             href={START_HIRE_HREF}
             className={
               folded
-                ? "btn primary max-[900px]:col-start-1 max-[900px]:row-start-2 max-[900px]:justify-self-start max-[900px]:[&_.kbd]:hidden min-[900px]:mb-5 min-[900px]:size-11 min-[900px]:self-center min-[900px]:justify-center min-[900px]:p-0 min-[900px]:[&_.kbd]:hidden"
-                : "btn primary max-[900px]:col-start-1 max-[900px]:row-start-2 max-[900px]:justify-self-start max-[900px]:[&_.kbd]:hidden min-[900px]:mb-5 min-[900px]:w-full min-[900px]:justify-start [&_.kbd]:ml-auto [&_.kbd]:border-on-primary/30 [&_.kbd]:bg-on-primary/10 [&_.kbd]:text-on-primary"
+                ? "btn primary max-rail:col-start-1 max-rail:row-start-2 max-rail:justify-self-start max-rail:[&_.kbd]:hidden rail:mb-5 rail:size-11 rail:self-center rail:justify-center rail:p-0 rail:[&_.kbd]:hidden"
+                : "btn primary max-rail:col-start-1 max-rail:row-start-2 max-rail:justify-self-start max-rail:[&_.kbd]:hidden rail:mb-5 rail:w-full rail:justify-start [&_.kbd]:ml-auto [&_.kbd]:border-on-primary/30 [&_.kbd]:bg-on-primary/10 [&_.kbd]:text-on-primary"
             }
             aria-label="Start a hire"
             aria-keyshortcuts={shortcutOn ? START_HIRE_KEY : undefined}
             title={shortcutOn ? `Start a hire (press ${START_HIRE_KEY})` : "Start a hire"}
           >
             <Icon name="plus" />
-            <span className={folded ? "min-[900px]:sr-only" : undefined}>Start a hire</span>
+            <span className={folded ? "rail:sr-only" : undefined}>Start a hire</span>
             {shortcutOn ? <Kbd decorative>{START_HIRE_KEY}</Kbd> : null}
           </NextLink>
         ) : null}
         {/* pb: the links keep 16px clear of the foot when they fill the rail (the foot's mt-auto then has no room) */}
-        <div className="isolate col-span-2 hidden animate-fade flex-col gap-0.5 border-t border-line pt-3 data-[open=true]:flex min-[900px]:flex min-[900px]:animate-none min-[900px]:gap-1.5 min-[900px]:border-t-0 min-[900px]:pb-4 min-[900px]:pt-0" id="rail-links" data-open={menuOpen ? "true" : undefined}>
+        <div className="isolate col-span-2 hidden animate-fade flex-col gap-0.5 border-t border-line pt-3 data-[open=true]:flex rail:flex rail:animate-none rail:gap-1.5 rail:border-t-0 rail:pb-4 rail:pt-0" id="rail-links" data-open={menuOpen ? "true" : undefined}>
           {me.activeCompanyId ? (
             <>
               <RailLink to="/" end icon="home" label="Home" folded={folded} />
               <RailLink to="/roles" icon="roles" label="Jobs" folded={folded} />
               {listed.length ? (
-                <ul className={folded ? `${SUB_LIST} min-[900px]:hidden` : SUB_LIST} aria-label="Jobs in progress">
+                <ul className={folded ? `${SUB_LIST} rail:hidden` : SUB_LIST} aria-label="Jobs in progress">
                   {listed.map((r) => (
                     <li key={r.id}>
                       <NavLink to={r.href} activeFor={`/roles/${r.id}`} className={SUB_LINK}>
@@ -486,7 +487,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
               <RailLink to="/admin" icon="lock" label="Console" folded={folded} />
               {/* The console's sections (Wave S6): Console stays marked on all of them, the section itself too. Folded,
                   the rail still shows them, as icons with their word in the tooltip. */}
-              <ul className={folded ? `${SUB_LIST} min-[900px]:ml-0 min-[900px]:border-l-0 min-[900px]:pl-0` : SUB_LIST} aria-label="Console sections">
+              <ul className={folded ? `${SUB_LIST} rail:ml-0 rail:border-l-0 rail:pl-0` : SUB_LIST} aria-label="Console sections">
                 {CONSOLE_LINKS.map((l) => (
                   <li key={l.to}>
                     <NavLink to={l.to} end={l.to === "/admin"} className={folded ? SUB_LINK_FOLDED : SUB_LINK} title={folded ? l.label : undefined}>
@@ -494,7 +495,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
                         <>
                           {on ? <Mark group="console" /> : null}
                           <Icon name={l.icon} size={16} />
-                          <span className={folded ? "min-w-0 flex-1 truncate min-[900px]:sr-only" : "min-w-0 flex-1 truncate"}>{l.label}</span>
+                          <span className={folded ? "min-w-0 flex-1 truncate rail:sr-only" : "min-w-0 flex-1 truncate"}>{l.label}</span>
                         </>
                       )}
                     </NavLink>
@@ -506,18 +507,18 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
         </div>
         {/* The foot, at the bottom of the rail: who is signed in, Sign out and the theme switch. Which AI company we use
             is shown in Settings, not here. Sign out stays reachable in the phone's top bar. */}
-        <div className="flex items-center gap-1 max-[900px]:col-start-2 max-[900px]:row-start-2 max-[900px]:justify-self-end min-[900px]:mt-auto min-[900px]:flex-col min-[900px]:items-stretch min-[900px]:gap-2.5 min-[900px]:border-t min-[900px]:border-line min-[900px]:pt-4">
-          <div className={folded ? "hidden" : "hidden min-w-0 items-center gap-2.5 px-1 min-[900px]:flex"}>
+        <div className="flex items-center gap-1 max-rail:col-start-2 max-rail:row-start-2 max-rail:justify-self-end rail:mt-auto rail:flex-col rail:items-stretch rail:gap-2.5 rail:border-t rail:border-line rail:pt-4">
+          <div className={folded ? "hidden" : "hidden min-w-0 items-center gap-2.5 px-1 rail:flex"}>
             <Avatar name={who} tone="ink" size="sm" />
             <span className="grid min-w-0 leading-tight">
               <strong className="truncate text-[13.5px] font-semibold text-ink">{me.user.name ?? me.user.email}</strong>
               {me.user.name ? <span className="truncate text-[12px] text-ink-3">{me.user.email}</span> : null}
             </span>
           </div>
-          <div className={folded ? "flex items-center gap-1 min-[900px]:flex-col" : "flex items-center gap-1 min-[900px]:justify-between"}>
-            <button type="button" className={folded ? "btn quiet sm min-[900px]:size-9 min-[900px]:justify-center min-[900px]:p-0" : "btn quiet sm"} title={folded ? "Sign out" : undefined} onClick={logout}>
-              <Icon name="log-out" size={16} className="max-[900px]:hidden" />
-              <span className={folded ? "min-[900px]:sr-only" : undefined}>Sign out</span>
+          <div className={folded ? "flex items-center gap-1 rail:flex-col" : "flex items-center gap-1 rail:justify-between"}>
+            <button type="button" className={folded ? "btn quiet sm rail:size-9 rail:justify-center rail:p-0" : "btn quiet sm"} title={folded ? "Sign out" : undefined} onClick={logout}>
+              <Icon name="log-out" size={16} className="max-rail:hidden" />
+              <span className={folded ? "rail:sr-only" : undefined}>Sign out</span>
             </button>
             <button type="button" className="icon-btn sm" aria-label="Dark theme" aria-pressed={dark} title={dark ? "Switch to the light theme" : "Switch to the dark theme"} onClick={toggleTheme}>
               <Icon name={dark ? "sun" : "moon"} size={16} />
@@ -530,7 +531,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             and the page's own heading lead). The company is not repeated here: the rail's chip names it. Phones have
             their own top bar. */}
         {trail ? (
-          <div className="hidden h-16 shrink-0 border-b border-line bg-ground/95 min-[900px]:block">
+          <div className="hidden h-16 shrink-0 border-b border-line bg-ground/95 rail:block">
             <p className={cx("mx-auto flex h-full w-full min-w-0 items-center gap-2 px-10 text-[13px] text-ink-3", width)}>
               <NextLink href={trail.parent.href} className="shrink-0 rounded-md font-medium text-ink-2 underline decoration-line-strong underline-offset-[3px] transition-colors duration-150 ease-soft hover:text-primary hover:decoration-current pointer-coarse:inline-flex pointer-coarse:min-h-10 pointer-coarse:items-center">
                 {trail.parent.label}
@@ -544,7 +545,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             </p>
           </div>
         ) : null}
-        <main id="main" className={cx("mx-auto w-full min-w-0 flex-1 px-4 pb-16 pt-5 min-[640px]:px-6 min-[900px]:px-10 min-[900px]:pb-20", trail ? "min-[900px]:pt-9" : "min-[900px]:pt-12", width)}>
+        <main id="main" className={cx("mx-auto w-full min-w-0 flex-1 px-4 pb-16 pt-5 sm:px-6 rail:px-10 rail:pb-20", trail ? "rail:pt-9" : "rail:pt-12", width)}>
           {me.staffAccess ? <div className="mb-4"><Alert tone="info">You are inside {me.staffAccess.companyName} through an escalation ({me.staffAccess.purpose}). Access is limited to that request and ends {new Date(me.staffAccess.expiresAt).toLocaleString()}. Every page you open is recorded for the customer.</Alert></div> : null}
           {me.ai.provider === "fake" ? <div className="mb-4"><Alert tone="caution">Development mode: the AI provider is a deterministic stand-in, so its drafts are rough.</Alert></div> : null}
           {children}
