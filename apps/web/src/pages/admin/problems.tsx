@@ -305,7 +305,7 @@ function Suppressions() {
       {q.isLoading ? <Skeleton lines={3} /> : q.error ? <ErrorState message="Could not load the addresses we must not send to." onRetry={() => q.refetch()} /> : rows.length ? (
         <div className="stack gap-4">
           <div className="max-w-[520px]">
-            <Field label="How you confirmed the address by another channel (required to release)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
+            <Field label="How you confirmed the address by another channel (required to release; the release is audited with your reason)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
           </div>
           <Table head={["Address", "Reason", numHead("Times"), "Last", ""]} label="Email addresses we must not send to">
             {rows.map((s, i) => (

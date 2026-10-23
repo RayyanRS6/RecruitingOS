@@ -202,8 +202,9 @@ describe("email that could not go", () => {
     expect(text(spam)).toContain("Spam complaint");
     expect(text(spam)).toContain("Never released");
     expect(text(html)).toContain("A spam complaint is never released from here: the person asked not to be emailed.");
-    // the release rule (confirm by another channel, never by emailing the address) is the reason field's own label
-    const label = html.indexOf("How you confirmed the address by another channel (required to release)");
+    // the release rule (confirm by another channel, never by emailing the address) and the audit notice are the reason
+    // field's own label: the admin knows their words become the audit record before typing them
+    const label = html.indexOf("How you confirmed the address by another channel (required to release; the release is audited with your reason)");
     expect(label).toBeGreaterThan(-1);
     expect(label).toBeLessThan(html.indexOf("<table"));
   });
