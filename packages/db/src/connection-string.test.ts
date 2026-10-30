@@ -1,6 +1,6 @@
 import pg from "pg";
 import { describe, expect, it } from "vitest";
-import { ConnectionStringError, countPlaceholders, fillPassword, PASSWORD_PLACEHOLDER, percentEncodePassword } from "./cli/connection-string";
+import { ConnectionStringError, countPlaceholders, fillPassword, PASSWORD_PLACEHOLDER, passwordFromStdin, percentEncodePassword } from "./cli/connection-string";
 
 const POOLER = "postgresql://postgres.abcdefghijklmnopqrst:[YOUR-PASSWORD]@aws-0-us-west-2.pooler.supabase.com:5432/postgres";
 
@@ -23,6 +23,22 @@ describe("percentEncodePassword", () => {
   });
   it("round-trips through the URL decoder", () => {
     for (const pw of ["p@ss:w/ord?#%&+ ", "100%sure", "ünïcödé 🔐", "a[b]c{d}e", "tab\tand\"quote'"]) expect(decodeURIComponent(percentEncodePassword(pw))).toBe(pw);
+  });
+});
+
+describe("passwordFromStdin", () => {
+  it("removes one line ending a pipe added (Unix or Windows) and a byte-order mark Windows PowerShell put in front, and nothing else", () => {
+    expect(passwordFromStdin("p@ss word")).toBe("p@ss word");
+    expect(passwordFromStdin("p@ss word\n")).toBe("p@ss word");
+    expect(passwordFromStdin("p@ss word\r\n")).toBe("p@ss word");
+    expect(passwordFromStdin("\uFEFFp@ss word")).toBe("p@ss word");
+    expect(passwordFromStdin("\uFEFFp@ss word\r\n")).toBe("p@ss word");
+    // only one of each: anything more was typed
+    expect(passwordFromStdin("pass\n\n")).toBe("pass\n");
+    expect(passwordFromStdin("\uFEFF\uFEFFpass")).toBe("\uFEFFpass");
+    expect(passwordFromStdin(" pass ")).toBe(" pass ");
+    expect(passwordFromStdin("pässwörd🔐")).toBe("pässwörd🔐");
+    expect(passwordFromStdin("")).toBe("");
   });
 });
 

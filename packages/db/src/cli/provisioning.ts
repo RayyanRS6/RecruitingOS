@@ -51,6 +51,67 @@ export function vaultGrantStatements(): string[] {
 
 export const PASSWORD_SHAPE = /^[A-Za-z0-9]{24,}$/;
 
+/**
+ * Safety limits on the application roles' sessions (audit OPS-V1, 29 Oct 2026), set with ALTER ROLE so every session
+ * either role opens gets them, whatever the code does: a stuck statement, a lock wait or a transaction left open by a
+ * request or job that died ends on its own instead of holding one of the role's 15 Session pooler slots and its locks.
+ * The owner, which runs the migrations, the maintenance SQL and these tools, is not affected. The values, after a
+ * search of the code for long work:
+ * - statement_timeout: no API statement comes near a minute (model calls never run inside a statement or a
+ *   transaction: runPromptDetached and the two-phase steps); the worker's daily sweep deletes in bulk inside one
+ *   platform transaction, so it gets five minutes, the length of a job's lease.
+ * - lock_timeout: the locks the code takes are row locks and transaction-level advisory locks held by short
+ *   transactions (slow work runs before the transaction opens; messages leave through the outbox after commit), so a
+ *   wait past 15 seconds means a stuck holder: the waiting statement fails, its transaction rolls back, and the request
+ *   or job is retried.
+ * - idle_in_transaction_session_timeout: an API transaction waits on nothing slower than a résumé upload to storage
+ *   (the apply path), and a worker step's transaction never waits on the model; two minutes and five minutes end a
+ *   transaction whose request or job died mid-way (a suspended Vercel instance, a stalled worker), releasing its locks.
+ */
+export const LIMIT_NAMES = ["statement_timeout", "lock_timeout", "idle_in_transaction_session_timeout"] as const;
+export type LimitName = (typeof LIMIT_NAMES)[number];
+export const ROLE_LIMITS: Record<AppRole, Record<LimitName, string>> = {
+  ros_app: { statement_timeout: "60s", lock_timeout: "15s", idle_in_transaction_session_timeout: "120s" },
+  ros_worker: { statement_timeout: "300s", lock_timeout: "15s", idle_in_transaction_session_timeout: "300s" },
+};
+
+/** The ALTER ROLE statements that set the limits; safe to run again (each replaces the role's earlier value). */
+export function roleLimitStatements(): string[] {
+  return APP_ROLES.flatMap((role) => LIMIT_NAMES.map((name) => `ALTER ROLE ${role} SET ${name} = '${ROLE_LIMITS[role][name]}'`));
+}
+
+/** One role's limits in words, for the report. */
+export function describeRoleLimits(role: AppRole): string {
+  return LIMIT_NAMES.map((name) => `${name} ${ROLE_LIMITS[role][name]}`).join(", ");
+}
+
+const DURATION_UNITS_MS: Record<string, number> = { us: 0.001, ms: 1, s: 1000, min: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/** A Postgres time setting in milliseconds ("60s", "1min", "60000", "0"), or null when it is not one. */
+export function durationMs(value: string): number | null {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(us|ms|s|min|h|d)?\s*$/.exec(value);
+  if (!m) return null;
+  return Math.round(Number(m[1]) * DURATION_UNITS_MS[m[2] ?? "ms"]!);
+}
+
+/** A role's own settings from pg_roles.rolconfig ("name=value" entries). */
+export function settingsFromRolconfig(rolconfig: string[] | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const entry of rolconfig ?? []) {
+    const at = entry.indexOf("=");
+    if (at > 0) out[entry.slice(0, at)] = entry.slice(at + 1);
+  }
+  return out;
+}
+
+/** The limits a role's settings (or a session's) lack or hold at another value; the same duration in other units counts as set. */
+export function roleLimitGaps(role: AppRole, settings: Partial<Record<LimitName, string | null>>): LimitName[] {
+  return LIMIT_NAMES.filter((name) => {
+    const have = settings[name];
+    return have == null || durationMs(have) !== durationMs(ROLE_LIMITS[role][name]);
+  });
+}
+
 /** The provisioning report, one line per step, printed as it goes so an interruption still shows what happened. */
 export type StepReport = { step: string; state: "done" | "skipped" | "failed"; detail: string };
 export function formatStep(r: StepReport): string {

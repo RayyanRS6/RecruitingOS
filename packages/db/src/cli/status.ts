@@ -2,14 +2,17 @@ import type { TLSSocket } from "node:tls";
 import { connectionConfig, createDb, tlsOptionsFromEnv } from "../client";
 import { migrationStatus } from "../migrate";
 import { describeConnectionError } from "./db-errors";
-import { describeCertificate, fingerprintOfDer, smallPool, withSsl } from "./provisioning";
+import { checkProjectRef, commandsFor, dbEnvironmentFrom } from "./environment";
+import { APP_ROLES, describeCertificate, describeRoleLimits, fingerprintOfDer, roleLimitGaps, settingsFromRolconfig, smallPool, withSsl } from "./provisioning";
 
 /**
- * Read-only report of the staging database for the founder (22 Sep 2026): which migrations are applied, whether the
- * next one was interrupted halfway, whether the application roles exist and can log in, whether Supabase Vault is
- * present and granted. Changes nothing. Prints no connection string, password or row data, so the output can be
- * pasted back in full. Exits 0 when everything is in place and non-zero otherwise (3 while setup still has work to
- * do, 2 when it could not connect; pnpm may flatten the code it shows).
+ * Read-only report of the staging or production database for the founder (22 Sep 2026): which migrations are applied,
+ * whether the next one was interrupted halfway, whether the application roles exist, can log in and carry their
+ * safety limits, whether Supabase Vault is present and granted. Changes nothing. Prints no connection string,
+ * password or row data, so the output can be pasted back in full. Exits 0 when everything is in place and non-zero
+ * otherwise (3 while setup still has work to do, 2 when it could not connect or was not told which database it is
+ * looking at; pnpm may flatten the code it shows). ROS_DB_ENV names the database (environment.ts), and a connection
+ * string from another Supabase project is refused before anything connects.
  *
  * Two flags for the release workflow (H4), where a pending migration is the expected state before the apply step:
  *   --report-only                  print the report and exit 0 whatever it says (a failed connection is still 2)
@@ -18,11 +21,24 @@ import { describeCertificate, fingerprintOfDer, smallPool, withSsl } from "./pro
 const flags = new Set(process.argv.slice(2));
 const reportOnly = flags.has("--report-only");
 const failOnPendingMigrations = flags.has("--fail-on-pending-migrations");
-const owner = process.env.MIGRATE_DATABASE_URL;
-if (!owner) {
-  console.error("status: MIGRATE_DATABASE_URL must be set by scripts/staging-db-status.sh (or the migrate workflow's environment secrets).");
+const environment = dbEnvironmentFrom(process.env);
+if (!environment.ok) {
+  console.error(`status: ${environment.error}.`);
   process.exit(2);
 }
+const target = environment.target;
+const commands = commandsFor(target);
+const owner = process.env.MIGRATE_DATABASE_URL;
+if (!owner) {
+  console.error(`status: MIGRATE_DATABASE_URL must be set by the status script (${commands.status}) or the migrate workflow's environment secrets.`);
+  process.exit(2);
+}
+const project = checkProjectRef(target, owner);
+if (!project.ok) {
+  console.error(`status: ${project.error}.`);
+  process.exit(2);
+}
+console.log(`status: environment: ${target.name} (Supabase project ${target.projectRef})`);
 const ownerUrl = withSsl(owner);
 
 // TLS first: which certificate the driver will verify with, and which authority the server actually presents.
@@ -87,13 +103,21 @@ try {
   pendingMigrations = m.pending.length;
   if (m.pending.length) todo.push("apply the pending migrations (the migrate workflow, or pnpm db:migrate with MIGRATE_DATABASE_URL; docs/runbooks/release-migrations.md)");
 
-  const roles = await q<{ rolname: string; rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; tenant: boolean }>("select rolname, rolcanlogin, rolsuper, rolbypassrls, pg_has_role(rolname, 'app_tenant', 'MEMBER') as tenant from pg_roles where rolname in ('ros_app','ros_worker','app_tenant') and exists (select 1 from pg_roles where rolname = 'app_tenant') order by rolname");
+  const roles = await q<{ rolname: string; rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; tenant: boolean; rolconfig: string[] | null }>("select rolname, rolcanlogin, rolsuper, rolbypassrls, pg_has_role(rolname, 'app_tenant', 'MEMBER') as tenant, rolconfig from pg_roles where rolname in ('ros_app','ros_worker','app_tenant') and exists (select 1 from pg_roles where rolname = 'app_tenant') order by rolname");
   for (const r of ["app_tenant", "ros_app", "ros_worker"]) {
     const row = roles.find((x) => x.rolname === r);
     if (!row) { console.log(`status: role ${r}: missing (created by migration 0003)`); todo.push(`role ${r} (migrations)`); continue; }
     const login = r === "app_tenant" ? "" : row.rolcanlogin ? ", can log in (password set)" : ", cannot log in yet (passwords not set)";
     console.log(`status: role ${r}: present${login}${row.rolsuper ? ", SUPERUSER (wrong)" : ""}${row.rolbypassrls ? ", BYPASSRLS (wrong)" : ""}${r !== "app_tenant" ? `, member of app_tenant: ${row.tenant ? "yes" : "no"}` : ""}`);
-    if (r !== "app_tenant" && !row.rolcanlogin) todo.push(`set the ${r} password (run scripts/staging-db-setup.sh again)`);
+    if (r !== "app_tenant" && !row.rolcanlogin) todo.push(`set the ${r} password (run the setup again: ${commands.setup})`);
+  }
+  // The safety limits every session of an application role starts with (provisioning.ts, ROLE_LIMITS).
+  for (const role of APP_ROLES) {
+    const row = roles.find((x) => x.rolname === role);
+    if (!row) continue;
+    const gaps = roleLimitGaps(role, settingsFromRolconfig(row.rolconfig));
+    console.log(`status: role ${role}: safety limits ${gaps.length ? `missing or different: ${gaps.join(", ")} (wanted: ${describeRoleLimits(role)})` : `in place (${describeRoleLimits(role)})`}`);
+    if (gaps.length) todo.push(`set the ${role} safety limits (run: ${commands.grants})`);
   }
 
   const sessions = await q<{ usename: string; active: number; idle: number }>("select usename, count(*) filter (where state <> 'idle')::int as active, count(*) filter (where state = 'idle')::int as idle from pg_stat_activity where usename in ('ros_app','ros_worker') group by usename order by usename").catch(() => [] as never[]);
@@ -102,7 +126,7 @@ try {
   const vault = (await q<{ present: boolean }>("select exists (select 1 from pg_namespace where nspname = 'vault') as present"))[0]!.present;
   if (!vault) {
     console.log("status: vault: schema not present (enable Supabase Vault: Dashboard, Database, Extensions, supabase_vault)");
-    todo.push("enable Supabase Vault, then run: bash scripts/staging-db-setup.sh grants");
+    todo.push(`enable Supabase Vault, then run: ${commands.grants}`);
   } else {
     const ok = roles.some((r) => r.rolname === "ros_app") && roles.some((r) => r.rolname === "ros_worker");
     if (!ok) console.log("status: vault: present; grants wait for the roles");
@@ -116,7 +140,7 @@ try {
         console.log(`status: vault: functions ${fns.map((f) => f.sig).join("; ")}`);
         const granted = g.app_usage && g.worker_usage && fns.every((f) => f.app && f.worker) && g.worker_read && !g.app_read;
         console.log(`status: vault: present; grants ${granted ? "in place (API stores and rotates; only the worker reads)" : "incomplete"}${g.app_read ? "; WRONG: ros_app can read decrypted secrets" : ""}`);
-        if (!granted) todo.push("apply the Vault grants (run: bash scripts/staging-db-setup.sh grants)");
+        if (!granted) todo.push(`apply the Vault grants (run: ${commands.grants})`);
       }
     }
   }
@@ -126,7 +150,7 @@ try {
   const api = await q<{ rolname: string; usage: boolean; tables: number }>("select r.rolname, exists (select 1 from pg_namespace n, aclexplode(n.nspacl) a where n.nspname = 'public' and a.grantee = r.oid and a.privilege_type = 'USAGE') as usage, (select count(*)::int from information_schema.table_privileges tp where tp.grantee = r.rolname and tp.table_schema = 'public') as tables from pg_roles r where r.rolname in ('anon','authenticated','service_role') order by 1");
   if (api.length) {
     for (const r of api) console.log(`status: data api role ${r.rolname}: explicit schema grant ${r.usage ? "YES (should be revoked)" : "no"}, table privileges ${r.tables}${r.tables ? " (should be 0)" : ""}`);
-    if (api.some((r) => r.usage || r.tables)) todo.push("revoke the Data API roles' access to public (migration 0017 does it; run scripts/staging-db-setup.sh again), then remove public from the exposed schemas in Supabase (Project Settings, Data API)");
+    if (api.some((r) => r.usage || r.tables)) todo.push(`revoke the Data API roles' access to public (migration 0017 does it; run the setup again: ${commands.setup}), then remove public from the exposed schemas in Supabase (Project Settings, Data API)`);
   }
 } finally {
   await handle.close();
@@ -137,4 +161,4 @@ if (todo.length) {
   if (failOnPendingMigrations) process.exit(pendingMigrations ? 3 : 0);
   process.exit(3);
 }
-console.log("\nstatus: everything is in place. If DATABASE_URL and WORKER_DATABASE_URL are not stored in 1Password yet, run scripts/staging-db-setup.sh again: it sets fresh passwords and delivers the two strings to the clipboard for 1Password (or shows them once with --print).");
+console.log(`\nstatus: everything is in place. If DATABASE_URL and WORKER_DATABASE_URL are not stored in 1Password (vault: ${target.vault}) yet, run the setup again (${commands.setup}): it sets fresh passwords and delivers the two strings to the clipboard for 1Password${target.name === "staging" && process.platform !== "win32" ? " (or shows them once with --print)" : ""}.`);

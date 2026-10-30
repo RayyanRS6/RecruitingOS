@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { describeConnectionError, diagnoseConnectionError } from "./cli/db-errors";
-import { applicationRoleOf, describeCertificate, formatStep, isTransientAuthAfterRotation, roleUrl, vaultGrantStatements, withSsl } from "./cli/provisioning";
+import { applicationRoleOf, describeCertificate, describeRoleLimits, durationMs, formatStep, isTransientAuthAfterRotation, roleLimitGaps, roleLimitStatements, roleUrl, settingsFromRolconfig, vaultGrantStatements, withSsl } from "./cli/provisioning";
 
 const OWNER = "postgresql://postgres.abcdefghijklmnopqrst:pass@aws-0-us-west-2.pooler.supabase.com:5432/postgres";
 
@@ -45,6 +45,42 @@ describe("provisioning helpers", () => {
   });
   it("formats step lines", () => {
     expect(formatStep({ step: "vault grants", state: "skipped", detail: "schema vault is not present" })).toBe("provision: vault grants: skipped (schema vault is not present)");
+  });
+});
+
+/**
+ * Audit OPS-V1 (29 Oct 2026): nothing bounded a stuck statement, a lock wait or a transaction left open, so one could
+ * hold a pooler slot and its locks for ever. The application roles now carry limits every session starts with.
+ */
+describe("role safety limits", () => {
+  it("sets the agreed limits on both application roles, and only on them", () => {
+    expect(roleLimitStatements()).toEqual([
+      "ALTER ROLE ros_app SET statement_timeout = '60s'",
+      "ALTER ROLE ros_app SET lock_timeout = '15s'",
+      "ALTER ROLE ros_app SET idle_in_transaction_session_timeout = '120s'",
+      "ALTER ROLE ros_worker SET statement_timeout = '300s'",
+      "ALTER ROLE ros_worker SET lock_timeout = '15s'",
+      "ALTER ROLE ros_worker SET idle_in_transaction_session_timeout = '300s'",
+    ]);
+    expect(describeRoleLimits("ros_app")).toBe("statement_timeout 60s, lock_timeout 15s, idle_in_transaction_session_timeout 120s");
+  });
+  it("reads Postgres durations in any unit, and refuses what is not one", () => {
+    expect(durationMs("60s")).toBe(60_000);
+    expect(durationMs("1min")).toBe(60_000);
+    expect(durationMs("60000")).toBe(60_000);
+    expect(durationMs("2.5s")).toBe(2_500);
+    expect(durationMs("1h")).toBe(3_600_000);
+    expect(durationMs("0")).toBe(0);
+    expect(durationMs("soon")).toBeNull();
+  });
+  it("finds a role's missing or different limits in pg_roles.rolconfig or a session's settings; the same duration in other units counts as set", () => {
+    expect(settingsFromRolconfig(["search_path=public", "statement_timeout=1min", "broken"])).toEqual({ search_path: "public", statement_timeout: "1min" });
+    expect(settingsFromRolconfig(null)).toEqual({});
+    expect(roleLimitGaps("ros_app", settingsFromRolconfig(null))).toEqual(["statement_timeout", "lock_timeout", "idle_in_transaction_session_timeout"]);
+    expect(roleLimitGaps("ros_app", settingsFromRolconfig(["statement_timeout=1min", "lock_timeout=15s", "idle_in_transaction_session_timeout=2min"]))).toEqual([]);
+    // what pg_settings shows inside a session: milliseconds; 0 means the limit is off
+    expect(roleLimitGaps("ros_worker", { statement_timeout: "300000", lock_timeout: "15000", idle_in_transaction_session_timeout: "0" })).toEqual(["idle_in_transaction_session_timeout"]);
+    expect(roleLimitGaps("ros_worker", { statement_timeout: "60s", lock_timeout: "15s", idle_in_transaction_session_timeout: "300s" })).toEqual(["statement_timeout"]);
   });
 });
 

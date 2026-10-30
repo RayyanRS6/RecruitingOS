@@ -41,7 +41,7 @@ describe("createDb's Postgres pool", () => {
     await Promise.all(Array.from({ length: 15 }, () => handle.query("select 1", [])));
     expect(wiring.pools).toHaveLength(1);
     const pool = wiring.pools[0];
-    expect(pool.options).toMatchObject({ max: 3, idleTimeoutMillis: 5000, connectionTimeoutMillis: 10000, onConnect: prepareConnection });
+    expect(pool.options).toMatchObject({ max: 3, idleTimeoutMillis: 5000, connectionTimeoutMillis: 10000, keepAlive: true, keepAliveInitialDelayMillis: 10000, onConnect: prepareConnection });
     expect(wiring.clients.length).toBeGreaterThan(0);
     expect(wiring.clients.length).toBeLessThanOrEqual(3);
     for (const c of wiring.clients) {

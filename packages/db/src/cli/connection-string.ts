@@ -32,6 +32,16 @@ export function countPlaceholders(uri: string): number {
 export class ConnectionStringError extends Error {}
 
 /**
+ * The password as it arrives on standard input. A pipe may add one line ending (`\n`, or `\r\n` on Windows) and
+ * Windows PowerShell may put a UTF-8 byte-order mark in front (when the console uses code page 65001); neither can be
+ * typed into a password, so one of each is removed and nothing else is touched.
+ */
+export function passwordFromStdin(raw: string): string {
+  const unmarked = raw.startsWith("\uFEFF") ? raw.slice(1) : raw;
+  return unmarked.endsWith("\r\n") ? unmarked.slice(0, -2) : unmarked.endsWith("\n") ? unmarked.slice(0, -1) : unmarked;
+}
+
+/**
  * Returns the connection string with the single `[YOUR-PASSWORD]` replaced by the percent-encoded password.
  * Throws when the string is not a Postgres URL, when the placeholder is missing or repeated, or when the password is
  * empty. Error messages never carry the string or the password.

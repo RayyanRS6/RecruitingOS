@@ -158,6 +158,14 @@ export function isDuplicateObjectError(err: unknown, statement = ""): boolean {
 export const POOL_IDLE_TIMEOUT_MS = 5_000;
 /** How long a query waits for a connection (from this pool, or from the session pooler, which would hold it for a minute) before it fails. */
 export const POOL_CONNECT_TIMEOUT_MS = 10_000;
+/**
+ * TCP keepalive on every connection (audit OPS-V1): after this long without traffic the operating system starts
+ * probing, so a connection whose network path died silently (a dropped NAT entry, a pooler that went away without
+ * closing) is found and failed instead of leaving a query or a checked-out transaction waiting on it for ever. Without
+ * a delay the operating system's own default applies, two hours on Linux. The server-side limits on the roles
+ * (statement_timeout and its kin, packages/db/src/cli/provisioning.ts) cannot see a dead socket from this side.
+ */
+export const POOL_KEEPALIVE_DELAY_MS = 10_000;
 
 /**
  * Platform mode for every connection before anyone can use it. pg-pool awaits this (through prepareConnection) before
@@ -186,9 +194,9 @@ export async function prepareConnection(client: Pick<ClientBase, "query" | "on">
  * Pool settings for every Postgres process. DATABASE_POOL_MAX is per process, which on Vercel means per instance;
  * every instance of every live deployment shares ros_app's 15 session-pooler slots.
  */
-export function poolSettings(env: Record<string, string | undefined> = process.env): { max: number; idleTimeoutMillis: number; connectionTimeoutMillis: number; onConnect: typeof prepareConnection } {
+export function poolSettings(env: Record<string, string | undefined> = process.env): { max: number; idleTimeoutMillis: number; connectionTimeoutMillis: number; keepAlive: true; keepAliveInitialDelayMillis: number; onConnect: typeof prepareConnection } {
   const max = Math.max(1, Math.min(20, Number(env.DATABASE_POOL_MAX ?? "3") || 3));
-  return { max, idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS, connectionTimeoutMillis: POOL_CONNECT_TIMEOUT_MS, onConnect: prepareConnection };
+  return { max, idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS, connectionTimeoutMillis: POOL_CONNECT_TIMEOUT_MS, keepAlive: true, keepAliveInitialDelayMillis: POOL_KEEPALIVE_DELAY_MS, onConnect: prepareConnection };
 }
 
 /** Resolves once the pool holds no connection (its idle timer closed them), or after maxWaitMs, whichever comes first. Never rejects. */
