@@ -9,8 +9,12 @@ import { IdentityError, type IdentityProvider, type MfaFactor, type TotpEnrolmen
  * so every sign-in policy (Microsoft for staff, a second factor for staff, verified email) is exercised without an
  * account. It also keeps authenticator factors the way the service does: enrol, challenge, verify a real time-based
  * code, and only then mint a token at assurance level 2. Production refuses this provider.
+ *
+ * Like the service, a token names the account's FIRST provider in app_metadata.provider and every linked one in
+ * app_metadata.providers. `provider` is the method of this sign-in; `providers` lists what the account already had, first
+ * one first (by default nothing else), so tests can sign a linked account in with its second provider.
  */
-export type FakeMintInput = { email: string; name?: string | null; provider?: "azure" | "google" | "email"; aal?: "aal1" | "aal2"; emailVerified?: boolean; subject?: string; expiresInSeconds?: number; now?: Date };
+export type FakeMintInput = { email: string; name?: string | null; provider?: "azure" | "google" | "email"; providers?: string[]; aal?: "aal1" | "aal2"; emailVerified?: boolean; subject?: string; expiresInSeconds?: number; now?: Date };
 
 type FakeFactor = { id: string; friendlyName: string; secret: string; status: "verified" | "unverified"; createdAt: string };
 
@@ -56,12 +60,13 @@ export class FakeIdentityProvider implements IdentityProvider {
   mint(input: FakeMintInput): string {
     const now = Math.floor((input.now ?? new Date()).getTime() / 1000);
     const provider = input.provider ?? "google";
+    const linked = [...new Set([...(input.providers ?? []), provider])];
     const aal = input.aal ?? "aal1";
     const amr = [{ method: provider === "email" ? "otp" : "oauth", timestamp: now }, ...(aal === "aal2" ? [{ method: "totp", timestamp: now }] : [])];
     return signHs256({
       iss: this.issuer, sub: input.subject ?? `fake-${createHash("sha256").update(input.email.toLowerCase()).digest("hex").slice(0, 24)}`, aud: "authenticated", role: "authenticated",
       iat: now, exp: now + (input.expiresInSeconds ?? 3600), email: input.email.toLowerCase(), aal, amr, session_id: base64url.encode(randomBytes(12)),
-      app_metadata: { provider, providers: [provider] },
+      app_metadata: { provider: linked[0], providers: linked },
       user_metadata: { full_name: input.name ?? null, email_verified: input.emailVerified ?? true },
     }, this.secret);
   }
@@ -120,7 +125,7 @@ export class FakeIdentityProvider implements IdentityProvider {
     if (!verifyTotp(factor.secret, input.code, { now: this.clock() })) throw new IdentityError("mfa_code_invalid", "That code is not right. Check the app and try again.");
     factor.status = "verified";
     this.challenges.delete(input.challengeId);
-    return { accessToken: this.mint({ email: who.email, name: who.name, provider: who.provider as FakeMintInput["provider"], aal: "aal2", emailVerified: who.emailVerified, subject: who.subject, now: this.clock() }) };
+    return { accessToken: this.mint({ email: who.email, name: who.name, provider: who.provider as FakeMintInput["provider"], providers: who.providers, aal: "aal2", emailVerified: who.emailVerified, subject: who.subject, now: this.clock() }) };
   }
   async unenrolFactor(accessToken: string, factorId: string): Promise<void> {
     const who = await this.holder(accessToken);

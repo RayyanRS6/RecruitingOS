@@ -2,13 +2,13 @@
 /** @jsxImportSource hono/jsx */
 import { randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
 import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
 import { answerCvLines, chatFactsWithKept } from "@ros/agents";
 import { applicationAnswerSentences, candidateNotices, emit, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey, type UploadGrantPayload } from "../uploads";
+import { readAppCookie, setAppCookie } from "../cookies";
 import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware/rate-limit";
@@ -867,7 +867,7 @@ function toReceipt(c: Context<Vars>, job: { company: { slug: string }; role: { i
   const now = container.engine.clock().getTime();
   const waiting = next === "interview" ? { wait: wait ?? uuidv7(), until: now + LOOK_ALIKE_MIN_MS + randomInt(LOOK_ALIKE_SPREAD_MS) } : {};
   const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: now + RECEIPT_TTL_MS, next, ...waiting };
-  setCookie(c, RECEIPT_COOKIE, sealPayload(RECEIPT_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
+  setAppCookie(c, RECEIPT_COOKIE, sealPayload(RECEIPT_PURPOSE, payload, container.env.SESSION_SECRET), { path, maxAge: RECEIPT_TTL_MS / 1000 });
   return c.redirect(path);
 }
 
@@ -877,7 +877,7 @@ function toInterview(c: Context<Vars>, token: string, maskedTo: string | null) {
   const path = screenPath(token);
   if (maskedTo) {
     const payload: ConversationPayload = { v: 1, token, to: maskedTo, exp: container.engine.clock().getTime() + RECEIPT_TTL_MS };
-    setCookie(c, CONVERSATION_COOKIE, sealPayload(CONVERSATION_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
+    setAppCookie(c, CONVERSATION_COOKIE, sealPayload(CONVERSATION_PURPOSE, payload, container.env.SESSION_SECRET), { path, maxAge: RECEIPT_TTL_MS / 1000 });
   }
   return c.redirect(path);
 }
@@ -1473,7 +1473,7 @@ function receiptFor(state: InterviewWait["state"]): Exclude<ReceiptNext, "interv
  */
 async function receiptPage(c: Context<Vars>, job: Job, opts: { again?: boolean; grant?: WaitGrant } = {}): Promise<Response> {
   const container = c.get("container");
-  const sealed = openPayload<ReceiptPayload>(RECEIPT_PURPOSE, getCookie(c, RECEIPT_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  const sealed = openPayload<ReceiptPayload>(RECEIPT_PURPOSE, readAppCookie(c, RECEIPT_COOKIE, { path: receiptPath(job.company.slug, job.role.id) }), container.env.SESSION_SECRET, container.engine.clock().getTime());
   const mine = sealed?.v === 1 && sealed.roleId === job.role.id;
   const to = mine && typeof sealed.to === "string" ? sealed.to : null;
   c.header("Cache-Control", "no-store");

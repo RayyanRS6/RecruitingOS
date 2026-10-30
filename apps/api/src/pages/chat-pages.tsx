@@ -1,10 +1,10 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
-import { getCookie } from "hono/cookie";
 import { SCREEN_PERSON_ROUTE_STATUSES } from "@ros/contracts";
 import { WITHDRAW_CONFIRM_KEY } from "@ros/agents";
 import { openPayload } from "@ros/core";
+import { readAppCookie } from "../cookies";
 import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { conversationLater, conversationPerson, conversationStart, conversationTurn, conversationView, conversationWithdraw, type ConversationView } from "../services/apply-conversation";
@@ -26,7 +26,7 @@ export { candidatePages as chatPages };
 /** The masked address the application's link went to, for the introduction, when this browser just sent the form. */
 function appliedTo(c: Context<Vars>, token: string): string | null {
   const container = c.get("container");
-  const sealed = openPayload<ConversationPayload>(CONVERSATION_PURPOSE, getCookie(c, CONVERSATION_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  const sealed = openPayload<ConversationPayload>(CONVERSATION_PURPOSE, readAppCookie(c, CONVERSATION_COOKIE, { path: screenPath(token) }), container.env.SESSION_SECRET, container.engine.clock().getTime());
   return sealed?.v === 1 && sealed.token === token && typeof sealed.to === "string" ? sealed.to : null;
 }
 

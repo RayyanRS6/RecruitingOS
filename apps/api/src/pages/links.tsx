@@ -1,11 +1,11 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
 import { isCompanyVerified, trialPaused } from "@ros/contracts";
 import { findLinkByToken, isLinkPreviewBot, isSource, openPayload, recordLinkVisit, sealPayload, type ApplicationSource } from "@ros/core";
 import { companies, roles, withPlatform } from "@ros/db";
+import { clearAppCookie, readAppCookie, setAppCookie, type CookiePlace } from "../cookies";
 import type { Vars } from "../middleware/session";
 import { jobUrls } from "../services/job-urls";
 import { Layout } from "./layout";
@@ -24,15 +24,13 @@ const SOURCE_PURPOSE = "application-source";
 
 export type ApplicationSourcePayload = { v: 1; linkId: string; source: ApplicationSource; sourceDetail: string | null; roleId: string; exp: number };
 
-function sourceCookieOptions(c: Context<Vars>) {
-  // Host-only on purpose: the link and the apply page live on the same job-page host, and a host-only cookie works whatever COOKIE_DOMAIN says.
-  return { httpOnly: true, sameSite: "Lax" as const, secure: c.get("container").env.NODE_ENV === "production", path: "/", maxAge: SOURCE_COOKIE_TTL_MS / 1000 };
-}
+// Host-only on purpose: the link and the apply page live on the same job-page host, and a host-only cookie works whatever COOKIE_DOMAIN says.
+const SOURCE_PLACE: CookiePlace = { path: "/" };
 
 /** The source the apply page records: the sealed cookie when it names this role, otherwise the careers page with no detail. */
 export function resolveApplicationSource(c: Context<Vars>, roleId: string): { source: ApplicationSource; sourceDetail: string | null; linkId: string | null } {
   const container = c.get("container");
-  const payload = openPayload<ApplicationSourcePayload>(SOURCE_PURPOSE, getCookie(c, SOURCE_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  const payload = openPayload<ApplicationSourcePayload>(SOURCE_PURPOSE, readAppCookie(c, SOURCE_COOKIE, SOURCE_PLACE), container.env.SESSION_SECRET, container.engine.clock().getTime());
   if (payload?.v === 1 && payload.roleId === roleId && typeof payload.linkId === "string" && isSource(payload.source)) {
     return { source: payload.source, sourceDetail: payload.sourceDetail ?? null, linkId: payload.linkId };
   }
@@ -41,7 +39,7 @@ export function resolveApplicationSource(c: Context<Vars>, roleId: string): { so
 
 /** After a successful submission the cookie has done its work; a later application from the same browser starts clean. */
 export function clearApplicationSource(c: Context<Vars>): void {
-  deleteCookie(c, SOURCE_COOKIE, { path: "/" });
+  clearAppCookie(c, SOURCE_COOKIE, SOURCE_PLACE);
 }
 
 function NotActive() {
@@ -77,7 +75,7 @@ linkPages.get("/a/:token", async (c) => {
   const urls = jobUrls(container.env, { slug: found.slug, roleId: link.roleId });
   if (bot) return c.redirect(urls.job, 302);
   const payload: ApplicationSourcePayload = { v: 1, linkId: link.id, source: link.source as ApplicationSource, sourceDetail: link.sourceDetail, roleId: link.roleId, exp: now.getTime() + SOURCE_COOKIE_TTL_MS };
-  setCookie(c, SOURCE_COOKIE, sealPayload(SOURCE_PURPOSE, payload, container.env.SESSION_SECRET), sourceCookieOptions(c));
+  setAppCookie(c, SOURCE_COOKIE, sealPayload(SOURCE_PURPOSE, payload, container.env.SESSION_SECRET), { ...SOURCE_PLACE, maxAge: SOURCE_COOKIE_TTL_MS / 1000 });
   // A shared link opens the job page first; a board's link goes straight to the form, since the board already showed the
   // job. A role that is not taking applications sends everyone to the job page, which says so, instead of a 404 on the form.
   return c.redirect(found.accepting && link.landing === "apply" ? urls.apply : urls.job, 302);
