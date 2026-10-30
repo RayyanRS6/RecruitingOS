@@ -102,7 +102,7 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     await container.drain();
     const [row] = await container.db.select().from(communications).where(eq(communications.id, body.communicationId));
     expect(row).toMatchObject({ templateKey: "freeform", status: "sent", direction: "outbound", channel: "email", disclosureIncluded: false, toAddress: cand.email });
-    expect(row.fromAddress).toMatch(/^Harbor Dental Group hiring team </);
+    expect(row.fromAddress).toMatch(/^"Harbor Dental Group hiring team" </);
     const mail = outbox().slice(before).find((m) => m.subject === "Quick question about your license");
     expect(mail).toBeTruthy();
     expect(mail!.to).toBe(cand.email);

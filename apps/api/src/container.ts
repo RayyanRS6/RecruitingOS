@@ -9,7 +9,7 @@ import { ALERT_EMAIL_JOB_KIND, ESCALATION_QUEUE_EMAIL_JOB_KIND, REVOKE_JOB_KIND,
 import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
-import { toProductEvent } from "@ros/integrations";
+import { mailbox, toProductEvent } from "@ros/integrations";
 import { loadEnv, type Env } from "./env";
 import { errorForLog, registerSecretValue } from "@ros/core";
 import { UploadGrants } from "./uploads";
@@ -143,7 +143,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     integrations.clock = () => engine.clock();
     // So does the job that writes an email alert for an update (plan B3).
     setNotifyClock(() => engine.clock());
-    const alertEmailDeps = (now: Date) => ({ send: (m: Parameters<typeof integrations.email.send>[0]) => integrations.email.send(m), from: `${env.PRODUCT_NAME} <${integrations.env.fromAddress}>`, consoleUrl: `${env.APP_BASE_URL}/admin`, now });
+    const alertEmailDeps = (now: Date) => ({ send: (m: Parameters<typeof integrations.email.send>[0]) => integrations.email.send(m), from: mailbox(env.PRODUCT_NAME, integrations.env.fromAddress), consoleUrl: `${env.APP_BASE_URL}/admin`, now });
     /** Emails one critical alert now (after the commit that raised it); a failure is left to the queued job. */
     const emailCritical = async (alertId: string): Promise<void> => {
       const r = await withPlatform(handle.db, (q) => emailCriticalAlert(q, alertEmailDeps(engine.clock()), { alertId }));

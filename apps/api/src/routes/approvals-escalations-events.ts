@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
 import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -309,7 +310,7 @@ escalationRoutes.post("/mine/:id/messages", requireTenant, async (c) => {
   const [holder] = holderId ? await withPlatform(container.db, (tx) => tx.select({ email: users.email }).from(users).where(eq(users.id, holderId)).limit(1)) : [];
   const sent = holder?.email ? await container.integrations.email.send({
     to: holder.email,
-    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+    from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
     subject: `[${e.kind}] The customer added a note to a request you hold`,
     text: `The customer added a note to a request you are working on. Read it in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
     idempotencyKey: `escalation-message:${message.id}`,
@@ -352,7 +353,7 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
   if (done.recruiter && done.grant) {
     const sent = await container.integrations.email.send({
       to: done.recruiter.email,
-      from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+      from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
       subject: `[${e.kind}] A customer reopened a request you answered: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${calendar.timeZone})`,
       text: `The customer says your answer did not solve it, and the request is yours again. Your access is back until ${new Date(done.grant.expiresAt).toLocaleDateString("en-US")}. Read why in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
       idempotencyKey: `escalation-reopen:${done.messageId}`,

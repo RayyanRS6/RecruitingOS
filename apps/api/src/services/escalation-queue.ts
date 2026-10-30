@@ -3,6 +3,7 @@ import { SEND_MAX_ATTEMPTS, queueCommunication, sendQueuedCommunication } from "
 import type { Actor } from "@ros/contracts";
 import { loadBusinessCalendar, servedSummary } from "@ros/core";
 import { recruiterEscalations, users, withPlatform, withTenant, type Tx } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
 import { boardView, loadPool } from "./pool";
@@ -57,7 +58,7 @@ export function queueNoticeEmail(n: QueueNotice, appBaseUrl: string): { subject:
 export async function sendToIts(deps: ItsMailDeps, input: { companyId: string; subject: string; text: string; idempotencyKey: string; template: string }): Promise<{ status: "sent" | "pending" | "failed"; communicationId: string }> {
   const now = deps.clock?.() ?? deps.integrations.clock();
   const queued = await withTenant(deps.db, input.companyId, (tx) => queueCommunication(tx, deps.integrations, {
-    channel: "email", companyId: input.companyId, to: deps.env.ITS_QUEUE_EMAIL, from: `${deps.env.PRODUCT_NAME} <${deps.integrations.env.fromAddress}>`,
+    channel: "email", companyId: input.companyId, to: deps.env.ITS_QUEUE_EMAIL, from: mailbox(deps.env.PRODUCT_NAME, deps.integrations.env.fromAddress),
     subject: input.subject, text: input.text, templateKey: input.template, idempotencyKey: input.idempotencyKey, tags: { template: input.template }, actor: ITS_MAIL_ACTOR,
   }, now));
   if (queued.status !== "pending") return { status: queued.status, communicationId: queued.communicationId };
@@ -113,7 +114,7 @@ export async function emailHolderAboutNote(container: Container, n: HeldNote): P
   if (!holder?.email) return false;
   const sent = await container.integrations.email.send({
     to: holder.email,
-    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+    from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
     subject: `[${n.kind}] The customer added a note to a request you hold`,
     text: `The customer added a note to a request you are working on. Read it in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${n.escalationId}`,
     idempotencyKey: `escalation-message:${n.messageId}`,

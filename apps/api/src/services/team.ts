@@ -3,6 +3,7 @@ import { seatsFullLine, type Actor, type InviteMember, type UpdateMember } from 
 import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, createInvitation, disconnectCalendar, emit, entitlements, invitationLink, invitationState, isRecentlyAuthenticated, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeInvitation, revokeSessionsForCompany, roleInWords, setActiveCompany, type InvitationRow, type SessionContext } from "@ros/core";
 import { queueCommunication } from "@ros/agents";
 import { applications, companies, interviewParticipants, interviews, invitations, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
@@ -60,7 +61,7 @@ async function queueInvitationEmail(tx: Tx, team: Team, input: { invitation: Inv
     companyId: tenant.companyId,
     channel: "email",
     to: inv.email,
-    from: `${input.companyName} via ${product} <${container.integrations.env.fromAddress}>`,
+    from: mailbox(`${input.companyName} via ${product}`, container.integrations.env.fromAddress),
     subject: input.again ? `Reminder: ${input.inviterName} invited you to ${input.companyName} on ${product}` : `${input.inviterName} invited you to ${input.companyName} on ${product}`,
     text,
     templateKey: "invite",

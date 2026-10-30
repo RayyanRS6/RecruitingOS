@@ -3,6 +3,7 @@ import { desc, eq } from "drizzle-orm";
 import { CreateCompany, InviteMember, UpdateMember, trialStanding } from "@ros/contracts";
 import { assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { INVITE_ONLY_MESSAGE, createCompany, maySignUp } from "../services/companies";
 import { tellItsAboutNewCompany } from "../services/company-trust";
@@ -52,7 +53,9 @@ companyRoutes.get("/current", requireTenant, async (c) => {
     // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
     return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: plan.limits } : null, usage, trial: trialStanding(co, now) };
   });
-  return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id } });
+  // `production`: NODE_ENV is production (staging too), where a service running without a provider ("fake") is a
+  // deliberate default rather than a development stand-in, and Settings says what it does instead (audit MAIL-18).
+  return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id }, production: container.env.NODE_ENV === "production" });
 });
 
 // PATCH /current (the typed company preferences), GET /current/audit and /current/audit.csv (the customer's own history)
@@ -188,7 +191,7 @@ companyRoutes.post("/current/staff-access/:grantId/revoke", requireTenant, async
     return { ...r, recruiter, companyName: company?.name ?? "the customer" };
   });
   // Tell the recruiter and the queue. Neither message carries candidate data.
-  const from = `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`;
+  const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
   let recruiterNotified = false;
   if (result.recruiter?.email) {
     const sent = await container.integrations.email.send({ to: result.recruiter.email, from, subject: `Your access to ${result.companyName} was ended by the customer`, text: `${actor.name ?? "The customer"} at ${result.companyName} ended your access just now.\nReason: ${reason}\n\n${result.escalationId ? "The request is back in the queue, unassigned. " : ""}Do not keep or use any copies of the customer's information.`, idempotencyKey: `grant_revoked:${result.grant.id}`, tags: { template: "staff_access_revoked" } });

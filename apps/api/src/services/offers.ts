@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Actor, ApplicationStage, MembershipRole, OfferMadeResult, RecordOfferMade } from "@ros/contracts";
 import { STAGE_LABEL, audit, companyToday, emit, openEscalationsFor, transition } from "@ros/core";
 import { type applications, companies, offers, roles, users, withPlatform, type Tx } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 
@@ -68,7 +69,7 @@ export async function tellRecruiterAboutOutcome(container: Container, companyId:
     const people = assigned.length ? await tx.select({ id: users.id, email: users.email }).from(users).where(inArray(users.id, assigned)) : [];
     return { company, role, emailOf: new Map(people.map((p) => [p.id, p.email])) };
   });
-  const from = `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`;
+  const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
   const told = new Set<string>();
   for (const e of escalations) {
     const to = e.assignedToUserId ? emailOf.get(e.assignedToUserId) : container.env.ITS_QUEUE_EMAIL;

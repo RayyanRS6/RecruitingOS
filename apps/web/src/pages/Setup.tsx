@@ -30,8 +30,12 @@ type BusinessHours = { days: number[]; start: string; end: string };
  */
 type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string }; about?: CompanyAbout | null; boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean; newTimesAfterCancel?: { auto: boolean; workingDays: number } };
 type CompanyAbout = { text: string; approvedAt: string; approvedBy?: { id?: string; name?: string | null } | null };
-/** `trial`: where the Trial plan's 30 days stand (founder decision L-02 B), null on another plan; `usage.seats` counts people live. */
-type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null; resetsAt?: string | null }>; trial?: TrialStanding | null; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string } };
+/**
+ * `trial`: where the Trial plan's 30 days stand (founder decision L-02 B), null on another plan; `usage.seats` counts
+ * people live. `production`: the app runs in production (staging too), where a service without a provider is there on
+ * purpose rather than a development stand-in (Connected services).
+ */
+type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null; resetsAt?: string | null }>; trial?: TrialStanding | null; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean };
 /**
  * minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered.
  * available: whether the product does this today (plan B7); the rest are listed under "Coming later" with no choice.
@@ -232,15 +236,18 @@ export function Setup() {
           <Section id="setup-services">
             <Card title="Connected services">
               <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
-                {c.integrations.map((i) => (
-                  <tr key={`${i.kind}-${i.provider}`}>
-                    <td className="font-semibold">{SERVICE_KIND_LABEL[i.kind] ?? i.kind.replace(/_/g, " ")}</td>
-                    <td>{SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " ")}</td>
-                    {/* a long state wraps inside its pill, so the explanations keep room and the table never scrolls sideways */}
-                    <td><Pill size="sm" tone={SERVICE_STATE_TONE[i.status] ?? "neutral"} className="wrap">{SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " ")}</Pill></td>
-                    <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its")}</td>
-                  </tr>
-                ))}
+                {c.integrations.map((i) => {
+                  const cells = serviceCells(i, c.production === true);
+                  return (
+                    <tr key={`${i.kind}-${i.provider}`}>
+                      <td className="font-semibold">{SERVICE_KIND_LABEL[i.kind] ?? i.kind.replace(/_/g, " ")}</td>
+                      <td>{cells.provider}</td>
+                      {/* a long state wraps inside its pill, so the explanations keep room and the table never scrolls sideways */}
+                      <td><Pill size="sm" tone={cells.tone} className="wrap">{cells.state}</Pill></td>
+                      <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its", c.production === true)}</td>
+                    </tr>
+                  );
+                })}
               </Table>
               <p className="small muted mt-3">AI provider: <strong className="text-ink-2">{c.ai.provider}</strong>{c.ai.provider === "fake" ? " (deterministic stand-in for development; production refuses to start with it)" : ""}.</p>
             </Card>
@@ -305,16 +312,33 @@ function ShortcutCard() {
 /** Only verified states are shown (founder decision F4). */
 const SERVICE_STATE_LABEL: Record<string, string> = { live: "Connected and working", awaiting_verification: "Submitted, awaiting verification", manual_action_required: "Manual action required", not_connected: "Not connected", fake: "Development stand-in", disabled: "Disabled" };
 const SERVICE_STATE_TONE: Record<string, Tone> = { live: "good", awaiting_verification: "accent", manual_action_required: "caution", fake: "caution" };
+/**
+ * In production (staging too) the app runs these services without a provider on purpose, so their row says what happens
+ * instead of "Development stand-in" (audit MAIL-18): texting stays off (decision M2), interviews are booked from the times
+ * people set and the candidate's confirmation carries a calendar file, product analytics stay off, and the app never
+ * opens a file to scan it, as the background worker does (apps/api/src/scanner-gate.ts). Email without Postmark sends
+ * nothing. Production never runs the other stand-ins (apps/api/src/env.ts).
+ */
+const WITHOUT_PROVIDER: Record<string, string> = { sms: "Off", calendar: "Manual times and calendar files", analytics: "Off", scanner: "Checked by the background worker", email: SERVICE_STATE_LABEL.not_connected };
 /** What each service is and who provides it, in plain words (packages/integrations registry.ts names them in code). */
 const SERVICE_KIND_LABEL: Record<string, string> = { email: "Email", sms: "Text messages", jobboard: "Job board", link_verifier: "Link checker", comp: "Pay data", storage: "File storage", scanner: "File scanner", secrets: "Key vault", identity: "Sign-in", calendar: "Calendar", analytics: "Analytics" };
 const SERVICE_PROVIDER_LABEL: Record<string, string> = { careers_page: "Careers page", google_jobs: "Google for Jobs", indeed: "Indeed", ziprecruiter: "ZipRecruiter", linkedin_basic: "LinkedIn", email_in: "Email in", postmark: "Postmark", twilio: "Twilio", google: "Google" };
 
+/** A service's provider and state cells: in production a service without a provider names none and says what happens instead. */
+function serviceCells(i: { kind: string; provider: string; status: string }, production: boolean): { provider: string; state: string; tone: Tone } {
+  if (i.status === "fake" && production) return { provider: "None", state: WITHOUT_PROVIDER[i.kind] ?? SERVICE_STATE_LABEL.not_connected, tone: "neutral" };
+  return { provider: SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " "), state: SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " "), tone: SERVICE_STATE_TONE[i.status] ?? "neutral" };
+}
+
 /**
  * What each connected service takes, in a line. The job boards are not connected to the product: ITS posts on them from
- * the company's own accounts (plan D3), or the team does when it chose to post itself (`whoPosts`).
+ * the company's own accounts (plan D3), or the team does when it chose to post itself (`whoPosts`). Texting is off
+ * whichever provider is loaded, the stand-in included. Another stand-in says in development that nothing leaves the
+ * app; in production only email has more to say than its state.
  */
-function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its"): string {
-  if (i.status === "fake") return "Development stand-in: records what it would send. Never used in production.";
+function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its", production = false): string {
+  if (i.provider === "twilio" || i.provider === "fake-sms") return "Text messaging is off until carrier registration and counsel review are complete. The AI interview runs on the web from an email link.";
+  if (i.status === "fake") return production ? (i.kind === "email" ? "Candidate email is not being sent." : "") : "Nothing leaves the app.";
   if (i.provider === "careers_page") return "Served by the product; every open job has a public page and apply form.";
   if (i.provider === "google_jobs") return "Every job page carries the details Google reads. Google lists jobs on its own schedule; a job is marked found once someone sees it in a Google search.";
   if (i.provider === "email_in") return i.status === "live" ? "Forward application emails to each job's intake address." : "The inbound mail domain is not configured yet, so forwarded applications cannot arrive. Share the apply link directly.";
@@ -323,7 +347,6 @@ function explainStatus(i: { kind: string; provider: string; status: string }, wh
   if (i.provider === "ziprecruiter") return "Not connected to ZipRecruiter. Post from your own account with the apply link.";
   if (i.provider === "linkedin_basic") return "Not connected to LinkedIn. Post a free listing from your company page with the apply link.";
   if (i.provider === "postmark") return i.status === "live" ? "Candidate email is sent from the dedicated ITS domain." : "The sending domain is not configured; candidate email is not being sent.";
-  if (i.provider === "twilio" || i.provider === "fake-sms") return "Text messaging is off until carrier registration and counsel review are complete. The AI interview runs on the web from an email link.";
   if (i.kind === "secrets") return i.status === "live" ? "Connected credentials are kept in the managed key vault." : "Development stand-in; production uses the managed key vault.";
   if (i.kind === "comp") return i.status === "live" ? "Public wage data from the Bureau of Labor Statistics." : "Wage benchmarks unavailable; playbook ranges are used and cited.";
   return "";

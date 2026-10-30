@@ -1,7 +1,7 @@
 import type { Actor } from "@ros/contracts";
 import { markConfirmationSent, type DataRequestRow } from "@ros/core";
 import { withPlatform, type Db, type Queryable } from "@ros/db";
-import type { Integrations } from "@ros/integrations";
+import { mailbox, type Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
 
 /**
@@ -30,7 +30,7 @@ We will complete it by ${due} and confirm when it is done. Reference: ${row.id.s
 Questions? Write to ${input.privacyEmail}.
 
 Identified Talent Solutions, on behalf of ${input.companyName}`;
-  await queueCommunication(q, integrations, { channel: "email", companyId: row.companyId, candidateId: row.candidateId ?? null, applicationId: row.applicationId ?? null, to: row.requesterEmail, from: `${input.companyName} privacy requests <${integrations.env.fromAddress}>`, replyTo: input.privacyEmail, subject: `We received your request (${row.id.slice(0, 8)})`, text, templateKey: "privacy_ack", idempotencyKey: `privacy_ack:${row.id}`, tags: { template: "privacy_ack" }, actor: input.actor });
+  await queueCommunication(q, integrations, { channel: "email", companyId: row.companyId, candidateId: row.candidateId ?? null, applicationId: row.applicationId ?? null, to: row.requesterEmail, from: mailbox(`${input.companyName} privacy requests`, integrations.env.fromAddress), replyTo: input.privacyEmail, subject: `We received your request (${row.id.slice(0, 8)})`, text, templateKey: "privacy_ack", idempotencyKey: `privacy_ack:${row.id}`, tags: { template: "privacy_ack" }, actor: input.actor });
 }
 
 type CompletionInput = { row: DataRequestRow; companyName: string; privacyEmail: string; actor: Actor; attachment?: { filename: string; contentType: string; contentBase64: string } };
@@ -49,7 +49,7 @@ ${row.kind === "delete" && row.status === "fulfilled" ? "Where a legal retention
 Reference: ${row.id.slice(0, 8)}. Questions? Write to ${input.privacyEmail}.
 
 Identified Talent Solutions, on behalf of ${input.companyName}`.replace(/\n{3,}/g, "\n\n");
-  const from = `${input.companyName} privacy requests <${integrations.env.fromAddress}>`;
+  const from = mailbox(`${input.companyName} privacy requests`, integrations.env.fromAddress);
   const subject = `${row.status === "declined" ? "About your request" : "Your request is complete"} (${row.id.slice(0, 8)})`;
   return { from, subject, text };
 }

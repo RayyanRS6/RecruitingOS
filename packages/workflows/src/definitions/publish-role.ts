@@ -3,7 +3,7 @@ import { isCompanyVerified } from "@ros/contracts";
 import { queueCommunication } from "@ros/agents";
 import { BOARD_NAME, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, applyLinkUrl, boardPostingOf, canTransitionPosting, createApplicationLink, emit, findPostingLink, isBoardChannel, jobUrlsFor, openPostingTask, publishChannelsFor, sourceForChannel, transitionPosting, type PostingState } from "@ros/core";
 import { companies, events, postings, randomToken, rolePackets, roles, uuidv7, type Tx } from "@ros/db";
-import { intakeAddress, type PublishResult } from "@ros/integrations";
+import { intakeAddress, mailbox, type PublishResult } from "@ros/integrations";
 import type { StepContext, WorkflowDefinition } from "../types";
 
 /**
@@ -162,7 +162,7 @@ async function tellItsQueue(ctx: StepContext<State>, input: { companyName: strin
     channel: "email",
     companyId: ctx.companyId,
     to: env.itsQueueEmail,
-    from: `${integrations.env.productName} <${integrations.env.fromAddress}>`,
+    from: mailbox(integrations.env.productName, integrations.env.fromAddress),
     subject: `[post_job] ${input.companyName}: post "${input.roleTitle}" on ${input.boards.join(", ")}`,
     text: `${input.companyName} approved "${input.roleTitle}". It needs posting from the company's own account on: ${input.boards.join(", ")}. Each board is its own task in the queue, with the posting package and the board's apply link: ${env.appBaseUrl}/recruiter/queue`,
     templateKey: "its_posting_tasks",

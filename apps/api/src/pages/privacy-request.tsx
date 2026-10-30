@@ -6,6 +6,7 @@ import { PrivacyRequestForm } from "@ros/contracts";
 import { audit, createDataRequest, noticesFor, normalizeEmail, openPayload, sealPayload } from "@ros/core";
 import { sendPrivacyAcknowledgment } from "@ros/agents";
 import { applications, candidates, companies, dataRequests, uuidv7, withPlatform } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { addressMatch } from "../services/applications";
@@ -135,7 +136,7 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
     const id = uuidv7(now.getTime());
     const token = sealPayload<VerifyToken>(VERIFY_PURPOSE, { v: 2, id, email: t.to, kind: parsed.data.kind, ...(parsed.data.details ? { details: parsed.data.details } : {}), companyId: t.companyId, candidateId: t.candidateId, applicationId: t.applicationId, exp: now.getTime() + VERIFY_TTL_MS }, container.env.SESSION_SECRET);
     const sent = await container.integrations.email.send({
-      to: t.to, from: `${t.companyName} privacy requests <${container.integrations.env.fromAddress}>`, replyTo: container.env.PRIVACY_EMAIL,
+      to: t.to, from: mailbox(`${t.companyName} privacy requests`, container.integrations.env.fromAddress), replyTo: container.env.PRIVACY_EMAIL,
       subject: `Confirm your request (${id.slice(0, 8)})`,
       text: `Hello,\n\nSomeone asked, using this address, for ${KIND_WORDS[parsed.data.kind]} held by ${t.companyName}.\n\nIf that was you, open this link within 24 hours and press the button to confirm:\n${link(token)}\n\nIf it was not you, ignore this email; nothing happens without the button.\n\nQuestions? Write to ${container.env.PRIVACY_EMAIL}.\n\nIdentified Talent Solutions, on behalf of ${t.companyName}`,
       idempotencyKey: `privacy_verify:${id}`, tags: { template: "privacy_verify" },
@@ -144,7 +145,7 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
   }
   if (!targets.length) {
     // Only the mailbox learns that nothing was found; a person can still help from there.
-    await container.integrations.email.send({ to: email, from: `${container.env.PRODUCT_NAME} privacy requests <${container.integrations.env.fromAddress}>`, replyTo: container.env.PRIVACY_EMAIL, subject: "About your privacy request", text: `Hello,\n\nSomeone asked, using this address, for ${KIND_WORDS[parsed.data.kind]}. We found no application under ${email}.\n\nIf you applied with a different address, send the form again from that address: ${container.env.APP_BASE_URL}/c/privacy-request\n\nIf you believe we do hold information about you, reply to this email and a person will look into it.\n\nIdentified Talent Solutions`, idempotencyKey: `privacy_form_unknown:${email}:${Math.floor(now.getTime() / 3600_000)}`, tags: { template: "privacy_form_unknown" } });
+    await container.integrations.email.send({ to: email, from: mailbox(`${container.env.PRODUCT_NAME} privacy requests`, container.integrations.env.fromAddress), replyTo: container.env.PRIVACY_EMAIL, subject: "About your privacy request", text: `Hello,\n\nSomeone asked, using this address, for ${KIND_WORDS[parsed.data.kind]}. We found no application under ${email}.\n\nIf you applied with a different address, send the form again from that address: ${container.env.APP_BASE_URL}/c/privacy-request\n\nIf you believe we do hold information about you, reply to this email and a person will look into it.\n\nIdentified Talent Solutions`, idempotencyKey: `privacy_form_unknown:${email}:${Math.floor(now.getTime() / 3600_000)}`, tags: { template: "privacy_form_unknown" } });
   }
   return c.html(<SentPage email={email} />);
 });

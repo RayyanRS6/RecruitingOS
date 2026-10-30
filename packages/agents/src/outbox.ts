@@ -2,7 +2,7 @@ import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, isCompanyVerified, type Actor } from "@ros/contracts";
 import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, nextContactWindow, notify, raiseAlert } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviews, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
-import type { Integrations, SendResult } from "@ros/integrations";
+import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 
 /**
  * The outbox for every email and text the product sends from inside a database transaction.
@@ -377,7 +377,7 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
       ? await integrations.sms.send({ to: claimed.toAddress, body: claimed.bodyText, idempotencyKey: claimed.idempotencyKey ?? claimed.id })
       : await integrations.email.send({
           to: claimed.toAddress,
-          from: claimed.fromAddress ?? `${integrations.env.productName} <${integrations.env.fromAddress}>`,
+          from: claimed.fromAddress ?? mailbox(integrations.env.productName, integrations.env.fromAddress),
           replyTo: claimed.replyTo ?? undefined,
           subject: claimed.subject ?? "",
           text: claimed.bodyText,

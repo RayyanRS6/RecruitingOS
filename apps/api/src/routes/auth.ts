@@ -10,7 +10,7 @@ import { renderSignInLinkPage } from "../pages/signin-link";
 import { renderInvitePage, type InvitePageProps } from "../pages/invite";
 import { maySignUp } from "../services/companies";
 import { clearInviteCookie, clearPkceCookie, clearSessionCookie, needsSecondFactor, openSession, readInviteCookie, readPkceCookie, setInviteCookie, setMfaCookie, setPkceCookie, setSessionCookie, signInPolicy } from "./auth-shared";
-import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url } from "@ros/integrations";
+import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url, mailbox } from "@ros/integrations";
 import { clientIp, isPlatformStaff, readSessionCookie, type Vars } from "../middleware/session";
 import { activeStaffGrant } from "@ros/core";
 import type { Container } from "../container";
@@ -161,7 +161,7 @@ authRoutes.post("/magic-link", rateLimit(POLICIES.authMagicLink), async (c) => {
   const link = consumeLink(container, token);
   await container.integrations.email.send({
     to: body.email,
-    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+    from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
     subject: "Your sign-in link",
     text: `Click to sign in (valid for 15 minutes):\n${link}\n\nIf you did not request this, ignore this email.`,
     idempotencyKey: `magic:${token.slice(0, 12)}`,
@@ -269,7 +269,7 @@ authRoutes.post("/invite/email", rateLimit(POLICIES.authInviteEmail), async (c) 
   const link = consumeLink(container, linkToken);
   await container.integrations.email.send({
     to: email,
-    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+    from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
     subject: `Your sign-in link to join ${page.companyName ?? "your team"}`,
     text: `Click to sign in and join ${page.companyName ?? "your team"} (valid for 15 minutes):\n${link}\n\nIf you did not request this, ignore this email.`,
     idempotencyKey: `magic:${linkToken.slice(0, 12)}`,

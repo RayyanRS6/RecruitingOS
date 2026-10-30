@@ -224,3 +224,50 @@ describe("Settings: the Trial plan's 30 days and 3 people (founder decision L-02
     expect(html).toMatch(/<button type="submit" class="btn primary" disabled=""[^>]*>Invite<\/button>/);
   });
 });
+
+describe("Settings: Connected services, for a service without a provider (audit MAIL-18)", () => {
+  // what the API sends where texting, calendars, analytics and the app's own file scanner run without a provider
+  const services = [
+    { kind: "email", provider: "postmark", status: "live" },
+    { kind: "sms", provider: "fake-sms", status: "fake" },
+    { kind: "scanner", provider: "fake_scanner", status: "fake" },
+    { kind: "calendar", provider: "google", status: "fake" },
+    { kind: "analytics", provider: "fake-analytics", status: "fake" },
+  ];
+  /** The Connected services card alone; production refuses the AI stand-in, so a production company names a real provider. */
+  const card = (over: Record<string, unknown>) => {
+    const html = page({ company: { ...company, ...over } });
+    return html.slice(html.indexOf('<div id="setup-services"'), html.indexOf('<div id="setup-audit"'));
+  };
+
+  it("in production (staging too) each says what really happens, names no provider and is not a warning", () => {
+    const html = card({ integrations: services, production: true, ai: { provider: "anthropic" } });
+    const words = text(html);
+    expect(words).toContain("Email Postmark Connected and working Candidate email is sent from the dedicated ITS domain.");
+    // texting is off on purpose (decision M2), and the line that says so shows
+    expect(words).toContain("Text messages None Off Text messaging is off until carrier registration and counsel review are complete. The AI interview runs on the web from an email link.");
+    expect(words).toContain("File scanner None Checked by the background worker");
+    expect(words).toContain("Calendar None Manual times and calendar files");
+    expect(words).toContain("Analytics None Off");
+    expect(words).not.toMatch(/development|stand-in|fake|never used in production|nothing leaves/i);
+    expect(html).toMatch(/class="pill neutral[^"]*"><span class="dot" aria-hidden="true"><\/span>Manual times and calendar files<\/span>/);
+    expect(html).not.toContain("pill caution");
+  });
+
+  it("in production, email without Postmark shows as not connected and says candidate email is not being sent", () => {
+    const words = text(card({ integrations: [{ kind: "email", provider: "fake-email", status: "fake" }], production: true, ai: { provider: "anthropic" } }));
+    expect(words).toContain("Email None Not connected Candidate email is not being sent.");
+    expect(words).not.toMatch(/stand-in|fake/i);
+  });
+
+  it("in development the stand-ins still say so, without claiming production never uses them; texting is off there too", () => {
+    const html = card({ integrations: services });
+    const words = text(html);
+    expect(words).toContain("Calendar Google Development stand-in Nothing leaves the app.");
+    expect(words).toContain("File scanner fake scanner Development stand-in Nothing leaves the app.");
+    expect(words).toContain("Analytics fake-analytics Development stand-in Nothing leaves the app.");
+    expect(words).toContain("Text messages fake-sms Development stand-in Text messaging is off until carrier registration and counsel review are complete.");
+    expect(words).not.toContain("Never used in production");
+    expect(html).toMatch(/class="pill caution[^"]*"><span class="dot" aria-hidden="true"><\/span>Development stand-in<\/span>/);
+  });
+});

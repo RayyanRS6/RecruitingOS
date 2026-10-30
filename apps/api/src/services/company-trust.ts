@@ -3,6 +3,7 @@ import { companyVerifiedAt, newTrialTerm, onTrialPlan, trialTermOf, type Actor }
 import { BOARD_UP_STATES, audit, closingDateRequired, defaultClosingDate, emit, isBoardChannel, notify, raiseAlert, transitionPosting, type PostingState } from "@ros/core";
 import { releaseHeldCommunications } from "@ros/agents";
 import { companies, postings, rolePackets, roles, type Queryable } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import { armClosingDate, companyVerifiedSignal } from "@ros/workflows";
 import type { Container } from "../container";
 import { trialDateWords, trialPatch } from "./trial";
@@ -158,7 +159,7 @@ export async function setJobBoardAccess(tx: Queryable, input: { companyId: strin
  * operator alert so the company never waits unseen.
  */
 export async function tellItsAboutNewCompany(container: Container, input: { company: { id: string; name: string; vertical: string; sizeBand: string; website: string | null }; owner: { name: string | null; email: string } }): Promise<void> {
-  const from = `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`;
+  const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
   const text = [
     "A company signed itself up. Its careers page, job pages, Google listing and first emails to candidates wait for the one-time ITS check; it can draft and approve roles meanwhile.",
     `Company: ${input.company.name}\nKind of business: ${input.company.vertical}\nSize: ${input.company.sizeBand} employees\nWebsite: ${input.company.website || "not given"}\nOwner: ${input.owner.name ? `${input.owner.name} <${input.owner.email}>` : input.owner.email}`,
