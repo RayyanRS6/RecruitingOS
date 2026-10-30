@@ -6,7 +6,7 @@ import { applicationLinks, applications, candidates, communications, companies, 
 import { jobValidThrough, type FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache } from "./pages/public-feeds";
+import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache, robotsTxt } from "./pages/public-feeds";
 import { ASKED_OF_EVERYONE, questionHelp, withPlainQuestionHelp } from "./pages/question-help";
 import { jobUrls } from "./services/job-urls";
 import { pastTheWaitingRoom, statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
@@ -553,11 +553,17 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(sitemapXml).toMatch(/<lastmod>\d{4}-\d{2}-\d{2}T[^<]+<\/lastmod>/);
     expect(sitemapXml).not.toContain("/apply");
     expect(sitemapXml).not.toContain("/a/");
-    // robots
+    // robots: anything but the production deployment (staging, a person's machine, this test) keeps every crawler out
+    // and names no sitemap (GAP3-3)
     const robots = await (await app.request("/robots.txt")).text();
-    expect(robots).toContain("Allow: /careers/");
-    for (const d of ["/c/", "/api/", "/a/", "/files/", "/dev/", "/webhooks/"]) expect(robots).toContain(`Disallow: ${d}`);
-    expect(robots).toContain("Sitemap: https://jobs.example.test/sitemap.xml");
+    expect(robots).toBe("User-agent: *\nDisallow: /\n");
+    expect(robotsTxt({ ...container.env, DEPLOY_ENV: "staging" })).toBe(robots);
+    // the production deployment lets crawlers read the careers and job pages only, and names the sitemap on the job host
+    const production = await (await createApp({ ...container, env: { ...container.env, DEPLOY_ENV: "production" } }).request("/robots.txt")).text();
+    expect(production).toContain("Allow: /careers/");
+    for (const d of ["/c/", "/api/", "/a/", "/files/", "/dev/", "/webhooks/"]) expect(production).toContain(`Disallow: ${d}`);
+    expect(production).not.toContain("Disallow: /\n");
+    expect(production).toContain("Sitemap: https://jobs.example.test/sitemap.xml");
     // the common job-board XML
     const xmlRes = await app.request("/feeds/jobs.xml");
     expect(xmlRes.headers.get("content-type")).toContain("application/xml");

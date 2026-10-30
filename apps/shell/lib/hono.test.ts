@@ -33,7 +33,8 @@ describe("the Next.js shell mounts the Hono application", () => {
     expect(sitemap.headers.get("content-type")).toContain("xml");
     const robots = await honoHandler(new Request("http://localhost:3000/robots.txt"));
     expect(robots.status).toBe(200);
-    expect(await robots.text()).toContain("Sitemap:");
+    // Hono's robots file; outside the production deployment it keeps every crawler out and names no sitemap (GAP3-3)
+    expect(await robots.text()).toBe("User-agent: *\nDisallow: /\n");
   });
 
   it("every mounted path exports the HTTP methods Next.js expects", async () => {
