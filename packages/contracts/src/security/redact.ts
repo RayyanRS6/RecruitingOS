@@ -29,9 +29,67 @@ export const SECRET_VALUE_PATTERNS: ReadonlyArray<RegExp> = [
   /("(?:access_token|refresh_token|client_secret|id_token|api_key|apikey|password|authorization|private_key)"\s*:\s*")([^"]*)(")/gi, // JSON text
 ];
 
-/** Removes known secret shapes and every supplied value from a string. */
-export function redactText(text: string, values: Iterable<string> = []): string {
+/** A line of a V8 stack trace ("    at fn (file.js:12:34)"): a value that runs into a stack stops there. */
+const STACK_FRAME = String.raw`\n {4}at [^\n]*:\d+:\d+\)?(?=\n|$)`;
+/** Any text, up to the stack if one follows. */
+const UNTIL_STACK = String.raw`(?:(?!${STACK_FRAME})[\s\S])*`;
+
+/**
+ * Where a database error carries the values it was given (audit OPS-2): drizzle wraps every failed query as
+ * "Failed query: <sql>\nparams: <values>", and Postgres names what it refused, the key a constraint saw ("Key (email)=
+ * (...) already exists"), the row a check refused ("Failing row contains (...)"), the input a type could not read.
+ * Those values are a candidate's name, address or answers. The statement and the reason are what a person needs to
+ * fix the fault, so they stay.
+ */
+const DATABASE_VALUE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [new RegExp(String.raw`(Failed query: [\s\S]*?\sparams: )${UNTIL_STACK}`, "g"), `$1${REDACTED}`],
+  [new RegExp(String.raw`(\b[Kk]ey \(.*?\)=\()(?:(?:(?!${STACK_FRAME})[\s\S])*?\)(?= already exists| is not present| is still referenced| is duplicated| conflicts with)|${UNTIL_STACK}\))`, "g"), `$1${REDACTED})`],
+  [new RegExp(String.raw`(\bFailing row contains \()${UNTIL_STACK}\)`, "g"), `$1${REDACTED})`],
+  [/((?:invalid input (?:syntax|value) for [^:\n]*|malformed [a-z]+ literal|field value out of range): )"[^\n]*"/g, `$1"${REDACTED}"`],
+  [/(\bvalue )"[^"\n]*"(?= is out of range)/g, `$1"${REDACTED}"`],
+];
+
+/** Cuts the values a database error carries out of a text (`DATABASE_VALUE_PATTERNS`), keeping the statement and the reason. */
+export function redactDatabaseValues(text: string): string {
   let out = text;
+  for (const [re, kept] of DATABASE_VALUE_PATTERNS) out = out.replace(re, kept);
+  return out;
+}
+
+/** An address written anywhere in a text, not only after `email=`. */
+const EMAIL_SHAPE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+/** E.164 with a plus, or a North American number with or without separators. */
+const PHONE_SHAPE = /(?:\+\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b|\+\d{7,15}\b/g;
+
+/**
+ * Cuts email addresses and phone numbers written anywhere in a text (audit OPS-2), such as a provider's "could not
+ * deliver to <address>". Only for words bound for an error report: the shapes can also catch a long run of digits, so
+ * ids and stack frames are never passed through it.
+ */
+export function redactContactDetails(text: string): string {
+  return text.replace(EMAIL_SHAPE, REDACTED).replace(PHONE_SHAPE, REDACTED);
+}
+
+/**
+ * A copy of an error that may be logged, stored or reported (audit OPS-2): the same name, its message and stack with
+ * `redactDatabaseValues` applied, and its cause copied the same way, so a failed query still says which statement
+ * failed and why. Nothing else is copied: not drizzle's `params`, not a driver error's `detail`. Secrets are left to
+ * `redactObject` and to the error reporter's own scrubber. A text comes back cut; anything else as it is.
+ */
+export function withoutDatabaseValues(err: unknown, depth = 0): unknown {
+  if (typeof err === "string") return redactDatabaseValues(err);
+  if (!(err instanceof Error)) return err;
+  const cause = err.cause !== undefined && depth < 8 ? withoutDatabaseValues(err.cause, depth + 1) : undefined;
+  const copy = new Error(redactDatabaseValues(err.message), cause === undefined ? undefined : { cause });
+  copy.name = err.name;
+  // A stack begins with its message: swapped whole first, so a value that runs over several lines goes with it.
+  copy.stack = err.stack === undefined ? undefined : redactDatabaseValues(err.stack.replace(err.message, () => copy.message));
+  return copy;
+}
+
+/** Removes known secret shapes, every supplied value, and the values a database error carries from a string. */
+export function redactText(text: string, values: Iterable<string> = []): string {
+  let out = redactDatabaseValues(text);
   for (const v of values) if (v && v.length >= 8) out = out.split(v).join(REDACTED);
   for (const re of SECRET_VALUE_PATTERNS) {
     re.lastIndex = 0;
@@ -50,7 +108,8 @@ export function redactObject<T>(value: T, values: Iterable<string> = [], depth =
   if (typeof value === "string") return redactText(value, values) as unknown as T;
   if (Array.isArray(value)) return value.map((v) => redactObject(v, values, depth + 1)) as unknown as T;
   if (value && typeof value === "object") {
-    if (value instanceof Error) return { name: value.name, message: redactText(value.message, values), stack: value.stack ? redactText(value.stack, values) : undefined } as unknown as T;
+    // the cause too: for a failed query it holds the database's reason
+    if (value instanceof Error) return { name: value.name, message: redactText(value.message, values), stack: value.stack ? redactText(value.stack, values) : undefined, ...(value.cause !== undefined ? { cause: redactObject(value.cause, values, depth + 1) } : {}) } as unknown as T;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       out[k] = SECRET_KEY_PATTERN.test(k) && typeof v === "string" && v.length > 0 ? REDACTED : redactObject(v, values, depth + 1);

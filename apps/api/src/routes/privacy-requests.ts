@@ -7,6 +7,7 @@ import { applications, candidates, companies, dataRequests, withPlatform } from 
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
+import { describeFailure } from "../failure-reports";
 
 /**
  * Administrator side of privacy requests (docs/runbooks/privacy-requests.md). Platform administrators only; every read is
@@ -178,7 +179,8 @@ async function removeStoredFiles(container: ContainerOf, row: DataRequestRow, ke
       await container.integrations.storage.delete(key);
     } catch (err) {
       failed++;
-      console.warn(`[privacy] a stored file of a deleted candidate could not be removed (request ${row.id}): ${err instanceof Error ? err.message : String(err)}`);
+      // a deleted candidate's: the text loses addresses and numbers too, not only a failed query's values (describeFailure)
+      console.warn(`[privacy] a stored file of a deleted candidate could not be removed (request ${row.id}): ${describeFailure(err instanceof Error ? err.message : String(err))}`);
     }
   }
   if (failed) await withPlatform(container.db, (tx) => raiseAlert(tx, { kind: "privacy_request.file_cleanup", severity: "high", title: "Files of a deleted candidate are still in storage", body: `${failed} of ${keys.length} stored file${keys.length === 1 ? "" : "s"} could not be removed after deletion request ${row.id.slice(0, 8)}. The records are anonymized; remove the files from storage by hand.`, companyId: row.companyId, target: { type: "candidate", id: row.candidateId ?? row.id }, details: { requestId: row.id, failed, files: keys.length } }));
@@ -190,7 +192,7 @@ async function confirmDeletionAfterCommit(container: ContainerOf, input: Paramet
     const sent = await sendDeletionConfirmation(container.db, container.integrations, input);
     if (!sent) console.warn(`[privacy] the confirmation of deletion request ${input.row.id} was not sent; the request shows no confirmation`);
   } catch (err) {
-    console.warn(`[privacy] the confirmation of deletion request ${input.row.id} could not be sent: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[privacy] the confirmation of deletion request ${input.row.id} could not be sent: ${describeFailure(err instanceof Error ? err.message : String(err))}`);
   }
 }
 

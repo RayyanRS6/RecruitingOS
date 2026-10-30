@@ -58,6 +58,14 @@ export function redact<T>(value: T): T {
 export function redactString(text: string): string {
   return redactText(text, registered);
 }
+/**
+ * An error's message as a log line may carry it (audit OPS-2): drizzle puts a failed query's values (a candidate's
+ * name, address or answers) in the message, and the hosts keep every log line. The values and known secrets are cut;
+ * the statement and the reason stay. tests/policy/log-scrubbing.test.ts holds every console call to a scrubber.
+ */
+export function errorForLog(err: unknown): string {
+  return redactString(err instanceof Error ? err.message : String(err));
+}
 
 /**
  * Refuses (outside production) or scrubs (in production) a value that carries a secret. Called on every event payload and

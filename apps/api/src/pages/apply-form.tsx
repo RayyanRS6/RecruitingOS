@@ -4,7 +4,7 @@ import { randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
 import { answerCvLines, chatFactsWithKept } from "@ros/agents";
-import { applicationAnswerSentences, candidateNotices, emit, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
+import { applicationAnswerSentences, candidateNotices, emit, errorForLog, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey, type UploadGrantPayload } from "../uploads";
@@ -1095,7 +1095,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
     }
   } catch (err) {
     // The reading could not even be asked for: the résumé stays attached and the candidate fills in the form.
-    console.warn(`[apply] the résumé reading could not be queued: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[apply] the résumé reading could not be queued: ${errorForLog(err)}`);
   }
   const checked = checkedForm(container, posted, questions, { grant, filename: upload.filename }, reading ?? failedReading(upload.uploadId, now));
   c.header("Cache-Control", "no-store");

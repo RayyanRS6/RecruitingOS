@@ -7,7 +7,7 @@ import {
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
   sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
-import { addBusinessHours, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
+import { addBusinessHours, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, errorForLog, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, type WorkflowEngine } from "@ros/workflows";
@@ -838,7 +838,7 @@ export async function conversationTurn(container: Container, ref: ConversationRe
       try {
         await learnFromSentChat(container, ref);
       } catch (err) {
-        console.warn(`[screen] learning from the sent chat failed: ${err instanceof Error ? err.message : String(err)}`);
+        console.warn(`[screen] learning from the sent chat failed: ${errorForLog(err)}`);
       }
     }
     await container.kick();

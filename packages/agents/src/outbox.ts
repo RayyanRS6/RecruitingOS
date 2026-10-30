@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, isCompanyVerified, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, autoTimesUnderTakeover, emit, nextContactWindow, notify, raiseAlert } from "@ros/core";
+import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, nextContactWindow, notify, raiseAlert } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviews, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
 
@@ -424,10 +424,10 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
   });
   if (outcome === "failed" && (result.status !== "failed" || result.retryable)) {
     // The provider itself failed for good (an outage that outlasted every retry, or an adapter that is not configured): an operator must see it.
-    await raiseAlert(db, { kind: "message.delivery_failed", severity: "high", title: `A ${claimed.channel} could not be delivered after ${ctx.attempt} attempt${ctx.attempt === 1 ? "" : "s"}`, body: `${claimed.templateKey ?? "message"} to a recipient in this company failed: ${describeFailure(result)}. Check the provider's status and credentials; the message is marked failed and was not sent.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey, attempts: ctx.attempt } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${err instanceof Error ? err.message : String(err)}`));
+    await raiseAlert(db, { kind: "message.delivery_failed", severity: "high", title: `A ${claimed.channel} could not be delivered after ${ctx.attempt} attempt${ctx.attempt === 1 ? "" : "s"}`, body: `${claimed.templateKey ?? "message"} to a recipient in this company failed: ${describeFailure(result)}. Check the provider's status and credentials; the message is marked failed and was not sent.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey, attempts: ctx.attempt } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${errorForLog(err)}`));
   }
   if (outcome === "unknown") {
-    await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${claimed.channel} may or may not have been delivered`, body: `The provider's reply to sending ${claimed.templateKey ?? "a message"} was cut off (${describeFailure(result).slice(0, 200)}). Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${err instanceof Error ? err.message : String(err)}`));
+    await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${claimed.channel} may or may not have been delivered`, body: `The provider's reply to sending ${claimed.templateKey ?? "a message"} was cut off (${describeFailure(result).slice(0, 200)}). Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${errorForLog(err)}`));
   }
   if (outcome === "retry") throw new Error(`delivery failed (attempt ${ctx.attempt} of ${ctx.maxAttempts}): ${describeFailure(result)}`);
   return outcome;

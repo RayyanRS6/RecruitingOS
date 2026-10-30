@@ -1,10 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { DrizzleQueryError, eq } from "drizzle-orm";
 import { adminAlerts, jobs, workerHeartbeats } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { appHealthWatch } from "./maintenance";
-import { HEARTBEAT_STALE_MS, WorkerHealth, listeningPort, queueSnapshot, readWorkerHealth, staleAfterMs, startHealthServer, writeHeartbeat } from "./worker-health";
+import { installReporter } from "./observability";
+import { FAILED_POLL_PAUSE_MS, HEARTBEAT_STALE_MS, StallWatchdog, WORKER_STALL_EXIT_MS, WorkerHealth, listeningPort, pollOnce, queueSnapshot, readWorkerHealth, stallExitMs, staleAfterMs, startHealthServer, writeHeartbeat } from "./worker-health";
 
 /**
  * Audit remediation H1 and H15: the worker writes a heartbeat every poll, answers its own /healthz (200 while it
@@ -145,5 +146,146 @@ describe("worker health", () => {
     } finally {
       await external.close();
     }
+  });
+});
+
+/**
+ * Audit OPS-V1 and HOST-12: Railway checks the worker's health only while it deploys and restarts only a process that
+ * exits, so a worker whose loop stops finishing anything exits by itself. A database outage the loop rides out never
+ * trips it, nor does a long batch whose jobs keep finishing. A failed poll is logged and reported without the values
+ * its query carried (OPS-2). Inline mode runs the kinds its build registers, as before (GAP6-2).
+ */
+describe("the worker's watchdog", () => {
+  let inline: Container;
+  let t = 0;
+  const stalls: number[] = [];
+  const watchdog = (stallMs = 60_000) => {
+    t = 0;
+    stalls.length = 0;
+    return new StallWatchdog({ stallMs, now: () => t, onStall: (ms) => stalls.push(ms) });
+  };
+  const PERSON = /Nia Brooks|nia\.brooks@example\.com/;
+
+  beforeAll(async () => {
+    inline = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true" } });
+  });
+  afterAll(async () => {
+    inline.engine.onProgress(null);
+    await inline.close();
+  });
+
+  it("WORKER_STALL_EXIT_MS is fifteen minutes unless set, and never under a minute", () => {
+    expect(WORKER_STALL_EXIT_MS).toBe(900_000);
+    for (const raw of [undefined, "", "soon", "0", "-5"]) expect(stallExitMs(raw)).toBe(900_000);
+    expect(stallExitMs("1200000")).toBe(1_200_000);
+    expect(stallExitMs("900")).toBe(60_000); // meant as seconds: a minute at least, so a busy worker is never restarted
+  });
+
+  it("calls the stall once nothing has finished for longer than the limit, and only once", () => {
+    const dog = watchdog();
+    t = 60_000;
+    expect(dog.check()).toBe(false);
+    t = 60_001;
+    expect(dog.check()).toBe(true);
+    expect(stalls).toEqual([60_001]);
+    t = 90_000;
+    expect(dog.check()).toBe(true);
+    expect(stalls).toHaveLength(1); // one line, one exit
+    dog.progress();
+    t = 120_000;
+    expect(dog.check()).toBe(false);
+  });
+
+  it("checks on its own timer until stopped", () => {
+    vi.useFakeTimers();
+    try {
+      const dog = watchdog();
+      const stop = dog.start(30_000);
+      t = 61_000;
+      vi.advanceTimersByTime(29_999);
+      expect(stalls).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(stalls).toEqual([61_000]);
+      stop();
+      dog.progress();
+      t = 200_000;
+      vi.advanceTimersByTime(120_000);
+      expect(stalls).toHaveLength(1); // stopped: nothing more is checked
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a poll that never ends trips it", async () => {
+    const dog = watchdog();
+    void pollOnce({ beat: () => new Promise(() => undefined), runPending: async () => 0, pollMs: 1000, watchdog: dog });
+    t = 59_000;
+    expect(dog.check()).toBe(false);
+    t = 61_000;
+    expect(dog.check()).toBe(true);
+    expect(stalls).toEqual([61_000]);
+  });
+
+  it("a database outage never trips it, and each failed poll is logged and reported without its query's values", async () => {
+    const dog = watchdog();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const reported: Array<{ err: unknown; context?: Record<string, unknown> }> = [];
+    installReporter((err, context) => reported.push({ err, context }));
+    try {
+      const cause = new Error("Connection terminated unexpectedly");
+      const failed = new DrizzleQueryError('insert into "candidates" ("first_name", "email") values ($1, $2)', ["Nia Brooks", "nia.brooks@example.com"], cause);
+      // each poll waits 50 s for a database that is not there, then pauses: twenty polls, over seventeen minutes
+      for (let i = 0; i < 20; i++) {
+        await pollOnce({ beat: async () => { t += 50_000; throw failed; }, runPending: async () => 0, pollMs: 1000, watchdog: dog, sleep: async (ms) => { t += ms; } });
+        expect(dog.check()).toBe(false);
+      }
+      expect(t).toBe(20 * (50_000 + FAILED_POLL_PAUSE_MS));
+      expect(stalls).toEqual([]);
+      expect(logged).toHaveBeenCalledTimes(20);
+      expect(logged.mock.calls[0][0]).toBe("[worker] tick failed");
+      const line = JSON.stringify(logged.mock.calls[0]);
+      expect(line).toContain("params: [redacted]");
+      expect(line).toContain("Connection terminated unexpectedly"); // the reason stays
+      expect(reported).toHaveLength(20);
+      expect(reported[0].context).toEqual({ process: "worker", where: "tick" });
+      const err = reported[0].err as Error;
+      expect(err.message).toBe('Failed query: insert into "candidates" ("first_name", "email") values ($1, $2)\nparams: [redacted]');
+      expect((err.cause as Error).message).toBe("Connection terminated unexpectedly");
+      expect("params" in err).toBe(false);
+      for (const text of [JSON.stringify(logged.mock.calls), err.message, String(err.stack)]) expect(text).not.toMatch(PERSON);
+    } finally {
+      logged.mockRestore();
+      installReporter(null);
+    }
+  });
+
+  it("a batch longer than the limit is not a stall while its jobs keep finishing", async () => {
+    const dog = watchdog();
+    inline.engine.onProgress(() => dog.progress());
+    let ran = 0;
+    inline.engine.registerJob("test.slow_but_moving", async () => {
+      expect(dog.check()).toBe(false); // checked between jobs, as the timer would
+      t += 50_000;
+      ran += 1;
+    });
+    for (let i = 0; i < 5; i++) await inline.engine.enqueue(inline.db, { kind: "test.slow_but_moving" });
+    await pollOnce({ beat: async () => undefined, runPending: () => inline.engine.runPending(25), pollMs: 1000, watchdog: dog, sleep: async () => undefined });
+    expect(ran).toBe(5);
+    expect(t).toBe(250_000);
+    expect(dog.check()).toBe(false);
+    expect(stalls).toEqual([]);
+    inline.engine.onProgress(null);
+  });
+
+  it("inline mode still runs the kinds its build registers; a kind only a newer build knows stays queued, untouched", async () => {
+    let ran = 0;
+    inline.engine.registerJob("test.inline_known", async () => { ran += 1; });
+    await inline.engine.enqueue(inline.db, { kind: "test.inline_known" });
+    const [unknown] = await inline.db.insert(jobs).values({ kind: "test.only_a_newer_build_knows", runAt: new Date(Date.now() - 1000).toISOString() }).returning({ id: jobs.id });
+    await inline.kick();
+    expect(ran).toBe(1);
+    expect((await inline.db.select().from(jobs).where(eq(jobs.kind, "test.inline_known")))[0].status).toBe("done");
+    expect((await inline.db.select().from(jobs).where(eq(jobs.id, unknown.id)))[0]).toMatchObject({ status: "queued", attempts: 0, lockedBy: null, lastError: null });
+    expect(await inline.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "job.failed"))).toEqual([]);
   });
 });

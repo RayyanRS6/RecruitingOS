@@ -5,7 +5,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { SESSION_COOKIE, sessionCookieName } from "./cookie-names";
 import { installReporter, sentryOptions } from "./observability";
-import { TEST_ERROR_EMAIL, TEST_ERROR_TOKEN, observabilityEnvironment, testErrorAvailable } from "./routes/observability";
+import { TEST_ERROR_EMAIL, TEST_ERROR_TEXT_EMAIL, TEST_ERROR_TOKEN, observabilityEnvironment, testErrorAvailable } from "./routes/observability";
 import { signInAdmin } from "./test-helpers";
 
 /**
@@ -48,10 +48,12 @@ describe("the observability test error", () => {
     const err = seen[0].err as Error;
     expect(err.name).toBe("DeliberateTestError");
     expect(err.message).toContain(TEST_ERROR_TOKEN); // the raw error carries them: only the SDK's scrubber stands between it and Sentry
-    const event = sentryOptions({ SENTRY_DSN: "https://examplePublicKey@o0.ingest.us.sentry.io/0", SENTRY_ENVIRONMENT: "staging" }).beforeSend({ message: err.message, exception: { values: [{ type: err.name, value: err.message }] }, extra: seen[0].context });
+    expect(err.message).toContain(TEST_ERROR_TEXT_EMAIL);
+    const event = sentryOptions({ SENTRY_DSN: "https://examplePublicKey@o0.ingest.us.sentry.io/0", SENTRY_ENVIRONMENT: "staging" }).beforeSend({ message: err.message, exception: { values: [{ type: err.name, value: err.message }] }, breadcrumbs: [{ message: `[api] unhandled ${err.message}` }], extra: seen[0].context });
     const json = JSON.stringify(event);
     expect(json).not.toContain(TEST_ERROR_TOKEN);
     expect(json).not.toContain(TEST_ERROR_EMAIL);
+    expect(json).not.toContain(TEST_ERROR_TEXT_EMAIL); // written in plain text, not after email= (audit OPS-2)
     expect(json).toContain("[redacted]");
     const audits = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "admin.bypass"));
     expect(audits.some((a) => /observability test error raised on purpose \(test\)/.test(a.reason ?? ""))).toBe(true);

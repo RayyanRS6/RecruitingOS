@@ -1,3 +1,4 @@
+import { errorForLog } from "@ros/core";
 import type { Db } from "@ros/db";
 import type { WorkflowEngine } from "@ros/workflows";
 
@@ -29,7 +30,7 @@ export function recurring(engine: WorkflowEngine, db: Db, kind: string, everyMs:
       await engine.ensureQueued(db, { kind, runAt: new Date(ctx.now.getTime() + everyMs) });
     } catch (err) {
       if (!failed) throw err;
-      console.error(`[queue] ${kind}: could not arm the next run: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[queue] ${kind}: could not arm the next run: ${errorForLog(err)}`);
     }
     if (failed) throw bodyError;
   };

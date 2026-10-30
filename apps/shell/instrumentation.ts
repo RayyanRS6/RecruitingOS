@@ -11,4 +11,15 @@ export async function register() {
   }
 }
 
-export const onRequestError = Sentry.captureRequestError;
+/**
+ * A page, route or action that threw. On the Node runtime it is reported without the values a failed query carries
+ * (audit OPS-2, instrumentation-node.ts); the Edge runtime runs only the middleware, which reads no database.
+ */
+export async function onRequestError(...args: Parameters<typeof Sentry.captureRequestError>): Promise<void> {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { reportRequestError } = await import("./instrumentation-node");
+    reportRequestError(...args);
+    return;
+  }
+  Sentry.captureRequestError(...args);
+}

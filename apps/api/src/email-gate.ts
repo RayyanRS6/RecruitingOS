@@ -1,4 +1,4 @@
-import { raiseAlertOnce, resolveAlertsOfKind } from "@ros/core";
+import { errorForLog, raiseAlertOnce, resolveAlertsOfKind } from "@ros/core";
 import type { Db } from "@ros/db";
 
 /**
@@ -14,7 +14,7 @@ export async function checkEmailForProduction(db: Db, input: { nodeEnv: string; 
   if (input.nodeEnv !== "production") return { raised: false };
   if (input.emailStatus !== "fake") {
     // the real provider is in use: an alert from before it was set up is over, so a later lapse is a new one
-    await resolveAlertsOfKind(db, "email.fake", { reason: `the real email provider (${input.emailId}) is in use` }).catch((err) => console.warn(`[email] could not resolve the earlier alert: ${err instanceof Error ? err.message : String(err)}`));
+    await resolveAlertsOfKind(db, "email.fake", { reason: `the real email provider (${input.emailId}) is in use` }).catch((err) => console.warn(`[email] could not resolve the earlier alert: ${errorForLog(err)}`));
     return { raised: false };
   }
   console.warn(`[email] production is running with the fake email adapter on the ${input.role}: no email is really sent. Set EMAIL_PROVIDER=postmark with POSTMARK_SERVER_TOKEN (to-do item 14, docs/spec/17-staging-handoff.md)`);
@@ -28,7 +28,7 @@ export async function checkEmailForProduction(db: Db, input: { nodeEnv: string; 
     });
     return { raised: alert.created };
   } catch (err) {
-    console.warn(`[email] could not raise the alert: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[email] could not raise the alert: ${errorForLog(err)}`);
     return { raised: false };
   }
 }

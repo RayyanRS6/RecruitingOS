@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { withoutDatabaseValues } from "@ros/contracts";
 import { createApp } from "@ros/api/src/app";
 import { createContainer, type Container } from "@ros/api/src/container";
 
@@ -21,7 +22,8 @@ async function build(): Promise<Shell> {
       try {
         await container.engine.runPending(25);
       } catch (err) {
-        console.error("[worker] tick failed", err);
+        // the stack stays for the developer; a failed query's values do not (audit OPS-2)
+        console.error("[worker] tick failed", withoutDatabaseValues(err));
       } finally {
         busy = false;
       }

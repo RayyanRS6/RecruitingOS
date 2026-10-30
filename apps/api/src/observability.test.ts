@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DrizzleQueryError } from "drizzle-orm";
 import { Hono } from "hono";
 import { registerSecretValue } from "@ros/core";
 import { errorHandler, HttpError } from "./middleware/errors";
@@ -30,6 +31,36 @@ describe("error reporting", () => {
     // a handled error (an HttpError) is answered without being reported
     expect((await app.request("/handled")).status).toBe(404);
     expect(seen.length).toBe(1);
+  });
+
+  it("an unhandled database error is answered, logged and reported without the values its query carried (OPS-2)", async () => {
+    const seen: Array<{ err: unknown; context?: Record<string, unknown> }> = [];
+    installReporter((err, context) => seen.push({ err, context }));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const sql = 'insert into "candidates" ("first_name", "email") values ($1, $2)';
+      const reason = 'duplicate key value violates unique constraint "candidates_company_email_key"';
+      const cause = Object.assign(new Error(reason), { code: "23505", detail: "Key (company_id, email)=(0192a6b2-0000-7aaa-8bbb-000000000001, nia.brooks@example.com) already exists." });
+      const app = new Hono();
+      app.onError(errorHandler);
+      app.post("/api/v1/candidates", () => { throw new DrizzleQueryError(sql, ["Nia Brooks", "nia.brooks@example.com"], cause); });
+      const res = await app.request("/api/v1/candidates", { method: "POST" });
+      expect(res.status).toBe(500);
+      const body = await res.text();
+      expect(body).toContain("params: [redacted]"); // outside production the message is shown, cut
+      expect(logged.mock.calls[0][0]).toBe("[api] unhandled");
+      expect(JSON.stringify(logged.mock.calls)).toContain(JSON.stringify(reason).slice(1, -1)); // the log keeps the database's reason
+      expect(seen).toHaveLength(1);
+      expect(seen[0].context).toEqual({ process: "api", method: "POST", path: "/api/v1/candidates" });
+      const err = seen[0].err as Error;
+      expect(err.message).toBe(`Failed query: ${sql}\nparams: [redacted]`);
+      expect((err.cause as Error).message).toBe(reason);
+      expect("params" in err).toBe(false);
+      expect("detail" in (err.cause as Error)).toBe(false);
+      for (const text of [body, JSON.stringify(logged.mock.calls), err.message, String(err.stack), String((err.cause as Error).stack)]) expect(text).not.toMatch(/Nia Brooks|nia\.brooks@example\.com/);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("the shared SDK options carry no PII, no replay, tracing off by default, and scrub registered values from events", () => {
