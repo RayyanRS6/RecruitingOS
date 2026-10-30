@@ -2,6 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { newTrialTerm, type Actor, type CreateCompany } from "@ros/contracts";
 import { audit, emit, entitlements } from "@ros/core";
 import { companies, events, memberships, users, withPlatform, type Db } from "@ros/db";
+import type { Env } from "../env";
 import { HttpError } from "../middleware/errors";
 import { AUTO_CHECK_ACTOR, autoVerification } from "./company-trust";
 
@@ -11,6 +12,23 @@ export function slugify(name: string): string {
 
 /** What a person who already has a company reads when they try to open another one themselves (founder decision L-17 A). */
 export const ANOTHER_COMPANY_MESSAGE = "To open another company, contact ITS.";
+
+/** What someone who may not open a company reads while sign-up is by invitation (GATE-V2, SIGNUP_MODE=invite). */
+export const INVITE_ONLY_MESSAGE = "Recruiting OS is by invitation for now. Ask ITS for an invitation.";
+
+/**
+ * Whether this person may create a company (GATE-V2, GAP3-2). While sign-up is open anyone signed in may (founder
+ * decision B7). By invitation, a platform admin may, as ITS always could, and so may an address SIGNUP_ALLOWED_EMAILS
+ * names in full or by "@domain" (that domain only, not its subdomains), in any case. The address is the one the
+ * identity service verified at sign-in.
+ */
+export function maySignUp(env: Pick<Env, "SIGNUP_MODE" | "SIGNUP_ALLOWED_EMAILS">, user: { email: string; platformRole: string }): boolean {
+  if (env.SIGNUP_MODE === "open" || user.platformRole === "platform_admin") return true;
+  const email = user.email.trim().toLowerCase();
+  const at = email.lastIndexOf("@");
+  if (at < 1) return false;
+  return env.SIGNUP_ALLOWED_EMAILS.some((entry) => entry === email || entry === email.slice(at));
+}
 
 /**
  * Creates the tenant, the owner membership, and the trial entitlements. Runs in platform context because the tenant does

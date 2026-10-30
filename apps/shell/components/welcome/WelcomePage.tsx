@@ -7,6 +7,9 @@ import { BrandMark } from "../BrandMark";
  * invitation is opened too; there is no sign-up or pilot request here, so the page asks for nothing. The hero comes in
  * with a short CSS rise, 30 ms apart (motion-safe only, so nothing moves for someone who asked for less motion).
  *
+ * By invitation (`inviteOnly`, SIGNUP_MODE=invite, GATE-V2) the owner band's "Get help with your next hire" goes, so
+ * nothing invites a stranger to start: the ways in that stay are for someone with an invitation, and signing in.
+ *
  * Fewer words (founder, 23 October 2026): each section is its heading, its one paragraph or list, and its way in; no
  * eyebrows over the headings, no strip of ticks, no taglines. The two-column sections line their heading up with the
  * top of the list beside it.
@@ -73,7 +76,7 @@ const POINTS: Array<{ icon: IconName; title: string; body: string }> = [
   },
 ];
 
-export function WelcomePage() {
+export function WelcomePage({ inviteOnly = false }: { inviteOnly?: boolean }) {
   return (
     <>
       <header className="motion-safe:animate-fade">
@@ -183,10 +186,12 @@ export function WelcomePage() {
               <p className="mt-5 max-w-[26rem] text-[15px] leading-[1.65] text-white/80">
                 Hiring shouldn{"’"}t become another one. Whether it falls to the owner, a manager, or whoever has a spare hour, Recruiting OS brings AI-assisted review and step-by-step guidance to the work a recruiter would help you navigate.
               </p>
-              <a href="/login" className="group mt-5 inline-flex min-h-10 items-center gap-1.5 rounded-lg text-[14px] font-semibold text-[#f4a68e] focus-visible:outline-white">
-                Get help with your next hire
-                <Arrow />
-              </a>
+              {inviteOnly ? null : (
+                <a href="/login" className="group mt-5 inline-flex min-h-10 items-center gap-1.5 rounded-lg text-[14px] font-semibold text-[#f4a68e] focus-visible:outline-white">
+                  Get help with your next hire
+                  <Arrow />
+                </a>
+              )}
             </div>
             <div className="rounded-2xl border border-white/15 bg-black/20 p-6 md:p-8">
               <h3 className="font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] text-white md:text-[30px]">You don{"’"}t have to figure out every step alone.</h3>

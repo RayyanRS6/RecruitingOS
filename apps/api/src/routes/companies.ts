@@ -4,7 +4,7 @@ import { CreateCompany, InviteMember, UpdateMember, trialStanding } from "@ros/c
 import { assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
-import { createCompany } from "../services/companies";
+import { INVITE_ONLY_MESSAGE, createCompany, maySignUp } from "../services/companies";
 import { tellItsAboutNewCompany } from "../services/company-trust";
 import { sendToIts } from "../services/escalation-queue";
 import { inviteMember, leaveCompany, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
@@ -18,12 +18,17 @@ export const companyRoutes = new Hono<Vars>();
  * it instead). A second company of one's own goes through ITS (founder decision L-17 A, known bug 65): a person who
  * already belongs to a company, or already created one, is refused with 409 `another_company_needs_its` ("To open
  * another company, contact ITS."). A platform admin sets companies up as before; someone invited to several companies
- * keeps the company switcher. The body is checked first, so a bad one still answers 400.
+ * keeps the company switcher. The body is checked before that rule, so a bad one still answers 400.
+ *
+ * By invitation (GATE-V2, SIGNUP_MODE=invite) only a platform admin or an address on SIGNUP_ALLOWED_EMAILS may create a
+ * company: anyone else is refused with 403 `signup_invite_only` before the body is read. Signing in and joining a
+ * company by invitation are untouched.
  */
 companyRoutes.post("/", requireUser, async (c) => {
-  const body = CreateCompany.parse(await c.req.json());
   const s = c.get("session")!;
   const container = c.get("container");
+  if (!maySignUp(container.env, s.user)) throw new HttpError(403, "signup_invite_only", INVITE_ONLY_MESSAGE);
+  const body = CreateCompany.parse(await c.req.json());
   const autoVerify = container.env.COMPANY_CHECK === "auto";
   const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock(), mayOpenAnother: s.user.platformRole === "platform_admin" });
   await setActiveCompany(container.db, s.sessionId, company.id);
