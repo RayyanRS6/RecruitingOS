@@ -93,8 +93,8 @@ Vercel app keeps `SCAN_PROVIDER=fake` because it never opens a quarantined file.
    host or port is wrong, or clamd is still loading signatures; the worker runs anyway and quarantined files wait,
    retried by the intake workflow, until the engine answers). Then apply on staging with the EICAR test file: the
    document is refused with `infected`, and the `document.rejected` event names the engine `clamav` and the signature.
-5. Spend: about $15 to $25 a month of compute for the always-on engine (`docs/spec/21`); raise the workspace hard
-   limit accordingly, or the whole workspace goes offline at the limit.
+5. Spend: about $15 to $25 a month of compute for the always-on engine (`docs/spec/21`). The workspace carries no
+   hard limit, which would stop production too; an email alert instead (`docs/runbooks/railway-worker.md`, screen 5).
 
 What a scan outage looks like: the scanner returns `error` (a refused connection, a closed socket, or no reply within
 `CLAMAV_TIMEOUT_MS`), the file stays in quarantine, the step retries with backoff, and the adapter reports

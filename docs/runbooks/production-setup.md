@@ -1,0 +1,559 @@
+# Production setup: from new accounts to go-live
+
+Status: written 29 October 2026 for the first production launch, from the code on branch `production-readiness`
+(strict production start-up checks, sign-up by invitation, the worker's stall exit, the Windows database tools). None of
+it has run against production yet: no production project exists. It is written for the assistant who guides the founder
+on her Windows laptop, one screen at a time. Staging is unchanged (`docs/runbooks/staging-environment-variables.md`,
+`docs/runbooks/railway-worker.md`, `docs/runbooks/staging-database-setup.md`).
+
+## Before you start
+
+- **Who does what.** The founder makes every change and types or pastes every secret. The assistant gives one screen at
+  a time, with the exact menu and button names, then checks the result itself (a dashboard read, `/healthz`, a log
+  line, the status report) before the next step.
+- **Secrets never go in chat**, a file, an email or a screenshot. What may be pasted back: the status report, the
+  `provision:` and `verified:` lines, `/healthz` output, log lines, project references and host names. The assistant
+  does not read a page while a secret shows on it: Vercel and GitHub show a pasted value until it is saved, and
+  Railway's staged-change details show new values in plain text.
+- **Placeholders.** `<host>`: the production web address (approved so far: `recruiting.identifiedtalent.com`; never
+  `app.identifiedtalent.com`, another vendor's service). `<prod-ref>`: the production Supabase project's reference.
+  `<reply mailbox>`, `<queue mailbox>`, `<test mailbox>`: ITS mailboxes (step 2). The repository is public, so
+  production identifiers stay out of it.
+- **Windows.** Commands run in Windows PowerShell (`powershell.exe`, not `pwsh`) from the root of an up-to-date
+  checkout of `main` with its packages installed. Where `pnpm.exe` is blocked, install with
+  `node "$env:APPDATA\npm\node_modules\pnpm\bin\pnpm.mjs" install --frozen-lockfile`.
+- **Accounts belong to ITS.** Each production account is opened in Identified Talent Solutions' name, with an ITS
+  mailbox someone reads for provider and billing mail, and two-step sign-in on: GitHub, Vercel, Supabase, Railway,
+  Upstash, Anthropic, Postmark, GoDaddy, Microsoft 365, 1Password.
+- **Decided before step 1** (founder): the host and the sending domain (planned: `hire.identifiedtalent.com`); the
+  product name (`PRODUCT_NAME`, which authenticator apps show); where the code lives (moving the repository later means
+  linking Vercel and Railway again); the monthly limits for Anthropic, Upstash and Railway; whether Google sign-in is
+  offered at launch.
+
+## Secrets on Windows
+
+Four values are made up here rather than issued by a provider: `SESSION_SECRET`, `ANALYTICS_SALT`,
+`POSTMARK_WEBHOOK_SECRET` and the database password. Each is new for production, never a staging value.
+
+1. **Make it.** From the repository root:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\new-secret.ps1 -Name SESSION_SECRET
+   ```
+   It puts 64 random letters and digits on the clipboard, never shown, kept out of clipboard history (Win+V) and the
+   cloud clipboard. Without the repository, 1Password's password generator does the same: 64 characters, letters and
+   digits, symbols off. The database password: the same generator, 40 letters and digits (no symbols, so the owner
+   connection string in step 3 needs no encoding).
+2. **Paste it** into its 1Password field first, then everywhere the variables table (step 5) says: Vercel with
+   **Sensitive** on, Railway followed by **Seal** in the variable's three-dot menu (the database password goes into
+   Supabase's new-project form instead, step 1). Then type `done`: the script clears the clipboard.
+3. **Check** that Win+V does not list the value. Pause any clipboard manager (Ditto and the like) before starting.
+
+`SESSION_SECRET` and `ANALYTICS_SALT` are identical on Vercel and the worker and different from staging. The start-up
+check refuses fewer than 32 characters (for `POSTMARK_WEBHOOK_SECRET` too); it cannot tell a copied staging value.
+
+Everything goes in a 1Password vault of its own, **Recruiting OS Production**:
+
+| Item | Fields |
+|---|---|
+| Recruiting OS production database owner | the database password; `MIGRATE_DATABASE_URL` (step 3) |
+| Recruiting OS production database | `DATABASE_URL`, `WORKER_DATABASE_URL` (the setup script fills them, step 3) |
+| Recruiting OS production application | `SESSION_SECRET`, `ANALYTICS_SALT`, `POSTMARK_WEBHOOK_SECRET` |
+| Recruiting OS production storage | the app key pair and the worker key pair |
+| Recruiting OS production rate limit | the Upstash REST token |
+| Recruiting OS production AI | the Anthropic key |
+| Recruiting OS production email | the Postmark server token |
+| Recruiting OS production sign-in | the Microsoft client secret with its expiry date; the Google client secret |
+
+## 1. Accounts
+
+### Supabase project
+
+Organization Identified Talent Solutions (Pro). Organization settings, **Security**: **Require MFA to access
+organization** on.
+
+**New project**: name `recruiting-os-production`; the database password from 1Password; region **West US (Oregon)**,
+`us-west-2` (it can never change; Vercel's `pdx1` and Railway's US West are next to it); compute **Small** if
+point-in-time recovery will be bought (it needs Small), otherwise Micro. If the form offers to leave the Data API off,
+leave it off.
+
+Then, in the project:
+
+- **Project Settings, Database, SSL Configuration**: **Enforce SSL on incoming connections** on; **Download
+  certificate** (`prod-ca-2021.crt`; public, not a secret).
+- **Project Settings, Data API**: off; the application never uses it. If the screen only offers the schemas, remove
+  `public` from the exposed schemas.
+- **Database, Extensions**: `supabase_vault` enabled.
+- **Project Settings, JWT Keys**: the current key is ECC (P-256), as on staging. If it is still the legacy secret,
+  migrate and rotate to ECC before anyone signs in.
+- **Project Settings, API Keys**: the publishable key (`sb_publishable_…`) becomes `SUPABASE_ANON_KEY`. The secret and
+  service-role keys stay in Supabase.
+- **Authentication, URL Configuration**: Site URL `https://<host>`; Redirect URLs: add
+  `https://<host>/api/v1/auth/callback` (both as on staging, with the production host).
+- **Authentication, Sign In / Providers**: Email off, Phone off, **Allow anonymous sign-ins** off, **Allow new users to
+  sign up** on (Microsoft and Google sign-ups need it; who may open a company is `SIGNUP_MODE`'s job). Azure and Google
+  on (next section), nothing else.
+- **Authentication, Multi-Factor**: TOTP (authenticator app) on.
+- **Storage**: steps 1 to 4 of `docs/runbooks/resume-storage.md` in this project, with staging's settings: bucket
+  `resumes`, Private, 8 MB, types `application/pdf`,
+  `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `text/plain`, `text/markdown`,
+  `image/png`, `image/jpeg`, `image/webp` (staging also lists `application/json` since 20 October; nothing needs it
+  now); global limit at least 8 MB; S3 protocol on. **Two** access keys: `recruiting-os-production-app` (Vercel) and
+  `recruiting-os-production-worker` (Railway), each into 1Password.
+
+Report back: `<prod-ref>`, the region, and the endpoint and region the S3 screen shows.
+
+### Microsoft and Google sign-in
+
+**Microsoft**: a registration of its own for production (Entra admin center, the ITS tenant, **App registrations**,
+**New registration**; background in `docs/spec/13` section 4a):
+
+- Name `Identified Talent Solutions Hiring - Sign-in (production)`; supported account types **Accounts in any
+  organizational directory and personal Microsoft accounts**; redirect URI (Web)
+  `https://<prod-ref>.supabase.co/auth/v1/callback`.
+- **API permissions** (delegated): `openid`, `profile`, `email`, `User.Read`. **Token configuration**: optional claims
+  `email` and `xms_edov`.
+- **Certificates & secrets**, **New client secret**, 12 months: the **Value** into 1Password with its expiry date, and
+  a reminder a month before. An expired secret locks every administrator out.
+- Supabase, **Azure** provider: the Application (client) ID, the secret's Value, **Azure Tenant URL** empty.
+
+**Google** (the Google Cloud project that holds the staging sign-in client): add
+`https://<prod-ref>.supabase.co/auth/v1/callback` to the client's **Authorized redirect URIs**, and publish the app
+(Google Auth Platform, **Audience**, **Publish app**: status In production; the basic scopes need no review).
+Supabase, **Google** provider: the client ID and secret. While the app is still in Testing only listed test users get
+in, so launch with `AUTH_SIGNIN_PROVIDERS=azure` and leave Google off in Supabase until it is published.
+
+### Railway project
+
+Workspace Identified Talent Solutions (Pro), **New Project**, **Empty project**, named `recruiting-os-production` (its
+environment is called `production`).
+
+1. **worker**: **New**, **GitHub Repo**, `RayyanRS6/RecruitingOS`, then the service's **Settings**:
+   - service name `worker`; source branch **`production`**, never `main`; root directory `/`; auto-deploy on;
+   - builder Railpack; build command `pnpm worker:check`; start command `pnpm worker:start`;
+   - healthcheck path `/healthz`, timeout `120`;
+   - restart policy **Always**. Railway reads `/healthz` only while a deployment goes live and restarts only a process
+     that exits. The worker exits with code 1 when nothing has finished for 15 minutes (`WORKER_STALL_EXIT_MS`), and
+     Always starts it again after any number of exits;
+   - region **US West (California)**, **1** replica; serverless (app sleeping) off;
+   - no public domain.
+
+   Railway may build at once from the `production` branch as it stands (until the first release, a September build).
+   Without variables it refuses to start, which is harmless.
+2. **clamav**: "Running ClamAV on Railway" in `docs/runbooks/resume-storage.md`, in this project: image
+   `clamav/clamav:stable`, service name `clamav`, no public domain, private networking on (the worker reaches it as
+   `clamav.railway.internal`), variables `CLAMAV_NO_MILTER=true` and `CLAMD_STARTUP_TIMEOUT=1800`. It needs about
+   1.5 GB of memory: about $15 to $25 a month.
+3. Workspace, **Usage**, **Set Usage Limits**: a **Custom email alert** sized for staging and production together, and
+   **no hard limit**. A hard limit takes every service in the workspace offline, production included.
+
+The worker's variables come in step 5.
+
+### Upstash
+
+console.upstash.com, **Create Database**: name `recruiting-os-production-rate-limit`, AWS **us-west-2 (Oregon)**, plan
+**Pay as you go** with the founder's monthly budget (an account has one free database, and staging uses it),
+**Eviction** off. From the database page: the REST URL (`UPSTASH_REDIS_REST_URL`, not a secret) and the REST token
+(into 1Password). Only the app on Vercel uses them.
+
+### Anthropic
+
+The Anthropic Console (platform.claude.com), in the organization that pays for production:
+
+- **Workspaces**: a workspace `production`, and in its **Limits** a monthly spend limit (the founder's figure; the
+  account worksheet planned $200) with an email alert below it. At the limit, or with the prepaid credit gone, every
+  customer's AI work is held: keep auto-reload on, or a low-balance alert.
+- **API keys**, **Create key** in workspace `production`, named `recruiting-os-production`, into 1Password. One key
+  serves the app and the worker. Never the staging key; the GitHub `fairness` secret stays a non-production key.
+
+### Postmark
+
+- The account's approval (requested 14 October) must be granted before go-live.
+- **Servers**, **Create server**: `recruiting-os-production`, delivery type Live, open and link tracking off.
+- The server's **API Tokens**: the Server API token into 1Password (`POSTMARK_SERVER_TOKEN`).
+- The sending domain `hire.identifiedtalent.com` is already on the account; its DNS records come next. The webhook comes
+  in step 5.
+
+## 2. DNS and email
+
+GoDaddy: the account that holds `identifiedtalent.com` (not every ITS login there does). Before any change: two-step
+sign-in on, and a copy of the zone's records saved in 1Password. Then add only these records, all on new names:
+
+| Type | Name | Value |
+|---|---|---|
+| CNAME | the host's label (`recruiting`) | what Vercel shows after **Settings, Domains, Add Domain**: `<host>`, environment Production |
+| TXT | `<selector>._domainkey.hire` | Postmark, **Sender Signatures**, `hire.identifiedtalent.com`: the DKIM record |
+| CNAME | `pm-bounces.hire` | `pm.mtasv.net`, as the same Postmark screen shows (Return-Path) |
+
+Never touch the root records, MX, the root SPF, `www`, `app` (another vendor's service) or the Microsoft 365 records.
+`hire` needs no DMARC record of its own: the root's covers it.
+
+Checks: `curl.exe -s "https://dns.google/resolve?name=identifiedtalent.com&type=CAA"` returns no `Answer`, or one that
+allows `letsencrypt.org`; Vercel shows `<host>` with a valid configuration and a certificate; Postmark shows DKIM and
+Return-Path **Verified** after **Verify**. In Vercel's **Domains**, make the production `.vercel.app` address redirect
+to `<host>`: staff open the app at exactly `<host>`, because a change posted from any other address is refused.
+
+ITS mailboxes (Microsoft 365), each read by a named person every business day:
+
+- `<reply mailbox>`: candidate replies, and the help and accommodation contact printed on job pages (`EMAIL_REPLY_TO`).
+- `<queue mailbox>`: recruiter requests and administrator changes (`ITS_QUEUE_EMAIL`; the reply mailbox may do both).
+- `privacy@identifiedtalent.com`: shown to every candidate (`PRIVACY_EMAIL`).
+- `<test mailbox>`: the smoke tests (step 8), with plus addressing (`name+1029a@…`) if the mail system accepts it.
+
+If Proofpoint holds mail from `hire.identifiedtalent.com`, allow it. Email-in (`apply.`) stays off at launch ("Not at
+launch" below).
+
+## 3. Database setup
+
+From the root of an up-to-date checkout of `main`, in Windows PowerShell. Paste back only the report lines.
+
+1. `prod-ca-2021.crt` from step 1 sits in Downloads. Supabase has one root certificate: if staging's copy is already
+   there, it is the same file, and the report says whether it matches the one the server presents.
+2. Read-only first:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\db-status.ps1 -Environment production -ProjectRef <prod-ref>
+   ```
+   It asks for the **Session pooler** string (Supabase, **Connect**, Session pooler) exactly as shown, with
+   `[YOUR-PASSWORD]` still in it; then the database password, typed and never shown; then the certificate (Return
+   accepts the file it offers). On the new project it reports 36 migrations pending and exits with 3.
+3. The setup, with the same three answers:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\db-setup.ps1 -Environment production -ProjectRef <prod-ref>
+   ```
+   It applies the 36 migrations, gives `ros_app` and `ros_worker` fresh passwords and their safety limits, applies the
+   Vault grants and checks both roles. Then it puts `DATABASE_URL` on the clipboard: paste it into 1Password, item
+   "Recruiting OS production database", field `DATABASE_URL`, and type `pasted`; then the same for
+   `WORKER_DATABASE_URL`. Win+V lists neither.
+4. If it reports the Vault grants as skipped: enable `supabase_vault` (Database, Extensions) and run the same command
+   with `-Mode grants` at the end.
+5. The status command again: `migrations applied: 36`, `migrations pending: 0`, both roles able to log in with their
+   safety limits in place, the Vault grants in place, table privileges 0 for the three Data API roles, and "everything
+   is in place" (exit 0).
+
+The scripts refuse a string from any other Supabase project, staging included, before anything connects. Every full run
+sets new passwords, so the setup is never used for a release: the strings already in Vercel and Railway would stop
+working. Releases migrate with the GitHub workflow (step 6).
+
+Last, the owner string for GitHub: in the 1Password item "Recruiting OS production database owner", a new password
+field `MIGRATE_DATABASE_URL` holding the Session pooler string with `[YOUR-PASSWORD]` replaced by the database password.
+
+## 4. GitHub
+
+Repository `RayyanRS6/RecruitingOS`, **Settings** (all free on a public repository):
+
+1. **Branches**, **Add classic branch protection rule**, once for `main` and once for `production`:
+   - **Require a pull request before merging** on; **Require approvals** off (one person releases);
+   - **Require status checks to pass before merging** on, with the check `verify`; **Require branches to be up to date
+     before merging** on for `main` and **off** for `production` (every release adds a merge commit that `main` never
+     has, so each later release would show as out of date);
+   - **Do not allow bypassing the above settings** on; **Allow force pushes** and **Allow deletions** off.
+2. **General**, Pull Requests: **Allow merge commits** on. A release is merged with a merge commit, never squashed or
+   rebased.
+3. **Actions**, General: workflows from fork pull requests need approval for every outside contributor.
+4. **Environments**, **New environment**, name **`production-database`**. Not `production`: Vercel already uses the
+   GitHub environment `Production`, and environment names ignore case.
+   - **Deployment branches and tags**: Selected branches and tags, `main` and `production`. The migration runs from
+     `main` before the release is merged (step 6), so `main` must be allowed.
+   - **Environment secrets**: `MIGRATE_DATABASE_URL` (from 1Password) and `DATABASE_SSL_CA` (the whole text of
+     `prod-ca-2021.crt`).
+   - **Environment variables**: `ROS_DB_PROJECT_REF` = `<prod-ref>`. The workflow refuses an owner string from any
+     other project.
+   - No required reviewers while one person releases.
+
+## 5. Vercel Production and the Railway worker
+
+**Vercel**, project `recruiting-os` (the team is on Pro, which business use needs):
+
+- **Settings, Environments, Production, Branch Tracking**: `production`. Check it again after any change to the Git
+  connection: re-linking the repository on 16 October reset it to `main`, which makes every merge into `main` a
+  production deployment.
+- **Settings, Environment Variables**: every row below with environment **Production** only, never Preview and never
+  all environments (a production `DATABASE_URL` on Preview would give every pull-request preview the production
+  database). **Sensitive** on for every secret. `ENABLE_EXPERIMENTAL_COREPACK=1` is already there for every
+  environment; check that it lists Production.
+- Spend management: notify only, never pause the project. Git fork protection stays on.
+- Do not press **Redeploy** on the current production deployment, a 16 October build of `main`: the first production
+  deployment with these values comes from the release (step 6).
+
+**Railway**, project `recruiting-os-production`, service `worker`, **Variables**: the non-secret rows in the **RAW
+Editor**, each secret with **New Variable**, then **Seal**. Do not press **Deploy** yet: until the release, branch
+`production` still holds the September build.
+
+**Postmark**, server `recruiting-os-production`, **Default Transactional Stream**, **Webhooks**, **Add webhook**: URL
+`https://<host>/webhooks/postmark/events`; events **Bounce**, **Spam complaint** and **Subscription change** (Delivery
+optional); basic auth with any user name and the password `POSTMARK_WEBHOOK_SECRET`.
+
+### The variables
+
+"Same" means the same value on both sides. No value here is a secret: secrets are named by where they come from.
+
+| Variable | Vercel Production | Railway production worker | Secret |
+|---|---|---|---|
+| `DEPLOY_ENV` | `production` | same (the worker's only way to know) | no |
+| `NODE_ENV` | not set: Vercel sets it | `production` | no |
+| `APP_BASE_URL` | `https://<host>`, no trailing slash | same | no |
+| `SESSION_SECRET` | new, 64 letters and digits ("Secrets on Windows") | same | yes |
+| `ANALYTICS_SALT` | new, 64 letters and digits | same | yes |
+| `SECRET_STORE` | `vault` | same | no |
+| `AUTH_PROVIDER` | `supabase` | same | no |
+| `SUPABASE_URL` | `https://<prod-ref>.supabase.co` | same | no |
+| `SUPABASE_ANON_KEY` | the publishable key (step 1) | same | no: public by design |
+| `AUTH_SIGNIN_PROVIDERS` | `azure,google`; `azure` while Google is not published | not set | no |
+| `ITS_STAFF_EMAIL_DOMAINS` | `identifiedtalent.com` | not set | no |
+| `SIGNUP_MODE` | `invite` (the app refuses to start without it) | not set | no |
+| `SIGNUP_ALLOWED_EMAILS` | not set at first; the partner's owner address or `@<partner domain>` at go-live (step 10) | not set | no |
+| `BOOTSTRAP_ADMIN_EMAILS` | the first administrator's `@identifiedtalent.com` address, removed in step 7 | not set | no |
+| `DATABASE_URL` | 1Password "Recruiting OS production database", field `DATABASE_URL` (`ros_app`) | never | yes |
+| `WORKER_DATABASE_URL` | never | the same item, field `WORKER_DATABASE_URL` (`ros_worker`) | yes |
+| `DATABASE_SSL_CA` | the whole text of `prod-ca-2021.crt` | same | no |
+| `DATABASE_POOL_MAX` | `3` | `5` (`ros_worker` has its own 15 connections) | no |
+| `WORKER_INLINE` | `false` | same | no |
+| `AI_PROVIDER` | `anthropic` | same | no |
+| `ANTHROPIC_API_KEY` | the `production` workspace's key | same | yes |
+| `STORAGE_PROVIDER` | `supabase` | same | no |
+| `STORAGE_BUCKET` | `resumes` | same | no |
+| `STORAGE_S3_ENDPOINT` | `https://<prod-ref>.storage.supabase.co/storage/v1/s3`, as the S3 screen shows | same | no |
+| `STORAGE_S3_REGION` | `us-west-2` | same | no |
+| `STORAGE_S3_ACCESS_KEY_ID`, `STORAGE_S3_SECRET_ACCESS_KEY` | the `recruiting-os-production-app` pair | **different**: the `recruiting-os-production-worker` pair | yes |
+| `SCAN_PROVIDER` | `fake` (the app never scans a file) | **different**: `clamav` | no |
+| `CLAMAV_HOST` | not set | `clamav.railway.internal` | no |
+| `CLAMAV_PORT`, `CLAMAV_TIMEOUT_MS` | not set | `3310`, `20000` | no |
+| `RATE_LIMIT_STORE` | `upstash` | **different**: `memory` (the worker counts no requests, and the Upstash token stays off Railway) | no |
+| `UPSTASH_REDIS_REST_URL` | the production database's REST URL | not set | no |
+| `UPSTASH_REDIS_REST_TOKEN` | its REST token | not set | yes |
+| `EMAIL_PROVIDER` | `postmark` | same | no |
+| `POSTMARK_SERVER_TOKEN` | the production server's API token | same | yes |
+| `POSTMARK_WEBHOOK_SECRET` | new, 64 letters and digits; also the webhook's password in Postmark | not set: only the app answers webhooks | yes |
+| `EMAIL_FROM_DOMAIN` | `hire.identifiedtalent.com` | same | no |
+| `EMAIL_FROM_ADDRESS` | `updates@hire.identifiedtalent.com` | same | no |
+| `EMAIL_REPLY_TO` | `<reply mailbox>` | same | no |
+| `ITS_QUEUE_EMAIL` | `<queue mailbox>` | same | no |
+| `PRIVACY_EMAIL` | `privacy@identifiedtalent.com` | not set: the worker does not read it | no |
+| `PRODUCT_NAME` | `Recruiting OS`, or the final name | same | no |
+| `SMS_PROVIDER`, `SMS_ENABLED` | `fake`, `false` | same | no |
+| `CALENDAR_PROVIDER` | `fake` (manual times and calendar files) | same | no |
+| `ANALYTICS_PROVIDER` | `fake` | same | no |
+| `CSP_MODE` | `report-only` | not set | no |
+| `TRUST_PROXY_HOPS` | `1` | not set | no |
+| `WORKER_POLL_MS` | not set | `1000` | no |
+| `WORKER_STALL_EXIT_MS` | not set | not set (15 minutes) | no |
+| `ENABLE_EXPERIMENTAL_COREPACK` | `1`, already there | not set | no |
+
+Never set, on either side:
+
+- `MIGRATE_DATABASE_URL` (the GitHub environment only), `SUPABASE_SERVICE_ROLE_KEY` (nowhere), `SUPABASE_JWT_SECRET`
+  (the project signs with ECC keys).
+- Refused at start-up: `COOKIE_DOMAIN`, `RATE_LIMIT_OVERRIDES`, `SENTRY_ENVIRONMENT=staging`, `COMPANY_CHECK=auto`,
+  `MAGIC_LINK_ENABLED=true`, and any value that names staging's Supabase project.
+- Off and staying off: `MAGIC_LINK_ENABLED`, `RUN_MIGRATIONS_ON_BOOT`, the Sentry values (`SENTRY_DSN`,
+  `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE`, `NEXT_PUBLIC_SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_ENVIRONMENT`), and
+  the PostHog, Twilio and Google Calendar values.
+- Left to their defaults: `JOBS_BASE_URL` (one host serves everything), `MESSAGE_UNDO_SECONDS` (30), `AI_MODEL_*` and
+  `AI_EFFORT_*`, `LINK_VERIFIER`, `BLS_API_KEY`, `COMP_BLS_ENABLED`.
+- Email-in, off at launch: `POSTMARK_INBOUND_SECRET`, `EMAIL_INTAKE_DOMAIN`.
+- Set by the hosts or the build: `PORT`, `VERCEL_ENV`, `VERCEL_GIT_COMMIT_SHA`, `RAILWAY_GIT_COMMIT_SHA`,
+  `ROS_REPO_ROOT`, `ROS_MIGRATIONS_DIR`.
+- For a person's machine only: `PGLITE_DIR`, `STORAGE_DIR`, `DATABASE_SSL_CA_FILE`. No longer read: `WEB_BASE_URL`,
+  `PLATFORM_ADMIN_EMAILS`, `RATE_LIMIT_SHARED_PROVIDER`, `RATE_LIMIT_SHARED_URL`, `LOG_LEVEL`.
+
+## 6. First release
+
+Order: migrate, then the worker, then the app.
+
+1. The latest commit on `main` has a green `verify`.
+2. **Actions**, **migrate**, **Run workflow**: **Use workflow from** `main`, environment **production-database**,
+   **Run workflow**. The log names `environment: production (Supabase project <prod-ref>)`; after step 3 it reports
+   `migrations pending: 0`, the apply step prints `up to date`, and every step is green.
+3. **Pull requests**, **New pull request**: base `production`, compare `main`, title `Release <date>`. Once `verify` is
+   green: **Merge pull request**, **Create a merge commit**, **Confirm merge**. Nothing else merges into `main` until
+   the release is live.
+4. **The worker.** Railway, `recruiting-os-production`: if **Deploy** shows staged changes, press it. The newest
+   deployment's log shows `[worker] started (db: postgres as worker, ai: anthropic, health: …, exits when stalled 15
+   min)` and no `refusing to start`; its health check passes and it is **Active**.
+5. **The app.** Vercel, **Deployments**: the Production deployment of the merge commit is **Ready**.
+   `https://<host>/healthz` answers `{"ok":true,"db":"postgres","ai":"anthropic","worker":{…,"healthy":true},"workerHealthy":true}`,
+   and `https://<host>/healthz?strict=1` answers the same with status 200.
+
+The merge starts both deployments. If the app is live first, any new kind of work it queues waits for the new worker
+(for up to a day): an older worker leaves work it does not know in the queue, and nothing fails. The console alert "An
+older worker build is running" resolves itself once the new worker has run that work.
+
+If a process refuses to start, its log says why (Vercel, **Logs**; Railway, the deployment's log):
+
+| The log says | Fix |
+|---|---|
+| `refusing to start: … not applied` | run the migrate workflow (item 2); the app comes up on its next request, the worker after a **Redeploy** if it has not come up by itself |
+| `… must be set on the production deployment`, `… must be "…"` | the named variable is missing or wrong on that side |
+| `DEPLOY_ENV must be "production" or "staging" …` | Railway: add `DEPLOY_ENV=production` (the worker's only way to know) |
+| `… names staging's Supabase project` | that variable was copied from staging: copy it from the production project |
+| `DEPLOY_ENV=production is set on a Vercel Preview deployment` | a production variable also went to Preview: edit it to Production only |
+| `NODE_ENV must be "production"` | Railway: add `NODE_ENV=production` |
+| `database role "…" is a superuser` | the owner string went in instead of the `ros_app` or `ros_worker` one |
+| `password authentication failed` (28P01) | the string on the host differs from 1Password: paste it again from 1Password |
+| a certificate error | `DATABASE_SSL_CA` is missing or incomplete |
+| `WARNING: BOOTSTRAP_ADMIN_EMAILS is set` | expected until step 7 |
+
+## 7. First administrator
+
+1. `BOOTSTRAP_ADMIN_EMAILS` (Vercel only) holds the first administrator's `@identifiedtalent.com` address since step 5.
+2. The first administrator opens `https://<host>/login`, **Continue with Microsoft**, signs in with the ITS account, and
+   the second-factor page enrols an authenticator for production (staging's entry does not work here). Add the backup
+   authenticator when it is offered, and rename the new entry in the authenticator app: both environments show
+   `PRODUCT_NAME`.
+3. The console opens at `https://<host>/admin`; **System and settings**, **Administrators** lists the new
+   administrator.
+4. Vercel: delete `BOOTSTRAP_ADMIN_EMAILS` from Production, then **Deployments**, the latest Production deployment, the
+   three-dot menu, **Redeploy**. The start-up warning about it stops.
+5. **System and settings**, **Business calendar**: publish the same calendar as staging (Monday to Friday, 9 to 5
+   Pacific, US federal holidays and the day after Thanksgiving). Production starts on built-in defaults.
+6. A second administrator first signs in with Microsoft and an authenticator; then **Administrators**, grant, with a
+   reason.
+
+## 8. Smoke test with made-up data
+
+Test data in production follows these rules:
+
+- Made-up people and documents only; nothing is copied from staging. Never run `scripts/load-apply.ts` against
+  production.
+- One ITS test company, **ITS Internal Test - not hiring**, opened once by the first administrator at
+  `https://<host>/setup/company` (an administrator may open a company while sign-up is by invitation). The queue
+  mailbox gets a notice about the new company: its first check. Then **Console, Customers**, the company, **Change
+  plan**: Design Partner, reason "ITS test company", so no trial clock pauses its applications after 30 days.
+- One role in it, **TEST - not a real job**, approved; nothing else.
+- Between checks the company stays unconfirmed: its pages, feeds and candidate emails are off.
+- Candidates use `<test mailbox>` with a new plus tag for each check, never `example.com` or a made-up domain: real
+  email bounces, and a bounce puts the address on the do-not-send list.
+- Test applicants stay. Deleting one goes through a privacy request that needs counsel's approval, so that path is never
+  used for test data; leave the test company out of totals by hand in reviews.
+
+The check:
+
+1. `curl.exe -s https://<host>/robots.txt` shows `Allow: /careers/` and a `Sitemap:` line; `curl.exe -sI
+   https://<host>/welcome` shows no `x-robots-tag`.
+2. Sign-in: the first administrator with Microsoft and the authenticator; a Microsoft account from outside ITS (a
+   personal one, or another company's) and, if offered, a Google account. Each outside account signs in, and the company
+   step says "Recruiting OS is by invitation for now" with the reply mailbox.
+3. **Console, Customers**, the test company: **Confirm the company**, reason "smoke test". From the second check on,
+   also the role's **More** menu, **Accept applications again**.
+4. In a private window, the role's job page (its **Share** tab has the link): apply as "Test Candidate <date>" with
+   `<test mailbox>` plus a new tag and a made-up PDF résumé. The acknowledgment arrives in the test mailbox from
+   `updates@hire.identifiedtalent.com`, and its message details show `dkim=pass` and `dmarc=pass`. The AI interview
+   invitation follows.
+5. As the owner: the résumé goes from quarantine to clean and opens; **Settings**, **Audit history** shows the read.
+6. A second made-up applicant with the EICAR test file: the file is refused as infected and the application goes on
+   without it. Build the file inside the browser page: saved to disk, Windows Defender removes it.
+7. Postmark, the webhook, **Send test**: the app answers 200.
+8. Optional: invite the test candidate to an interview and pick a time from the email; the confirmation carries a
+   calendar file.
+9. Right afterwards: the role's **More** menu, **Stop accepting applications**; **Console, Customers**, the test
+   company, **Take back the confirmation**, reason "smoke test done". Feeds may list the role for up to 5 more minutes.
+10. Write the result, without addresses, as a comment on the release pull request.
+
+## 9. Uptime monitor
+
+Nothing else watches production from outside: Railway reads the worker's health only while it deploys, and the app
+raises "The background worker has stopped polling" only when its `/healthz` is called.
+
+1. A free uptime-monitor account in ITS's name (for example Better Stack; check that the free plan allows business
+   use), alerting the founder by email and phone push, and the backup person once named.
+2. Monitor `https://<host>/healthz?strict=1` (expects 200) at the shortest free interval, alerting after 2 or 3 failed
+   checks in a row: a long batch can trip a single check.
+3. Monitor `https://<host>/welcome` the same way.
+4. Optional: the same mailbox follows the status pages of Vercel, Supabase, Railway, Anthropic and Postmark.
+5. Prove it once, before the first real candidate. Railway, the worker, **Deployments**, the active deployment, the
+   three-dot menu, **Remove**. Within about 20 minutes the monitor alerts, **Console, Problems, Alerts** shows "The
+   background worker has stopped polling", and its email reaches the platform administrators (look in Proofpoint if it
+   does not). Then **Redeploy** the removed deployment: `/healthz?strict=1` answers 200 again and the alert resolves
+   itself.
+
+## 10. Go-live
+
+Real people's data enters production only after:
+
+- the founder's dated sign-off in `docs/spec/00` section O (gate 4.13), which settles the legal route for the AI
+  interview and the score;
+- evidence for every blocker in `docs/readiness/20` section B, among them point-in-time recovery (it needs Small
+  compute) with one restore drill, the partner's signed pilot agreement, the vendors' data-processing terms and a named
+  incident lead;
+- Postmark's approval, and steps 8 and 9 passed on production.
+
+Then:
+
+1. Vercel Production: `SIGNUP_ALLOWED_EMAILS` = the partner's owner address, or `@<partner domain>`; redeploy the
+   latest Production deployment.
+2. Send the partner `https://<host>`. They sign in with Microsoft or Google and open their company. If their Microsoft
+   365 asks for an administrator's approval, their IT administrator approves the app once.
+3. ITS confirms the company (**Console, Customers**, **Confirm the company**) only once the agreement is signed, then
+   **Change plan**: Design Partner.
+4. The first real role. Every business day: the console's **Problems**, the queue mailbox and the reply mailbox; daily
+   in the first week. No second customer before seven stable days (`docs/readiness/20` section C).
+5. Then lock down staging (step 11).
+
+## 11. Lock down staging
+
+Staging's address is public (this repository's history prints it) and it stays a working copy, so close it once
+production is live:
+
+1. Vercel, **Environment Variables**, Preview, branch `main`: `SIGNUP_MODE=invite` and `SIGNUP_ALLOWED_EMAILS` = the
+   staging test identities (full addresses or `@domain`); redeploy the latest `main` deployment. An account not on the
+   list now sees "Recruiting OS is by invitation for now" at the company step.
+2. If the partner used staging: in the staging console, **Customers**, their company, **Take back the confirmation**;
+   **System and settings**, **Sign someone out everywhere**, for each of their people; then the staging Supabase
+   project, **Authentication**, **Users**: delete their users (it cannot be undone). Their production company starts
+   fresh; nothing is copied from staging.
+3. Take back the confirmation of every other staging company not under test: their pages and feeds go offline at once,
+   and confirming again brings them back.
+4. A new staging AI key with a low limit, in the Anthropic organization that holds the staging key: workspace staging,
+   **Limits**, a low monthly limit ($25 to $50); **Create key**; replace `ANTHROPIC_API_KEY` on Vercel (Preview, `main`)
+   and on the staging Railway worker (since 22 October they may hold different keys: replace both); redeploy both;
+   `/healthz` shows `"ai":"anthropic"` and one job draft works; then delete the old key.
+5. `curl.exe -sI <staging address>/welcome` shows `x-robots-tag: noindex, nofollow`.
+
+Stronger, optional: staging Supabase, **Authentication, Sign In / Providers**, **Allow new users to sign up** off.
+Existing test accounts keep working; a new tester is added in the dashboard first.
+
+## Every later release
+
+1. `main` is green; nothing else merges into it until the release is live.
+2. The **migrate** workflow from `main` with **production-database** (step 6, item 2). A pending migration is expected;
+   the run ends with "Confirm no migration is pending" green. Migrations work with the code already live, so
+   production keeps running meanwhile.
+3. The release pull request, merged with a merge commit (step 6, item 3).
+4. The worker, then the app (step 6, items 4 and 5); Railway now deploys by itself. If the console shows "An older
+   worker build is running" for more than a few minutes, see `docs/runbooks/railway-worker.md`.
+5. The short smoke test: step 8, items 3, 4 and 9.
+
+## Rollback
+
+- **The app**: Vercel, **Deployments**, the last good Production deployment, the three-dot menu, **Instant Rollback**.
+  Afterwards Vercel no longer puts new production deployments live by itself: once the fix is merged, open its
+  deployment and **Promote** it.
+- **The worker**: Railway, the worker, **Deployments**, the last good deployment, the three-dot menu, **Redeploy**. An
+  older worker leaves work it does not know in the queue ("An older worker build is running") for up to a day; after
+  that the work fails like any other job, so release the fix within the day, or roll the app back too.
+- **The database is never rolled back.** Every migration works with the release before it, so the older code runs on
+  the newer schema. A wrong migration is corrected by the next numbered one, in a normal release.
+- **One company**: **Console, Customers**, the company, **Take back the confirmation**: its pages, feeds and candidate
+  emails stop at once.
+
+## Hotfix
+
+- A fix goes through a pull request and `verify` (about an hour). If production is broken meanwhile, roll back first.
+- If `main` holds nothing beyond what is live: fix on a branch from `main`, merge into `main`, release as usual.
+- If `main` already holds unreleased work: branch `hotfix/<name>` from `production`, pull request into `production`,
+  merge with a merge commit; Railway and Vercel deploy it. Then a pull request from `production` into `main`, so the
+  next release keeps the fix.
+- A hotfix carries no migration. One that needs a migration is released from `main` the usual way, migration first.
+- Turning branch protection off for an emergency is the founder's recorded decision, undone right after.
+
+## Not at launch
+
+- **Email-in** (`apply.`): MX `apply` to `inbound.postmarkapp.com` (priority 10); the Postmark server's inbound stream
+  with domain `apply.identifiedtalent.com` and webhook
+  `https://inbound:<POSTMARK_INBOUND_SECRET>@<host>/webhooks/postmark/inbound`; then `POSTMARK_INBOUND_SECRET` and
+  `EMAIL_INTAKE_DOMAIN=apply.identifiedtalent.com` on Vercel and the worker, the same on both. It needs a Postmark plan
+  with inbound. First, staging's `EMAIL_INTAKE_DOMAIN` (Vercel Preview and the staging worker) becomes
+  `intake.localhost`, so only production uses `apply.`.
+- **`CSP_MODE=enforce`**, once staging has run enforced for two weeks without new reports (`docs/readiness/18`);
+  redeploy after the change.
+- A separate jobs host (`JOBS_BASE_URL`, the same on both sides), Sentry, and a Supabase custom domain for the sign-in
+  screens.

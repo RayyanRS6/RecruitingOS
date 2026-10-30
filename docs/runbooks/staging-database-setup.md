@@ -16,6 +16,29 @@ Both ask for the Session pooler connection string with `[YOUR-PASSWORD]` still i
 echo (`docs/spec/13` §9, PR 9), then for the path to the Supabase CA certificate (below). The completed string lives
 only in that process.
 
+### On Windows (added 29 October 2026)
+
+The founder's Windows laptop has no bash, openssl or pbcopy, so the same steps also run from PowerShell, for staging
+or production, with the database named on the command line:
+
+| Command (from the repository root) | Changes the database? |
+|---|---|
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\db-status.ps1 -Environment staging -ProjectRef vjuaiyjmtrenbrmujvtc` | no |
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\db-setup.ps1 -Environment staging -ProjectRef vjuaiyjmtrenbrmujvtc` | yes (full) |
+| the same with `-Mode grants` at the end | yes (grants and limits only) |
+
+They need Node.js and the installed packages, nothing else (the steps run through `node_modules\.bin\tsx.cmd`). The
+password is typed at a prompt that shows nothing and reaches `fill-password.ts` on standard input only. The two new
+strings go to the clipboard one at a time through `scripts/lib/clipboard.ps1`, which keeps them out of Windows
+clipboard history (Win+V) and cloud clipboard; a computer that cannot do that is refused before anything changes.
+`scripts\new-secret.ps1 -Name SESSION_SECRET` puts a fresh 64-character secret on the clipboard the same way, for the
+values the application makes up itself. Ctrl-C clears the clipboard before the script ends; Windows may then ask
+"Terminate batch job (Y/N)?", and either answer is fine.
+
+Every tool now needs `ROS_DB_ENV` (`staging` or `production`; the scripts set it, and production also needs
+`ROS_DB_PROJECT_REF`), names that environment's vault and item, and refuses a connection string from another Supabase
+project: staging is `vjuaiyjmtrenbrmujvtc`, and production can never be it.
+
 ## TLS: why the first run most likely failed, and the certificate
 
 Supabase signs its database and pooler certificates with its own authority ("Supabase Root 2021 CA"), not one that
@@ -60,7 +83,8 @@ hosted shape; same), with a string carrying `ssl=no-verify` (refused before conn
 | 1. migrations | applies each `packages/db/migrations/*.sql` not yet in `_migrations`, **each file in one transaction together with its ledger row** | the failing file is rolled back whole; the report names the file, the statement number and the Postgres code | skipped files stay skipped; the failed file is applied again |
 | 1a. the first pending migration | applied with "already exists" statements skipped and counted (a file the old, non-transactional runner left half-applied) | as above | the rerun completes it and records it; the report says how many statements were already there |
 | 2. roles present | checks `ros_app`, `ros_worker`, `app_tenant` exist (migration 0003 creates them) | nothing changed | run again after step 1 succeeds |
-| 3. passwords | `ALTER ROLE … LOGIN PASSWORD` with fresh random passwords, in one transaction with the Vault grants | nothing changed | always sets both afresh; any `DATABASE_URL` already entered elsewhere must be replaced |
+| 3. passwords | `ALTER ROLE … LOGIN PASSWORD` with fresh random passwords, in one transaction with the safety limits and the Vault grants | nothing changed | always sets both afresh; any `DATABASE_URL` already entered elsewhere must be replaced |
+| 3a. safety limits | `ALTER ROLE … SET` on both roles (both modes): `ros_app` statement_timeout 60s, lock_timeout 15s, idle_in_transaction_session_timeout 120s; `ros_worker` 300s, 15s, 300s. Sessions opened afterwards get them; the status report shows them | nothing changed | reapplied |
 | 4. Vault grants | the grants in `packages/db/scripts/vault-grants.sql` (the EXECUTE grants resolve Vault's real function signatures at run time); skipped with a clear line when the `vault` schema is absent | nothing changed (same transaction as step 3) | reapplied; or `grants` mode after enabling Vault |
 | 5. verification | connects as each role through the same Session pooler host and port the application will use, checks not superuser, no RLS bypass, `ros_app` can enter `app_tenant`; retries for up to 30 seconds while the pooler picks up the new password | reported as `verified: <role>: FAILED: <plain diagnosis>`; passwords and grants stay | run again after fixing the cause |
 | 6. print | the two connection strings, once | | printed again on the rerun, with the new passwords |
@@ -167,6 +191,11 @@ If the Vault grants were skipped, enable Supabase Vault (Dashboard, Database, Ex
 `packages/db/src/migrate.test.ts` (atomic files, repair of an interrupted file, strictness for later files, non-duplicate
 errors never skipped, status report, the real migrations on a fresh database), `packages/db/src/provisioning.test.ts`
 (role string derivation, TLS default, Vault grant statements, the diagnosis of every error kind with no secret in it),
-`packages/db/src/connection-string.test.ts` (the two prompts' encoding). Both scripts were exercised under macOS
+`packages/db/src/connection-string.test.ts` (the two prompts' encoding), `packages/db/src/db-environment.test.ts` (the
+environment and project checks, both directions). Both scripts were exercised under macOS
 `/bin/bash` 3.2 with a stand-in for the database steps: full mode, grants mode, an unknown mode, a failing migration,
-a failing provision, and the refusals.
+a failing provision, and the refusals. The PowerShell scripts were exercised on the founder's Windows laptop (29 Oct)
+against an address where nothing listens, never a real database: status, grants and full mode up to the failed
+connection, the password reaching `fill-password.ts` byte for byte (accents and an emoji included), every refusal
+(wrong project both ways, Transaction pooler, a filled-in or direct string, an empty password), and the clipboard: a
+dummy value read back by another process, marked out of history and cloud sync, then cleared.

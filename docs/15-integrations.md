@@ -37,7 +37,7 @@ The public job surfaces live on the job-page host, `JOBS_BASE_URL` (docs/spec/20
 | Address | What it is | Cadence |
 |---|---|---|
 | `GET /sitemap.xml` | The careers page of every company with at least one listed role, then every listed job page, each with `lastmod` (the role's last change). Standard sitemap schema (`http://www.sitemaps.org/schemas/sitemap/0.9`). | Rebuilt every 5 minutes; crawl daily |
-| `GET /robots.txt` | Allows `/careers/`; disallows `/c/`, `/api/`, `/a/`, `/files/`, `/dev/`, `/webhooks/`; names the sitemap. | Static |
+| `GET /robots.txt` | On the production deployment (`DEPLOY_ENV=production` or `VERCEL_ENV=production`): allows `/careers/`; disallows `/c/`, `/api/`, `/a/`, `/files/`, `/dev/`, `/webhooks/`; names the sitemap. Everywhere else (staging, a person's machine): `User-agent: *` and `Disallow: /`, with no sitemap; a hosted deployment that is not production also sends `X-Robots-Tag: noindex, nofollow` on every response. | Static |
 | `GET /feeds/jobs.xml` | The common job-board XML: one `<source>` with `<publisher>`, `<publisherurl>` and `<lastBuildDate>`, then one `<job>` per listing. Text is in CDATA. | Rebuilt every 5 minutes; poll every 1 to 4 hours |
 | `GET /feeds/jobs.json` | The same listings as JSON: `{ publisher, publisherUrl, lastBuildDate, jobs: [...] }`. | Same |
 | `GET /feeds/linkedin.xml` | LinkedIn Basic Jobs XML (`<source>` with `<lastBuildDate>` and `<publisherUrl>`; per job `partnerJobId`, `company`, `title`, `description`, `location`, `applyUrl` pointing at the job's canonical page, and `salaries` when the range is disclosed). Not advertised until LinkedIn confirms ingestion. | Same |

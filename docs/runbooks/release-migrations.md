@@ -15,22 +15,27 @@ refusing to start: 1 migration is not applied (0021_worker_heartbeats.sql). Run 
 So the order on a release day is: **migrate first, deploy second.** Every migration is written to work with the
 release before it (additive columns, tables with defaults, no drops without an `allow-destructive` reason), so the
 old code keeps running on the new schema while Vercel and Railway roll forward. The deploy itself is unchanged:
-Railway follows `main` for the worker, Vercel deploys `main` to the staging Preview and `production` to production.
+Railway's staging worker follows `main` and the production worker `production`; Vercel deploys `main` to the staging
+Preview and `production` to production.
 
 ## Two ways to apply it, and one way never to
 
 | Way | When | What it needs |
 |---|---|---|
-| The `migrate` GitHub workflow (Actions, **migrate**, **Run workflow**, pick the environment) | the normal way; leaves a run log anyone can read | the environment's secrets `MIGRATE_DATABASE_URL` (the owner string) and `DATABASE_SSL_CA` (the Supabase certificate text), entered once by the founder |
-| `pnpm db:migrate` on the founder's machine | when Actions is down or the workflow's secrets are not entered yet | `MIGRATE_DATABASE_URL` and `DATABASE_SSL_CA_FILE` in front of the command, from 1Password, never saved in a file |
-| `bash scripts/staging-db-setup.sh` | **never for a release**: it is the first-time setup and every run rotates the `ros_app` and `ros_worker` passwords, which breaks the strings entered in Vercel and Railway until they are replaced | |
+| The `migrate` GitHub workflow (Actions, **migrate**, **Run workflow**, pick the environment) | the normal way, and the only way for production and from Windows; leaves a run log anyone can read | the environment's secrets `MIGRATE_DATABASE_URL` (the owner string) and `DATABASE_SSL_CA` (the Supabase certificate text), entered once by the founder; `production-database` also has the variable `ROS_DB_PROJECT_REF` |
+| `pnpm db:migrate` on the founder's machine | staging only, from a Mac, when Actions is down or the workflow's secrets are not entered yet | `ROS_DB_ENV=staging`, `MIGRATE_DATABASE_URL` read at a prompt that shows nothing, and `DATABASE_SSL_CA_FILE` (below); never saved in a file |
+| `bash scripts/staging-db-setup.sh` or `scripts\db-setup.ps1` | **never for a release**: they are the first-time setup and every full run rotates the `ros_app` and `ros_worker` passwords, which breaks the strings entered in Vercel and Railway until they are replaced | |
 
 The owner string is the only credential that may run a migration; the application roles cannot create tables. It
 lives in the GitHub environment's secrets and in 1Password, and nowhere else (never Vercel, never Railway).
 
 ## Running the workflow
 
-1. GitHub, **Actions**, **migrate**, **Run workflow**, choose the environment (`staging` today), **Run workflow**.
+1. GitHub, **Actions**, **migrate**, **Run workflow**, choose the environment, **Run workflow**: `staging`, or
+   `production-database` for production, run with **Use workflow from** `main` before the release pull request into
+   `production` is merged (`docs/runbooks/production-setup.md`, step 6). The tools name the database from it
+   (`ROS_DB_ENV`) and refuse an owner string from any other Supabase project; the status step's first line says which:
+   `status: environment: staging (Supabase project vjuaiyjmtrenbrmujvtc)`.
 2. The run has five steps. Read them in order:
    - **Migration validation**: the static and structural checks (`pnpm db:validate`). A failure here means the
      migration file itself is wrong; fix it on the branch and run again. Nothing was sent to the database.
@@ -54,17 +59,23 @@ lives in the GitHub environment's secrets and in 1Password, and nowhere else (ne
 
 ## Running it from the founder's machine instead
 
-From the repository root, in the founder's own Terminal, with the owner string from 1Password:
+Staging only, from a Mac's Terminal at the repository root. Production migrates only through the workflow, and on
+Windows (no bash, and `pnpm.exe` may be blocked) the workflow is the release path for staging too. The owner string from
+1Password is pasted at a prompt that shows nothing, so it never reaches the screen or the shell's history:
 
 ```bash
-MIGRATE_DATABASE_URL='<owner string>' DATABASE_SSL_CA_FILE=~/Downloads/prod-ca-2021.crt pnpm db:status --report-only
-MIGRATE_DATABASE_URL='<owner string>' DATABASE_SSL_CA_FILE=~/Downloads/prod-ca-2021.crt pnpm db:migrate
-MIGRATE_DATABASE_URL='<owner string>' DATABASE_SSL_CA_FILE=~/Downloads/prod-ca-2021.crt pnpm db:status --fail-on-pending-migrations
+printf 'Owner connection string: '; read -rs MIGRATE_DATABASE_URL; echo
+export MIGRATE_DATABASE_URL ROS_DB_ENV=staging DATABASE_SSL_CA_FILE=~/Downloads/prod-ca-2021.crt
+pnpm db:status --report-only
+pnpm db:migrate
+pnpm db:status --fail-on-pending-migrations
+unset MIGRATE_DATABASE_URL
 ```
 
-The single quotes keep the string out of shell history expansion; clear the terminal afterwards. `scripts/staging-db-status.sh`
-gives the same report interactively (it asks for the string and never echoes it) and exits 3 while anything is
-still to do, which is only a reminder, not a failure.
+Without `ROS_DB_ENV` the status reports refuse to start (exit 2); with it, every one of the three refuses a string from
+any other Supabase project before anything connects. `bash scripts/staging-db-status.sh` gives the same report interactively (it asks for
+the string and the password separately and never echoes the password) and exits 3 while anything is still to do, which
+is only a reminder, not a failure.
 
 ## Reading the status output
 
@@ -89,7 +100,8 @@ file (the ledger records it by name and the validator refuses gaps and renumberi
 
 ## What the founder sees when the order is wrong
 
-If a deploy lands before the migration: the worker restarts up to ten times with `refusing to start: 1 migration is
-not applied` and Railway's health check never passes; Vercel's deployment builds but `/healthz` and every request
-answer 503 with `database unavailable` in the log line above it. Nothing is damaged. Run the migration (either way
-above), then redeploy or wait for the next restart; the processes come up on their own once the ledger is complete.
+If a deploy lands before the migration: the new worker deployment logs `refusing to start: 1 migration is not
+applied`, never passes Railway's health check and fails, while the one before it keeps running; Vercel's deployment
+builds but `/healthz` and every request answer 503 with `database unavailable` in the log line above it. Nothing is
+damaged. Run the migration (either way above), then **Redeploy** the worker; the app comes up on its own once the
+ledger is complete.
