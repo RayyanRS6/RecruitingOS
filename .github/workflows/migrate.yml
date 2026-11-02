@@ -2,14 +2,17 @@
 # docs/runbooks/release-migrations.md). Production never migrates on boot and refuses to start while a migration is
 # pending, so this runs before a deploy that needs a schema change. The owner connection string lives only in the
 # GitHub environment's secrets. A pending migration is the expected state when this starts: the status report before
-# the apply step never fails the run (H4); the one after it fails only if a migration is still pending.
+# the apply step never fails the run (H4); the one after it fails only if a migration is still pending. The status
+# reports refuse to run without ROS_DB_ENV, and with it every step refuses an owner string from any other Supabase
+# project than that environment's (packages/db/src/cli/environment.ts): staging's project is built in, production's
+# comes from the production-database environment's variable ROS_DB_PROJECT_REF.
 name: migrate
 
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: The GitHub environment whose database to migrate (its secrets hold MIGRATE_DATABASE_URL)
+        description: staging or production-database (the GitHub environment whose secrets hold MIGRATE_DATABASE_URL)
         type: environment
         required: true
 
@@ -32,6 +35,11 @@ jobs:
       NODE_ENV: production
       MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
       DATABASE_SSL_CA: ${{ secrets.DATABASE_SSL_CA }}
+      # Which database this is: the GitHub environment production-database is production (not "production", a name
+      # Vercel's deployments already use); staging is staging. Any other environment is refused by the tools. Only
+      # production reads ROS_DB_PROJECT_REF (that environment's variable); staging's project is built in.
+      ROS_DB_ENV: ${{ inputs.environment == 'production-database' && 'production' || inputs.environment }}
+      ROS_DB_PROJECT_REF: ${{ inputs.environment == 'production-database' && vars.ROS_DB_PROJECT_REF || '' }}
     steps:
       - uses: actions/checkout@v7
 

@@ -5,6 +5,7 @@ import { desc, eq, gt, gte, inArray, ne, sql } from "drizzle-orm";
 import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
 import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
+import { mailbox } from "@ros/integrations";
 import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, invitations, jobs, memberships, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
 import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, resolveAlert, resolveAlertsFor, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
@@ -668,7 +669,7 @@ adminRoutes.post("/platform-roles/:grantId/revoke", async (c) => {
 async function notifyOtherAdmins(container: Container, actorUserId: string, subject: string, text: string, key: string): Promise<{ notified: number; failed: number }> {
   const others = await container.db.select({ email: users.email }).from(users).where(and(eq(users.platformRole, "platform_admin"), sql`${users.id} <> ${actorUserId}`));
   const recipients = new Set<string>([...others.map((o) => o.email), container.env.ITS_QUEUE_EMAIL]);
-  const from = `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`;
+  const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
   let notified = 0;
   let failed = 0;
   for (const to of recipients) {

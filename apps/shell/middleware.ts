@@ -1,8 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { sessionCookieName } from "@ros/api/src/cookie-names";
 import { buildAppCsp, cspHeaderName, cspMode, makeNonce } from "./lib/csp";
-
-/** The session cookie's name (apps/api/src/middleware/session.ts), repeated here so the middleware bundle stays dependency-free. */
-const SESSION_COOKIE = "ros_session";
 
 /**
  * Every page of the authenticated application gets a per-request nonce and the content-security policy (21 Sep, item 6).
@@ -13,14 +11,16 @@ const SESSION_COOKIE = "ros_session";
  * Someone with no session who opens the bare address of Home sees the public welcome page (/welcome, October 2026
  * redesign) instead of the sign-in form; with a session cookie Home is unchanged, and an expired one still ends on
  * sign-in. A Home address with a query is a link from the app's own emails (`/?request=<id>`, `/?start=1`), so it goes on
- * to the sign-in form as before.
+ * to the sign-in form as before. The session cookie goes by the API's own rule ("__Host-ros_session" over https), from
+ * apps/api/src/cookie-names.ts, which imports nothing, so the middleware bundle stays dependency-free.
  */
 export function middleware(req: NextRequest) {
   const nonce = makeNonce();
   const mode = cspMode(process.env.CSP_MODE);
   const csp = buildAppCsp({ nonce, dev: process.env.NODE_ENV !== "production", reportPath: "/api/csp-report" });
   const header = cspHeaderName(mode);
-  if (req.nextUrl.pathname === "/" && req.nextUrl.search === "" && !req.cookies.has(SESSION_COOKIE)) {
+  const sessionCookie = sessionCookieName({ NODE_ENV: process.env.NODE_ENV, COOKIE_DOMAIN: process.env.COOKIE_DOMAIN });
+  if (req.nextUrl.pathname === "/" && req.nextUrl.search === "" && !req.cookies.has(sessionCookie)) {
     const away = NextResponse.redirect(new URL("/welcome", req.url));
     away.headers.set(header, csp);
     return away;

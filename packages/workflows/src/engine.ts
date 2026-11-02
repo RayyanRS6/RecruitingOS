@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
+import { redactDatabaseValues, type Actor } from "@ros/contracts";
 import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert, raiseAlertOnce, resolveAlertsOfKind, settleRetriedRunRequest, stoppedRunQuestion } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
 import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
@@ -23,6 +23,13 @@ import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, Ste
  *   run resumes by itself.
  * - A job claimed by a worker keeps its lease while it runs (renewed every third of the lease), so a slow model step
  *   is never picked up and repeated by a second worker.
+ * - Builds overlap (audit GAP6-2): during a release, after a rollback, or while the web app is live before the worker,
+ *   an older worker meets work a newer build queued. It claims only the job kinds it has handlers for, and a tick for
+ *   a workflow or step it does not know goes back to the queue, its try not counted, with one alert that an older
+ *   worker build is running; the alert resolves itself once a worker that knows the work runs it. Nothing is failed
+ *   and no run is stranded while a newer build can still come: work that waits `NEWER_BUILD_PATIENCE_MS` is work no
+ *   build knows (a step renamed or removed, a definition naming a step it lacks) and fails like any other job.
+ * - Error text is kept and logged without the values a failed query carries (audit OPS-2, `errorText`).
  */
 export type JobHandler = (payload: Record<string, unknown>, ctx: { attempt: number; maxAttempts: number; now: Date }) => Promise<void>;
 
@@ -37,6 +44,22 @@ export const AI_HOLD_CHECK_EVERY_MS = 15 * 60_000;
 export const AI_OUTAGE_ALERT_KIND = "ai.provider_outage";
 /** How far apart held runs go again once the provider answers (each a few seconds after the one before). */
 export const HELD_RELEASE_SPACING_MS = 3000;
+/** The one alert raised while a worker meets work only a newer build knows (`leaveForNewerBuild`). */
+export const OUTDATED_WORKER_ALERT_KIND = "worker.outdated";
+/** How soon a tick this build cannot run is due again, for whichever worker claims it first. */
+export const NEWER_BUILD_RETRY_MS = 30_000;
+/**
+ * How long work only a newer build knows waits for it: from the first time a worker put a tick back, or from when a job
+ * of a kind no worker claims was due. Long enough for a release, and for a worker rolled back until its fix is out (a
+ * fix takes about an hour through its checks alone). After that no build that knows the work is coming, and it is
+ * treated as an ordinary failure: the job is tried its usual number of times and then fails with its own error.
+ */
+export const NEWER_BUILD_PATIENCE_MS = 24 * 3600_000;
+
+/** An error's text as the queue keeps or logs it: without the values a failed query carries (audit OPS-2). */
+function errorText(err: unknown): string {
+  return redactDatabaseValues(err instanceof Error ? err.message : String(err));
+}
 
 /** The wait before a run's next try after its `attempts`-th failure: 2 s, 4 s, 8 s ... up to 10 minutes. */
 export function retryDelayMs(attempts: number): number {
@@ -126,7 +149,7 @@ export class WorkflowEngine {
       try {
         await this.checkHeldRuns();
       } catch (err) {
-        console.error(`[queue] the AI hold check failed; it runs again in ${Math.round(AI_HOLD_CHECK_EVERY_MS / 60_000)} minutes: ${err instanceof Error ? err.message : String(err)}`);
+        console.error(`[queue] the AI hold check failed; it runs again in ${Math.round(AI_HOLD_CHECK_EVERY_MS / 60_000)} minutes: ${errorText(err)}`);
         await this.ensureQueued(this.deps.db, { kind: AI_HOLD_CHECK_JOB_KIND, runAt: new Date(this.now().getTime() + AI_HOLD_CHECK_EVERY_MS) });
       }
     });
@@ -191,9 +214,26 @@ export class WorkflowEngine {
   }
 
   private jobHandlers = new Map<string, JobHandler>();
+  private progressListener: (() => void) | null = null;
   /** The engine's clock (tests move it); routes that enqueue jobs use it so a job is due on the same clock that runs it. */
   clock(): Date {
     return this.now();
+  }
+
+  /**
+   * Hears every job and every workflow step that finishes, whatever its outcome (audit OPS-V1): the worker's watchdog
+   * listens, so a long batch that keeps finishing work never looks stalled. One listener; null removes it.
+   */
+  onProgress(listener: (() => void) | null): void {
+    this.progressListener = listener;
+  }
+
+  private progressed(): void {
+    try {
+      this.progressListener?.();
+    } catch {
+      // a listener never affects the queue
+    }
   }
 
   /** Registers a handler for a queued job kind other than workflow ticks (for example credential revocation). */
@@ -224,11 +264,15 @@ export class WorkflowEngine {
   async runPending(limit = 10): Promise<number> {
     const nowIso = this.now().toISOString();
     const staleIso = new Date(this.now().getTime() - this.leaseMs).toISOString();
+    // Only the kinds this build can run (GAP6-2): a newer build's job waits in the queue for a worker that knows it. One
+    // that has waited NEWER_BUILD_PATIENCE_MS past its time is claimed all the same, to fail with its error (runClaimed).
+    const kinds = ["workflow.tick", ...this.jobHandlers.keys()];
+    const overdueIso = new Date(this.now().getTime() - NEWER_BUILD_PATIENCE_MS).toISOString();
     const claimed = (await this.deps.db.execute(sql`
       UPDATE jobs SET locked_at = ${nowIso}, locked_by = ${this.workerId}, attempts = attempts + 1
       WHERE id IN (
         SELECT id FROM jobs
-        WHERE status = 'queued' AND run_at <= ${nowIso} AND (locked_at IS NULL OR locked_at < ${staleIso})
+        WHERE status = 'queued' AND run_at <= ${nowIso} AND (locked_at IS NULL OR locked_at < ${staleIso}) AND (kind IN ${kinds} OR run_at < ${overdueIso})
         ORDER BY run_at ASC LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
       )
@@ -248,6 +292,7 @@ export class WorkflowEngine {
           await this.runClaimed(id, job);
         } finally {
           pending.delete(id);
+          this.progressed();
         }
       }
     } finally {
@@ -268,27 +313,74 @@ export class WorkflowEngine {
 
   /** Runs one claimed job and records how it ended: done, retried later with a growing wait, or failed for good. */
   private async runClaimed(id: number, job: Record<string, unknown>): Promise<void> {
-    const payload = (job.payload ?? {}) as { runId?: string; wake?: WakePayload };
+    const payload = (job.payload ?? {}) as { runId?: string; wake?: WakePayload; newerBuildSince?: string };
+    // Claimed although this build has no handler: it waited NEWER_BUILD_PATIENCE_MS past its time and no worker ran it.
+    const noBuildKnows = job.kind !== "workflow.tick" && !this.jobHandlers.has(String(job.kind));
     try {
       if (job.kind === "workflow.tick" && payload.runId) {
         await this.tick(payload.runId, payload.wake ?? null);
       } else if (job.kind !== "workflow.tick") {
         const handler = this.jobHandlers.get(String(job.kind));
-        if (!handler) throw new Error(`no handler registered for job kind ${String(job.kind)}`);
+        if (!handler) throw new Error(`this worker build does not know job kind ${String(job.kind)}, and no worker that does ran it in the ${Math.round(NEWER_BUILD_PATIENCE_MS / 3600_000)} hours since it was due`);
         await handler(job.payload as Record<string, unknown>, { attempt: Number(job.attempts), maxAttempts: Number(job.max_attempts), now: this.now() });
       }
       await this.deps.db.update(jobs).set({ status: "done" }).where(eq(jobs.id, id));
+      // An older build had put this back, and a worker that knows it has now run it: the older-worker alert is over.
+      if (payload.newerBuildSince) await this.olderBuildGone();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof UnknownToThisBuild && !this.waitedOutNewerBuild(payload)) return this.leaveForNewerBuild(id, job, err);
+      const message = errorText(err);
       const attempts = Number(job.attempts);
       const max = Number(job.max_attempts);
-      if (attempts >= max) {
+      // No try of this build can run a kind it has no handler for, so that one fails at once.
+      if (attempts >= max || noBuildKnows) {
         await this.deps.db.update(jobs).set({ status: "failed", lastError: message }).where(eq(jobs.id, id));
         await this.jobFailedForGood({ kind: String(job.kind), jobId: id, attempts, error: message });
       } else {
         const delay = jobRetryDelayMs(attempts);
         await this.deps.db.update(jobs).set({ lastError: message, lockedAt: null, lockedBy: null, runAt: new Date(this.now().getTime() + delay).toISOString() }).where(eq(jobs.id, id));
       }
+    }
+  }
+
+  /**
+   * A tick for a workflow or step this build does not know (GAP6-2): a newer build queued it, so this worker is the
+   * older one. The job goes back as it was, its try not counted, due again in `NEWER_BUILD_RETRY_MS` for whichever
+   * worker claims it first, and one alert (it stands while the condition lasts) says an older worker build is running.
+   * The payload keeps when this first happened (`newerBuildSince`), so the wait has an end (`waitedOutNewerBuild`).
+   */
+  private async leaveForNewerBuild(id: number, job: Record<string, unknown>, err: UnknownToThisBuild): Promise<void> {
+    const now = this.now();
+    const payload = (job.payload ?? {}) as Record<string, unknown>;
+    await this.deps.db
+      .update(jobs)
+      .set({ attempts: Math.max(0, Number(job.attempts) - 1), lockedAt: null, lockedBy: null, runAt: new Date(now.getTime() + NEWER_BUILD_RETRY_MS).toISOString(), lastError: err.message, payload: payload.newerBuildSince ? payload : { ...payload, newerBuildSince: now.toISOString() } })
+      .where(and(eq(jobs.id, id), eq(jobs.lockedBy, this.workerId), eq(jobs.status, "queued")));
+    try {
+      await raiseAlertOnce(this.deps.db, {
+        kind: OUTDATED_WORKER_ALERT_KIND,
+        severity: "high",
+        title: "An older worker build is running",
+        body: `Worker ${this.workerId} found queued work its build does not know (${err.message}) and put it back for a newer worker instead of failing it. That is expected for a few minutes during a release, and while a worker is rolled back. If it lasts, deploy the current build to the worker service (docs/runbooks/railway-worker.md); this alert resolves itself once a worker that knows the work runs it. If the worker already runs the current build, no build knows this work (a step renamed or removed): ${Math.round(NEWER_BUILD_PATIENCE_MS / 3600_000)} hours after it was first put back it fails like any other job, with this error.`,
+        details: { workerId: this.workerId, ...err.what },
+      }, { now });
+    } catch (alertErr) {
+      console.error(`[queue] could not raise the older-worker alert: ${errorText(alertErr)}`);
+    }
+  }
+
+  /** Whether work put back for a newer build has waited `NEWER_BUILD_PATIENCE_MS` since the first time: no such build is coming. */
+  private waitedOutNewerBuild(payload: { newerBuildSince?: string }): boolean {
+    const since = payload.newerBuildSince ? Date.parse(payload.newerBuildSince) : Number.NaN;
+    return Number.isFinite(since) && this.now().getTime() - since >= NEWER_BUILD_PATIENCE_MS;
+  }
+
+  /** A worker that knows the work an older build put back has run it: the older-worker alert has served its purpose. */
+  private async olderBuildGone(): Promise<void> {
+    try {
+      await resolveAlertsOfKind(this.deps.db, OUTDATED_WORKER_ALERT_KIND, { now: this.now(), reason: "a worker that knows the work an older build put back has run it" });
+    } catch (err) {
+      console.error(`[queue] could not resolve the older-worker alert: ${errorText(err)}`);
     }
   }
 
@@ -328,7 +420,7 @@ export class WorkflowEngine {
         details: { jobId: info.jobId, kind: info.kind, attempts: info.attempts, lastError: info.error.slice(0, 500) },
       });
     } catch (err) {
-      console.error(`[queue] could not raise the job.failed alert for job ${info.jobId}: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[queue] could not raise the job.failed alert for job ${info.jobId}: ${errorText(err)}`);
     }
     try {
       this.deps.onJobFailed?.(info);
@@ -364,13 +456,14 @@ export class WorkflowEngine {
       if ((w?.kind === "event" || w?.kind === "human") && !wake) return run; // needs a signal (or its timer)
     }
     const def = this.defs.get(run.workflowKey);
-    if (!def) throw new Error(`unknown workflow ${run.workflowKey}`);
+    if (!def) throw new UnknownToThisBuild({ workflowKey: run.workflowKey });
     if (!run.companyId) throw new Error("platform-level workflows are not supported yet");
 
     let current = run;
     let currentWake = wake;
     for (let i = 0; i < this.maxInlineSteps; i++) {
       const result = await this.executeStep(def, current, currentWake);
+      this.progressed();
       currentWake = null;
       const [reloaded] = await this.deps.db.select().from(workflowRuns).where(eq(workflowRuns.id, runId)).limit(1);
       current = reloaded;
@@ -383,7 +476,8 @@ export class WorkflowEngine {
     const companyId = run.companyId!;
     const stepKey = run.currentStep;
     const step = def.steps[stepKey];
-    if (!step) throw new Error(`workflow ${def.key} has no step ${stepKey}`);
+    // Before anything is written: a newer build moved the run to a step this one does not have.
+    if (!step) throw new UnknownToThisBuild({ workflowKey: def.key, step: stepKey });
     const seq = await this.nextSeq(run.id);
     const actor: Actor = { kind: "system", id: `workflow:${def.key}` };
 
@@ -420,7 +514,8 @@ export class WorkflowEngine {
     } catch (err) {
       // A step's own "fail" result rolls its transaction back by throwing StepFailed; it keeps the step's word on whether
       // trying again can help, so a failure that cannot be retried goes straight to failForGood.
-      outcome = err instanceof StepFailed ? { kind: "fail", error: err.message, retryable: err.retryable } : { kind: "threw", error: err instanceof Error ? err.message : String(err) };
+      // Either text is kept (workflow_steps.error, the run's last error, its events), so a failed query's values are cut.
+      outcome = err instanceof StepFailed ? { kind: "fail", error: errorText(err), retryable: err.retryable } : { kind: "threw", error: errorText(err) };
     }
 
     if (outcome.kind === "ended") return "stop";
@@ -525,7 +620,7 @@ export class WorkflowEngine {
         details: { workflowKey: def.key, step: stepKey, attempts, ...(account ? { cause: "account" } : {}) },
       }, { now });
     } catch (err) {
-      console.error(`[queue] could not raise the AI outage alert: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[queue] could not raise the AI outage alert: ${errorText(err)}`);
     }
   }
 
@@ -568,7 +663,7 @@ export class WorkflowEngine {
     try {
       await this.tick(probe.id, heldWake(probe));
     } catch (err) {
-      console.warn(`[queue] the held run ${probe.id} could not be tried again: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[queue] the held run ${probe.id} could not be tried again: ${errorText(err)}`);
     }
     const [after] = await this.deps.db.select({ status: workflowRuns.status, wait: workflowRuns.wait }).from(workflowRuns).where(eq(workflowRuns.id, probe.id)).limit(1);
     const keys = (after?.wait as { keys?: unknown } | null | undefined)?.keys;
@@ -669,6 +764,13 @@ async function runHasEnded(q: Queryable, runId: string, lock = false): Promise<b
 class StepFailed extends Error {
   constructor(message: string, public retryable: boolean) {
     super(message);
+  }
+}
+
+/** A tick for a workflow, or a step of one, that this build's definitions do not have: work a newer build queued. */
+class UnknownToThisBuild extends Error {
+  constructor(public readonly what: { workflowKey: string; step?: string }) {
+    super(what.step ? `this worker build does not know step "${what.step}" of workflow ${what.workflowKey}` : `this worker build does not know workflow ${what.workflowKey}`);
   }
 }
 

@@ -3,6 +3,7 @@ import { queueCommunication } from "@ros/agents";
 import type { Actor, PostingTaskKind } from "@ros/contracts";
 import { closingDateRequired, closingDayWords, defaultClosingDate, emit, notify, openMissingPostingTasks, postingTaskLabel } from "@ros/core";
 import { companies, rolePackets, roles, withPlatform, withTenant, type Queryable } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import { armClosingDate } from "@ros/workflows";
 import type { Container } from "../container";
 
@@ -33,7 +34,7 @@ export async function tellItsQueueAboutTasks(q: Queryable, deps: Pick<Deps, "int
     channel: "email",
     companyId: input.companyId,
     to: deps.env.ITS_QUEUE_EMAIL,
-    from: `${deps.integrations.env.productName} <${deps.integrations.env.fromAddress}>`,
+    from: mailbox(deps.integrations.env.productName, deps.integrations.env.fromAddress),
     subject: `[posting tasks] ${input.companyName}: ${n} job board ${n === 1 ? "task" : "tasks"}`,
     text: `${input.companyName} has job board work for ITS, from the company's own accounts:\n${input.tasks.map((t) => `- ${postingTaskLabel(t.kind, t.board)}: "${t.roleTitle}"`).join("\n")}\nEach one is its own task in the queue, with the posting package and the board's apply link: ${deps.env.APP_BASE_URL}/recruiter/queue`,
     templateKey: "its_posting_tasks",

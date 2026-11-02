@@ -317,7 +317,9 @@ Seven signed-in pages are reached by **no** vitest test, only by browser journey
 ### 2.3 Signed in, no company yet
 
 - [ ] **`/setup/company`**, which saves with `POST /api/v1/companies`. Anyone who already has a company is sent to Today.
-  Automated: 17 of the 18 browser specs (all but `e2e/staff-mfa.spec.ts`) create their company through this form, with `createCompanyThroughTheForm` (`tests/e2e/specs/helpers.ts:70`). No vitest test renders the page, and the signed-out check skips it.
+  Automated: 17 of the 18 browser specs (all but `e2e/staff-mfa.spec.ts`) create their company through this form, with `createCompanyThroughTheForm` (`tests/e2e/specs/helpers.ts:70`). The signed-out check skips it.
+- [ ] **By invitation** (`SIGNUP_MODE=invite`, GATE-V2; the production app refuses to start without `SIGNUP_MODE`). **Do:** sign in with an account that is not on `SIGNUP_ALLOWED_EMAILS` and open `/setup/company`. **Expect:** "Recruiting OS is by invitation for now" with the ITS inbox instead of the form, Sign out still there, and `POST /api/v1/companies` answers 403 `signup_invite_only`. **Do:** the same as a listed address or a platform administrator. **Expect:** the form, as before; the welcome page offers no "Get help with your next hire" link.
+  Automated: `api/signup-invite.test.ts`, `shell/components/company-setup-ui.test.ts`, `shell/components/welcome-page.test.ts`.
 
 ### 2.4 The company's team: pages
 

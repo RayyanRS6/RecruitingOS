@@ -9,9 +9,9 @@ import { ALERT_EMAIL_JOB_KIND, ESCALATION_QUEUE_EMAIL_JOB_KIND, REVOKE_JOB_KIND,
 import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
-import { toProductEvent } from "@ros/integrations";
+import { mailbox, toProductEvent } from "@ros/integrations";
 import { loadEnv, type Env } from "./env";
-import { registerSecretValue } from "@ros/core";
+import { errorForLog, registerSecretValue } from "@ros/core";
 import { UploadGrants } from "./uploads";
 import { HEALTH_CHECK_JOB_KIND, HOURLY_MS, MAINTENANCE_JOB_KIND, runHourlyChecks, runMaintenance } from "./maintenance";
 import { emailQueueAboutRequest } from "./services/escalation-queue";
@@ -84,7 +84,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       // The shared store degraded to per-process counting (decision 4 fail-safe): one alert an hour, never a refused request.
       onDegraded: (reason) => {
         console.warn(`[rate-limit] shared store unavailable, counting per process: ${reason}`);
-        void raiseAlert(handle.db, { kind: "rate_limit.shared_unavailable", severity: "high", title: "Shared rate-limit store unreachable; limits apply per process", body: "The Upstash counter could not be reached or refused the request. Limits are counted in this process's memory until it answers again. Check the Upstash console, the monthly budget and the REST token.", details: { reason: reason.slice(0, 200) } }).catch((err) => console.warn(`[rate-limit] could not raise the degradation alert: ${err instanceof Error ? err.message : String(err)}`));
+        void raiseAlert(handle.db, { kind: "rate_limit.shared_unavailable", severity: "high", title: "Shared rate-limit store unreachable; limits apply per process", body: "The Upstash counter could not be reached or refused the request. Limits are counted in this process's memory until it answers again. Check the Upstash console, the monthly budget and the REST token.", details: { reason: reason.slice(0, 200) } }).catch((err) => console.warn(`[rate-limit] could not raise the degradation alert: ${errorForLog(err)}`));
       },
     });
     if (env.BOOTSTRAP_ADMIN_EMAILS.length && (await countActiveAdmins(handle.db)) > 0) {
@@ -143,7 +143,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     integrations.clock = () => engine.clock();
     // So does the job that writes an email alert for an update (plan B3).
     setNotifyClock(() => engine.clock());
-    const alertEmailDeps = (now: Date) => ({ send: (m: Parameters<typeof integrations.email.send>[0]) => integrations.email.send(m), from: `${env.PRODUCT_NAME} <${integrations.env.fromAddress}>`, consoleUrl: `${env.APP_BASE_URL}/admin`, now });
+    const alertEmailDeps = (now: Date) => ({ send: (m: Parameters<typeof integrations.email.send>[0]) => integrations.email.send(m), from: mailbox(env.PRODUCT_NAME, integrations.env.fromAddress), consoleUrl: `${env.APP_BASE_URL}/admin`, now });
     /** Emails one critical alert now (after the commit that raised it); a failure is left to the queued job. */
     const emailCritical = async (alertId: string): Promise<void> => {
       const r = await withPlatform(handle.db, (q) => emailCriticalAlert(q, alertEmailDeps(engine.clock()), { alertId }));

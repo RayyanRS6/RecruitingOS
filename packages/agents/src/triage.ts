@@ -1,7 +1,7 @@
 import { inArray, eq } from "drizzle-orm";
 import { importanceOf, type CompanyQuestions, type Confidence, type EligibilityResult, type Evidence, type EvidenceAssessment, type EvidenceSource, type Overall, type ResumeExtraction, type RolePacket } from "@ros/contracts";
 import { resumeExtractPrompt, runPromptDetached, triageAssessPrompt, type AiRuntime, type RunOutcome, type TriageInput } from "@ros/ai";
-import { applicationAnswerSentences, matchScore, quickQuestionsOf, scoredSkill } from "@ros/core";
+import { applicationAnswerSentences, errorForLog, matchScore, quickQuestionsOf, scoredSkill } from "@ros/core";
 import { aiRuns, withTenant, type Db, type Queryable } from "@ros/db";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
 
@@ -429,7 +429,7 @@ export async function linkReadingRuns(db: Db, companyId: string, kept: RunOutcom
   try {
     await withTenant(db, companyId, (q) => q.update(aiRuns).set({ finalOutcome: { readingOf: kept.runId, readings: ids } }).where(inArray(aiRuns.id, ids)));
   } catch (err) {
-    console.warn(`[triage] could not link the readings' runs: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[triage] could not link the readings' runs: ${errorForLog(err)}`);
   }
 }
 

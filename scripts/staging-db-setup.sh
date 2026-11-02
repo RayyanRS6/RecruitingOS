@@ -7,8 +7,8 @@
 # DATABASE_URL or WORKER_DATABASE_URL entered earlier into Vercel or Railway must be replaced with the new values.
 #
 # Modes:  bash scripts/staging-db-setup.sh          full setup (default); also the way to rotate the passwords
-#         bash scripts/staging-db-setup.sh grants   Vault grants and checks only, after enabling Supabase Vault;
-#                                                   passwords and connection strings are left alone
+#         bash scripts/staging-db-setup.sh grants   role safety limits, Vault grants and checks only, after enabling
+#                                                   Supabase Vault; passwords and connection strings are left alone
 #         bash scripts/staging-db-status.sh         read-only report of where things stand
 #
 # The two connection strings are never printed on a Mac: each goes to the clipboard in turn for 1Password and the
@@ -19,8 +19,13 @@
 # password is percent-encoded and put in place of the one placeholder by packages/db/src/cli/fill-password.ts, which
 # receives it on standard input: never on a command line, never in this shell's history, never written to disk, and
 # never printed. The completed string lives only in this process and the steps it runs.
+#
+# Staging only: ROS_DB_ENV=staging names the database for every step (packages/db/src/cli/environment.ts), and a
+# connection string from any other Supabase project is refused before anything connects. Production is set up from
+# Windows with scripts/db-setup.ps1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+export ROS_DB_ENV=staging
 if ! command -v node >/dev/null 2>&1 && [ -d "$HOME/.local/its-toolchain/node/bin" ]; then export PATH="$HOME/.local/its-toolchain/node/bin:$PATH"; fi
 command -v pnpm >/dev/null 2>&1 || { echo "pnpm is not on the PATH of this terminal."; exit 1; }
 MODE="full"; DELIVERY="print"
@@ -42,7 +47,7 @@ read_owner_url || exit 1
 echo
 
 if [ "$MODE" = "grants" ]; then
-  echo "1/1 Vault grants and checks (passwords and connection strings unchanged)"
+  echo "1/1 role safety limits, Vault grants and checks (passwords and connection strings unchanged)"
   ROS_PROVISION_MODE=grants pnpm --silent --filter @ros/db provision
   exit $?
 fi

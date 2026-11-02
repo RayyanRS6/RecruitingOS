@@ -18,6 +18,15 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+/**
+ * A usable address (normalize it first): one @, something before it, a dotted domain after it, no spaces or control
+ * characters, 254 characters at most. A sign-in that names none (a phone or anonymous account at the identity service)
+ * must never match an account or create one (audit SEC-8).
+ */
+export function isEmailAddress(email: string): boolean {
+  return email.length <= 254 && /^[^\s@\p{Cc}]+@[^\s@.\p{Cc}]+(?:\.[^\s@.\p{Cc}]+)+$/u.test(email);
+}
+
 /** Creates a single-use link. The caller sends it through the email adapter. */
 export async function createMagicLink(q: Queryable, input: { email: string; ip?: string; ttlMs?: number }): Promise<{ token: string; expiresAt: string }> {
   const token = randomToken(32);

@@ -3,6 +3,7 @@
 import { Hono } from "hono";
 import type { ReviewItem, TapFormat, WriteupAnswer } from "@ros/contracts";
 import { writeupCounts } from "@ros/agents";
+import { errorForLog } from "@ros/core";
 import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { conversationEdit, conversationSubmit, conversationView, type ConversationView } from "../services/apply-conversation";
@@ -344,7 +345,7 @@ candidatePages.post("/c/screen/:token/submit", rateLimit(POLICIES.screen), async
     try {
       await learnFromSentChat(container, found.ref);
     } catch (err) {
-      console.warn(`[screen] learning from the sent chat failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[screen] learning from the sent chat failed: ${errorForLog(err)}`);
     }
   }
   return c.redirect(screenPath(found.ref.token));

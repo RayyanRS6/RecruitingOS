@@ -73,4 +73,13 @@ describe("sign-in through the identity service's return trip", () => {
     const refused = await app.request(`${back.pathname}${back.search}`, { headers: { cookie: cookieOf(mine) } });
     expect(refused.headers.get("location")).toContain("/login?error=signin_incomplete");
   });
+
+  it("refuses a return from an account that does not hold the provider this browser started with (audit SEC-8)", async () => {
+    // Started with Microsoft; the authorize address was changed on the way and the service answers for a Google-only account.
+    const start = await app.request("/api/v1/auth/start/azure");
+    const back = serviceReturns(start.headers.get("location")!, "code-3");
+    const refused = await app.request(`${back.pathname}${back.search}`, { headers: { cookie: cookieOf(start) } });
+    expect(refused.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/login?error=provider_mismatch`);
+    expect(refused.headers.get("set-cookie") ?? "").not.toContain("ros_session=");
+  });
 });

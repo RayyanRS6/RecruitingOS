@@ -7,8 +7,14 @@ export type VerifiedIdentity = {
   email: string;
   emailVerified: boolean;
   name: string | null;
-  /** The sign-in method the provider recorded: azure (Microsoft), google, email (OTP or magic link), or fake. */
+  /**
+   * The sign-in method the provider recorded: azure (Microsoft), google, email (OTP or magic link), or fake. The managed
+   * service names the account's FIRST method here, not necessarily the one used this time (known bug row 41): the
+   * browser flow knows which one the person started with and settles it (packages/core identityForSignIn).
+   */
   provider: string;
+  /** Every method linked to the account, `provider` first. The service links accounts across providers by email. */
+  providers: string[];
   /** Authenticator assurance level: aal2 means a second factor was used in this session. */
   aal: "aal1" | "aal2";
   /** Authentication methods with timestamps, e.g. oauth then totp. */

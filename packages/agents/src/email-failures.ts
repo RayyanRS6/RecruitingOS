@@ -2,7 +2,7 @@ import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, emit, nextContactWindow, notify, raiseAlert, suppressAddress } from "@ros/core";
 import { applications, candidates, communications, companies, events, jobs, rolePackets, roles, users, type Queryable } from "@ros/db";
-import type { EmailEvent, Integrations } from "@ros/integrations";
+import { mailbox, type EmailEvent, type Integrations } from "@ros/integrations";
 import { deliverSms } from "./coordinator";
 import { queueCommunication } from "./outbox";
 
@@ -169,7 +169,7 @@ export async function retryCommunication(q: Queryable, integrations: Integration
     candidateId: orig.candidateId,
     applicationId: orig.applicationId,
     to: orig.toAddress,
-    from: orig.fromAddress ?? `${integrations.env.productName} <${integrations.env.fromAddress}>`,
+    from: orig.fromAddress ?? mailbox(integrations.env.productName, integrations.env.fromAddress),
     replyTo: orig.replyTo ?? integrations.env.replyTo,
     subject: orig.subject ?? "(no subject)",
     text: orig.bodyText,

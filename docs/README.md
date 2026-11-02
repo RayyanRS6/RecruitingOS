@@ -59,6 +59,7 @@ Step-by-step procedures for the team and the founder. The two marked new were wr
 
 | Runbook | What it is for |
 |---|---|
+| [production-setup.md](runbooks/production-setup.md) | Production from new accounts to go-live: secrets and the database on Windows, every production variable, GitHub protection, the first release, smoke test, uptime monitor, rollback and hotfix, locking down staging |
 | [release-migrations.md](runbooks/release-migrations.md) (new) | Release day with a pending migration: migrate first, deploy second; the `migrate` GitHub workflow or `pnpm db:migrate`; reading the status output; what the boot refusal looks like |
 | [candidate-replies.md](runbooks/candidate-replies.md) (new) | Where candidate email replies land with and without the inbound mail domain, the per-application reply address, the HUMAN reply, and the checks |
 | [railway-worker.md](runbooks/railway-worker.md) | The worker on Railway: variables, the health check, first deployment |

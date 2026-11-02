@@ -2,7 +2,7 @@ import { and, asc, eq, or, sql } from "drizzle-orm";
 import { MAX_RESUME_BYTES, inspectResumeFile, type QuickQuestionView, type ResumeExtraction } from "@ros/contracts";
 import { resumeExtractPrompt, runPromptDetached, type AiRuntime } from "@ros/ai";
 import { cvLinesOf, documentToText, verifyQuotes } from "@ros/agents";
-import { scrubAiRun } from "@ros/core";
+import { errorForLog, scrubAiRun } from "@ros/core";
 import { aiRuns, jobs, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { DISCARD_OBJECT_JOB_KIND, FORM_READING_KEEP_MS, formReadSignal, formReadingNoteKey, formReadingRun, linkFormReading, type WorkflowEngine } from "@ros/workflows";
@@ -162,7 +162,7 @@ export async function runResumeReading(deps: ReadingDeps, payload: Record<string
     // An unexpected failure (a corrupt file, an error nobody planned for) on the last try still writes the reading, so
     // the form stops waiting, and still queues the clean-up of the file and the record.
     if (!last) throw err;
-    console.warn(`[apply] the résumé reading failed for good: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[apply] the résumé reading failed for good: ${errorForLog(err)}`);
     await finish("failed");
   }
 }

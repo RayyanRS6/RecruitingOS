@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { emit, normalizePhone } from "@ros/core";
+import { emit, errorForLog, normalizePhone } from "@ros/core";
 import { applications, candidates, communications, screens, withTenant } from "@ros/db";
 import { parseTwilioInbound, smsKeyword, verifyTwilioSignature } from "@ros/integrations";
 import { runScreenTurn } from "@ros/agents";
@@ -84,7 +84,7 @@ twilioWebhook.post("/inbound", async (c) => {
     try {
       await learnFromSentChat(container, { kind: "screen", id: t.screenId, companyId: t.companyId, applicationId: t.applicationId, token: "" });
     } catch (err) {
-      console.warn(`[sms] learning from the sent chat failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[sms] learning from the sent chat failed: ${errorForLog(err)}`);
     }
   }
   await container.kick();

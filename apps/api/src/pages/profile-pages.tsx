@@ -3,6 +3,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { LearnedFact, LearnedFactKind } from "@ros/contracts";
+import { errorForLog } from "@ros/core";
 import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { confirmRepeat, repeatConfirmationView, type RepeatConfirmationView } from "../services/apply-conversation";
@@ -312,7 +313,7 @@ candidatePages.post("/c/confirm-answers/:token", rateLimit(POLICIES.confirmAnswe
     try {
       await learnFromConfirmedRepeat(container, token);
     } catch (err) {
-      console.warn(`[screen] learning from the confirmed answers failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[screen] learning from the confirmed answers failed: ${errorForLog(err)}`);
     }
   }
   return c.redirect(`/c/confirm-answers/${token}`);

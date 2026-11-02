@@ -3,6 +3,7 @@ import type { Actor } from "@ros/contracts";
 import { queueCommunication } from "@ros/agents";
 import { DIGEST_CATCH_UP_DAYS, alertLink, belongsInDigest, digestCadencesDue, digestWindow, lastDigestAt, nextDigestAt, notifyGroupOf, renderAlertEmail, renderDigestEmail, resolveNotifyCadence, rolesForLinks, storedPreferences, type DigestCadence } from "@ros/core";
 import { companies, memberships, notifications, users, withTenant, workflowRuns, type Db, type Queryable } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import type { WorkflowEngine } from "../engine";
 import type { Services, StepContext, WorkflowDefinition } from "../types";
 
@@ -43,7 +44,7 @@ export async function startNotificationDigest(engine: WorkflowEngine, q: Queryab
 }
 
 function teamFrom(services: Services): string {
-  return `${services.integrations.env.productName} <${services.integrations.env.fromAddress}>`;
+  return mailbox(services.integrations.env.productName, services.integrations.env.fromAddress);
 }
 
 export const notificationDigest: WorkflowDefinition<State> = {

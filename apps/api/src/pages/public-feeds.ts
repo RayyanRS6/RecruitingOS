@@ -84,7 +84,13 @@ export function sitemapXml(env: Container["env"], rows: Listing[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</urlset>\n`;
 }
 
+/**
+ * Only the production deployment lets crawlers in, to the careers and job pages, and names the sitemap. Staging, a
+ * person's machine and the tests keep every crawler out with no sitemap (GAP3-3); hosted staging also sends
+ * X-Robots-Tag on every response (apps/shell/next.config.ts).
+ */
 export function robotsTxt(env: Container["env"]): string {
+  if (env.DEPLOY_ENV !== "production") return ["User-agent: *", "Disallow: /", ""].join("\n");
   return ["User-agent: *", "Allow: /careers/", "Disallow: /c/", "Disallow: /api/", "Disallow: /a/", "Disallow: /files/", "Disallow: /dev/", "Disallow: /webhooks/", "", `Sitemap: ${env.JOBS_BASE_URL}/sitemap.xml`, ""].join("\n");
 }
 

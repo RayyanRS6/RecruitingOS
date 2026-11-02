@@ -1,5 +1,4 @@
 import { Hono, type Context } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { and, eq } from "drizzle-orm";
 import { MagicLinkConsume, MagicLinkRequest, type MeResponse, type MembershipRole } from "@ros/contracts";
 import { createHash, randomBytes } from "node:crypto";
@@ -9,9 +8,10 @@ import { mfaRoutes } from "./auth-mfa";
 import { REAUTH_STATE_SUFFIX, completeReauth, readReauthMarker } from "./auth-sessions";
 import { renderSignInLinkPage } from "../pages/signin-link";
 import { renderInvitePage, type InvitePageProps } from "../pages/invite";
-import { MFA_COOKIE, clearInviteCookie, mfaCookieOptions, needsSecondFactor, openSession, readInviteCookie, sessionCookieOptions, setInviteCookie, signInPolicy } from "./auth-shared";
-import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url } from "@ros/integrations";
-import { SESSION_COOKIE, clientIp, isPlatformStaff, type Vars } from "../middleware/session";
+import { maySignUp } from "../services/companies";
+import { clearInviteCookie, clearPkceCookie, clearSessionCookie, needsSecondFactor, openSession, readInviteCookie, readPkceCookie, setInviteCookie, setMfaCookie, setPkceCookie, setSessionCookie, signInPolicy } from "./auth-shared";
+import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url, mailbox } from "@ros/integrations";
+import { clientIp, isPlatformStaff, readSessionCookie, type Vars } from "../middleware/session";
 import { activeStaffGrant } from "@ros/core";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
@@ -28,15 +28,20 @@ export function consumeLink(container: Container, token: string): string {
   return `${container.env.APP_BASE_URL}/api/v1/auth/consume?token=${encodeURIComponent(token)}`;
 }
 
-/** What the sign-in page offers: delegated providers always; the email link only where it is enabled. */
+/**
+ * What the sign-in page offers: delegated providers always; the email link only where it is enabled. `signup` (GATE-V2):
+ * whether company sign-up is open or by invitation (SIGNUP_MODE), whether the person asking may create a company (by
+ * invitation, nobody before signing in; the list itself is never sent), and whom to ask for an invitation: the ITS
+ * inbox job pages already print (EMAIL_REPLY_TO).
+ */
 authRoutes.get("/config", async (c) => {
   const container = c.get("container");
-  return c.json({ mode: container.integrations.identity.id, providers: container.integrations.identity.providers(), magicLink: container.env.MAGIC_LINK_ENABLED, staffDomains: container.env.ITS_STAFF_EMAIL_DOMAINS });
+  const user = c.get("session")?.user;
+  const signup = { mode: container.env.SIGNUP_MODE, allowed: user ? maySignUp(container.env, user) : container.env.SIGNUP_MODE === "open", contact: container.env.EMAIL_REPLY_TO };
+  return c.json({ mode: container.integrations.identity.id, providers: container.integrations.identity.providers(), magicLink: container.env.MAGIC_LINK_ENABLED, staffDomains: container.env.ITS_STAFF_EMAIL_DOMAINS, signup });
 });
 
 authRoutes.route("/mfa", mfaRoutes);
-
-const PKCE_COOKIE = "ros_pkce";
 
 /** Starts the PKCE authorization-code flow with the identity service. The verifier lives in an httpOnly cookie, never in the URL. */
 authRoutes.get("/start/:provider", async (c) => {
@@ -46,38 +51,41 @@ authRoutes.get("/start/:provider", async (c) => {
   const verifier = base64url.encode(randomBytes(32));
   const state = base64url.encode(randomBytes(16));
   const codeChallenge = base64url.encode(createHash("sha256").update(verifier).digest());
-  setCookie(c, PKCE_COOKIE, `${verifier}.${state}.${provider}`, { ...sessionCookieOptions(container), maxAge: 600 });
+  setPkceCookie(c, { verifier, state, provider });
   const redirectTo = `${container.env.APP_BASE_URL}/api/v1/auth/callback`;
   return c.redirect(container.integrations.identity.authorizeUrl({ provider, redirectTo, codeChallenge, state }), 302);
 });
 
-/** The identity service returns here with a single-use code; the code is exchanged server-side and the token verified before a session opens. */
+/**
+ * The identity service returns here with a single-use code; the code is exchanged server-side and the token verified
+ * before a session opens. The provider this browser started with (the PKCE cookie) is this sign-in's provider when the
+ * account holds it; otherwise the sign-in is refused (identityForSignIn in packages/core).
+ */
 authRoutes.get("/callback", async (c) => {
   const container = c.get("container");
-  const fail = (code: string) => { deleteCookie(c, PKCE_COOKIE, { path: "/" }); return c.redirect(`${container.env.APP_BASE_URL}/login?error=${encodeURIComponent(code)}`, 302); };
-  const pkce = getCookie(c, PKCE_COOKIE);
+  const fail = (code: string) => { clearPkceCookie(c); return c.redirect(`${container.env.APP_BASE_URL}/login?error=${encodeURIComponent(code)}`, 302); };
+  const pkce = readPkceCookie(c);
   const code = c.req.query("code");
   if (!pkce || !code) return fail("signin_incomplete");
-  const [verifier, state] = pkce.split(".");
   // The state is mandatory and must be the one this browser was given; PKCE binds the code, the state binds the flow.
   const returnedState = c.req.query("state");
-  if (!returnedState || returnedState !== state) return fail("signin_incomplete");
+  if (!returnedState || returnedState !== pkce.state) return fail("signin_incomplete");
   try {
-    const { accessToken } = await container.integrations.identity.exchangeCode({ code, codeVerifier: verifier });
+    const { accessToken } = await container.integrations.identity.exchangeCode({ code, codeVerifier: pkce.verifier });
     const identity = await container.integrations.identity.verify(accessToken);
     // "Confirm it's you" (audit finding A12): a flow marked reauth=1 stamps the session already open instead of opening one.
     const reauth = readReauthMarker(c, container);
-    if (reauth && returnedState.endsWith(REAUTH_STATE_SUFFIX)) return await completeReauth(c, container, { identity, marker: reauth, returnedState });
-    if (await needsSecondFactor(container, identity)) {
+    if (reauth && returnedState.endsWith(REAUTH_STATE_SUFFIX)) return await completeReauth(c, container, { identity, startedProvider: pkce.provider, marker: reauth, returnedState });
+    if (await needsSecondFactor(container, identity, pkce.provider)) {
       // Microsoft has vouched for an ITS staff member; the authenticator step opens the session, not this route.
-      deleteCookie(c, PKCE_COOKIE, { path: "/" });
+      clearPkceCookie(c);
       const now = container.engine.clock().getTime();
-      setCookie(c, MFA_COOKIE, sealMfaTransaction({ v: 1, id: newMfaTransactionId(), accessToken, email: normalizeEmail(identity.email), provider: identity.provider, subject: identity.subject, stage: "start", factorIds: [], secret: null, uri: null, notice: null, expiresAt: now + MFA_TRANSACTION_TTL_MS }, container.env.SESSION_SECRET), mfaCookieOptions(container));
+      setMfaCookie(c, sealMfaTransaction({ v: 1, id: newMfaTransactionId(), accessToken, email: normalizeEmail(identity.email), provider: pkce.provider, subject: identity.subject, stage: "start", factorIds: [], secret: null, uri: null, notice: null, expiresAt: now + MFA_TRANSACTION_TTL_MS }, container.env.SESSION_SECRET));
       return c.redirect(`${container.env.APP_BASE_URL}/api/v1/auth/mfa`, 302);
     }
-    const result = await openSession(container, c, identity);
-    deleteCookie(c, PKCE_COOKIE, { path: "/" });
-    setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
+    const result = await openSession(container, c, identity, pkce.provider);
+    clearPkceCookie(c);
+    setSessionCookie(c, result.sessionToken);
     return c.redirect(`${container.env.APP_BASE_URL}${result.activeCompanyId || result.staff ? "/" : "/setup/company"}`, 302);
   } catch (err) {
     if (err instanceof SignInRefused || err instanceof IdentityError) return fail(err.code);
@@ -85,15 +93,19 @@ authRoutes.get("/callback", async (c) => {
   }
 });
 
-/** JSON variant: a verified token from the identity service opens a session (native clients, tests). */
+/**
+ * JSON variant: a verified token from the identity service opens a session. Only tests and their helpers use it, and it
+ * knows no started provider, so a production build does not have it (audit SEC-8).
+ */
 authRoutes.post("/session", rateLimit(POLICIES.authSession), async (c) => {
   const container = c.get("container");
+  if (container.env.NODE_ENV === "production") return c.notFound();
   const { accessToken } = (await c.req.json()) as { accessToken?: string };
   if (!accessToken) throw new HttpError(400, "invalid_request", "accessToken is required.");
   try {
     const identity = await container.integrations.identity.verify(accessToken);
     const result = await openSession(container, c, identity);
-    setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
+    setSessionCookie(c, result.sessionToken);
     return c.json({ ok: true, userId: result.userId, activeCompanyId: result.activeCompanyId, staff: result.staff, expiresAt: result.expiresAt });
   } catch (err) {
     if (err instanceof SignInRefused) throw new HttpError(403, err.code, err.message);
@@ -149,7 +161,7 @@ authRoutes.post("/magic-link", rateLimit(POLICIES.authMagicLink), async (c) => {
   const link = consumeLink(container, token);
   await container.integrations.email.send({
     to: body.email,
-    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+    from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
     subject: "Your sign-in link",
     text: `Click to sign in (valid for 15 minutes):\n${link}\n\nIf you did not request this, ignore this email.`,
     idempotencyKey: `magic:${token.slice(0, 12)}`,
@@ -178,11 +190,11 @@ async function consumeWithInvitation(c: Context<Vars>, container: Container, tok
   const invitationTokenHash = readInviteCookie(c, container);
   try {
     const result = await withPlatform(container.db, (tx) => consumeMagicLink(tx, { token, ip: clientIp(c), userAgent: c.req.header("user-agent"), invitationTokenHash, openedAt: container.engine.clock() }));
-    if (invitationTokenHash) clearInviteCookie(c, container);
+    if (invitationTokenHash) clearInviteCookie(c);
     return result;
   } catch (err) {
     if (err instanceof InvitationRefused) {
-      if (err.code === "invite_expired" || err.code === "invite_seats_full") clearInviteCookie(c, container);
+      if (err.code === "invite_expired" || err.code === "invite_seats_full") clearInviteCookie(c);
       // The transaction rolled back, so the refusal is recorded outside it, as openSession does: refusals are never silent.
       await audit(container.db, { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "signin.refused", reason: err.code, ip: clientIp(c), details: { provider: "magic_link", ...(err.email ? { email: err.email } : {}) } });
     }
@@ -196,7 +208,7 @@ authRoutes.post("/consume", async (c) => {
   const token = typeof form.token === "string" ? form.token : "";
   try {
     const result = await consumeWithInvitation(c, container, token);
-    setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
+    setSessionCookie(c, result.sessionToken);
     return c.redirect(`${container.env.APP_BASE_URL}${result.activeCompanyId ? "/" : "/setup/company"}`, 302);
   } catch (err) {
     return c.redirect(`${container.env.APP_BASE_URL}/login?error=${err instanceof InvitationRefused ? err.code : "expired"}`, 302);
@@ -214,7 +226,7 @@ authRoutes.post("/magic-link/consume", async (c) => {
     if (err instanceof InvitationRefused) throw new HttpError(403, err.code, err.message);
     throw err;
   }
-  setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
+  setSessionCookie(c, result.sessionToken);
   return c.json({ ok: true, userId: result.userId, activeCompanyId: result.activeCompanyId, invitationsAccepted: result.invitationsAccepted });
 });
 
@@ -257,7 +269,7 @@ authRoutes.post("/invite/email", rateLimit(POLICIES.authInviteEmail), async (c) 
   const link = consumeLink(container, linkToken);
   await container.integrations.email.send({
     to: email,
-    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+    from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
     subject: `Your sign-in link to join ${page.companyName ?? "your team"}`,
     text: `Click to sign in and join ${page.companyName ?? "your team"} (valid for 15 minutes):\n${link}\n\nIf you did not request this, ignore this email.`,
     idempotencyKey: `magic:${linkToken.slice(0, 12)}`,
@@ -269,14 +281,14 @@ authRoutes.post("/invite/email", rateLimit(POLICIES.authInviteEmail), async (c) 
 
 /** Drops a carried invitation (after "that invitation was sent to a different address") so the person can sign in as themselves. */
 authRoutes.post("/invite/forget", async (c) => {
-  clearInviteCookie(c, c.get("container"));
+  clearInviteCookie(c);
   return c.json({ ok: true });
 });
 
 authRoutes.post("/logout", async (c) => {
-  const token = getCookie(c, SESSION_COOKIE);
+  const token = readSessionCookie(c);
   if (token) await revokeSession(c.get("container").db, token);
-  deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  clearSessionCookie(c);
   return c.json({ ok: true });
 });
 

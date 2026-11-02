@@ -15,6 +15,15 @@ process.env.ROS_MIGRATIONS_DIR ??= join(repoRoot, "packages", "db", "migrations"
 const appPages = "/((?!(?:api|c|careers|a|files|webhooks|feeds|dev)(?:/|$)|(?:privacy|healthz|sitemap\\.xml|robots\\.txt)$).*)";
 
 /**
+ * Staging stays out of search engines (GAP3-3): a hosted deployment that is not production (a Vercel Preview deployment,
+ * or DEPLOY_ENV=staging: the same test as DEPLOY_ENV in apps/api/src/env.ts) sends X-Robots-Tag on every response, the
+ * application's pages, the paths mounted on Hono and the static files alike, beside robots.txt's Disallow: /
+ * (apps/api/src/pages/public-feeds.ts). Read from the deployment's variables when the build writes its routes; a
+ * person's machine and the tests send none.
+ */
+const hostedStaging = () => process.env.VERCEL_ENV === "preview" || process.env.DEPLOY_ENV === "staging";
+
+/**
  * The application shell on Vercel (decision D20, slice 5 step 5). One Next.js app serves the owner, recruiter and admin
  * interface and mounts the existing Hono API and candidate pages under catch-all route handlers, so the API code is
  * retained unchanged. Workspace packages are TypeScript sources and are transpiled here; native database drivers stay
@@ -40,6 +49,7 @@ const config: NextConfig = {
     { source: "/(.*)", headers: [{ key: "X-Content-Type-Options", value: "nosniff" }] },
     { source: appPages, headers: [{ key: "X-Frame-Options", value: "DENY" }, { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" }] },
     { source: "/fonts/:file*", headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }] },
+    ...(hostedStaging() ? [{ source: "/(.*)", headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }] }] : []),
   ],
 };
 

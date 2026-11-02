@@ -1,7 +1,7 @@
 import type { Actor, DecisionWording, RolePacket } from "@ros/contracts";
 import { ADVERSE_DECISION_LINE, emit, disclosureLine } from "@ros/core";
 import { communications, type Queryable, type applications, type candidates, type companies, type roles } from "@ros/db";
-import { replyAddress, type Integrations, type SendResult } from "@ros/integrations";
+import { mailbox, replyAddress, type Integrations, type SendResult } from "@ros/integrations";
 import { queueCommunication, type QueueResult } from "./outbox";
 
 type App = typeof applications.$inferSelect;
@@ -11,9 +11,9 @@ type Company = typeof companies.$inferSelect;
 
 export type MessageInput = { application: App; candidate: Cand; role: Role; company: Company; packet: RolePacket; actor: Actor; correlationId?: string | null };
 
-/** Founder decision F6: a dedicated ITS sending address with the customer's hiring team as the display name; never the customer's domain. */
+/** Founder decision F6: a dedicated ITS sending address with the customer's hiring team as the display name (quoted, MAIL-V1); never the customer's domain. */
 export function fromAddress(company: Company, integrations: Integrations): string {
-  return `${company.name} hiring team <${integrations.env.fromAddress}>`;
+  return mailbox(`${company.name} hiring team`, integrations.env.fromAddress);
 }
 
 /**

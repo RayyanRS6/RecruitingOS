@@ -2,10 +2,10 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { desc, eq } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { assertCan, connectCalendar, disconnectCalendar, disconnectIntegration, escapeHtml, openPayload, publicConnection, sealPayload } from "@ros/core";
 import { CalendarError, FakeGoogleCalendarProvider, base64url } from "@ros/integrations";
 import { integrations, withTenant } from "@ros/db";
+import { clearAppCookie, readAppCookie, setAppCookie, type CookiePlace } from "../cookies";
 import { actorOf, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { signalAvailabilityChanged } from "./interviews";
@@ -55,11 +55,9 @@ integrationRoutes.post("/:id/disconnect", requireTenant, async (c) => {
  */
 const CAL_COOKIE = "ros_cal_pkce";
 const CAL_COOKIE_TTL_MS = 10 * 60_000;
+/** Path=/ and shared like the sign-in cookies (cookies.ts names and flags it). */
+const CAL_PLACE: CookiePlace = { path: "/", shared: true };
 type CalendarConsent = { v: 1; verifier: string; state: string; provider: string; companyId: string; userId: string; exp: number };
-
-function calendarCookieOptions(container: { env: { NODE_ENV: string; raw: Record<string, string | undefined> } }) {
-  return { httpOnly: true, sameSite: "Lax" as const, secure: container.env.NODE_ENV === "production", path: "/", maxAge: CAL_COOKIE_TTL_MS / 1000, ...(container.env.raw.COOKIE_DOMAIN ? { domain: container.env.raw.COOKIE_DOMAIN } : {}) };
-}
 
 integrationRoutes.get("/calendar/:provider/connect", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -70,7 +68,7 @@ integrationRoutes.get("/calendar/:provider/connect", requireTenant, async (c) =>
   const verifier = base64url.encode(randomBytes(32));
   const state = base64url.encode(randomBytes(16));
   const consent: CalendarConsent = { v: 1, verifier, state, provider: provider.provider, companyId: t.companyId, userId: t.userId, exp: container.engine.clock().getTime() + CAL_COOKIE_TTL_MS };
-  setCookie(c, CAL_COOKIE, sealPayload("calendar-consent", consent, container.env.SESSION_SECRET), calendarCookieOptions(container));
+  setAppCookie(c, CAL_COOKIE, sealPayload("calendar-consent", consent, container.env.SESSION_SECRET), { ...CAL_PLACE, maxAge: CAL_COOKIE_TTL_MS / 1000 });
   const redirectTo = `${container.env.APP_BASE_URL}/api/v1/integrations/calendar/${provider.provider}/callback`;
   const codeChallenge = base64url.encode(createHash("sha256").update(verifier).digest());
   const s = c.get("session")!;
@@ -79,8 +77,8 @@ integrationRoutes.get("/calendar/:provider/connect", requireTenant, async (c) =>
 
 integrationRoutes.get("/calendar/:provider/callback", async (c) => {
   const container = c.get("container");
-  const back = (q: string) => { deleteCookie(c, CAL_COOKIE, { path: "/" }); return c.redirect(`${container.env.APP_BASE_URL}/setup?calendar=${encodeURIComponent(q)}`, 302); };
-  const consent = openPayload<CalendarConsent>("calendar-consent", getCookie(c, CAL_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  const back = (q: string) => { clearAppCookie(c, CAL_COOKIE, CAL_PLACE); return c.redirect(`${container.env.APP_BASE_URL}/setup?calendar=${encodeURIComponent(q)}`, 302); };
+  const consent = openPayload<CalendarConsent>("calendar-consent", readAppCookie(c, CAL_COOKIE, CAL_PLACE), container.env.SESSION_SECRET, container.engine.clock().getTime());
   const code = c.req.query("code");
   const state = c.req.query("state");
   if (consent?.v !== 1 || !code) return back("incomplete");

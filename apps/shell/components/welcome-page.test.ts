@@ -1,7 +1,7 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { NextRequest } from "next/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cspHeaderName, cspMode } from "../lib/csp";
 import { middleware } from "../middleware";
 
@@ -17,7 +17,8 @@ const page = await import("../app/(public)/welcome/page");
 const html = renderToStaticMarkup(React.createElement(page.default));
 
 const text = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
-const links = [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((m) => ({ href: /\shref="([^"]*)"/.exec(m[1])?.[1], name: text(m[2]) }));
+const linksIn = (markup: string) => [...markup.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((m) => ({ href: /\shref="([^"]*)"/.exec(m[1])?.[1], name: text(m[2]) }));
+const links = linksIn(html);
 const named = (name: string) => links.filter((l) => l.name === name);
 
 describe("the public welcome page", () => {
@@ -126,6 +127,46 @@ describe("the public welcome page", () => {
     for (const tag of ["<header", "<main", "<footer"]) expect(html.split(tag)).toHaveLength(2);
     expect(html).toContain("<nav aria-label=\"On this page\"");
     expect(html).toContain("<nav aria-label=\"Footer\"");
+  });
+});
+
+/**
+ * By invitation (SIGNUP_MODE=invite, GATE-V2) the page invites no stranger to start: the owner band's "Get help with
+ * your next hire" goes, and the ways in for someone with an invitation, and for signing in, stay. The route reads the
+ * mode from the environment as the API does (apps/api/src/env.ts), without starting the API.
+ */
+describe("the public welcome page by invitation", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+  const draw = () => renderToStaticMarkup(React.createElement(page.default));
+  const hrefsOf = (markup: string, name: string) => linksIn(markup).filter((l) => l.name === name).map((l) => l.href);
+
+  it("while sign-up is open (unset or open) the owner band asks an owner in", () => {
+    for (const mode of ["", "open"]) {
+      vi.stubEnv("SIGNUP_MODE", mode);
+      expect(hrefsOf(draw(), "Get help with your next hire"), mode).toEqual(["/login"]);
+    }
+  });
+
+  it("by invitation the owner band's way in goes; Sign in, Have an invitation? and Open your invitation stay", () => {
+    vi.stubEnv("SIGNUP_MODE", "open");
+    const open = draw();
+    vi.stubEnv("SIGNUP_MODE", "invite");
+    const invited = draw();
+    expect(hrefsOf(invited, "Get help with your next hire")).toEqual([]);
+    expect(hrefsOf(invited, "Sign in")).toEqual(["/login", "/login"]);
+    expect(hrefsOf(invited, "Have an invitation?")).toEqual(["/login"]);
+    expect(hrefsOf(invited, "Open your invitation")).toEqual(["/login", "/login"]);
+    for (const l of linksIn(invited)) expect(["/login", "/", "#how-it-works", "#for-owners"], `${l.name} -> ${l.href}`).toContain(l.href);
+    // nothing else changes: the same page without that one link
+    expect(linksIn(invited)).toHaveLength(linksIn(open).length - 1);
+    expect(text(invited)).toBe(text(open).replace(" Get help with your next hire", ""));
+  });
+
+  it("a SIGNUP_MODE that is neither open nor invite is refused here too, as the API refuses it", () => {
+    vi.stubEnv("SIGNUP_MODE", "closed");
+    expect(draw).toThrow(/^SIGNUP_MODE must be "open" or "invite"/);
   });
 });
 

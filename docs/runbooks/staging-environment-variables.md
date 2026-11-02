@@ -1,7 +1,9 @@
 # Staging environment variables: the Vercel Preview environment for `main`
 
-Status: written 22 September 2026 for the first staging deployment. Every value here is either a constant, a value the
-founder already holds in 1Password, or a public identifier. No secret is written here or in chat.
+Status: written 22 September 2026 for the first staging deployment; revised 29 October 2026 (secrets made on Windows,
+the app's own storage key pair, sign-in providers, sign-up by invitation). Every value here is either a constant, a
+value the founder already holds in 1Password, or a public identifier. No secret is written here or in chat. Production
+has its own runbook: `docs/runbooks/production-setup.md`.
 
 ## Creating the Vercel project (once; facts from vercel.com/docs, read 22 Sep)
 
@@ -42,10 +44,22 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
    latest deployment from `main`, and under **Domains** copy the address of the form
    `https://recruiting-os-git-main-<team>.vercel.app`. That is `APP_BASE_URL` below, and later the Supabase Auth
    redirect address.
-2. **Two generated secrets.** In your own Terminal app, run the line below once for `SESSION_SECRET` and once for
-   `ANALYTICS_SALT`; each puts a fresh random value on the clipboard, never on the screen. Paste each into a new
-   1Password item "Recruiting OS staging application" (fields `SESSION_SECRET`, `ANALYTICS_SALT`), then into Vercel.
-   Copy something harmless afterwards to clear the clipboard.
+2. **Two generated secrets.** Make one fresh random value for `SESSION_SECRET` and one for `ANALYTICS_SALT`, each
+   straight onto the clipboard, never on the screen. Paste each into a new 1Password item "Recruiting OS staging
+   application" (fields `SESSION_SECRET`, `ANALYTICS_SALT`), then into Vercel and the Railway worker (the same value in
+   both; never production's).
+
+   On Windows (no `openssl` or `pbcopy` there), in Windows PowerShell from the repository root, once per value:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\new-secret.ps1 -Name SESSION_SECRET
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\new-secret.ps1 -Name ANALYTICS_SALT
+   ```
+
+   Each puts 64 letters and digits on the clipboard, kept out of clipboard history and the cloud clipboard. Once it is
+   pasted everywhere, type `done`: the clipboard is cleared. Then press Win+V: the value must not be listed there.
+   Without the repository, 1Password's password generator does the same (64 characters, letters and digits, symbols
+   off). On a Mac, in Terminal, then copy something harmless to clear the clipboard:
 
    ```bash
    openssl rand -base64 48 | tr -d '\n' | pbcopy
@@ -64,7 +78,7 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `ANALYTICS_SALT` | generated | step 2 | **yes** |
 | `SECRET_STORE` | `vault` | constant | no |
 | `AUTH_PROVIDER` | `supabase` | constant | no |
-| `AUTH_SIGNIN_PROVIDERS` | `azure` | constant (Google sign-in is not configured in Supabase yet; add `,google` when it is) | no |
+| `AUTH_SIGNIN_PROVIDERS` | `azure,google` | constant: the providers the sign-in page offers, and since 29 October 2026 the only ones a session can be opened with (a token from any other provider is refused). Drop `google` only if Google sign-in is switched off in Supabase | no |
 | `SUPABASE_URL` | `https://vjuaiyjmtrenbrmujvtc.supabase.co` | constant (the project reference) | no |
 | `SUPABASE_ANON_KEY` | the project's publishable (anon) key | Supabase, Project Settings, API Keys | no (public by design) |
 | `ITS_STAFF_EMAIL_DOMAINS` | `identifiedtalent.com` | constant | no |
@@ -77,8 +91,8 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `STORAGE_BUCKET` | `resumes` | constant | no |
 | `STORAGE_S3_ENDPOINT` | `https://vjuaiyjmtrenbrmujvtc.storage.supabase.co/storage/v1/s3` | the S3 Configuration screen (reported 22 Sep) | no |
 | `STORAGE_S3_REGION` | `us-west-2` | the S3 Configuration screen (reported 22 Sep) | no |
-| `STORAGE_S3_ACCESS_KEY_ID` | the access key ID | 1Password, "Recruiting OS staging storage" | **yes** |
-| `STORAGE_S3_SECRET_ACCESS_KEY` | the secret access key | 1Password, "Recruiting OS staging storage" | **yes** |
+| `STORAGE_S3_ACCESS_KEY_ID` | the app's access key ID (Supabase S3 access key `recruiting-os-staging-app`) | 1Password, "Recruiting OS staging storage"; the Railway worker has a key pair of its own | **yes** |
+| `STORAGE_S3_SECRET_ACCESS_KEY` | the same pair's secret access key | the same item | **yes** |
 | `SCAN_PROVIDER` | `fake` | constant for the app, which never scans a file; the worker on Railway switches to `clamav` once the ClamAV service exists (`docs/runbooks/resume-storage.md`) | no |
 | `RATE_LIMIT_STORE` | `upstash` | constant; the production app refuses anything else, and refuses `upstash` without the two values below. Staging runs with `NODE_ENV=production`, so a missing value stops the app at boot (the Railway worker, also set to `upstash`, needs both values as it always did) | no |
 | `UPSTASH_REDIS_REST_URL` | `https://complete-narwhal-292092.upstash.io` | the Upstash database page (reported 22 Sep) | no |
@@ -97,20 +111,24 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `WORKER_INLINE` | `false` | constant; production refuses `true`. Until the Railway worker runs, work that needs it (intake compilation, application processing, reminders) waits in the queue | no |
 | `CSP_MODE` | `report-only` | constant until the staging reports are reviewed | no |
 | `COMPANY_CHECK` | not set (`its`) | constant; production refuses `auto`. A company created on staging waits for an administrator's confirmation in the admin console (Customers, Confirm) before its pages are public | no |
+| `SIGNUP_MODE` | `invite` | constant once the test identities are listed in the next row, and at the latest when production goes live (`docs/runbooks/production-setup.md`, step 11). Only opening a new company needs the list (platform administrators always may); signing in and team invitations work as before. Any value but `open` or `invite` stops the app | no |
+| `SIGNUP_ALLOWED_EMAILS` | the staging test identities, comma-separated: full addresses, or `@domain` for a whole domain | your list | no |
 | `TRUST_PROXY_HOPS` | `1` | constant for Vercel | no |
 | `DATABASE_POOL_MAX` | `3` | constant: each Vercel instance holds up to this many of `ros_app`'s 15 Session pooler connections (changed from `5` on 12 October 2026, after three redeploys filled the pooler; if Vercel still shows `5`, edit it to `3`). Not `1`, which slows requests that arrive together | no |
 
 Not set on purpose: `SENTRY_DSN` (the Sentry projects do not exist yet; reporting stays off), `WORKER_DATABASE_URL`
 and `MIGRATE_DATABASE_URL` (never on Vercel), `SUPABASE_SERVICE_ROLE_KEY` (never anywhere), `MAGIC_LINK_ENABLED`
-(production defaults to off), `RUN_MIGRATIONS_ON_BOOT` (production never migrates on boot and refuses to start while
-a migration is pending; migrations run from the founder's machine or the `migrate` GitHub workflow). No longer read:
+(production defaults to off), `RUN_MIGRATIONS_ON_BOOT` (with it a process would try to migrate as its own role, which
+cannot change the schema, so a pending migration would still stop the start; without it the app refuses to start
+while a migration is pending, and migrations run from the `migrate` GitHub workflow or the founder's machine),
+`DEPLOY_ENV` (Vercel's own `VERCEL_ENV=preview` already marks staging; `production` here is refused). No longer read:
 `WEB_BASE_URL` (the app and the API share `APP_BASE_URL`), `RATE_LIMIT_SHARED_PROVIDER`, `RATE_LIMIT_SHARED_URL`,
 `LOG_LEVEL`; remove them if present.
 
 ## After entering them
 
 Vercel, **Deployments**, the latest `main` deployment, **Redeploy** (without the build cache is fine). When it shows
-Ready, open `<the main alias>/healthz` in a browser: `{"ok":true,"db":"postgres",...,"worker":"external"}` means the
+Ready, open `<the main alias>/healthz` in a browser: `{"ok":true,"db":"postgres",...,"worker":{...}}` means the
 application booted against the staging database as `ros_app` with TLS verified. Report the alias and that line
 (it holds no secret). Sign-in comes after the Supabase Auth redirect allow list is set to that alias.
 

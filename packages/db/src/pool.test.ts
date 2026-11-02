@@ -11,6 +11,8 @@ import { fakeDriver } from "./test-pg-driver";
 describe("the Postgres connection pool", () => {
   it("poolSettings: default 3, DATABASE_POOL_MAX honoured and clamped", () => {
     expect(poolSettings({})).toMatchObject({ max: 3, idleTimeoutMillis: 5000, connectionTimeoutMillis: 10000 });
+    // TCP keepalive (audit OPS-V1): a connection whose network died silently is found within seconds, not two hours
+    expect(poolSettings({})).toMatchObject({ keepAlive: true, keepAliveInitialDelayMillis: 10000 });
     expect(poolSettings({}).onConnect).toBe(prepareConnection);
     expect(poolSettings({ DATABASE_POOL_MAX: "5" }).max).toBe(5);
     expect(poolSettings({ DATABASE_POOL_MAX: "50" }).max).toBe(20);

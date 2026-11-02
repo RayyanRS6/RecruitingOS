@@ -3,8 +3,9 @@ import { desc, eq } from "drizzle-orm";
 import { CreateCompany, InviteMember, UpdateMember, trialStanding } from "@ros/contracts";
 import { assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
+import { mailbox } from "@ros/integrations";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
-import { createCompany } from "../services/companies";
+import { INVITE_ONLY_MESSAGE, createCompany, maySignUp } from "../services/companies";
 import { tellItsAboutNewCompany } from "../services/company-trust";
 import { sendToIts } from "../services/escalation-queue";
 import { inviteMember, leaveCompany, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
@@ -18,12 +19,17 @@ export const companyRoutes = new Hono<Vars>();
  * it instead). A second company of one's own goes through ITS (founder decision L-17 A, known bug 65): a person who
  * already belongs to a company, or already created one, is refused with 409 `another_company_needs_its` ("To open
  * another company, contact ITS."). A platform admin sets companies up as before; someone invited to several companies
- * keeps the company switcher. The body is checked first, so a bad one still answers 400.
+ * keeps the company switcher. The body is checked before that rule, so a bad one still answers 400.
+ *
+ * By invitation (GATE-V2, SIGNUP_MODE=invite) only a platform admin or an address on SIGNUP_ALLOWED_EMAILS may create a
+ * company: anyone else is refused with 403 `signup_invite_only` before the body is read. Signing in and joining a
+ * company by invitation are untouched.
  */
 companyRoutes.post("/", requireUser, async (c) => {
-  const body = CreateCompany.parse(await c.req.json());
   const s = c.get("session")!;
   const container = c.get("container");
+  if (!maySignUp(container.env, s.user)) throw new HttpError(403, "signup_invite_only", INVITE_ONLY_MESSAGE);
+  const body = CreateCompany.parse(await c.req.json());
   const autoVerify = container.env.COMPANY_CHECK === "auto";
   const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock(), mayOpenAnother: s.user.platformRole === "platform_admin" });
   await setActiveCompany(container.db, s.sessionId, company.id);
@@ -47,7 +53,9 @@ companyRoutes.get("/current", requireTenant, async (c) => {
     // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
     return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: plan.limits } : null, usage, trial: trialStanding(co, now) };
   });
-  return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id } });
+  // `production`: NODE_ENV is production (staging too), where a service running without a provider ("fake") is a
+  // deliberate default rather than a development stand-in, and Settings says what it does instead (audit MAIL-18).
+  return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id }, production: container.env.NODE_ENV === "production" });
 });
 
 // PATCH /current (the typed company preferences), GET /current/audit and /current/audit.csv (the customer's own history)
@@ -183,7 +191,7 @@ companyRoutes.post("/current/staff-access/:grantId/revoke", requireTenant, async
     return { ...r, recruiter, companyName: company?.name ?? "the customer" };
   });
   // Tell the recruiter and the queue. Neither message carries candidate data.
-  const from = `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`;
+  const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
   let recruiterNotified = false;
   if (result.recruiter?.email) {
     const sent = await container.integrations.email.send({ to: result.recruiter.email, from, subject: `Your access to ${result.companyName} was ended by the customer`, text: `${actor.name ?? "The customer"} at ${result.companyName} ended your access just now.\nReason: ${reason}\n\n${result.escalationId ? "The request is back in the queue, unassigned. " : ""}Do not keep or use any copies of the customer's information.`, idempotencyKey: `grant_revoked:${result.grant.id}`, tags: { template: "staff_access_revoked" } });

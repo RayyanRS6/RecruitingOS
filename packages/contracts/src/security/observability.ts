@@ -1,4 +1,4 @@
-import { redactObject } from "./redact";
+import { redactContactDetails, redactObject } from "./redact";
 
 /**
  * Error-tracking hygiene (correction 10): nothing that reaches the error tracker may carry a credential, a cookie, an
@@ -17,9 +17,22 @@ export type SentryLikeEvent = {
 
 const DROP_HEADERS = /^(authorization|cookie|set-cookie|x-api-key|x-supabase-auth|proxy-authorization)$/i;
 
+/** Every text in a breadcrumb with addresses and numbers cut, however deep (a console breadcrumb keeps the logged arguments). */
+function withoutContactDetails(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return redactContactDetails(value);
+  if (depth > 12 || !value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((v) => withoutContactDetails(v, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withoutContactDetails(v, depth + 1)]));
+}
+
 /** Scrubs an event by shape (headers, cookies, body, link tokens in URLs, identity) and by every registered secret value. */
 export function scrubObservabilityEvent<T extends SentryLikeEvent>(event: T, values: Iterable<string> = []): T {
   const copy = redactObject(event, values) as T;
+  // A person's address or number written into the words (a provider's "could not deliver to ...", a logged line kept as
+  // a breadcrumb) is not for the error tracker either (audit OPS-2). Ids, tags and stack frames are left as they are.
+  if (typeof copy.message === "string") copy.message = redactContactDetails(copy.message);
+  for (const v of copy.exception?.values ?? []) if (typeof v.value === "string") v.value = redactContactDetails(v.value);
+  if (copy.breadcrumbs) copy.breadcrumbs = copy.breadcrumbs.map((b) => withoutContactDetails(b) as typeof b);
   if (copy.request) {
     delete copy.request.cookies;
     delete copy.request.data;

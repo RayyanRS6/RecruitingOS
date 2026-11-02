@@ -3,8 +3,9 @@ import { eq } from "drizzle-orm";
 import { auditRecords } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { SESSION_COOKIE, sessionCookieName } from "./cookie-names";
 import { installReporter, sentryOptions } from "./observability";
-import { TEST_ERROR_EMAIL, TEST_ERROR_TOKEN, observabilityEnvironment, testErrorAvailable } from "./routes/observability";
+import { TEST_ERROR_EMAIL, TEST_ERROR_TEXT_EMAIL, TEST_ERROR_TOKEN, observabilityEnvironment, testErrorAvailable } from "./routes/observability";
 import { signInAdmin } from "./test-helpers";
 
 /**
@@ -47,10 +48,12 @@ describe("the observability test error", () => {
     const err = seen[0].err as Error;
     expect(err.name).toBe("DeliberateTestError");
     expect(err.message).toContain(TEST_ERROR_TOKEN); // the raw error carries them: only the SDK's scrubber stands between it and Sentry
-    const event = sentryOptions({ SENTRY_DSN: "https://examplePublicKey@o0.ingest.us.sentry.io/0", SENTRY_ENVIRONMENT: "staging" }).beforeSend({ message: err.message, exception: { values: [{ type: err.name, value: err.message }] }, extra: seen[0].context });
+    expect(err.message).toContain(TEST_ERROR_TEXT_EMAIL);
+    const event = sentryOptions({ SENTRY_DSN: "https://examplePublicKey@o0.ingest.us.sentry.io/0", SENTRY_ENVIRONMENT: "staging" }).beforeSend({ message: err.message, exception: { values: [{ type: err.name, value: err.message }] }, breadcrumbs: [{ message: `[api] unhandled ${err.message}` }], extra: seen[0].context });
     const json = JSON.stringify(event);
     expect(json).not.toContain(TEST_ERROR_TOKEN);
     expect(json).not.toContain(TEST_ERROR_EMAIL);
+    expect(json).not.toContain(TEST_ERROR_TEXT_EMAIL); // written in plain text, not after email= (audit OPS-2)
     expect(json).toContain("[redacted]");
     const audits = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "admin.bypass"));
     expect(audits.some((a) => /observability test error raised on purpose \(test\)/.test(a.reason ?? ""))).toBe(true);
@@ -65,13 +68,15 @@ describe("the observability test error", () => {
     // an allow list: a production build under any other name, or no name, is production
     expect(testErrorAvailable({ NODE_ENV: "production", raw: {} })).toBe(false);
     for (const name of ["production", "prod", "live", "production-us", "Staging", "staging-2"]) expect(testErrorAvailable({ NODE_ENV: "production", raw: { SENTRY_ENVIRONMENT: name } })).toBe(false);
-    // end to end: the same database and session behind an app whose environment is a production build under another name
+    // end to end: the same database and session behind an app whose environment is a production build under another name.
+    // A production build reads the session only under its https name (cookie-names.ts), so the browser sends it so named.
+    const prodAdmin = admin.replace(`${SESSION_COOKIE}=`, `${sessionCookieName({ NODE_ENV: "production", COOKIE_DOMAIN: container.env.raw.COOKIE_DOMAIN })}=`);
     const prodApp = createApp({ ...container, env: { ...container.env, NODE_ENV: "production", raw: { ...container.env.raw, SENTRY_ENVIRONMENT: "production-us" } } });
-    const r = await prodApp.request("/api/v1/admin/observability/test-error", { method: "POST", headers: { cookie: admin, "x-admin-reason": "scrubbing proof" } });
+    const r = await prodApp.request("/api/v1/admin/observability/test-error", { method: "POST", headers: { cookie: prodAdmin, "x-admin-reason": "scrubbing proof" } });
     expect(r.status).toBe(404);
     expect(seen).toHaveLength(1); // nothing new was reported
     const staging = createApp({ ...container, env: { ...container.env, NODE_ENV: "production", raw: { ...container.env.raw, SENTRY_ENVIRONMENT: "staging" } } });
-    expect((await staging.request("/api/v1/admin/observability/test-error", { method: "POST", headers: { cookie: admin, "x-admin-reason": "scrubbing proof" } })).status).toBe(500);
+    expect((await staging.request("/api/v1/admin/observability/test-error", { method: "POST", headers: { cookie: prodAdmin, "x-admin-reason": "scrubbing proof" } })).status).toBe(500);
     expect(seen).toHaveLength(2);
   });
 });

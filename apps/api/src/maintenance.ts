@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, ne, or } from "drizzle-orm";
 import { expireEmptyDrafts, sweepStaleSending } from "@ros/agents";
-import { REMOVED_INBOUND_EMAIL, alertOverdueEscalations, anonymizedCandidates, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData, scrubCandidateWorkflowData, type CancelWorkflowRun } from "@ros/core";
+import { REMOVED_INBOUND_EMAIL, alertOverdueEscalations, anonymizedCandidates, errorForLog, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData, scrubCandidateWorkflowData, type CancelWorkflowRun } from "@ros/core";
 import { cspReports, inboundEmails, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
 import { settleTrials } from "./services/trial";
 import { HEARTBEAT_STALE_MS, queueSnapshot, readWorkerHealth } from "./worker-health";
@@ -201,7 +201,7 @@ export function appHealthWatch(db: Db, opts: MaintenanceOptions & { everyMs?: nu
     lastRun = Date.now();
     running = checkOperationalHealth(db, now, { workerInline: false, emailCritical: opts.emailCritical })
       .then(() => undefined)
-      .catch((err) => console.warn(`[healthz] the operational health check failed: ${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => console.warn(`[healthz] the operational health check failed: ${errorForLog(err)}`))
       .finally(() => { running = null; });
     await running;
   };
@@ -237,7 +237,7 @@ export async function checkOperationalHealth(db: Db, now: Date, opts: Maintenanc
           try {
             await opts.emailCritical(result.id);
           } catch (err) {
-            console.warn(`[health] the critical alert could not be emailed now; the queued job will try: ${err instanceof Error ? err.message : String(err)}`);
+            console.warn(`[health] the critical alert could not be emailed now; the queued job will try: ${errorForLog(err)}`);
           }
         }
       }
@@ -253,7 +253,7 @@ export async function checkOperationalHealth(db: Db, now: Date, opts: Maintenanc
       kind: "queue.stale",
       severity: "high",
       title: "Queued work is not being picked up",
-      body: `${queue.queueDepth} job${queue.queueDepth === 1 ? " is" : "s are"} due and waiting; the oldest has waited ${minutes} minutes. Either no worker is running or it cannot keep up. Check the worker's health and logs (docs/runbooks/railway-worker.md) and the Queue tab of the console.`,
+      body: `${queue.queueDepth} job${queue.queueDepth === 1 ? " is" : "s are"} due and waiting; the oldest has waited ${minutes} minutes. Either no worker is running, it cannot keep up, or it is an older build that does not know this kind of work (which waits up to a day for a newer one). Check the worker's health, its build and its logs (docs/runbooks/railway-worker.md) and the Queue tab of the console.`,
       details: { queueDepth: queue.queueDepth, oldestQueuedAt: queue.oldestQueuedAt, waitedMinutes: minutes },
     }, { withinMs: HEALTH_ALERT_WINDOW_MS, now }));
     if (result.created) raised += 1;

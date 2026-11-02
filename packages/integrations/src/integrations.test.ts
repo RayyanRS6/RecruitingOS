@@ -145,6 +145,24 @@ describe("observability scrubbing (correction 10)", () => {
     expect(ev.request!.headers).toEqual({ "user-agent": "test" });
     expect(ev.user).toEqual({ id: "u1" });
   });
+
+  it("removes addresses and phone numbers written in the words and in breadcrumbs, and leaves ids alone (audit OPS-2)", async () => {
+    const { scrubObservabilityEvent } = await import("./observability/sentry");
+    const jobId = "0192f0a1-7b3c-7def-8123-456789012345";
+    const ev = scrubObservabilityEvent({
+      message: "could not deliver to jane.doe@example.com",
+      exception: { values: [{ type: "Error", value: "the provider refused +1 415 555 0134 for jane.doe@example.com" }] },
+      breadcrumbs: [{ message: "[outbox] could not deliver to (415) 555-0134", data: { arguments: ["to", { to: "jane.doe@example.com" }] } }],
+      extra: { jobId },
+    });
+    const text = JSON.stringify(ev);
+    expect(text).not.toContain("jane.doe@example.com");
+    expect(text).not.toContain("555");
+    expect(ev.message).toBe("could not deliver to [redacted]");
+    expect(ev.exception!.values![0].value).toBe("the provider refused [redacted] for [redacted]");
+    expect(ev.breadcrumbs).toEqual([{ message: "[outbox] could not deliver to [redacted]", data: { arguments: ["to", { to: "[redacted]" }] } }]);
+    expect(ev.extra).toEqual({ jobId });
+  });
 });
 
 describe("calendar providers (slice 5 steps 6 and 8)", () => {

@@ -1,14 +1,14 @@
 import { Hono, type Context } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { createHash, randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { audit, listSessions, markReauthenticated, normalizeEmail, openPayload, revokeAllSessions, revokeSessionById, sealPayload } from "@ros/core";
+import { audit, identityForSignIn, linkedToAnotherSubject, listSessions, markReauthenticated, normalizeEmail, openPayload, revokeAllSessions, revokeSessionById, sealPayload } from "@ros/core";
 import { users, withPlatform } from "@ros/db";
 import { base64url, type VerifiedIdentity } from "@ros/integrations";
 import type { Container } from "../container";
+import { clearAppCookie, readAppCookie, setAppCookie } from "../cookies";
 import { HttpError } from "../middleware/errors";
-import { SESSION_COOKIE, clientIp, requireUser, type Vars } from "../middleware/session";
-import { MFA_COOKIE_PATH, sessionCookieOptions } from "./auth-shared";
+import { clientIp, requireUser, type Vars } from "../middleware/session";
+import { SIGN_IN_STEP_PLACE, clearPkceCookie, clearSessionCookie, setPkceCookie, signInPolicy } from "./auth-shared";
 
 /**
  * A person's own sessions and the re-authentication step (audit findings A11 and A12). Mounted under /api/v1/auth next
@@ -50,7 +50,7 @@ authSessionRoutes.post("/sessions/:id/revoke", requireUser, async (c) => {
     return ended;
   });
   if (!ok) throw new HttpError(404, "not_found", "No open session with that id.");
-  if (id === s.sessionId) deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  if (id === s.sessionId) clearSessionCookie(c);
   return c.json({ ok: true, current: id === s.sessionId });
 });
 
@@ -61,21 +61,16 @@ authSessionRoutes.post("/sessions/:id/revoke", requireUser, async (c) => {
 export const REAUTH_COOKIE = "ros_reauth";
 /** Appended to the OAuth state of a re-authentication ("reauth=1" in the brief's words; spelled without characters the cookie or the URL could mangle). */
 export const REAUTH_STATE_SUFFIX = "-reauth1";
-const PKCE_COOKIE = "ros_pkce";
 const REAUTH_TTL_MS = 10 * 60_000;
 type ReauthMarker = { v: 1; sessionId: string; userId: string; state: string; returnTo: string; exp: number };
 
-function reauthCookieOptions(container: Container) {
-  return { ...sessionCookieOptions(container), path: MFA_COOKIE_PATH, maxAge: REAUTH_TTL_MS / 1000 };
-}
 export function readReauthMarker(c: Context<Vars>, container: Container): ReauthMarker | null {
-  const p = openPayload<ReauthMarker>("reauth", getCookie(c, REAUTH_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  const p = openPayload<ReauthMarker>("reauth", readAppCookie(c, REAUTH_COOKIE, SIGN_IN_STEP_PLACE), container.env.SESSION_SECRET, container.engine.clock().getTime());
   return p?.v === 1 && typeof p.sessionId === "string" && typeof p.state === "string" ? p : null;
 }
-function clearReauthCookies(c: Context<Vars>, container: Container): void {
-  const domain = container.env.raw.COOKIE_DOMAIN ? { domain: container.env.raw.COOKIE_DOMAIN } : {};
-  deleteCookie(c, REAUTH_COOKIE, { path: MFA_COOKIE_PATH, ...domain });
-  deleteCookie(c, PKCE_COOKIE, { path: "/" });
+function clearReauthCookies(c: Context<Vars>): void {
+  clearAppCookie(c, REAUTH_COOKIE, SIGN_IN_STEP_PLACE);
+  clearPkceCookie(c);
 }
 
 /** Only a path inside the app; never another site. */
@@ -107,8 +102,8 @@ authSessionRoutes.post("/reauth/start", requireUser, async (c) => {
   const state = `${base64url.encode(randomBytes(16))}${REAUTH_STATE_SUFFIX}`;
   const codeChallenge = base64url.encode(createHash("sha256").update(verifier).digest());
   const now = container.engine.clock().getTime();
-  setCookie(c, PKCE_COOKIE, `${verifier}.${state}.${provider}`, { ...sessionCookieOptions(container), maxAge: 600 });
-  setCookie(c, REAUTH_COOKIE, sealPayload<ReauthMarker>("reauth", { v: 1, sessionId: s.sessionId, userId: s.user.id, state, returnTo, exp: now + REAUTH_TTL_MS }, container.env.SESSION_SECRET), reauthCookieOptions(container));
+  setPkceCookie(c, { verifier, state, provider });
+  setAppCookie(c, REAUTH_COOKIE, sealPayload<ReauthMarker>("reauth", { v: 1, sessionId: s.sessionId, userId: s.user.id, state, returnTo, exp: now + REAUTH_TTL_MS }, container.env.SESSION_SECRET), { ...SIGN_IN_STEP_PLACE, maxAge: REAUTH_TTL_MS / 1000 });
   const url = container.integrations.identity.authorizeUrl({ provider, redirectTo: `${container.env.APP_BASE_URL}/api/v1/auth/callback`, codeChallenge, state });
   if (contentType.includes("application/json") || (c.req.header("accept") ?? "").includes("application/json")) return c.json({ ok: true, url, provider });
   return c.redirect(url, 302);
@@ -116,22 +111,26 @@ authSessionRoutes.post("/reauth/start", requireUser, async (c) => {
 
 /**
  * The callback's re-authentication branch: the identity the provider vouched for must be the signed-in person (same
- * verified address, and the same subject when the account is linked to this provider). Then the session is stamped,
- * audited, and the browser returns to where it was with `reauth=ok`; anything else returns with `reauth=failed` and
- * changes nothing.
+ * verified address, and the same subject when the account is linked to a provider it holds), through a provider the
+ * deployment offers and the one this browser started with (identityForSignIn, as for a sign-in). Then the session is
+ * stamped, audited, and the browser returns to where it was with `reauth=ok`; anything else returns with
+ * `reauth=failed` or `reauth=mismatch` and changes nothing.
  */
-export async function completeReauth(c: Context<Vars>, container: Container, input: { identity: VerifiedIdentity; marker: ReauthMarker; returnedState: string | null }): Promise<Response> {
-  const back = (outcome: "ok" | "failed" | "mismatch") => { clearReauthCookies(c, container); return c.redirect(`${container.env.APP_BASE_URL}${withParam(input.marker.returnTo, "reauth", outcome)}`, 302); };
+export async function completeReauth(c: Context<Vars>, container: Container, input: { identity: VerifiedIdentity; startedProvider: string; marker: ReauthMarker; returnedState: string | null }): Promise<Response> {
+  const back = (outcome: "ok" | "failed" | "mismatch") => { clearReauthCookies(c); return c.redirect(`${container.env.APP_BASE_URL}${withParam(input.marker.returnTo, "reauth", outcome)}`, 302); };
   const s = c.get("session");
   if (!s || s.sessionId !== input.marker.sessionId || s.user.id !== input.marker.userId) return back("failed");
   if (!input.returnedState || input.returnedState !== input.marker.state || !input.marker.state.endsWith(REAUTH_STATE_SUFFIX)) return back("failed");
-  if (!input.identity.emailVerified || normalizeEmail(input.identity.email) !== normalizeEmail(s.user.email)) return back("mismatch");
+  const checked = identityForSignIn(input.identity, input.startedProvider, signInPolicy(container));
+  if (!checked.ok) return back("failed");
+  const identity = checked.identity;
+  if (!identity.emailVerified || normalizeEmail(identity.email) !== normalizeEmail(s.user.email)) return back("mismatch");
   const now = container.engine.clock();
   const outcome = await withPlatform(container.db, async (tx) => {
     const [u] = await tx.select({ authProvider: users.authProvider, authSubject: users.authSubject }).from(users).where(eq(users.id, s.user.id)).limit(1);
-    if (u?.authProvider === input.identity.provider && u.authSubject && u.authSubject !== input.identity.subject) return "mismatch" as const;
+    if (u && linkedToAnotherSubject(u, identity)) return "mismatch" as const;
     await markReauthenticated(tx, s.sessionId, now);
-    await audit(tx, { companyId: c.get("tenant")?.companyId ?? null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "session.reauthenticated", target: { type: "user", id: s.user.id }, reason: input.identity.provider, ip: clientIp(c), details: { sessionId: s.sessionId, provider: input.identity.provider, aal: input.identity.aal } });
+    await audit(tx, { companyId: c.get("tenant")?.companyId ?? null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "session.reauthenticated", target: { type: "user", id: s.user.id }, reason: identity.provider, ip: clientIp(c), details: { sessionId: s.sessionId, provider: identity.provider, aal: identity.aal } });
     return "ok" as const;
   });
   return back(outcome);

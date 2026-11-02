@@ -9,8 +9,11 @@ allowBuilds:
 # 7 Oct: source-map-js (GHSA-68fv-2mgg-jv7q, under postcss) and sharp (GHSA-wq5f-xc86-pv6w, under next) gained high
 # advisories; both are build-time or image-optimisation paths, moved to the patched lines.
 # 21 Oct: vite (under vitest, tests only) gained a high advisory (GHSA-587h-7wmj-h5pm); moved to the patched 7.3 line.
+# 29 Oct: fast-uri (under @sentry/nextjs's webpack plugin, build time only) gained two moderate and two low advisories
+# (GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h, GHSA-333x-w4r6-6crp); moved to the patched 3.1 line.
 overrides:
   "postcss@<8.5.23": ">=8.5.23"
   "source-map-js@<1.2.2": "^1.2.2"
   "sharp@<0.35.5": "^0.35.5"
   "vite@<7.3.7": "^7.3.7"
+  "fast-uri@<3.1.9": "^3.1.9"

@@ -104,15 +104,18 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
   (the Railway GitHub App must have access to that private repository), branch `main`. The worker service's Settings hold
   the build and deploy values (from `railway.json` until 15 Oct 2026): builder Railpack, build command `pnpm worker:check` (a typecheck; the worker runs from source
   with `tsx`, which is a runtime dependency of `@ros/api` for that reason), start command `pnpm worker:start`, restart
-  policy On Failure with ten retries. Root directory stays `/` because the pnpm workspace installs from the root; Node
+  policy Always (29 October 2026; On Failure with ten retries before that): the worker exits on purpose when it stalls,
+  and only Always starts it again every time. Root directory stays `/` because the pnpm workspace installs from the root; Node
   comes from `.node-version` (24). Watch paths: `apps/api/**`, `packages/**`, `package.json`, `pnpm-lock.yaml`,
   `.node-version`.
 - Region: **US West Metal (California)**, the closest offered to the Oregon database; changeable later without downtime.
 - Environment: the project's default `production` environment holds the staging worker (the project is the staging
   one); a production project or environment follows the production database.
-- Spend: Workspace Usage page, Set Usage Limits, hard limit $10 (the minimum) with the email alert; Railway stops every
-  workload at the limit and restarts them when it is raised.
-- Variables (service Variables tab; every secret sealed after entry): `NODE_ENV=production`, `WORKER_DATABASE_URL`
+- Spend: Workspace Usage page, Set Usage Limits: an email alert and no hard limit (29 October 2026; a $10 hard limit
+  before that). Railway stops every workload in the workspace at a hard limit, and the production project shares the
+  workspace, so a limit would take production offline too; ClamAV alone costs more than $10 a month.
+- Variables (service Variables tab; every secret sealed after entry): `NODE_ENV=production`, `DEPLOY_ENV=staging`
+  (since 29 October 2026: a worker that names no deployment refuses to start), `WORKER_DATABASE_URL`
   (the pooler connection string as `ros_worker`; sealed), `SESSION_SECRET` (sealed; the same value as Vercel's),
   `SECRET_STORE=vault`, `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` (sealed), `AUTH_PROVIDER=supabase`,
   `SUPABASE_URL`, `SUPABASE_ANON_KEY` (sealed), `APP_BASE_URL` (the staging address, for links in messages;

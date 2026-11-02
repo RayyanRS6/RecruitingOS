@@ -51,6 +51,10 @@ The founder's answers to the small choices (docs/workflow-decisions.md). No migr
 - **Row 60** (L-02 B, its trial part): the Trial plan's seats and its 30-day end are now enforced (the rest of the row as the S2 notes say).
 - **Rows 15 and 31** stay **partly fixed**. Wave S10 adds a neutral line for the hiring team when a résumé or the written answers held text aimed at the AI (L-08 B, packages/core/src/hidden-text.ts, with tests that try such text), but the remaining part of both rows is a change to the prompts (the résumé extraction and the chat's own turns), which this wave did not make.
 
+## Production readiness (branch production-readiness, 29 October 2026)
+
+- **Row 41**: fixed. A browser sign-in now counts as the provider it started with (the PKCE cookie), not the account's first provider, and is refused when the account does not hold that provider (`provider_mismatch`). An ITS staff account must hold Microsoft only: one that also has another sign-in linked is refused (`staff_provider_linked`) until ITS removes the link at the identity service (packages/core/src/identity.ts, `identityForSignIn` and `evaluateSignIn`). Built and tested against fake providers only.
+
 ## Waves S6 to S8 (15 October 2026)
 
 - **S6** (PR #43, merged, `92f7253`): the AI run detail is now on the console's System page (part of row 1).

@@ -1,18 +1,17 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
 import { audit, MFA_MAX_ATTEMPTS, MFA_PERSON_ATTEMPTS, MFA_PERSON_WINDOW_MS, MFA_TRANSACTION_TTL_MS, normalizeEmail, openMfaTransaction, rateLimitKey, revokeAllSessions, sealMfaTransaction, SignInRefused, type MfaTransaction } from "@ros/core";
 import { sessions, users } from "@ros/db";
 import { hashToken } from "@ros/core";
 import { IdentityError, type MfaFactor } from "@ros/integrations";
 import type { Container } from "../container";
-import { clientIp, SESSION_COOKIE, type Vars } from "../middleware/session";
+import { clientIp, type Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { fromThisSite } from "../middleware/same-site";
 import { BackupOfferPage, EnrolPage, VerifyPage } from "../pages/mfa";
-import { MFA_COOKIE, MFA_COOKIE_PATH, mfaCookieOptions, openSession, sessionCookieOptions } from "./auth-shared";
+import { clearMfaCookie, openSession, readMfaCookie, setMfaCookie, setSessionCookie } from "./auth-shared";
 
 /**
  * The staff second factor (founder approval of 22 September 2026). After Microsoft has vouched for an ITS staff member,
@@ -39,16 +38,16 @@ function paths(container: Container) {
 }
 
 function readTx(c: Context<Vars>, container: Container): MfaTransaction | null {
-  return openMfaTransaction(getCookie(c, MFA_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  return openMfaTransaction(readMfaCookie(c), container.env.SESSION_SECRET, container.engine.clock().getTime());
 }
 function saveTx(c: Context<Vars>, container: Container, tx: MfaTransaction) {
-  setCookie(c, MFA_COOKIE, sealMfaTransaction(tx, container.env.SESSION_SECRET), mfaCookieOptions(container));
+  setMfaCookie(c, sealMfaTransaction(tx, container.env.SESSION_SECRET));
 }
-function clearTx(c: Context<Vars>, container: Container) {
-  deleteCookie(c, MFA_COOKIE, { path: MFA_COOKIE_PATH, ...(container.env.raw.COOKIE_DOMAIN ? { domain: container.env.raw.COOKIE_DOMAIN } : {}) });
+function clearTx(c: Context<Vars>) {
+  clearMfaCookie(c);
 }
 function toLogin(c: Context<Vars>, container: Container, code: string | null) {
-  clearTx(c, container);
+  clearTx(c);
   return c.redirect(`${container.env.APP_BASE_URL}/login${code ? `?error=${encodeURIComponent(code)}` : ""}`, 302);
 }
 function providerFailure(c: Context<Vars>, container: Container, err: unknown) {
@@ -108,7 +107,7 @@ mfaRoutes.get("/", async (c) => {
   const p = paths(container);
   try {
     if (tx.stage === "backup_offer") {
-      if (!sessionOf(c, tx)) { clearTx(c, container); return c.redirect(p.home, 302); }
+      if (!sessionOf(c, tx)) { clearTx(c); return c.redirect(p.home, 302); }
       return c.html(<BackupOfferPage backupHref={p.backup} skipAction={p.skip} />);
     }
     // A refresh shows the same setup key the person may already have scanned, and the message from a wrong code once.
@@ -136,7 +135,7 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
   // A request that says it came from another site never answers a transaction (also refused app-wide, middleware/same-site.ts).
   if (!fromThisSite(c, container.env)) return c.redirect(p.base, 302);
   if (tx.stage !== "enrol" && tx.stage !== "verify" && tx.stage !== "backup_enrol") return c.redirect(p.base, 302);
-  if (tx.stage === "backup_enrol" && !sessionOf(c, tx)) { clearTx(c, container); return c.redirect(p.home, 302); }
+  if (tx.stage === "backup_enrol" && !sessionOf(c, tx)) { clearTx(c); return c.redirect(p.home, 302); }
   const form = await c.req.parseBody();
   const code = String(typeof form.code === "string" ? form.code : "").replace(/\s+/g, "");
   const ip = clientIp(c);
@@ -182,7 +181,7 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
   if (tx.stage === "backup_enrol") {
     const s = sessionOf(c, tx)!;
     await audit(container.db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "mfa.backup_enrolled", target: { type: "user", id: s.user.id }, ip, details: { email: tx.email } });
-    clearTx(c, container);
+    clearTx(c);
     return c.redirect(p.home, 302);
   }
   // Only the service's re-issued token, verified like any other, opens the session.
@@ -198,12 +197,13 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
     return toLogin(c, container, "mfa_unavailable");
   }
   try {
-    result = await openSession(container, c, identity);
+    // The service's re-issued token names the account's first provider again; the transaction keeps the one this sign-in used.
+    result = await openSession(container, c, identity, tx.provider);
   } catch (err) {
     if (err instanceof SignInRefused) return toLogin(c, container, err.code);
     throw err;
   }
-  setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
+  setSessionCookie(c, result.sessionToken);
   // From here the person is signed in; whatever fails below must not read as a failed sign-in.
   try {
     const actor = { kind: "user" as const, id: result.userId, name: identity.name ?? identity.email };
@@ -226,7 +226,7 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
   } catch {
     // The backup offer is a convenience; the session stands.
   }
-  clearTx(c, container);
+  clearTx(c);
   return c.redirect(p.home, 302);
 });
 
@@ -235,13 +235,13 @@ mfaRoutes.get("/backup", async (c) => {
   const container = c.get("container");
   const tx = readTx(c, container);
   const p = paths(container);
-  if (!tx || (tx.stage !== "backup_offer" && tx.stage !== "backup_enrol") || !sessionOf(c, tx)) { clearTx(c, container); return c.redirect(p.home, 302); }
+  if (!tx || (tx.stage !== "backup_offer" && tx.stage !== "backup_enrol") || !sessionOf(c, tx)) { clearTx(c); return c.redirect(p.home, 302); }
   try {
     // A refresh keeps the setup key the person may already have scanned.
     if (tx.stage === "backup_enrol" && tx.secret && tx.factorIds.length) return renderStage(c, container, tx);
     return await beginEnrolment(c, container, tx, true);
   } catch (err) {
-    if (err instanceof IdentityError && (err.code === "mfa_factor_conflict" || err.code === "mfa_aal2_required")) { clearTx(c, container); return c.redirect(p.home, 302); }
+    if (err instanceof IdentityError && (err.code === "mfa_factor_conflict" || err.code === "mfa_aal2_required")) { clearTx(c); return c.redirect(p.home, 302); }
     return providerFailure(c, container, err);
   }
 });
@@ -250,7 +250,7 @@ mfaRoutes.post("/skip", async (c) => {
   const container = c.get("container");
   const p = paths(container);
   if (!fromThisSite(c, container.env)) return c.redirect(p.base, 302);
-  clearTx(c, container);
+  clearTx(c);
   return c.redirect(p.home, 302);
 });
 

@@ -45,7 +45,14 @@ import { API_FORM_PAGES, formPageReferrer, sameSiteChanges } from "./middleware/
 import { contextStorage } from "hono/context-storage";
 import { buildCandidateCsp, cspHeaderName, makeNonce, normalizeCspReports, recordCspReport } from "@ros/core";
 
-export function createApp(container: Container) {
+/**
+ * How long one process answers /healthz from its last database and worker check (HOST-V7). The endpoint needs no
+ * session, so a burst of anonymous requests costs one check every five seconds per process, not one each.
+ */
+export const HEALTHZ_CACHE_MS = 5_000;
+
+/** `healthCacheMs`: how long /healthz reuses its check; HEALTHZ_CACHE_MS, or 0 under NODE_ENV=test so a test sees a heartbeat it has just written. */
+export function createApp(container: Container, opts: { healthCacheMs?: number } = {}) {
   const app = new Hono<Vars>();
   app.onError(errorHandler);
   app.use("*", contextStorage());
@@ -95,22 +102,33 @@ export function createApp(container: Container) {
 
   // A stale worker's critical alert is emailed from here, after its commit: the queued email job waits for that worker.
   const workerWatch = appHealthWatch(container.db, { workerInline: container.env.WORKER_INLINE, emailCritical: (id) => container.emailCritical(id) });
-  app.get("/healthz", async (c) => {
+  const checkHealth = async () => {
     try {
       await container.db.select({ id: companies.id }).from(companies).limit(1);
       // With a separate worker (H15) the newest heartbeat says whether it is polling; `healthy` is false once it is ten minutes old.
       const worker = container.env.WORKER_INLINE ? "inline" : await readWorkerHealth(container.db, container.engine.clock()).then((w) => ({ lastSeenAt: w?.lastSeenAt ?? null, queueDepth: w?.queueDepth ?? null, healthy: !!w?.healthy }));
       // H3: the app is the process still up when the worker is not, so it raises the stale-worker and stale-queue alerts (throttled).
       await workerWatch(container.engine.clock());
-      const workerHealthy = worker === "inline" || worker.healthy;
-      // `?strict=1` is for an uptime monitor that reads only the status code: a stopped worker answers 503 there.
-      if (c.req.query("strict") === "1" && !workerHealthy) return c.json({ ok: false, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy }, 503);
-      return c.json({ ok: true, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy });
+      return { ok: true as const, worker, workerHealthy: worker === "inline" || worker.healthy };
     } catch (err) {
       // An anonymous endpoint never shows a driver error (it can name hosts, roles or a connection string); the log has it, redacted.
       console.error(`[healthz] database check failed: ${redactString(err instanceof Error ? err.message : String(err))}`);
-      return c.json({ ok: false, error: "database unavailable" }, 503);
+      return { ok: false as const };
     }
+  };
+  // HOST-V7: one check per process every `healthCacheMs`, shared by the requests in between (a failed one too) and by
+  // requests that arrive while it runs; each request still reads `?strict=1` itself.
+  const healthCacheMs = opts.healthCacheMs ?? (container.env.NODE_ENV === "test" ? 0 : HEALTHZ_CACHE_MS);
+  let lastCheck: { at: number; result: ReturnType<typeof checkHealth> } | null = null;
+  app.get("/healthz", async (c) => {
+    const now = container.engine.clock().getTime();
+    if (!lastCheck || now - lastCheck.at >= healthCacheMs || now < lastCheck.at) lastCheck = { at: now, result: checkHealth() };
+    const health = await lastCheck.result;
+    if (!health.ok) return c.json({ ok: false, error: "database unavailable" }, 503);
+    const { worker, workerHealthy } = health;
+    // `?strict=1` is for an uptime monitor that reads only the status code: a stopped worker answers 503 there.
+    if (c.req.query("strict") === "1" && !workerHealthy) return c.json({ ok: false, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy }, 503);
+    return c.json({ ok: true, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy });
   });
 
   app.route("/api/v1/auth", authRoutes);

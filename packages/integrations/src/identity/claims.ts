@@ -7,6 +7,8 @@ export function identityFromClaims(claims: Record<string, unknown>): VerifiedIde
   const amrRaw = Array.isArray(claims.amr) ? (claims.amr as Array<{ method?: string; timestamp?: number }>) : [];
   const amr = amrRaw.map((a) => ({ method: String(a.method ?? "unknown"), at: new Date(Number(a.timestamp ?? 0) * 1000).toISOString() }));
   const provider = String(appMeta.provider ?? "email");
+  // The account's first method, then every other one the service has linked to it (by email).
+  const linked = Array.isArray(appMeta.providers) ? appMeta.providers.filter((p): p is string => typeof p === "string" && p !== "" && p !== provider) : [];
   const aal = claims.aal === "aal2" ? "aal2" : "aal1";
   const totp = amr.find((a) => a.method === "totp" || a.method === "mfa/totp" || a.method === "webauthn");
   const email = String(claims.email ?? "").trim().toLowerCase();
@@ -17,6 +19,7 @@ export function identityFromClaims(claims: Record<string, unknown>): VerifiedIde
     emailVerified: userMeta.email_verified === true || claims.email_verified === true || (userMeta.email_verified === undefined && claims.email_verified === undefined && provider !== "email"),
     name: userMeta.full_name ?? userMeta.name ?? null,
     provider,
+    providers: [provider, ...new Set(linked)],
     aal,
     amr,
     mfaVerifiedAt: aal === "aal2" ? (totp?.at ?? new Date(Number(claims.iat ?? 0) * 1000).toISOString()) : null,

@@ -1,10 +1,11 @@
 import type { Context, MiddlewareHandler } from "hono";
-import { getCookie } from "hono/cookie";
 import { and, eq } from "drizzle-orm";
 import { activeStaffGrant, loadSession, recordStaffAccess, scopeAllows, type SessionContext, type StaffGrant } from "@ros/core";
 import type { MembershipRole } from "@ros/contracts";
 import { applications, interviewParticipants, interviews, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
+import { SESSION_COOKIE } from "../cookie-names";
+import { readAppCookie, type CookiePlace } from "../cookies";
 import { HttpError } from "./errors";
 
 export type StaffAccess = { grantId: string; kind: string; purpose: string; expiresAt: string; scope: { escalationId: string | null; roleId: string | null; applicationId: string | null } };
@@ -20,7 +21,13 @@ export type Vars = {
   };
 };
 
-export const SESSION_COOKIE = "ros_session";
+export { SESSION_COOKIE };
+/** The session cookie lives on Path=/, shared across the hosts COOKIE_DOMAIN names: "__Host-ros_session" over https without it (cookie-names.ts). */
+export const SESSION_PLACE: CookiePlace = { path: "/", shared: true };
+
+export function readSessionCookie(c: Context<Vars>): string | undefined {
+  return readAppCookie(c, SESSION_COOKIE, SESSION_PLACE);
+}
 
 export function isPlatformStaff(s: SessionContext | null): boolean {
   return !!s && ["platform_admin", "its_recruiter"].includes(s.user.platformRole);
@@ -38,7 +45,7 @@ function staffAccessOf(g: StaffGrant): StaffAccess {
 export function sessionMiddleware(container: Container): MiddlewareHandler<Vars> {
   return async (c, next) => {
     c.set("container", container);
-    const token = getCookie(c, SESSION_COOKIE);
+    const token = readSessionCookie(c);
     let session: SessionContext | null = null;
     if (token) session = await loadSession(container.db, token);
     c.set("session", session);

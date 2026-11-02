@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
 import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, zonedParts } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
-import type { Integrations } from "@ros/integrations";
+import { mailbox, type Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
 
 /**
@@ -295,7 +295,7 @@ export async function runInterventionLadder(q: Queryable, deps: LadderDeps, comp
 
 /** Team-facing mail goes through the outbox like everything sent from inside a transaction. */
 function teamMail(q: Queryable, deps: LadderDeps, companyId: string, input: { to: string; subject: string; text: string; idempotencyKey: string; templateKey: string; tags?: Record<string, string> }) {
-  return queueCommunication(q, deps.integrations, { channel: "email", companyId, to: input.to, from: `${deps.integrations.env.productName} <${deps.integrations.env.fromAddress}>`, subject: input.subject, text: input.text, templateKey: input.templateKey, idempotencyKey: input.idempotencyKey, tags: { template: input.templateKey, ...(input.tags ?? {}) }, actor: deps.actor }, deps.now);
+  return queueCommunication(q, deps.integrations, { channel: "email", companyId, to: input.to, from: mailbox(deps.integrations.env.productName, deps.integrations.env.fromAddress), subject: input.subject, text: input.text, templateKey: input.templateKey, idempotencyKey: input.idempotencyKey, tags: { template: input.templateKey, ...(input.tags ?? {}) }, actor: deps.actor }, deps.now);
 }
 
 async function sendIntervention(q: Queryable, deps: LadderDeps, companyId: string, d: Detection, level: LadderLevel): Promise<void> {

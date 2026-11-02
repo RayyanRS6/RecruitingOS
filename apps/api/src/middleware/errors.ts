@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import { ZodError } from "zod";
-import { INTAKE_MESSAGE_MAX } from "@ros/contracts";
+import { INTAKE_MESSAGE_MAX, withoutDatabaseValues } from "@ros/contracts";
 import { AuthError, PermissionError, SecretLeakError, SignInRefused, StaffProviderRequired, TransitionError, maskTokenPath, redact, redactString } from "@ros/core";
 import { reportError } from "../observability";
 
@@ -55,10 +55,13 @@ export function errorHandler(err: unknown, c: Context) {
     console.error("[api] refused to write a secret", err.where);
     return c.json({ error: { code: "internal", message: "Something went wrong. It has been logged." } }, 500);
   }
-  const message = redactString(err instanceof Error ? err.message : String(err));
-  console.error("[api] unhandled", redact(err));
+  // A failed query's values (drizzle's "params:" list, the key or row a constraint names) are cut before anything is
+  // answered, logged or reported (audit OPS-2); secrets go here through redact and on the way out through the reporter.
+  const safe = withoutDatabaseValues(err);
+  const message = redactString(safe instanceof Error ? safe.message : String(safe));
+  console.error("[api] unhandled", redact(safe));
   // Reported with the route only: no query string, no body, no headers (decision 3).
-  reportError(err, { process: "api", method: c.req.method, path: maskTokenPath(c.req.path) });
+  reportError(safe, { process: "api", method: c.req.method, path: maskTokenPath(c.req.path) });
   return c.json({ error: { code: "internal", message: process.env.NODE_ENV === "production" ? "Something went wrong. It has been logged." : message } }, 500);
 }
 

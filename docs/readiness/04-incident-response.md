@@ -18,7 +18,7 @@ Status: **Not started** as a practised process; written 18 September 2026. Becom
 
 ## Detection
 
-- Sentry alerts (scrubbed), Vercel, Railway and Supabase status, the worker's health check on Railway (a worker that stops polling is restarted and the app's `/healthz` shows `worker.healthy: false`), the console's Overview and Problems section (Console › Problems › Alerts for operator alerts including `worker.stale`, `queue.stale` and `job.failed`; › Failed work for credential deletions; › Email for suppressions), PostHog volume drop, a report from a design partner or candidate to `support@` or `privacy@`.
+- Sentry alerts (scrubbed), Vercel, Railway and Supabase status, the uptime monitor on the app's `/healthz?strict=1` (Railway reads the worker's own health check only while a deployment goes live; a worker that stops finishing anything exits after `WORKER_STALL_EXIT_MS`, 15 minutes, and the restart policy, Always, starts it again; only the app's `/healthz` notices a stopped worker, showing `worker.healthy: false` and raising `worker.stale`), the console's Overview and Problems section (Console › Problems › Alerts for operator alerts including `worker.stale`, `queue.stale` and `job.failed`; › Failed work for credential deletions; › Email for suppressions), PostHog volume drop, a report from a design partner or candidate to `support@` or `privacy@`.
 
 ## Steps
 

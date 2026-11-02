@@ -54,6 +54,11 @@ export class SupabaseIdentityProvider implements IdentityProvider {
     this.jwksCache = { at: Date.now(), keys };
     return keys;
   }
+  /**
+   * The token itself: signature, issuer, audience, expiry. Which provider may open a session (AUTH_SIGNIN_PROVIDERS) and
+   * which one this sign-in used are the sign-in policy's to decide (packages/core identityForSignIn), so those refusals
+   * are audited like every other.
+   */
   async verify(accessToken: string): Promise<VerifiedIdentity> {
     const claims = await verifyJwt(accessToken, { issuer: this.issuer, audience: "authenticated", hs256Secret: this.cfg.jwtSecret, jwks: () => this.jwks() });
     return identityFromClaims(claims);
