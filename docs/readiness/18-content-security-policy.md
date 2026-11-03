@@ -101,6 +101,16 @@ Left, both in development only (disposition *expected in development only*):
 
 Candidate pages, the job-page preview, the second-factor page after the fix, and the framed résumé reported nothing.
 
+## Found on production (smoke test, 4 November 2026)
+
+A production build reported `script-src` with blocked origin `eval`, source the site itself, about once per page load on
+the application's pages. `next dev` allows `unsafe-eval`, so the rehearsal above could not see it. The source is zod: it
+tries `new Function("")` when the first object schema is built, to see whether it may compile its parsers, and catches
+the refusal, but the browser reports the try. The browser now sets zod's `jitless` first
+(`packages/contracts/src/zod-browser.ts`, loaded first by `apps/shell/instrumentation-client.ts`;
+`packages/contracts/src/zod-browser.test.ts`); the server is unchanged. A report of this kind after that release is new
+and needs a look.
+
 ## Tests
 
 - `apps/api/src/csp.test.ts`: every candidate page receives the policy; one nonce per request on the style and the

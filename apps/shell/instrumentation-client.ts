@@ -1,3 +1,5 @@
+// First, before anything that builds a zod schema: this file runs before the rest of the browser's code, and imports run in order.
+import "@ros/contracts/zod-browser";
 import * as Sentry from "@sentry/nextjs";
 import { scrubObservabilityEvent } from "@ros/contracts";
 
