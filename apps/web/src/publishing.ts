@@ -142,6 +142,11 @@ export function boardTicksToast(input: { before: readonly string[]; after: reado
   return { title, detail: parts.join(" ") || undefined };
 }
 
+/** The boards ticked on the screen when they are not what is saved (in any order), or null when they are. */
+export function unsavedBoards(chosen: readonly string[], picked: readonly string[]): string[] | null {
+  return picked.length !== chosen.length || picked.some((c) => !chosen.includes(c)) ? [...picked] : null;
+}
+
 /** The line under the list when no board was ticked for the job, or null. */
 export function noBoardsLine(boards: readonly BoardChoiceView[]): string | null {
   if (boards.some((b) => b.chosen)) return null;

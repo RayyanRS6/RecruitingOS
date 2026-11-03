@@ -9,7 +9,7 @@ import {
   aboutDraftOf, aboutProblem, addDays, autoActionsLine, boardStatus, boardTicksToast, careersStatus, closingDateLine, closingDateProblem, closingDateRequiredFor,
   closingDateToast, dayWords, destinationsOf, draftClosingDateKey, googleStatus, interviewersNote, isClosingDateAction, isLegalReason, isPostingTaskKind, legalLines,
   liveEditWords, logoProblem, logoUrlOf, materialChangesOf, noBoardsLine, opensOwnApp, outdatedBoardsLine, pollInterval, previewHref, previewOfEdit, previewPageHref, queueKindLabel,
-  readDraftClosingDate, savedVersionToast, shareSubject, shareTargetsFor, shareTextFor, todayIn, writeDraftClosingDate,
+  readDraftClosingDate, savedVersionToast, shareSubject, shareTargetsFor, shareTextFor, todayIn, unsavedBoards, writeDraftClosingDate,
 } from "../../apps/web/src/publishing";
 
 /**
@@ -332,6 +332,28 @@ describe("board ticks and ITS posting tasks (D6, D3)", () => {
     expect(boardTicksToast({ before: ["indeed"], after: ["indeed", "linkedin_basic"], roleStatus: "open", whoPosts: "its" })).toEqual({ title: "Boards saved: Indeed, LinkedIn.", detail: "ITS posts the job on LinkedIn from your company's account." });
     expect(boardTicksToast({ before: ["indeed"], after: [], roleStatus: "open", whoPosts: "self" })).toEqual({ title: "No job boards for this job.", detail: "Indeed closed; take the listing down from your own account if it was up." });
     expect(boardTicksToast({ before: [], after: ["indeed"], roleStatus: "pending_approval", whoPosts: "its" }).detail).toMatch(/^Nothing is posted until the job is approved/);
+  });
+
+  // The live smoke test of 4 Nov 2026: Indeed unticked on the approval card, "Approve and publish" pressed without "Save
+  // the boards", and the job still went to Indeed. What is ticked on the card is what is approved.
+  it("knows when the ticks on the card are not saved, whatever the order they were ticked in", () => {
+    expect(unsavedBoards(["linkedin_basic", "indeed"], ["indeed", "linkedin_basic"])).toBeNull();
+    expect(unsavedBoards(["indeed"], [])).toEqual([]);
+    expect(unsavedBoards(["indeed"], ["indeed", "linkedin_basic"])).toEqual(["indeed", "linkedin_basic"]);
+    expect(unsavedBoards([], ["indeed"])).toEqual(["indeed"]);
+    expect(unsavedBoards(["indeed"], ["linkedin_basic"])).toEqual(["linkedin_basic"]);
+  });
+
+  it("the approval saves the boards ticked on the card first, and the card's sentence names what is ticked", () => {
+    const plan = read("../../apps/web/src/pages/RolePlan.tsx");
+    const saved = plan.indexOf("await api.post(`/api/v1/roles/${role.id}/channels`, { channels: unsaved });");
+    expect(saved).toBeGreaterThan(-1);
+    expect(plan.indexOf("api.post(`/api/v1/roles/${role.id}/approve`")).toBeGreaterThan(saved);
+    expect(plan).toContain("<WhereItGoes role={role} canManage={canManage} unsaved={unsaved} onUnsaved={setUnsaved} />");
+    expect(plan).toContain("role.boards.filter((b) => (unsaved ? unsaved.includes(b.channel) : b.chosen))");
+    const ticks = read("../../apps/web/src/components/BoardTicks.tsx");
+    expect(ticks).toContain("props.onUnsaved?.(unsavedBoards(chosen, next));");
+    expect(ticks).toContain("props.onUnsaved?.(null);");
   });
 
   it("names the posting tasks in the queue in words", () => {

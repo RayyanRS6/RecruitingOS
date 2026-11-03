@@ -135,8 +135,18 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
   const [note, setNote] = useState("");
   // Until ITS confirms the company (founder decision B7) an approved role waits to go public; the toast says so.
   const check = useCompanyCheck();
+  // Boards ticked on this card and not saved: approving goes by what is on the screen, so they are saved first (the live
+  // smoke test of 4 Nov 2026 unticked Indeed, approved without "Save the boards", and the job still went to Indeed).
+  const [unsaved, setUnsaved] = useState<string[] | null>(null);
   const approve = useMutation({
-    mutationFn: (_editWhileOpen: boolean) => api.post(`/api/v1/roles/${role.id}/approve`, { version: pending!.version }),
+    mutationFn: async (_editWhileOpen: boolean) => {
+      if (unsaved) {
+        await api.post(`/api/v1/roles/${role.id}/channels`, { channels: unsaved });
+        setUnsaved(null);
+        await qc.invalidateQueries({ queryKey: ["role", role.id] });
+      }
+      return api.post(`/api/v1/roles/${role.id}/approve`, { version: pending!.version });
+    },
     onSuccess: async (_r, editWhileOpen) => { toast(approvedToast({ editWhileOpen: !!pending?.editWhileOpen, check })); onApproved({ editWhileOpen }); await refresh(); },
     // A refusal by the legal check (D5) names what is missing; the card lists it once the role is read again.
     onError: async (e) => { toast(e instanceof ApiError ? e.message : "Could not approve."); if (e instanceof ApiError && e.code === "legal_check") await refresh(); },
@@ -202,7 +212,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
             <a className="btn secondary sm" href={previewHref(role.id, pending.version)} target="_blank" rel="noopener noreferrer" title={`Version ${pending.version} exactly as candidates will see it. The preview is not public and search engines never see it.`}><Icon name="eye" />Preview the job page<span className="sr-only"> (opens in a new tab)</span></a>
           </div>
         ) : null}
-        {!pending.editWhileOpen ? <WhereItGoes role={role} canManage={canManage} /> : null}
+        {!pending.editWhileOpen ? <WhereItGoes role={role} canManage={canManage} unsaved={unsaved} onUnsaved={setUnsaved} /> : null}
         {musts.length || nices.length ? (
           // The job page lists them (plan D10), so the approver sees them as candidates will; the eye says so, and the
           // lock says why each one matters stays with the team (both words are the marks' names and tooltips).
@@ -272,11 +282,12 @@ export function CatchingUpCard({ latest, sentBackHere }: { latest: RoleDetail["p
 
 /**
  * Where the job goes once approved (plan D6): the careers page, Google and the ticked boards, and who posts on the
- * boards. Those who manage postings change the ticks here, before approving; they can change them after too.
+ * boards. Those who manage postings change the ticks here, before approving; they can change them after too. The line
+ * names what is ticked (`unsaved`), saved or not: approving saves it.
  */
-function WhereItGoes({ role, canManage }: { role: RoleDetail; canManage: boolean }) {
+function WhereItGoes({ role, canManage, unsaved, onUnsaved }: { role: RoleDetail; canManage: boolean; unsaved: string[] | null; onUnsaved: (channels: string[] | null) => void }) {
   const [changing, setChanging] = useState(false);
-  const boards = role.boards.filter((b) => b.chosen).map((b) => b.name);
+  const boards = role.boards.filter((b) => (unsaved ? unsaved.includes(b.channel) : b.chosen)).map((b) => b.name);
   const places = wordsList(["your careers page", "Google", ...boards]);
   return (
     <div className="stack gap-1.5">
@@ -284,7 +295,7 @@ function WhereItGoes({ role, canManage }: { role: RoleDetail; canManage: boolean
         Once approved it goes to {places}. {boards.length ? (role.whoPosts === "its" ? "ITS posts it on the job boards from your company's own accounts." : "You post it on the job boards from your own accounts.") : ""}
         {canManage && !changing ? <> <button type="button" className="link-btn" onClick={() => setChanging(true)}>Change the boards</button></> : null}
       </p>
-      {changing ? <BoardTicks roleId={role.id} boards={role.boards} roleStatus={role.status} whoPosts={role.whoPosts} canManage={canManage} onDone={() => setChanging(false)} /> : null}
+      {changing ? <BoardTicks roleId={role.id} boards={role.boards} roleStatus={role.status} whoPosts={role.whoPosts} canManage={canManage} onDone={() => setChanging(false)} onUnsaved={onUnsaved} /> : null}
     </div>
   );
 }

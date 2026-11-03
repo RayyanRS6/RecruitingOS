@@ -81,6 +81,38 @@ test("approve a role, see where it is going, share it and give it a closing date
   await expectAccessible(page, "empty applicant list with sharing");
 });
 
+// The live smoke test of 4 Nov 2026: Indeed unticked, "Approve and publish" pressed without "Save the boards", and the job
+// still went to Indeed. What is ticked on the card is what is approved.
+test("a board unticked on the approval card is left out, without pressing Save the boards", async ({ page, baseURL }) => {
+  test.setTimeout(180_000);
+  await signIn(page, { email: `boards+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
+  await createCompanyThroughTheForm(page, `Brightline Boards ${run}`);
+  const s = await (await page.request.post(`${baseURL}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json() as { session: { id: string } };
+  const { roleId } = await (await page.request.post(`${baseURL}/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string };
+
+  await page.goto(`/roles/${roleId}`);
+  const card = page.locator(".card", { has: page.getByRole("heading", { name: "Approve this job" }) });
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(card.getByText(/Once approved it goes to your careers page, Google and Indeed\./)).toBeVisible();
+  await card.getByRole("button", { name: "Change the boards" }).click();
+  await card.getByRole("checkbox", { name: /Indeed/ }).uncheck();
+  // the line says what is ticked now, saved or not
+  await expect(card.getByText(/Once approved it goes to your careers page and Google\./)).toBeVisible();
+
+  await card.getByRole("button", { name: "Approve and publish" }).click();
+  const done = page.getByRole("dialog", { name: "Your job is approved" });
+  await expect(done).toBeVisible({ timeout: 30_000 });
+  const where = done.getByRole("region", { name: "Where it is going" });
+  await expect(where.getByText("Your careers page", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(where.getByText("Indeed", { exact: true })).toHaveCount(0);
+  await expect(where.getByText(/No job boards were chosen for this job/)).toBeVisible();
+  await done.getByRole("button", { name: "Go to your role" }).click();
+
+  // and the Share tab agrees
+  await page.goto(`/roles/${roleId}?tab=posting`);
+  await expect(page.getByRole("checkbox", { name: /Indeed/ })).not.toBeChecked({ timeout: 30_000 });
+});
+
 test("Setup: the logo and the 'about the company' text, and who posts on the job boards", async ({ page }) => {
   test.setTimeout(180_000);
   await signIn(page, { email: `profile+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
