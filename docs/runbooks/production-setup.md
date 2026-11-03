@@ -197,7 +197,8 @@ ITS mailboxes (Microsoft 365), each read by a named person every business day:
 - `<reply mailbox>`: candidate replies, and the help and accommodation contact printed on job pages (`EMAIL_REPLY_TO`).
 - `<queue mailbox>`: recruiter requests and administrator changes (`ITS_QUEUE_EMAIL`; the reply mailbox may do both).
 - `privacy@identifiedtalent.com`: shown to every candidate (`PRIVACY_EMAIL`).
-- `<test mailbox>`: the smoke tests (step 8), with plus addressing (`name+1029a@…`) if the mail system accepts it.
+- `<test mailbox>`: the smoke tests (step 8). A plus tag (`name+1029a@…`) reaches the same mailbox, but the app counts it
+  as the same person (step 8).
 
 If Proofpoint holds mail from `hire.identifiedtalent.com`, allow it. Email-in (`apply.`) stays off at launch ("Not at
 launch" below).
@@ -420,8 +421,15 @@ Test data in production follows these rules:
   plan**: Design Partner, reason "ITS test company", so no trial clock pauses its applications after 30 days.
 - One role in it, **TEST - not a real job**, approved; nothing else.
 - Between checks the company stays unconfirmed: its pages, feeds and candidate emails are off.
-- Candidates use `<test mailbox>` with a new plus tag for each check, never `example.com` or a made-up domain: real
-  email bounces, and a bounce puts the address on the do-not-send list.
+- Candidates use `<test mailbox>`, never `example.com` or a made-up domain: real email bounces, and a bounce puts the
+  address on the do-not-send list.
+- A plus tag does not make a new person: the app ignores it when it matches applicants, so `name+2@…` is `name@…`. A
+  second application under the same mailbox name shows nothing new on the team's list, and its interview is held aside
+  until that address confirms by email. A check that must show a new applicant needs a mailbox name not used before in
+  the test company.
+- Until email is live, an address at `blackhole.postmarkapp.com` stands in, so no real mailbox is involved, and its
+  emails show **Could not be delivered** on the applicant's **Messages** tab. Once email is live, check step 4 again with
+  `<test mailbox>`.
 - Test applicants stay. Deleting one goes through a privacy request that needs counsel's approval, so that path is never
   used for test data; leave the test company out of totals by hand in reviews.
 
@@ -434,19 +442,24 @@ The check:
    step says "Recruiting OS is by invitation for now" with the reply mailbox.
 3. **Console, Customers**, the test company: **Confirm the company**, reason "smoke test". From the second check on,
    also the role's **More** menu, **Accept applications again**.
-4. In a private window, the role's job page (its **Share** tab has the link): apply as "Test Candidate <date>" with
-   `<test mailbox>` plus a new tag and a made-up PDF résumé. The acknowledgment arrives in the test mailbox from
-   `updates@hire.identifiedtalent.com`, and its message details show `dkim=pass` and `dmarc=pass`. The AI interview
-   invitation follows.
-5. As the owner: the résumé goes from quarantine to clean and opens; **Settings**, **Audit history** shows the read.
-6. A second made-up applicant with the EICAR test file: the file is refused as infected and the application goes on
-   without it. Build the file inside the browser page: saved to disk, Windows Defender removes it.
+4. In a private window, the role's job page (its **Share** tab has the link): apply as "Test Candidate <date>" with a
+   made-up PDF résumé. The AI interview opens by itself about a minute after sending. The one email (thank you, and the
+   link to the interview) arrives in the test mailbox from `updates@hire.identifiedtalent.com`, and its message details
+   show `dkim=pass` and `dmarc=pass`.
+5. As the owner: the résumé opens on the applicant's **Résumé** tab. **Settings**, **Audit history** says the candidate's
+   record was opened; it lists records, not each file. The file itself is `document.read` in the database's
+   `audit_records`, with `document.uploaded` before it.
+6. A second made-up applicant with the EICAR test file, at **Read my resume**: the page says "We could not use <file>"
+   and offers another file or the four short questions. The proof that the real scanner refused it is
+   `Eicar-Test-Signature FOUND` in Railway, the clamav service, **Deploy Logs**. The application goes on without a file
+   through the four questions. Build the file inside the browser page: saved to disk, Windows Defender removes it.
 7. Postmark, the webhook, **Send test**: the app answers 200.
 8. Optional: invite the test candidate to an interview and pick a time from the email; the confirmation carries a
    calendar file.
 9. Right afterwards: the role's **More** menu, **Stop accepting applications**; **Console, Customers**, the test
    company, **Take back the confirmation**, reason "smoke test done". Feeds may list the role for up to 5 more minutes.
-10. Write the result, without addresses, as a comment on the release pull request.
+10. Write the result, without addresses, in the private launch to-do document, not on a pull request: the repository is
+    public.
 
 ## 9. Uptime monitor
 
