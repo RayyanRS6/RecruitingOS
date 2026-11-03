@@ -26,7 +26,7 @@ import { quickStartDraftKey } from "./quick-start";
 import { RoomAlert } from "./StartView";
 import {
   NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersPayload, approvalHelp, askFromDetails, cardsKey, cardsToShow, changedSections, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
-  draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, turnProblem,
+  draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, turnProblem, typedWithCards,
   type CardState, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
 } from "./rules";
 import { CHANGE_REQUEST_MAX, asksBack, checkSignature, proposalSections, refinePaths } from "./refine-api";
@@ -128,13 +128,14 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     onSettled: () => { setPending(null); setThinking(null); },
   });
   const answer = useMutation({
-    mutationFn: (input: { answers: IntakeAnswer[]; echo: string }) => api.post<IntakeTurnResponse>(`${base}/answers`, { answers: input.answers }),
-    onMutate: (input) => { setPending({ key: "pending", role: "owner", content: input.echo, kind: "answers" }); setThinking("Thinking about your answers…"); setProblem(null); },
+    mutationFn: (input: { answers: IntakeAnswer[]; echo: string; note?: string }) => api.post<IntakeTurnResponse>(`${base}/answers`, { answers: input.answers, ...(input.note ? { note: input.note } : {}) }),
+    onMutate: (input) => { setPending({ key: "pending", role: "owner", content: input.echo, kind: "answers" }); setThinking("Thinking about your answers…"); setProblem(null); if (input.note) setText(""); },
     onSuccess: (r) => {
       afterTurn(r);
       if (r.refused?.length) toast("Some words were not used.", "The reason is in the conversation.");
     },
-    onError: (err) => {
+    onError: (err, input) => {
+      if (input.note) setText(input.note);
       failed(err);
       // A card answered after newer ones arrived: show the newer ones.
       if (err instanceof ApiError && err.code === "unknown_question") qc.invalidateQueries({ queryKey: key });
@@ -350,7 +351,12 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const help = approvalHelp(view.readiness);
   // Once the draft is written, words typed in the box ask for a change to it; before that they go to the conversation.
   const asks = !!hasDraft;
-  const submitText = (t: string) => (asks ? revise.mutate(t) : send.mutate(t));
+  // What is already answered on the cards goes with typed words (the reply's new cards would start the deck afresh).
+  const submitText = (t: string) => {
+    if (asks) return revise.mutate(t);
+    const withCards = typedWithCards(cards, live.state, t);
+    return withCards ? answer.mutate(withCards) : send.mutate(t);
+  };
   const sendCards = () => { handOff.current = { from: deckKey }; answer.mutate({ answers: answersPayload(cards, live.state), echo: echoText(cards, live.state) }); };
   const showInDraft = (ids: SectionId[]) => {
     setPane("secondary");
@@ -419,8 +425,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       value={text}
       onChange={setText}
       onSend={submitText}
-      sending={send.isPending || revise.isPending}
-      disabled={busy && !send.isPending && !revise.isPending}
+      sending={send.isPending || revise.isPending || answer.isPending}
+      disabled={busy && !send.isPending && !revise.isPending && !answer.isPending}
       label={asks ? "Ask for a change to the draft" : "Message to the assistant"}
       placeholder={composerPlaceholder({ started: true, hasDraft: asks })}
       // what to do next, in the server's words, only while the draft cannot be written yet ("Answer the question cards

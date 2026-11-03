@@ -215,6 +215,17 @@ export function echoText(questions: readonly IntakeQuestion[], state: CardState)
   return lines.length ? lines.join("\n") : "Skipped those questions.";
 }
 
+/**
+ * Words typed in the message box while cards are open ("Or type your own answer…"): what is already answered on a card
+ * goes with them, or it would be lost when the reply brings new cards (the live smoke test of 4 Nov 2026 lost "Why you
+ * are hiring" that way). Only the cards answered: one left alone is not skipped. Null when no card has an answer, so the
+ * words go as a plain message.
+ */
+export function typedWithCards(questions: readonly IntakeQuestion[], state: CardState, note: string): { answers: IntakeAnswer[]; note: string; echo: string } | null {
+  const answered = questions.filter((q) => isAnswered(q, answerOf(state, q)));
+  return answered.length ? { answers: answersPayload(answered, state), note, echo: `${echoText(answered, state)}\n${note}` } : null;
+}
+
 /** The cards worth showing: a pay card is dropped once a person has set or confirmed the pay elsewhere (the draft's pay card). */
 export function cardsToShow(view: Pick<IntakeSessionView, "questions" | "pay" | "status">): IntakeQuestion[] {
   if (view.status !== "active") return [];

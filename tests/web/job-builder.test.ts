@@ -9,7 +9,7 @@ import {
   NEW_ROLE_FRESH_HREF, SOMEONE_NEW, addOwn, answerOf, answerPayload, answersPayload, approvalHelp, askFromDetails, basicsChips, cardsKey, cardsToShow, changedSections,
   composerPlaceholder, deckFor, draftOutOfDate, draftRecruiterAsk, draftSections, draftSteps, draftTitle, draftingNow, echoText, enterSends, errorWords, goTo, initialCards, isDiscardDraft,
   marketRange, marketSource, mayHireAgain, mayTakeOverDrafts, messageLimit, messageProblem, nextLabel, parseAmount, payFormFrom, payPayload, payProblem, pickHint, readinessList,
-  redraftWarning, removeOwn, sectionOfPath, setDraft, setPayForm, startHireHref, togglePick, turnProblem, DRAFT_SEEN_BY, TAKEN_OVER_TOAST, type CardState,
+  redraftWarning, removeOwn, sectionOfPath, setDraft, setPayForm, startHireHref, togglePick, turnProblem, typedWithCards, DRAFT_SEEN_BY, TAKEN_OVER_TOAST, type CardState,
 } from "../../apps/web/src/pages/new-role/rules";
 import { factsFormFrom, factsPatch } from "../../apps/web/src/pages/new-role/facts-form";
 import { GUIDE_OF_VERTICAL, QUICK_STARTS, quickStartsFor } from "../../apps/web/src/pages/new-role/quick-starts";
@@ -131,6 +131,33 @@ describe("question cards", () => {
     const fresh = deckFor(deck, [{ ...must, id: "q2_1" }]);
     expect(fresh).toEqual({ key: "q2_1", state: initialCards(), closed: false });
     expect(deckFor({ key: "", state: initialCards(), closed: false }, [reason])).toEqual({ key: cardsKey([reason]), state: initialCards(), closed: false });
+  });
+
+  // The live smoke test of 4 Nov 2026: "Why you are hiring" picked on the first card, then "Or type your own answer…" for
+  // the second, and the pick never reached the server: the reply's new cards started the deck afresh.
+  it("words typed in the message box take what is already answered on the cards with them, and leave the other cards alone", () => {
+    let s = togglePick(initialCards(), reason, "replacement");
+    expect(typedWithCards([reason, must], s, "Dana interviews and decides.")).toEqual({
+      answers: [{ questionId: "q1_1", selected: ["replacement"], own: [], skipped: false }],
+      note: "Dana interviews and decides.",
+      echo: "Why you are hiring: Replacing someone who left\nDana interviews and decides.",
+    });
+    // words still in a card's box are an answer too, and pay once it can be set
+    s = setPayForm(setDraft(s, must, "Local anesthesia permit"), pay, { basis: "hourly", min: "45", max: "55", ceiling: "" });
+    const sent = typedWithCards([reason, must, pay], s, "Start soon.")!;
+    expect(sent.answers.map((a) => a.questionId)).toEqual(["q1_1", "q1_2", "q2_2"]);
+    expect(sent.echo).toBe("Why you are hiring: Replacing someone who left\nMust-haves: Local anesthesia permit\nPay: $45–$55 an hour\nStart soon.");
+    for (const a of sent.answers) expect(IntakeAnswer.parse(a)).toEqual(a);
+    // nothing on any card: a plain message
+    expect(typedWithCards([reason, must], initialCards(), "Dana decides.")).toBeNull();
+    expect(typedWithCards([], s, "Dana decides.")).toBeNull();
+    // a pay card with figures that cannot be set yet is no answer
+    expect(typedWithCards([pay], setPayForm(initialCards(), pay, { basis: "hourly", min: "45", max: "", ceiling: "" }), "Dana decides.")).toBeNull();
+    // and the message box sends them that way, with the words back in the box if it fails
+    const builder = readFileSync(new URL("../../apps/web/src/pages/new-role/Builder.tsx", import.meta.url), "utf8");
+    expect(builder).toContain("const withCards = typedWithCards(cards, live.state, t);");
+    expect(builder).toContain("return withCards ? answer.mutate(withCards) : send.mutate(t);");
+    expect(builder).toContain("if (input.note) setText(input.note);");
   });
 });
 

@@ -162,6 +162,28 @@ describe("the job builder API", () => {
     expect((await read<{ error: { code: string } }>(stale)).error.code).toBe("unknown_question");
   });
 
+  // The live smoke test of 4 Nov 2026: a pick on one card, words typed for the next, and the pick was lost.
+  it("words typed beside the cards go in with what was answered on them, in that order, and the card left alone is not skipped", async () => {
+    const started = await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine." }));
+    const id = started.session.id;
+    const card = started.session.questions.find((q) => q.field === "reason_for_hire" && q.options.some((o) => o.value === "replacement"));
+    expect(card).toBeTruthy();
+    const others = started.session.questions.filter((q) => q.id !== card!.id);
+    const r = await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { answers: [{ questionId: card!.id, selected: ["replacement"] }], note: "Dana Owner interviews and decides." });
+    expect(r.status).toBe(200);
+    const body = await read<{ session: IntakeSessionView; reply: Reply | null }>(r);
+    expect(body.session.facts.reason).toBe("replacement");
+    const owners = body.session.messages.filter((m) => m.role === "owner");
+    expect(owners.slice(-2).map((m) => [m.kind, m.content])).toEqual([["answers", "Why you are hiring: Replacing someone who left"], ["text", "Dana Owner interviews and decides."]]);
+    // the assistant takes its turn, as after a typed message
+    expect(body.reply?.assistantMessage).toBeTruthy();
+    expect(body.session.messages[body.session.messages.length - 1]?.role).toBe("assistant");
+    // the card left alone was not answered or skipped
+    expect(others.length).toBeGreaterThan(0);
+    const answered = await container.db.select().from(events).where(and(eq(events.type, "intake.answered"), eq(events.subjectId, id)));
+    expect(answered.map((e) => (e.payload as { questionIds: string[] }).questionIds)).toEqual([[card!.id]]);
+  });
+
   it("nothing is asked twice: a card answered or skipped, a fact set on the panel, or what the owner already said never comes back (staging, 20 Oct 2026)", async () => {
     const fieldOf = (q: IntakeQuestion) => (q.mode === "pay" ? "compensation" : q.field);
     const started = await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine." }));
