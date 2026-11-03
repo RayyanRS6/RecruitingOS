@@ -825,6 +825,94 @@ describe("the Kanvis-style chat", () => {
     expect(flat.turn.messageToCandidate).toBe(`You said you built a pump.\n\n${CHAT_LADDER_QUESTION.push}`);
   });
 
+  /**
+   * The live smoke test of 4 Nov 2026: two questions lost their first sentence, because "Tell us…" and "Give an
+   * example…" did not read as asking, so a candidate was shown only "What did you do, and how did it turn out?" after a
+   * restatement of something else, and answered the wrong thing.
+   */
+  describe("a question of two sentences keeps its first one (live smoke test, 4 Nov 2026)", () => {
+    const HELP = "Tell us about a time you helped someone who was frustrated or confused. What did you do and how did it turn out?";
+    const MISTAKE = "Give an example of a time you made a mistake at work. What did you do about it?";
+    const live = { ...role, companyQuestions: { quick: [], written: [{ key: "wq_track", question: "Describe how you keep track of tasks and deadlines when several things need attention at once.", required: true }, { key: "wq_help", question: HELP, required: true }, { key: "wq_mistake", question: MISTAKE, required: true, lookFor: "owns the mistake and says what changed afterwards" }] } } as unknown as RolePacket;
+    const startLive = () => withChatPlan(live, { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit" }, { channel: "web", gaps: [], at });
+    /** What the candidate is shown when the model moves on to `to` from the question before it. */
+    const moveTo = (to: "wq_help" | "wq_mistake", messageToCandidate: string) => {
+      const from = to === "wq_help" ? "wq_track" : "wq_help";
+      const p = askingNow(startLive(), from, to === "wq_help" ? ["wq_track"] : ["wq_track", "wq_help"]);
+      return enforceChatTurn(turnOf({ reading: "concrete", questionKey: to, messageToCandidate }), chatPacket(live, p), p, {}, { transcript: said("Q", "I keep one shared task list and a calendar."), latest: "I keep one shared task list and a calendar." }).turn.messageToCandidate;
+    };
+    const TASKS = "You keep one shared task list and a calendar, check them each morning, and move urgent items to the top.";
+    const VISITOR = "You helped a visitor with a missed appointment by listening, apologizing, and getting them a new time that same week.";
+
+    it("says the model's whole question, with or without the blank line before it", () => {
+      expect(moveTo("wq_help", `${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What did you do, and how did it turn out?`)).toBe(`${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What did you do, and how did it turn out?`);
+      expect(moveTo("wq_help", `${TASKS} Tell us about a time you helped someone who was frustrated or confused. What did you do, and how did it turn out?`)).toBe(`${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What did you do, and how did it turn out?`);
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nGive an example of a time you made a mistake at work. What happened, and what did you do about it?`)).toBe(`${VISITOR}\n\nGive an example of a time you made a mistake at work. What happened, and what did you do about it?`);
+      expect(moveTo("wq_mistake", `${VISITOR} Give an example of a time you made a mistake at work. What happened, and what did you do about it?`)).toBe(`${VISITOR}\n\nGive an example of a time you made a mistake at work. What happened, and what did you do about it?`);
+      // the other ways of asking, and a request said on its own
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nThink of a time you made a mistake at work. What did you do about it?`)).toBe(`${VISITOR}\n\nThink of a time you made a mistake at work. What did you do about it?`);
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nNow, walk us through a mistake you made at work.`)).toBe(`${VISITOR}\n\nNow, walk us through a mistake you made at work.`);
+    });
+
+    it("keeps a scenario set before the question, and the words of a question of the job's own", () => {
+      const p = askingNow(start([]), "wq_explain", ["wq_explain"]);
+      const shown = (messageToCandidate: string) => enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_room", messageToCandidate }), chatPacket(role, p), p, {}, { transcript: said("Q", "Like a thirsty finger that feels the water"), latest: "Like a thirsty finger that feels the water" }).turn.messageToCandidate;
+      const LEAD = "You explained it as a thirsty finger.";
+      expect(shown(`${LEAD}\n\nSeveral kits fail at once in a class of twenty. How do you handle the room?`)).toBe(`${LEAD}\n\nSeveral kits fail at once in a class of twenty. How do you handle the room?`);
+      expect(shown(`${LEAD} Several kits fail at once in a class of twenty. How do you handle the room?`)).toBe(`${LEAD}\n\nSeveral kits fail at once in a class of twenty. How do you handle the room?`);
+      expect(shown(`${LEAD}\n\nPicture a class of twenty where several kits stop working. How do you handle the room?`)).toBe(`${LEAD}\n\nPicture a class of twenty where several kits stop working. How do you handle the room?`);
+      // the question a gap asks, as the model is free to write it
+      const g = askingNow(start(["arduino", "english"]), "arduino", ["arduino"]);
+      const gap = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "english", messageToCandidate: `You built a water pump.\n\n${gapQuestion("Explaining technical ideas in English")}` }), chatPacket(role, g), g, {}, { transcript: said("Q", "I built a water pump with an Arduino at CUST"), latest: "I built a water pump with an Arduino at CUST" });
+      expect(gap.turn.messageToCandidate).toBe(`You built a water pump.\n\n${gapQuestion("Explaining technical ideas in English")}`);
+    });
+
+    it("asks in the job's words when what the model wrote is only the end of the question: a new question is never asked without its first sentence", () => {
+      expect(moveTo("wq_help", `${TASKS}\n\nWhat did you do, and how did it turn out?`)).toBe(`${TASKS}\n\n${HELP}`);
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nWhat happened, and what did you do about it?`)).toBe(`${VISITOR}\n\n${MISTAKE}`);
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nHow did you handle it?`)).toBe(`${VISITOR}\n\n${MISTAKE}`);
+      const p = askingNow(start([]), "wq_explain", ["wq_explain"]);
+      const room = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_room", messageToCandidate: "You explained it as a thirsty finger.\n\nHow do you handle the room?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "Like a thirsty finger"), latest: "Like a thirsty finger" });
+      expect(room.turn.messageToCandidate).toBe("You explained it as a thirsty finger.\n\nSeveral kits fail at once in a class of twenty. How do you handle the room?");
+      const g = askingNow(start(["arduino", "english"]), "arduino", ["arduino"]);
+      const gap = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "english", messageToCandidate: "You built a water pump.\n\nWhat can you tell me about it from your own work?" }), chatPacket(role, g), g, {}, { transcript: said("Q", "I built a water pump with an Arduino at CUST"), latest: "I built a water pump with an Arduino at CUST" });
+      expect(gap.turn.messageToCandidate).toBe(`You built a water pump.\n\n${gapQuestion("Explaining technical ideas in English")}`);
+    });
+
+    it("leaves alone a question that stands by itself, a short check on what they said, and a follow-up on the same question", () => {
+      // the model's own words for the question, in one sentence
+      expect(moveTo("wq_help", `${TASKS}\n\nCan you tell me about a time you helped someone who was upset, and what you did?`)).toBe(`${TASKS}\n\nCan you tell me about a time you helped someone who was upset, and what you did?`);
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nWhich tool did you use to book the new time?`)).toBe(`${VISITOR}\n\nWhich tool did you use to book the new time?`);
+      // the item was already answered: the restatement names it and the question is one short check (screen.turn v8), never the item's question again
+      expect(moveTo("wq_mistake", "You said you made a mistake with the vendor's order.\n\nWhat did you do next?")).toBe("You said you made a mistake with the vendor's order.\n\nWhat did you do next?");
+      // staying on a question: what came of it is the push, and the question it follows is already on the screen
+      const p = askingNow(startLive(), "wq_help", ["wq_track", "wq_help"]);
+      const push = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "nothing specific yet", messageToCandidate: "You helped a visitor.\n\nWhat did you do, and how did it turn out?" }), chatPacket(live, p), p, {}, { transcript: said(HELP, "I helped a visitor."), latest: "I helped a visitor." });
+      expect(push.turn.messageToCandidate).toBe("You helped a visitor.\n\nWhat did you do, and how did it turn out?");
+    });
+
+    it("still says one restatement and one question: a second question is cut, and what does not belong to the question is left out", () => {
+      // a question that has nothing to do with the request before it
+      expect(moveTo("wq_help", `${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What pay are you looking for?`)).toBe(`${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused.`);
+      expect(moveTo("wq_help", `${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. And which days can you work?`)).toBe(`${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused.`);
+      // two questions after the request
+      expect(moveTo("wq_help", `${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What did you do? And what pay are you looking for?`)).toBe(`${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What did you do?`);
+      // a second restatement in one breath with the question is still left out
+      expect(moveTo("wq_help", `${TASKS} You also check your email first. Tell us about a time you helped someone who was frustrated or confused. What did you do and how did it turn out?`)).toBe(`${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What did you do and how did it turn out?`);
+      // a guess or praise in the question's own paragraph never reaches the candidate
+      expect(moveTo("wq_help", `${TASKS}\n\nIt sounds like you stay calm. That is a strong habit. Tell us about a time you helped someone who was frustrated. What did you do?`)).toBe(`${TASKS}\n\nTell us about a time you helped someone who was frustrated. What did you do?`);
+      // anything after the question is left out, as before
+      expect(moveTo("wq_help", `${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What did you do and how did it turn out? Take your time.`)).toBe(`${TASKS}\n\nTell us about a time you helped someone who was frustrated or confused. What did you do and how did it turn out?`);
+    });
+
+    it("never says a private note, in the sentence before the question either", () => {
+      const p = askingNow(start([]), "wq_room", ["wq_explain", "wq_room"]);
+      const leak = enforceChatTurn(turnOf({ followUpReason: "push", reading: "vague", messageToCandidate: "You calmed the room.\n\nA good trainer uses a concrete everyday analogy and checks understanding with the children. What did you do?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "I'd calm the room"), latest: "I'd calm the room" });
+      expect(leak.turn.messageToCandidate).not.toMatch(/everyday analogy|checks understanding/);
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nA good answer owns the mistake and says what changed afterwards. What did you do about it?`)).toBe(MISTAKE);
+    });
+  });
+
   it("one push only: a second push moves on to the next item, the candidate's own words recorded as the answer", () => {
     const p = askingNow(start(["arduino", "english"]), "arduino", ["arduino"], { pushes: 1 });
     const { turn, move } = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "still vague", messageToCandidate: "You handled the wiring. Can you say more?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "Yes", "I handled it well"), latest: "I handled it well" });
