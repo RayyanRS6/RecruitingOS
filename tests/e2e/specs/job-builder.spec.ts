@@ -97,6 +97,28 @@ test.describe("the job builder", () => {
     await expect(page.getByRole("status").filter({ hasText: "Sent for approval." })).toBeVisible();
   });
 
+  // The live smoke test of 4 Nov 2026: a pick on the first card, "Or type your own answer…" for the next, and the pick was lost.
+  test("words typed instead of a card take the answers already picked with them", async ({ page }) => {
+    test.setTimeout(180_000);
+    await signIn(page, { email: `typed+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
+    await createCompanyThroughTheForm(page, `Brightline Typed ${run}`);
+    await page.getByRole("textbox", { name: "Who are you hiring?" }).fill("I need a dental hygienist in Irvine. Full time. $45 to $55 an hour.");
+    await page.getByRole("button", { name: "Start drafting" }).click();
+    await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 60_000 });
+    const card = page.getByRole("region", { name: "Questions from the assistant" });
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    const first = card.locator("label.option-row").first();
+    const picked = (await first.innerText()).split("\n")[0]!.trim();
+    await first.locator("input").check({ force: true });
+    await card.getByRole("button", { name: "Or type your own answer…" }).click();
+    const typed = "We would also like someone who can start soon.";
+    await page.getByRole("textbox", { name: "Message to the assistant" }).fill(typed);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    // the pick reaches the conversation as an answer, and the words as a message of their own
+    await expect(page.locator(".answers", { hasText: "Your answers" }).filter({ hasText: picked })).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(typed, { exact: true })).toBeVisible();
+  });
+
   test("on a phone, one pane at a time with a switch, and no sideways scrolling", async ({ page }) => {
     test.setTimeout(180_000);
     await page.setViewportSize({ width: 375, height: 812 });
