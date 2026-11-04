@@ -604,39 +604,52 @@ const ASKS_ANOTHER_THING = /\b(?:pay|paid|salary|wages?|hourly|benefits?|commute
 const FOLLOWS_ON = /\b(?:did|was|were|happened|came of|changed|went|turn(?:ed)? out)\b|\b(?:it|that|them|this|there)\?["”’)]*$/i;
 
 /**
- * The first question the model wrote, from where it starts: "Not done that exactly? Tell me about something similar." is
- * one (a question with the request that follows it), and so is "Tell us about a time you helped someone. What did you
- * do?" (a request with the question that follows it, unless that asks for something else and is not the job's own, `known`).
- * Anything after it is left out.
+ * The first question the model wrote, from where it starts, with none of its words lost (the live smoke test's bug). A
+ * question keeps the request that follows it ("Not done that exactly? Tell me about something similar."). A request keeps
+ * what it leads through: a scene (`keeps` decides, as for any setup), another request, and the question it leads to ("Tell
+ * us about another day. Think of a mistake you made. What happened?"), unless that asks for something else and is not the
+ * job's own, `known`. Anything after it is left out.
  */
-function firstQuestion(sentences: string[], at: number, known?: string | null): string {
-  let end = at + 1;
+function firstQuestion(sentences: string[], at: number, known: string | null | undefined, keeps: (s: string) => boolean): string {
   if (ASKS.test(sentences[at])) {
+    let end = at + 1;
     while (end < sentences.length && KEPT_AFTER_A_QUESTION.test(sentences[end]) && !/\?/.test(sentences[end])) end += 1;
     return sentences.slice(at, end).join(" ");
   }
-  // past a scene the request leads into ("Tell us about another day. Think of a mistake you made. What happened?")
-  let next = at + 1;
-  while (next < sentences.length && SETS_UP.test(sentences[next])) next += 1;
-  const asked = sentences[next];
-  if (asked && ASKS.test(asked) && (!ASKS_ANOTHER_THING.test(asked) || FOLLOWS_ON.test(asked) || sentencesOf(known ?? "").some((s) => plainKey(s) === plainKey(asked)))) end = next + 1;
-  return sentences.slice(at, end).join(" ");
+  const belongs = (s: string) => !ASKS_ANOTHER_THING.test(s) || FOLLOWS_ON.test(s) || sentencesOf(known ?? "").some((x) => plainKey(x) === plainKey(s));
+  const ask = [sentences[at]];
+  let scenes: string[] = [];
+  for (const s of sentences.slice(at + 1)) {
+    const asks = ASKS.test(s);
+    if (!asks && SETS_UP.test(s)) {
+      scenes.push(s);
+      continue;
+    }
+    if (!(asks || REQUEST.test(s)) || !belongs(s)) break;
+    ask.push(...scenes.filter(keeps), s);
+    if (asks) break;
+    scenes = [];
+  }
+  return ask.join(" ");
 }
 
 /**
  * Where the first question of a message starts, among all its sentences, or -1: the first asking sentence of the first
  * paragraph that asks. A first paragraph with no question mark gives way to a later paragraph that asks: its request is
- * then a step they told us about ("Share the plan with the team each morning.\n\nWhich tool do you use?") or a way in
- * ("Tell us a bit more.\n\nThink of a time you helped. What did you do?"). The one exception: a paragraph that is only a
- * request said to them, with a next paragraph that opens with a question mark's sentence, is one ask over two paragraphs
- * ("Tell me about one specific time.\n\nWhat did you do?").
+ * then a step they told us about ("Share the plan with the team each morning.\n\nWhich tool do you use?"). The one
+ * exception: when it ends with a request said to them and the next paragraph goes straight on (it asks, or sets a scene
+ * first), the two are one ask, from that request ("You keep a list. Tell me about one specific time.\n\nWhat did you do?").
  */
 function questionAt(paragraphs: string[][]): number {
   const asks = (p: string[]) => asksAt(p) >= 0;
   const first = paragraphs.findIndex(asks);
   const later = first === 0 && !paragraphs[0].some((s) => ASKS.test(s)) ? paragraphs.findIndex((p, i) => i > 0 && asks(p)) : -1;
-  const oneAsk = later === 1 && paragraphs[0].every((s) => ASKS_THEM_DIRECTLY.test(s)) && ASKS.test(paragraphs[1][0]);
-  const own = later > 0 && !oneAsk ? later : first;
+  if (later === 1) {
+    const ends = paragraphs[0].length - 1;
+    const goesOn = paragraphs[1].slice(0, asksAt(paragraphs[1])).every((s) => SETS_UP.test(s));
+    if (ASKS_THEM_DIRECTLY.test(paragraphs[0][ends]) && goesOn) return ends;
+  }
+  const own = later > 0 ? later : first;
   return own < 0 ? -1 : paragraphs.slice(0, own).flat().length + asksAt(paragraphs[own]);
 }
 
@@ -672,7 +685,7 @@ const JUDGES = /^(?:you seem|you clearly|you obviously|sounds like|that sounds|t
 /** Opens with praise, whatever it goes on to say ("Good work.", "Great work on that."). "Strong", "solid" and "clear" are left out: "A strong wind…" is about the wind. */
 const OPENS_WITH_PRAISE = /^(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|well done|nicely|(?:good|nice) (?:job|work))\b/i;
 /** A promise of a time: the code says what happens next, and decisions have no deadline (founder decision B6). "The team will be in touch." names no time, and stays. */
-const PROMISES_A_TIME = /\b(?:will|['’]ll)\b.*\b(?:within|in a few|few days|next week|soon|shortly|by (?:monday|tuesday|wednesday|thursday|friday))\b/i;
+const PROMISES_A_TIME = /\b(?:will|['’]ll)\b.*\b(?:within|few (?:hours|days|weeks)|next week|soon|shortly|by (?:monday|tuesday|wednesday|thursday|friday))\b/i;
 const ABOUT_THEM = /^(?:you|your|that|this|it)\b/i;
 const JUDGING_WORD = /\b(?:good|nice|fun|capable|organi[sz]ed)\b/i;
 /** Judging only in a short remark ("You handled that well.", "It went smoothly."): a scene can say them ("You have a customer who does not speak English well."). */
@@ -723,10 +736,11 @@ function chatParts(text: string, opts: { experience: boolean; answering: boolean
     from += p.length;
   }
   const own = sentences.slice(from, at).filter(usable);
-  const question = run ? sentences.slice(run.from, run.to).join(" ") : firstQuestion(sentences, at, opts.known);
+  const noNote = (s: string) => !(opts.notes ?? []).some((n) => echoesNotePart(s, n));
+  const question = run ? sentences.slice(run.from, run.to).join(" ") : firstQuestion(sentences, at, opts.known, (s) => usable(s) && noNote(s));
   const lead = (from > 0 ? sentences.slice(0, from).filter((s) => usable(s) && !ASKS_THEM_DIRECTLY.test(s)) : own.filter((s) => !SETS_UP.test(s))).slice(0, restates);
   const said = [...lead, question, CHAT_CALM_LINE].join(" ");
-  const setsUp = (s: string) => !(opts.notes ?? []).some((n) => echoesNotePart(s, n)) && !says(said, s);
+  const setsUp = (s: string) => noNote(s) && !says(said, s);
   const setup = (from > 0 ? own : own.filter((s) => SETS_UP.test(s))).filter(setsUp).slice(-2);
   return { lead, question: [...setup, question].join(" ") };
 }

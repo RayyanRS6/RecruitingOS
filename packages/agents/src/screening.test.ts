@@ -1156,12 +1156,27 @@ describe("the Kanvis-style chat", () => {
       expect(asksPay("You keep a list. Let's talk about pay.\n\nWhat salary are you hoping for?")).toBe("You keep a list.\n\nWhat salary are you hoping for?");
       // a job's own question of one sentence, written word for word
       expect(moveToOwn("Describe how you keep track of tasks.", "You keep a list. Let's talk about how you stay on top of things.\n\nDescribe how you keep track of tasks.")).toBe("You keep a list.\n\nDescribe how you keep track of tasks.");
-      // a request said to them as the way in: the question in its own paragraph is the one asked
+      // a request said to them as the way in: nothing of the ask is lost
       for (const way of ["Tell us a bit more.", "Give an example of a hard day."]) {
-        expect(moveTo("wq_help", `${way}\n\n${THINK}`), way).toBe(THINK);
-        expect(moveTo("wq_mistake", `${way}\n\n${REQUESTED} What did you do and how did it turn out?`), way).toBe(`${REQUESTED} What did you do and how did it turn out?`);
-        expect(moveTo("wq_mistake", `${way}\n\nDescribe a busy day. How do you decide what comes first?`), way).toBe("Describe a busy day. How do you decide what comes first?");
+        expect(moveTo("wq_help", `${way}\n\n${THINK}`), way).toBe(`${way} ${THINK}`);
+        expect(moveTo("wq_mistake", `${way}\n\n${REQUESTED} What did you do and how did it turn out?`), way).toBe(`${way} ${REQUESTED} What did you do and how did it turn out?`);
+        expect(moveTo("wq_mistake", `${way}\n\nDescribe a busy day. How do you decide what comes first?`), way).toBe(`${way} Describe a busy day. How do you decide what comes first?`);
+        // a scene in other words leads the next paragraph, so that paragraph is the question
+        expect(moveTo("wq_mistake", `${way}\n\nA patient cancels a two-hour slot tomorrow morning. What do you do?`), way).toBe("A patient cancels a two-hour slot tomorrow morning. What do you do?");
+        expect(moveTo("wq_mistake", `${way}\n\nThink of a busy day. A patient cancels a slot. What do you do?`), way).toBe("Think of a busy day. A patient cancels a slot. What do you do?");
+        // and a scene with no question after it is not kept
+        expect(moveTo("wq_mistake", `${way}\n\nThink of a busy day.`), way).toBe(way);
       }
+      // beside the restatement, the blank line one sentence later: the same one ask
+      expect(moveTo("wq_mistake", `${VISITOR} Tell me about a time you made a mistake at work.\n\nWhat happened, and what did you do about it?`)).toBe(`${VISITOR}\n\nTell me about a time you made a mistake at work. What happened, and what did you do about it?`);
+      expect(moveToOwn("Tell me about a time you handled an angry customer.", "You keep a list. Tell me about a time you handled an angry customer.\n\nWhat did you do?")).toBe("You keep a list.\n\nTell me about a time you handled an angry customer. What did you do?");
+      expect(stayOn("wq_help", "You have not done that exactly. Tell me about something similar from your own work.\n\nWhat did you do, and what came of it?")).toBe("You have not done that exactly.\n\nTell me about something similar from your own work. What did you do, and what came of it?");
+      expect(moveTo("wq_mistake", `${VISITOR} Tell me about a time you made a mistake at work.\n\nWalk me through what you did about it.`)).toBe(`${VISITOR}\n\nTell me about a time you made a mistake at work. Walk me through what you did about it.`);
+      // a pay question there stays out, unless it is the job's
+      expect(moveTo("wq_mistake", `${VISITOR} Tell me about a time you made a mistake at work.\n\nWhat pay are you looking for?`)).toBe(`${VISITOR}\n\nTell me about a time you made a mistake at work.`);
+      // a scene a request leads through is held to the rules of any setup
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nTell us about another day. Think of the person who says what changed afterwards. What happened?`)).toBe(`${VISITOR}\n\nTell us about another day. What happened?`);
+      expect(moveTo("wq_mistake", `${VISITOR}\n\nTell us about another day. Think of how you will hear from the team within a few days. What happened?`)).toBe(`${VISITOR}\n\nTell us about another day. What happened?`);
       // "About your experience": a word of praise in a sentence that moves on is left out like any other
       const g = askingNow(start(["arduino", "english"]), "arduino", ["arduino"]);
       const experience = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "english", messageToCandidate: "You built a pump.\n\nI'd love to hear more about that impressive project. How do you explain it in English?" }), chatPacket(role, g), g, {}, { transcript: said("Q", "I built a pump with an Arduino"), latest: "I built a pump with an Arduino" });
@@ -1172,12 +1187,13 @@ describe("the Kanvis-style chat", () => {
       const AGAIN = "Now, what did you do when that person was frustrated, and how did it turn out?";
       const p = askingNow(startLive(), "wq_help", ["wq_track", "wq_help"]);
       const answering = (messageToCandidate: string, latest: string) => enforceChatTurn(turnOf({ candidateAskedAbout: "other", messageToCandidate }), chatPacket(live, p), p, {}, { transcript: said(HELP, latest), latest }).turn.messageToCandidate;
-      for (const [answer, asked] of [["A person from the hiring team will get back to you about pay.", "What does it pay?"], ["Someone from the team will be in touch about pay.", "What does it pay?"], ["It is easy to reach by bus.", "Can I get there by bus?"], ["That is well within the posted range.", "Is 70k ok?"]] as const) {
+      for (const [answer, asked] of [["A person from the hiring team will get back to you about pay.", "What does it pay?"], ["Someone from the team will be in touch about pay.", "What does it pay?"], ["It is easy to reach by bus.", "Can I get there by bus?"], ["That is well within the posted range.", "Is 70k ok?"], ["You will work in a few different rooms.", "Where would I work?"]] as const) {
         expect(answering(`${answer}\n\n${AGAIN}`, asked), answer).toBe(`${answer}\n\n${AGAIN}`);
       }
       // a judgement or a time is still left out
       expect(answering(`You seem very capable.\n\n${AGAIN}`, "What does it pay?")).toBe(AGAIN);
       expect(answering(`The team will get back to you within a few days.\n\n${AGAIN}`, "When will I hear?")).toBe(AGAIN);
+      expect(answering(`The team will reply in a few days.\n\n${AGAIN}`, "When will I hear?")).toBe(AGAIN);
     });
 
     it("keeps a scene in the second person, and one that opens with a word of praise", () => {

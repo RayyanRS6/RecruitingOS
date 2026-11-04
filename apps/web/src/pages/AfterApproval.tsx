@@ -76,8 +76,8 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
     setSharing(true);
     window.setTimeout(() => shareRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() }), 50);
   };
-  // "not_open" can only be an answer read before the approval, kept from the Share tab: this screen opens after it.
-  const preparing = !d || d.publishing.state === "preparing" || d.publishing.state === "not_open";
+  // An answer read before the approval, kept from the Share tab, says "not_open" with the role still pending: this screen opens after the approval.
+  const preparing = !d || d.publishing.state === "preparing" || (d.publishing.state === "not_open" && d.role.status === "pending_approval");
   const sub = props.editWhileOpen
     ? "Your careers page shows the new version now; Google picks it up the next time it reads the page."
     : (!preparing ? d?.publishing.message : null) ?? "Getting the job ready on its channels. This takes a moment.";
