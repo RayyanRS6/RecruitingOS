@@ -530,12 +530,16 @@ function sentencesOf(text: string): string[] {
 }
 
 /**
- * Anything personal, said of themselves or said back to them: "You have two kids, so mornings suit you." reads as "I
- * have two kids…". `redactProtected` itself stays as it is for what is recorded, where the words are the candidate's.
+ * Anything personal, said of themselves or said back to them as a comment on it: "You have two kids, so mornings suit
+ * you." reads as "I have two kids…". Without the comment it may be a scene ("You have two toddlers fighting over a toy.",
+ * "You are 15 minutes late."), which stays. `redactProtected` itself stays as it is for what is recorded, where the words
+ * are the candidate's.
  */
 function personal(s: string): boolean {
+  if (redactProtected(s) !== s) return true;
+  if (!/\b(?:so|since|because|given)\b/i.test(s)) return false;
   const asTheirs = s.replace(/\byou(?:['’]re| are)\b/gi, "I am").replace(/\byou(?:['’]ve| have)\b/gi, "I have").replace(/\byour\b/gi, "my");
-  return redactProtected(s) !== s || redactProtected(asTheirs) !== asTheirs;
+  return redactProtected(asTheirs) !== asTheirs;
 }
 
 /**
@@ -571,8 +575,12 @@ const asksAssistant = (s: string) => ASKS.test(s) && (ASKS_THEM.test(s.replace(/
  */
 const LEAD_INS = "(?:(?:please|now|next|so|and|also)[,:]?\\s+)*";
 const OPENING = `^${LEAD_INS}(?:(?!(?:then|first|finally|lastly)\\b)[\\p{L}'’-]+,\\s+)?${LEAD_INS}`;
-/** What can only be a request of ours: it is said to them ("Tell us about…", "Give an example of…", "I'd like to hear about…"). */
-const SAID_TO_THEM = "tell (?:me|us)|walk (?:me|us) through|talk (?:me|us) through|give (?:me|us)|give (?:an|one|a)\\s+(?:\\w+\\s+)?example|(?:i|we)['’]d (?:like|love) to hear|(?:i|we) would (?:like|love) to hear|let['’]s talk";
+/**
+ * What can only be a request of ours: it is said to them ("Tell us about…", "Give an example of…"). "Let's talk about pay."
+ * and "I'd like to hear about…" are not among them: they are how a model moves from one thing to the next, and the
+ * question follows, or the code adds it.
+ */
+const SAID_TO_THEM = "tell (?:me|us)|walk (?:me|us) through|talk (?:me|us) through|give (?:me|us)|give (?:an|one|a)\\s+(?:\\w+\\s+)?example";
 const ASKS_THEM_DIRECTLY = new RegExp(`${OPENING}(?:${SAID_TO_THEM})\\b`, "iu");
 /** A request, which asks by itself as a question does: those, and the ones that can also be a step they told us about ("Describe…", "Share…", "Explain…"). */
 const REQUEST = new RegExp(`${OPENING}(?:${SAID_TO_THEM}|describe|share|explain)\\b`, "iu");
@@ -603,23 +611,32 @@ const FOLLOWS_ON = /\b(?:did|was|were|happened|came of|changed|went|turn(?:ed)? 
  */
 function firstQuestion(sentences: string[], at: number, known?: string | null): string {
   let end = at + 1;
-  const next = sentences[end];
-  if (ASKS.test(sentences[at])) while (end < sentences.length && KEPT_AFTER_A_QUESTION.test(sentences[end]) && !/\?/.test(sentences[end])) end += 1;
-  else if (next && ASKS.test(next) && (!ASKS_ANOTHER_THING.test(next) || FOLLOWS_ON.test(next) || sentencesOf(known ?? "").some((s) => plainKey(s) === plainKey(next)))) end += 1;
+  if (ASKS.test(sentences[at])) {
+    while (end < sentences.length && KEPT_AFTER_A_QUESTION.test(sentences[end]) && !/\?/.test(sentences[end])) end += 1;
+    return sentences.slice(at, end).join(" ");
+  }
+  // past a scene the request leads into ("Tell us about another day. Think of a mistake you made. What happened?")
+  let next = at + 1;
+  while (next < sentences.length && SETS_UP.test(sentences[next])) next += 1;
+  const asked = sentences[next];
+  if (asked && ASKS.test(asked) && (!ASKS_ANOTHER_THING.test(asked) || FOLLOWS_ON.test(asked) || sentencesOf(known ?? "").some((s) => plainKey(s) === plainKey(asked)))) end = next + 1;
   return sentences.slice(at, end).join(" ");
 }
 
 /**
  * Where the first question of a message starts, among all its sentences, or -1: the first asking sentence of the first
- * paragraph that asks. A first paragraph that only has a request that could be a step they told us about, when a later one
- * asks too, is the restatement in the candidate's own words ("Share the plan with the team each morning.\n\nWhich tool do
- * you use?"). "Tell me about one specific time." can't be: it is the question, and what follows belongs to it.
+ * paragraph that asks. A first paragraph with no question mark gives way to a later paragraph that asks: its request is
+ * then a step they told us about ("Share the plan with the team each morning.\n\nWhich tool do you use?") or a way in
+ * ("Tell us a bit more.\n\nThink of a time you helped. What did you do?"). The one exception: a paragraph that is only a
+ * request said to them, with a next paragraph that opens with a question mark's sentence, is one ask over two paragraphs
+ * ("Tell me about one specific time.\n\nWhat did you do?").
  */
 function questionAt(paragraphs: string[][]): number {
   const asks = (p: string[]) => asksAt(p) >= 0;
   const first = paragraphs.findIndex(asks);
-  const later = first === 0 && !paragraphs[0].some((s) => ASKS.test(s) || ASKS_THEM_DIRECTLY.test(s)) ? paragraphs.findIndex((p, i) => i > 0 && asks(p)) : -1;
-  const own = later > 0 ? later : first;
+  const later = first === 0 && !paragraphs[0].some((s) => ASKS.test(s)) ? paragraphs.findIndex((p, i) => i > 0 && asks(p)) : -1;
+  const oneAsk = later === 1 && paragraphs[0].every((s) => ASKS_THEM_DIRECTLY.test(s)) && ASKS.test(paragraphs[1][0]);
+  const own = later > 0 && !oneAsk ? later : first;
   return own < 0 ? -1 : paragraphs.slice(0, own).flat().length + asksAt(paragraphs[own]);
 }
 
@@ -654,12 +671,20 @@ const says = (text: string | null, s: string) => sentencesOf(text ?? "").some((x
 const JUDGES = /^(?:you seem|you clearly|you obviously|sounds like|that sounds|that seems|that looks|that must)\b|\b(?:good|great|strong|best|ideal|perfect|right) answers?\b|\bwe(?:['’]re| are)? (?:want|look(?:ing)? for)\b|\b(?:team|company|employer|manager)(?:['’]s| is)? (?:wants?|look(?:s|ing)? for) (?:someone|people|a person)\b|\b(?:straightforward|easy) for you\b|\bno major (?:issues|hurdles)\b/i;
 /** Opens with praise, whatever it goes on to say ("Good work.", "Great work on that."). "Strong", "solid" and "clear" are left out: "A strong wind…" is about the wind. */
 const OPENS_WITH_PRAISE = /^(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|well done|nicely|(?:good|nice) (?:job|work))\b/i;
-/** A promise of a time: the code says what happens next, and decisions have no deadline (founder decision B6). */
-const PROMISES_A_TIME = /\b(?:hear back|get back to you|be in touch)\b|\b(?:will|['’]ll)\b.*\b(?:within|few days|next week|soon|shortly)\b/i;
+/** A promise of a time: the code says what happens next, and decisions have no deadline (founder decision B6). "The team will be in touch." names no time, and stays. */
+const PROMISES_A_TIME = /\b(?:will|['’]ll)\b.*\b(?:within|in a few|few days|next week|soon|shortly|by (?:monday|tuesday|wednesday|thursday|friday))\b/i;
 const ABOUT_THEM = /^(?:you|your|that|this|it)\b/i;
-const JUDGING_WORD = /\b(?:good|nice|fun|capable|organi[sz]ed|well|perfect|smart|useful|easy|smooth(?:ly)?|straightforward)\b/i;
-/** A sentence about anything else keeps its words: "A strong wind knocks out the power during class." stays. */
-const judges = (s: string) => JUDGES.test(s) || OPENS_WITH_PRAISE.test(s) || PROMISES_A_TIME.test(s) || (ABOUT_THEM.test(s) && (PRAISE.test(s) || JUDGING_WORD.test(s)));
+const JUDGING_WORD = /\b(?:good|nice|fun|capable|organi[sz]ed)\b/i;
+/** Judging only in a short remark ("You handled that well.", "It went smoothly."): a scene can say them ("You have a customer who does not speak English well."). */
+const MILD_JUDGING_WORD = /\b(?:well|perfect|smart|useful|easy|smooth(?:ly)?|straightforward)\b/i;
+const SHORT_REMARK = 8;
+/** Said whoever it is about. A scene that opens with a word of praise keeps it: "Great, think of a time…" is still the scene. */
+const hints = (s: string) => JUDGES.test(s) || (OPENS_WITH_PRAISE.test(s) && !SETS_UP.test(s)) || PROMISES_A_TIME.test(s);
+/**
+ * A sentence that judges them or hints at what the team wants. A sentence about anything else keeps its words: "A strong
+ * wind knocks out the power during class." stays.
+ */
+const judges = (s: string) => hints(s) || (ABOUT_THEM.test(s) && (PRAISE.test(s) || JUDGING_WORD.test(s) || (MILD_JUDGING_WORD.test(s) && s.split(/\s+/).length <= SHORT_REMARK)));
 
 /**
  * A message's restatement and question, by its paragraphs: the model is asked for the restatement, a blank line, then the
@@ -668,13 +693,14 @@ const judges = (s: string) => JUDGES.test(s) || OPENS_WITH_PRAISE.test(s) || PRO
  * The question: the job's own (`known`) when the model wrote all of it word for word, never cut, filtered or capped; or
  * else the first one the model wrote (`questionAt`, `firstQuestion`).
  *
- * What is before it, wherever it stands, without filler, inference, judgement (`judges`), (in "About your experience")
+ * What is before it, wherever it stands, without filler, inference, judgement (`judges`; while answering the candidate's
+ * own question only `hints`, since "That is well within the range." may be the answer), (in "About your experience")
  * praise or anything personal (`personal`), which is not recorded either. With earlier paragraphs: those are the
- * restatement (at most one sentence, two while answering the candidate), and what is in the question's own paragraph sets
- * it up. All in one paragraph: the first sentence is the restatement, a second one in one breath is left out, and only a
- * sentence that opens as a scene does (`SETS_UP`) sets the question up. Two sentences of setup at most, never one that
- * says a private note in part (`echoesNotePart`), says the calm line, or repeats the message. With no question, a scene is
- * not kept: it sets up nothing.
+ * restatement (at most one sentence, two while answering the candidate, never a request said to them), and what is in the
+ * question's own paragraph sets it up. All in one paragraph: the first sentence is the restatement, a second one in one
+ * breath is left out, and only a sentence that opens as a scene does (`SETS_UP`) sets the question up. Two sentences of
+ * setup at most, never one that says a private note in part (`echoesNotePart`), says the calm line, or repeats the
+ * message. With no question, a scene is not kept: it sets up nothing.
  */
 function chatParts(text: string, opts: { experience: boolean; answering: boolean; known?: string | null; notes?: readonly string[] }): { lead: string[]; question: string | null } {
   // A sentence said twice in a row counts once ("Tell us about it.\n\nTell us about it. What did you do?").
@@ -686,7 +712,7 @@ function chatParts(text: string, opts: { experience: boolean; answering: boolean
   };
   const paragraphs = text.split(/\n+/).map((p) => sentencesOf(p).filter(once)).filter((p) => p.length);
   const sentences = paragraphs.flat();
-  const usable = (s: string) => !FILLER.test(s) && !INFERENCE.test(s) && !judges(s) && !(opts.experience && PRAISE.test(s)) && !/\?/.test(s) && !personal(s);
+  const usable = (s: string) => !FILLER.test(s) && !INFERENCE.test(s) && !(opts.answering ? hints(s) : judges(s)) && !(opts.experience && PRAISE.test(s)) && !/\?/.test(s) && !personal(s);
   const restates = opts.answering ? 2 : 1;
   const run = wordForWord(sentences, opts.known);
   const at = run ? run.from : questionAt(paragraphs);
@@ -698,7 +724,7 @@ function chatParts(text: string, opts: { experience: boolean; answering: boolean
   }
   const own = sentences.slice(from, at).filter(usable);
   const question = run ? sentences.slice(run.from, run.to).join(" ") : firstQuestion(sentences, at, opts.known);
-  const lead = (from > 0 ? sentences.slice(0, from).filter(usable) : own.filter((s) => !SETS_UP.test(s))).slice(0, restates);
+  const lead = (from > 0 ? sentences.slice(0, from).filter((s) => usable(s) && !ASKS_THEM_DIRECTLY.test(s)) : own.filter((s) => !SETS_UP.test(s))).slice(0, restates);
   const said = [...lead, question, CHAT_CALM_LINE].join(" ");
   const setsUp = (s: string) => !(opts.notes ?? []).some((n) => echoesNotePart(s, n)) && !says(said, s);
   const setup = (from > 0 ? own : own.filter((s) => SETS_UP.test(s))).filter(setsUp).slice(-2);
@@ -915,7 +941,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     composed = true;
     t = { ...t, done: false, questionKey: next.key, followUpReason: null, messageToCandidate: calm ? `${CHAT_CALM_LINE}\n\n${next.question}` : next.question };
   }
-  // A private note is never said, even in part, whichever question it belongs to: the model is given every note.
+  // Five words in a row of a private note are never said, whichever question it belongs to: the model is given every note.
   const notes = [...lookFor.values()];
   const echoesAny = (text: string) => notes.some((n) => echoesNote(text, n));
   if (t.done) {
