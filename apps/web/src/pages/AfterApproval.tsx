@@ -76,10 +76,11 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
     setSharing(true);
     window.setTimeout(() => shareRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() }), 50);
   };
-  const preparing = !d || d.publishing.state === "preparing";
+  // "not_open" can only be an answer read before the approval, kept from the Share tab: this screen opens after it.
+  const preparing = !d || d.publishing.state === "preparing" || d.publishing.state === "not_open";
   const sub = props.editWhileOpen
     ? "Your careers page shows the new version now; Google picks it up the next time it reads the page."
-    : d?.publishing.message ?? "Getting the job ready on its channels. This takes a moment.";
+    : (!preparing ? d?.publishing.message : null) ?? "Getting the job ready on its channels. This takes a moment.";
   const note = d ? interviewersNote(d.interviewers) : null;
   // Not while it is being got ready: until the worker opens the role the server has no boards to name, and the line would be wrong for a moment.
   const noBoards = d && !preparing && !props.editWhileOpen ? noBoardsLine(d.boards) : null;
