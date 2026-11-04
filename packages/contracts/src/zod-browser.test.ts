@@ -5,9 +5,10 @@ import { describe, expect, it } from "vitest";
 
 /**
  * The live smoke test of 4 Nov 2026 recorded a `script-src` violation with blocked origin `eval` on every signed-in page:
- * zod tries `new Function("")` when the first object schema is built, to see whether it may compile its parsers, and a
- * content-security policy reports that even though zod catches the refusal. The browser turns the try off; once the
- * policy blocks instead of reporting, nothing changes for anyone.
+ * zod tries `new Function("")` when the first object schema is built, to see whether it may compile its parsers. Under
+ * report-only (production today) the try succeeds and is reported; under enforce it is refused, zod catches that, and
+ * it is still reported. The browser turns the try off; once the policy blocks instead of reporting, nothing changes for
+ * anyone.
  *
  * A fresh Node process for each, because the try happens once per loaded copy of zod and this file's own is already
  * loaded. Every `new Function` is counted from before zod loads.
