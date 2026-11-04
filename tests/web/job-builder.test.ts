@@ -1,15 +1,15 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { presetOf } from "../../apps/web/src/recruiter-access";
-import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeFactsPatch, RolePacket as RolePacketSchema, packetVisibility, type IntakeFacts, type IntakeQuestion, type IntakeServerState, type IntakeSessionView } from "../../packages/contracts/src/index";
+import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeAnswersRequest, IntakeFactsPatch, RolePacket as RolePacketSchema, packetVisibility, type IntakeFacts, type IntakeQuestion, type IntakeServerState, type IntakeSessionView } from "../../packages/contracts/src/index";
 import { SOMEONE_NEW as CORE_SOMEONE_NEW, applyAnswers, applyFactsPatch, draftFactsKey, intakeReadiness, normalizeFacts } from "../../packages/core/src/intake-builder";
 import { VERTICAL_TO_PLAYBOOK, findPlaybook, matchPlaybookRole } from "../../packages/playbooks/src/index";
 import { samplePacket } from "../../packages/agents/src/fixtures/sample-packet";
 import {
-  NEW_ROLE_FRESH_HREF, SOMEONE_NEW, addOwn, answerOf, answerPayload, answersPayload, approvalHelp, askFromDetails, basicsChips, cardsKey, cardsToShow, changedSections,
+  NEW_ROLE_FRESH_HREF, SOMEONE_NEW, addOwn, answerOf, answerPayload, answersFirst, answersPayload, approvalHelp, askFromDetails, basicsChips, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck,
   composerPlaceholder, deckFor, draftOutOfDate, draftRecruiterAsk, draftSections, draftSteps, draftTitle, draftingNow, echoText, enterSends, errorWords, goTo, initialCards, isDiscardDraft,
   marketRange, marketSource, mayHireAgain, mayTakeOverDrafts, messageLimit, messageProblem, nextLabel, parseAmount, payFormFrom, payPayload, payProblem, pickHint, readinessList,
-  redraftWarning, removeOwn, sectionOfPath, setDraft, setPayForm, startHireHref, togglePick, turnProblem, typedWithCards, DRAFT_SEEN_BY, TAKEN_OVER_TOAST, type CardState,
+  redraftWarning, refusedLines, removeOwn, sectionOfPath, setDraft, setPayForm, startHireHref, togglePick, turnProblem, typeInstead, typedWithCards, DRAFT_SEEN_BY, TAKEN_OVER_TOAST, type CardState, type Deck,
 } from "../../apps/web/src/pages/new-role/rules";
 import { factsFormFrom, factsPatch } from "../../apps/web/src/pages/new-role/facts-form";
 import { GUIDE_OF_VERTICAL, QUICK_STARTS, quickStartsFor } from "../../apps/web/src/pages/new-role/quick-starts";
@@ -133,31 +133,118 @@ describe("question cards", () => {
     expect(deckFor({ key: "", state: initialCards(), closed: false }, [reason])).toEqual({ key: cardsKey([reason]), state: initialCards(), closed: false });
   });
 
+  const openDeck = (s: CardState): Deck => ({ key: "", state: s, closed: false });
+
   // The live smoke test of 4 Nov 2026: "Why you are hiring" picked on the first card, then "Or type your own answer…" for
   // the second, and the pick never reached the server: the reply's new cards started the deck afresh.
-  it("words typed in the message box take what is already answered on the cards with them, and leave the other cards alone", () => {
-    let s = togglePick(initialCards(), reason, "replacement");
-    expect(typedWithCards([reason, must], s, "Dana interviews and decides.")).toEqual({
+  it("after 'Or type your own answer…' typed words take what is already answered on the cards with them, leave the other cards alone, and say so above the box first", () => {
+    let d = typeInstead(openDeck(togglePick(initialCards(), reason, "replacement")));
+    expect(d).toMatchObject({ closed: true, carry: true });
+    expect(typedWithCards([reason, must], d, "Dana interviews and decides.")).toEqual({
       answers: [{ questionId: "q1_1", selected: ["replacement"], own: [], skipped: false }],
       note: "Dana interviews and decides.",
       echo: "Why you are hiring: Replacing someone who left\nDana interviews and decides.",
     });
-    // words still in a card's box are an answer too, and pay once it can be set
-    s = setPayForm(setDraft(s, must, "Local anesthesia permit"), pay, { basis: "hourly", min: "45", max: "55", ceiling: "" });
-    const sent = typedWithCards([reason, must, pay], s, "Start soon.")!;
+    expect(carriedLine([reason, must], d)).toBe("Sent with your message: Why you are hiring: Replacing someone who left");
+    // words added on a card are an answer too, and pay once it can be set
+    const s = setPayForm(addOwn(setDraft(d.state, must, "Local anesthesia permit"), must), pay, { basis: "hourly", min: "45", max: "55", ceiling: "" });
+    d = { ...d, state: s };
+    const sent = typedWithCards([reason, must, pay], d, "Start soon.")!;
     expect(sent.answers.map((a) => a.questionId)).toEqual(["q1_1", "q1_2", "q2_2"]);
     expect(sent.echo).toBe("Why you are hiring: Replacing someone who left\nMust-haves: Local anesthesia permit\nPay: $45–$55 an hour\nStart soon.");
     for (const a of sent.answers) expect(IntakeAnswer.parse(a)).toEqual(a);
-    // nothing on any card: a plain message
-    expect(typedWithCards([reason, must], initialCards(), "Dana decides.")).toBeNull();
-    expect(typedWithCards([], s, "Dana decides.")).toBeNull();
+    // the line names them as the server will write them
+    expect(carriedLine([reason, must, pay], d)).toBe(`Sent with your message: ${applyAnswers(facts(), [reason, must, pay], sent.answers, team).summary.join(" · ")}`);
+    // nothing on any card: a plain message, and no line
+    const nothing = typeInstead(openDeck(initialCards()));
+    expect(typedWithCards([reason, must], nothing, "Dana decides.")).toBeNull();
+    expect(carriedLine([reason, must], nothing)).toBeNull();
+    expect(typedWithCards([], d, "Dana decides.")).toBeNull();
     // a pay card with figures that cannot be set yet is no answer
-    expect(typedWithCards([pay], setPayForm(initialCards(), pay, { basis: "hourly", min: "45", max: "", ceiling: "" }), "Dana decides.")).toBeNull();
-    // and the message box sends them that way, with the words back in the box if it fails
+    expect(typedWithCards([pay], typeInstead(openDeck(setPayForm(initialCards(), pay, { basis: "hourly", min: "45", max: "", ceiling: "" }))), "Dana decides.")).toBeNull();
+    // one of the cards answered on the panel goes: what the others carry stays, and new cards start afresh
+    const after = deckFor({ ...d, key: cardsKey([reason, must, pay]) }, [reason, must]);
+    expect(after).toMatchObject({ closed: true, carry: true });
+    expect(carriedLine([reason, must], after)).toBe("Sent with your message: Why you are hiring: Replacing someone who left · Must-haves: Local anesthesia permit");
+    expect(deckFor({ ...d, key: cardsKey([reason, must]) }, [{ ...must, id: "q2_1" }]).carry).toBeUndefined();
+    // and the message box sends them that way, says so above the box, and puts the words back in the box if it fails
     const builder = readFileSync(new URL("../../apps/web/src/pages/new-role/Builder.tsx", import.meta.url), "utf8");
-    expect(builder).toContain("const withCards = typedWithCards(cards, live.state, t);");
+    expect(builder).toContain("const withCards = typedWithCards(cards, live, t);");
     expect(builder).toContain("return withCards ? answer.mutate(withCards) : send.mutate(t);");
     expect(builder).toContain("if (input.note) setText(input.note);");
+    expect(builder).toContain("setDeck(typeInstead(live));");
+    expect(builder).toContain("carried={asks || answer.isPending ? null : carriedLine(cards, live)}");
+  });
+
+  // Review of 4 Nov 2026: the X and "Or type your own answer…" looked the same, so a card closed unsent went out unseen.
+  it("the X leaves what is answered on the cards: typed words go alone, with no line, until the deck is opened and folded the other way", () => {
+    let s = togglePick(initialCards(), must, "Active RDH license");
+    s = setPayForm(s, pay, { basis: "hourly", min: "24", max: "28", ceiling: "" });
+    const closed = closeDeck(openDeck(s));
+    expect(closed.closed).toBe(true);
+    expect(typedWithCards([must, pay], closed, "What does the market pay here?")).toBeNull();
+    expect(carriedLine([must, pay], closed)).toBeNull();
+    expect(answersFirst([must, pay], closed)).toBeNull();
+    // still on the card, for when it is opened again
+    expect(answerOf(closed.state, must).selected).toEqual(["Active RDH license"]);
+    expect(answerOf(closed.state, pay).pay).toMatchObject({ min: "24", max: "28" });
+    // the X clears what "Or type your own answer…" set, and the other way round
+    expect(typedWithCards([must], closeDeck(typeInstead(openDeck(s))), "Hello")).toBeNull();
+    expect(typedWithCards([must], typeInstead(closed), "Hello")?.answers).toEqual([{ questionId: "q1_2", selected: ["Active RDH license"], own: [], skipped: false }]);
+    const builder = readFileSync(new URL("../../apps/web/src/pages/new-role/Builder.tsx", import.meta.url), "utf8");
+    expect(builder).toContain("onClose={() => setDeck(closeDeck(live))}");
+  });
+
+  it("a half-typed 'Add your own' word is not an answer when something else is sent; the card's own Send still takes it, and a box with no Add is the answer", () => {
+    const half = typeInstead(openDeck(setDraft(initialCards(), must, "Dent")));
+    expect(typedWithCards([must], half, "Hello")).toBeNull();
+    expect(carriedLine([must], half)).toBeNull();
+    expect(answersFirst([must], { ...half, closed: false, carry: false })).toBeNull();
+    // beside a tick or an added word, only those go
+    const ticked = { ...half, state: addOwn(setDraft(togglePick(half.state, must, "Active RDH license"), must, "CPR certification"), must) };
+    const both = { ...ticked, state: setDraft(ticked.state, must, "Dent") };
+    expect(typedWithCards([must], both, "Hello")?.answers).toEqual([{ questionId: "q1_2", selected: ["Active RDH license"], own: ["CPR certification"], skipped: false }]);
+    expect(carriedLine([must], both)).toBe("Sent with your message: Must-haves: Active RDH license; CPR certification");
+    // the same on a team card: a name still waiting for Add
+    const name = typeInstead(openDeck(setDraft(togglePick(initialCards(), interviewers, SOMEONE_NEW), interviewers, "Pat Riv")));
+    expect(typedWithCards([interviewers], name, "Hello")).toBeNull();
+    // the card's own Send counts the words in the box, as it always has
+    expect(answerPayload(must, answerOf(both.state, must)).own).toEqual(["CPR certification", "Dent"]);
+    // a pick-one or a free card has no Add: the words in the box are the answer, and the line names them before Send
+    const free = q({ id: "q1_4", field: "what_failure_looks_like", mode: "free" });
+    const words = typeInstead(openDeck(setDraft(setDraft(initialCards(), reason, "We are opening a second office"), free, "Late every day")));
+    expect(typedWithCards([reason, free], words, "Hello")?.answers).toEqual([{ questionId: "q1_1", selected: [], own: ["We are opening a second office"], skipped: false }, { questionId: "q1_4", selected: [], own: ["Late every day"], skipped: false }]);
+    expect(carriedLine([reason, free], words)).toBe("Sent with your message: Why you are hiring: We are opening a second office · What would not work out: Late every day");
+    const named = typeInstead(openDeck(setDraft(togglePick(initialCards(), decider, SOMEONE_NEW), decider, "Dr Chen")));
+    expect(typedWithCards([decider], named, "Hello")?.answers).toEqual([{ questionId: "q2_1", selected: [], own: ["Dr Chen"], skipped: false }]);
+  });
+
+  // Review of 4 Nov 2026: a tick beside "Write the draft" never reached the draft, and one beside "Ask for approval" was gone for good.
+  it("'Write the draft' and 'Ask for approval' send what is answered on the open cards first, with no reply; never what the X left on a card", () => {
+    const s = togglePick(togglePick(initialCards(), must, "Active RDH license"), reason, "replacement");
+    const first = answersFirst([reason, must, pay], openDeck(s))!;
+    expect(first).toEqual({ answers: [{ questionId: "q1_1", selected: ["replacement"], own: [], skipped: false }, { questionId: "q1_2", selected: ["Active RDH license"], own: [], skipped: false }], reply: false });
+    // the API takes it as it is, and the assistant is not asked anything
+    expect(IntakeAnswersRequest.parse(first)).toMatchObject({ answers: first.answers, reply: false, draftIt: false });
+    // a card left alone stays open, unsent; so does a deck with nothing on it, which sends nothing at all
+    expect(first.answers.map((a) => a.questionId)).not.toContain(pay.id);
+    expect(answersFirst([reason, must], openDeck(initialCards()))).toBeNull();
+    // what goes with typed words goes here too, and the X keeps its picks on the card
+    expect(answersFirst([reason, must], typeInstead(openDeck(s)))?.answers).toEqual(first.answers);
+    expect(answersFirst([reason, must], closeDeck(openDeck(s)))).toBeNull();
+    // the page does it ahead of both calls, from all three buttons; the quick start's own draft has no cards to send
+    const builder = readFileSync(new URL("../../apps/web/src/pages/new-role/Builder.tsx", import.meta.url), "utf8");
+    expect(builder).toContain("const cardsFirst = answersFirst(cards, live);");
+    expect(builder).toContain("await api.post<IntakeTurnResponse>(`${base}/answers`, first);");
+    expect(builder).toMatch(/const saved = await saveCards\(first\);[^}]*return api\.post<SessionData>\(`\$\{base\}\/draft`\);/);
+    expect(builder).toMatch(/const saved = await saveCards\(first\);[\s\S]{0,400}return api\.post<IntakeApprovalResponse>\(`\$\{base\}\/request-approval`\);/);
+    expect(builder).toContain("onClick={() => draft.mutate(cardsFirst)}>Write the draft</Button>");
+    expect(builder).toContain("onRedraft={() => draft.mutate(cardsFirst)}");
+    expect(builder).toContain("onAsk={() => approve.mutate(cardsFirst)}");
+    expect(builder).toContain("!draftingNow(view.progress)) draft.mutate(null);");
+    // words the fairness check refused are said before the ask for approval leaves this page, in the conversation's own words
+    expect(builder).toContain("setBlockers(refusedLines(saved.refused));");
+    expect(refusedLines([{ text: "Recent graduates only", reason: "That is a proxy for age." }])).toEqual(['Not used: "Recent graduates only". That is a proxy for age.']);
   });
 });
 

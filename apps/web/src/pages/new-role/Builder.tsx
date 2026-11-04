@@ -25,15 +25,16 @@ import { QuestionCard } from "./QuestionCard";
 import { quickStartDraftKey } from "./quick-start";
 import { RoomAlert } from "./StartView";
 import {
-  NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersPayload, approvalHelp, askFromDetails, cardsKey, cardsToShow, changedSections, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
-  draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, turnProblem, typedWithCards,
-  type CardState, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
+  NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersFirst, answersPayload, approvalHelp, askFromDetails, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
+  draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, refusedLines, turnProblem, typeInstead, typedWithCards,
+  type Deck, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
 } from "./rules";
 import { CHANGE_REQUEST_MAX, asksBack, checkSignature, proposalSections, refinePaths } from "./refine-api";
 
 type Problem = { message: string; ask: RecruiterAction | null };
 type Member = { userId: string; role: string; status: string; email: string; name: string | null };
 type Pay = NonNullable<ReturnType<typeof payPayload>>;
+type CardsFirst = ReturnType<typeof answersFirst>;
 type SessionData = { session: IntakeSessionView };
 
 /**
@@ -72,7 +73,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const box = useRef<HTMLTextAreaElement | null>(null);
   /** Set when the cards' answers are sent: the cards they were sent from, so the next dock can take the focus. */
   const handOff = useRef<{ from: string } | null>(null);
-  const [deck, setDeck] = useState<{ key: string; state: CardState; closed: boolean }>({ key: "", state: initialCards(), closed: false });
+  const [deck, setDeck] = useState<Deck>({ key: "", state: initialCards(), closed: false });
   const [pane, setPane] = useState<"primary" | "secondary">("primary");
   const [proposal, setProposal] = useState<PacketRevisionProposal | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -119,6 +120,19 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     qc.invalidateQueries({ queryKey: ["intake", "mine"] });
   };
   const failed = (err: unknown) => setProblem({ message: errorWords(err), ask: (err instanceof ApiError ? askFromDetails(err.details) : null) ?? recruiter });
+  // What is answered on the open cards goes ahead of the draft and the ask for approval, or the draft would leave it out
+  // and a role would lose it for good. A card answered after newer ones arrived: show the newer ones.
+  const saveCards = async (first: CardsFirst) => {
+    if (!first) return null;
+    try {
+      const r = await api.post<IntakeTurnResponse>(`${base}/answers`, first);
+      apply(r.session);
+      return r;
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "unknown_question") qc.invalidateQueries({ queryKey: key });
+      throw err;
+    }
+  };
 
   const send = useMutation({
     mutationFn: (message: string) => api.post<IntakeTurnResponse>(`${base}/messages`, { message }),
@@ -160,10 +174,15 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     onSuccess: (r) => { apply(r.session); toast("Pay set.", "Recorded as set by you."); },
   });
   const draft = useMutation({
-    mutationFn: () => api.post<SessionData>(`${base}/draft`),
+    mutationFn: async (first: CardsFirst) => {
+      const saved = await saveCards(first);
+      if (saved?.refused?.length) toast("Some words were not used.", "The reason is in the conversation.");
+      return api.post<SessionData>(`${base}/draft`);
+    },
     onMutate: () => { setPolling(true); setProblem(null); },
     onSuccess: (r) => { apply(r.session); toast("The draft is written.", "Check it beside the conversation. Nothing is sent to anyone."); },
-    onError: failed,
+    // Said in the conversation, which a phone may have folded away behind the draft.
+    onError: (err) => { setPane("primary"); failed(err); },
     onSettled: () => { setPolling(false); qc.invalidateQueries({ queryKey: key }); },
   });
   // A draft the quick start just made (Wave S2, K2): the answers are all on it, so the job post is written as soon as the
@@ -175,12 +194,22 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     if (!qc.getQueryData(mark)) return;
     autoDraft.current = true;
     qc.removeQueries({ queryKey: mark, exact: true });
-    if (view.status === "active" && view.readiness.mayDraft && !view.readiness.hasDraft && !draftingNow(view.progress)) draft.mutate();
+    if (view.status === "active" && view.readiness.mayDraft && !view.readiness.hasDraft && !draftingNow(view.progress)) draft.mutate(null);
   }, [view, qc, sessionId, draft]);
   const approve = useMutation({
-    mutationFn: () => api.post<IntakeApprovalResponse>(`${base}/request-approval`),
+    mutationFn: async (first: CardsFirst) => {
+      const saved = await saveCards(first);
+      // Refused words are told in the conversation, which is gone once the role exists: stop here so they can be read.
+      if (saved?.refused?.length) {
+        setBlockers(refusedLines(saved.refused));
+        setPane("primary");
+        return null;
+      }
+      return api.post<IntakeApprovalResponse>(`${base}/request-approval`);
+    },
     onMutate: () => { setPolling(true); setBlockers(null); setProblem(null); setRoom(null); },
     onSuccess: async (r) => {
+      if (!r) return;
       // The chosen closing date goes on the new role; if that fails the role is still waiting for approval, and the
       // Share tab can set the date.
       let dateProblem: string | null = null;
@@ -199,6 +228,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       nav(`/roles/${r.roleId}`);
     },
     onError: (err) => {
+      // Said in the conversation, which a phone may have folded away behind the draft.
+      setPane("primary");
       if (err instanceof ApiError && err.code === "not_ready") {
         setBlockers((err.details as { blockers?: string[] } | undefined)?.blockers ?? [err.message]);
         qc.invalidateQueries({ queryKey: key });
@@ -351,12 +382,14 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const help = approvalHelp(view.readiness);
   // Once the draft is written, words typed in the box ask for a change to it; before that they go to the conversation.
   const asks = !!hasDraft;
-  // What is already answered on the cards goes with typed words (the reply's new cards would start the deck afresh).
+  // After "Or type your own answer…" what is answered on the cards goes with typed words (the reply's new cards would
+  // start the deck afresh); after the X it stays on the cards.
   const submitText = (t: string) => {
     if (asks) return revise.mutate(t);
-    const withCards = typedWithCards(cards, live.state, t);
+    const withCards = typedWithCards(cards, live, t);
     return withCards ? answer.mutate(withCards) : send.mutate(t);
   };
+  const cardsFirst = answersFirst(cards, live);
   const sendCards = () => { handOff.current = { from: deckKey }; answer.mutate({ answers: answersPayload(cards, live.state), echo: echoText(cards, live.state) }); };
   const showInDraft = (ids: SectionId[]) => {
     setPane("secondary");
@@ -398,7 +431,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       {!hasDraft && view.readiness.mayDraft && !draftRunning && !busy ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line-tint bg-linear-110 from-tint to-peach px-4 py-3 text-[14px] text-ink motion-safe:animate-enter">
           <span className="flex min-w-0 items-start gap-2"><Icon name="sparkle" size={16} className="mt-0.5 text-accent" /> There is enough for a first draft. Keep answering, or write it now.</span>
-          <Button size="sm" variant="primary" onClick={() => draft.mutate()}>Write the draft</Button>
+          <Button size="sm" variant="primary" onClick={() => draft.mutate(cardsFirst)}>Write the draft</Button>
         </div>
       ) : null}
       {cards.length && live.closed ? (
@@ -414,8 +447,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       state={live.state}
       onState={(state) => setDeck({ ...live, state })}
       onSend={sendCards}
-      onClose={() => setDeck({ ...live, closed: true })}
-      onTypeInstead={hasDraft ? undefined : () => { setDeck({ ...live, closed: true }); window.setTimeout(() => box.current?.focus(), 0); }}
+      onClose={() => setDeck(closeDeck(live))}
+      onTypeInstead={hasDraft ? undefined : () => { setDeck(typeInstead(live)); window.setTimeout(() => box.current?.focus(), 0); }}
       sending={answer.isPending}
       pay={view.pay}
     />
@@ -432,6 +465,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       // what to do next, in the server's words, only while the draft cannot be written yet ("Answer the question cards
       // first, or say "draft it".")
       hint={asks ? null : view.readiness.draftBlocker}
+      carried={asks || answer.isPending ? null : carriedLine(cards, live)}
       changeMax={asks ? CHANGE_REQUEST_MAX : undefined}
     />
   );
@@ -461,7 +495,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
               else setConfirmDiscard(true);
             }}
           />
-          <ApprovalButton help={help} loading={approve.isPending} onAsk={() => approve.mutate()} />
+          <ApprovalButton help={help} loading={approve.isPending} onAsk={() => approve.mutate(cardsFirst)} />
         </div>
       </header>
 
@@ -512,7 +546,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
             onKeepFlag={(flagId, reason) => keep.mutate({ flagId, reason })}
             keepingFlag={keep.isPending ? keep.variables?.flagId ?? null : null}
             onAsk={(instruction) => { setPane("primary"); revise.mutate(instruction); }}
-            onRedraft={() => draft.mutate()}
+            onRedraft={() => draft.mutate(cardsFirst)}
             drafting={draft.isPending}
             onPreview={() => setPreviewOpen(true)}
             closing={mayManage ? { value: closesOn, onChange: setClosesOn, required: closingDateRequiredFor({ locations: view.draft?.identity.locations, remotePolicy: view.draft?.identity.remotePolicy ?? view.facts.remotePolicy, locationText: view.facts.locationText }) } : null}

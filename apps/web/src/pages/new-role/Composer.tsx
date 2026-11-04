@@ -32,7 +32,8 @@ const SEND = "shrink-0 disabled:not-aria-busy:bg-surface-2 disabled:not-aria-bus
  * The message box (plan C5): it grows with what is typed and takes a whole pasted job ad. At a desk Enter sends and
  * Shift+Enter starts a new line; on a touch screen Enter is a new line and the Send button sends. Under the box is one
  * small line at most: a message that is too long is said so before sending, with the limit, or else the `hint` (the job
- * builder's what to do next while the draft cannot be written yet). `size="lg"` is the big box on the empty page.
+ * builder's what to do next while the draft cannot be written yet). `carried` is the one line above it: what goes with
+ * the words when they are sent. `size="lg"` is the big box on the empty page.
  */
 export function Composer(props: {
   value: string;
@@ -48,6 +49,8 @@ export function Composer(props: {
   sendLabel?: string;
   /** The line under the box when there is no problem to say; read with the box by screen readers. */
   hint?: ReactNode;
+  /** The line above the box naming what goes with the words; read with the box by screen readers. */
+  carried?: string | null;
   /** A shorter limit than a turn of conversation (a request to change the draft). */
   changeMax?: number;
 }) {
@@ -55,6 +58,7 @@ export function Composer(props: {
   const hintId = useId();
   const problemId = useId();
   const keysId = useId();
+  const carriedId = useId();
   const problem = messageProblem(props.value, !!props.first, props.changeMax);
   const hint = problem ? null : props.hint;
   const canSend = !props.disabled && !props.sending && !!props.value.trim() && !problem;
@@ -63,6 +67,7 @@ export function Composer(props: {
   };
   return (
     <div className="grid min-w-0 gap-1.5">
+      {props.carried ? <p className="px-1.5 text-[12.5px] leading-snug text-ink-2" id={carriedId}>{props.carried}</p> : null}
       <div className={props.size === "lg" ? "composer lg" : "composer"} data-disabled={props.disabled ? "true" : undefined}>
         <AutoTextarea
           inputRef={props.inputRef}
@@ -70,7 +75,7 @@ export function Composer(props: {
           onChange={props.onChange}
           placeholder={props.placeholder}
           ariaLabel={props.label}
-          ariaDescribedBy={[problem ? problemId : hint ? hintId : null, touch ? null : keysId].filter(Boolean).join(" ") || undefined}
+          ariaDescribedBy={[props.carried ? carriedId : null, problem ? problemId : hint ? hintId : null, touch ? null : keysId].filter(Boolean).join(" ") || undefined}
           disabled={props.disabled}
           maxHeight={props.size === "lg" ? 360 : 240}
           onKeyDown={(e) => {

@@ -67,7 +67,8 @@ export function cardsKey(questions: readonly Pick<IntakeQuestion, "id">[]): stri
   return questions.map((q) => q.id).join("|");
 }
 
-export type Deck = { key: string; state: CardState; closed: boolean };
+/** `carry`: "Or type your own answer…" sets it and the X clears it, so a closed deck knows whether its answers go along (`answersToCarry`). */
+export type Deck = { key: string; state: CardState; closed: boolean; carry?: boolean };
 
 /**
  * The deck for the cards showing now. New cards start afresh; when cards were only taken away (one answered on the draft
@@ -81,7 +82,17 @@ export function deckFor(prev: Deck, cards: readonly Pick<IntakeQuestion, "id">[]
   if (!onlyRemoved) return { key, state: initialCards(), closed: false };
   const answers = Object.fromEntries(Object.entries(prev.state.answers).filter(([id]) => cards.some((q) => q.id === id)));
   const at = cards.findIndex((q) => q.id === before[prev.state.index]);
-  return { key, state: { index: at >= 0 ? at : Math.min(prev.state.index, cards.length - 1), answers }, closed: prev.closed };
+  return { ...prev, key, state: { index: at >= 0 ? at : Math.min(prev.state.index, cards.length - 1), answers } };
+}
+
+/** "Or type your own answer…": the deck folds away and what is answered on it goes with the typed words. */
+export function typeInstead(deck: Deck): Deck {
+  return { ...deck, closed: true, carry: true };
+}
+
+/** The X: the deck folds away and what is answered on it stays on the cards until new cards arrive; typed words go alone. */
+export function closeDeck(deck: Deck): Deck {
+  return { ...deck, closed: true, carry: false };
 }
 
 export function answerOf(state: CardState, q: Pick<IntakeQuestion, "id">): CardAnswer {
@@ -215,15 +226,50 @@ export function echoText(questions: readonly IntakeQuestion[], state: CardState)
   return lines.length ? lines.join("\n") : "Skipped those questions.";
 }
 
+/** The cards' answers without words still waiting for "Add" on a pick-any card. A pick-one or free card has no Add: its box is the answer. */
+function addedOnly(questions: readonly IntakeQuestion[], state: CardState): CardState {
+  const answers = { ...state.answers };
+  for (const q of questions) {
+    const a = answers[q.id];
+    if (a && !picksOne(q) && q.mode !== "free") answers[q.id] = { ...a, draft: "" };
+  }
+  return { ...state, answers };
+}
+
 /**
- * Words typed in the message box while cards are open ("Or type your own answer…"): what is already answered on a card
- * goes with them, or it would be lost when the reply brings new cards (the live smoke test of 4 Nov 2026 lost "Why you
- * are hiring" that way). Only the cards answered: one left alone is not skipped. Null when no card has an answer, so the
- * words go as a plain message.
+ * What is answered on the cards when something else is about to be sent (typed words, "Write the draft", "Ask for
+ * approval"): it goes along, or the reply's new cards would lose it (the live smoke test of 4 Nov 2026 lost "Why you are
+ * hiring" that way) and the draft would leave it out. Only the cards answered: one left alone is not skipped. A half-typed
+ * "Add your own" word is not an answer yet. Nothing from a deck closed with the X. Null when nothing goes.
  */
-export function typedWithCards(questions: readonly IntakeQuestion[], state: CardState, note: string): { answers: IntakeAnswer[]; note: string; echo: string } | null {
+export function answersToCarry(questions: readonly IntakeQuestion[], deck: Pick<Deck, "state" | "closed" | "carry">): { answers: IntakeAnswer[]; echo: string } | null {
+  if (deck.closed && !deck.carry) return null;
+  const state = addedOnly(questions, deck.state);
   const answered = questions.filter((q) => isAnswered(q, answerOf(state, q)));
-  return answered.length ? { answers: answersPayload(answered, state), note, echo: `${echoText(answered, state)}\n${note}` } : null;
+  return answered.length ? { answers: answersPayload(answered, state), echo: echoText(answered, state) } : null;
+}
+
+/** Words typed in the message box, with what goes along. Null when nothing does, so the words go as a plain message. */
+export function typedWithCards(questions: readonly IntakeQuestion[], deck: Pick<Deck, "state" | "closed" | "carry">, note: string): { answers: IntakeAnswer[]; note: string; echo: string } | null {
+  const carried = answersToCarry(questions, deck);
+  return carried ? { answers: carried.answers, note, echo: `${carried.echo}\n${note}` } : null;
+}
+
+/** The one line above the message box naming what goes with the words, so the person sees it before pressing Send. */
+export function carriedLine(questions: readonly IntakeQuestion[], deck: Pick<Deck, "state" | "closed" | "carry">): string | null {
+  const carried = answersToCarry(questions, deck);
+  return carried ? `Sent with your message: ${carried.echo.replace(/\n+/g, " · ")}` : null;
+}
+
+/** What goes ahead of "Write the draft" and "Ask for approval": POST /answers, the assistant not asked anything. */
+export function answersFirst(questions: readonly IntakeQuestion[], deck: Pick<Deck, "state" | "closed" | "carry">): { answers: IntakeAnswer[]; reply: false } | null {
+  const carried = answersToCarry(questions, deck);
+  return carried ? { answers: carried.answers, reply: false } : null;
+}
+
+/** Words the fairness check refused, as the conversation says them (`applyIntakeEdit` in packages/agents/src/intake.ts). */
+export function refusedLines(refused: ReadonlyArray<{ text: string; reason: string }>): string[] {
+  return refused.map((r) => `Not used: "${r.text}". ${r.reason}`);
 }
 
 /** The cards worth showing: a pay card is dropped once a person has set or confirmed the pay elsewhere (the draft's pay card). */

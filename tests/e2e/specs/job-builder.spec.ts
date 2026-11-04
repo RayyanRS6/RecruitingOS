@@ -98,7 +98,7 @@ test.describe("the job builder", () => {
   });
 
   // The live smoke test of 4 Nov 2026: a pick on the first card, "Or type your own answer…" for the next, and the pick was lost.
-  test("words typed instead of a card take the answers already picked with them", async ({ page }) => {
+  test("words typed after the X go alone; words typed instead of a card take the answers already picked with them", async ({ page }) => {
     test.setTimeout(180_000);
     await signIn(page, { email: `typed+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
     await createCompanyThroughTheForm(page, `Brightline Typed ${run}`);
@@ -107,16 +107,54 @@ test.describe("the job builder", () => {
     await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 60_000 });
     const card = page.getByRole("region", { name: "Questions from the assistant" });
     await expect(card).toBeVisible({ timeout: 60_000 });
+    const box = page.getByRole("textbox", { name: "Message to the assistant" });
+    const send = page.getByRole("button", { name: "Send", exact: true });
+    const carried = page.getByText(/^Sent with your message:/);
     const first = card.locator("label.option-row").first();
+    // the X leaves the pick on the card: nothing is named above the box, and the words go alone
+    await first.locator("input").check({ force: true });
+    await card.getByRole("button", { name: "Close the questions" }).click();
+    await expect(box).toBeVisible();
+    await expect(carried).toHaveCount(0);
+    const alone = "It is Monday to Friday.";
+    await box.fill(alone);
+    await send.click();
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(alone, { exact: true })).toBeVisible();
+    await expect(page.locator(".answers")).toHaveCount(0);
+    // on the reply's new cards, a pick and "Or type your own answer…"
     const picked = (await first.innerText()).split("\n")[0]!.trim();
     await first.locator("input").check({ force: true });
     await card.getByRole("button", { name: "Or type your own answer…" }).click();
+    // the box names what will go with the words, before anything is sent
+    await expect(carried).toContainText(picked);
     const typed = "We would also like someone who can start soon.";
-    await page.getByRole("textbox", { name: "Message to the assistant" }).fill(typed);
-    await page.getByRole("button", { name: "Send", exact: true }).click();
-    // the pick reaches the conversation as an answer, and the words as a message of their own
-    await expect(page.locator(".answers", { hasText: "Your answers" }).filter({ hasText: picked })).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText(typed, { exact: true })).toBeVisible();
+    await box.fill(typed);
+    await send.click();
+    // the words come back as a message of their own, which only the saved conversation can show (the page's waiting line
+    // holds them with the answers); by then that line is gone, so the answers line below can only be the saved one
+    await expect(page.getByText(typed, { exact: true })).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator(".answers", { hasText: "Your answers" }).filter({ hasText: picked })).toBeVisible();
+  });
+
+  // Review of 4 Nov 2026: a tick beside "Write the draft" never reached the draft.
+  test("'Write the draft' takes the answers on the open card with it", async ({ page }) => {
+    test.setTimeout(180_000);
+    await signIn(page, { email: `open-card+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
+    await createCompanyThroughTheForm(page, `Brightline Open Card ${run}`);
+    await page.getByRole("textbox", { name: "Who are you hiring?" }).fill("I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. Just draft it.");
+    await page.getByRole("button", { name: "Start drafting" }).click();
+    await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 60_000 });
+    const card = page.getByRole("region", { name: "Questions from the assistant" });
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    const first = card.locator("label.option-row").first();
+    const picked = (await first.innerText()).split("\n")[0]!.trim();
+    await first.locator("input").check({ force: true });
+    await page.getByRole("button", { name: "Write the draft" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "The draft is written." })).toBeVisible({ timeout: 90_000 });
+    // in the conversation as an answer, and on the draft
+    await expect(page.locator(".answers", { hasText: "Your answers" }).filter({ hasText: picked })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Draft", exact: true })).toContainText(picked);
   });
 
   test("on a phone, one pane at a time with a switch, and no sideways scrolling", async ({ page }) => {
