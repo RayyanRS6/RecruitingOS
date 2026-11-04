@@ -72,7 +72,7 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
       <div className="rounded-[20px] border border-line bg-surface px-5 py-7 shadow-sm motion-safe:animate-enter sm:px-9 sm:py-9">
         <div className="flex items-start justify-between gap-4">
           <h1 className="min-w-0 text-[30px] sm:text-[34px]">{byInvitation ? "Recruiting OS is by invitation for now" : "Tell us about your company"}</h1>
-          <Button variant="quiet" size="sm" loading={leaving} onClick={signOut}>Sign out</Button>
+          <Button variant="quiet" size="sm" loading={leaving} onClick={signOut} className="shrink-0">Sign out</Button>
         </div>
         {byInvitation ? (
           // a long address breaks anywhere rather than pushing the card wider than a phone

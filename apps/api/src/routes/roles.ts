@@ -16,6 +16,7 @@ import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/pub
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { assertNoNewWork } from "../services/trial";
+import { saveBoardTicks } from "./postings";
 import { CLOSED_ROLE_MESSAGE, createPacketVersion, currentVersionOf, settleVersionsSavedWhilePaused } from "../services/packet-versions";
 import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewFollowups, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, rolesInterviewedBy, type Vars } from "../middleware/session";
@@ -196,11 +197,17 @@ roleRoutes.post("/:id/packets", requireTenant, async (c) => {
  * the version unless they are the company's only owner, and reserved for the named decision maker when there is one.
  * Refused with 409 `legal_check` while the law of the job's places asks for something the version lacks (plan D5:
  * `details.missing` lists each item with what to do).
+ *
+ * `channels` are the boards ticked on the approval card: checked as POST /:id/channels checks them (role.manage too, which
+ * a hiring manager approving does not hold) and saved in this transaction, so the approval and the boards land together
+ * and a refused approval changes nothing. A change to a live job takes none (409 `live_job_boards`): there, unticking a
+ * board closes its posting, which the Share tab warns about first. Left out, the saved boards stand.
  */
 roleRoutes.post("/:id/approve", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.approve");
   const body = ApproveRole.parse(await c.req.json());
+  if (body.channels) assertCan(t.role, "role.manage");
   const container = c.get("container");
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
@@ -211,9 +218,15 @@ roleRoutes.post("/:id/approve", requireTenant, async (c) => {
     if (proposedVersion !== body.version) throw new HttpError(409, "version_mismatch", `The pending approval is for version ${proposedVersion}.`);
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version))).limit(1);
     await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null, now: container.engine.clock() });
+    if (body.channels) {
+      if (["open", "paused"].includes(role.status)) throw new HttpError(409, "live_job_boards", "This is a change to a live job, so its boards are not part of this approval. Change them on the Share tab.");
+      await saveBoardTicks(tx, { role, channels: body.channels, actor: actorOf(c) });
+    }
     // On the engine's clock, like POST /approvals/:id/decide: the waiting workflow judges expiry on that clock.
     const decidedAt = container.engine.clock().toISOString();
-    await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null }).where(eq(approvalRequests.id, req.id));
+    // Still pending is checked again in the write itself: of two approvals at once, the second changes nothing, its boards included.
+    const [decided] = await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null }).where(and(eq(approvalRequests.id, req.id), eq(approvalRequests.status, "pending"))).returning({ id: approvalRequests.id });
+    if (!decided) throw new HttpError(409, "nothing_pending", "There is no pending approval for this role.");
     await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: decidedAt }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version)));
     await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: role.id, version: body.version, note: body.note ?? null }, correlationId: req.workflowRunId });
     await emit(tx, { type: "role.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { version: body.version } });

@@ -27,7 +27,8 @@ vi.mock("@ros/web/src/components/use-is-client", () => ({ useIsClient: () => tru
 (globalThis as { React?: typeof React }).React = React;
 const { AfterApproval, StatusPill } = await import("@ros/web/src/pages/AfterApproval");
 const { PacketApprovalCard } = await import("@ros/web/src/pages/RolePlan");
-const { PostingTab, acceptingMode, postingNeedsTeam } = await import("@ros/web/src/pages/RolePosting");
+const { BOARDS_ON_THE_CARD, PostingTab, acceptingMode, postingNeedsTeam } = await import("@ros/web/src/pages/RolePosting");
+const { BoardTicks } = await import("@ros/web/src/components/BoardTicks");
 const { People } = await import("@ros/web/src/pages/People");
 const { RecruiterQueue, queueCounts, queueSearch, queueShown, queueViewFrom } = await import("@ros/web/src/pages/RecruiterQueue");
 const { Setup } = await import("@ros/web/src/pages/Setup");
@@ -244,6 +245,20 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
     expect(words).toContain("Apply by Friday, October 30, 2026. New applications stop at the end of that day");
   });
 
+  it("while the job waits for approval it points to the approval card: Approve reads only that card's ticks", () => {
+    const tab = (roleStatus: string) => render(client(), createElement(PostingTab, { roleId: "r1", roleStatus, canManage: true, canShare: true, roleTitle: "Dental hygienist", companyName: "Bright Dental" }));
+    const waiting = tab("pending_approval");
+    expect(text(waiting)).toContain(`Where it is posted ITS posts it on the job boards from your company's accounts. ${BOARDS_ON_THE_CARD}`);
+    expect(waiting).not.toContain("Where the job is posted");
+    expect(waiting).not.toContain('type="checkbox"');
+    // a live job keeps its list, and anything but waiting for approval never reads the line
+    for (const roleStatus of ["open", "paused", "draft"]) {
+      const html = tab(roleStatus);
+      expect(html, roleStatus).toContain('<legend class="sr-only">Where the job is posted</legend>');
+      expect(html, roleStatus).not.toContain(BOARDS_ON_THE_CARD);
+    }
+  });
+
   it("a task ITS closed as not possible is never called done: its words, and 'Ask ITS again'", () => {
     const qc = client();
     const couldNot = posting({ task: { id: "t1", kind: "post_job", status: "resolved", label: "Post the job on Indeed", recruiterName: "Pat Poster", createdAt: "", resolvedAt: "2026-10-08T12:00:00.000Z", notDone: true, note: "Your Indeed account has no job slots left." } });
@@ -254,6 +269,25 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
     expect(out).toContain("Nothing is on Indeed yet: ITS could not post it.");
     expect(out).toContain("Pat Poster wrote: \"Your Indeed account has no job slots left.\"");
     expect(out).toContain("Ask ITS again");
+  });
+});
+
+describe("the board ticks (D6)", () => {
+  const ticks = (over: Record<string, unknown>) => render(client(), createElement(BoardTicks, { roleId: "r1", boards: boards as never, roleStatus: "pending_approval", whoPosts: "its", canManage: true, ...over }));
+  const tickOf = (html: string, board: string) => new RegExp(`<input type="checkbox"([^>]*)/>${board}`).exec(html)?.[1] ?? null;
+
+  it("can be changed by someone who manages the job, except ZipRecruiter without the company's own plan", () => {
+    const html = ticks({});
+    expect(tickOf(html, "LinkedIn")).not.toContain("disabled");
+    expect(tickOf(html, "Indeed")).not.toContain("disabled");
+    expect(tickOf(html, "Indeed")).toContain("checked");
+    expect(tickOf(html, "ZipRecruiter")).toContain("disabled");
+  });
+
+  it("hold still while the approval they belong to is being sent", () => {
+    const html = ticks({ busy: true });
+    for (const board of ["LinkedIn", "Indeed", "ZipRecruiter"]) expect(tickOf(html, board), board).toContain("disabled");
+    expect(tickOf(html, "Indeed")).toContain("checked");
   });
 });
 

@@ -25,6 +25,7 @@ const { NewRole } = await import("@ros/web/src/pages/NewRole");
 const { Home } = await import("@ros/web/src/pages/Home");
 const { checkSignature } = await import("@ros/web/src/pages/new-role/refine-api");
 const { samplePacket } = await import("../../../packages/agents/src/fixtures/sample-packet");
+const { Composer } = await import("@ros/web/src/pages/new-role/Composer");
 const { StepBody } = await import("@ros/web/src/pages/new-role/QuickStart");
 const { emptyQuickAnswers, STEP_HINT } = await import("@ros/web/src/pages/new-role/quick-start");
 const { suggestKey } = await import("@ros/web/src/pages/new-role/quick-suggest");
@@ -220,6 +221,18 @@ describe("the job builder", () => {
     // with nothing blocking, the box is described by the keys alone (screen readers only)
     expect(ready).toMatch(/<textarea[^>]*aria-describedby="[^" ]+"/);
     expect(ready).toContain(">Write the draft</button>");
+  });
+
+  it("names what goes with the words in one small line above the message box, read with the box by screen readers", () => {
+    const box = { value: "", onChange: () => undefined, onSend: () => undefined, placeholder: "Answer here", label: "Message to the assistant" };
+    const html = renderToStaticMarkup(createElement(Composer, { ...box, carried: "Sent with your message: Must-haves: Active RDH license" }));
+    const line = html.match(/<p class="px-1\.5 text-\[12\.5px\] leading-snug text-ink-2" id="([^"]+)">Sent with your message: Must-haves: Active RDH license<\/p><div class="composer"/);
+    expect(line).not.toBeNull();
+    expect(html).toMatch(new RegExp(`<textarea[^>]*aria-label="Message to the assistant" aria-describedby="${line![1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} [^"]+"`));
+    // with nothing going along there is no line, and the box is described by the keys alone
+    const alone = renderToStaticMarkup(createElement(Composer, { ...box, carried: null }));
+    expect(alone).not.toContain("Sent with your message");
+    expect(alone).toMatch(/<textarea[^>]*aria-describedby="[^" ]+"/);
   });
 
   it("once the draft is written, the box asks for changes and the draft shows what candidates will read", () => {

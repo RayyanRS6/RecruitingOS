@@ -521,7 +521,7 @@ function chatPromptOf(packet: RolePacket, progress: ScreenProgress, facts: ChatF
   };
 }
 
-const FILLER = /^(?:(?:ok(?:ay)?|great|good|excellent|awesome|perfect|wonderful|fantastic|amazing|nice|cool|brilliant|lovely|thanks?|thank you|got it|i see|noted|sure|understood|right|alright)(?: so much| very much| for (?:sharing|that|explaining|telling me)(?: that)?)?|that['’]?s (?:great|good|helpful|really helpful|very helpful|good to know|wonderful|impressive|excellent|fantastic|amazing|interesting|clear)|good to know|that helps|love (?:that|it))[.!]*$/i;
+const FILLER = /^(?:(?:ok(?:ay)?|great|good|excellent|awesome|perfect|wonderful|fantastic|amazing|nice|cool|brilliant|lovely|thanks?|thank you|got it|i see|noted|sure|understood|right|alright)(?:,? (?:thanks?|thank you))?(?: so much| very much| for (?:sharing|that|explaining|telling me)(?: that)?(?: with me)?)?|that['’]?s (?:great|good|helpful|really helpful|very helpful|good to know|wonderful|impressive|excellent|fantastic|amazing|interesting|clear)|good to know|that helps|love (?:that|it))[.!]*$/i;
 const PRAISE = /\b(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|strong|solid|clear(?:ly)?|well done|nicely|good job|good work)\b/i;
 const INFERENCE = /^(?:it sounds like|it seems|it looks like|that suggests|this suggests|clearly|obviously|you must|you clearly|you obviously|i can tell|that shows|this shows|so it was|so that was|it must have)\b|\b(?:which|that|this) (?:shows|proves|demonstrates)\b|\byou(?:'re| are) clearly\b/i;
 
@@ -530,14 +530,31 @@ function sentencesOf(text: string): string[] {
 }
 
 /**
- * One neutral restatement and one question (spec step 6): the first question the model wrote, and before it at most one
- * sentence (two when the candidate asked something and it is being answered), with filler, inference and, in "About
- * your experience", praise left out. `calm`: the restatement is the calm line instead (an item settled as not known).
- * `question`: asked when the model wrote none. Never adds words of the model's.
+ * Anything personal, said of themselves or said back to them as a comment on it: "You have two kids, so mornings suit
+ * you." reads as "I have two kids…". Without the comment it may be a scene ("You have two toddlers fighting over a toy.",
+ * "You are 15 minutes late."), which stays. `redactProtected` itself stays as it is for what is recorded, where the words
+ * are the candidate's.
  */
-export function shapeChatMessage(text: string, opts: { experience: boolean; calm: boolean; question: string | null; answering: boolean }): string {
-  const question = firstQuestion(text) ?? opts.question;
-  const lead = chatLead(text, opts);
+function personal(s: string): boolean {
+  if (redactProtected(s) !== s) return true;
+  if (!/\b(?:so|since|because|given)\b/i.test(s)) return false;
+  const asTheirs = s.replace(/\byou(?:['’]re| are)\b/gi, "I am").replace(/\byou(?:['’]ve| have)\b/gi, "I have").replace(/\byour\b/gi, "my");
+  return redactProtected(asTheirs) !== asTheirs;
+}
+
+/**
+ * One neutral restatement and one question (spec step 6): the question the model wrote, with what sets it up, and before
+ * it at most one sentence (two when the candidate asked something and it is being answered), with filler, inference,
+ * judgement and, in "About your experience", praise left out (`chatParts`). `calm`: the restatement is the calm line instead (an item
+ * settled as not known). `question`: asked when the model wrote none. `known`: the job's own question for the item being
+ * asked, kept whole when the model wrote it word for word. `next`: the job's words for the question this message moves
+ * on to, asked instead when all the model wrote is its last sentence (`onlyItsEnd`). `notes`: the team's private notes.
+ * Never adds words of the model's, and the restatement never repeats a sentence of the question.
+ */
+export function shapeChatMessage(text: string, opts: { experience: boolean; calm: boolean; question: string | null; answering: boolean; known?: string | null; next?: string | null; notes?: readonly string[] }): string {
+  const parts = chatParts(text, opts);
+  const question = parts.question && !(opts.next && onlyItsEnd(parts.question, opts.next)) ? parts.question : (opts.next ?? opts.question);
+  const lead = opts.calm ? CHAT_CALM_LINE : parts.lead.filter((s) => !says(question, s)).join(" ");
   if (!question) return lead || text.trim();
   return lead ? `${lead}\n\n${question}` : question;
 }
@@ -551,31 +568,186 @@ const ASKS_THEM = /^(?:(?:ok(?:ay)?|so|and|but|also|sorry|hi|hello|hey|thanks|on
  * hour?", "I'm looking for $52 an hour, is that ok?", "5 years, why?") is still an answer (Wave S9 review).
  */
 const asksAssistant = (s: string) => ASKS.test(s) && (ASKS_THEM.test(s.replace(/[’‘]/g, "'")) || !/[\p{L}\p{N}]/u.test(s));
-/** A request that asks as a question does ("Tell me about…", "Walk me through…"). */
-const REQUEST = /^(?:please\s+)?(?:tell me|describe|walk me through|talk me through|share|give me|explain)\b/i;
+/**
+ * How a request or a scene may open: a lead-in word or two ("Now, …") and how the candidate is addressed (one word and a
+ * comma: "Test, …"). "Then", "First", "Finally" and "Lastly" are not among them: "First, explain the problem to the
+ * customer" is a step they told us about, and it is the restatement.
+ */
+const LEAD_INS = "(?:(?:please|now|next|so|and|also)[,:]?\\s+)*";
+const OPENING = `^${LEAD_INS}(?:(?!(?:then|first|finally|lastly)\\b)[\\p{L}'’-]+,\\s+)?${LEAD_INS}`;
+/**
+ * What can only be a request of ours: it is said to them ("Tell us about…", "Give an example of…"). "Let's talk about pay."
+ * and "I'd like to hear about…" are not among them: they are how a model moves from one thing to the next, and the
+ * question follows, or the code adds it.
+ */
+const SAID_TO_THEM = "tell (?:me|us)|walk (?:me|us) through|talk (?:me|us) through|give (?:me|us)|give (?:an|one|a)\\s+(?:\\w+\\s+)?example";
+const ASKS_THEM_DIRECTLY = new RegExp(`${OPENING}(?:${SAID_TO_THEM})\\b`, "iu");
+/** A request, which asks by itself as a question does: those, and the ones that can also be a step they told us about ("Describe…", "Share…", "Explain…"). */
+const REQUEST = new RegExp(`${OPENING}(?:${SAID_TO_THEM}|describe|share|explain)\\b`, "iu");
+/** A sentence that sets the scene ("Think of a busy day.", "Test, picture a class of twenty."): it asks nothing by itself. */
+const SETS_UP = new RegExp(`${OPENING}(?:think (?:of|about|back)|imagine|picture|suppose|consider|recall|remember|let['’]s say)\\b`, "iu");
 const asksAt = (sentences: string[]) => sentences.findIndex((s) => ASKS.test(s) || REQUEST.test(s));
+/**
+ * Whether a message asks without a question mark, as the shaping reads one: a sentence of it is a `REQUEST`, so "Think of
+ * a time…" alone does not. The eval reads messages with this (packages/evals, chat-suite.ts), so the two never drift.
+ */
+export const asksByRequest = (text: string): boolean => sentencesOf(text).some((s) => REQUEST.test(s));
+/** The requests a question keeps after it ("Not done that exactly? Tell me about something similar."); a question followed by "Tell us…" is two asks. */
+const KEPT_AFTER_A_QUESTION = /^(?:please\s+)?(?:tell me|describe|walk me through|talk me through|share|give me|explain)\b/i;
+/**
+ * What a question after a request asks when it is a second ask: pay, days, hours, starting. Any other question stays with
+ * the request ("Describe a busy day. How do you decide what comes first?"): cutting it would lose the real question, and
+ * the team would read an answer to half of it, which is worse than two asks.
+ */
+const ASKS_ANOTHER_THING = /\b(?:pay|paid|salary|wages?|hourly|benefits?|commute|relocat\w*|weekends?|shifts?|availab\w+|start date)\b|\b(?:what|which) (?:days|hours)\b|\bcan you (?:start|begin|work)\b/i;
+/** A question about what happened there, which stays even in those words ("How many hours did it take?"). */
+const FOLLOWS_ON = /\b(?:did|was|were|happened|came of|changed|went|turn(?:ed)? out)\b|\b(?:it|that|them|this|there)\?["”’)]*$/i;
 
 /**
- * The first question the model wrote ("Not done that exactly? Tell me about something similar." is one: a question
- * with the request that follows it), or null. Anything after it is left out.
+ * The first question the model wrote, from where it starts, with none of its words lost (the live smoke test's bug). A
+ * question keeps the request that follows it ("Not done that exactly? Tell me about something similar."). A request keeps
+ * what it leads through: a scene (`keeps` decides, as for any setup), another request, and the question it leads to ("Tell
+ * us about another day. Think of a mistake you made. What happened?"), unless that asks for something else and is not the
+ * job's own, `known`. Anything after it is left out.
  */
-function firstQuestion(text: string): string | null {
-  const sentences = sentencesOf(text);
-  const at = asksAt(sentences);
-  if (at < 0) return null;
-  let end = at + 1;
-  if (ASKS.test(sentences[at])) while (end < sentences.length && REQUEST.test(sentences[end]) && !/\?/.test(sentences[end])) end += 1;
-  return sentences.slice(at, end).join(" ");
+function firstQuestion(sentences: string[], at: number, known: string | null | undefined, keeps: (s: string) => boolean): string {
+  if (ASKS.test(sentences[at])) {
+    let end = at + 1;
+    while (end < sentences.length && KEPT_AFTER_A_QUESTION.test(sentences[end]) && !/\?/.test(sentences[end])) end += 1;
+    return sentences.slice(at, end).join(" ");
+  }
+  const belongs = (s: string) => !ASKS_ANOTHER_THING.test(s) || FOLLOWS_ON.test(s) || sentencesOf(known ?? "").some((x) => plainKey(x) === plainKey(s));
+  const ask = [sentences[at]];
+  let scenes: string[] = [];
+  for (const s of sentences.slice(at + 1)) {
+    const asks = ASKS.test(s);
+    if (!asks && SETS_UP.test(s)) {
+      scenes.push(s);
+      continue;
+    }
+    if (!(asks || REQUEST.test(s)) || !belongs(s)) break;
+    ask.push(...scenes.filter(keeps), s);
+    if (asks) break;
+    scenes = [];
+  }
+  return ask.join(" ");
 }
 
-/** The restatement: at most one sentence before the first question (two while answering the candidate), without filler, inference or (in "About your experience") praise; the calm line instead when `calm`. */
-function chatLead(text: string, opts: { experience: boolean; calm: boolean; answering: boolean }): string {
-  if (opts.calm) return CHAT_CALM_LINE;
-  const sentences = sentencesOf(text);
-  const at = asksAt(sentences);
-  // A restatement never repeats anything personal the candidate volunteered (their kids, their age…): it is not recorded either.
-  const before = (at >= 0 ? sentences.slice(0, at) : sentences).filter((s) => !FILLER.test(s) && !INFERENCE.test(s) && !(opts.experience && PRAISE.test(s)) && !/\?/.test(s) && redactProtected(s) === s);
-  return before.slice(0, opts.answering ? 2 : 1).join(" ");
+/**
+ * Where the first question of a message starts, among all its sentences, or -1: the first asking sentence of the first
+ * paragraph that asks. A first paragraph with no question mark gives way to a later paragraph that asks: its request is
+ * then a step they told us about ("Share the plan with the team each morning.\n\nWhich tool do you use?"). The one
+ * exception: when it ends with a request said to them and the next paragraph goes straight on (it asks, or sets a scene
+ * first), the two are one ask, from that request ("You keep a list. Tell me about one specific time.\n\nWhat did you do?").
+ */
+function questionAt(paragraphs: string[][]): number {
+  const asks = (p: string[]) => asksAt(p) >= 0;
+  const first = paragraphs.findIndex(asks);
+  const later = first === 0 && !paragraphs[0].some((s) => ASKS.test(s)) ? paragraphs.findIndex((p, i) => i > 0 && asks(p)) : -1;
+  if (later === 1) {
+    const ends = paragraphs[0].length - 1;
+    const goesOn = paragraphs[1].slice(0, asksAt(paragraphs[1])).every((s) => SETS_UP.test(s));
+    if (ASKS_THEM_DIRECTLY.test(paragraphs[0][ends]) && goesOn) return ends;
+  }
+  const own = later > 0 ? later : first;
+  return own < 0 ? -1 : paragraphs.slice(0, own).flat().length + asksAt(paragraphs[own]);
+}
+
+/** Where the job's own question of two or more sentences stands in the model's sentences, word for word (commas aside), next to each other. */
+function wordForWord(sentences: string[], known: string | null | undefined): { from: number; to: number } | null {
+  const job = sentencesOf(known ?? "").map(plainKey);
+  if (job.length < 2) return null;
+  const said = sentences.map(plainKey);
+  const from = said.findIndex((_, i) => job.every((k, j) => said[i + j] === k));
+  return from < 0 ? null : { from, to: from + job.length };
+}
+
+/**
+ * Whether all the model wrote for a new question is the last sentence of the job's own, which has more (the live smoke
+ * test of 4 Nov 2026: "What did you do, and how did it turn out?", with nothing to say what about), commas aside. Only
+ * that exact case: "What did you do next?" or "How did that go?" is the short check screen.turn v8 asks for on an item
+ * already answered, or the model's own words, and stands.
+ */
+function onlyItsEnd(written: string, jobQuestion: string): boolean {
+  const job = sentencesOf(jobQuestion);
+  return job.length >= 2 && plainKey(written) === plainKey(job[job.length - 1]);
+}
+
+/** Whether a text already says this sentence (`sentenceKey`). */
+const says = (text: string | null, s: string) => sentencesOf(text ?? "").some((x) => sentenceKey(x) === sentenceKey(s));
+
+/**
+ * A sentence that judges the candidate, or hints at what the team wants ("You seem very organized.", "A good answer
+ * says…", "We look for someone who…", "There were no major issues."). A team in a scene can want things: only a person
+ * they want counts ("The team wants a new rota by Friday." stays).
+ */
+const JUDGES = /^(?:you seem|you clearly|you obviously|sounds like|that sounds|that seems|that looks|that must)\b|\b(?:good|great|strong|best|ideal|perfect|right) answers?\b|\bwe(?:['’]re| are)? (?:want|look(?:ing)? for)\b|\b(?:team|company|employer|manager)(?:['’]s| is)? (?:wants?|look(?:s|ing)? for) (?:someone|people|a person)\b|\b(?:straightforward|easy) for you\b|\bno major (?:issues|hurdles)\b/i;
+/** Opens with praise, whatever it goes on to say ("Good work.", "Great work on that."). "Strong", "solid" and "clear" are left out: "A strong wind…" is about the wind. */
+const OPENS_WITH_PRAISE = /^(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|well done|nicely|(?:good|nice) (?:job|work))\b/i;
+/** A promise of a time: the code says what happens next, and decisions have no deadline (founder decision B6). "The team will be in touch." names no time, and stays. */
+const PROMISES_A_TIME = /\b(?:will|['’]ll)\b.*\b(?:within|few (?:hours|days|weeks)|next week|soon|shortly|by (?:monday|tuesday|wednesday|thursday|friday))\b/i;
+const ABOUT_THEM = /^(?:you|your|that|this|it)\b/i;
+const JUDGING_WORD = /\b(?:good|nice|fun|capable|organi[sz]ed)\b/i;
+/** Judging only in a short remark ("You handled that well.", "It went smoothly."): a scene can say them ("You have a customer who does not speak English well."). */
+const MILD_JUDGING_WORD = /\b(?:well|perfect|smart|useful|easy|smooth(?:ly)?|straightforward)\b/i;
+const SHORT_REMARK = 8;
+/** Said whoever it is about. A scene that opens with a word of praise keeps it: "Great, think of a time…" is still the scene. */
+const hints = (s: string) => JUDGES.test(s) || (OPENS_WITH_PRAISE.test(s) && !SETS_UP.test(s)) || PROMISES_A_TIME.test(s);
+/**
+ * A sentence that judges them or hints at what the team wants. A sentence about anything else keeps its words: "A strong
+ * wind knocks out the power during class." stays.
+ */
+const judges = (s: string) => hints(s) || (ABOUT_THEM.test(s) && (PRAISE.test(s) || JUDGING_WORD.test(s) || (MILD_JUDGING_WORD.test(s) && s.split(/\s+/).length <= SHORT_REMARK)));
+
+/**
+ * A message's restatement and question, by its paragraphs: the model is asked for the restatement, a blank line, then the
+ * question, and it writes that (the real model's messages, live test of 4 Nov 2026).
+ *
+ * The question: the job's own (`known`) when the model wrote all of it word for word, never cut, filtered or capped; or
+ * else the first one the model wrote (`questionAt`, `firstQuestion`).
+ *
+ * What is before it, wherever it stands, without filler, inference, judgement (`judges`; while answering the candidate's
+ * own question only `hints`, since "That is well within the range." may be the answer), (in "About your experience")
+ * praise or anything personal (`personal`), which is not recorded either. With earlier paragraphs: those are the
+ * restatement (at most one sentence, two while answering the candidate, never a request said to them), and what is in the
+ * question's own paragraph sets it up. All in one paragraph: the first sentence is the restatement, a second one in one
+ * breath is left out, and only a sentence that opens as a scene does (`SETS_UP`) sets the question up. Two sentences of
+ * setup at most, never one that says a private note in part (`echoesNotePart`), says the calm line, or repeats the
+ * message. With no question, a scene is not kept: it sets up nothing.
+ */
+function chatParts(text: string, opts: { experience: boolean; answering: boolean; known?: string | null; notes?: readonly string[] }): { lead: string[]; question: string | null } {
+  // A sentence said twice in a row counts once ("Tell us about it.\n\nTell us about it. What did you do?").
+  let previous = "";
+  const once = (s: string) => {
+    const same = sentenceKey(s) === previous;
+    previous = sentenceKey(s);
+    return !same;
+  };
+  const paragraphs = text.split(/\n+/).map((p) => sentencesOf(p).filter(once)).filter((p) => p.length);
+  const sentences = paragraphs.flat();
+  const usable = (s: string) => !FILLER.test(s) && !INFERENCE.test(s) && !(opts.answering ? hints(s) : judges(s)) && !(opts.experience && PRAISE.test(s)) && !/\?/.test(s) && !personal(s);
+  const restates = opts.answering ? 2 : 1;
+  const run = wordForWord(sentences, opts.known);
+  const at = run ? run.from : questionAt(paragraphs);
+  if (at < 0) return { lead: sentences.filter((s) => usable(s) && !SETS_UP.test(s)).slice(0, restates), question: null };
+  let from = 0;
+  for (const p of paragraphs) {
+    if (from + p.length > at) break;
+    from += p.length;
+  }
+  const own = sentences.slice(from, at).filter(usable);
+  const noNote = (s: string) => !(opts.notes ?? []).some((n) => echoesNotePart(s, n));
+  const question = run ? sentences.slice(run.from, run.to).join(" ") : firstQuestion(sentences, at, opts.known, (s) => usable(s) && noNote(s));
+  const lead = (from > 0 ? sentences.slice(0, from).filter((s) => usable(s) && !ASKS_THEM_DIRECTLY.test(s)) : own.filter((s) => !SETS_UP.test(s))).slice(0, restates);
+  const said = [...lead, question, CHAT_CALM_LINE].join(" ");
+  const setsUp = (s: string) => noNote(s) && !says(said, s);
+  const setup = (from > 0 ? own : own.filter((s) => SETS_UP.test(s))).filter(setsUp).slice(-2);
+  return { lead, question: [...setup, question].join(" ") };
+}
+
+/** The restatement alone, for a message whose question is the code's (a request is no restatement beside it): the calm line instead when `calm`. */
+function chatLead(text: string, opts: { experience: boolean; calm: boolean; answering: boolean; known?: string | null }): string {
+  return opts.calm ? CHAT_CALM_LINE : chatParts(text, opts).lead.filter((s) => !REQUEST.test(s)).join(" ");
 }
 
 /**
@@ -584,19 +756,33 @@ function chatLead(text: string, opts: { experience: boolean; calm: boolean; answ
  * when none are left.
  */
 function shapeClosing(text: string): string | null {
-  const kept = sentencesOf(text).filter((s) => !/\?/.test(s) && !INFERENCE.test(s) && !FILLER.test(s) && redactProtected(s) === s && !/\b(?:press send|next screen|review your answers|check your answers|what happens next|hear back|within|few days|next week|soon|shortly)\b/i.test(s));
+  const kept = sentencesOf(text).filter((s) => !/\?/.test(s) && !INFERENCE.test(s) && !FILLER.test(s) && !personal(s) && !/\b(?:press send|next screen|review your answers|check your answers|what happens next|hear back|within|few days|next week|soon|shortly)\b/i.test(s));
   return kept.length ? kept.slice(0, 2).join(" ") : null;
 }
 
-/** Whether the words share a run of five with a private note: a note is never said to a candidate, even in part. */
+const noteWords = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+/** Whether the words share a run of `size` with a note's words. */
+function sharesRun(text: string, n: string[], size: number): boolean {
+  const grams = new Set(n.slice(0, n.length - size + 1).map((_, i) => n.slice(i, i + size).join(" ")));
+  const t = noteWords(text);
+  return t.some((_, i) => i + size <= t.length && grams.has(t.slice(i, i + size).join(" ")));
+}
+
+/**
+ * Whether the words share five in a row with a private note: a note is never said to a candidate. A whole message is held
+ * to this, since a candidate's own words or the job's can share a shorter run with a note by chance.
+ */
 function echoesNote(text: string, note: string | undefined): boolean {
   if (!note) return false;
-  const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
-  const n = words(note);
-  if (n.length < 5) return false;
-  const grams = new Set(n.slice(0, -4).map((_, i) => n.slice(i, i + 5).join(" ")));
-  const t = words(text);
-  return t.slice(0, -4).some((_, i) => grams.has(t.slice(i, i + 5).join(" ")));
+  const n = noteWords(note);
+  return n.length >= 5 && sharesRun(text, n, 5);
+}
+
+/** The stricter check on a sentence the model chose to add before its question: three in a row, or the whole of a shorter note (two words or more). */
+function echoesNotePart(text: string, note: string | undefined): boolean {
+  if (!note) return false;
+  const n = noteWords(note);
+  return n.length >= 2 && sharesRun(text, n, Math.min(3, n.length));
 }
 
 /**
@@ -655,6 +841,8 @@ export function seemsConfused(text: string | null | undefined): boolean {
 
 /** A sentence as compared with another: case, spacing and the closing mark left out. */
 const sentenceKey = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, " ").replace(/[.!?…"”’)]+$/, "").trim();
+/** The same, commas aside: the real model adds them to a job's words ("What did you do, and how did it turn out?"). */
+const plainKey = (s: string) => sentenceKey(s).replace(/,/g, "");
 
 /**
  * The recorded answer held to the candidate's latest message (Wave S9): a question they asked in it is never part of
@@ -755,7 +943,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     } else {
       move = { key: item.key, move: expected };
       calm = expected === "unknown";
-      if (modelStays || (!t.questionKey && !t.done)) t = moveOn(chatLead(t.messageToCandidate, { experience: plan.section === "experience", calm, answering: false }), answerFor(expected));
+      if (modelStays || (!t.questionKey && !t.done)) t = moveOn(chatLead(t.messageToCandidate, { experience: plan.section === "experience", calm, answering: false, known: q(item.key)?.question }), answerFor(expected));
       else t = { ...t, answerRecorded: answerFor(expected) };
     }
     if (move.move === "unknown" && item.kind === "gap" && t.answerRecorded?.questionKey === item.key) t = { ...t, answerRecorded: null };
@@ -767,7 +955,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     composed = true;
     t = { ...t, done: false, questionKey: next.key, followUpReason: null, messageToCandidate: calm ? `${CHAT_CALM_LINE}\n\n${next.question}` : next.question };
   }
-  // A private note is never said, even in part, whichever question it belongs to: the model is given every note.
+  // Five words in a row of a private note are never said, whichever question it belongs to: the model is given every note.
   const notes = [...lookFor.values()];
   const echoesAny = (text: string) => notes.some((n) => echoesNote(text, n));
   if (t.done) {
@@ -775,7 +963,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     return { turn: { ...t, messageToCandidate: echoesAny(closing) ? "" : closing }, move };
   }
   const asking = t.questionKey ? q(t.questionKey) : undefined;
-  let message = composed ? t.messageToCandidate : shapeChatMessage(t.messageToCandidate, { experience: plan.section === "experience", calm, question: ladderQuestion ?? asking?.question ?? (item ? q(item.key)?.question ?? null : null), answering: !!t.candidateAskedAbout });
+  let message = composed ? t.messageToCandidate : shapeChatMessage(t.messageToCandidate, { experience: plan.section === "experience", calm, question: ladderQuestion ?? asking?.question ?? (item ? q(item.key)?.question ?? null : null), answering: !!t.candidateAskedAbout, known: asking?.question ?? q(current)?.question, next: asking && asking.key !== current ? asking.question : null, notes });
   // The question goes back to its own words (the packet's, which never carry a note).
   if (echoesAny(message)) message = shapeChatMessage("", { experience: false, calm, question: asking?.question ?? q(current)?.question ?? CHAT_WRAP_QUESTION, answering: false });
   // A confused candidate gets the question again and the offer of a person (Wave S9), after the one question.

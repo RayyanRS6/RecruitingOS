@@ -1,10 +1,26 @@
 # Production setup: from new accounts to go-live
 
 Status: written 29 October 2026 for the first production launch, from the code on branch `production-readiness`
-(strict production start-up checks, sign-up by invitation, the worker's stall exit, the Windows database tools). None of
-it has run against production yet: no production project exists. It is written for the assistant who guides the founder
-on her Windows laptop, one screen at a time. Staging is unchanged (`docs/runbooks/staging-environment-variables.md`,
-`docs/runbooks/railway-worker.md`, `docs/runbooks/staging-database-setup.md`).
+(strict production start-up checks, sign-up by invitation, the worker's stall exit, the Windows database tools). It is
+written for the assistant who guides the founder on her Windows laptop, one screen at a time. Staging is unchanged
+(`docs/runbooks/staging-environment-variables.md`, `docs/runbooks/railway-worker.md`,
+`docs/runbooks/staging-database-setup.md`).
+
+**Where production stands (4 November 2026).** It exists, so do not start again from step 1. Read the dashboards before
+changing anything: some plans and settings differ from step 1, to stay inside the plans already paid.
+
+- **Has run:** the production database (steps 1 and 3); Vercel Production's settings, and the Railway worker and its
+  scanner (steps 1 and 5); the first release (step 6); Microsoft sign-in, the first administrator and the business
+  calendar (step 7); and the smoke test (step 8), which passed except for email and the outside Microsoft part of item 2.
+  Its test company and role exist.
+- **Not live:** email. Postmark's account approval is still pending and the sending domain's DNS records (step 2) are
+  not in, so every email fails. The one email check, the proof of the queue mailbox and the Postmark webhook (step 5;
+  step 8, item 7) wait for it.
+- **Being decided:** the product's new name and its domain. Until then production runs on its `.vercel.app` address, and
+  the names in this file (`recruiting.identifiedtalent.com`, `hire.identifiedtalent.com`) are the plan of 29 October.
+- **Not run yet:** a Microsoft sign-in from outside ITS (check first that the app registration in use takes outside
+  accounts, see step 1), a second administrator (step 7, item 6), branch protection (step 4), the uptime monitor (step 9),
+  go-live (step 10) and locking down staging (step 11).
 
 ## Before you start
 
@@ -197,7 +213,8 @@ ITS mailboxes (Microsoft 365), each read by a named person every business day:
 - `<reply mailbox>`: candidate replies, and the help and accommodation contact printed on job pages (`EMAIL_REPLY_TO`).
 - `<queue mailbox>`: recruiter requests and administrator changes (`ITS_QUEUE_EMAIL`; the reply mailbox may do both).
 - `privacy@identifiedtalent.com`: shown to every candidate (`PRIVACY_EMAIL`).
-- `<test mailbox>`: the smoke tests (step 8), with plus addressing (`name+1029a@…`) if the mail system accepts it.
+- `<test mailbox>`: the one email check of the smoke test (step 8). A plus tag (`name+1029a@…`) reaches the same
+  mailbox, but the app counts it as the same person (step 8).
 
 If Proofpoint holds mail from `hire.identifiedtalent.com`, allow it. Email-in (`apply.`) stays off at launch ("Not at
 launch" below).
@@ -415,13 +432,28 @@ Test data in production follows these rules:
 - Made-up people and documents only; nothing is copied from staging. Never run `scripts/load-apply.ts` against
   production.
 - One ITS test company, **ITS Internal Test - not hiring**, opened once by the first administrator at
-  `https://<host>/setup/company` (an administrator may open a company while sign-up is by invitation). The queue
-  mailbox gets a notice about the new company: its first check. Then **Console, Customers**, the company, **Change
-  plan**: Design Partner, reason "ITS test company", so no trial clock pauses its applications after 30 days.
+  `https://<host>/setup/company` (an administrator may open a company while sign-up is by invitation). Then **Console,
+  Customers**, the company, **Change plan**: Design Partner, reason "ITS test company", so no trial clock pauses its
+  applications after 30 days.
+- Opening it sends the queue mailbox one notice about the new company. Until email is live that send fails and
+  **Console, Problems, Alerts** shows "A new company is waiting for the ITS check" instead: **Resolve** it. The notice
+  never goes again for this company, so once email is live something else proves the queue mailbox: the email about an
+  administrator grant made after that (step 7, item 6) arrives there, or, with no grant to make, the email about a
+  **Bring in a recruiter** request on the test role (answer the request in the **Queue** afterwards).
 - One role in it, **TEST - not a real job**, approved; nothing else.
 - Between checks the company stays unconfirmed: its pages, feeds and candidate emails are off.
-- Candidates use `<test mailbox>` with a new plus tag for each check, never `example.com` or a made-up domain: real
-  email bounces, and a bounce puts the address on the do-not-send list.
+- Applicants use one of two addresses, never `example.com` or a made-up domain: real email bounces, and a bounce puts
+  the address on the do-not-send list.
+  - **A new name at `blackhole.postmarkapp.com`**, not used before in the test company and with no plus tag
+    (`test-1105a@blackhole.postmarkapp.com`): item 4 until email is live and on every later release, and item 6 always.
+    Postmark accepts mail to that domain and throws it away, so no real mailbox is involved and nothing arrives
+    anywhere. Until email is live, its emails show **Could not be delivered** on the applicant's **Messages** tab.
+  - **`<test mailbox>`**: the one email check. Once email is live, run items 3, 4 and 9 again with `<test mailbox>`. It
+    works once: the address is then on file, so another email check needs a new Microsoft 365 alias.
+- A plus tag does not make a new person: the app ignores it when it matches applicants, so `name+2@…` is `name@…`. A
+  second application under the same mailbox name shows nothing new on the team's list, gets "You already have an
+  application with us" (at most once a day) instead of the one email, and its interview is held aside until that address
+  confirms by email.
 - Test applicants stay. Deleting one goes through a privacy request that needs counsel's approval, so that path is never
   used for test data; leave the test company out of totals by hand in reviews.
 
@@ -434,19 +466,26 @@ The check:
    step says "Recruiting OS is by invitation for now" with the reply mailbox.
 3. **Console, Customers**, the test company: **Confirm the company**, reason "smoke test". From the second check on,
    also the role's **More** menu, **Accept applications again**.
-4. In a private window, the role's job page (its **Share** tab has the link): apply as "Test Candidate <date>" with
-   `<test mailbox>` plus a new tag and a made-up PDF résumé. The acknowledgment arrives in the test mailbox from
-   `updates@hire.identifiedtalent.com`, and its message details show `dkim=pass` and `dmarc=pass`. The AI interview
-   invitation follows.
-5. As the owner: the résumé goes from quarantine to clean and opens; **Settings**, **Audit history** shows the read.
-6. A second made-up applicant with the EICAR test file: the file is refused as infected and the application goes on
-   without it. Build the file inside the browser page: saved to disk, Windows Defender removes it.
+4. In a private window, the role's job page (its **Share** tab has the link): apply as "Test Candidate `<date>`" with
+   the check's address (the rules above) and a made-up PDF résumé. The AI interview opens by itself about a minute after
+   sending. With `<test mailbox>`, the one email (thank you, and the link to the interview) arrives in the test mailbox
+   from `updates@hire.identifiedtalent.com`, and its message details show `dkim=pass` and `dmarc=pass`. With a new name
+   at `blackhole.postmarkapp.com` nothing arrives anywhere, so read the email on the applicant's **Messages** tab.
+5. As the owner: the résumé opens on the applicant's **Résumé** tab. **Settings**, **Security**, **Audit history** says
+   the candidate's record was opened; it lists records, not each file. The file itself is `document.read` in the
+   database's `audit_records`, with `document.uploaded` before it.
+6. A second made-up applicant, with a new name at `blackhole.postmarkapp.com` and the EICAR test file, at **Read my
+   resume**: the page says "We could not use `<file>`" and offers another file or the four short questions. The proof
+   that the real scanner refused it is `Eicar-Test-Signature FOUND` in Railway, the clamav service, **Deploy Logs**. The
+   application goes on without a file through the four questions. Build the file inside the browser page: saved to disk,
+   Windows Defender removes it.
 7. Postmark, the webhook, **Send test**: the app answers 200.
-8. Optional: invite the test candidate to an interview and pick a time from the email; the confirmation carries a
-   calendar file.
+8. Optional, with `<test mailbox>`: invite the test candidate to an interview and pick a time from the email; the
+   confirmation carries a calendar file.
 9. Right afterwards: the role's **More** menu, **Stop accepting applications**; **Console, Customers**, the test
    company, **Take back the confirmation**, reason "smoke test done". Feeds may list the role for up to 5 more minutes.
-10. Write the result, without addresses, as a comment on the release pull request.
+10. Write the result, without addresses, in the private launch to-do document, not on a pull request: the repository is
+    public.
 
 ## 9. Uptime monitor
 
@@ -474,7 +513,7 @@ Real people's data enters production only after:
 - evidence for every blocker in `docs/readiness/20` section B, among them point-in-time recovery (it needs Small
   compute) with one restore drill, the partner's signed pilot agreement, the vendors' data-processing terms and a named
   incident lead;
-- Postmark's approval, and steps 8 and 9 passed on production.
+- Postmark's approval, and steps 8 and 9 passed on production, the one email check and the queue mailbox included.
 
 Then:
 
@@ -520,7 +559,7 @@ Existing test accounts keep working; a new tester is added in the dashboard firs
 3. The release pull request, merged with a merge commit (step 6, item 3).
 4. The worker, then the app (step 6, items 4 and 5); Railway now deploys by itself. If the console shows "An older
    worker build is running" for more than a few minutes, see `docs/runbooks/railway-worker.md`.
-5. The short smoke test: step 8, items 3, 4 and 9.
+5. The short smoke test: step 8, items 3, 4 and 9, with a new name at `blackhole.postmarkapp.com`.
 
 ## Rollback
 

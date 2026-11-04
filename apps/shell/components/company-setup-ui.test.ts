@@ -51,6 +51,15 @@ describe("the company step by invitation", () => {
     expect(words(html)).toContain("Sign out");
   });
 
+  // The live smoke test of 4 Nov 2026: beside a long title the button gave way and "Sign out" broke onto two lines.
+  it("keeps Sign out on one line beside the title, however long the title: the button never gives way, the title wraps", () => {
+    for (const signup of [{ allowed: false, contact: "recruiting@its.example" }, { allowed: true, contact: "recruiting@its.example" }]) {
+      const html = draw(createElement(CompanySetup, { signup }));
+      expect(html, String(signup.allowed)).toMatch(/<h1 class="[^"]*\bmin-w-0\b[^"]*">/);
+      expect(html, String(signup.allowed)).toMatch(/<button[^>]*class="btn quiet sm[^"]*\bshrink-0\b[^"]*"[^>]*>(?:(?!<\/button>)[\s\S])*Sign out(?:(?!<\/button>)[\s\S])*<\/button>/);
+    }
+  });
+
   it("with no inbox to name, the line still says whom to ask", () => {
     const html = draw(createElement(CompanySetup, { signup: { allowed: false, contact: null } }));
     expect(words(html)).toContain("Ask ITS for an invitation.");

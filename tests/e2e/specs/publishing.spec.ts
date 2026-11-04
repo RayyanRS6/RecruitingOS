@@ -81,6 +81,126 @@ test("approve a role, see where it is going, share it and give it a closing date
   await expectAccessible(page, "empty applicant list with sharing");
 });
 
+// The live smoke test of 4 Nov 2026: Indeed unticked, "Approve and publish" pressed without "Save the boards", and the job
+// still went to Indeed. What is ticked on the card is what is approved.
+test("a board unticked on the approval card is left out, without pressing Save the boards", async ({ page, baseURL }) => {
+  test.setTimeout(180_000);
+  await signIn(page, { email: `boards+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
+  await createCompanyThroughTheForm(page, `Brightline Boards ${run}`);
+  const s = await (await page.request.post(`${baseURL}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json() as { session: { id: string } };
+  const { roleId } = await (await page.request.post(`${baseURL}/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string };
+
+  // the Share tab of a job waiting for approval has no ticks of its own: Approve reads only the card's
+  await page.goto(`/roles/${roleId}?tab=posting`);
+  const card = page.locator(".card", { has: page.getByRole("heading", { name: "Approve this job" }) });
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("The approval card above names the boards.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("checkbox", { name: /Indeed/ })).toHaveCount(0);
+  await expect(card.getByText(/Once approved it goes to your careers page, Google and Indeed\./)).toBeVisible();
+  await card.getByRole("button", { name: "Change the boards" }).click();
+  await card.getByRole("checkbox", { name: /Indeed/ }).uncheck();
+  // the line says what is ticked now, saved or not
+  await expect(card.getByText(/Once approved it goes to your careers page and Google\./)).toBeVisible();
+
+  // one request: the boards go with the approval, never as a step of their own before it
+  const saves: string[] = [];
+  page.on("request", (r) => { if (r.method() === "POST" && r.url().endsWith(`/api/v1/roles/${roleId}/channels`)) saves.push(r.url()); });
+  const approving = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith(`/api/v1/roles/${roleId}/approve`));
+  await card.getByRole("button", { name: "Approve and publish" }).click();
+  expect((await approving).postDataJSON()).toEqual({ version: 1, channels: [] });
+  const done = page.getByRole("dialog", { name: "Your job is approved" });
+  await expect(done).toBeVisible({ timeout: 30_000 });
+  const where = done.getByRole("region", { name: "Where it is going" });
+  await expect(where.getByText("Your careers page", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(where.getByText("Indeed", { exact: true })).toHaveCount(0);
+  await expect(where.getByText(/No job boards were chosen for this job/)).toBeVisible();
+  await done.getByRole("button", { name: "Go to your role" }).click();
+  expect(saves).toEqual([]);
+
+  // and the Share tab agrees
+  await page.goto(`/roles/${roleId}?tab=posting`);
+  await expect(page.getByRole("checkbox", { name: /Indeed/ })).not.toBeChecked({ timeout: 30_000 });
+});
+
+// A tick nobody saved used to outlive its list: after Send back the list came back with Indeed ticked, the line and Approve
+// still went by the old untick, and the job went without Indeed while Indeed showed ticked.
+test("ticks nobody saved go with their list: sent back and asked for again, the card goes by the saved boards", async ({ page, baseURL }) => {
+  test.setTimeout(180_000);
+  await signIn(page, { email: `ticks+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
+  await createCompanyThroughTheForm(page, `Brightline Ticks ${run}`);
+  const s = await (await page.request.post(`${baseURL}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json() as { session: { id: string } };
+  const { roleId } = await (await page.request.post(`${baseURL}/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string };
+
+  await page.goto(`/roles/${roleId}`);
+  const card = page.locator(".card", { has: page.getByRole("heading", { name: "Approve this job" }) });
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await card.getByRole("button", { name: "Change the boards" }).click();
+  await card.getByRole("checkbox", { name: /Indeed/ }).uncheck();
+  await expect(card.getByText(/Once approved it goes to your careers page and Google\./)).toBeVisible();
+
+  await card.getByRole("button", { name: "Send back with a note" }).click();
+  await card.getByLabel(/What should change/).fill("Have another look at the ceiling.");
+  await card.getByRole("button", { name: "Send back", exact: true }).click();
+  await page.getByRole("button", { name: "Request approval again" }).click({ timeout: 30_000 });
+
+  // the saved boards again, on the line and in the list, with nothing to save
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(card.getByText(/Once approved it goes to your careers page, Google and Indeed\./)).toBeVisible();
+  await card.getByRole("button", { name: "Change the boards" }).click();
+  await expect(card.getByRole("checkbox", { name: /Indeed/ })).toBeChecked();
+  await expect(card.getByRole("button", { name: "Save the boards" })).toHaveCount(0);
+
+  // "Save the boards" still works, and the line never goes back to the old boards while the role is read again
+  await card.getByRole("checkbox", { name: /LinkedIn/ }).check();
+  const withLinkedIn = card.getByText(/Once approved it goes to your careers page, Google, LinkedIn and Indeed\./);
+  await expect(withLinkedIn).toBeVisible();
+  await page.route(`**/api/v1/roles/${roleId}`, async (route) => { await new Promise((done) => setTimeout(done, 1500)); await route.continue(); });
+  const saved = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith(`/api/v1/roles/${roleId}/channels`));
+  await card.getByRole("button", { name: "Save the boards" }).click();
+  await saved;
+  await page.waitForTimeout(300);
+  await expect(withLinkedIn).toBeVisible({ timeout: 500 });
+  // the list closes once it is saved
+  await expect(card.getByRole("button", { name: "Change the boards" })).toBeVisible({ timeout: 30_000 });
+  await expect(withLinkedIn).toBeVisible();
+  await page.unrouteAll({ behavior: "wait" });
+
+  // nothing is left unsaved, so approving sends no boards and the saved ones stand
+  const approving = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith(`/api/v1/roles/${roleId}/approve`));
+  await card.getByRole("button", { name: "Approve and publish" }).click();
+  expect((await approving).postDataJSON()).toEqual({ version: 1 });
+  const done = page.getByRole("dialog", { name: "Your job is approved" });
+  await expect(done).toBeVisible({ timeout: 30_000 });
+  const where = done.getByRole("region", { name: "Where it is going" });
+  await expect(where.getByText("LinkedIn", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(where.getByText("Indeed", { exact: true })).toBeVisible({ timeout: 30_000 });
+});
+
+// A page left behind: someone else approved a moment ago. Saving the ticks first used to close the live job's board without
+// its warning, and only then was the approval refused. Now the refusal changes nothing, and the page catches up.
+test("approving on a page left behind changes no boards, and the page catches up", async ({ page, baseURL }) => {
+  test.setTimeout(180_000);
+  await signIn(page, { email: `behind+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
+  await createCompanyThroughTheForm(page, `Brightline Behind ${run}`);
+  const s = await (await page.request.post(`${baseURL}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json() as { session: { id: string } };
+  const { roleId } = await (await page.request.post(`${baseURL}/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string };
+
+  await page.goto(`/roles/${roleId}`);
+  const card = page.locator(".card", { has: page.getByRole("heading", { name: "Approve this job" }) });
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await card.getByRole("button", { name: "Change the boards" }).click();
+  await card.getByRole("checkbox", { name: /Indeed/ }).uncheck();
+
+  // approved elsewhere; this page does not know yet
+  expect((await page.request.post(`${baseURL}/api/v1/roles/${roleId}/approve`, { data: { version: 1 } })).ok()).toBeTruthy();
+  await card.getByRole("button", { name: "Approve and publish" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "There is no pending approval for this role." })).toBeVisible({ timeout: 30_000 });
+  await expect(card).toBeHidden({ timeout: 30_000 });
+
+  await page.goto(`/roles/${roleId}?tab=posting`);
+  await expect(page.getByRole("checkbox", { name: /Indeed/ })).toBeChecked({ timeout: 30_000 });
+});
+
 test("Setup: the logo and the 'about the company' text, and who posts on the job boards", async ({ page }) => {
   test.setTimeout(180_000);
   await signIn(page, { email: `profile+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });

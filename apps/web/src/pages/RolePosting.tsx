@@ -11,6 +11,7 @@ import { LinkedInPost } from "../components/LinkedInPost";
 import { JobAddress, ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
 import { scrollBehavior } from "../motion";
+import { savedBoardsKey } from "../publishing";
 import { toast } from "../toast";
 import { ACCEPTING_LABEL } from "../role-status";
 import { boardNames } from "../role-words";
@@ -34,6 +35,9 @@ import { linkedInPostLink } from "../linkedin-post";
 
 /** What the read-only tab says to someone without role.manage. */
 export const READ_ONLY_POSTINGS = "Only an owner or an admin changes where this job is posted.";
+
+/** The boards card while the job waits for approval: Approve reads only the approval card's boards, so they are named and changed there. */
+export const BOARDS_ON_THE_CARD = "The approval card above names the boards.";
 
 /** The dot beside each posting state: green once a check proved it live, amber while it waits on a person or is paused. */
 const STATE_TONE: Record<string, Tone> = { draft: "neutral", approved: "neutral", ready_to_post: "caution", posted_manually: "accent", submitted_integration: "accent", live_verified: "good", paused: "caution", failed: "critical", closed: "neutral" };
@@ -285,7 +289,7 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
       <div className="grid-2">
         <Card title="Where it is posted">
           <p className="small muted mb-3">{its ? "ITS posts it on the job boards from your company's accounts." : "Your team posts it on the job boards from your own accounts."}</p>
-          <BoardTicks key={d.boards.map((b) => `${b.channel}:${b.chosen}`).join(",")} roleId={roleId} boards={d.boards} roleStatus={roleStatus} whoPosts={d.whoPosts} canManage={canManage} />
+          {roleStatus === "pending_approval" ? <p className="small text-ink-2">{BOARDS_ON_THE_CARD}</p> : <BoardTicks key={savedBoardsKey(d.boards)} roleId={roleId} boards={d.boards} roleStatus={roleStatus} whoPosts={d.whoPosts} canManage={canManage} />}
         </Card>
         <section id="closing-date" className="setup-section" tabIndex={-1}>
           <Card title="Closing date">
