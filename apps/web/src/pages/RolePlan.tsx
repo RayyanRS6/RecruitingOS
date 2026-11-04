@@ -10,7 +10,7 @@ import { BoardTicks } from "../components/BoardTicks";
 import { ClosingDateField } from "../components/ClosingDate";
 import { useCompanyCheck } from "../components/use-company-check";
 import { Link } from "../nav";
-import { autoActionsLine, isLegalReason, legalLines, previewHref, wordsList } from "../publishing";
+import { approveRequest, autoActionsLine, boardsOnTheLine, isLegalReason, legalLines, previewHref, savedBoardsKey, wordsList } from "../publishing";
 import { toast } from "../toast";
 import { actorWords, describeRoleEvent, roleWords } from "../role-words";
 import { evidencedInWords } from "./role/evidence";
@@ -135,21 +135,18 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
   const [note, setNote] = useState("");
   // Until ITS confirms the company (founder decision B7) an approved role waits to go public; the toast says so.
   const check = useCompanyCheck();
-  // Boards ticked on this card and not saved: approving goes by what is on the screen, so they are saved first (the live
-  // smoke test of 4 Nov 2026 unticked Indeed, approved without "Save the boards", and the job still went to Indeed).
+  // Boards ticked on this card and not saved: approving goes by what is on the screen, so they go with the approval, which
+  // the server applies whole or refuses whole (the live smoke test of 4 Nov 2026 unticked Indeed, approved without "Save
+  // the boards", and the job still went to Indeed). They last as long as their list (BoardTicks clears them as it goes),
+  // and the list goes when the request waiting changes (WhereItGoes below is keyed on it).
   const [unsaved, setUnsaved] = useState<string[] | null>(null);
   const approve = useMutation({
-    mutationFn: async (_editWhileOpen: boolean) => {
-      if (unsaved) {
-        await api.post(`/api/v1/roles/${role.id}/channels`, { channels: unsaved });
-        setUnsaved(null);
-        await qc.invalidateQueries({ queryKey: ["role", role.id] });
-      }
-      return api.post(`/api/v1/roles/${role.id}/approve`, { version: pending!.version });
-    },
-    onSuccess: async (_r, editWhileOpen) => { toast(approvedToast({ editWhileOpen: !!pending?.editWhileOpen, check })); onApproved({ editWhileOpen }); await refresh(); },
-    // A refusal by the legal check (D5) names what is missing; the card lists it once the role is read again.
-    onError: async (e) => { toast(e instanceof ApiError ? e.message : "Could not approve."); if (e instanceof ApiError && e.code === "legal_check") await refresh(); },
+    mutationFn: (editWhileOpen: boolean) => api.post(`/api/v1/roles/${role.id}/approve`, approveRequest({ version: pending!.version, editWhileOpen, unsaved })),
+    // Cleared once the role has been read again, so the line never goes back to the old boards meanwhile.
+    onSuccess: async (_r, editWhileOpen) => { toast(approvedToast({ editWhileOpen: !!pending?.editWhileOpen, check })); onApproved({ editWhileOpen }); await refresh(); setUnsaved(null); },
+    // A refusal by the legal check (D5) names what is missing; the card lists it once the role is read again. A page left
+    // behind (someone else decided, or a newer version waits) catches up the same way; nothing changed on the server.
+    onError: async (e) => { toast(e instanceof ApiError ? e.message : "Could not approve."); if (e instanceof ApiError && ["legal_check", "nothing_pending", "version_mismatch"].includes(e.code)) await refresh(); },
   });
   // Sent back from this card: the API keeps saying the role waits for approval until the worker makes it a draft again,
   // so the card says it was sent back meanwhile. Once the role is no longer waiting, this is done with: asking for
@@ -212,7 +209,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
             <a className="btn secondary sm" href={previewHref(role.id, pending.version)} target="_blank" rel="noopener noreferrer" title={`Version ${pending.version} exactly as candidates will see it. The preview is not public and search engines never see it.`}><Icon name="eye" />Preview the job page<span className="sr-only"> (opens in a new tab)</span></a>
           </div>
         ) : null}
-        {!pending.editWhileOpen ? <WhereItGoes role={role} canManage={canManage} unsaved={unsaved} onUnsaved={setUnsaved} /> : null}
+        {!pending.editWhileOpen ? <WhereItGoes key={pending.id} role={role} canManage={canManage} unsaved={unsaved} mayDecide={pending.viewer.mayDecide} busy={approve.isPending} onUnsaved={setUnsaved} /> : null}
         {musts.length || nices.length ? (
           // The job page lists them (plan D10), so the approver sees them as candidates will; the eye says so, and the
           // lock says why each one matters stays with the team (both words are the marks' names and tooltips).
@@ -282,12 +279,13 @@ export function CatchingUpCard({ latest, sentBackHere }: { latest: RoleDetail["p
 
 /**
  * Where the job goes once approved (plan D6): the careers page, Google and the ticked boards, and who posts on the
- * boards. Those who manage postings change the ticks here, before approving; they can change them after too. The line
- * names what is ticked (`unsaved`), saved or not: approving saves it.
+ * boards. Those who manage postings change the ticks here, before approving; they can change them after too. For someone
+ * who may decide, the line names what is ticked (`unsaved`), saved or not: approving takes it. For anyone else it names
+ * what is saved. The list starts again from the saved boards whenever they change, and holds still while approving (`busy`).
  */
-function WhereItGoes({ role, canManage, unsaved, onUnsaved }: { role: RoleDetail; canManage: boolean; unsaved: string[] | null; onUnsaved: (channels: string[] | null) => void }) {
+function WhereItGoes({ role, canManage, unsaved, mayDecide, busy, onUnsaved }: { role: RoleDetail; canManage: boolean; unsaved: string[] | null; mayDecide: boolean; busy: boolean; onUnsaved: (channels: string[] | null) => void }) {
   const [changing, setChanging] = useState(false);
-  const boards = role.boards.filter((b) => (unsaved ? unsaved.includes(b.channel) : b.chosen)).map((b) => b.name);
+  const boards = boardsOnTheLine(role.boards, unsaved, mayDecide);
   const places = wordsList(["your careers page", "Google", ...boards]);
   return (
     <div className="stack gap-1.5">
@@ -295,7 +293,7 @@ function WhereItGoes({ role, canManage, unsaved, onUnsaved }: { role: RoleDetail
         Once approved it goes to {places}. {boards.length ? (role.whoPosts === "its" ? "ITS posts it on the job boards from your company's own accounts." : "You post it on the job boards from your own accounts.") : ""}
         {canManage && !changing ? <> <button type="button" className="link-btn" onClick={() => setChanging(true)}>Change the boards</button></> : null}
       </p>
-      {changing ? <BoardTicks roleId={role.id} boards={role.boards} roleStatus={role.status} whoPosts={role.whoPosts} canManage={canManage} onDone={() => setChanging(false)} onUnsaved={onUnsaved} /> : null}
+      {changing ? <BoardTicks key={savedBoardsKey(role.boards)} roleId={role.id} boards={role.boards} roleStatus={role.status} whoPosts={role.whoPosts} canManage={canManage} busy={busy} onDone={() => setChanging(false)} onUnsaved={onUnsaved} /> : null}
     </div>
   );
 }

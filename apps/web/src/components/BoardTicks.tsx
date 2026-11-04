@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Chip } from "@ros/ui";
 import { api, ApiError, type BoardChoiceView, type WhoPosts } from "../api/client";
@@ -16,9 +16,10 @@ const ROW = "flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text
  * plan, and says so. The ticks can change before and after approval: on a live job a newly ticked board is prepared
  * (and ITS gets a task to post it when ITS posts for the company), and an unticked board's listing is closed and, if it
  * was up, taken down. Changing them needs role.manage; everyone else sees the same list read-only. `onUnsaved` tells the
- * approval card what is ticked and not saved yet, so approving goes by what is on the screen.
+ * approval card what is ticked and not saved yet, so approving goes by what is on the screen, and that lasts only as long
+ * as this list. `busy` holds the list while that approval is being sent.
  */
-export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; roleStatus: string; whoPosts: WhoPosts; canManage: boolean; onDone?: () => void; onUnsaved?: (channels: string[] | null) => void }) {
+export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; roleStatus: string; whoPosts: WhoPosts; canManage: boolean; busy?: boolean; onDone?: () => void; onUnsaved?: (channels: string[] | null) => void }) {
   const qc = useQueryClient();
   const chosen = props.boards.filter((b) => b.chosen).map((b) => b.channel as string);
   const [picked, setPicked] = useState<string[]>(chosen);
@@ -29,12 +30,17 @@ export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; r
     onSuccess: async () => {
       const t = boardTicksToast({ before: chosen, after: picked, roleStatus: props.roleStatus, whoPosts: props.whoPosts });
       toast(t.title, t.detail);
+      // Read again first, the role last: the card's line goes from these ticks straight to the same boards saved, never back to the old ones.
+      for (const k of [["postings", props.roleId], ["brief"], ["role", props.roleId]]) await qc.invalidateQueries({ queryKey: k });
       props.onUnsaved?.(null);
-      for (const k of [["role", props.roleId], ["postings", props.roleId], ["brief"]]) await qc.invalidateQueries({ queryKey: k });
       props.onDone?.();
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save the boards."),
   });
+  const busy = save.isPending || !!props.busy;
+  // Ticks nobody saved go with the list that shows them: nothing may be approved by boards no tick shows.
+  const { onUnsaved } = props;
+  useEffect(() => () => onUnsaved?.(null), [onUnsaved]);
   const pick = (next: string[]) => {
     setPicked(next);
     props.onUnsaved?.(unsavedBoards(chosen, next));
@@ -50,7 +56,7 @@ export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; r
         {props.boards.map((b) => (
           <div key={b.channel} className="grid gap-0.5">
             <label className={ROW}>
-              <input type="checkbox" checked={picked.includes(b.channel)} disabled={!editable || !b.available || save.isPending} onChange={(e) => toggle(b.channel, e.target.checked)} />
+              <input type="checkbox" checked={picked.includes(b.channel)} disabled={!editable || !b.available || busy} onChange={(e) => toggle(b.channel, e.target.checked)} />
               {b.name}
               {b.inRolePlan ? <Chip tone="accent">in your role plan</Chip> : null}
             </label>
@@ -62,8 +68,8 @@ export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; r
         <div className="grid gap-2.5">
           {props.roleStatus === "open" || props.roleStatus === "paused" ? <Alert tone="info">{props.whoPosts === "its" ? "A board you tick is prepared now and ITS posts it from your company's account. A board you untick is closed; if the job is up there, ITS takes it down." : "A board you tick is prepared now for you to post. A board you untick is closed; if the job is up there, take it down from your own account."}</Alert> : null}
           <div className="row">
-            <Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Save the boards</Button>
-            <Button size="sm" variant="ghost" disabled={save.isPending} onClick={() => pick(chosen)}>Undo</Button>
+            <Button size="sm" variant="primary" loading={save.isPending} disabled={busy} onClick={() => save.mutate()}>Save the boards</Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => pick(chosen)}>Undo</Button>
           </div>
         </div>
       ) : null}

@@ -147,6 +147,28 @@ export function unsavedBoards(chosen: readonly string[], picked: readonly string
   return picked.length !== chosen.length || picked.some((c) => !chosen.includes(c)) ? [...picked] : null;
 }
 
+/** The key of a list of ticks: it starts again from what is saved whenever that changes, so it never shows boards left behind. */
+export function savedBoardsKey(boards: ReadonlyArray<Pick<BoardChoiceView, "channel" | "chosen">>): string {
+  return boards.map((b) => `${b.channel}:${b.chosen}`).join(",");
+}
+
+/**
+ * What the approval card's line names: what is ticked when this person's Approve sends it, otherwise what is saved.
+ * Someone who cannot approve has no button that would send their ticks, so they reach nobody until they save them.
+ */
+export function boardsOnTheLine(boards: ReadonlyArray<Pick<BoardChoiceView, "channel" | "chosen" | "name">>, unsaved: readonly string[] | null, mayDecide: boolean): string[] {
+  return boards.filter((b) => (unsaved && mayDecide ? unsaved.includes(b.channel) : b.chosen)).map((b) => b.name);
+}
+
+/**
+ * What Approve sends: the version, and the boards ticked on the card when they are not what is saved, which the server
+ * applies with the approval or not at all. A change to a live job never carries boards: there, unticking closes a posting,
+ * which the Share tab warns about first.
+ */
+export function approveRequest(input: { version: number; editWhileOpen: boolean; unsaved: readonly string[] | null }): { version: number; channels?: string[] } {
+  return input.unsaved && !input.editWhileOpen ? { version: input.version, channels: [...input.unsaved] } : { version: input.version };
+}
+
 /** The line under the list when no board was ticked for the job, or null. */
 export function noBoardsLine(boards: readonly BoardChoiceView[]): string | null {
   if (boards.some((b) => b.chosen)) return null;
