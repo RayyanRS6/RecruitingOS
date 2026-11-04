@@ -1,6 +1,6 @@
 import type { RolePacket, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { screenTurnPrompt, type ScreenContext } from "@ros/ai";
-import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, chatPacket, enforceChatTurn, screenContextOf, unfairQuestion, withChatPlan, type ChatFacts } from "@ros/agents";
+import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, asksByRequest, chatPacket, enforceChatTurn, screenContextOf, unfairQuestion, withChatPlan, type ChatFacts } from "@ros/agents";
 import { traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 
 /** The step a turn took on the item it was about (`chatNextMove` in @ros/core, which this package does not depend on). */
@@ -84,8 +84,6 @@ export function sharesFiveWords(a: string, b: string): boolean {
 const PRAISE = /\b(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|well done|good job)\b/i;
 const INFERENCE = /\b(?:it sounds like|it seems|it looks like|clearly|obviously|you must have|straightforward for you|easy for you|no major (?:issues|hurdles))\b/i;
 const TIME_PROMISE = /\b(?:within|in a few|in \d+|few days|next week|soon|shortly|by (?:monday|tuesday|wednesday|thursday|friday))\b/i;
-/** A message that asks without a question mark, as `shapeChatMessage` reads one: "Tell us about…", "Give an example of…". */
-const ASKS_BY_REQUEST = /^(?:(?:please|now|next|then|so|and|also|first|finally|lastly)[,:]?\s+)*(?:tell (?:me|us)|describe|walk (?:me|us)|talk (?:me|us)|share|give (?:me|us|an|one|a)\b|explain|think (?:of|about|back))/im;
 
 /** The checks every case gets on what the candidate is shown. */
 function shownFailures(turn: ScreenTurn, experience: boolean): string[] {
@@ -93,7 +91,7 @@ function shownFailures(turn: ScreenTurn, experience: boolean): string[] {
   const m = turn.messageToCandidate;
   const asks = (m.match(/\?/g) ?? []).length;
   if (asks > 1) out.push(`more than one question: ${m}`);
-  if (!turn.done && !turn.humanRequested && asks === 0 && !ASKS_BY_REQUEST.test(m)) out.push(`no question: ${m}`);
+  if (!turn.done && !turn.humanRequested && asks === 0 && !asksByRequest(m)) out.push(`no question: ${m}`);
   if (experience && PRAISE.test(m)) out.push(`praise in "About your experience": ${m}`);
   if (INFERENCE.test(m)) out.push(`an inference: ${m}`);
   const unfair = unfairQuestion(m);
@@ -142,7 +140,7 @@ const followedUp = (raw: ScreenTurn) => !!raw.followUpReason && !raw.questionKey
  */
 function shownQuestion(message: string): string {
   const parts = message.split(/\n\n/);
-  const at = parts.findIndex((p) => /\?/.test(p) || ASKS_BY_REQUEST.test(p));
+  const at = parts.findIndex((p) => /\?/.test(p) || asksByRequest(p));
   return at < 0 ? message : parts.slice(at).join("\n\n");
 }
 /** Asking again, on the same item, for what a reply already gave: how they found or fixed it, what came of it, how long. */
