@@ -200,6 +200,21 @@ export function answersPayload(questions: readonly IntakeQuestion[], state: Card
 }
 
 /**
+ * A pay card on the deck with figures typed that cannot be sent, as words and where it is, or null. Sending would count it
+ * as skipped and the card would not come back, so the figures would be gone with nothing to say why. Boxes left empty are
+ * a real skip.
+ */
+export function payCardProblem(questions: readonly IntakeQuestion[], state: CardState): { index: number; words: string } | null {
+  for (const [index, q] of questions.entries()) {
+    const form = q.mode === "pay" ? answerOf(state, q).pay : undefined;
+    if (!form || ![form.min, form.max, form.ceiling].some((v) => v.trim())) continue;
+    const words = payProblem(form);
+    if (words) return { index, words };
+  }
+  return null;
+}
+
+/**
  * The picks as the one short message the conversation shows straight away (C15), line for line as the server writes it
  * (`applyAnswers` in packages/core/src/intake-builder.ts); the server's own copy replaces it when the answer comes back.
  */

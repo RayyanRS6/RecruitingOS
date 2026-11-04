@@ -202,7 +202,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       const saved = await saveCards(first);
       // Refused words are told in the conversation, which is gone once the role exists: stop here so they can be read.
       if (saved?.refused?.length) {
-        setBlockers(refusedLines(saved.refused));
+        setBlockers([...refusedLines(saved.refused), ...saved.session.readiness.approvalBlockers]);
         setPane("primary");
         return null;
       }
