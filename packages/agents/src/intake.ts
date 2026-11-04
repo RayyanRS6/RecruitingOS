@@ -323,10 +323,14 @@ export function typedWordsOf(messages: IntakeMessage[]): Set<string> {
   return ownerWordsOf(messages.filter((m) => m.kind !== "answers"));
 }
 
-/** Whether the owner typed anything since the assistant last replied (a reply that failed leaves their words unread). */
+/** What was said since the assistant last replied (a reply that failed leaves the owner's words unread). */
+function sinceReply(messages: IntakeMessage[]): IntakeMessage[] {
+  return messages.slice(messages.map((m) => m.role).lastIndexOf("assistant") + 1);
+}
+
+/** Whether the owner typed anything since the assistant last replied. */
 export function typedSinceReply(messages: IntakeMessage[]): boolean {
-  const since = messages.slice(messages.map((m) => m.role).lastIndexOf("assistant") + 1);
-  return since.some((m) => m.role === "owner" && (m.kind ?? "text") === "text");
+  return sinceReply(messages).some((m) => m.role === "owner" && (m.kind ?? "text") === "text");
 }
 
 /** An offered answer drawn from the company profile is the assistant's, never "Your words". */
@@ -538,10 +542,10 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
       state.pay = { by: actorOfTurn(input.actor), at: new Date().toISOString(), via: "typed", basis: merged.compensationBasis as "hourly" | "salary", min: merged.compensationMin!, max: merged.compensationMax!, ...(ceiling !== undefined ? { ceiling } : {}) };
       await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: "typed" } });
     } else if (state.pay && payConfirmed(merged, state)) {
-      // Once the range is settled the ceiling is the person's: one they typed in this very message replaces it; one the
-      // model read anywhere else (an earlier message, an ad) does not.
-      const said = input.message && (input.message.kind ?? "text") === "text" ? [{ role: "owner" as const, content: input.message.content, at: now }] : [];
-      const ceiling = typedCeiling(said, merged);
+      // Once the range is settled the ceiling is the person's: one they typed since the last reply replaces it (a message,
+      // or a note beside a pick, whose turn has no message of its own); one the model read anywhere else (an earlier
+      // message, an ad) does not.
+      const ceiling = typedCeiling(sinceReply(session.messages), merged);
       if (ceiling !== undefined && ceiling !== state.pay.ceiling) {
         state.pay = { ...state.pay, by: actorOfTurn(input.actor), at: new Date().toISOString(), via: "typed", ceiling };
         await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: "typed", ceiling: true } });
