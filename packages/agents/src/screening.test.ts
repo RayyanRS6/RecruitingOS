@@ -1108,8 +1108,83 @@ describe("the Kanvis-style chat", () => {
       expect(moveToOwn(HARD, `${TASKS}\n\nPeople who stay calm and listen do best. ${HARD}`, "stay calm and listen")).toBe(`${TASKS}\n\n${HARD}`);
       expect(moveToOwn(HARD, `${TASKS}\n\nPeople here stay calm. ${HARD}`, "stay calm")).toBe(`${TASKS}\n\n${HARD}`);
       expect(moveToOwn(HARD, `${TASKS}\n\nPeople here stay calm. ${HARD}`, "calm")).toBe(`${TASKS}\n\nPeople here stay calm. ${HARD}`);
-      // and the check on the whole message reads a short note too: the question goes back to its own words
-      expect(moveToOwn(HARD, `You stay calm and listen.\n\n${HARD}`, "stay calm and listen")).toBe(HARD);
+      // the check on the whole message reads five words in a row, as it always did: the candidate's words or the job's can
+      // share a shorter run with a note by chance, and neither loses the restatement or the push for it
+      expect(moveToOwn(HARD, `You stay calm and listen.\n\n${HARD}`, "stay calm and listen")).toBe(`You stay calm and listen.\n\n${HARD}`);
+      expect(moveToOwn("How do you stay calm with an upset customer?", "You keep a list.\n\nHow do you stay calm with an upset customer?", "stay calm")).toBe("You keep a list.\n\nHow do you stay calm with an upset customer?");
+      expect(moveToOwn(HARD, `You keep a list.\n\n${HARD}`, "they stay calm with an upset customer and listen")).toBe(`You keep a list.\n\n${HARD}`);
+      expect(moveToOwn("How do you stay calm with an upset customer?", "You keep a list.\n\nHow do you stay calm with an upset customer?", "they stay calm with an upset customer and listen")).toBe("How do you stay calm with an upset customer?");
+    });
+
+    it("keeps the question that goes with a request, unless it asks for something else", () => {
+      const LIST = "You keep a list.";
+      const BUSY = "Describe a busy day. How do you decide what comes first and what can wait?";
+      // a lead-in or a comma of the model's own, on a job's question that is not about the past
+      expect(moveToOwn(BUSY, `${LIST}\n\nTest, describe a busy day. How do you decide what comes first and what can wait?`)).toBe(`${LIST}\n\nTest, describe a busy day. How do you decide what comes first and what can wait?`);
+      expect(moveToOwn(BUSY, `${LIST}\n\nDescribe a busy day. How do you decide what comes first, and what can wait?`)).toBe(`${LIST}\n\nDescribe a busy day. How do you decide what comes first, and what can wait?`);
+      expect(moveToOwn(BUSY, `${LIST}\n\nNow, describe a busy day. How do you decide what comes first, and what can wait?`)).toBe(`${LIST}\n\nNow, describe a busy day. How do you decide what comes first, and what can wait?`);
+      expect(moveToOwn("Describe a time you disagreed with a coworker. What would you do differently?", `${LIST}\n\nNow, describe a time you disagreed with a coworker. What would you do differently?`)).toBe(`${LIST}\n\nNow, describe a time you disagreed with a coworker. What would you do differently?`);
+      expect(moveToOwn("A patient cancels a two-hour appointment tomorrow morning. What do you do?", `${LIST}\n\nTell us about a patient cancelling a two-hour appointment tomorrow morning. What do you do?`)).toBe(`${LIST}\n\nTell us about a patient cancelling a two-hour appointment tomorrow morning. What do you do?`);
+      expect(moveToRoom("You explained it as a finger.\n\nTell us about a class of twenty where several kits fail at once. How would you handle the room?")).toBe("You explained it as a finger.\n\nTell us about a class of twenty where several kits fail at once. How would you handle the room?");
+      // not the job's, and in the model's own words
+      expect(moveTo("wq_help", `${TASKS}\n\nTell us about your approach. What would you say to an upset customer?`)).toBe(`${TASKS}\n\nTell us about your approach. What would you say to an upset customer?`);
+      // the job's own question about pay stays, however the model opens it; the model's own does not
+      const PAY = "Tell us about your last job. What pay are you looking for?";
+      expect(moveToOwn(PAY, `${LIST}\n\nNow, tell us about your last job. What pay are you looking for?`)).toBe(`${LIST}\n\nNow, tell us about your last job. What pay are you looking for?`);
+      expect(moveToOwn(BUSY, `${LIST}\n\nNow, tell us about your last job. What pay are you looking for?`)).toBe(`${LIST}\n\nNow, tell us about your last job.`);
+      // said in other words, it is a request too
+      expect(moveTo("wq_help", `${TASKS}\n\nI'd like to hear about a time you helped someone who was frustrated. What pay are you looking for?`)).toBe(`${TASKS}\n\nI'd like to hear about a time you helped someone who was frustrated.`);
+      expect(moveTo("wq_help", `${TASKS}\n\nLet's talk about a time you helped someone. What did you do?`)).toBe(`${TASKS}\n\nLet's talk about a time you helped someone. What did you do?`);
+    });
+
+    it("never asks two things where the model wrote one: a request said to them is the question, never a restatement", () => {
+      // the request and its question over two paragraphs are one ask
+      expect(moveTo("wq_mistake", "Tell me about a time you made a mistake.\n\nWhat did you do about it?")).toBe("Tell me about a time you made a mistake. What did you do about it?");
+      expect(moveTo("wq_help", "Tell me about a time you helped someone.\n\nWhat pay are you looking for?")).toBe("Tell me about a time you helped someone.");
+      expect(stayOn("wq_help", "Give an example of a time you helped.\n\nWhat did you do?")).toBe("Give an example of a time you helped. What did you do?");
+      // a second vague reply, and the model stays: the plan moves on, and the request does not go with it
+      const pushed = askingNow(startLive(), "wq_help", ["wq_track", "wq_help"], { pushes: 1 });
+      const second = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "still vague", messageToCandidate: "Tell me about one specific time.\n\nWhat did you do?" }), chatPacket(live, pushed), pushed, {}, { transcript: said("Q", "I sorted it out.", "I just did."), latest: "I just did." });
+      expect(second.turn.messageToCandidate).toBe(MISTAKE);
+      // one that could be a step they told us about is still read as one
+      expect(moveTo("wq_mistake", "Share the plan with the team each morning.\n\nWhich tool do you use?")).toBe("Share the plan with the team each morning.\n\nWhich tool do you use?");
+    });
+
+    it("leaves out praise, filler, a guess, a time promise and a hint before the question, wherever the sentence stands", () => {
+      const ASK = "What did you do about it next?";
+      for (const out of ["Good work.", "Great work on that.", "Excellent work.", "Well done.", "Great, thanks for sharing.", "Got it, thanks.", "Okay, thank you.", "That's a smart approach.", "You handled that well.", "You're a perfect fit for this job.", "It went smoothly.", "That was easy for you.", "There were no major issues.", "The team will reply within a few days.", "The team will get back to you within a few days.", "We look for someone who stays calm under pressure.", "A great answer names the customer.", "The ideal answer names the customer.", "The hiring team is looking for someone who takes responsibility."]) {
+        // in the question's own paragraph
+        expect(moveTo("wq_mistake", `${VISITOR}\n\n${out} ${ASK}`), out).toBe(`${VISITOR}\n\n${ASK}`);
+        // as the restatement
+        expect(moveTo("wq_mistake", `${out}\n\n${ASK}`), out).toBe(ASK);
+        expect(moveTo("wq_mistake", `${out} ${ASK}`), out).toBe(ASK);
+      }
+      // moving to the closing question too
+      const p = askingNow(start([]), "wq_room", ["wq_explain", "wq_room"]);
+      const wrap = enforceChatTurn(turnOf({ reading: "concrete", questionKey: CHAT_WRAP_KEY, messageToCandidate: `You finished the report.\n\nThe team will get back to you within a few days. ${CHAT_WRAP_QUESTION}` }), chatPacket(role, p), p, {}, { transcript: said("Q", "I finished the report."), latest: "I finished the report." });
+      expect(wrap.turn.messageToCandidate).toBe(`You finished the report.\n\n${CHAT_WRAP_QUESTION}`);
+      // a scene about someone else keeps its words
+      for (const scene of ["The team wants a new rota by Friday.", "A customer is looking for a missing order.", "A client moves the launch to next week.", "A patient calls within minutes of closing."]) {
+        expect(moveTo("wq_mistake", `${VISITOR}\n\n${scene} ${ASK}`), scene).toBe(`${VISITOR}\n\n${scene} ${ASK}`);
+      }
+    });
+
+    it("says nothing personal back to them, in the restatement or before the question", () => {
+      const ASK = "What did you do about it next?";
+      for (const out of ["You have two kids, so mornings suit you best.", "You are 45, so you know this work.", "Since you have two children at home, mornings suit you.", "You're a mom of three."]) {
+        expect(moveTo("wq_mistake", `${VISITOR}\n\n${out} ${ASK}`), out).toBe(`${VISITOR}\n\n${ASK}`);
+        expect(moveTo("wq_mistake", `${out}\n\n${ASK}`), out).toBe(ASK);
+      }
+    });
+
+    it("says the calm line once", () => {
+      const g = askingNow(start(["arduino", "english"]), "english", ["arduino", "english"], { step: "smaller" });
+      const settle = (messageToCandidate: string) => enforceChatTurn(turnOf({ reading: "not_done", questionKey: "wq_explain", messageToCandidate }), chatPacket(role, g), g, {}, { transcript: said("Q", "No"), latest: "No" });
+      for (const message of [`You have not done that.\n\n${CHAT_CALM_LINE} What do you do first?`, `Okay.\n\n${CHAT_CALM_LINE} What do you do first?`, `${CHAT_CALM_LINE}\n\nWhat do you do first?`]) {
+        const { turn, move } = settle(message);
+        expect(move?.move, message).toBe("unknown");
+        expect(turn.messageToCandidate, message).toBe(`${CHAT_CALM_LINE}\n\nWhat do you do first?`);
+      }
     });
 
     it("the eval reads a message's question as the shaping does: a request asks, and a sentence that sets the scene does not", () => {
