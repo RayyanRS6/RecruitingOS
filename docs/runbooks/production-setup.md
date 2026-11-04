@@ -11,13 +11,15 @@ changing anything: some plans and settings differ from step 1, to stay inside th
 
 - **Has run:** the production database (steps 1 and 3); Vercel Production's settings, and the Railway worker and its
   scanner (steps 1 and 5); the first release (step 6); Microsoft sign-in, the first administrator and the business
-  calendar (step 7); and the smoke test (step 8), which passed except for email. Its test company and role exist.
+  calendar (step 7); and the smoke test (step 8), which passed except for email and the Google part of item 2. Its test
+  company and role exist.
 - **Not live:** email. Postmark's account approval is still pending and the sending domain's DNS records (step 2) are
   not in, so every email fails. The one email check, the proof of the queue mailbox and the Postmark webhook (step 5;
   step 8, item 7) wait for it.
 - **Being decided:** the product's new name and its domain. Until then production runs on its `.vercel.app` address, and
   the names in this file (`recruiting.identifiedtalent.com`, `hire.identifiedtalent.com`) are the plan of 29 October.
-- **Not run yet:** a first sign-in with Google (it is switched on), a second administrator (step 7, item 6), branch
+- **Not run yet:** a first sign-in with Google (it is switched on), a Microsoft sign-in from outside ITS (check first that
+  the app registration in use takes outside accounts, see step 1), a second administrator (step 7, item 6), branch
   protection (step 4), the uptime monitor (step 9), go-live (step 10) and locking down staging (step 11).
 
 ## Before you start
