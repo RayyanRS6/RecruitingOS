@@ -9,7 +9,7 @@ import {
   NEW_ROLE_FRESH_HREF, SOMEONE_NEW, addOwn, answerOf, answerPayload, answersFirst, answersPayload, approvalHelp, askFromDetails, basicsChips, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck,
   composerPlaceholder, deckFor, draftOutOfDate, draftRecruiterAsk, draftSections, draftSteps, draftTitle, draftingNow, echoText, enterSends, errorWords, goTo, initialCards, isDiscardDraft,
   marketRange, marketSource, mayHireAgain, mayTakeOverDrafts, messageLimit, messageProblem, nextLabel, parseAmount, payFormFrom, payPayload, payProblem, pickHint, readinessList,
-  redraftWarning, refusedLines, removeOwn, sectionOfPath, setDraft, setPayForm, startHireHref, togglePick, turnProblem, typeInstead, typedWithCards, DRAFT_SEEN_BY, TAKEN_OVER_TOAST, type CardState, type Deck,
+  blockersHeading, redraftWarning, refusedLines, removeOwn, sectionOfPath, setDraft, setPayForm, startHireHref, togglePick, turnProblem, typeInstead, typedWithCards, DRAFT_SEEN_BY, TAKEN_OVER_TOAST, type CardState, type Deck,
 } from "../../apps/web/src/pages/new-role/rules";
 import { factsFormFrom, factsPatch } from "../../apps/web/src/pages/new-role/facts-form";
 import { GUIDE_OF_VERTICAL, QUICK_STARTS, quickStartsFor } from "../../apps/web/src/pages/new-role/quick-starts";
@@ -245,6 +245,10 @@ describe("question cards", () => {
     // words the fairness check refused are said before the ask for approval leaves this page, in the conversation's own words
     expect(builder).toContain("setBlockers(refusedLines(saved.refused));");
     expect(refusedLines([{ text: "Recent graduates only", reason: "That is a proxy for age." }])).toEqual(['Not used: "Recent graduates only". That is a proxy for age.']);
+    // the heading says what the stop is: refused words go through on the next press, and "write it again" clears when it is written again
+    expect(blockersHeading(refusedLines([{ text: "Recent graduates only", reason: "That is a proxy for age." }]))).toBe("Some words were not used. Ask for approval again to go on.");
+    expect(blockersHeading(["You changed answers after the draft was written. Write it again with them first."])).toBe("Not ready to ask for approval yet.");
+    expect(builder).toContain("onMutate: () => { setPolling(true); setProblem(null); setBlockers(null); },");
   });
 });
 
@@ -429,6 +433,11 @@ describe("pay", () => {
     expect(payProblem({ basis: "hourly", min: "60000", max: "70000", ceiling: "" })).toMatch(/yearly figure/);
     expect(payProblem({ basis: "salary", min: "45", max: "55", ceiling: "" })).toMatch(/hourly rate/);
     expect(payProblem({ basis: "hourly", min: "45", max: "55", ceiling: "50" })).toMatch(/must not be below the top/);
+    // the API's cap, in plain words: otherwise the refusal names nothing, and the words come back to the box each time
+    expect(payProblem({ basis: "salary", min: "20000000", max: "20000000", ceiling: "" })).toMatch(/too high/);
+    expect(payProblem({ basis: "salary", min: "50000", max: "60000", ceiling: "20000000" })).toMatch(/too high/);
+    expect(payProblem({ basis: "hourly", min: "45", max: "55", ceiling: "20000000" })).toMatch(/too high/);
+    expect(payProblem({ basis: "salary", min: "10000000", max: "10000000", ceiling: "10000000" })).toBeNull();
     expect(payPayload({ basis: "salary", min: "60k", max: "$70,000", ceiling: "" })).toEqual({ basis: "salary", min: 60000, max: 70000 });
   });
 

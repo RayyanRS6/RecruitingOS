@@ -26,7 +26,7 @@ import { quickStartDraftKey } from "./quick-start";
 import { RoomAlert } from "./StartView";
 import {
   NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersFirst, answersPayload, approvalHelp, askFromDetails, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
-  draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, refusedLines, turnProblem, typeInstead, typedWithCards,
+  blockersHeading, draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, refusedLines, turnProblem, typeInstead, typedWithCards,
   type Deck, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
 } from "./rules";
 import { CHANGE_REQUEST_MAX, asksBack, checkSignature, proposalSections, refinePaths } from "./refine-api";
@@ -179,7 +179,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       if (saved?.refused?.length) toast("Some words were not used.", "The reason is in the conversation.");
       return api.post<SessionData>(`${base}/draft`);
     },
-    onMutate: () => { setPolling(true); setProblem(null); },
+    // A "write it again first" from the last ask for approval is answered by this very press.
+    onMutate: () => { setPolling(true); setProblem(null); setBlockers(null); },
     onSuccess: (r) => { apply(r.session); toast("The draft is written.", "Check it beside the conversation. Nothing is sent to anyone."); },
     // Said in the conversation, which a phone may have folded away behind the draft.
     onError: (err) => { setPane("primary"); failed(err); },
@@ -401,7 +402,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
       {room?.room && !room.room.ok ? <RoomAlert room={room.room} ask={room.ask} /> : null}
       {blockers ? (
         <Alert tone="caution">
-          <strong>Not ready to ask for approval yet.</strong>
+          <strong>{blockersHeading(blockers)}</strong>
           <ul className="mt-1.5 grid list-disc gap-0.5 pl-[18px]">{blockers.map((b) => <li key={b}>{b}</li>)}</ul>
         </Alert>
       ) : null}

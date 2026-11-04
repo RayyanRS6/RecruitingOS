@@ -272,6 +272,11 @@ export function refusedLines(refused: ReadonlyArray<{ text: string; reason: stri
   return refused.map((r) => `Not used: "${r.text}". ${r.reason}`);
 }
 
+/** The heading over what stopped "Ask for approval": refused words only stop it once, so they can be read (`refusedLines`). */
+export function blockersHeading(blockers: readonly string[]): string {
+  return blockers.every((b) => b.startsWith("Not used: ")) ? "Some words were not used. Ask for approval again to go on." : "Not ready to ask for approval yet.";
+}
+
 /** The cards worth showing: a pay card is dropped once a person has set or confirmed the pay elsewhere (the draft's pay card). */
 export function cardsToShow(view: Pick<IntakeSessionView, "questions" | "pay" | "status">): IntakeQuestion[] {
   if (view.status !== "active") return [];
@@ -298,6 +303,9 @@ export function payFormFrom(card: Pick<IntakePayCard, "basis" | "stated">): PayF
   return { basis: card.basis ?? "", min: amountText(card.stated.min), max: amountText(card.stated.max), ceiling: amountText(card.stated.ceiling) };
 }
 
+/** The most the API takes for a pay figure (packages/contracts, `IntakeAnswer`). */
+const PAY_LIMIT = 10_000_000;
+
 /** The first thing wrong with the pay as typed, in plain words, or null when it can be set. */
 export function payProblem(f: PayForm): string | null {
   if (!f.basis) return "Choose by the hour or a yearly salary.";
@@ -307,10 +315,12 @@ export function payProblem(f: PayForm): string | null {
   if (min > max) return "The lowest pay must not be above the highest.";
   if (f.basis === "hourly" && max >= 1000) return "That looks like a yearly figure. Choose a yearly salary, or enter an hourly rate.";
   if (f.basis === "salary" && max < 1000) return "That looks like an hourly rate. Choose by the hour, or enter a yearly figure.";
+  if (max > PAY_LIMIT) return "That figure is too high. Enter $10,000,000 or less.";
   if (f.ceiling.trim()) {
     const ceiling = parseAmount(f.ceiling);
     if (!Number.isFinite(ceiling) || ceiling < 0) return "The most you would pay must be a figure, or left empty.";
     if (ceiling < max) return "The most you would pay must not be below the top of the range.";
+    if (ceiling > PAY_LIMIT) return "That figure is too high. Enter $10,000,000 or less.";
   }
   return null;
 }

@@ -155,6 +155,8 @@ test.describe("the job builder", () => {
     // in the conversation as an answer, and on the draft
     await expect(page.locator(".answers", { hasText: "Your answers" }).filter({ hasText: picked })).toBeVisible();
     await expect(page.getByRole("region", { name: "Draft", exact: true })).toContainText(picked);
+    // the draft was written with the pick, not before it: the pick would have made it out of date
+    await expect(page.getByRole("button", { name: "Write it again with them" })).toHaveCount(0);
   });
 
   test("on a phone, one pane at a time with a switch, and no sideways scrolling", async ({ page }) => {
