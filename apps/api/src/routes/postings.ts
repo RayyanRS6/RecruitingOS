@@ -512,6 +512,27 @@ postingRoutes.post("/:id/postings/:channel/ask-its", requireTenant, async (c) =>
 });
 
 /**
+ * A person's board ticks, checked and written: POST /:id/channels below, and POST /:id/approve when the boards ticked on
+ * the approval card go with the approval (routes/roles.ts). Refused on a closed role (409 `role_closed`), and ZipRecruiter
+ * only with the company's own plan (409 `ziprecruiter_needs_plan`). Answers what is chosen now and what was before; what
+ * that does to a live job's postings is the caller's. The caller has checked `role.manage`.
+ */
+export async function saveBoardTicks(tx: Tx, input: { role: RoleRow; channels: readonly string[]; actor: Actor }): Promise<{ wanted: BoardChannel[]; before: string[] }> {
+  const { role, actor } = input;
+  if (role.status === "closed") throw new HttpError(409, "role_closed", "The role is closed; its boards no longer change.");
+  const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
+  const wanted = BOARD_CHANNELS.filter((b) => input.channels.includes(b));
+  if (wanted.includes("ziprecruiter") && !zipRecruiterOffered(company?.settings)) throw new HttpError(409, "ziprecruiter_needs_plan", "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Settings first.");
+  const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id));
+  const packet = currentVersionOf(role, packets)?.packet ?? null;
+  const before: string[] = packet ? chosenBoards(role, packet, company?.settings) : (role.publishChannels ?? []);
+  await tx.update(roles).set({ publishChannels: wanted }).where(eq(roles.id, role.id));
+  await emit(tx, { type: "role.boards_chosen", companyId: role.companyId, actor, subject: { type: "role", id: role.id }, payload: { channels: wanted, before } });
+  await audit(tx, { companyId: role.companyId, actor, action: "role.boards_chosen", target: { type: "role", id: role.id }, reason: wanted.length ? wanted.join(", ") : "no boards", details: { channels: wanted, before } });
+  return { wanted, before };
+}
+
+/**
  * The boards a role uses (founder decision Q11, plan D6): the ticks, before or after approval. The careers page,
  * Google and email are part of every role. On an open role a newly ticked board is prepared; an unticked board's
  * posting closes, and a listing that was up is named for taking down (by ITS, when ITS posts for the company).
@@ -525,16 +546,7 @@ postingRoutes.post("/:id/channels", requireTenant, async (c) => {
   const actor = actorOf(c);
   await withTenant(container.db, t.companyId, async (tx) => {
     const role = await loadRole(tx, c.req.param("id"));
-    if (role.status === "closed") throw new HttpError(409, "role_closed", "The role is closed; its boards no longer change.");
-    const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-    const wanted = BOARD_CHANNELS.filter((b) => body.channels.includes(b));
-    if (wanted.includes("ziprecruiter") && !zipRecruiterOffered(company?.settings)) throw new HttpError(409, "ziprecruiter_needs_plan", "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Settings first.");
-    const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id));
-    const packet = currentVersionOf(role, packets)?.packet ?? null;
-    const before: string[] = packet ? chosenBoards(role, packet, company?.settings) : (role.publishChannels ?? []);
-    await tx.update(roles).set({ publishChannels: wanted }).where(eq(roles.id, role.id));
-    await emit(tx, { type: "role.boards_chosen", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { channels: wanted, before } });
-    await audit(tx, { companyId: t.companyId, actor, action: "role.boards_chosen", target: { type: "role", id: role.id }, reason: wanted.length ? wanted.join(", ") : "no boards", details: { channels: wanted, before } });
+    const { wanted, before } = await saveBoardTicks(tx, { role, channels: body.channels, actor });
     if (role.status !== "open" && role.status !== "paused") return;
     const now = container.engine.clock();
     for (const channel of before.filter((b) => !wanted.includes(b as BoardChannel))) {

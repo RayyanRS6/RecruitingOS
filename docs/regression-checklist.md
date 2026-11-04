@@ -687,7 +687,7 @@ Who: the owner, the ITS recruiter (posting tasks) and the candidate.
 - [ ] **Do:** open a tracked link `/a/<token>`. **Expect:** it lands on the job page or the form, and the visit counts as that source.
 - [ ] **Do:** set a closing date (Q12). **Expect:** new applications stop at the end of that day in the company's time zone. Anyone who already opened the form can finish within 24 hours. Nobody is rejected.
 - [ ] **Do:** pause the role. **Expect:** the apply form answers "not found" and the job page stays up.
-- [ ] Automated: `api/job-page.test.ts`, `api/public-job-surfaces.test.ts`, `api/job-distribution.test.ts`, `api/postings-routes.test.ts`, `api/posting-access.test.ts`, `api/publishing.test.ts`, `core/postings.test.ts`, `core/publishing.test.ts`, `integrations/jobboards/jobboards.test.ts`, `web/publishing.test.ts`, `shell/publishing-ui.test.ts`, `e2e/publishing.spec.ts`.
+- [ ] Automated: `api/job-page.test.ts`, `api/public-job-surfaces.test.ts`, `api/job-distribution.test.ts`, `api/postings-routes.test.ts`, `api/posting-access.test.ts`, `api/publishing.test.ts`, `api/approve-boards.test.ts`, `core/postings.test.ts`, `core/publishing.test.ts`, `integrations/jobboards/jobboards.test.ts`, `web/publishing.test.ts`, `shell/publishing-ui.test.ts`, `e2e/publishing.spec.ts`.
 - [ ] Known issues: outside production, the link checker calls every listing "live" (KB #62); the LinkedIn feed is not approved by LinkedIn (`03-jobs.md` JOBS-34).
 
 ### 4.4 Apply by form, and apply in one visit (including "Check your answers")
