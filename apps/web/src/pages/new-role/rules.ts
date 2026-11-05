@@ -67,7 +67,8 @@ export function cardsKey(questions: readonly Pick<IntakeQuestion, "id">[]): stri
   return questions.map((q) => q.id).join("|");
 }
 
-export type Deck = { key: string; state: CardState; closed: boolean };
+/** `carry`: "Or type your own answer…" sets it and the X clears it, so a closed deck knows whether its answers go along (`answersToCarry`). */
+export type Deck = { key: string; state: CardState; closed: boolean; carry?: boolean };
 
 /**
  * The deck for the cards showing now. New cards start afresh; when cards were only taken away (one answered on the draft
@@ -81,7 +82,17 @@ export function deckFor(prev: Deck, cards: readonly Pick<IntakeQuestion, "id">[]
   if (!onlyRemoved) return { key, state: initialCards(), closed: false };
   const answers = Object.fromEntries(Object.entries(prev.state.answers).filter(([id]) => cards.some((q) => q.id === id)));
   const at = cards.findIndex((q) => q.id === before[prev.state.index]);
-  return { key, state: { index: at >= 0 ? at : Math.min(prev.state.index, cards.length - 1), answers }, closed: prev.closed };
+  return { ...prev, key, state: { index: at >= 0 ? at : Math.min(prev.state.index, cards.length - 1), answers } };
+}
+
+/** "Or type your own answer…": the deck folds away and what is answered on it goes with the typed words. */
+export function typeInstead(deck: Deck): Deck {
+  return { ...deck, closed: true, carry: true };
+}
+
+/** The X: the deck folds away and what is answered on it stays on the cards until new cards arrive; typed words go alone. */
+export function closeDeck(deck: Deck): Deck {
+  return { ...deck, closed: true, carry: false };
 }
 
 export function answerOf(state: CardState, q: Pick<IntakeQuestion, "id">): CardAnswer {
@@ -189,6 +200,21 @@ export function answersPayload(questions: readonly IntakeQuestion[], state: Card
 }
 
 /**
+ * A pay card on the deck with figures typed that cannot be sent, as words and where it is, or null. Sending would count it
+ * as skipped and the card would not come back, so the figures would be gone with nothing to say why. Boxes left empty are
+ * a real skip.
+ */
+export function payCardProblem(questions: readonly IntakeQuestion[], state: CardState): { index: number; words: string } | null {
+  for (const [index, q] of questions.entries()) {
+    const form = q.mode === "pay" ? answerOf(state, q).pay : undefined;
+    if (!form || ![form.min, form.max, form.ceiling].some((v) => v.trim())) continue;
+    const words = payProblem(form);
+    if (words) return { index, words };
+  }
+  return null;
+}
+
+/**
  * The picks as the one short message the conversation shows straight away (C15), line for line as the server writes it
  * (`applyAnswers` in packages/core/src/intake-builder.ts); the server's own copy replaces it when the answer comes back.
  */
@@ -213,6 +239,57 @@ export function echoText(questions: readonly IntakeQuestion[], state: CardState)
     else lines.push(`${FIELD_LABEL[q.field]}: ${label(values[0])}`);
   }
   return lines.length ? lines.join("\n") : "Skipped those questions.";
+}
+
+/** The cards' answers without words still waiting for "Add" on a pick-any card. A pick-one or free card has no Add: its box is the answer. */
+function addedOnly(questions: readonly IntakeQuestion[], state: CardState): CardState {
+  const answers = { ...state.answers };
+  for (const q of questions) {
+    const a = answers[q.id];
+    if (a && !picksOne(q) && q.mode !== "free") answers[q.id] = { ...a, draft: "" };
+  }
+  return { ...state, answers };
+}
+
+/**
+ * What is answered on the cards when something else is about to be sent (typed words, "Write the draft", "Ask for
+ * approval"): it goes along, or the reply's new cards would lose it (the live smoke test of 4 Nov 2026 lost "Why you are
+ * hiring" that way) and the draft would leave it out. Only the cards answered: one left alone is not skipped. A half-typed
+ * "Add your own" word is not an answer yet. Nothing from a deck closed with the X. Null when nothing goes.
+ */
+export function answersToCarry(questions: readonly IntakeQuestion[], deck: Pick<Deck, "state" | "closed" | "carry">): { answers: IntakeAnswer[]; echo: string } | null {
+  if (deck.closed && !deck.carry) return null;
+  const state = addedOnly(questions, deck.state);
+  const answered = questions.filter((q) => isAnswered(q, answerOf(state, q)));
+  return answered.length ? { answers: answersPayload(answered, state), echo: echoText(answered, state) } : null;
+}
+
+/** Words typed in the message box, with what goes along. Null when nothing does, so the words go as a plain message. */
+export function typedWithCards(questions: readonly IntakeQuestion[], deck: Pick<Deck, "state" | "closed" | "carry">, note: string): { answers: IntakeAnswer[]; note: string; echo: string } | null {
+  const carried = answersToCarry(questions, deck);
+  return carried ? { answers: carried.answers, note, echo: `${carried.echo}\n${note}` } : null;
+}
+
+/** The one line above the message box naming what goes with the words, so the person sees it before pressing Send. */
+export function carriedLine(questions: readonly IntakeQuestion[], deck: Pick<Deck, "state" | "closed" | "carry">): string | null {
+  const carried = answersToCarry(questions, deck);
+  return carried ? `Sent with your message: ${carried.echo.replace(/\n+/g, " · ")}` : null;
+}
+
+/** What goes ahead of "Write the draft" and "Ask for approval": POST /answers, the assistant not asked anything. */
+export function answersFirst(questions: readonly IntakeQuestion[], deck: Pick<Deck, "state" | "closed" | "carry">): { answers: IntakeAnswer[]; reply: false } | null {
+  const carried = answersToCarry(questions, deck);
+  return carried ? { answers: carried.answers, reply: false } : null;
+}
+
+/** Words the fairness check refused, as the conversation says them (`applyIntakeEdit` in packages/agents/src/intake.ts). */
+export function refusedLines(refused: ReadonlyArray<{ text: string; reason: string }>): string[] {
+  return refused.map((r) => `Not used: "${r.text}". ${r.reason}`);
+}
+
+/** The heading over what stopped "Ask for approval": refused words only stop it once, so they can be read (`refusedLines`). */
+export function blockersHeading(blockers: readonly string[]): string {
+  return blockers.every((b) => b.startsWith("Not used: ")) ? "Some words were not used. Ask for approval again to go on." : "Not ready to ask for approval yet.";
 }
 
 /** The cards worth showing: a pay card is dropped once a person has set or confirmed the pay elsewhere (the draft's pay card). */
@@ -241,6 +318,9 @@ export function payFormFrom(card: Pick<IntakePayCard, "basis" | "stated">): PayF
   return { basis: card.basis ?? "", min: amountText(card.stated.min), max: amountText(card.stated.max), ceiling: amountText(card.stated.ceiling) };
 }
 
+/** The most the API takes for a pay figure (packages/contracts, `IntakeAnswer`). */
+const PAY_LIMIT = 10_000_000;
+
 /** The first thing wrong with the pay as typed, in plain words, or null when it can be set. */
 export function payProblem(f: PayForm): string | null {
   if (!f.basis) return "Choose by the hour or a yearly salary.";
@@ -250,10 +330,12 @@ export function payProblem(f: PayForm): string | null {
   if (min > max) return "The lowest pay must not be above the highest.";
   if (f.basis === "hourly" && max >= 1000) return "That looks like a yearly figure. Choose a yearly salary, or enter an hourly rate.";
   if (f.basis === "salary" && max < 1000) return "That looks like an hourly rate. Choose by the hour, or enter a yearly figure.";
+  if (max > PAY_LIMIT) return "That figure is too high. Enter $10,000,000 or less.";
   if (f.ceiling.trim()) {
     const ceiling = parseAmount(f.ceiling);
     if (!Number.isFinite(ceiling) || ceiling < 0) return "The most you would pay must be a figure, or left empty.";
     if (ceiling < max) return "The most you would pay must not be below the top of the range.";
+    if (ceiling > PAY_LIMIT) return "That figure is too high. Enter $10,000,000 or less.";
   }
   return null;
 }

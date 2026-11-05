@@ -76,12 +76,14 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
     setSharing(true);
     window.setTimeout(() => shareRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() }), 50);
   };
-  const preparing = !d || d.publishing.state === "preparing";
+  // An answer read before the approval, kept from the Share tab, says "not_open" with the role still pending: this screen opens after the approval.
+  const preparing = !d || d.publishing.state === "preparing" || (d.publishing.state === "not_open" && d.role.status === "pending_approval");
   const sub = props.editWhileOpen
     ? "Your careers page shows the new version now; Google picks it up the next time it reads the page."
-    : d?.publishing.message ?? "Getting the job ready on its channels. This takes a moment.";
+    : (!preparing ? d?.publishing.message : null) ?? "Getting the job ready on its channels. This takes a moment.";
   const note = d ? interviewersNote(d.interviewers) : null;
-  const noBoards = d && !props.editWhileOpen ? noBoardsLine(d.boards) : null;
+  // Not while it is being got ready: until the worker opens the role the server has no boards to name, and the line would be wrong for a moment.
+  const noBoards = d && !preparing && !props.editWhileOpen ? noBoardsLine(d.boards) : null;
   const outdated = props.editWhileOpen && d ? outdatedBoardsLine(d.postings.filter((p) => p.showsOldVersion).map((p) => p.channel), d.whoPosts) : null;
   const goTo = (tab: "posting" | "plan") => { props.onClose(); props.onOpenTab(tab); };
   return (

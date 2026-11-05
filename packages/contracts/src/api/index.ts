@@ -5,6 +5,7 @@ import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX } from "../domain/intake";
 import { AiInterviewGroup, ApplicationStage, DecisionWording, MarkKind, OwnerStage, PERSONAL_LINE_MAX, RejectReason, ToldState, type CancelledView, type CandidateNotice } from "../domain/stages";
 import { ActionType, PolicyLevel } from "../domain/policy";
 import { RequestInterview } from "../domain/interview";
+import { SetPublishChannels } from "./publishing";
 
 /** Slice 1 API request and response schemas. docs/12 is the map. */
 
@@ -173,7 +174,11 @@ export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
 
 // Roles
 export const CreatePacketVersion = z.object({ packet: RolePacket, changeSummary: z.string().min(1).max(500) });
-export const ApproveRole = z.object({ version: z.number().int().min(1), note: z.string().max(1000).optional() });
+/**
+ * Approving a version. `channels`: the boards ticked on the approval card and not saved yet, the same list as POST
+ * /roles/:id/channels. They are applied with the approval or not at all; left out, the saved boards stand.
+ */
+export const ApproveRole = z.object({ version: z.number().int().min(1), note: z.string().max(1000).optional(), channels: SetPublishChannels.shape.channels.optional() });
 export const RoleStatusChange = z.object({ reason: z.string().max(500).optional() });
 /** Interviewers per round, from the role page's Interview plan tab; every key must be a round of the current packet. */
 export const UpdateInterviewPlan = z.object({ rounds: z.array(z.object({ key: z.string().min(1), interviewerUserIds: z.array(z.string().min(1)).max(10) })).min(1).max(5) });

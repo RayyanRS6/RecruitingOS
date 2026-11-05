@@ -91,9 +91,24 @@ describe("chat.* suites", () => {
     expect(chatCaseFailures(earlier, toEnglish(earlier, "You ran a weekend robotics club for two years.\n\nHow long have you been explaining technical ideas in English?"))).toEqual([expect.stringMatching(/^asks the next item again after the reply gave it: /)]);
     // one short check on what they said passes
     expect(chatCaseFailures(earlier, toEnglish(earlier, "You ran a weekend robotics club for two years, explaining technical ideas in English to beginners.\n\nWhat did the beginners find hardest to follow?"))).toEqual([]);
+    // however it is worded, and whatever words the restatement uses (the code never swaps a short check for the item's question)
+    expect(chatCaseFailures(earlier, toEnglish(earlier, "You ran a weekend club for beginners for two years.\n\nHow did that go?"))).toEqual([]);
+    expect(chatCaseFailures(earlier, toEnglish(earlier, "You ran a weekend robotics club for two years, telling beginners a sensor is like a finger.\n\nWhat came of it?"))).toEqual([]);
+    // a restatement that opens with a word like "Explained" is no request, so it is never read as asking
+    expect(chatCaseFailures(justSaid, toEnglish(justSaid, "Explained the dropouts: a loose ground wire, resoldered.\n\nTell me about one time you explained a technical idea in English to beginners: what did you do, and what came of it?"))).toEqual([]);
     // a reply that names the must-have without showing it, taken as covered: the eval says the push was lost
     const thin = chatCases.find((c) => c.id === "thin_must_have_still_pushed")!;
     expect(chatCaseFailures(thin, toEnglish(thin, "You have done some Arduino work."))).toEqual(["a reply that names the must-have without showing it did not get its push", "expected one push, got covered", "a thin reply was recorded as a full answer"]);
+  });
+
+  // The "no question" check reads a request as the shaping does (`asksByRequest` from @ros/agents): "Think of a time…" and
+  // a restatement that only looks like a request ask nothing. Here no item's question stands in, so the words are shown as written.
+  it("fails a message with no question, and a request counts as one", () => {
+    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+    const offPlan = { ...chatCases.find((c) => c.id === "bare_yes_gets_one_push")!, asking: "not_on_the_plan", expect: () => [] };
+    const shown = (messageToCandidate: string) => chatCaseFailures(offPlan, { ...base, messageToCandidate });
+    for (const none of ["Think of a time you made a mistake.", "Test, think of a time you made a mistake.", "Picture a class of twenty.", "Explained it as a thirsty finger.", "Described the fix to the team.", "Shared a list with the team.", "Tell users to restart.", "Give a warm welcome."]) expect(shown(none), none).toEqual([`no question: ${none}`]);
+    for (const asks of ["Tell us about a time you made a mistake.", "Now, walk us through a mistake.", "Give an example of a mistake.", "Test, describe your last job.", "How did it go?"]) expect(shown(asks), asks).toEqual([]);
   });
 
   // Wave S9: a failing case keeps its full record in the result file (the chat, the model's turn and the turn after the

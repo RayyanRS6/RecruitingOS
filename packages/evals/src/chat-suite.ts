@@ -1,6 +1,6 @@
 import type { RolePacket, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { screenTurnPrompt, type ScreenContext } from "@ros/ai";
-import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, chatPacket, enforceChatTurn, screenContextOf, unfairQuestion, withChatPlan, type ChatFacts } from "@ros/agents";
+import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, asksByRequest, chatPacket, enforceChatTurn, screenContextOf, unfairQuestion, withChatPlan, type ChatFacts } from "@ros/agents";
 import { traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 
 /** The step a turn took on the item it was about (`chatNextMove` in @ros/core, which this package does not depend on). */
@@ -91,7 +91,7 @@ function shownFailures(turn: ScreenTurn, experience: boolean): string[] {
   const m = turn.messageToCandidate;
   const asks = (m.match(/\?/g) ?? []).length;
   if (asks > 1) out.push(`more than one question: ${m}`);
-  if (!turn.done && !turn.humanRequested && asks === 0 && !/^(?:please\s+)?(?:tell me|describe|walk me|share|give me|explain)\b/im.test(m)) out.push(`no question: ${m}`);
+  if (!turn.done && !turn.humanRequested && asks === 0 && !asksByRequest(m)) out.push(`no question: ${m}`);
   if (experience && PRAISE.test(m)) out.push(`praise in "About your experience": ${m}`);
   if (INFERENCE.test(m)) out.push(`an inference: ${m}`);
   const unfair = unfairQuestion(m);
@@ -140,7 +140,7 @@ const followedUp = (raw: ScreenTurn) => !!raw.followUpReason && !raw.questionKey
  */
 function shownQuestion(message: string): string {
   const parts = message.split(/\n\n/);
-  const at = parts.findIndex((p) => /\?/.test(p) || /^(?:please\s+)?(?:tell me|describe|walk me|share|give me|explain)\b/i.test(p));
+  const at = parts.findIndex((p) => /\?/.test(p) || asksByRequest(p));
   return at < 0 ? message : parts.slice(at).join("\n\n");
 }
 /** Asking again, on the same item, for what a reply already gave: how they found or fixed it, what came of it, how long. */

@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { IntakePayCard, IntakeQuestion } from "@ros/contracts";
-import { AutoTextarea, Avatar, Button, Eyebrow, Icon, IconButton } from "@ros/ui";
+import { Alert, AutoTextarea, Avatar, Button, Eyebrow, Icon, IconButton } from "@ros/ui";
 import { OPTION_WORDS, OPTIONS, OWN_CHIP, OWN_CHIP_X, OWN_CHIPS, TEAM_CHIP } from "./look";
 import { OriginMark } from "./marks";
 import { PayFields } from "./PayCard";
 import {
-  SOMEONE_NEW, addOwn, answerOf, goTo, isAnswered, nextLabel, payFormFrom, pickHint, picksOne, removeOwn, setDraft, setPayForm, togglePick,
+  SOMEONE_NEW, addOwn, answerOf, goTo, isAnswered, nextLabel, payCardProblem, payFormFrom, pickHint, picksOne, removeOwn, setDraft, setPayForm, togglePick,
   type CardState,
 } from "./rules";
 
@@ -42,9 +42,22 @@ export function QuestionCard(props: {
     if (moved.current) heading.current?.focus();
     moved.current = true;
   }, [shownId]);
+  // Pay figures that cannot be sent: said on their card, and nothing goes until they are right.
+  const [payWords, setPayWords] = useState<string | null>(null);
   if (!q) return null;
   const a = answerOf(state, q);
-  const next = () => (index >= total - 1 ? props.onSend() : onState(goTo(state, index + 1, total)));
+  const next = () => {
+    if (index < total - 1) {
+      const here = payCardProblem([q], state);
+      setPayWords(here?.words ?? null);
+      if (!here) onState(goTo(state, index + 1, total));
+      return;
+    }
+    const wrong = payCardProblem(questions, state);
+    setPayWords(wrong?.words ?? null);
+    if (!wrong) props.onSend();
+    else if (wrong.index !== index) onState(goTo(state, wrong.index, total));
+  };
   const name = `card-${q.id}`;
   const one = picksOne(q);
   const answeredCount = questions.filter((x) => isAnswered(x, answerOf(state, x))).length;
@@ -64,7 +77,10 @@ export function QuestionCard(props: {
       <div key={q.id} className="grid min-w-0 gap-3 motion-safe:animate-fade">
         <h2 ref={heading} tabIndex={-1} className="qcard-prompt font-display text-[19px] font-bold leading-snug tracking-[-0.02em] focus:outline-none">{q.prompt}</h2>
         {q.mode === "pay" ? (
-          <PayFields form={a.pay ?? payFormFrom(props.pay)} onChange={(f) => onState(setPayForm(state, q, f))} card={props.pay} idBase={name} />
+          <>
+            <PayFields form={a.pay ?? payFormFrom(props.pay)} onChange={(f) => { setPayWords(null); onState(setPayForm(state, q, f)); }} card={props.pay} idBase={name} />
+            {payWords ? <Alert tone="caution">{payWords}</Alert> : null}
+          </>
         ) : q.mode === "free" ? (
           <AutoTextarea className="textarea" value={a.draft} onChange={(v) => onState(setDraft(state, q, v))} ariaLabel={q.prompt} placeholder="Type your answer" maxLength={500} rows={2} />
         ) : q.mode === "team" ? (
