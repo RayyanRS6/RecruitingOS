@@ -9,6 +9,7 @@ import { ClosingMessageCard } from "../../components/ClosingMessage";
 import { closeRoleToast, type PanelStep } from "../../talent-actions";
 import { useCompanyTimeZone } from "../../components/use-company-time-zone";
 import { hireConfirmText, hireFollowUpView, hireToast, keepWarmToast, offerAnswerToast, offerDateBounds, offerMadeToast, offerNote, offerStepText, waitingOnCandidateText } from "../../hiring";
+import { cannotSeeYetWords } from "../../upgrade";
 import { firstSentence } from "./helpers";
 import { useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
 import { LEAD, STEP, Why } from "./why";
@@ -184,6 +185,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
             <ul className="grid gap-1.5" aria-label="Still in the running">
               {v.people.map((p) => <li key={p.applicationId} className="flex flex-wrap items-center gap-2 text-sm"><Avatar name={p.name} size="sm" /><span className="font-semibold">{p.name}</span><span className="muted small">{p.stageLabel}</span></li>)}
             </ul>
+            {after.backups.locked ? <p className="small muted">{cannotSeeYetWords(after.backups.locked)}</p> : null}
           </div>
         ) : null}
         {/* the ways forward, side by side on a desk: each its own card with its one button */}

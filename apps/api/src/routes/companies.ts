@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { desc, eq } from "drizzle-orm";
 import { CreateCompany, InviteMember, UpdateMember, limitsForCustomers, trialStanding } from "@ros/contracts";
-import { aiCreditView, assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
+import { aiCreditView, assertCan, audit, entitlements, planIncludesItsPosting, raiseAlert, setActiveCompany, revokeStaffGrant, whoPostsBoards } from "@ros/core";
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
@@ -53,8 +53,11 @@ companyRoutes.get("/current", requireTenant, async (c) => {
     const usage = await entitlements.usageOf(tx, t.companyId, { now });
     // Home's row about the AI credit: its level, its percentage and its words; null when the plan puts no limit on it.
     const aiCredit = await aiCreditView(tx, t.companyId, { now, timeZone: co.timezone });
+    // Who really posts on the boards (Rule 6), and whether the plan leaves that choice to the company at all.
+    const itsPosting = await planIncludesItsPosting(tx, t.companyId);
+    const whoPosts = await whoPostsBoards(tx, t.companyId, co.settings);
     // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
-    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, aiCredit, trial: trialStanding(co, now) };
+    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, aiCredit, itsPosting, whoPosts, trial: trialStanding(co, now) };
   });
   // `production`: NODE_ENV is production (staging too), where a service running without a provider ("fake") is a
   // deliberate default rather than a development stand-in, and Settings says what it does instead (audit MAIL-18).

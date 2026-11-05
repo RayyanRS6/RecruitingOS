@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, eq, gte } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateApplicationLink, CreateShareLink, PostingReason, RecordPostingUrl, SetAcceptingApplications, SetPublishChannels, VerifyPosting, companyOnboarding, type PostingTaskKind, type PostingTaskView } from "@ros/contracts";
-import { BOARD_CHANNELS, BOARD_UP_STATES, CHANNEL_NAME, CLOSING_DATE_REASON, POSTING_CHANNELS, POSTING_STATE_LABEL, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, PostingNotFoundError, PostingTransitionError, SHARE_PLACES, SOURCES, SOURCE_LABEL, assertCan, audit, boardPostingOf, can, chosenBoards, closingMoment, confirmBoardRemoved, confirmBoardUpdated, createApplicationLink, disableApplicationLink, emit, isBoardChannel, isPostingState, isSource, listApplicationLinks, notify, openPostingTask, postingPackage, postingTaskLabel, postingTaskNeeded, postingTasksForRole, showsOldVersion, transitionPosting, zipRecruiterOffered, type ApplicationLinkRow, type BoardChannel, type PostingChannel, type PostingPatch, type PostingRow, type PostingState } from "@ros/core";
+import { BOARD_CHANNELS, BOARD_UP_STATES, CHANNEL_NAME, CLOSING_DATE_REASON, POSTING_CHANNELS, POSTING_STATE_LABEL, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, PostingNotFoundError, PostingTransitionError, SHARE_PLACES, SOURCES, SOURCE_LABEL, assertCan, audit, whoPostsBoards,can, chosenBoards, closingMoment, confirmBoardRemoved, confirmBoardUpdated, createApplicationLink, disableApplicationLink, emit, isBoardChannel, isPostingState, isSource, listApplicationLinks, notify, openPostingTask, postingPackage, postingTaskLabel, postingTaskNeeded, postingTasksForRole, showsOldVersion, transitionPosting, zipRecruiterOffered, type ApplicationLinkRow, type BoardChannel, type PostingChannel, type PostingPatch, type PostingRow, type PostingState } from "@ros/core";
 import { applicationLinks, applications, companies, postings, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { intakeAddress } from "@ros/integrations";
 import { DEFAULT_VOLUME_ALERT_PER_DAY, localDays } from "@ros/workflows";
@@ -96,7 +96,7 @@ async function postingContext(tx: Tx, container: Container, role: RoleRow) {
   const linkUrl = (l: ApplicationLinkRow) => trackedLinkUrl(container.env, l.token);
   const tasks = postingTaskViews(await postingTasksForRole(tx, role.id), (id) => posts.find((p) => p.id === id)?.channel ?? null);
   const boards: readonly string[] = pv ? chosenBoards(role, pv.packet, company?.settings) : (role.publishChannels ?? []);
-  return { company, packet: pv?.packet ?? null, posts, links, urls, emailIn, emailInAddress, emailInConnected, linkUrl, tasks, boards, whoPosts: boardPostingOf(company?.settings), currentVersion: role.currentPacketVersion };
+  return { company, packet: pv?.packet ?? null, posts, links, urls, emailIn, emailInAddress, emailInConnected, linkUrl, tasks, boards, whoPosts: await whoPostsBoards(tx, role.companyId, company?.settings), currentVersion: role.currentPacketVersion };
 }
 type PostingContext = Awaited<ReturnType<typeof postingContext>>;
 
@@ -496,7 +496,7 @@ postingRoutes.post("/:id/postings/:channel/ask-its", requireTenant, async (c) =>
     const role = await loadRole(tx, c.req.param("id"));
     const posting = await loadPosting(tx, role.id, channel);
     const [company] = await tx.select({ name: companies.name, vertical: companies.vertical, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-    if (boardPostingOf(company?.settings) !== "its") throw new HttpError(409, "team_posts", "Your team posts on the job boards itself (Settings, Job boards), so there is no ITS task to ask for.");
+    if ((await whoPostsBoards(tx, role.companyId, company?.settings)) !== "its") throw new HttpError(409, "team_posts", "Your team posts on the job boards itself (Settings, Job boards), so there is no ITS task to ask for.");
     const kind = postingTaskNeeded(posting, role);
     if (!kind) throw new HttpError(409, "nothing_to_do", `${CHANNEL_NAME[channel]} needs nothing from ITS right now (it is "${stateLabel(posting.status)}").`);
     const now = container.engine.clock();

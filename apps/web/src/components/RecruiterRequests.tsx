@@ -146,7 +146,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
           <Field label="What is still missing?" htmlFor={fieldId}>
             <textarea id={fieldId} className="textarea" value={text} onChange={(e) => setText(e.target.value)} />
           </Field>
-          <p className="small muted">{reopenHint(r.recruiterName, accessWords(r.scope), ACCESS_DAYS)}</p>
+          <p className="small muted">{reopenHint(r.recruiterName, r.topic === "plan" ? null : accessWords(r.scope), ACCESS_DAYS)}</p>
           <div className="row"><Button size="sm" variant="primary" disabled={text.trim().length < REOPEN_MIN} loading={reopen.isPending} onClick={() => reopen.mutate()}>Reopen the request</Button><Button size="sm" variant="quiet" onClick={() => setMode(null)}>Keep it closed</Button></div>
         </div>
       ) : null}

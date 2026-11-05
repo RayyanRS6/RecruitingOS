@@ -11,6 +11,7 @@ import { NEW_TIMES_SHEET_TEXT, cancelledAlertText, cancelledChips, mergeNewTimes
 import { messageOnItsWayChip } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
+import { LockedCandidates } from "../components/LockedCandidates";
 import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
 import { useIsClient } from "../components/use-is-client";
@@ -237,7 +238,7 @@ export function People() {
   };
 
   const total = counts?.total ?? rows.length;
-  const headline = [`${total} ${total === 1 ? "applicant" : "applicants"}`, waitingCount ? `${waitingCount} waiting on you` : "", noInterviewCount ? `${noInterviewCount} without an AI interview yet` : ""].filter(Boolean).join(" · ");
+  const headline = [`${total} ${total === 1 ? "applicant" : "applicants"}`, apps.data?.locked?.count ? `${apps.data.locked.count} locked` : "", waitingCount ? `${waitingCount} waiting on you` : "", noInterviewCount ? `${noInterviewCount} without an AI interview yet` : ""].filter(Boolean).join(" · ");
   const strip = stripParts(counts, view.stage);
   const pickStage = (stage: TalentView["stage"]) => setView({ stage, waiting: false, cancelledReason: null, aiInterview: null });
   // Every filter that narrows the list, as a removable chip above it (Wave S6, as on Kanvis), so a short list always
@@ -451,6 +452,8 @@ export function People() {
           </div>
         </div>
       )}
+      {/* People past the plan's candidates per job (Rule 3), under the list and the board alike: they are in no stage and no column. */}
+      {roleId ? <LockedCandidates locked={apps.data?.locked} /> : null}
       {/* The candidate panel comes last, so a name opened from Review and apply or from an answer sits on top of them. */}
       {reviewing && roleId && board.data ? <ReviewApply roleId={roleId} board={board.data} mayDecline={mayTell} onClose={closeReview} onOpen={(id) => openPanel(id)} /> : null}
       {asking && roleId && board.data ? <AskPool roleId={roleId} board={board.data} onClose={() => setAsking(false)} onOpen={(id) => openPanel(id)} onShow={(ids, label) => { setOnlyFor({ roleId, ids, label }); setAsking(false); }} /> : null}

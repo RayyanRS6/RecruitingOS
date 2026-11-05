@@ -34,7 +34,8 @@ export type RecordInterviewDecision = z.infer<typeof RecordInterviewDecision>;
  */
 export type HireFollowUp = {
   startDate: string | null;
-  backups: { count: number; people: Array<{ applicationId: string; name: string; stageLabel: string }> };
+  /** `locked`: how many more applied past the plan's candidates per job, a number and never who; older answers leave it out. */
+  backups: { count: number; people: Array<{ applicationId: string; name: string; stageLabel: string }>; locked?: number };
   closeRole: { path: string; outcome: "filled"; stillInProcess: number; words: string } | null;
 };
 

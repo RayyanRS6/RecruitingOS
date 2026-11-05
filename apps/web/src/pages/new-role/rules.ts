@@ -613,11 +613,22 @@ const askOf = (actions: readonly ActionLike[] | undefined): RecruiterAction | nu
 
 /**
  * A turn the assistant could not take: what to say, and the "Bring in a recruiter" the server offers with the draft
- * attached. The model's own error text is never shown; it means nothing to the person.
+ * attached. The model's own error text is never shown; it means nothing to the person. A turn with no AI help left
+ * (`upgrade`) failed at nothing, so it says only that, and the way on is the server's Upgrade: never "try again".
  */
-export function turnProblem(reply: { error?: string; recovery?: string; proposedActions?: readonly ActionLike[] } | null | undefined): { message: string; ask: RecruiterAction | null } | null {
+export function turnProblem(reply: { error?: string; recovery?: string; proposedActions?: readonly ActionLike[]; upgrade?: boolean } | null | undefined): { message: string; ask: RecruiterAction | null; upgrade?: boolean } | null {
   if (!reply?.error) return null;
+  if (reply.upgrade) return { message: reply.recovery ?? "Your plan's AI help is used up.", ask: askOf(reply.proposedActions), upgrade: true };
   return { message: `The assistant could not reply just now. ${reply.recovery ?? "Try again."}`, ask: askOf(reply.proposedActions) };
+}
+
+/**
+ * What a problem from the API offers: its own way on, otherwise "Bring in a recruiter" with the draft. When the way on is to
+ * upgrade (no AI help left, no room) a recruiter is never offered instead, which would hand out a free person in place of the
+ * upgrade; someone who may not ask gets the words alone.
+ */
+export function problemAsk(err: { details?: unknown } | null | undefined, recruiter: RecruiterAction): RecruiterAction | null {
+  return askFromDetails(err?.details) ?? ((err?.details as { upgrade?: unknown } | null | undefined)?.upgrade ? null : recruiter);
 }
 
 /**

@@ -525,8 +525,10 @@ describe("the team cannot read a locked person", () => {
     const hiredText = await hired.text();
     expect(hired.status, hiredText).toBe(201);
     expect(leaks(hiredText)).toEqual([]);
-    const { hire } = JSON.parse(hiredText) as { hire: { backups: { count: number; people: unknown[] }; closeRole: { stillInProcess: number } } };
-    expect(hire.backups).toEqual({ count: 0, people: [] });
+    const { hire } = JSON.parse(hiredText) as { hire: { backups: { count: number; people: unknown[]; locked?: number }; closeRole: { stillInProcess: number } } };
+    expect(hire.backups).toMatchObject({ count: 0, people: [] });
+    // that more applied is a number, for "and N more you cannot see yet", and nothing else about them
+    expect(hire.backups.locked).toBeGreaterThan(0);
     expect(hire.closeRole.stillInProcess).toBe(0);
     await container.db.update(applications).set({ stage: "received" }).where(eq(applications.id, ids.locked));
 
@@ -758,7 +760,8 @@ describe("the team cannot read a locked person", () => {
     const text = await decided.text();
     expect(decided.status, text).toBe(200);
     expect(/zqzoe/i.test(text)).toBe(false);
-    expect((JSON.parse(text) as { hire: { backups: unknown } }).hire.backups).toEqual({ count: 0, people: [] });
+    // nobody to name, and only how many the team cannot read yet
+    expect((JSON.parse(text) as { hire: { backups: unknown } }).hire.backups).toEqual({ count: 0, people: [], locked: 1 });
     // Home's "keep your backups warm" is there only for people it can name, so it says nothing here.
     const brief = await read<{ cards: Array<{ kind: string }> }>(await json(company.cookie, "GET", "/api/v1/brief"));
     expect(brief.cards.map((c) => c.kind)).not.toContain("hire");

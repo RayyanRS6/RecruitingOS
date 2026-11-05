@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_LINE, FREE_PLAN_KEY, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, publicPlanView } from "./plans";
+import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_LINE, FREE_PLAN_KEY, MORE_CANDIDATES_UPGRADE_QUESTION, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, mayOfferUpgrade, planChangedWords, planRequestQuestion, publicPlanView } from "./plans";
+
+describe("asking for a bigger plan", () => {
+  it("offers an upgrade on every plan but the last public one and the private pilot, read from the list", () => {
+    for (const key of ["free", "basic", "pro", "trial", "core", "growth", "company"]) expect(mayOfferUpgrade(key), key).toBe(true);
+    for (const key of ["ultra", "design_partner"]) expect(mayOfferUpgrade(key), key).toBe(false);
+  });
+
+  it("the question names the plan, then why, then the person's own note", () => {
+    expect(planRequestQuestion("Pro")).toBe("We would like to move to the Pro plan.");
+    expect(planRequestQuestion("Pro", { reason: MORE_CANDIDATES_UPGRADE_QUESTION, note: "  From next month.  " })).toBe("We would like to move to the Pro plan. We would like to view more candidates. From next month.");
+    expect(planRequestQuestion("Ultra", { note: "   " })).toBe("We would like to move to the Ultra plan.");
+  });
+
+  it("what the team is told when ITS changes the plan: no dollars, and how many it opened", () => {
+    expect(planChangedWords("Pro")).toEqual({ title: "Your plan is now Pro", body: "Your company is on the Pro plan now. The new limits apply at once.", answer: "Your company is on the Pro plan now." });
+    expect(planChangedWords("Pro", 1).body).toContain("1 candidate who was locked is open now.");
+    expect(planChangedWords("Pro", 3).body).toContain("3 candidates who were locked are open now.");
+  });
+});
 
 describe("the public plans", () => {
   it("lists Free, Basic, Pro and Ultra, in that order, and starts a new company on Free", () => {

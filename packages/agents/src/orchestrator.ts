@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
-import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
+import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, planIncludesItsPosting, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import { mailbox, type Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -264,6 +264,11 @@ const LADDER: LadderLevel[] = ["brief", "message", "offer_recruiter", "escalatio
  * waiting for an answer goes as far as an email to the team: following up an offer made outside the app is theirs.
  */
 const LADDER_TOP: Partial<Record<Detection["detector"], LadderLevel>> = { hold_ended: "brief", decisions_untold: "brief", offers_waiting: "message" };
+/**
+ * The ladder's top on a plan with no ITS staff time (the plans of 5 November 2026, Rule 6): the email. Nobody at ITS is
+ * offered or brought in by the ladder, read from the plan's `its_work`. A person who asks for a recruiter still reaches ITS.
+ */
+const NO_ITS_WORK_TOP: LadderLevel = "message";
 
 export type LadderDeps = { integrations: Integrations; appBaseUrl: string; itsQueueEmail: string; now: Date; actor: Actor };
 
@@ -273,6 +278,7 @@ export type LadderDeps = { integrations: Integrations; appBaseUrl: string; itsQu
  */
 export async function runInterventionLadder(q: Queryable, deps: LadderDeps, companyId: string, detections: Detection[]): Promise<Array<{ roleId: string; detector: string; level: LadderLevel | "skipped" | "resolved"; reason?: string }>> {
   const results: Array<{ roleId: string; detector: string; level: LadderLevel | "skipped" | "resolved"; reason?: string }> = [];
+  const itsWork = await planIncludesItsPosting(q, companyId);
   const openInterventions = await q.select().from(interventions).where(and(eq(interventions.companyId, companyId), eq(interventions.status, "sent")));
   for (const iv of openInterventions) {
     const still = detections.some((d) => d.roleId === iv.roleId && d.detector === iv.detector);
@@ -296,6 +302,7 @@ export async function runInterventionLadder(q: Queryable, deps: LadderDeps, comp
     if (level === "escalation" && active.some((p) => p.ladderLevel === "escalation")) { results.push({ roleId: d.roleId, detector: d.detector, level: "skipped", reason: "already escalated" }); continue; }
     const top = LADDER_TOP[d.detector];
     if (top && LADDER.indexOf(level) > LADDER.indexOf(top)) { results.push({ roleId: d.roleId, detector: d.detector, level: "skipped", reason: "already told in the app" }); continue; }
+    if (!itsWork && LADDER.indexOf(level) > LADDER.indexOf(NO_ITS_WORK_TOP)) { results.push({ roleId: d.roleId, detector: d.detector, level: "skipped", reason: "the plan has no ITS staff time" }); continue; }
     await sendIntervention(q, deps, companyId, d, level);
     const [row] = await q.insert(interventions).values({ companyId, roleId: d.roleId, detector: d.detector, ladderLevel: level, status: "sent", sentAt: deps.now.toISOString() }).returning({ id: interventions.id });
     await emit(q, { type: "intervention.sent", companyId, actor: deps.actor, subject: { type: "role", id: d.roleId }, payload: { detector: d.detector, level, interventionId: row.id, days: d.days } });

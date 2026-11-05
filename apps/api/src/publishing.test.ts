@@ -513,6 +513,8 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
   it("a company that posts on the boards itself gets no ITS tasks; after an approved edit it is told which boards still show the old version", async () => {
     const own = await signIn("owner@diy.test");
     const co = await body<{ id: string }>(await post(own, "/api/v1/companies", { name: "Do It Yourself Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] }));
+    // its own choice, on a plan that leaves the choice to it (a plan with no ITS staff time is in plan-upgrade.test.ts)
+    await entitlements.applyPlan(container.db, co.id, "growth");
     await settings({ boardPosting: "self" }, co.id);
     const roleId = await newRole(own);
     expect((await post(own, `/api/v1/roles/${roleId}/approve`, { version: 1 })).status).toBe(200);

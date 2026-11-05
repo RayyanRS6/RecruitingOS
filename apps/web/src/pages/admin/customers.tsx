@@ -11,7 +11,7 @@ import { RECRUITER_ASKS_OVER_CHIP } from "../../recruiter-requests";
 import { toast } from "../../toast";
 import { trialDate } from "../../trial";
 import { CustomerReportPanel } from "../AdminCustomerReport";
-import { type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
+import { type AiCreditLine, type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
 import { activityWords, exactMoney, exactWhen, money, planStatusWords, planWords, trialWords, whenWords } from "./admin-words";
 import type { TrialStanding, TrialTerm } from "@ros/contracts";
 import { Outcomes } from "./outcomes";
@@ -93,11 +93,12 @@ export function customerFilterFrom(value: string | null): CustomerFilter {
 
 /**
  * Whether a customer belongs under a pill: Waiting, not confirmed yet; Running low, an open allowance alert (80% of the
- * screening chats, or used up); Quiet, no activity for more than 7 days (the console's churn rule, admin-words.ts).
+ * screening chats, or used up) or its AI credit at the same lines; Quiet, no activity for more than 7 days (the console's
+ * churn rule, admin-words.ts).
  */
 export function customerInFilter(c: CustomerRow, filter: CustomerFilter, low: ReadonlyMap<string, unknown>, now: number = Date.now()): boolean {
   if (filter === "waiting") return !c.verifiedAt;
-  if (filter === "low") return low.has(c.id);
+  if (filter === "low") return low.has(c.id) || !!c.aiCredit?.level;
   if (filter === "quiet") return activityWords(c.lastActivityAt, now).state !== "active";
   return true;
 }
@@ -174,6 +175,37 @@ function TrialStandingLine({ c }: { c: Pick<CustomerRow, "trial" | "timezone"> }
   if (!c.trial) return null;
   const words = trialWords(c.trial, c.timezone);
   return c.trial.ended ? <Chip tone="caution">{words}</Chip> : <div className="small muted">{words}</div>;
+}
+
+/** "$1.20 of $10 AI credit", or "$4.00 of $20 AI credit this month, resets December 5": dollars, which only ITS reads. */
+export function aiCreditDollars(a: Pick<AiCreditLine, "monthly" | "spentUsd" | "limitUsd" | "resetsAt">): string {
+  const limit = Number.isInteger(a.limitUsd) ? `$${a.limitUsd.toLocaleString("en-US")}` : money(a.limitUsd);
+  const resets = a.resetsAt ? `, resets ${new Date(a.resetsAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}` : "";
+  return `${money(a.spentUsd)} of ${limit} AI credit${a.monthly ? ` this month${resets}` : ""}`;
+}
+
+/** "3 locked": how many the plan's candidates per job left locked, a count and never who. */
+export function lockedWords(n: number): string {
+  return `${n} locked`;
+}
+
+/** The chip when a company's AI credit is at 80% or used up, and when it has asked ITS to upgrade. */
+export function aiCreditChip(level: AiCreditLine["level"]): string | null {
+  return level === "used_up" ? "AI credit used up" : level === "warning" ? "80% of AI credit used" : null;
+}
+export const ASKED_TO_UPGRADE_CHIP = "Asked to upgrade";
+
+/** What a customer's plan has come to, under its name in the list and on the Overview: the AI credit in dollars, the people locked, and the chips. */
+function PlanFacts({ c }: { c: Pick<CustomerRow, "aiCredit" | "lockedApplicants" | "planRequestSince"> }) {
+  const credit = c.aiCredit ? aiCreditChip(c.aiCredit.level) : null;
+  return (
+    <>
+      {c.aiCredit ? <div className="small muted">{aiCreditDollars(c.aiCredit)}</div> : null}
+      {c.lockedApplicants ? <div className="small muted">{lockedWords(c.lockedApplicants)}</div> : null}
+      {credit ? <Chip tone="caution">{credit}</Chip> : null}
+      {c.planRequestSince ? <span title={`Since ${exactWhen(c.planRequestSince)}`}><Chip tone="accent">{ASKED_TO_UPGRADE_CHIP}</Chip></span> : null}
+    </>
+  );
 }
 
 /** A row's first line: 14 px in ink (redesign spec 3.3); its second lines are `.small.muted` (13 px, --ink-3). */
@@ -338,7 +370,8 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
           <div className={LINE}>{planLine(c, true)}</div>
           {/* The Trial plan's 30 days (L-02 B): when they end, or that they ended and new applications are paused. */}
           <TrialStandingLine c={c} />
-          {usage ? <div className="small muted">{usage.used}{usage.limit !== null ? ` of ${usage.limit}` : ""} chats this month</div> : null}
+          {usage && usage.limit !== null ? <div className="small muted">{usage.used} of {usage.limit} chats this month</div> : usage && !c.aiCredit ? <div className="small muted">{usage.used} chats this month</div> : null}
+          <PlanFacts c={c} />
           {low ? <span title={allowanceChip(low)}><Chip tone="caution">{low.level === "used_up" ? "Used up" : "Running low"}</Chip></span> : null}
         </div>
       </td>
@@ -426,7 +459,7 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
             </Fact>
           </dd>
           <dt>Job boards</dt>
-          <dd>{c.jobBoardsConfirmedAt ? "ITS can sign in" : "Not confirmed yet"}</dd>
+          <dd>{c.whoPosts === "self" ? "Their team posts them" : c.jobBoardsConfirmedAt ? "ITS can sign in" : "Not confirmed yet"}</dd>
           <dt>Plan</dt>
           <dd className={CELL}>
             <Fact action={<Button size="sm" variant="secondary" onClick={() => onTab("plan")}>Change plan</Button>}>{planLine(c)}</Fact>
@@ -434,6 +467,7 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
             {c.seats && c.seats.limit !== null ? <div className="small muted" title={SEATS_NOTE}>{seatsWords(c.seats)}</div> : null}
             {extensionLines(c.trialTerm, c.timezone).map((line) => <div key={line.key} className="small muted">{line.text}</div>)}
             {c.screeningConversations ? <div className="small muted">{screeningLine(c.screeningConversations)}</div> : null}
+            <PlanFacts c={c} />
             {low ? <Chip tone="caution">{allowanceChip(low)}</Chip> : null}
           </dd>
           <dt>How people apply</dt>
@@ -473,17 +507,41 @@ export function screeningLine(u: { used: number; limit: number | null; resetsAt?
   return `${u.used}${u.limit !== null ? ` of ${u.limit}` : ""} AI interviews this month${resets}`;
 }
 
-export type PlanOption = { key: string; name: string; limits: Record<string, number | null> };
-const LIMIT_WORDS: Array<[string, string]> = [["active_roles", "active jobs"], ["text_screens", "AI interviews a month"], ["recruiter_asks", "recruiter requests a month"], ["seats", "seats"]];
+export type PlanOption = { key: string; name: string; prices?: Record<string, number>; limits: Record<string, number | null> };
+const dollars = (cents: number) => `$${(cents / 100).toLocaleString("en-US")}`;
 
-/** What a plan includes, in one line: "3 active jobs · 300 screening chats a month · 10 recruiter requests a month · unlimited seats". */
+/**
+ * What a plan includes, in one line, in dollars for ITS: "1 job ever · 5 candidates a job · $10 AI credit in all · 1 recruiter
+ * request a month · 2 seats · the team posts its own boards". A key the plan does not name is left out, and so is a limit that
+ * says nothing there: no limit of jobs ever or of candidates a job, the jobs at a time beside one job ever, and unlimited AI
+ * interviews on a plan the AI credit meters.
+ */
 export function planLimitsLine(limits: Record<string, number | null>): string {
-  return LIMIT_WORDS.filter(([k]) => k in limits).map(([k, words]) => `${limits[k] === null ? "unlimited" : limits[k]} ${words}`).join(" · ");
+  const count = (key: string, one: string, many: string) => (key in limits ? `${limits[key] === null ? "unlimited" : limits[key]} ${limits[key] === 1 ? one : many}` : null);
+  const total = limits.ai_credit_total_cents;
+  const monthly = limits.ai_credit_monthly_cents;
+  const jobsEver = limits.jobs_total;
+  const metered = typeof total === "number" || typeof monthly === "number";
+  return [
+    typeof jobsEver === "number" ? `${jobsEver} ${jobsEver === 1 ? "job" : "jobs"} ever` : count("active_roles", "active job", "active jobs"),
+    typeof limits.candidates_per_job === "number" ? `${limits.candidates_per_job} candidates a job` : null,
+    metered && limits.text_screens === null ? null : count("text_screens", "AI interview a month", "AI interviews a month"),
+    typeof total === "number" ? `${dollars(total)} AI credit in all` : typeof monthly === "number" ? `${dollars(monthly)} AI credit a month` : null,
+    count("recruiter_asks", "recruiter request a month", "recruiter requests a month"),
+    count("seats", "seat", "seats"),
+    limits.its_work === 0 ? "the team posts its own boards" : null,
+  ].filter(Boolean).join(" · ");
 }
 
-/** The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B). */
-export function planChangedToast(company: string, plan: string, endedTrial = false): { title: string; detail: string } {
-  const limits = "The new limits apply at once. This month's usage stays; the reset date does not move.";
+/** What a plan costs, for the console's list: "$49 a month", "$0 a month". */
+export function planPriceLine(prices: Record<string, number> | undefined): string | null {
+  return typeof prices?.monthlyUsd === "number" ? `$${prices.monthlyUsd.toLocaleString("en-US")} a month` : null;
+}
+
+/** The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B); `opened` how many locked candidates the new plan opened. */
+export function planChangedToast(company: string, plan: string, endedTrial = false, opened = 0): { title: string; detail: string } {
+  const people = opened ? ` ${opened === 1 ? "1 locked candidate opens" : `${opened} locked candidates open`} now.` : "";
+  const limits = `The new limits apply at once. This month's usage stays; the reset date does not move.${people}`;
   return { title: `${company} is on ${plan} now.`, detail: endedTrial ? `The trial has ended; new applications are open again. ${limits}` : limits };
 }
 
@@ -536,11 +594,17 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
   const [pick, setPick] = useState(company.planKey);
   const [why, setWhy] = useState("");
   const [confirming, setConfirming] = useState(false);
-  const chosen = (plans.data ?? []).find((p) => p.key === pick) ?? null;
+  // A retired plan the company is still on stays in the list, or the list would draw its first option as if chosen and
+  // offer no change to it. The API offers nothing else, so it can only be left as it is.
+  const offered = plans.data ?? [];
+  const options: PlanOption[] = offered.some((p) => p.key === company.planKey) ? offered : [...offered, { key: company.planKey, name: planWords(company.planKey), limits: {} }];
+  const chosen = options.find((p) => p.key === pick) ?? null;
+  const price = planPriceLine(chosen?.prices);
+  const includes = chosen ? [price, planLimitsLine(chosen.limits)].filter(Boolean).join(" · ") : "";
   const save = useMutation({
-    mutationFn: () => api.post<{ trialEnded?: boolean }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
+    mutationFn: () => api.post<{ trialEnded?: boolean; unlocked?: number }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
     onSuccess: (r) => {
-      const t = planChangedToast(company.name, chosen?.name ?? pick, !!r?.trialEnded);
+      const t = planChangedToast(company.name, chosen?.name ?? pick, !!r?.trialEnded, r?.unlocked ?? 0);
       toast(t.title, t.detail);
       setWhy("");
       setConfirming(false);
@@ -558,10 +622,10 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
           <div className={FORM}>
             <Field label="Plan" htmlFor="plan-pick">
               <select id="plan-pick" className="select" value={pick} onChange={(e) => { setPick(e.target.value); setConfirming(false); }}>
-                {(plans.data ?? []).map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
+                {options.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
               </select>
             </Field>
-            {chosen ? <p className="rounded-xl bg-surface-2 px-3.5 py-2.5 text-[13px] text-ink-2">{planLimitsLine(chosen.limits)}</p> : null}
+            {includes ? <p className="rounded-xl bg-surface-2 px-3.5 py-2.5 text-[13px] text-ink-2">{includes}</p> : null}
             {pick !== company.planKey ? (
               <>
                 <Field label="Why (required, kept with the change)" htmlFor="plan-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="plan-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
@@ -757,7 +821,8 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
           ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setConfirming(true)}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
         </div>
       </Card>
-      <Card title="Job-board access">
+      {/* no ITS staff time on the company's plan: its team posts, so there is nothing for ITS to sign in to */}
+      {company.whoPosts === "self" ? null : <Card title="Job-board access">
         {/* the button says what it records; when to press it, and what it ticks for the owner, folds */}
         <details className="more">
           <summary>How this works</summary>
@@ -768,7 +833,7 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
             ? <><Chip tone="good">ITS can sign in</Chip><Button size="sm" variant="secondary" loading={boards.isPending} onClick={() => boards.mutate(false)}>No longer confirmed</Button></>
             : <Button size="sm" variant="primary" loading={boards.isPending} onClick={() => boards.mutate(true)}>ITS can sign in to the job boards</Button>}
         </div>
-      </Card>
+      </Card>}
     </div>
   );
 }

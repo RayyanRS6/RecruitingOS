@@ -127,6 +127,13 @@ export function competencyUnquoted(c: { finding: string; evidence?: EvidenceRef 
 
 export const SCORECARD_UNAVAILABLE_TEXT = "The AI interview is finished, but its AI review could not be written. Read the chat and decide yourself.";
 
+/** The latest AI interview is in and its AI review waits for the plan's AI help (the plans of 5 November 2026, Rule 4): nothing failed, and the team can read it now. */
+export const SCORECARD_WAITING_TEXT = "Their AI interview is in, but your plan's AI help is used up, so it was not scored. Read their answers and decide yourself.";
+
+export function scorecardWaiting(a: Pick<ApplicationDetail, "screens">): boolean {
+  return a.screens[0]?.scorecard === "waiting_for_credit";
+}
+
 /**
  * The latest screen finished but its scorecard could not be written (the run gave up after two unusable answers; the
  * engine then asked ITS to look). The page says so instead of showing a screen with no reading.

@@ -10,7 +10,7 @@ import { Link } from "../../nav";
 import { firstName } from "../../today";
 import { adminKeys, adminReason, type AlertRow, type CustomerRow, type DataRequest } from "./admin-api";
 import { activityWords, money, planWords, severityWords } from "./admin-words";
-import { customerOrder, waitingCustomers } from "./customers";
+import { aiCreditDollars, customerOrder, waitingCustomers } from "./customers";
 import { PRIVACY_DUE_SOON_DAYS } from "./privacy";
 import { needsAPerson } from "./problems";
 import { costsSinceKey, monthStartIn } from "./system";
@@ -184,6 +184,22 @@ export function attentionRows(s: OverviewSources, now: number = Date.now()): Att
         action: { label: "Open", href: `/admin/customers?show=low&open=${encodeURIComponent(a.companyId)}` },
       });
     }
+  }
+
+  // The AI credit, from each customer's own line (the plans of 5 November 2026, Rule 4): in dollars, which only ITS reads.
+  const credit = (s.customers ?? []).filter((c) => c.aiCredit?.level).sort((a, b) => (a.aiCredit?.level === b.aiCredit?.level ? 0 : a.aiCredit?.level === "used_up" ? -1 : 1));
+  if (credit.length > LOW_ROWS_EACH) {
+    rows.push({ key: "credit", urgent: false, text: `${credit.length} customers are running low on AI credit`, sub: someNames(credit.map((c) => c.name)), action: { label: "Open", href: "/admin/customers?show=low" } });
+  } else {
+    for (const c of credit) {
+      if (c.aiCredit) rows.push({ key: `credit-${c.id}`, urgent: false, text: `${c.name} has used ${c.aiCredit.level === "used_up" ? "all its" : "80% of its"} AI credit`, sub: aiCreditDollars(c.aiCredit), action: { label: "Open", href: `/admin/customers?open=${encodeURIComponent(c.id)}&tab=plan` } });
+    }
+  }
+
+  // A customer waiting for ITS to change its plan (Rule 5): there is no payment system, so nothing happens until someone here does it.
+  const asking = (s.customers ?? []).filter((c) => c.planRequestSince);
+  if (asking.length) {
+    rows.push({ key: "plan-requests", urgent: false, text: count(asking.length, "customer asked to upgrade", "customers asked to upgrade"), sub: someNames(asking.map((c) => c.name)), action: { label: "Open", href: asking.length === 1 ? `/admin/customers?open=${encodeURIComponent(asking[0].id)}&tab=plan` : "/admin/customers" } });
   }
   return rows;
 }

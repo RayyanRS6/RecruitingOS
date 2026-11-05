@@ -1,5 +1,5 @@
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, type FollowUpView } from "@ros/core";
 import { withoutLockedApprovals, withoutLockedEvents } from "./locked-visibility";
 import { askToViewMore } from "../middleware/candidate-lock";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
@@ -183,7 +183,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const sortsPools = !viewer || can(viewer.role, "application.act");
   // Who posts on the boards (plan D3): when ITS does, the posting and taking-down work is ITS's, not a card for the team.
   const [company] = await tx.select({ settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
-  const teamPosts = boardPostingOf(company?.settings) === "self";
+  const teamPosts = (await whoPostsBoards(tx, companyId, company?.settings)) === "self";
   // Sharing a job is open to those who manage postings and those who approve roles (routes/postings.ts, share-links).
   const shares = !viewer || can(viewer.role, "role.manage") || can(viewer.role, "role.approve");
   for (const card of closingDateCards(openRoles, company?.timezone ?? null, now, managesPostings, closesRoles)) cards.push(card);
@@ -539,7 +539,9 @@ async function gettingStartedSteps(tx: Tx, companyId: string, role: MembershipRo
       actions: [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }, ...askRecruiter],
     });
   }
-  if (can(role, "integration.manage")) {
+  // Only while ITS posts for the company (Rule 6): on a plan with no ITS staff time this step would never finish, and it
+  // would tell the owner to add ITS to LinkedIn for nothing.
+  if (can(role, "integration.manage") && (await whoPostsBoards(tx, companyId, settings)) === "its") {
     steps.push({
       key: "job_boards",
       title: "Give ITS access to your job boards",

@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, count, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import type { ApplicationStage, HireFollowUp, MembershipRole } from "@ros/contracts";
 import { STAGE_LABEL, activeMarksFor, can, closingDayWords, companyToday, notLocked } from "@ros/core";
 import { applications, candidates, companies, hiringOutcomes, roles, type Tx } from "@ros/db";
@@ -62,7 +62,10 @@ export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplica
       : "Close the role as filled. Nobody else is still in process.";
     closeRole = { path: `/api/v1/roles/${input.roleId}/outcome`, outcome: "filled", stillInProcess: others, words };
   }
-  return { startDate: input.startDate, backups: { count: backups.length, people: backups }, closeRole };
+  // A number and never who: a recruiter given one candidate reads about nobody else.
+  const [lockedRow] = input.scope?.applicationId ? [] : await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, input.roleId), isNotNull(applications.lockedAt)));
+  const locked = Number(lockedRow?.n ?? 0);
+  return { startDate: input.startDate, backups: { count: backups.length, people: backups, ...(locked ? { locked } : {}) }, closeRole };
 }
 
 /** A Today card about a hire; the brief adds it with its other cards (kind "hire"). */

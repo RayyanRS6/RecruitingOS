@@ -79,6 +79,7 @@ const HEADLINES: Record<string, string> = {
   "company.trial_ending": "Your trial ends soon",
   "company.trial_extended": "ITS extended your trial",
   "company.trial_ended": "Your trial has ended",
+  "company.plan_changed": "ITS changed your plan",
   "entitlement.text_screens": "News about your plan's AI interviews",
   "entitlement.ai_credit": "News about your plan's AI help",
 };

@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { IntakeSessionSummary, PlanRoom } from "@ros/contracts";
 import { Alert, Card, Icon } from "@ros/ui";
+import { api } from "../../api/client";
 import { Link } from "../../nav";
 import { START_HIRE_HREF } from "../../start-hire";
 import { Composer } from "./Composer";
@@ -17,11 +20,14 @@ import { useStartDraft } from "./use-start-draft";
  * who may start a hire. It looks like screenshot 3's guided conversation: a chat mark beside the title, a soft wash, the
  * message box. The title and the link are the Card's own title and aside, so the kit sizes the title (19px, as on every
  * card that is not a page's one next step); the mark is hidden from screen readers, so the heading's name stays
- * "Who are you hiring?".
+ * "Who are you hiring?". A plan with no room says so before anyone types, as the job builder's first screen does.
  */
 export function TodayStart() {
   const [text, setText] = useState("");
   const { start, pending, notARole, problem, limit, clearProblem } = useStartDraft();
+  const drafts = useQuery({ queryKey: ["intake", "mine"], queryFn: () => api.get<{ sessions: IntakeSessionSummary[]; room: PlanRoom }>("/api/v1/intake/sessions?mine=1") });
+  const room = limit?.room ?? drafts.data?.room ?? null;
+  const full = !!room && !room.ok;
   return (
     <Card
       title={<>
@@ -34,7 +40,7 @@ export function TodayStart() {
       className="border-line-tint bg-linear-150 from-tint/70 via-surface via-55% to-peach/60"
     >
       <div className="grid gap-3">
-        {limit?.room && !limit.room.ok ? <RoomAlert room={limit.room} ask={limit.ask} /> : null}
+        {full && room ? <RoomAlert room={room} ask={limit?.ask ?? null} /> : null}
         {notARole ? (
           // the job builder's own chat look (Conversation.tsx): the assistant's mark, then its white bubble
           <div className="flex min-w-0 items-start gap-2.5 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]">
@@ -48,6 +54,7 @@ export function TodayStart() {
           onChange={(v) => { setText(v); clearProblem(); }}
           onSend={start}
           sending={pending}
+          disabled={full}
           label="Who are you hiring?"
           sendLabel="Start drafting"
           placeholder="For example: a dental assistant for our Irvine office, full time, $24 to $28 an hour"

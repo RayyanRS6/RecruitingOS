@@ -174,7 +174,8 @@ export function RoleDetail() {
   const newestVersion = Math.max(0, ...r.packetVersions.map((v) => v.version));
   const openEditor = (focus: EditorFocus | null = null) => { if (editSource) setEditBase({ version: editSource.version, packet: editSource.packet, proposed: !!proposed && editSource === proposed, newestAtOpen: newestVersion, focus }); };
   const share = canShareJob(myRole);
-  const applicants = r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0;
+  // Everyone at a stage, and those past the plan's candidates per job, who are at none: the same number as the Candidates page's tab.
+  const applicants = (r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0) + (r.lockedCount ?? 0);
   const tabItems = jobTabs({ seesCandidates: talent, candidates: applicants });
   // Only with someone to put in order, and never on an ITS grant about one candidate (roles.ts canTryWeights).
   const mayTryWeights = canTryWeights(myRole, me.data?.staffAccess?.scope) && !!current && applicants > 0;

@@ -6,8 +6,10 @@ import { Alert, Button, Card, Chip, Dialog, EvidenceChip, Menu } from "@ros/ui";
 import { api, ApiError, type ApplicationDetail, type AssessmentResult, type Me, type Screen } from "../../api/client";
 import { ACCESS_LIMITS, accessWords } from "../../recruiter-access";
 import { toast } from "../../toast";
+import { AI_HELP_UPGRADE_QUESTION } from "@ros/contracts";
 import { AskRecruiter } from "../../components/AskRecruiter";
-import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, screenQuestionText } from "../../evidence";
+import { Upgrade } from "../../components/Upgrade";
+import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, SCORECARD_WAITING_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, scorecardWaiting, screenQuestionText } from "../../evidence";
 import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, hiddenAnswersLine, isRecruiterNote, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
 import { actionToast } from "../../talent-actions";
 import { ASSISTANT_NOTE_LABEL, REC_LABEL, chatGapLines, writeupLines, writeupSummary, type PanelQuestion, type WriteupLine } from "./helpers";
@@ -147,6 +149,17 @@ export function ScorecardUnavailableCard({ detail, roleId }: { detail: Applicati
       <p>{SCORECARD_UNAVAILABLE_TEXT}</p>
       <div className="row"><AskRecruiter roleId={roleId} applicationId={detail.id} size="sm" /></div>
       <Why>Nothing is hidden: the whole chat is on the AI interview tab. {state.recruiterAsked ? "An ITS recruiter has been asked to look into it." : "ITS has the details."}</Why>
+    </Card>
+  );
+}
+
+/** The AI review of a finished AI interview waits for the plan's AI help: said, so it never looks forgotten, with the way on. */
+export function ScorecardWaitingCard({ detail }: { detail: ApplicationDetail }) {
+  if (!scorecardWaiting(detail)) return null;
+  return (
+    <Card title="AI review of the AI interview" className={STEP}>
+      <p>{SCORECARD_WAITING_TEXT}</p>
+      <div className="row"><Upgrade size="sm" reason={AI_HELP_UPGRADE_QUESTION} /></div>
     </Card>
   );
 }

@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { LOCKED_WORD } from "@ros/contracts";
 import { Alert, Avatar, Button, Chip, Drawer, ErrorState, IconButton, Menu, type MenuItem, ScoreBadge, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
-import { api, type ApplicationDetail } from "../../api/client";
+import { api, isCandidateLocked, type ApplicationDetail } from "../../api/client";
+import { LockedCard } from "../../components/LockedCandidates";
 import { canSeeActivity } from "../../roles";
 import { isTextEntry } from "../../start-hire";
 import { stageBlocked, stageIntent, type PanelStep } from "../../talent-actions";
@@ -67,8 +69,10 @@ function writeSeen(id: string, seen: SeenTabs): void {
 
 export function CandidatePanel(props: PanelProps) {
   const { id, roleId, tab, onTab, onClose } = props;
-  const q = useQuery({ queryKey: ["application", id], queryFn: () => api.get<ApplicationDetail>(`/api/v1/applications/${id}`) });
+  // Someone past the plan's candidates per job (Rule 3) is an answer, not a hiccup: it is not asked again.
+  const q = useQuery({ queryKey: ["application", id], queryFn: () => api.get<ApplicationDetail>(`/api/v1/applications/${id}`), retry: (count, e) => !isCandidateLocked(e) && count < 1 });
   const a = q.data && q.data.id === id ? q.data : undefined;
+  const locked = !a && isCandidateLocked(q.error);
   const viewer = useViewer();
   const act = useCandidateAction(id, roleId);
 
@@ -176,7 +180,7 @@ export function CandidatePanel(props: PanelProps) {
       open
       size="lg"
       onClose={() => guarded(onClose)}
-      title={name}
+      title={locked ? LOCKED_WORD : name}
       sub={sub}
       leading={a ? <Avatar name={name} size="lg" /> : undefined}
       actions={
@@ -219,7 +223,7 @@ export function CandidatePanel(props: PanelProps) {
       }
       tabs={a ? <Tabs idBase="candidate-panel" label="Candidate sections" value={tab} onChange={(v) => onTab(v as PanelTab)} items={PANEL_TABS.map((t) => ({ id: t.id, label: t.label, marker: unread.has(t.id) }))} /> : undefined}
     >
-      {q.error && !a ? <ErrorState message="Could not load this candidate. They may have been removed, or you may not have access." onRetry={() => q.refetch()} /> : !a ? <Skeleton lines={6} /> : (
+      {locked ? <LockedCard /> : q.error && !a ? <ErrorState message="Could not load this candidate. They may have been removed, or you may not have access." onRetry={() => q.refetch()} /> : !a ? <Skeleton lines={6} /> : (
         <DraftContext.Provider value={report}>
           <div key={id}>
             <NeedsYou a={a} roleId={roleId} myRole={viewer.role} myUserId={viewer.userId} step={props.step} setStep={props.onStep} roundKey={props.roundKey} onTab={onTab} />

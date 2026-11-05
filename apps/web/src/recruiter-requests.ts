@@ -34,8 +34,9 @@ export function splitRequests(rows: readonly RecruiterRequestView[], now: Date):
   return { current: [...open, ...closed.filter((r) => closedAt(r) >= since)], older: closed.filter((r) => closedAt(r) < since) };
 }
 
-/** What the request is about: one candidate (by name, while the record has one), one role, or all of the hiring. */
-export function aboutWords(r: Pick<RecruiterRequestView, "scope" | "roleTitle" | "candidateName">): string {
+/** What the request is about: the plan, one candidate (by name, while the record has one), one role, or all of the hiring. */
+export function aboutWords(r: Pick<RecruiterRequestView, "scope" | "roleTitle" | "candidateName"> & Partial<Pick<RecruiterRequestView, "topic">>): string {
+  if (r.topic === "plan") return "Your plan";
   if (r.scope === "application") return r.candidateName ? `${r.candidateName}${r.roleTitle ? `, for ${r.roleTitle}` : ""}` : `A candidate${r.roleTitle ? ` for ${r.roleTitle}` : ""}`;
   if (r.scope === "role") return r.roleTitle ?? "One role";
   return "All of your hiring";
@@ -175,7 +176,9 @@ export const REOPEN_MIN = 5;
  * still take it (they still work for ITS, and nobody here ended their access to it); otherwise to the ITS queue. The
  * reply after the reopen says which it was.
  */
-export function reopenHint(recruiterName: string | null, access: string, days: number): string {
+export function reopenHint(recruiterName: string | null, access: string | null, days: number): string {
+  // A talk about the plan gives whoever has it no access, so nothing here says it does.
+  if (access === null) return "Reopening sets a new reply-by time, and it goes back to ITS.";
   const where = recruiterName ? `It goes back to ${recruiterName}, who answered, when they can still take it; otherwise to the ITS queue.` : "It goes back to the ITS queue.";
   return `Reopening sets a new reply-by time. ${where} Whoever has it then can see ${access} for up to ${days} days, or until a day after it is resolved again. That access is recorded in your activity, your team is told, and an owner or admin can end it in Settings.`;
 }

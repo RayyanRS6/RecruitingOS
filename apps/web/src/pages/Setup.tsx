@@ -17,9 +17,10 @@ import { SETTINGS_TABS, type SettingsTab, defaultTab, leadAndRest, settingsHref,
 import { browserStorage, SHORTCUT_CHANGED_EVENT, START_HIRE_KEY, setStartHireShortcut, startHireShortcutOn } from "../start-hire";
 import { toast } from "../toast";
 import { trialPlanLine, trialRow } from "../trial";
+import { Upgrade } from "../components/Upgrade";
 import { NotificationsCard } from "./NotificationsCard";
 import { TeamCard } from "./TeamCard";
-import type { TrialStanding } from "@ros/contracts";
+import { ITS_POSTING_UPGRADE_QUESTION, mayOfferUpgrade, type TrialStanding } from "@ros/contracts";
 
 type BusinessHours = { days: number[]; start: string; end: string };
 /**
@@ -37,7 +38,9 @@ type UsageRow = { used: number; limit: number | null; resetsAt?: string | null; 
  * people live. `production`: the app runs in production (staging too), where a service without a provider is there on
  * purpose rather than a development stand-in (Connected services).
  */
-type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, UsageRow>; trial?: TrialStanding | null; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean };
+type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, UsageRow>; trial?: TrialStanding | null; /** Who really posts on the boards, and whether the plan leaves that to the company (the plans of 5 November 2026, Rule 6); older answers leave them out. */ whoPosts?: "its" | "self"; itsPosting?: boolean; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean };
+/** Who posts on the boards as the API reads it, plan first; an older answer has only the company's own setting. */
+const whoPostsOf = (c: Pick<Company, "whoPosts" | "settings">): "its" | "self" => c.whoPosts ?? (c.settings.boardPosting === "self" ? "self" : "its");
 /**
  * minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered.
  * available: whether the product does this today (plan B7); the rest are listed under "Coming later" with no choice.
@@ -246,7 +249,7 @@ export function Setup() {
                       <td>{cells.provider}</td>
                       {/* a long state wraps inside its pill, so the explanations keep room and the table never scrolls sideways */}
                       <td><Pill size="sm" tone={cells.tone} className="wrap">{cells.state}</Pill></td>
-                      <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its", c.production === true)}</td>
+                      <td className="small muted">{explainStatus(i, whoPostsOf(c), c.production === true)}</td>
                     </tr>
                   );
                 })}
@@ -728,7 +731,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
             <dt>Careers page</dt><dd><a href={`/careers/${c.slug}`} target="_blank" rel="noreferrer">/careers/{c.slug}</a>{companyCheckOf(c) === "waiting" ? <span className="small muted"> · {CAREERS_PAGE_WAITS}</span> : null}</dd>
             <dt>Website</dt><dd>{c.settings.website || <span className="muted">not set</span>}</dd>
             <dt>Locations</dt><dd>{c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}</dd>
-            <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{trialLine ? <span className="small muted"> · {trialLine}</span> : null}{c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; jobs in progress are never cut off</span> : null}</dd>
+            <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{trialLine ? <span className="small muted"> · {trialLine}</span> : null}{c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; jobs in progress are never cut off</span> : null}{mayOfferUpgrade(c.planKey) ? <span className="ms-2 inline-block align-middle"><Upgrade size="sm" /></span> : null}</dd>
             {c.usage ? <><dt>Usage</dt><dd className="small">{usageLines(c.usage).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}{c.usage.recruiter_asks ?<span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
           </dl>
           {/* The rest of the company's details, one click away. The plan and its usage stay on view: "See usage" links land here. */}
@@ -1025,7 +1028,7 @@ function AboutText({ company: c, canEdit }: { company: Company; canEdit: boolean
  */
 function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
   const qc = useQueryClient();
-  const whoPosts = c.settings.boardPosting === "self" ? "self" : "its";
+  const whoPosts = whoPostsOf(c);
   const save = useMutation({
     mutationFn: (settings: { boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean }) => api.patch<{ changed: string[] }>("/api/v1/companies/current", { settings }),
     onSuccess: async (r) => {
@@ -1039,7 +1042,10 @@ function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boo
     <Card title="Job boards">
       <div className="stack gap-4">
         <Field label="Who posts your jobs on the boards">
-          {canEdit ? (
+          {/* a plan with no ITS staff time leaves no choice (Rule 6): the team posts, and the way to ITS is a bigger plan */}
+          {c.itsPosting === false ? (
+            <div className="row"><Chip>Your team posts them</Chip><Upgrade size="sm" reason={ITS_POSTING_UPGRADE_QUESTION} /></div>
+          ) : canEdit ? (
             <Segmented value={whoPosts} onChange={(v) => save.mutate({ boardPosting: v })} ariaLabel="Who posts your jobs on the boards" options={[{ value: "its", label: "ITS posts them for us" }, { value: "self", label: "Our team posts them" }]} />
           ) : <Chip>{whoPosts === "its" ? "ITS posts them for you" : "Your team posts them"}</Chip>}
         </Field>

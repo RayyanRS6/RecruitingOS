@@ -10,7 +10,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { createApplication } from "./services/applications";
-import { signInAdmin, signInAs, useTrial } from "./test-helpers";
+import { signInAdmin, signInAs, usePlan, useTrial } from "./test-helpers";
 
 /**
  * The one-time ITS check (founder decision B7; plan B1) and the getting-started card (plan B2). A company that signs
@@ -498,6 +498,11 @@ describe("getting started: ticks, hiding, and drafting the first role with ITS",
   });
 
   it("ticks job-board access when ITS confirms it, and the AI rules when an owner or admin has reviewed them", async () => {
+    // the step is there only while ITS posts for the company: on the Free plan its team does, and it never shows
+    const keys = async () => (await setupCard(owner))?.gettingStarted?.steps.map((s) => s.key);
+    expect(await keys()).not.toContain("job_boards");
+    await usePlan(container, companyId, "pro");
+    expect(await keys()).toContain("job_boards");
     const admin = await signInAdmin(app, container, "ben.admin@identifiedtalent.com", "Ben Admin");
     expect((await json(owner, "POST", `/api/v1/admin/customers/${companyId}/job-boards`, { confirmed: true })).status).toBe(403);
     expect((await json(admin, "POST", `/api/v1/admin/customers/${companyId}/job-boards`, { confirmed: true })).status).toBe(200);

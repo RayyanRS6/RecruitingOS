@@ -97,13 +97,55 @@ export function publicPlanView(row: PlanRowForView, currentPlanKey: string | nul
   };
 }
 
+/** GET /api/v1/plans: the public plans in their order, and whether ITS already has an open request about the plan from this company. */
+export type PublicPlans = { plans: PublicPlan[]; requested: boolean };
+
+/** The private pilot: never listed for a customer, and ITS gives it, so it is never offered an upgrade. */
+const PRIVATE_PLAN_KEY = "design_partner";
+
+/**
+ * Whether a company on this plan is offered an Upgrade where nothing has run out (Settings): every plan but the last public
+ * one, which has nothing above it, and the private pilot. Read from the list, so no screen compares a plan's name.
+ */
+export function mayOfferUpgrade(planKey: string | null | undefined): boolean {
+  return !!planKey && planKey !== PRIVATE_PLAN_KEY && planKey !== PUBLIC_PLAN_KEYS[PUBLIC_PLAN_KEYS.length - 1];
+}
+
+/** What the queue shows of a plan request before anyone accepts it: template words, never the customer's. */
+export const PLAN_REQUEST_SUMMARY = "A customer asked about their plan.";
+/** What it needs from whoever picks it up. */
+export const PLAN_REQUEST_EXPERTISE = "plan and billing";
+/** Said when ITS already has an open request about the plan: a second one is not raised. */
+export const PLAN_REQUEST_OPEN_LINE = "ITS has your request.";
+/** The upgrade sheet's one plain line: there is no payment system. */
+export const UPGRADE_SHEET_LINE = "No card is charged. ITS will contact you, and nothing changes until then.";
+
+/** The question a plan request carries: the plan by name, then why, then the person's own note. */
+export function planRequestQuestion(planName: string, opts: { reason?: string | null; note?: string | null } = {}): string {
+  return [`We would like to move to the ${planName} plan.`, opts.reason?.trim(), opts.note?.trim()].filter(Boolean).join(" ");
+}
+
+/** What the team is told when ITS changes the plan, and the answer it puts on the open plan request. `opened`: how many locked people the new plan opened. */
+export function planChangedWords(planName: string, opened = 0): { title: string; body: string; answer: string } {
+  const people = opened ? ` ${opened === 1 ? "1 candidate who was locked is open now" : `${opened} candidates who were locked are open now`}.` : "";
+  const answer = `Your company is on the ${planName} plan now.`;
+  return { title: `Your plan is now ${planName}`, body: `${answer} The new limits apply at once.${people}`, answer };
+}
+
 /** Why another job is refused once the plan's jobs are all used: "Your Free plan includes one job. Upgrade to post more." */
 export function jobsTotalLine(planName: string | null | undefined, limit: number): string {
   return `Your ${planName ? `${planName} ` : ""}plan includes ${limit === 1 ? "one job" : `${limit} jobs`}. Upgrade to post more.`;
 }
 
-/** What that refusal's Upgrade asks ITS. */
-export const MORE_JOBS_UPGRADE_QUESTION = "We would like to upgrade our plan so we can post more jobs.";
+/** Why that refusal's Upgrade is asked for, after the plan's name in the question. */
+export const MORE_JOBS_UPGRADE_QUESTION = "We would like to post more jobs.";
+
+/** Said when a company on a plan with no ITS staff time asks ITS to post its jobs. */
+export const ITS_POSTING_UPGRADE_LINE = "On your plan your team posts the jobs on the boards. Upgrade to have ITS post them.";
+/** Why that Upgrade is asked for. */
+export const ITS_POSTING_UPGRADE_QUESTION = "We would like ITS to post our jobs on the boards.";
+/** Why an Upgrade is asked for when every place for a person on the team is in use. */
+export const MORE_PEOPLE_UPGRADE_QUESTION = "We would like to add more people.";
 
 /**
  * What the team reads of someone past the plan's candidates per job (Rule 3): a lock, this word, when they applied and the
@@ -117,8 +159,8 @@ export function moreAppliedTitle(roleTitle: string): string {
   return `More people applied to ${roleTitle}.`;
 }
 
-/** What an Upgrade asks ITS when it is more candidates the company wants to see. */
-export const MORE_CANDIDATES_UPGRADE_QUESTION = "We would like to upgrade our plan so we can view more candidates.";
+/** Why an Upgrade is asked for when it is more candidates the company wants to see. */
+export const MORE_CANDIDATES_UPGRADE_QUESTION = "We would like to view more candidates.";
 
 /** A recruiter request about someone locked, as the team's own list shows it: their words, and ITS's, stay with ITS. */
 export const LOCKED_REQUEST_LINE = "An ITS recruiter is helping a candidate you cannot see yet.";
@@ -135,8 +177,8 @@ export type LockedApplicants = { count: number; cards: LockedCard[] };
  */
 export const AI_CREDIT_AVAILABLE = "ai.credit_available";
 
-/** What an Upgrade asks ITS when the AI help is what ran out. */
-export const AI_HELP_UPGRADE_QUESTION = "We would like to upgrade our plan for more AI help.";
+/** Why an Upgrade is asked for when the AI help is what ran out. */
+export const AI_HELP_UPGRADE_QUESTION = "We would like more AI help.";
 
 const USED_UP = "Your plan's AI help is used up.";
 /** A call too big for what is left: the credit is not all gone, so it does not say so. */

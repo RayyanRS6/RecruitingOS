@@ -2,7 +2,7 @@
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MORE_JOBS_UPGRADE_QUESTION, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
+import { AI_HELP_UPGRADE_QUESTION, MORE_JOBS_UPGRADE_QUESTION, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
 import { Alert, Button, Card, Icon, IconChip, Skeleton } from "@ros/ui";
 import { api } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
@@ -29,8 +29,8 @@ const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting f
  * Where the plan stands, when it has no room: the roles using the places now (open, paused, waiting for approval or sent
  * back for changes; closing one gives its place back), each a link to close it from, and a way to ask ITS for more (C13).
  * When the trial has ended (L-02 B) the ask is to choose a plan, and when the plan's jobs are all used for good (Free's
- * one job) it is to upgrade, also when the room came from GET /intake/room or /intake/sessions, which carry no ask of
- * their own. Neither lists roles: closing one would not help.
+ * one job) or the AI help is too low for a new job it is to upgrade, also when the room came from GET /intake/room or
+ * /intake/sessions, which carry no ask of their own. None of those lists roles: closing one would not help.
  */
 export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }) {
   return (
@@ -43,7 +43,8 @@ export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }
           </ul>
         ) : null}
         <div className="row">
-          <AskRecruiter label={ask?.label ?? (room.trialEnded ? "Ask ITS to choose a plan" : room.upgrade ? "Upgrade" : "Talk to ITS about more roles")} size="sm" variant="secondary" preset={ask ? presetOf(ask.body) : room.trialEnded ? TRIAL_ASK : { kind: "ask", about: "all", topic: "plan", question: room.upgrade ? MORE_JOBS_UPGRADE_QUESTION : "We would like to open more roles than our plan includes. Can we talk about adding more?" }} />
+          {/* every one of these is a request about the plan, which opens the one upgrade sheet (components/Upgrade.tsx) */}
+          <AskRecruiter label={ask?.label ?? (room.trialEnded ? "Ask ITS to choose a plan" : room.upgrade ? "Upgrade" : "Talk to ITS about more roles")} size="sm" variant="secondary" preset={ask ? presetOf(ask.body) : room.trialEnded ? TRIAL_ASK : { kind: "ask", about: "all", topic: "plan", question: room.aiHelp ? AI_HELP_UPGRADE_QUESTION : room.upgrade ? MORE_JOBS_UPGRADE_QUESTION : "We would like to open more roles than our plan includes. Can we talk about adding more?" }} />
         </div>
       </div>
     </Alert>

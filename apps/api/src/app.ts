@@ -10,6 +10,7 @@ import { sessionMiddleware, type Vars } from "./middleware/session";
 import { authRoutes } from "./routes/auth";
 import { companyRoutes } from "./routes/companies";
 import { companySettingsRoutes } from "./routes/company-settings";
+import { planRoutes } from "./routes/plans";
 import { authSessionRoutes } from "./routes/auth-sessions";
 import { privacyRequestPages } from "./pages/privacy-request";
 import { intakeRoutes } from "./routes/intake";
@@ -140,6 +141,7 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.route("/api/v1/auth", authSessionRoutes);
   app.route("/api/v1/companies", companyRoutes);
   app.route("/api/v1/companies", companySettingsRoutes);
+  app.route("/api/v1/plans", planRoutes);
   app.route("/api/v1/intake", intakeRoutes);
   // Before the data routes: a browser tab asking for the preview gets the page, the app's own requests the data.
   app.route("/api/v1/intake", draftPreviewPages);

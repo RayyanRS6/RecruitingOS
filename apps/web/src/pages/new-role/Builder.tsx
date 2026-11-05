@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { IntakeAnswer, IntakeFactsPatch, IntakeSessionView, PacketRevisionProposal, PlanRoom, RequirementsCheck } from "@ros/contracts";
+import type { IntakeAnswer, IntakeFactsPatch, IntakeSessionSummary, IntakeSessionView, PacketRevisionProposal, PlanRoom, RequirementsCheck } from "@ros/contracts";
 import { Alert, Button, EmptyState, ErrorState, Icon, Menu, Pill, ProgressSteps, Skeleton, SplitView } from "@ros/ui";
 import { api, ApiError, type IntakeApprovalResponse, type IntakeTurnReply, type IntakeTurnResponse, type Me } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
@@ -25,8 +25,8 @@ import { QuestionCard } from "./QuestionCard";
 import { quickStartDraftKey } from "./quick-start";
 import { RoomAlert } from "./StartView";
 import {
-  NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersFirst, answersPayload, approvalHelp, askFromDetails, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
-  blockersHeading, draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, refusedLines, turnProblem, typeInstead, typedWithCards,
+  NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersFirst, answersPayload, approvalHelp, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
+  blockersHeading, draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, problemAsk, refusedLines, turnProblem, typeInstead, typedWithCards,
   type Deck, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
 } from "./rules";
 import { CHANGE_REQUEST_MAX, asksBack, checkSignature, proposalSections, refinePaths } from "./refine-api";
@@ -61,10 +61,14 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Member[]>("/api/v1/companies/current/members") });
   const team: TeamPick[] = (members.data ?? []).filter((m) => m.status === "active").map((m) => ({ userId: m.userId, name: m.name ?? m.email, role: m.role }));
   const view = session.data?.session ?? null;
+  // A plan with no room for another job, whatever is closed: said as the draft opens, before anyone spends time on it (the
+  // routes that write it refuse too).
+  const mine = useQuery({ queryKey: ["intake", "mine"], queryFn: () => api.get<{ sessions: IntakeSessionSummary[]; room: PlanRoom }>("/api/v1/intake/sessions?mine=1") });
+  const noRoom = mine.data?.room && !mine.data.room.ok && mine.data.room.upgrade ? mine.data.room : null;
 
   const [problem, setProblem] = useState<Problem | null>(() => {
     const p = turnProblem(qc.getQueryData<IntakeTurnReply>(["intake", "first-reply", sessionId]) ?? null);
-    return p ? { message: p.message, ask: p.ask ?? draftRecruiterAsk(sessionId) } : null;
+    return p ? { message: p.message, ask: p.ask ?? (p.upgrade ? null : draftRecruiterAsk(sessionId)) } : null;
   });
   const [pending, setPending] = useState<LocalLine | null>(null);
   const [thinking, setThinking] = useState<string | null>(null);
@@ -116,10 +120,10 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const afterTurn = (r: IntakeTurnResponse) => {
     apply(r.session);
     const p = turnProblem(r.reply);
-    setProblem(p ? { message: p.message, ask: p.ask ?? recruiter } : null);
+    setProblem(p ? { message: p.message, ask: p.ask ?? (p.upgrade ? null : recruiter) } : null);
     qc.invalidateQueries({ queryKey: ["intake", "mine"] });
   };
-  const failed = (err: unknown) => setProblem({ message: errorWords(err), ask: (err instanceof ApiError ? askFromDetails(err.details) : null) ?? recruiter });
+  const failed = (err: unknown) => setProblem({ message: errorWords(err), ask: err instanceof ApiError ? problemAsk(err, recruiter) : recruiter });
   // What is answered on the open cards goes ahead of the draft and the ask for approval, or the draft would leave it out
   // and a role would lose it for good. A card answered after newer ones arrived: show the newer ones.
   const saveCards = async (first: CardsFirst) => {
@@ -399,7 +403,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
 
   const above = (
     <>
-      {room?.room && !room.room.ok ? <RoomAlert room={room.room} ask={room.ask} /> : null}
+      {room?.room && !room.room.ok ? <RoomAlert room={room.room} ask={room.ask} /> : noRoom ? <RoomAlert room={noRoom} ask={null} /> : null}
       {blockers ? (
         <Alert tone="caution">
           <strong>{blockersHeading(blockers)}</strong>

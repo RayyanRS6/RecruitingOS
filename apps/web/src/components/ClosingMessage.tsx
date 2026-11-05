@@ -7,6 +7,7 @@ import { api, ApiError, type ApplicationsWithCounts, type ClosingMessagePreview,
 import { toast } from "../toast";
 import { CLOSING_SENDERS, closeRoleToast } from "../talent-actions";
 import { bulkUndoMillis, closingResultToast, closingSendLabel, closingSheetLines, safetyNetDate, safetyNetPromise, safetyNetShort, undoable } from "../telling";
+import { cannotSeeYetWords } from "../upgrade";
 import { InlineUndo } from "./InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "./use-undo";
 
@@ -80,6 +81,7 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
                   <li key={a.id} className={PERSON}><Avatar name={a.candidate?.name ?? "?"} size="sm" /><span className="min-w-0 font-medium text-ink">{a.candidate?.name ?? "A candidate"}</span><span className="muted small ml-auto">{a.ownerStageLabel}</span></li>
                 ))}
               </ul>
+              {apps.data?.locked?.count ? <p className="small muted mt-2">{cannotSeeYetWords(apps.data.locked.count)}</p> : null}
               <p className="small muted mt-2.5">{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. {safetyNetShort({ policy: null, on: safetyNetDate(new Date().toISOString()), what: "the closing message" })} Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Home page.`}</p>
             </>
           ) : <p className="small muted">Nobody is still in process.</p>}

@@ -6,12 +6,13 @@ import { Alert, Card, EmptyState, ErrorState, Icon, numHead, OWNER_STAGES, Pipel
 import { Link } from "../nav";
 import { ApiError, api, type Me, type ScreeningFunnel } from "../api/client";
 import { funnelLines } from "../screen-view";
+import { reportLockedLabel } from "../upgrade";
 
 /** The role report as the API answers it (apps/api/src/services/role-report.ts). Counts and days only; never a name. */
 export type RoleReport = {
   generatedAt: string;
   role: { id: string; title: string; status: string; openedAt: string | null; closedAt: string | null; daysOpen: number | null } | null;
-  applicants: { total: number; last30Days: number; timeZone: string; bySource: Array<{ source: string; label: string; sourceDetail: string | null; count: number }>; byDay: Array<{ day: string; count: number }> };
+  applicants: { total: number; locked?: number; last30Days: number; timeZone: string; bySource: Array<{ source: string; label: string; sourceDetail: string | null; count: number }>; byDay: Array<{ day: string; count: number }> };
   /**
    * `byOwnerStage` is the stage strip (private marks included); `marks` counts who carries each mark now and every hold
    * ever set; `told` counts decisions by whether the candidate was told (founder decisions B3 and B6). Optional: an
@@ -166,6 +167,8 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
           <div className="stat-row">
             <Stat n={r.applicants.total} label={r.applicants.total === 1 ? "applicant in total" : "applicants in total"} />
             <Stat n={r.applicants.last30Days} label="in the last 30 days" />
+            {/* past the plan's candidates per job: a number, in no other figure (the plans of 5 November 2026, Rule 3) */}
+            {r.applicants.locked ? <Stat n={r.applicants.locked} label={reportLockedLabel(r.applicants.locked)} /> : null}
           </div>
           {/* the bars' heights are the data (each day's count against the busiest day); how to read them is the
               chart's tooltip, each bar's its day and count */}

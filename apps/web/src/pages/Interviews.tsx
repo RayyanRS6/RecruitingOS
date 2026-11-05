@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
 import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Eyebrow, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
-import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
+import { api, ApiError, isCandidateLocked, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
+import { LockedCard } from "../components/LockedCandidates";
 import { toast } from "../toast";
 import { interviewNewTimesText } from "../cancelled";
 import { activeCompanyOf } from "../rail";
@@ -134,7 +135,7 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
     queryKey: ["interview", id],
     queryFn: () => api.get<InterviewDetail>(`/api/v1/interviews/${id}`),
     refetchInterval: (query) => (query.state.status === "error" ? false : 10000),
-    retry: (count, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404)) && count < 3,
+    retry: (count, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404 || isCandidateLocked(e))) && count < 3,
   });
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -165,7 +166,8 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
   const companyConfirmed = setting.data?.companyConfirmed;
   return (
     <Drawer open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"} leading={i ? <Avatar name={`${i.candidate.firstName} ${i.candidate.lastName}`} size="lg" /> : undefined}>
-      {q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
+      {/* an old link to someone past the plan's candidates per job (Rule 3): the same card as on their job, not an error */}
+      {!i && isCandidateLocked(q.error) ? <LockedCard /> : q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
         // Screenshot 7's "Account at a glance": the state and what it is about on top, the facts as the kit's label and
         // value rows (dl.glance), the questions to answer in their own cards, the history last.
         <div className="stack gap-4">

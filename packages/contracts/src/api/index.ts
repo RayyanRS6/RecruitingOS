@@ -453,6 +453,8 @@ export type RecruiterRequestView = {
   recruiterName: string | null; reopenedCount: number; thread: EscalationThreadEntry[];
   /** About someone past the plan's candidates per job (Rule 3): their name, the words and the thread stay with ITS, and the team can add nothing to it. */
   locked?: boolean;
+  /** A talk about the plan itself: it gives ITS no access to anything, so nothing on the page speaks of access. */
+  topic?: "plan";
 };
 
 // Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.

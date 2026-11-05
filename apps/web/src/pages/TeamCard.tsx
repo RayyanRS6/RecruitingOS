@@ -2,8 +2,10 @@
 
 import { type CSSProperties, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { MORE_PEOPLE_UPGRADE_QUESTION, onTrialPlan } from "@ros/contracts";
 import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Icon, IconButton, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
+import { Upgrade } from "../components/Upgrade";
 import { useNavigate, useRefresh } from "../nav";
 import { toast } from "../toast";
 import { seatLine, seatsAllUsed, seatsFullWords, type SeatUsage } from "../trial";
@@ -150,7 +152,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats, planKey }:
           <form className="stack gap-3 @container" onSubmit={(e) => { e.preventDefault(); if (!full) sendInvite.mutate(); }}>
             {/* the people in use: a standing fact in the kit's info look, not a live region */}
             {seatWords ? <p className="alert info">{seatWords}</p> : null}
-            {full && seats ? <Alert tone="caution">{seatsFullWords(seats, planKey)}</Alert> : null}
+            {full && seats ? <Alert tone="caution"><div className="row justify-between"><span>{seatsFullWords(seats, planKey)}</span><Upgrade size="sm" label={onTrialPlan(planKey) ? "Ask ITS to choose a plan" : undefined} reason={MORE_PEOPLE_UPGRADE_QUESTION} /></div></Alert> : null}
             {/* the Invite button's class string is pinned by tests (team-card-ui, settings-ui), so the grid places it */}
             <div className="grid items-end gap-3 @md:grid-cols-2 @xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_10.5rem_auto] [&>.btn]:justify-self-start">
               <Field label="Invite by email" htmlFor="inv"><input id="inv" className="input" type="email" required value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} /></Field>

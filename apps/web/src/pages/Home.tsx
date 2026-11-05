@@ -4,12 +4,13 @@ import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, Card, cn, ErrorState, Icon, IconChip, Menu, PageHeader, Pill, SectionHeader, Skeleton, type Tone } from "@ros/ui";
-import type { GettingStartedAction, TrialStanding } from "@ros/contracts";
+import { AI_HELP_UPGRADE_QUESTION, mayOfferUpgrade, type AiCreditView, type GettingStartedAction, type TrialStanding } from "@ros/contracts";
 import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, type InterviewDraft, type Me, type Notification, type RoleSummary } from "../api/client";
 import { ALLOWANCE_ASK, screeningAllowanceWarning, type AllowanceWarning, type UsageLine } from "../allowance";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { RecruiterRequests } from "../components/RecruiterRequests";
+import { Upgrade } from "../components/Upgrade";
 import { useIsClient } from "../components/use-is-client";
 import { interviewDraftPath } from "../hiring";
 import { closingDateToast, isClosingDateAction } from "../publishing";
@@ -20,6 +21,7 @@ import { presetOf, requestSentText } from "../recruiter-access";
 import { START_HIRE_HREF } from "../start-hire";
 import { briefDecisionToast } from "../talent-actions";
 import { TRIAL_ASK, trialRow, type TrialRowWords } from "../trial";
+import { isPlanAsk, reasonOf } from "../upgrade";
 import { HOME_ROWS, TODAY_REFRESH, cardLine, firstName, homeHeadline, homeJobs, homeRows, isFyi, moreLabel, nextStep, setupActionToast, splitActions, type HomeJob } from "../today";
 import { POOL_CARD_NOTE, boardPersonPath, poolCardView } from "./board/board-model";
 import { isDiscardDraft } from "./new-role/rules";
@@ -52,10 +54,12 @@ export function Home() {
   const [sentToRecruiter, setSentToRecruiter] = useState<string | null>(null);
   // The plan's screening conversations at 80% or used up (Q17): owners and admins, who can talk to ITS about the plan.
   const seesAllowance = canChangeCompany(myRole);
-  const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<{ planKey?: string; timezone?: string; usage?: Record<string, UsageLine>; trial?: TrialStanding | null }>("/api/v1/companies/current"), enabled: seesAllowance, ...TODAY_REFRESH });
+  const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<{ planKey?: string; timezone?: string; usage?: Record<string, UsageLine>; trial?: TrialStanding | null; aiCredit?: AiCreditView | null }>("/api/v1/companies/current"), enabled: seesAllowance, ...TODAY_REFRESH });
   const allowance = seesAllowance ? screeningAllowanceWarning(company.data?.usage, company.data?.planKey) : null;
   // The Trial plan's last 7 days, and its end (founder decision L-02 B): owners and admins, the first row under Needs you.
   const trial = seesAllowance ? trialRow(company.data?.trial, company.data?.timezone) : null;
+  // The plan's AI help at 80% or used up (the plans of 5 November 2026, Rule 4): in words or a percentage, never dollars.
+  const aiCredit = seesAllowance && company.data?.aiCredit?.notice ? company.data.aiCredit : null;
   // "Your jobs" is the rail's list (the same request, shared): members only, never an ITS recruiter under a grant.
   const listsRoles = railListsRoles(me.data);
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: listsRoles });
@@ -76,15 +80,16 @@ export function Home() {
 
   const { setup, rows, empty } = homeRows(brief.error ? [] : brief.data?.cards ?? []);
   const setupOpen = !!setup?.gettingStarted?.steps.some((s) => !s.done);
-  const needs = rows.filter((c) => !isFyi(c.kind)).length + (trial ? 1 : 0) + (allowance ? 1 : 0) + (setupOpen ? 1 : 0);
+  const needs = rows.filter((c) => !isFyi(c.kind)).length + (trial ? 1 : 0) + (aiCredit ? 1 : 0) + (allowance ? 1 : 0) + (setupOpen ? 1 : 0);
   // A company's first screen (nothing yet, and this person may start a hire) is a first step, not "nothing waiting" (plan C18).
   const firstRun = !!empty && empty.actions.some((a) => a.path === START_HIRE_HREF);
   const name = firstName(me.data?.user.name);
 
   // The trial and allowance rows do not wait for the brief: they come from the company's own plan and usage.
-  const needsBlock = rows.length || allowance || trial ? (
+  const needsBlock = rows.length || allowance || trial || aiCredit ? (
     <NeedsYou title={needs > 0 ? "Needs you" : "Good to know"} items={[
       ...(trial ? [{ key: "trial", node: <TrialRow row={trial} onSentToRecruiter={setSentToRecruiter} /> }] : []),
+      ...(aiCredit ? [{ key: "ai-credit", node: <AiCreditRow credit={aiCredit} planKey={company.data?.planKey} onSentToRecruiter={setSentToRecruiter} /> }] : []),
       ...(allowance ? [{ key: "allowance", node: <AllowanceRow warning={allowance} onSentToRecruiter={setSentToRecruiter} /> }] : []),
       ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
     ]} />
@@ -232,6 +237,20 @@ function AllowanceRow({ warning, onSentToRecruiter }: { warning: AllowanceWarnin
 }
 
 /**
+ * The plan's AI help at 80%, or used up (the plans of 5 November 2026, Rule 4): the words the owner's notice says, a word or
+ * a percentage beside them and never dollars, and the way on. Applications keep coming in and candidates can still finish.
+ */
+function AiCreditRow({ credit, planKey, onSentToRecruiter }: { credit: AiCreditView; planKey?: string; onSentToRecruiter: (message: string) => void }) {
+  const { line, rest } = cardLine(credit.notice?.body ?? "");
+  return (
+    <Row title={credit.notice?.title ?? ""} pill={<Pill size="sm" tone="caution">{credit.level === "used_up" ? "Used up" : `${credit.percent}% used`}</Pill>} line={line} rest={rest ? restText(rest) : null}>
+      {mayOfferUpgrade(planKey) ? <Upgrade size="sm" reason={AI_HELP_UPGRADE_QUESTION} onSent={onSentToRecruiter} /> : null}
+      <Link to="/setup" className="btn quiet sm">See usage</Link>
+    </Row>
+  );
+}
+
+/**
  * The Trial plan's last 7 days, and its end (founder decision L-02 B): "Your trial ends on <date>", then "Your trial has
  * ended" with the one line on what is paused. Choosing a plan is done by ITS, so the button opens the request about the
  * plan, filled in, never sent in one click; "See plan" opens Settings, where the plan and its dates are.
@@ -287,6 +306,8 @@ function CardRow({ card, level, onSentToRecruiter }: { card: BriefCard; level?: 
   // Start a hire is Home's one main button: a row's first button is the strong one on the row, the others quiet.
   const button = (a: BriefCard["actions"][number], i: number) => {
     const variant = i === 0 ? "secondary" : "quiet";
+    // A request about the plan opens the one upgrade sheet, never goes in one click.
+    if (isPlanAsk(a)) return <Upgrade key={i} label={a.label} size="sm" reason={reasonOf(a.body)} onSent={onSentToRecruiter} />;
     return a.method === "GET"
       ? <Link key={i} to={a.path} className={`btn ${variant} sm`}>{a.label}</Link>
       : <Button key={i} size="sm" variant={variant} loading={act.isPending && act.variables === a} disabled={act.isPending} onClick={() => run(a)}>{a.label}</Button>;

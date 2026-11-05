@@ -1,9 +1,9 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { desc, eq, gt, gte, inArray, ne, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, aiCreditLines, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, settleAiCreditAlerts, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
-import { AI_CREDIT_AVAILABLE, ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
+import { desc, eq, gt, gte, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, aiCreditLines, audit, boardPostingOf, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, settleAiCreditAlerts, suppressAddress, describeHours, unsentScreenReadings, whoPostsBoards, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
+import { AI_CREDIT_AVAILABLE, ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PUBLIC_PLAN_KEYS, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { mailbox } from "@ros/integrations";
 import { unlockApplicants } from "@ros/workflows";
@@ -21,6 +21,7 @@ import { customerReport } from "../services/role-report";
 import { setJobBoardAccess, unverifyCompany, verifyCompany } from "../services/company-trust";
 import { resetPublicFeedCache } from "../pages/public-feeds";
 import { failedEmailApplications, retryFailedEmail } from "../webhooks/postmark";
+import { afterPlanChange } from "../services/plan-change";
 import { TRIAL_ENDED_ALERT, extendTrial, replayHeldEmailsForCompany } from "../services/trial";
 
 /** Platform admin console API (docs/16). Every read is audited with the reason the admin supplies. */
@@ -62,6 +63,11 @@ adminRoutes.get("/customers", async (c) => {
   const memberCounts = byCompany(await db.select({ companyId: memberships.companyId, n: sql<number>`count(*)` }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.status, "active"), ne(memberships.role, "recruiter"), eq(users.platformRole, "none"))).groupBy(memberships.companyId));
   const inviteCounts = byCompany(await db.select({ companyId: invitations.companyId, n: sql<number>`count(*)` }).from(invitations).where(and(eq(invitations.status, "pending"), gt(invitations.expiresAt, now.toISOString()))).groupBy(invitations.companyId));
   const seatRows = byCompany(await db.select({ companyId: entitlementRows.companyId, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.SEATS)));
+  // The people the plan's candidates per job left locked (a count, for ITS), and whether the company asked to upgrade.
+  const lockedCounts = byCompany(await db.select({ companyId: applications.companyId, n: sql<number>`count(*)` }).from(applications).where(isNotNull(applications.lockedAt)).groupBy(applications.companyId));
+  const planAsks = byCompany(await db.select({ companyId: recruiterEscalations.companyId, since: sql<string>`min(${recruiterEscalations.createdAt})` }).from(recruiterEscalations).where(and(inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"]), sql`${recruiterEscalations.billing}->>'topic' = 'plan'`)).groupBy(recruiterEscalations.companyId));
+  // Who posts its jobs: the plan first, as `whoPostsBoards` reads it for one company (a row with no staff time), then its own setting.
+  const itsWorkRows = byCompany(await db.select({ companyId: entitlementRows.companyId, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.ITS_WORK)));
   const planLimits = new Map((await db.select({ key: plans.key, limits: plans.limits }).from(plans)).map((p) => [p.key, p.limits]));
   const seatsOf = (co: typeof companies.$inferSelect) => {
     const row = seatRows.get(co.id);
@@ -93,6 +99,9 @@ adminRoutes.get("/customers", async (c) => {
     trial: trialStanding(co, now),
     trialTerm: co.settings.trial ?? null,
     seats: seatsOf(co),
+    lockedApplicants: Number(lockedCounts.get(co.id)?.n ?? 0),
+    planRequestSince: planAsks.get(co.id)?.since ?? null,
+    whoPosts: itsWorkRows.get(co.id)?.limit === 0 ? "self" : boardPostingOf(co.settings),
   })));
 });
 
@@ -545,10 +554,14 @@ adminRoutes.get("/staff-access", async (c) => {
   return c.json(rows);
 });
 
-/** The plans a customer can be put on (the console's Plan control): key, name and what each includes. */
+/**
+ * The plans a customer can be put on (the console's Plan control): key, name, price and what each includes, in dollars for
+ * ITS. The public plans in their own order first, then the private pilot, whichever row is older in this database.
+ */
 adminRoutes.get("/plans", async (c) => {
-  const rows = await c.get("container").db.select({ key: plans.key, name: plans.name, limits: plans.limits, active: plans.active }).from(plans).orderBy(plans.createdAt);
-  return c.json(rows.filter((p) => p.active).map((p) => ({ key: p.key, name: p.name, limits: p.limits })));
+  const rows = await c.get("container").db.select({ key: plans.key, name: plans.name, prices: plans.prices, limits: plans.limits, active: plans.active }).from(plans).orderBy(plans.createdAt);
+  const place = (key: string) => { const at = (PUBLIC_PLAN_KEYS as readonly string[]).indexOf(key); return at < 0 ? PUBLIC_PLAN_KEYS.length : at; };
+  return c.json(rows.filter((p) => p.active).sort((a, b) => place(a.key) - place(b.key)).map((p) => ({ key: p.key, name: p.name, prices: p.prices, limits: p.limits })));
 });
 
 /**
@@ -582,10 +595,13 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     // job's applicants' lock, whose holder is about to make such an insert. "For update" would leave the two waiting for each other.
     const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1).for("no key update");
     if (!co) throw new HttpError(404, "not_found", "Company not found.");
-    const [plan] = await tx.select({ key: plans.key, active: plans.active }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
+    const [plan] = await tx.select({ key: plans.key, name: plans.name, active: plans.active }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
     if (!plan) throw new HttpError(400, "unknown_plan", `There is no plan called ${body.planKey}.`);
     // a retired plan (hidden from GET /admin/plans) is not offered by the API either
     if (plan.active === false) throw new HttpError(400, "inactive_plan", `The ${body.planKey} plan is retired and can no longer be given to a customer.`);
+    const [fromPlan] = await tx.select({ name: plans.name }).from(plans).where(eq(plans.key, co.planKey)).limit(1);
+    // Who posts on the boards before the change: the plan decides that too (Rule 6), read against what it decides after.
+    const postedBy = await whoPostsBoards(tx, companyId, co.settings);
     await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
     await entitlements.settleAllowanceAlerts(tx, { companyId });
     // People a smaller plan left locked open now, oldest first, up to the new limit. A move down opens nobody and locks nobody.
@@ -609,8 +625,11 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     await container.engine.signal(tx, { companyId, key: AI_CREDIT_AVAILABLE });
     if (leavingTrial) await resolveAlertsFor(tx, TRIAL_ENDED_ALERT, companyId, clock);
     await emit(tx, { type: "plan.changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from: co.planKey, to: body.planKey, pilot, ...(leavingTrial ? { trialEnded: true } : {}) } });
-    await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey, ...(term ? { trial: { startedAt: term.startedAt, endsAt: term.endsAt } } : {}), ...(leavingTrial ? { trialEnded: true } : {}) } });
+    // The customer reads this in their own history (`describeAuditRecord`), so it carries the plans' names.
+    await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey, fromName: fromPlan?.name ?? null, toName: plan.name, unlocked: opened.unlocked, ...(term ? { trial: { startedAt: term.startedAt, endsAt: term.endsAt } } : {}), ...(leavingTrial ? { trialEnded: true } : {}) } });
     if (term) await emit(tx, { type: "trial.started", companyId, actor, subject: { type: "company", id: companyId }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
+    // The boards' work follows the plan, the open plan request is answered and the owners and admins are told.
+    await afterPlanChange(tx, container, { companyId, planName: plan.name, opened: opened.unlocked, postedBy, postsNow: await whoPostsBoards(tx, companyId, settings), actor, now: clock });
     return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked };
   });
   if (result.wasPaused) {

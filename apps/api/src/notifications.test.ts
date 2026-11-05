@@ -8,7 +8,7 @@ import type { FakeEmailAdapter } from "@ros/integrations";
 import { ALERT_TEMPLATE, DIGEST_TEMPLATE } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs } from "./test-helpers";
+import { signInAs, usePlan } from "./test-helpers";
 
 /**
  * Email alerts and the full history of updates (plan B3). An update someone wants as it happens becomes a short email
@@ -335,6 +335,8 @@ describe("email alerts and the history of updates", () => {
   });
 
   it("the ITS queue's email when the ladder reaches a recruiter names the role and links the queue, never a candidate", async () => {
+    // the ladder reaches ITS only on a plan with ITS staff time (Rule 6 of the plans; a new company is on Free)
+    await usePlan(container, companyId, "pro");
     // a detection whose body names people (a conversation stuck open, the team never acting)
     const found: Detection[] = [{ detector: "conversations_stuck", roleId: roleB, roleTitle: "Front Desk Coordinator", title: "2 applicants are stuck in the screening chat (Front Desk Coordinator)", body: "Priya Shah, Maria Reyes. Their screening chat should have closed by itself and did not.", action: { label: "See who", href: `/roles/${roleB}/talent` }, days: 6, applicationIds: [] }];
     const deps = (now: Date) => ({ integrations: container.integrations, appBaseUrl: container.env.APP_BASE_URL, itsQueueEmail: container.env.ITS_QUEUE_EMAIL, now, actor: { kind: "system" as const, id: "stuck_role_detector" } });

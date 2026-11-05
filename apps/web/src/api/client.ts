@@ -1,4 +1,4 @@
-import type { ActiveMark, AiInterviewGroup, AiInterviewView, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CancelledView, CandidateNotice, ChatPlan, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, InterviewFollowUpRef, InterviewInScore, LegalCheck, MatchBand, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ScreenWriteup, ShareTarget, ShareView, StageMove, ToldState, WrittenQuestionView } from "@ros/contracts";
+import type { ActiveMark, AiInterviewGroup, AiInterviewView, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CancelledView, CandidateNotice, ChatPlan, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, InterviewFollowUpRef, InterviewInScore, LegalCheck, LockedApplicants, MatchBand, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ScreenWriteup, ShareTarget, ShareView, StageMove, ToldState, WrittenQuestionView } from "@ros/contracts";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
 // The Cancelled column (founder decisions 1A to 4A): who is there and why, where their new times stand, the team's
@@ -41,6 +41,11 @@ export const api = {
   delete: <T>(path: string) => request<T>("DELETE", path),
 };
 
+/** The API's answer about someone past the plan's candidates per job (the plans of 5 November 2026, Rule 3): a state to draw, not a failure. */
+export function isCandidateLocked(e: unknown): boolean {
+  return e instanceof ApiError && e.code === "candidate_locked";
+}
+
 /** The signed-in person, exactly as the API answers it (the shape lives in @ros/contracts so the two cannot drift). */
 export type Me = MeResponse;
 
@@ -55,7 +60,7 @@ export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string }
  * `countsHidden`: the list was read by an interviewer, so it holds only the roles they interview for and no applicant counts.
  * `counts` is by owner group (a running hold waits on nobody); `stageCounts` is the stage strip, private marks included.
  */
-export type RoleSummary = { id: string; title: string; status: string; openedAt: string | null; createdAt?: string; counts: Record<string, number> & { total: number }; stageCounts?: Record<OwnerStage, number>; countsHidden?: boolean; needsYou: number; daysOpen: number | null };
+export type RoleSummary = { id: string; title: string; status: string; openedAt: string | null; createdAt?: string; counts: Record<string, number> & { total: number }; /** How many applied past the plan's candidates per job (counted in `counts.total`). */ lockedCount?: number; stageCounts?: Record<OwnerStage, number>; countsHidden?: boolean; needsYou: number; daysOpen: number | null };
 /** One role on one channel, with the nine-state fields (docs/spec/20). `status` is one of the nine posting states; `stateLabel` on PostingView is the owner's word for it. */
 export type Posting = { id: string; channel: string; status: string; externalUrl: string | null; intakeToken: string | null; instructions: string | null; steps: string[]; error: string | null; publishedAt: string | null; publicUrlRecordedAt: string | null; verifiedAt: string | null; verifiedBy: { kind: string; id: string; name?: string } | null; verificationNote: string | null; verificationError: string | null; verificationAttempts: number; pausedAt: string | null; closedAt: string | null; closureRequired: boolean; closureConfirmedAt: string | null; closureConfirmedBy: { kind: string; id: string; name?: string } | null; /** The packet version a board listing shows (plan D4); null until it is posted. */ boardVersion?: number | null };
 /** A team member as the decision maker of a role packet (matched from the packet's preferences to an active approver). */
@@ -161,7 +166,8 @@ export type ApplicationSummary = ApplicationCore & {
 export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying?: number; cancelled?: CancelledCounts; aiInterview?: Record<AiInterviewGroup, number> };
 /** Everyone under Cancelled, by reason: the three chips above the list while that column is shown. */
 export type CancelledCounts = { askedNewTimes: number; notInterested: number; noShow: number };
-export type ApplicationsWithCounts = { applications: ApplicationSummary[]; counts: StageStripCounts };
+/** `locked`: the people past the plan's candidates per job (the plans of 5 November 2026, Rule 3): where they came in and when, nothing else. `counts.total` includes them, and no other count does. */
+export type ApplicationsWithCounts = { applications: ApplicationSummary[]; counts: StageStripCounts; locked?: LockedApplicants };
 /** Where a claim came from. `unquoted`: a claim about the candidate with nothing verified quoted from them (packages/agents/src/triage.ts), shown as "no quote". */
 export type EvidenceRef = { source: string; quote?: string; unquoted?: boolean };
 export type Finding = { claim: string; evidence: EvidenceRef };
@@ -233,7 +239,7 @@ export type { IntakeQuestion, IntakeSessionSummary, IntakeSessionView, PacketFla
 /** A "Bring in a recruiter" the server offers on a failed turn, with the draft attached (C12). */
 export type IntakeProposedAction = { kind: string; label: string; method?: string; path: string; body?: Record<string, unknown> };
 /** The assistant's turn as the builder reads it, or what went wrong and what to do next. */
-export type IntakeTurnReply = { assistantMessage?: string; readyToCompile?: boolean; takenFromAd?: string[]; notARole?: boolean; error?: string; recovery?: string; proposedActions?: IntakeProposedAction[] };
+export type IntakeTurnReply = { assistantMessage?: string; readyToCompile?: boolean; takenFromAd?: string[]; notARole?: boolean; error?: string; recovery?: string; proposedActions?: IntakeProposedAction[]; /** No AI help left: the way on is to upgrade, not to try again. */ upgrade?: boolean };
 /** POST /intake/sessions: the new draft and its first turn; `session` is null when the message was not about a role. */
 export type IntakeStartResponse = { session: IntakeSessionView | null; notARole?: boolean; reply: IntakeTurnReply | null };
 /** POST /intake/sessions/:id/messages and /answers: the draft as it now stands, the next turn (none for a quiet edit), and anything refused. */

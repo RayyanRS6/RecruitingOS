@@ -4,7 +4,7 @@ import { companies, postings, recruiterEscalations, roles, type Queryable } from
 import { jobNoticesFor, payShown, type NoticeOverrides } from "./compliance";
 import { emit } from "./events";
 import { notify } from "./notifications";
-import { POSTING_TASK_KINDS, boardPostingOf, cancelPostingTasks, notDoneTaskIds, openPostingTask, resolvePostingTasks } from "./posting-tasks";
+import { POSTING_TASK_KINDS, cancelPostingTasks, notDoneTaskIds, openPostingTask, resolvePostingTasks, whoPostsBoards } from "./posting-tasks";
 
 /**
  * The posting state machine (docs/spec/20 items 11 and 12). A posting is one role on one channel. It is never called
@@ -187,7 +187,7 @@ async function settleBoardTasks(q: Queryable, posting: PostingRow, to: PostingSt
   await cancelPostingTasks(q, { companyId: posting.companyId, postingId: posting.id, kinds: ["post_job", "update_job"], reason: `The ${board} listing was closed before this was done.`, actor, now });
   if (!posting.closureRequired || posting.closureConfirmedAt) return;
   const [company] = await q.select({ name: companies.name, vertical: companies.vertical, settings: companies.settings }).from(companies).where(eq(companies.id, posting.companyId)).limit(1);
-  if (!company || boardPostingOf(company.settings) !== "its") return;
+  if (!company || (await whoPostsBoards(q, posting.companyId, company.settings)) !== "its") return;
   const [role] = await q.select({ title: roles.title }).from(roles).where(eq(roles.id, posting.roleId)).limit(1);
   await openPostingTask(q, { companyId: posting.companyId, roleId: posting.roleId, postingId: posting.id, channel: posting.channel, board, kind: "take_down_job", roleTitle: role?.title ?? "the role", companyName: company.name, vertical: company.vertical, actor, now });
 }
@@ -241,7 +241,7 @@ export function postingTaskNeeded(posting: TaskPosting, role: { status: string; 
  */
 export async function openMissingPostingTasks(q: Queryable, input: { companyId: string; actor: Actor; now?: Date }): Promise<Array<{ roleId: string; roleTitle: string; board: string; kind: PostingTaskKind }>> {
   const [company] = await q.select({ name: companies.name, vertical: companies.vertical, settings: companies.settings }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
-  if (!company || boardPostingOf(company.settings) !== "its") return [];
+  if (!company || (await whoPostsBoards(q, input.companyId, company.settings)) !== "its") return [];
   const boards = await q.select().from(postings).where(and(eq(postings.companyId, input.companyId), inArray(postings.channel, [...BOARD_CHANNELS])));
   if (!boards.length) return [];
   const roleRows = await q.select({ id: roles.id, title: roles.title, status: roles.status, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(inArray(roles.id, [...new Set(boards.map((p) => p.roleId))]));
@@ -331,7 +331,7 @@ export async function markBoardsOutdated(q: Queryable, input: { companyId: strin
   const [company] = await q.select({ name: companies.name, vertical: companies.vertical, settings: companies.settings }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
   const [role] = await q.select({ title: roles.title }).from(roles).where(eq(roles.id, input.roleId)).limit(1);
   const boards = stale.map((p) => BOARD_NAME[p.channel as BoardChannel]);
-  if (company && boardPostingOf(company.settings) === "its") {
+  if (company && (await whoPostsBoards(q, input.companyId, company.settings)) === "its") {
     for (const p of stale) await openPostingTask(q, { companyId: input.companyId, roleId: input.roleId, postingId: p.id, channel: p.channel, board: BOARD_NAME[p.channel as BoardChannel], kind: "update_job", roleTitle: role?.title ?? "the role", companyName: company.name, vertical: company.vertical, actor: input.actor, now });
   } else {
     await notify(q, {

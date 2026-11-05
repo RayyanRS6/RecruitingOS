@@ -6,7 +6,7 @@ import { aiRuns, applications, approvalRequests, assessments, auditRecords, comm
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
-import { useLaterApplyFlow } from "../../apps/api/src/test-helpers";
+import { useLaterApplyFlow, usePlan } from "../../apps/api/src/test-helpers";
 
 /**
  * docs/13: A 100-person company (Brightline Dental Group, Irvine) hires a full-time Dental Hygienist.
@@ -49,6 +49,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     slug = co.slug;
     // ITS's old switch, kept on the company's settings: since 20 Oct 2026 nothing reads it (every applicant gets the AI interview).
     await useLaterApplyFlow(container, co.id);
+    // A plan with ITS staff time (Rule 6 of the plans of 5 November 2026): this scenario has ITS post the board and be brought in at the ladder's top.
+    await usePlan(container, co.id, "pro");
   });
   afterAll(async () => { await container.close(); });
 

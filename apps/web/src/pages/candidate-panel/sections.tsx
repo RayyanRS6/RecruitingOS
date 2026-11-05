@@ -14,7 +14,7 @@ import { offerMadeOn, plainDayWords } from "../../hiring";
 import { aiInterviewCard, callNotesState, noScreenWords, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
 import { HIDDEN_LINK_NOTE, sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft, type ThreadPart } from "../../telling";
-import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard, StrengthsAndConcerns } from "./assessment";
+import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScorecardWaitingCard, ScreenCard, StrengthsAndConcerns } from "./assessment";
 import { CallNotesCard } from "./call-notes";
 import { MatchVerdict, NextStepLine, ScoreBreakdown } from "./match";
 import type { NextStepAction } from "./match-view";
@@ -40,6 +40,7 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
       <AiInterviewCard a={a} roleId={roleId} onDecline={() => onNext?.({ kind: "move", to: "not_moving_forward", label: "Not moving forward" })} />
       <NoAssessmentCard detail={a} />
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
+      <ScorecardWaitingCard detail={a} />
       <MatchVerdict a={a}>
         <NextStepLine a={a} onAction={onNext} />
         <StrengthsAndConcerns assessment={latest} />
@@ -271,6 +272,7 @@ export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; 
       {a.screens.map((s, i) => <ScreenCard key={s.id} screen={s} open={i === 0} questions={panelQuestions(a.packetLabels)} mustHaves={a.packetLabels.mustHaves} timeline={a.timeline} action={i === 0 ? <StopScreen a={a} roleId={roleId} /> : undefined} />)}
       {notesCard}
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
+      <ScorecardWaitingCard detail={a} />
       {scorecards.slice(a.assessments[0]?.kind === "screen" ? 1 : 0).map((s) => <AssessmentCard key={s.id} assessment={s} detail={a} roleId={roleId} labels={a.packetLabels} />)}
       {a.assessments[0]?.kind === "screen" ? <p className="small muted">The latest AI review of this chat is on the Overview, under Full breakdown.</p> : null}
     </div>
