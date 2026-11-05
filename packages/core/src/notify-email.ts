@@ -62,6 +62,7 @@ const HEADLINES: Record<string, string> = {
   "stuck.boards_outdated": "A job board still shows an earlier version of a job",
   "stuck.escalated": "An ITS recruiter is looking at a role",
   "volume.high": "A role had more applicants in a day than your limit",
+  "entitlement.more_applied": "More people applied to a role",
   "applications.closed": "A role stopped taking new applications",
   "applications.reopened": "A role is taking applications again",
   "recruiter.resolved": "Your ITS recruiter answered your request",

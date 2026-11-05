@@ -127,7 +127,7 @@ export function sendOnFileEmail(q: Tx, deps: Deps, b: Bundle, at: At): Promise<S
 /** Founder decision F8: a Design Partner's allowance never interrupts a candidate; the owner and ITS are told. */
 export async function overDesignPartnerAllowance(q: Tx, input: { companyId: string; applicationId: string; name: string; ent: { used: number; limit: number | null }; planKey: string; actor: Actor; correlationId: string | null }): Promise<void> {
   await emit(q, { type: "entitlement.exceeded", companyId: input.companyId, actor: input.actor, subject: { type: "application", id: input.applicationId }, payload: { key: entitlements.TEXT_SCREENS, limit: input.ent.limit, used: input.ent.used, plan: input.planKey }, correlationId: input.correlationId });
-  await notify(q, { companyId: input.companyId, kind: "entitlement.text_screens", title: "Over the pilot's included AI interviews", body: `${input.name} gets the AI interview anyway: the Design Partner pilot never interrupts a candidate in progress. ITS has been told so the allowance can be reviewed.`, action: { label: "See usage", href: "/setup" } });
+  await notify(q, { companyId: input.companyId, about: input.applicationId, kind: "entitlement.text_screens", title: "Over the pilot's included AI interviews", body: `${input.name} gets the AI interview anyway: the Design Partner pilot never interrupts a candidate in progress. ITS has been told so the allowance can be reviewed.`, action: { label: "See usage", href: "/setup" } });
 }
 
 /**

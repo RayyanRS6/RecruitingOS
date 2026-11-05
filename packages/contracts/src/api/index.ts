@@ -451,6 +451,8 @@ export type RecruiterRequestView = {
   askedBy: { kind: "you" | "team" | "recruiter" | "system" | "candidate"; name: string | null };
   createdAt: string; slaDueAt: string | null; firstResponseAt: string | null; resolvedAt: string | null; resolution: string | null; accessExpiresAt: string | null;
   recruiterName: string | null; reopenedCount: number; thread: EscalationThreadEntry[];
+  /** About someone past the plan's candidates per job (Rule 3): their name, the words and the thread stay with ITS, and the team can add nothing to it. */
+  locked?: boolean;
 };
 
 // Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.

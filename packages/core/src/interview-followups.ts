@@ -410,6 +410,7 @@ async function notifyNewTimesSent(q: Queryable, f: FollowUpRow): Promise<void> {
   if (!who) return;
   await notify(q, {
     companyId: f.companyId,
+    about: f.applicationId,
     kind: "interview.new_times_sent",
     title: `New times went to ${who.full}`,
     body: `${who.first} cancelled the ${titleMidSentence(who.title)} and asked for new times. They went out today. This was their one automatic set; if ${who.first} does not pick a time, they stay under Cancelled for you to decide.`,
@@ -431,6 +432,7 @@ export async function notifyNewTimesNotSent(q: Queryable, input: { followUp: Fol
   const next = input.reason === "company_not_checked" ? "you can send new times once ITS confirms your company, or decide" : "send new times when you are ready, or decide";
   await notify(q, {
     companyId: f.companyId,
+    about: f.applicationId,
     kind: "interview.new_times_not_sent",
     title: `New times for ${who.full} were not sent`,
     body: `${who.first} asked for new times${due}.${why ? ` ${why}` : ""} They are under Cancelled: ${next}.`,

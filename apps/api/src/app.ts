@@ -5,6 +5,7 @@ import { companies, withPlatform } from "@ros/db";
 import { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import type { Container } from "./container";
 import { errorHandler } from "./middleware/errors";
+import { applicationLockGuard, interviewLockGuard } from "./middleware/candidate-lock";
 import { sessionMiddleware, type Vars } from "./middleware/session";
 import { authRoutes } from "./routes/auth";
 import { companyRoutes } from "./routes/companies";
@@ -130,6 +131,10 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
     if (c.req.query("strict") === "1" && !workerHealthy) return c.json({ ok: false, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy }, 503);
     return c.json({ ok: true, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy });
   });
+
+  // Rule 3 of the plans of 5 November 2026: before any handler under these paths, and at the prefix so a new router cannot forget it.
+  for (const p of ["/api/v1/applications/:id", "/api/v1/applications/:id/*"]) app.use(p, applicationLockGuard);
+  for (const p of ["/api/v1/interviews/:id", "/api/v1/interviews/:id/*"]) app.use(p, interviewLockGuard);
 
   app.route("/api/v1/auth", authRoutes);
   app.route("/api/v1/auth", authSessionRoutes);

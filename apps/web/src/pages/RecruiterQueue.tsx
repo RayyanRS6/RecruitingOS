@@ -15,7 +15,7 @@ import { snapshotOf } from "./board/board-model";
 /** Exactly what a recruiter sees before accepting (correction 11): no customer words, nothing from a candidate record. */
 type Preview = { id: string; status: string; kind: string; urgency: "low" | "normal" | "high" | "critical"; requiredExpertise: string; summary: string; companyName: string; roleTitle: string | null; slaDueAt: string | null; slaRemainingMinutes: number | null; businessMinutesRemaining: number | null; overdue: boolean; createdAt: string; claimedByMe: boolean; claimed: boolean };
 /** `postingTask`: an accepted ITS posting task (plan D3), the job ad and the board only; it never opens anything about candidates. */
-type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } }; postingTask?: PostingTaskDetail };
+type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; lockedForCompany?: boolean; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } }; postingTask?: PostingTaskDetail };
 
 const URGENCY_TONE: Record<Preview["urgency"], Tone> = { low: "neutral", normal: "accent", high: "caution", critical: "critical" };
 /** Urgency in plain words (Wave S6): the API's "critical" is what the customer chose as "Urgent". */
@@ -453,6 +453,8 @@ function EscalationDetail({ id }: { id: string }) {
     <div className="stack gap-4">
       <Card title={`${queueKindLabel(e.kind)} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row justify-end gap-1.5"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{URGENCY_WORD[e.urgency]}</Pill><Pill size="sm" tone={st.tone}>{st.label}</Pill></div>}>
         {e.accessGranted && ctx.candidate?.name ? <p className="mb-2"><strong>About:</strong> {ctx.candidate.name}{aboutRole ? ` · ${aboutRole}` : ""}</p> : null}
+        {/* Rule 3 of the plans: words cannot be checked by a machine, so the person writing them is told. */}
+        {e.accessGranted && e.lockedForCompany ? <div className="mb-4"><Alert tone="caution">Locked for the company. Do not name them in your reply.</Alert></div> : null}
         {hasActions ? (
           <div className="row mb-4">
             {e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>{isPostingTaskKind(e.kind) ? "Accept this task" : "Accept this request"}</Button> : null}

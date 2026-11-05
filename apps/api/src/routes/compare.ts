@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings } from "@ros/core";
+import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings, visibleTo } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, screens, withTenant, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
@@ -61,7 +61,8 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const ids = input.ids.filter((s) => UUID.test(s));
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) return null;
-  const apps = ids.length ? (await tx.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.id, ids)))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId) : [];
+  // Someone past the plan's candidates per job (Rule 3) is skipped like an id that is not in the role: read by nobody, audited as viewed by nobody.
+  const apps = ids.length ? (await tx.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.id, ids), visibleTo(t)))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId) : [];
   const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
   const currentRow = currentVersionOf(role, packets) ?? packets[0] ?? null;
   const packet = currentRow?.packet ?? null;

@@ -160,8 +160,9 @@ export function latestAnswer(thread: readonly EscalationThreadEntry[]): Escalati
  * What a person may do with a request now: add a note while it is open, reopen it once answered. An ITS recruiter
  * inside the company does neither here; they answer from the recruiter queue.
  */
-export function requestActions(r: Pick<RecruiterRequestView, "status">, opts: { staff: boolean }): { note: boolean; reopen: boolean } {
-  if (opts.staff) return { note: false, reopen: false };
+export function requestActions(r: Pick<RecruiterRequestView, "status" | "locked">, opts: { staff: boolean }): { note: boolean; reopen: boolean } {
+  // About someone the team cannot read (Rule 3): it stays with ITS, and the API refuses both.
+  if (opts.staff || r.locked) return { note: false, reopen: false };
   const s = requestState(r.status);
   return { note: s === "waiting" || s === "working", reopen: s === "answered" };
 }

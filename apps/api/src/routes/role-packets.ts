@@ -9,7 +9,7 @@ import {
   IntakeSessionError, RequirementFixError, applyRequirementFixes, checkRequirements, decideRevision, loadRevision, loadTeam, mergeRevision, packetFingerprint, payChanged, proposeRevision, sessionView, storeDraftPacket,
   type IntakeSessionRow, type MergedRevision, type StoredRevision,
 } from "@ros/agents";
-import { assertCan, can, closingDateProblem, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
+import { assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
 import { companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
@@ -18,6 +18,7 @@ import { jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
 import { eventTargets, inStaffScope, staffScopeOf } from "../services/staff-scope";
 import { applyCompanyQuestionsEdit, applyFieldEdit } from "../services/packet-fields";
+import { withoutLockedEvents } from "../services/locked-visibility";
 import { withoutUnsentChats } from "../services/screen-visibility";
 import { CLOSED_ROLE_MESSAGE, cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, materialChanges, mayApproveRoles, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
 import type { Container } from "../container";
@@ -136,7 +137,8 @@ rolePacketRoutes.post("/:id/request-approval", requireTenant, async (c) => {
  * a grant reads only the events it covers, by the rule of the activity list (GET /events): a grant about one candidate
  * sees the role's own events and that candidate's, never another applicant's application or outcome. Like the activity
  * list, nothing is shown about a screening chat the candidate has not sent: no entry about a single answer, no count of
- * what was answered, and no entry about a reading the team may not see (`withoutUnsentScreenEvents`).
+ * what was answered, and no entry about a reading the team may not see (`withoutUnsentScreenEvents`). Nor about anyone
+ * past the plan's candidates per job (Rule 3, `withoutLockedEvents`).
  */
 rolePacketRoutes.get("/:id/timeline", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -158,10 +160,10 @@ rolePacketRoutes.get("/:id/timeline", requireTenant, async (c) => {
         ),
       ))
       .orderBy(desc(events.occurredAt), desc(events.id))
-      // Scoped: read further back, keep what the grant covers, and answer with the same number at most.
-      .limit(scope ? TIMELINE_LIMIT * 10 : TIMELINE_LIMIT);
-    const shown = await withoutUnsentChats(tx, found);
-    if (!scope) return shown;
+      // Scoped, or with people past the plan's limit whose entries come out: read further back, keep what may be shown, and answer with the same number at most.
+      .limit(scope || (await companyHasLocked(tx, t.companyId)) ? TIMELINE_LIMIT * 10 : TIMELINE_LIMIT);
+    const shown = await withoutLockedEvents(tx, { companyId: t.companyId, reader: t }, await withoutUnsentChats(tx, found));
+    if (!scope) return shown.slice(0, TIMELINE_LIMIT);
     const targets = await eventTargets(tx, shown);
     return shown.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, TIMELINE_LIMIT);
   });

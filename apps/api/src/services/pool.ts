@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { BOARD_COLUMN_LABEL, BoardColumn, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, interviewInScore, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
+import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, hiddenFrom, interviewInScore, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, visibleTo, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, documents, events, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
@@ -127,7 +127,8 @@ export type PoolRow = ScoredPerson & {
   activeInterview: boolean;
 };
 
-export type Pool = { role: typeof roles.$inferSelect; packet: RolePacket | null; packets: Map<number, RolePacket>; currentVersion: number | null; rows: PoolRow[] };
+/** `lockedCount`: how many applied past the plan's candidates per job and are not among `rows`: a number, never who (Rule 3). */
+export type Pool = { role: typeof roles.$inferSelect; packet: RolePacket | null; packets: Map<number, RolePacket>; currentVersion: number | null; rows: PoolRow[]; lockedCount: number };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (s: string) => UUID.test(s);
@@ -135,18 +136,24 @@ export const isUuid = (s: string) => UUID.test(s);
 /**
  * Everything the board knows about a role's applicants, in one query per kind of fact. An ITS recruiter given one
  * candidate sees that candidate only (`tenant.staff`, or `scopeApplicationId` for Today's viewer). `onlyIds` narrows the
- * load to some applications (Review and apply).
+ * load to some applications (Review and apply). The one line the board, its summary, the questions, Review and apply, the
+ * report's must-haves, Home's pool card and a recruiter's board snapshot all go through: nobody past the plan's candidates per
+ * job is loaded (Rule 3), so a locked id in a body reads as someone who is not a candidate of this role.
  */
 export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Tenant, "staff"> | null; scopeApplicationId?: string | null; onlyIds?: readonly string[]; now?: Date }): Promise<Pool> {
   const [role] = isUuid(input.roleId) ? await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1) : [];
   if (!role) throw new HttpError(404, "not_found", "Role not found.");
   const scope = input.scopeApplicationId ?? input.tenant?.staff?.scope.applicationId ?? null;
+  const reader = input.tenant?.staff ? input.tenant : scope ? { staff: { kind: "escalation", scope: { applicationId: scope } } } : null;
   // An id that is not one names nobody (Postgres would refuse it for the column).
   const only = input.onlyIds?.filter(isUuid);
-  const where = only ? and(eq(applications.roleId, role.id), inArray(applications.id, only.length ? only : ["00000000-0000-0000-0000-000000000000"])) : eq(applications.roleId, role.id);
+  const where = only ? and(eq(applications.roleId, role.id), inArray(applications.id, only.length ? only : ["00000000-0000-0000-0000-000000000000"]), visibleTo(reader)) : and(eq(applications.roleId, role.id), visibleTo(reader));
   const apps = (await tx.select().from(applications).where(where).orderBy(desc(applications.createdAt))).filter((a) => !scope || a.id === scope);
+  const pastTheLimit = only || scope ? null : hiddenFrom(reader);
+  const [lockedRow] = pastTheLimit ? await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, role.id), pastTheLimit)) : [];
+  const lockedCount = Number(lockedRow?.n ?? 0);
   const { byVersion, current, currentVersion } = await packetsOf(tx, role);
-  if (!apps.length) return { role, packet: current, packets: byVersion, currentVersion, rows: [] };
+  if (!apps.length) return { role, packet: current, packets: byVersion, currentVersion, rows: [], lockedCount };
   const appIds = apps.map((a) => a.id);
   const names = new Map((await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId)))).map((c) => [c.id, `${c.firstName} ${c.lastName}`.trim()]));
   const asmts = await tx.select().from(assessments).where(inArray(assessments.applicationId, appIds)).orderBy(desc(assessments.createdAt));
@@ -188,7 +195,7 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
       activeInterview: ivs.some((i) => i.applicationId === app.id && INTERVIEW_ACTIVE_STATUSES.includes(i.status)),
     };
   });
-  return { role, packet: current, packets: byVersion, currentVersion, rows };
+  return { role, packet: current, packets: byVersion, currentVersion, rows, lockedCount };
 }
 
 /** The person as the summary and the questions read them. */
@@ -254,6 +261,7 @@ export function boardView(pool: Pool, now: Date): BoardView {
     noAiInterview,
     stillApplying: noAiInterview,
     summary: poolSummary(pool.rows.map(poolPersonOf), pool.packet, { roleId: pool.role.id, now }),
+    lockedCount: pool.lockedCount,
     generatedAt: now.toISOString(),
   };
 }

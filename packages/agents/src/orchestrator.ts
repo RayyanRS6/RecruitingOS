@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
-import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, notLocked, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
+import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import { mailbox, type Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -235,8 +235,10 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the AI interview (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their AI interview should have closed by itself and did not, so they may be waiting. Their answers appear only once they send them; a recruiter can contact them.`, action: { label: "See who", href: `/roles/${role.id}/talent?ownerStage=no_ai_interview` } });
     }
     const pending = await q.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
+    // Its rationale names the person, and the team could not decide it anyway.
+    const aboutLocked = await lockedAmong(q, pending.flatMap((p) => (p.applicationId ? [p.applicationId] : [])));
     // An "Invite to a screening chat?" from before 20 Oct 2026 is no decision any more (the daily check retires it).
-    const oldPending = pending.filter((p) => p.actionType !== "role_packet.approve" && p.actionType !== "application.invite_screen" && now.getTime() - Date.parse(p.createdAt) >= 2 * DAYS && !(p.applicationId && parked({ id: p.applicationId })));
+    const oldPending = pending.filter((p) => p.actionType !== "role_packet.approve" && p.actionType !== "application.invite_screen" && now.getTime() - Date.parse(p.createdAt) >= 2 * DAYS && !(p.applicationId && (parked({ id: p.applicationId }) || aboutLocked.has(p.applicationId))));
     if (oldPending.length) {
       const days = Math.floor((now.getTime() - Math.min(...oldPending.map((p) => Date.parse(p.createdAt)))) / DAYS);
       out.push({ detector: "approval_pending", roleId: role.id, roleTitle: role.title, days, title: `A decision has been waiting ${days} days (${role.title})`, body: oldPending.map((p) => p.rationale ?? p.actionType.replace(/[._]/g, " ")).join("; "), action: { label: "Decide", href: "/" } });

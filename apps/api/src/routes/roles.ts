@@ -5,7 +5,8 @@ import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalat
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { aiInterviewsFor } from "../services/screens";
-import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, boardPostingOf, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion, unlockedAtFor, waitingSince } from "@ros/core";
+import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, boardPostingOf, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, hiddenFrom, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion, unlockedAtFor, visibleTo, waitingSince } from "@ros/core";
+import { lockedCardsOf, withoutLockedApprovals } from "../services/locked-visibility";
 import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson, shownReadings } from "../services/pool";
 import { applyBatch, previewBatch } from "../services/review-apply";
 import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
@@ -70,14 +71,18 @@ roleRoutes.get("/", requireTenant, async (c) => {
     // talent list and the report read through `activeFollowUpsFor`, so the three agree (J18).
     const roleIds = visible.map((r) => r.id);
     const interviewOpen = sql<boolean>`EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = ${applications.id} AND i.status IN ('proposed','scheduling'))`;
+    // Past the plan's candidates per job (Rule 3) nobody counts toward a stage, a group or a decision waiting: only the total
+    // and `lockedCount` say more people applied, which names nobody and shows what an upgrade opens.
     const stageCounts = await tx
       .select({ roleId: applications.roleId, stage: applications.stage, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, kind: interviewFollowups.kind, choice: interviewFollowups.choice, autoState: interviewFollowups.autoState, interviewOpen, n: count() })
       .from(applications)
       .leftJoin(applicationMarks, and(eq(applicationMarks.applicationId, applications.id), isNull(applicationMarks.clearedAt)))
       .leftJoin(interviewFollowups, and(eq(interviewFollowups.applicationId, applications.id), isNull(interviewFollowups.resolvedAt)))
-      .where(inArray(applications.roleId, roleIds))
+      .where(and(inArray(applications.roleId, roleIds), visibleTo(t)))
       .groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt, interviewFollowups.kind, interviewFollowups.choice, interviewFollowups.autoState, interviewOpen);
-    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"))).groupBy(approvalRequests.roleId);
+    const hidden = hiddenFrom(t);
+    const lockedCounts = hidden ? await tx.select({ roleId: applications.roleId, n: count() }).from(applications).where(and(inArray(applications.roleId, roleIds), hidden)).groupBy(applications.roleId) : [];
+    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).leftJoin(applications, eq(applications.id, approvalRequests.applicationId)).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), or(isNull(approvalRequests.applicationId), visibleTo(t)))).groupBy(approvalRequests.roleId);
     // The newest application per role, for `lastActivityAt` (the Jobs page's "Recent activity" order).
     const newest = await tx.select({ roleId: applications.roleId, at: sql<string | null>`max(${applications.createdAt})` }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId);
     const now = c.get("container").engine.clock();
@@ -99,7 +104,8 @@ roleRoutes.get("/", requireTenant, async (c) => {
       // a raw max() may come back from the driver as a Date or as text
       const at = newest.find((x) => x.roleId === r.id)?.at as string | Date | null | undefined;
       const newestApplication = at instanceof Date ? at.toISOString() : at ? String(at) : null;
-      return { ...r, counts: { total, ...counts }, stageCounts: stageStrip, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null, lastActivityAt: lastActivityOf(r, newestApplication) };
+      const lockedCount = Number(lockedCounts.find((l) => l.roleId === r.id)?.n ?? 0);
+      return { ...r, counts: { total: total + lockedCount, ...counts }, lockedCount, stageCounts: stageStrip, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null, lastActivityAt: lastActivityOf(r, newestApplication) };
     });
   });
   return c.json(rows);
@@ -118,10 +124,14 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     // Applicants by stage, for those who read applications (an interviewer gets none, as on the roles list); a grant about
     // one candidate counts that candidate alone, as the role's applications list shows them alone.
     const onlyApplicationId = t.staff?.scope.applicationId ?? null;
-    const apps = !can(t.role, "application.read") ? [] : await tx.select({ stage: applications.stage }).from(applications).where(onlyApplicationId ? and(eq(applications.roleId, role.id), eq(applications.id, onlyApplicationId)) : eq(applications.roleId, role.id));
+    const apps = !can(t.role, "application.read") ? [] : await tx.select({ stage: applications.stage }).from(applications).where(and(eq(applications.roleId, role.id), onlyApplicationId ? eq(applications.id, onlyApplicationId) : visibleTo(t)));
     const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     const counts: Record<string, number> = {};
     for (const a of apps) counts[a.stage] = (counts[a.stage] ?? 0) + 1;
+    // Past the plan's candidates per job (Rule 3): a number for the Candidates tab, beside stages that cover those the team can read.
+    const hidden = hiddenFrom(t);
+    const [lockedRow] = hidden && !onlyApplicationId && can(t.role, "application.read") ? await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, role.id), hidden)) : [];
+    const lockedCount = Number(lockedRow?.n ?? 0);
     // Without compensation.read the pay section keeps its shape but carries no figure anywhere (services/pay-redaction.ts).
     const redact = (p: typeof current) => (p && !canSeeComp ? withEmptyPay(p) : p);
     // Whether candidates see the range, by the public pages' rule: the owner's choice, or a pay transparency law where the job is (plan 0.8).
@@ -137,7 +147,7 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     // a request about the whole role, such as the closing message naming every untold applicant, is not shown to a grant
     // about one candidate. The approval card below reads them all.
     const scope = staffScopeOf(t);
-    const visiblePending = !can(t.role, "application.read") ? [] : pending.filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId }));
+    const visiblePending = !can(t.role, "application.read") ? [] : await withoutLockedApprovals(tx, t, pending.filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId })));
     // A version proposed while the role runs (an edit waiting for approval): shown beside the current one, never in its place.
     const proposed = current && ["open", "paused"].includes(role.status) ? packets.find((p) => p.status === "proposed" && p.version > current.version) ?? null : null;
     const now = c.get("container").engine.clock();
@@ -150,7 +160,7 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
       closingDate: closingDateFor(role, company ?? null, current?.packet ?? null, now),
       boardsShowingOldVersion: posts.filter((p) => showsOldVersion(p, role.currentPacketVersion)).map((p) => p.channel),
     };
-    return { ...role, currentPacket: withPayView(current), proposedPacket: withPayView(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker, ...publishing };
+    return { ...role, currentPacket: withPayView(current), proposedPacket: withPayView(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, lockedCount, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker, ...publishing };
   });
   if (!row) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(row);
@@ -414,7 +424,11 @@ async function companyTimeZone(tx: Tx, companyId: string): Promise<string> {
  * was made against an earlier version of the role. One query per kind of fact for the whole list, never one per row.
  * Ordered newest first, by the longest wait, by name, or by score (`order=score`, or `sort=score`): people whose score
  * counts the AI interview first, then résumé-only scores, each highest first, no score last. `?counts=1` answers
- * `{ applications, counts }`, the counts covering every visible applicant whatever the filters.
+ * `{ applications, counts, locked }`, the counts covering every visible applicant whatever the filters.
+ *
+ * Past the plan's candidates per job (Rule 3) nobody is a row. They are left out in the query, before anything reads a name, a
+ * score or a stage, so where a row sorts or which filter finds it says nothing about them. `locked` is all there is:
+ * `{ count, cards: [{ position, appliedAt }] }`, and `counts.total` includes them; every other count is the people shown.
  */
 roleRoutes.get("/:id/applications", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -422,7 +436,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
   const q = OwnerGroupQuery.parse({ group: c.req.query("group"), stage: c.req.query("stage"), ownerStage: c.req.query("ownerStage"), told: c.req.query("told"), aiInterview: c.req.query("aiInterview"), order: c.req.query("order") ?? c.req.query("sort"), counts: c.req.query("counts") });
   const now = c.get("container").engine.clock();
   const result = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const apps = (await tx.select().from(applications).where(eq(applications.roleId, c.req.param("id"))).orderBy(desc(applications.createdAt))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId);
+    const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, c.req.param("id")), visibleTo(t))).orderBy(desc(applications.createdAt))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId);
+    const locked = q.counts ? await lockedCardsOf(tx, c.req.param("id"), t) : { count: 0, cards: [] };
     const ids = apps.map((a) => a.candidateId);
     const appIds = apps.map((a) => a.id);
     const cands = ids.length ? await tx.select().from(candidates).where(inArray(candidates.id, ids)) : [];
@@ -500,7 +515,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
         stageMoves: stageMoves(facts),
       };
     });
-    const counts: StageStripCounts = { total: rows.length, byOwnerStage: Object.fromEntries(OwnerStage.options.map((s) => [s, 0])) as Record<OwnerStage, number>, byGroup: Object.fromEntries(OwnerGroup.options.map((g) => [g, 0])) as Record<OwnerGroup, number>, notTold: 0, holdsEnded: 0, stillApplying: 0, cancelled: { askedNewTimes: 0, notInterested: 0, noShow: 0 }, aiInterview: Object.fromEntries(AiInterviewGroup.options.map((g) => [g, 0])) as Record<AiInterviewGroup, number> };
+    const counts: StageStripCounts = { total: rows.length + locked.count, byOwnerStage: Object.fromEntries(OwnerStage.options.map((s) => [s, 0])) as Record<OwnerStage, number>, byGroup: Object.fromEntries(OwnerGroup.options.map((g) => [g, 0])) as Record<OwnerGroup, number>, notTold: 0, holdsEnded: 0, stillApplying: 0, cancelled: { askedNewTimes: 0, notInterested: 0, noShow: 0 }, aiInterview: Object.fromEntries(AiInterviewGroup.options.map((g) => [g, 0])) as Record<AiInterviewGroup, number> };
     for (const r of rows) {
       counts.byOwnerStage[r.ownerStage] += 1;
       counts.byGroup[r.group] += 1;
@@ -518,9 +533,9 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const byScore = (x: (typeof rows)[number], y: (typeof rows)[number]) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1);
     const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : q.order === "score" ? [...rows].sort(byScore) : rows;
     const shown = ordered.filter((r) => (!q.group || r.group === q.group) && (!q.stage || r.stage === q.stage) && (!q.ownerStage || r.ownerStage === q.ownerStage) && (!q.told || r.toldState === q.told) && (!q.aiInterview || r.aiInterview?.group === q.aiInterview));
-    return { shown, counts };
+    return { shown, counts, locked };
   });
-  return c.json(q.counts ? { applications: result.shown, counts: result.counts } : result.shown);
+  return c.json(q.counts ? { applications: result.shown, counts: result.counts, locked: result.locked } : result.shown);
 });
 
 /**

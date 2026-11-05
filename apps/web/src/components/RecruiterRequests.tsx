@@ -128,7 +128,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
       ) : <p className="small mt-2 whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{r.question}</p>}
       {said ? <div className="mt-3"><Alert tone="info">{said}</Alert></div> : null}
       <div className="row mt-3 gap-1.5">
-        <Button size="sm" variant="quiet" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide the conversation" : `Show the conversation (${r.thread.length})`}</Button>
+        {r.locked ? null : <Button size="sm" variant="quiet" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide the conversation" : `Show the conversation (${r.thread.length})`}</Button>}
         {may.note && mode !== "note" ? <Button size="sm" variant="secondary" onClick={() => { setMode("note"); setText(""); setSaid(null); }}>Add a note for the recruiter</Button> : null}
         {may.reopen && mode !== "reopen" ? <Button size="sm" variant="secondary" onClick={() => { setMode("reopen"); setText(""); setSaid(null); }}>This didn't solve it</Button> : null}
       </div>

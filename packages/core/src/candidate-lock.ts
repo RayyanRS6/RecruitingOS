@@ -1,7 +1,9 @@
-import { and, count, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
-import { CANDIDATES_PER_JOB } from "@ros/contracts";
-import { applications, events, type Queryable } from "@ros/db";
+import { and, count, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { CANDIDATES_PER_JOB, MORE_CANDIDATES_LINE, moreAppliedTitle } from "@ros/contracts";
+import { applications, companies, events, notifications, type Queryable } from "@ros/db";
+import { zonedParts } from "./business-hours";
 import { limitOf, planOf } from "./entitlements";
+import { notify } from "./notifications";
 
 /**
  * Locked candidates, the plans of 5 November 2026, Rule 2. A plan's `candidates_per_job` is how many people applying to one
@@ -66,15 +68,75 @@ export async function onlyLockedApplications(q: Queryable, candidateId: string):
   return rows.length > 0 && rows.every((r) => !!r.lockedAt);
 }
 
-/** The applications among these that nobody may name to the team. One query; an empty list asks nothing. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The applications among these that nobody may name to the team. One query; an empty list asks nothing, and anything that is not an id names nobody. */
 export async function lockedAmong(q: Queryable, applicationIds: readonly string[]): Promise<Set<string>> {
-  if (!applicationIds.length) return new Set();
-  const rows = await q.select({ id: applications.id }).from(applications).where(and(inArray(applications.id, [...new Set(applicationIds)]), isNotNull(applications.lockedAt)));
+  const ids = [...new Set(applicationIds)].filter((id) => UUID.test(id));
+  if (!ids.length) return new Set();
+  const rows = await q.select({ id: applications.id }).from(applications).where(and(inArray(applications.id, ids), isNotNull(applications.lockedAt)));
   return new Set(rows.map((r) => r.id));
 }
 
 /** Filter for a query that reads applications for reminders or for the team's work: never someone locked. */
 export const notLocked = () => isNull(applications.lockedAt);
+
+/**
+ * Who is reading, for the wall of Rule 3: someone on the team, or ITS staff under a grant. ITS is not the paying customer, but
+ * a recruiter inside a customer's workspace reads the same lists as the customer, so they cannot name a locked person by
+ * accident. Only two grants read past the lock: break glass, and one naming exactly this application, which is how a
+ * candidate who asked for a person gets one. A grant for a role or for the whole company does not.
+ */
+export type LockReader = { staff?: { kind: string; scope: { applicationId: string | null } } | null } | null | undefined;
+
+const readsEveryone = (reader: LockReader) => reader?.staff?.kind === "break_glass";
+
+/** The filter for a query over applications, in the query, before anything is ordered or counted. Undefined for break glass, who reads everyone. */
+export function visibleTo(reader: LockReader): SQL | undefined {
+  if (readsEveryone(reader)) return undefined;
+  const named = reader?.staff?.scope.applicationId;
+  return named ? or(notLocked(), eq(applications.id, named)) : notLocked();
+}
+
+/** The opposite filter: the locked applications this reader may not read, to count them. Null for break glass, who has none. */
+export function hiddenFrom(reader: LockReader): SQL | null {
+  if (readsEveryone(reader)) return null;
+  const named = reader?.staff?.scope.applicationId;
+  return named ? (and(isNotNull(applications.lockedAt), ne(applications.id, named)) as SQL) : isNotNull(applications.lockedAt);
+}
+
+/** The applications among these this reader may not read. */
+export async function hiddenAmong(q: Queryable, reader: LockReader, applicationIds: readonly string[]): Promise<Set<string>> {
+  if (readsEveryone(reader)) return new Set();
+  const locked = await lockedAmong(q, applicationIds);
+  const named = reader?.staff?.scope.applicationId;
+  if (named) locked.delete(named);
+  return locked;
+}
+
+/** Whether anyone at this company is locked: a company with nobody locked reads every list as it always did. */
+export async function companyHasLocked(q: Queryable, companyId: string): Promise<boolean> {
+  const [row] = await q.select({ id: applications.id }).from(applications).where(and(eq(applications.companyId, companyId), isNotNull(applications.lockedAt))).limit(1);
+  return !!row;
+}
+
+/** What the neutral notice is filed under. It carries no name, so it needs no `about`. */
+export const MORE_APPLIED_KIND = "entitlement.more_applied";
+
+/**
+ * All the team hears of people applying past the limit: one notice per job per day, in the company's own days, naming nobody.
+ * Called while the job's lock is held (`decideLock`), so two people applying at the same moment send one. An email, if someone
+ * wants this group as it happens, says the same thing. Returns how many people it reached.
+ */
+export async function tellMoreApplied(q: Queryable, input: { companyId: string; roleId: string; roleTitle: string; now?: Date }): Promise<number> {
+  const href = `/roles/${input.roleId}/talent`;
+  const [last] = await q.select({ at: notifications.createdAt }).from(notifications).where(and(eq(notifications.companyId, input.companyId), eq(notifications.kind, MORE_APPLIED_KIND), sql`${notifications.action}->>'href' = ${href}`)).orderBy(desc(notifications.createdAt)).limit(1);
+  const [company] = await q.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
+  const zone = company?.timezone ?? "UTC";
+  const now = input.now ?? new Date();
+  if (last && zonedParts(new Date(last.at), zone).dayKey === zonedParts(now, zone).dayKey) return 0;
+  return notify(q, { companyId: input.companyId, kind: MORE_APPLIED_KIND, title: moreAppliedTitle(input.roleTitle), body: MORE_CANDIDATES_LINE, action: { label: "See applicants", href } });
+}
 
 /**
  * When each of these applications was opened by a change of plan, for the ones that were (`application.unlocked`). What they

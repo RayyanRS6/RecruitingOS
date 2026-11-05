@@ -99,6 +99,13 @@ describe("what a person may do, and who may ask", () => {
     expect(requestActions(req({ status: "resolved" }), { staff: true })).toEqual({ note: false, reopen: false });
   });
 
+  it("nothing on a request about someone the team cannot read: it stays with ITS, and the API refuses both", () => {
+    expect(requestActions(req({ status: "open", locked: true }), { staff: false })).toEqual({ note: false, reopen: false });
+    expect(requestActions(req({ status: "resolved", locked: true }), { staff: false })).toEqual({ note: false, reopen: false });
+    // It says who it is about the way any request about an unnamed candidate does.
+    expect(aboutWords({ scope: "application", roleTitle: "Hygienist", candidateName: null })).toBe("A candidate for Hygienist");
+  });
+
   it("everyone but an interviewer brings in a recruiter (escalation.create)", () => {
     for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter"]) expect(canAskRecruiter(role), role).toBe(true);
     expect(canAskRecruiter("interviewer")).toBe(false);

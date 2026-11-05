@@ -102,7 +102,7 @@ async function queueMessage(tx: Tx, container: Container, input: { app: App; bun
 /** The message waits for an approver: the approver roles are told, the request is audited, and the writer gets a 202. */
 async function holdForApprover(tx: Tx, input: { app: App; roleTitle: string; tenant: Tenant; actor: Actor; proposal: MessageProposal; approvalRequestId: string; approverRoles: string[] }): Promise<Extract<SendMessageResult, { status: "pending_approval" }>> {
   const { proposal } = input;
-  await notify(tx, { companyId: input.tenant.companyId, kind: "message.approval_requested", title: `Send this message to ${proposal.candidateName}?`, body: `${proposal.senderName} wrote to ${proposal.candidateName} about ${input.roleTitle}. Read it on Home or the candidate's page and decide; nothing goes out until you do.`, action: { label: "Read the message", href: `/roles/${input.app.roleId}/talent?open=${input.app.id}` }, roles: input.approverRoles });
+  await notify(tx, { companyId: input.tenant.companyId, about: input.app.id, kind: "message.approval_requested", title: `Send this message to ${proposal.candidateName}?`, body: `${proposal.senderName} wrote to ${proposal.candidateName} about ${input.roleTitle}. Read it on Home or the candidate's page and decide; nothing goes out until you do.`, action: { label: "Read the message", href: `/roles/${input.app.roleId}/talent?open=${input.app.id}` }, roles: input.approverRoles });
   await audit(tx, { companyId: input.tenant.companyId, actor: input.actor, action: "message.approval_requested", target: { type: "application", id: input.app.id }, details: { approvalRequestId: input.approvalRequestId, subject: proposal.subject, requiredRoles: input.approverRoles } });
   return { ok: true, status: "pending_approval", approvalRequestId: input.approvalRequestId };
 }
@@ -151,7 +151,7 @@ export async function sendCandidateMessage(tx: Tx, container: Container, input: 
   }
   const sent = await queueMessage(tx, container, { app, bundle: b, sender: actor, auditActor: actor, tenant: t, proposal, idempotencyKey: `freeform:${app.id}:${uuidv7()}`, approvalRequestId: null, approvedBy: null, holdForUndo: true });
   if (d.outcome === "execute" && d.notify) {
-    await notify(tx, { companyId: t.companyId, kind: "message.sent", title: `${senderName} wrote to ${candidateName}`, body: `About ${b.role.title}${proposal.subject ? `: "${proposal.subject}"` : ""}. The message is on the candidate's page.`, action: { label: "Open the candidate", href: open } });
+    await notify(tx, { companyId: t.companyId, about: app.id, kind: "message.sent", title: `${senderName} wrote to ${candidateName}`, body: `About ${b.role.title}${proposal.subject ? `: "${proposal.subject}"` : ""}. The message is on the candidate's page.`, action: { label: "Open the candidate", href: open } });
   }
   return sent;
 }
@@ -172,7 +172,7 @@ export async function settleMessageApproval(tx: Tx, container: Container, input:
   const open = `/roles/${app.roleId}/talent?open=${app.id}`;
   const approver = input.actor.name ?? "An approver";
   if (input.status === "rejected") {
-    if (writerIds.length) await notify(tx, { companyId: input.tenant.companyId, kind: "message.declined", title: `Your message to ${candidateName} was not sent`, body: `${approver} decided not to send it${input.note ? `: ${input.note}` : "."} You can write a new one from the candidate's page.`, action: { label: "Open the candidate", href: open }, userIds: writerIds });
+    if (writerIds.length) await notify(tx, { companyId: input.tenant.companyId, about: app.id, kind: "message.declined", title: `Your message to ${candidateName} was not sent`, body: `${approver} decided not to send it${input.note ? `: ${input.note}` : "."} You can write a new one from the candidate's page.`, action: { label: "Open the candidate", href: open }, userIds: writerIds });
     return null;
   }
   const b = await loadBundle(tx, app);
@@ -182,7 +182,7 @@ export async function settleMessageApproval(tx: Tx, container: Container, input:
   const sent = await queueMessage(tx, container, { app, bundle: b, sender: writer, auditActor: input.actor, tenant: input.tenant, proposal: full, idempotencyKey: `freeform:approval:${input.req.id}`, approvalRequestId: input.req.id, approvedBy: input.tenant.userId, holdForUndo: false });
   if (writerIds.length) {
     const held = sent.status === "held";
-    await notify(tx, { companyId: input.tenant.companyId, kind: "message.sent", title: held ? `Your message to ${candidateName} was approved` : `Your message to ${candidateName} was sent`, body: held ? `${approver} approved it. It goes out under your name as soon as ITS confirms your company.` : `${approver} approved it; it went out under your name.`, action: { label: "Open the candidate", href: open }, userIds: writerIds });
+    await notify(tx, { companyId: input.tenant.companyId, about: app.id, kind: "message.sent", title: held ? `Your message to ${candidateName} was approved` : `Your message to ${candidateName} was sent`, body: held ? `${approver} approved it. It goes out under your name as soon as ITS confirms your company.` : `${approver} approved it; it went out under your name.`, action: { label: "Open the candidate", href: open }, userIds: writerIds });
   }
   return sent.status;
 }

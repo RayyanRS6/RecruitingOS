@@ -2,7 +2,7 @@ import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { and, desc, eq, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordInterviewDecision, RequestInterviewWithLine, RescheduleInterview, type Actor, type CandidateNotice, type HireFollowUp, type InterviewDraft, type InterviewFollowUpRef, type OfferedSlot } from "@ros/contracts";
 import { HELD_REASON, checkPersonalLine, clashesWithBookings, participantsOf, sendInterviewMoved, type InvitationNote } from "@ros/agents";
-import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, formatInZone, freshSchedulingWindow, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, slotStillAhead, transition, upsertAvailability, type FollowUpView } from "@ros/core";
+import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, formatInZone, freshSchedulingWindow, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, slotStillAhead, transition, upsertAvailability, visibleTo, type FollowUpView } from "@ros/core";
 import { applications, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { cancelNewTimesRuns } from "@ros/workflows";
@@ -157,7 +157,7 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
     if (others.length) {
       const [who] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
       const name = `${who?.firstName ?? ""} ${who?.lastName ?? ""}`.trim() || "the candidate";
-      await notify(tx, { companyId: t.companyId, kind: "interview.rescheduled", title: `Interview moved: ${name}, ${iv.title}`, body: booked ? `The time on ${formatInZone(iv.startsAt!, company.timezone)} is off.${hadEvents ? " The calendar event is being removed." : ""} New times are being offered; you will be told when one is booked.` : "New times are being offered; you will be told when one is booked.", action: { label: "Open the interview", href: `/interviews/${iv.id}` }, userIds: others });
+      await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.rescheduled", title: `Interview moved: ${name}, ${iv.title}`, body: booked ? `The time on ${formatInZone(iv.startsAt!, company.timezone)} is off.${hadEvents ? " The calendar event is being removed." : ""} New times are being offered; you will be told when one is booked.` : "New times are being offered; you will be told when one is booked.", action: { label: "Open the interview", href: `/interviews/${iv.id}` }, userIds: others });
     }
     await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: iv.applicationId, roleId: app.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1, ...(knew ? { rescheduled: true } : {}), ...(carried ?? {}) }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId: t.companyId, actor }, runAt: now.toISOString(), maxAttempts: 5 });
@@ -205,6 +205,9 @@ interviewRoutes.get("/", requireTenant, async (c) => {
     if (t.staff?.scope.roleId) conds.push(inArray(interviews.applicationId, tx.select({ id: applications.id }).from(applications).where(eq(applications.roleId, t.staff.scope.roleId))));
     // a grant about one candidate shows that candidate's interviews only, the same limit as the role's applications list
     if (t.staff?.scope.applicationId) conds.push(eq(interviews.applicationId, t.staff.scope.applicationId));
+    // Never someone past the plan's candidates per job (Rule 3): an interview on such a person can only be from before a change, and it names them.
+    const readable = visibleTo(t);
+    if (readable) conds.push(inArray(interviews.applicationId, tx.select({ id: applications.id }).from(applications).where(readable)));
     const list = await tx.select().from(interviews).where(and(...conds)).orderBy(desc(interviews.createdAt));
     return summaries(tx, list);
   });
@@ -300,10 +303,10 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
         noShowOpened = opened.created;
       }
     }
-    if (app && noShowOpened) await notify(tx, { companyId: t.companyId, kind: "interview.no_show", title: `${name} did not come to the interview`, body: `${iv.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: send new times for the same round, or decide.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+    if (app && noShowOpened) await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.no_show", title: `${name} did not come to the interview`, body: `${iv.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: send new times for the same round, or decide.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     // Our side missed it (founder decision L-12): the approval card offers the same round again, and its invitation says sorry.
-    else if (app && body.outcome === "no_show_interviewer" && INTERVIEW_FROM.includes(moved ? "interview_complete" : app.stage)) await notify(tx, { companyId: t.companyId, kind: "interview.decision", title: `${name}'s interview did not happen`, body: `Our interviewer missed ${iv.title}. Approve the same round again from their page; the new invitation says sorry. You can pick another round instead.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}&step=interview` } });
-    else if (app && moved) await notify(tx, { companyId: t.companyId, kind: "interview.decision", title: `How did it go with ${name}?`, body: `${iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+    else if (app && body.outcome === "no_show_interviewer" && INTERVIEW_FROM.includes(moved ? "interview_complete" : app.stage)) await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.decision", title: `${name}'s interview did not happen`, body: `Our interviewer missed ${iv.title}. Approve the same round again from their page; the new invitation says sorry. You can pick another round instead.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}&step=interview` } });
+    else if (app && moved) await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.decision", title: `How did it go with ${name}?`, body: `${iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     return summary(tx, u);
   });
   return c.json(row);
@@ -593,7 +596,7 @@ roleInterviewRoutes.get("/:id/interviews", requireTenant, async (c) => {
   assertCan(t.role, "role.read");
   const only = t.staff?.scope.applicationId ?? null;
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId), ...(only ? [eq(applications.id, only)] : [])))).map((a) => a.id);
+    const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId), visibleTo(t), ...(only ? [eq(applications.id, only)] : [])))).map((a) => a.id);
     if (!appIds.length) return [];
     const conds = [inArray(interviews.applicationId, appIds)];
     if (t.role === "interviewer") conds.push(inArray(interviews.id, tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))));

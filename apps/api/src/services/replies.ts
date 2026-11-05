@@ -170,7 +170,7 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
     : saidNoThanks && !aboutFutureRoles ? `${quoted}. This may mean they do not want to go ahead with this step.${cancelled.stopped ? " Reply to check with them." : " Nothing was changed; reply to check with them."}`
     : wantsExplanation ? `About ${role.title}: they asked for the reasons for your decision and for a person to review it. ITS's compliance team has the request and answers them; their message is on their page.`
     : quoted;
-  if (!app.lockedAt) await notify(tx, { companyId: app.companyId, kind: "message.received", title: `${name} wrote back`, body: `${body}${cancelled.sentence}`, action: { label: "Read it", href: open } });
+  await notify(tx, { companyId: app.companyId, about: app.id, kind: "message.received", title: `${name} wrote back`, body: `${body}${cancelled.sentence}`, action: { label: "Read it", href: open } });
   if (wantsExplanation) return { communicationId, humanRequested: false, explanationRequested: { candidateId: candidate.id, email: candidate.email ?? mail.from ?? null, companyName: company.name } };
   if (!wantsHuman) {
     // Saying no to being kept is done and confirmed; anything else they wrote needs someone who may read it.
@@ -191,7 +191,7 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
     await requestHuman(tx, screenDeps(container), { screenId: screen.id, reason: "candidate asked for a person by email", actor: EMAIL_REPLY_ACTOR, reply, replyChannel: "web", confirmByEmail: false });
   } else {
     await createEscalation(tx, { companyId: app.companyId, roleId: app.roleId, applicationId: app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: `${name} replied HUMAN to an email about the ${role.title} role and needs a person. Please reach out by email${candidate.phone ? " or phone" : ""} and pick up the conversation.`, requestedBy: EMAIL_REPLY_ACTOR, now });
-    if (!app.lockedAt) await notify(tx, { companyId: app.companyId, kind: "screen.human_requested", title: `${name} asked for a person`, body: `They replied HUMAN to an email about ${role.title}. A recruiter has the request; you can also reply directly.`, action: { label: "Open the candidate", href: open } });
+    await notify(tx, { companyId: app.companyId, about: app.id, kind: "screen.human_requested", title: `${name} asked for a person`, body: `They replied HUMAN to an email about ${role.title}. A recruiter has the request; you can also reply directly.`, action: { label: "Open the candidate", href: open } });
   }
   if (candidate.email) {
     // The response-time sentence goes back the same way every candidate email does: through the outbox, after this transaction commits.

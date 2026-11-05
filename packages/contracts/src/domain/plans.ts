@@ -106,6 +106,29 @@ export function jobsTotalLine(planName: string | null | undefined, limit: number
 export const MORE_JOBS_UPGRADE_QUESTION = "We would like to upgrade our plan so we can post more jobs.";
 
 /**
+ * What the team reads of someone past the plan's candidates per job (Rule 3): a lock, this word, when they applied and the
+ * line below. Never a name, initials, a score, a stage or a source.
+ */
+export const LOCKED_WORD = "Locked";
+export const MORE_CANDIDATES_LINE = "Upgrade to view more candidates.";
+
+/** The neutral notice's first half, once per job per day (`MORE_CANDIDATES_LINE` is the second): all the team hears of people applying past the limit. */
+export function moreAppliedTitle(roleTitle: string): string {
+  return `More people applied to ${roleTitle}.`;
+}
+
+/** What an Upgrade asks ITS when it is more candidates the company wants to see. */
+export const MORE_CANDIDATES_UPGRADE_QUESTION = "We would like to upgrade our plan so we can view more candidates.";
+
+/** A recruiter request about someone locked, as the team's own list shows it: their words, and ITS's, stay with ITS. */
+export const LOCKED_REQUEST_LINE = "An ITS recruiter is helping a candidate you cannot see yet.";
+
+/** One locked person on a job's list: where they came in, and when. Nothing else about them. */
+export type LockedCard = { position: number; appliedAt: string };
+/** The locked people of one job, beside the people the team can read (GET /roles/:id/applications?counts=1). */
+export type LockedApplicants = { count: number; cards: LockedCard[] };
+
+/**
  * The company-level signal that a company's AI work waiting for credit should look again (`waitForCredit` in
  * packages/workflows): Change plan sends it. A monthly credit's new month has no event, so those waits also end at the
  * period's end.

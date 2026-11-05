@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, AiInterviewView, ApplicationStage, RecruiterCallNotes, ScreeningFunnel, ScreenTranscriptEntry } from "@ros/contracts";
-import { AI_INTERVIEW_PHASE, AI_INTERVIEW_REMIND_EXTENDS_HOURS, aiInterviewCanRemind, aiInterviewOf, audit, disclosureLine, emit, isOneVisitFlow, screeningFunnel, transition, unsentScreenReadings, writtenQuestionsOf, type AiInterviewScreen } from "@ros/core";
+import { AI_INTERVIEW_PHASE, AI_INTERVIEW_REMIND_EXTENDS_HOURS, aiInterviewCanRemind, aiInterviewOf, audit, disclosureLine, emit, isOneVisitFlow, notLocked, screeningFunnel, transition, unsentScreenReadings, writtenQuestionsOf, type AiInterviewScreen } from "@ros/core";
 import { HELD_REASON, createScreen, deliver, linkEmailWaiting, linkEmailsWaiting, loadScreenBundle, sendConversationIdleReminder, sendConversationNotStartedReminder, sendConversationReviewReminder, sendScreenReminder, type ScreenDeps } from "@ros/agents";
 import { interviewsWaitingForMore } from "@ros/workflows";
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
@@ -111,10 +111,11 @@ export async function addRecruiterCallNotes(tx: Tx, container: Container, input:
 /**
  * How the conversation goes for a role (plan E13): offered, started, finished, the median time to finish, how many
  * chose a person, and the questions people skipped in the answers they sent. From the latest screen of each
- * application; counts only, never a name or an answer, and nothing from a conversation nobody sent (`screeningFunnel`).
+ * application; counts only, never a name or an answer, and nothing from a conversation nobody sent (`screeningFunnel`), nor
+ * anything someone past the plan's candidates per job did (Rule 3).
  */
 export async function roleScreeningFunnel(tx: Tx, roleId: string): Promise<ScreeningFunnel> {
-  const rows = await tx.select({ applicationId: screens.applicationId, status: screens.status, invitedVia: screens.invitedVia, startedAt: screens.startedAt, completedAt: screens.completedAt, progress: screens.progress, transcript: screens.transcript, createdAt: screens.createdAt }).from(screens).innerJoin(applications, eq(applications.id, screens.applicationId)).where(eq(applications.roleId, roleId)).orderBy(desc(screens.createdAt));
+  const rows = await tx.select({ applicationId: screens.applicationId, status: screens.status, invitedVia: screens.invitedVia, startedAt: screens.startedAt, completedAt: screens.completedAt, progress: screens.progress, transcript: screens.transcript, createdAt: screens.createdAt }).from(screens).innerJoin(applications, eq(applications.id, screens.applicationId)).where(and(eq(applications.roleId, roleId), notLocked())).orderBy(desc(screens.createdAt));
   const latest = new Map<string, (typeof rows)[number]>();
   for (const r of rows) if (!latest.has(r.applicationId)) latest.set(r.applicationId, r);
   const [role] = await tx.select({ version: roles.currentPacketVersion }).from(roles).where(eq(roles.id, roleId)).limit(1);

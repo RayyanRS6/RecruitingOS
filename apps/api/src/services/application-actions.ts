@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
+import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, visibleTo, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, type PersonalLine } from "@ros/agents";
 import { heldDecisionSignal, intakeOn, interviewsBeingPrepared, startInterviewAgain } from "@ros/workflows";
@@ -722,7 +722,8 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
 export async function sendDecisionMessages(tx: Tx, container: Container, input: { roleId: string; applicationIds: string[]; tenant: Tenant; actor: Actor; wording?: DecisionWording | null }): Promise<Array<{ applicationId: string; ok: boolean; candidateNotice?: CandidateNotice; toldState?: ToldState; communicationId?: string | null; undoUntil?: string | null; code?: string; message?: string }>> {
   assertCan(input.tenant.role, "application.reject");
   const ids = [...new Set(input.applicationIds)];
-  const rows = await tx.select().from(applications).where(and(eq(applications.roleId, input.roleId), inArray(applications.id, ids)));
+  // Someone past the plan's candidates per job (Rule 3) answers like an id outside the role: no path guard sees these ids.
+  const rows = await tx.select().from(applications).where(and(eq(applications.roleId, input.roleId), inArray(applications.id, ids), visibleTo(input.tenant)));
   const out: Array<{ applicationId: string; ok: boolean; candidateNotice?: CandidateNotice; toldState?: ToldState; communicationId?: string | null; undoUntil?: string | null; code?: string; message?: string }> = [];
   const send = (app: App, wording: DecisionWording | null) => sendDecisionMessage(tx, container, { app, actor: input.actor, wording });
   for (const id of ids) {

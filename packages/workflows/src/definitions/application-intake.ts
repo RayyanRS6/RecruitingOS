@@ -155,7 +155,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       // admitted straight to the talent pool (a closed role) asks nothing of the team now. The reason is recorded where
       // the application is triaged (`ready`).
       if (app.stage !== "talent_pool") {
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${candidate.firstName} ${candidate.lastName}'s application was not read by AI`, body: "They applied by email, and our email telling them how AI is used did not reach them, so the assistant does not read their application. Their résumé and answers are on their page: please review it yourself.", action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.needs_review", title: `${candidate.firstName} ${candidate.lastName}'s application was not read by AI`, body: "They applied by email, and our email telling them how AI is used did not reach them, so the assistant does not read their application. Their résumé and answers are on their page: please review it yourself.", action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
       }
       return { kind: "next", step: "eligibility", state: { noticeWaitSince: undefined, noAiReading: true } };
     },
@@ -267,7 +267,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       });
       const { candidate, role } = loaded;
       const name = `${candidate.firstName} ${candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_hold", title: `${name} answered no to an eligibility question`, body: `Held for your decision (${result.failedRules.map((f) => f.reason).join("; ")}). They get a thank-you without the AI interview link. Override if the answer was a mistake: "Keep them in" sends them the link. No decision is sent to them, even if you decline, until someone sends the decision message.`, action: { label: "Review", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.ineligible_hold", title: `${name} answered no to an eligibility question`, body: `Held for your decision (${result.failedRules.map((f) => f.reason).join("; ")}). They get a thank-you without the AI interview link. Override if the answer was a mistake: "Keep them in" sends them the link. No decision is sent to them, even if you decline, until someone sends the decision message.`, action: { label: "Review", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       // The AI interview's run sends the neutral thank-you now and waits for "Keep them in" (R20-10).
       await settleReading(ctx, null);
       if (g.outcome === "human_only") return { kind: "next", step: "ready" }; // reminders disabled by policy; the hold stays visible in Today
@@ -293,7 +293,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const hoursHeld = Math.round((ctx.now.getTime() - Date.parse(heldAt)) / 3600_000);
       const remindersSent = (ctx.state.remindersSent ?? 0) + 1;
       const name = `${candidate.firstName} ${candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them, even if you decline, until someone sends the decision message.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them, even if you decline, until someone sends the decision message.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       await emit(ctx.q, { type: "application.hold_reminded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { hoursHeld, remindersSent }, correlationId: ctx.run.id });
       if (hoursHeld >= escalateAfter) {
         await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, kind: "review", question: `${name} answered no to an eligibility question for ${role.title} and has waited ${hoursHeld} hours for a decision. Please review it with the customer; only they can decline.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, now: ctx.now });
@@ -385,7 +385,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
           if (!withInterview && !(await interviewNow(ctx))) await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "assessment unavailable; manual review", correlationId: ctx.run.id });
           await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { assessmentId: null, recommendation: "review_manually", reason: "assessment unavailable" }, correlationId: ctx.run.id });
           const name = `${candidate.firstName} ${candidate.lastName}`;
-          await notify(ctx.q, { companyId: ctx.companyId, kind: "application.assessment_unavailable", title: `We could not assess ${name} automatically; please review`, body: `${ASSESSMENT_UNAVAILABLE_TEXT} The assistant's answer was not usable after two tries. Nothing is hidden: the application, the résumé and the answers are on ${candidate.firstName}'s page.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+          await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.assessment_unavailable", title: `We could not assess ${name} automatically; please review`, body: `${ASSESSMENT_UNAVAILABLE_TEXT} The assistant's answer was not usable after two tries. Nothing is hidden: the application, the résumé and the answers are on ${candidate.firstName}'s page.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
           return settleReading(ctx, { kind: "complete" });
         }
         // The model writes no number (plan 0.9); the column stays for a score worked out in code later.

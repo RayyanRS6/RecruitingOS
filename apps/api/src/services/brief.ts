@@ -1,8 +1,10 @@
-import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { withoutLockedApprovals, withoutLockedEvents } from "./locked-visibility";
+import { askToViewMore } from "../middleware/candidate-lock";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
-import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
+import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, MORE_CANDIDATES_LINE, companyOnboarding, companyVerifiedAt, moreAppliedTitle, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
 import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
@@ -119,7 +121,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const now = new Date();
   // Only the requests the viewer may decide (`staffMayAsk`, the rule POST /approvals/:id/decide applies): an ITS recruiter
   // given one candidate gets no card for a request about the whole role, such as a closing message naming every applicant.
-  const pending = (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId }));
+  // Home never names or counts anyone past the plan's candidates per job, whoever reads it (Rule 3): this is built here, so
+  // the job builder's conversation, which answers with these cards, follows too.
+  const pending = await withoutLockedApprovals(tx, null, (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId })));
   // The candidates the waiting requests are about, in one query, so a card can name the person instead of an action key.
   const pendingAppIds = [...new Set(pending.map((p) => p.applicationId).filter((x): x is string => !!x))];
   const pendingNames = pendingAppIds.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, pendingAppIds)) : [];
@@ -219,6 +223,10 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (cancelledCard) cards.push(cancelledCard);
     if (fresh.length) {
       cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "Each gets the AI interview link by email once their résumé is read.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
+    }
+    // People past the plan's candidates per job (Rule 3): that more applied, in a neutral line and no number, and the way to read them. Not for ITS staff, who cannot ask for a company's plan.
+    if (viewer?.role !== "recruiter" && (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, role.id), isNotNull(applications.lockedAt), gte(applications.createdAt, since))).limit(1)).length) {
+      cards.push({ kind: "new_applicants", title: moreAppliedTitle(role.title), body: MORE_CANDIDATES_LINE, roleId: role.id, actions: [...(!viewer || can(viewer.role, "escalation.create") ? [askToViewMore] : []), { label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
     if (waiting.length) {
       const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, waiting.slice(0, 5).map((a) => a.candidateId)));
@@ -326,7 +334,10 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   for (const card of await draftCards(tx, companyId, viewer)) cards.push(card);
 
   // ITS posting tasks are ITS's own work, shown with each board on the Posting tab, not as the team's requests (plan D3).
-  const escalations = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e) && !isPostingTask(e.kind));
+  const openRequests = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e) && !isPostingTask(e.kind));
+  // A request about someone locked stays with ITS (Rule 3): its question names them. "Your recruiter requests" says only that it exists.
+  const aboutLocked = await lockedAmong(tx, openRequests.flatMap((e) => (e.applicationId ? [e.applicationId] : [])));
+  const escalations = openRequests.filter((e) => !e.applicationId || !aboutLocked.has(e.applicationId));
   // Each open request leads to itself in "Your recruiter requests" on Today, where its thread, notes and (once it comes)
   // the answer in full are; answered requests are shown there for two weeks, so the brief needs no card of its own.
   const readsRequests = !viewer || can(viewer.role, "escalation.create");
@@ -351,13 +362,13 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // does not count. A reading of a conversation the candidate never sent is never theirs to be counted by (9 October
   // 2026): they count by the newest reading left, their résumé's, as the Talent list and the board show them.
   const strongIds = new Set([...(await shownLatestReadings(tx, { companyId })).values()].filter((r) => r.overall === "strong").map((r) => r.applicationId));
-  const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(eq(applications.companyId, companyId))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
+  const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(and(eq(applications.companyId, companyId), notLocked()))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
   const companyMarks = await activeMarksFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
   const companyFollowUps = await activeFollowUpsFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
   const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && groupFor(a, companyMarks.get(a.id), now, companyFollowUps.get(a.id)) === "waiting_on_you").length;
   const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.length;
   const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);
-  const recent = await tx.select({ type: events.type, actor: events.actor, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since)));
+  const recent = await withoutLockedEvents(tx, { companyId, reader: null }, await tx.select({ id: events.id, type: events.type, actor: events.actor, subjectType: events.subjectType, subjectId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since))));
   // Under a scoped grant, only what was done about the role or the candidate in scope is counted.
   const inScopeSubjects = scope ? new Set<string>([...openRoles.map((r) => r.id), ...companyApps.map((a) => a.id)]) : null;
   const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent") && (!inScopeSubjects || inScopeSubjects.has(e.subjectId))).length;
@@ -692,7 +703,7 @@ async function interviewerBrief(tx: Tx, companyId: string, viewer: BriefViewer):
     .from(interviews)
     .innerJoin(interviewParticipants, eq(interviewParticipants.interviewId, interviews.id))
     .innerJoin(applications, eq(applications.id, interviews.applicationId))
-    .where(and(eq(interviews.companyId, companyId), eq(interviewParticipants.userId, viewer.userId), inArray(interviews.status, ["proposed", "scheduling", "scheduled", "completed"])));
+    .where(and(eq(interviews.companyId, companyId), eq(interviewParticipants.userId, viewer.userId), inArray(interviews.status, ["proposed", "scheduling", "scheduled", "completed"]), notLocked()));
   const names = rows.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, [...new Set(rows.map((r) => r.candidateId))])) : [];
   const titles = rows.length ? await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, [...new Set(rows.map((r) => r.roleId))])) : [];
   const nameOf = (candidateId: string) => { const n = names.find((x) => x.id === candidateId); return `${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim() || "A candidate"; };

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, inspectResumeFile, trialPaused, type Actor } from "@ros/contracts";
 import { fromAddress, queueCommunication, replyToFor, sendPrivacyCompletion, sendRepeatApplicationNotice, sendStatusLinks, statusUrlFor } from "@ros/agents";
-import { CANDIDATE_LOCK_ACTOR, CLOSING_DATE_REASON, audit, createDataRequest, decideLock, dedupeKey, emit, fulfilWithdrawal, jobPastItsLimit, normalizeEmailForDedupe, normalizePhone, transition } from "@ros/core";
+import { CANDIDATE_LOCK_ACTOR, CLOSING_DATE_REASON, audit, createDataRequest, decideLock, dedupeKey, emit, fulfilWithdrawal, jobPastItsLimit, normalizeEmailForDedupe, normalizePhone, tellMoreApplied, transition } from "@ros/core";
 import { applications, candidates, companies, documents, events, interviews, lowercaseToken, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type ConsentRecord, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { Container } from "../container";
@@ -207,6 +207,8 @@ export async function createApplication(tx: Tx, container: Container, input: New
   if (locked) {
     await emit(tx, { type: "application.locked", companyId: input.companyId, actor: CANDIDATE_LOCK_ACTOR, subject: { type: "application", id: application.id }, payload: locked });
     await audit(tx, { companyId: input.companyId, actor: CANDIDATE_LOCK_ACTOR, action: "application.locked", target: { type: "application", id: application.id }, details: locked });
+    // All the team hears of it (Rule 3): behind the job's lock, so two at the same moment send one.
+    await tellMoreApplied(tx, { companyId: input.companyId, roleId: role.id, roleTitle: role.title });
   }
   if (opts.intoTalentPool) {
     await transition(tx, { applicationId: application.id, companyId: input.companyId, to: "talent_pool", by: "system", actor, reason: "the role closed while this emailed application was held" });
