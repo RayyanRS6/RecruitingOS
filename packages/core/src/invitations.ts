@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, gt } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
+import { seatsFullAtSignInLine, type Actor } from "@ros/contracts";
 import { invitations, memberships, randomToken, users, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { seatRoom } from "./entitlements";
@@ -143,8 +143,8 @@ export type AcceptedInvitation = { invitationId: string; companyId: string; role
  *   - the carried invitation is expired or withdrawn: refused (`invite_expired`); the caller drops the cookie;
  *   - otherwise every open invitation for the address becomes an active membership with its role, marked accepted,
  *     with `member.joined` emitted and `invitation.accepted` audited. ITS staff accounts accept nothing.
- * The plan's people (founder decision L-02 B: 3 on the Trial plan) are checked under the company's seat lock before a
- * new member joins, counting this invitation's own place: an invitation sent before a company was full, to a company
+ * The plan's people are checked under the company's seat lock before a new member joins, counting this invitation's own
+ * place: an invitation sent before a company was full, to a company
  * that is full now, stays pending (it joins once a place is free), and when it is the carried one the sign-in is
  * refused (`invite_seats_full`) with what to do. Someone who is already an active member takes no new place.
  * Returns which company the new session should open in: the carried invitation's when it was honoured, else the first
@@ -174,7 +174,7 @@ export async function acceptPendingInvitations(
       // This invitation already holds a place among the open ones, so it is left out of the count and asks for one place.
       const room = await seatRoom(q, inv.companyId, { now, exceptEmail: email });
       if (!room.ok) {
-        if (carried?.id === inv.id) throw new InvitationRefused("invite_seats_full", `This company's trial includes ${room.limit} people. Ask the person who invited you to choose a plan to add more.`, email);
+        if (carried?.id === inv.id) throw new InvitationRefused("invite_seats_full", seatsFullAtSignInLine(room.limit ?? 0, room.planKey), email);
         continue;
       }
     }

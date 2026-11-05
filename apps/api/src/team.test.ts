@@ -6,7 +6,7 @@ import { applications, auditRecords, candidates, entitlements, events, integrati
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { putOnInterview, signInAs, signInWithIdentity, usePlan } from "./test-helpers";
+import { putOnInterview, signInAs, signInWithIdentity, usePlan, useTrial } from "./test-helpers";
 
 /**
  * Team invitations, members and per-role permissions (docs/spec/21, area A, and section 7 P0): an invitation is a row
@@ -674,6 +674,7 @@ describe("people on the Trial plan", () => {
     app = createApp(container);
     owner = await signInWithIdentity(app, container, { email: "olga@seats.test", name: "Olga Owner", provider: "google", aal2: false });
     companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Seat Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    await useTrial(container, companyId);
   });
   afterAll(async () => {
     await container.close();

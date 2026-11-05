@@ -106,10 +106,11 @@ export async function useOneVisitFlow(browser: Browser, base: string, companyId:
 }
 
 /**
- * ITS puts a company on another plan (founder decision F8): a new company is on the trial, which has room for one role
- * at a time, so a journey that publishes a role and then starts another needs more room. Through the admin API, as above.
+ * ITS puts a company on another plan (founder decision F8): a new company is on Free, which has room for one job ever,
+ * so a journey that publishes a role and then starts another needs more room. Through the admin API, as above, which
+ * takes the plans the console offers.
  */
-export async function usePlan(browser: Browser, base: string, companyId: string, planKey: "core" | "growth" | "company") {
+export async function usePlan(browser: Browser, base: string, companyId: string, planKey: "basic" | "pro" | "ultra") {
   const staff = await browser.newContext();
   try {
     const admin = await staff.newPage();

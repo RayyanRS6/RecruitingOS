@@ -48,7 +48,7 @@ function explain(e: unknown, fallback: string): string {
     case "not_found": return "That person is no longer on the team. Refresh the page.";
     case "forbidden": return "Your role cannot do that.";
     case "invalid_request": return "Check the email address and the role.";
-    // The Trial plan's people are all in use (founder decision L-02 B): the API's own words say so and what to do.
+    // The plan's people are all in use: the API's own words say so and what to do.
     case "seats_full": return e.message;
     default: return e.message || fallback;
   }
@@ -57,11 +57,11 @@ function explain(e: unknown, fallback: string): string {
 /**
  * The team (docs/spec/21, area A): who is here and as what, who is invited and not yet in, and the changes an owner,
  * admin or HR can make. Every change that affects someone else asks first and says what will happen. `seats`: the
- * plan's people (GET /companies/current `usage.seats`); with a limit (3 on the Trial plan, founder decision L-02 B) the
- * line above the invite form says how many are in use, invitations not yet answered included, and when all are, Invite
- * waits and says why.
+ * plan's people (GET /companies/current `usage.seats`); with a limit the line above the invite form says how many are in
+ * use, invitations not yet answered included, and when all are, Invite waits and says why. `planKey` chooses the words:
+ * Trial's, or any other plan's.
  */
-export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole: string; myUserId: string; onReauthRequired?: () => void; seats?: SeatUsage }) {
+export function TeamCard({ myRole, myUserId, onReauthRequired, seats, planKey }: { myRole: string; myUserId: string; onReauthRequired?: () => void; seats?: SeatUsage; planKey?: string | null }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const refreshFrame = useRefresh();
@@ -75,7 +75,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
   const invitations = useQuery({ queryKey: ["invitations"], queryFn: () => api.get<Invitation[]>("/api/v1/companies/current/invitations"), enabled: canManage });
   // The company's usage too: the people line counts the members and the invitations not yet answered.
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ["members"] }); await qc.invalidateQueries({ queryKey: ["invitations"] }); await qc.invalidateQueries({ queryKey: ["company"] }); };
-  const seatWords = seatLine(seats);
+  const seatWords = seatLine(seats, planKey);
   const full = seatsAllUsed(seats);
 
   const [invite, setInvite] = useState({ email: "", role: "hiring_manager", name: "" });
@@ -150,7 +150,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats }: { myRole
           <form className="stack gap-3 @container" onSubmit={(e) => { e.preventDefault(); if (!full) sendInvite.mutate(); }}>
             {/* the people in use: a standing fact in the kit's info look, not a live region */}
             {seatWords ? <p className="alert info">{seatWords}</p> : null}
-            {full && seats ? <Alert tone="caution">{seatsFullWords(seats)}</Alert> : null}
+            {full && seats ? <Alert tone="caution">{seatsFullWords(seats, planKey)}</Alert> : null}
             {/* the Invite button's class string is pinned by tests (team-card-ui, settings-ui), so the grid places it */}
             <div className="grid items-end gap-3 @md:grid-cols-2 @xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_10.5rem_auto] [&>.btn]:justify-self-start">
               <Field label="Invite by email" htmlFor="inv"><input id="inv" className="input" type="email" required value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} /></Field>

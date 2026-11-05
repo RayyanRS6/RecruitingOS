@@ -10,6 +10,7 @@ import { HttpError } from "../middleware/errors";
 import { briefViewerOf, composeBrief } from "../services/brief";
 import { escalationInScope, eventTargets, inStaffScope, staffMayAsk, staffScopeOf } from "../services/staff-scope";
 import { assertMayApprovePacket } from "../services/packet-approval";
+import { CLOSED_ROLE_MESSAGE } from "../services/packet-versions";
 import { withoutUnsentChats } from "../services/screen-visibility";
 import { assertMayShareDraft } from "./intake";
 import { settleMessageApproval } from "../services/messages";
@@ -72,6 +73,8 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
       assertCan(t.role, "role.approve");
       const [role] = req.roleId ? await tx.select().from(roles).where(eq(roles.id, req.roleId)).limit(1) : [];
       if (!role) throw new HttpError(404, "not_found", "Role not found.");
+      // A closed role is never opened or sent back by a decision (closing one withdraws its request); only ITS reopens one.
+      if (role.status === "closed") throw new HttpError(409, "role_closed", CLOSED_ROLE_MESSAGE);
       const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, proposedVersion))).limit(1);
       if (status === "approved") await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null, now: container.engine.clock() });
       else {

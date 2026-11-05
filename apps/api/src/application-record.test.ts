@@ -132,7 +132,7 @@ describe("the application record (status page) after sending", () => {
     roleId = await makeRole("I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.");
     its = await signInStaff(app, container, "ops@its-record.test", "platform_admin");
     // room for a second job, so one person can apply to two jobs at the company
-    const plan = await json("POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "growth", reason: "Two jobs for this suite" }, its, { "x-admin-reason": "test" });
+    const plan = await json("POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "pro", reason: "Two jobs for this suite" }, its, { "x-admin-reason": "test" });
     expect(plan.status, await plan.clone().text()).toBe(200);
     secondRoleId = await makeRole("I need a dental assistant in Irvine, $25 to $30 an hour, part time. New role. I decide. Must-haves: x-ray certificate. Just draft it.");
     packet = ((await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } }).currentPacket.packet;

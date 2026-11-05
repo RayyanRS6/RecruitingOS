@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { desc, eq } from "drizzle-orm";
-import { CreateCompany, InviteMember, UpdateMember, trialStanding } from "@ros/contracts";
+import { CreateCompany, InviteMember, UpdateMember, limitsForCustomers, trialStanding } from "@ros/contracts";
 import { assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { mailbox } from "@ros/integrations";
@@ -48,10 +48,11 @@ companyRoutes.get("/current", requireTenant, async (c) => {
     const [co] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
     const [plan] = await tx.select().from(plans).where(eq(plans.key, co.planKey)).limit(1);
     // Roles are counted from the roles using a place now, so closing one shows its place free again (polish list); people
-    // from the members and the invitations not yet answered (known bug 128).
+    // from the members and the invitations not yet answered (known bug 128). The AI credit is money: a percentage in the
+    // usage and nothing in the limits, because customers never read it in dollars.
     const usage = await entitlements.usageOf(tx, t.companyId, { now });
     // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
-    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: plan.limits } : null, usage, trial: trialStanding(co, now) };
+    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, trial: trialStanding(co, now) };
   });
   // `production`: NODE_ENV is production (staging too), where a service running without a provider ("fake") is a
   // deliberate default rather than a development stand-in, and Settings says what it does instead (audit MAIL-18).

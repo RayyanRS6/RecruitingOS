@@ -179,7 +179,10 @@ export async function correctOutcome(
     await emit(q, { type: "human.override", companyId: original.companyId, actor: input.actor, subject: { type: "application", id: original.applicationId }, payload: { action: "outcome_corrected", outcome: newOutcome, stageTo } });
   } else if (original.roleId) {
     if (newOutcome === "voided") {
-      const previous = (original.details as { previousStatus?: string }).previousStatus ?? "open";
+      // Closing a role withdrew the approval it was waiting for, so one reopened from there goes back to a draft: its team
+      // asks for approval again. Waiting for approval, with nothing to approve, it would be stuck.
+      const before = (original.details as { previousStatus?: string }).previousStatus ?? "open";
+      const previous = before === "pending_approval" ? "draft" : before;
       await q.update(roles).set({ status: previous, closedAt: null, closeReason: null }).where(eq(roles.id, original.roleId));
       const closing = (await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, original.roleId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")))).filter((r) => (r.proposal as { kind?: unknown }).kind === "role_closed");
       for (const r of closing) {

@@ -19,9 +19,9 @@ test.describe("owner and candidate journey", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expectAccessible(page, "home");
 
-    // the trial has room for one role at a time; this journey publishes one and then drafts another
+    // Free has room for one job ever; this journey publishes one and then drafts another
     const company = await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json() as { id: string };
-    await usePlan(browser, baseURL!, company.id, "growth");
+    await usePlan(browser, baseURL!, company.id, "pro");
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
 
     // the job builder (/roles/new): the first message starts the draft, and the conversation announces each new reply

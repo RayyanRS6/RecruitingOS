@@ -30,12 +30,14 @@ type BusinessHours = { days: number[]; start: string; end: string };
  */
 type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string }; about?: CompanyAbout | null; boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean; newTimesAfterCancel?: { auto: boolean; workingDays: number } };
 type CompanyAbout = { text: string; approvedAt: string; approvedBy?: { id?: string; name?: string | null } | null };
+/** One allowance as GET /companies/current sends it; `unit: "percent"` is the AI credit, which customers read as a percentage. */
+type UsageRow = { used: number; limit: number | null; resetsAt?: string | null; unit?: "percent" };
 /**
  * `trial`: where the Trial plan's 30 days stand (founder decision L-02 B), null on another plan; `usage.seats` counts
  * people live. `production`: the app runs in production (staging too), where a service without a provider is there on
  * purpose rather than a development stand-in (Connected services).
  */
-type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null; resetsAt?: string | null }>; trial?: TrialStanding | null; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean };
+type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, UsageRow>; trial?: TrialStanding | null; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean };
 /**
  * minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered.
  * available: whether the product does this today (plan B7); the rest are listed under "Coming later" with no choice.
@@ -185,7 +187,7 @@ export function Setup() {
           <Section id="setup-profile"><CompanyProfileCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
         </>)}
 
-        {panel("team", <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} onReauthRequired={() => setReauthNeeded(true)} seats={c.usage?.seats} /></Section>)}
+        {panel("team", <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} onReauthRequired={() => setReauthNeeded(true)} seats={c.usage?.seats} planKey={c.planKey} /></Section>)}
 
         {panel("notifications", <>
           <Section id="setup-notifications"><NotificationsCard /></Section>
@@ -633,8 +635,19 @@ const NOTICE_LABEL: Record<string, string> = { ai_use: "How we use AI (shown on 
 const NOTICE_SHORT: Record<string, string> = { ai_use: "AI notice", privacy: "privacy notice", pay_transparency: "pay range notice", adverse_decision_explanation: "decision review notice" };
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 /** The plan's allowances in the company card's words (recruiter_asks counts the team's own requests, founder decision Q33). */
-const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", text_screens: "AI interviews this month", screen_person_requests: "requests for a person instead of the AI interview", voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "people (invitations not yet answered count too)" };
+const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", jobs_total: "jobs", text_screens: "AI interviews this month", screen_person_requests: "requests for a person instead of the AI interview", voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "people (invitations not yet answered count too)", ai_credit_total_cents: "AI help", ai_credit_monthly_cents: "AI help this month" };
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * The Usage row's lines: "label: used of limit", and "label: 18% used" for the AI credit. A limit of jobs ever takes the
+ * place of the jobs at a time: with one job ever, the two would say the same thing twice.
+ */
+export function usageLines(usage: Record<string, UsageRow>): string[] {
+  const jobsEver = usage.jobs_total?.limit !== null && usage.jobs_total?.limit !== undefined;
+  return Object.entries(usage)
+    .filter(([k]) => !(jobsEver && k === "active_roles"))
+    .map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.unit === "percent" ? `${v.used}% used` : `${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`}`);
+}
 
 /**
  * When the monthly allowances start again from zero (GET /companies/current `usage[key].resetsAt`; roles never reset):
@@ -716,7 +729,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
             <dt>Website</dt><dd>{c.settings.website || <span className="muted">not set</span>}</dd>
             <dt>Locations</dt><dd>{c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}</dd>
             <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{trialLine ? <span className="small muted"> · {trialLine}</span> : null}{c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; jobs in progress are never cut off</span> : null}</dd>
-            {c.usage ? <><dt>Usage</dt><dd className="small">{Object.entries(c.usage).map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}{c.usage.recruiter_asks ?<span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
+            {c.usage ? <><dt>Usage</dt><dd className="small">{usageLines(c.usage).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}{c.usage.recruiter_asks ?<span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
           </dl>
           {/* The rest of the company's details, one click away. The plan and its usage stay on view: "See usage" links land here. */}
           <details className="more mt-4">

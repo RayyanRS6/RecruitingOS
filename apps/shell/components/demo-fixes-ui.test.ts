@@ -72,6 +72,13 @@ describe("the approval card while the worker catches up", () => {
     // the same answer after "Request approval again" (not sent back from here) is the approval on its way
     expect(text(render(client(), createElement(CatchingUpCard, { latest: rejected, sentBackHere: false })))).toContain("Getting the approval ready");
   });
+
+  it("a job closed while it waited, and reopened by ITS, can ask for approval again: closing withdrew the request", () => {
+    const words = text(card(role("draft", { id: "ap1", status: "cancelled", version: 1, decisionNote: "the job was closed", decidedAt: daysAgo(1), decidedBy: null })));
+    expect(words).toContain("The approval was withdrawn");
+    expect(words).toContain("The job was closed while it waited. ITS has reopened it, so it is a draft again.");
+    expect(words).toContain("Request approval again");
+  });
 });
 
 describe("an interview's Link line", () => {

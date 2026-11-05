@@ -231,18 +231,18 @@ From the root of an up-to-date checkout of `main`, in Windows PowerShell. Paste 
    ```
    It asks for the **Session pooler** string (Supabase, **Connect**, Session pooler) exactly as shown, with
    `[YOUR-PASSWORD]` still in it; then the database password, typed and never shown; then the certificate (Return
-   accepts the file it offers). On the new project it reports 36 migrations pending and exits with 3.
+   accepts the file it offers). On the new project it reports 37 migrations pending and exits with 3.
 3. The setup, with the same three answers:
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\db-setup.ps1 -Environment production -ProjectRef <prod-ref>
    ```
-   It applies the 36 migrations, gives `ros_app` and `ros_worker` fresh passwords and their safety limits, applies the
+   It applies the 37 migrations, gives `ros_app` and `ros_worker` fresh passwords and their safety limits, applies the
    Vault grants and checks both roles. Then it puts `DATABASE_URL` on the clipboard: paste it into 1Password, item
    "Recruiting OS production database", field `DATABASE_URL`, and type `pasted`; then the same for
    `WORKER_DATABASE_URL`. Win+V lists neither.
 4. If it reports the Vault grants as skipped: enable `supabase_vault` (Database, Extensions) and run the same command
    with `-Mode grants` at the end.
-5. The status command again: `migrations applied: 36`, `migrations pending: 0`, both roles able to log in with their
+5. The status command again: `migrations applied: 37`, `migrations pending: 0`, both roles able to log in with their
    safety limits in place, the Vault grants in place, table privileges 0 for the three Data API roles, and "everything
    is in place" (exit 0).
 

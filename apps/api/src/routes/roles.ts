@@ -17,7 +17,7 @@ import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { assertNoNewWork } from "../services/trial";
 import { saveBoardTicks } from "./postings";
-import { CLOSED_ROLE_MESSAGE, createPacketVersion, currentVersionOf, settleVersionsSavedWhilePaused } from "../services/packet-versions";
+import { CLOSED_ROLE_MESSAGE, cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, settleVersionsSavedWhilePaused } from "../services/packet-versions";
 import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewFollowups, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, rolesInterviewedBy, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -212,6 +212,8 @@ roleRoutes.post("/:id/approve", requireTenant, async (c) => {
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
+    // A closed role is never opened by an approval (closing one withdraws its request); only ITS reopens one, by correcting its outcome.
+    if (role.status === "closed") throw new HttpError(409, "role_closed", CLOSED_ROLE_MESSAGE);
     const [req] = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending"))).limit(1);
     if (!req) throw new HttpError(409, "nothing_pending", "There is no pending approval for this role.");
     const proposedVersion = Number((req.proposal as { version?: number }).version);
@@ -997,9 +999,14 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   const body = RecordRoleOutcome.parse(await c.req.json());
   const container = c.get("container");
   const actor = actorOf(c);
+  const roleId = c.req.param("id") ?? "";
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     try {
-      const closed = await recordRoleOutcome(tx, { companyId: t.companyId, roleId: c.req.param("id") ?? "", outcome: body.outcome, by: t.role, actor, reason: body.reason, now: container.engine.clock() });
+      // A closed role's place comes back, so its approval goes too: nobody can open it later, past the plan's limit, by
+      // approving a request still waiting, and its 14 days cannot run out and turn it back into a draft. On every plan.
+      // Before the role itself: a step opening the role holds the run and then the role, so this takes its turn behind it.
+      await cancelPendingPacketApprovals(tx, container, { companyId: t.companyId, roleId, actor, reason: "the job was closed" });
+      const closed = await recordRoleOutcome(tx, { companyId: t.companyId, roleId, outcome: body.outcome, by: t.role, actor, reason: body.reason, now: container.engine.clock() });
       // Everyone still in the process left it with the role: their interviews and screens end. The decision stays private
       // (founder decision B6) until someone sends the decision message, but a candidate who held a booked time or was
       // offered times is told at once, with no reason, that the interview is off; the decision message leaves it out.

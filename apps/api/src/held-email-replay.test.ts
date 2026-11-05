@@ -4,7 +4,7 @@ import { applications, candidates, companies, inboundEmails, notifications, post
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin } from "./test-helpers";
+import { signInAdmin, useTrial } from "./test-helpers";
 import { replayHeldEmails } from "./webhooks/postmark";
 
 /**
@@ -134,6 +134,7 @@ describe("held email applications while a trial has ended", () => {
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
     owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
     companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Paused Mail Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    await useTrial(container, companyId);
     const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
@@ -162,7 +163,7 @@ describe("held email applications while a trial has ended", () => {
     await endTrial();
     expect(await (await inbound("Paused Again")).json()).toMatchObject({ held: true });
     expect(await replayHeldEmails(container, { companyId, roleId })).toEqual({ replayed: 0, failed: 0 });
-    const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "growth", reason: "The owner chose Growth." });
+    const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "pro", reason: "The owner chose Pro." });
     expect(r.status).toBe(200);
     await container.drain();
     expect((await inboundRow("Paused Again")).status).toBe("matched");

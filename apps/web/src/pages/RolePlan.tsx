@@ -166,12 +166,13 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not ask for approval."),
   });
 
-  const sentBack = role.status === "draft" && latest && (latest.status === "rejected" || latest.status === "expired") ? latest : null;
+  // A draft whose latest request was withdrawn: closing a job withdraws its approval, and ITS has reopened this one since.
+  const sentBack = role.status === "draft" && latest && (latest.status === "rejected" || latest.status === "expired" || latest.status === "cancelled") ? latest : null;
   if (sentBack) {
     return (
-      <Card needsYou hero lift title={sentBack.status === "expired" ? "The approval ran out of time" : "Sent back"}>
+      <Card needsYou hero lift title={sentBack.status === "expired" ? "The approval ran out of time" : sentBack.status === "cancelled" ? "The approval was withdrawn" : "Sent back"}>
         <p className="max-w-[68ch] text-ink-2">
-          {sentBack.status === "expired" ? "Nobody decided within 14 days, so the role is a draft again." : `Sent back${sentBack.decidedBy ? ` by ${sentBack.decidedBy.name}` : ""}${sentBack.decidedAt ? ` on ${new Date(sentBack.decidedAt).toLocaleDateString()}` : ""}: ${sentBack.decisionNote ?? "no note was left"}.`}
+          {sentBack.status === "expired" ? "Nobody decided within 14 days, so the role is a draft again." : sentBack.status === "cancelled" ? "The job was closed while it waited. ITS has reopened it, so it is a draft again." : `Sent back${sentBack.decidedBy ? ` by ${sentBack.decidedBy.name}` : ""}${sentBack.decidedAt ? ` on ${new Date(sentBack.decidedAt).toLocaleDateString()}` : ""}: ${sentBack.decisionNote ?? "no note was left"}.`}
         </p>
         {/* the two buttons say what comes next; someone who cannot edit is told who does */}
         {canEdit ? (

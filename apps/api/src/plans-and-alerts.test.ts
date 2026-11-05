@@ -6,7 +6,7 @@ import { checkOperationalHealth } from "./maintenance";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin } from "./test-helpers";
+import { signInAdmin, useTrial } from "./test-helpers";
 
 /**
  * Allowances, plans and alerts (Wave S2 F1, founder-visible blockers): a monthly allowance starts again from zero when
@@ -31,8 +31,9 @@ describe("allowances, plans and alerts", () => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@allowance.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
     owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
-    // a company that signed itself up starts on Trial: 25 screening conversations, 1 recruiter request
+    // a company on Trial (one that signed itself up earlier): 25 screening conversations, 1 recruiter request
     companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Reset Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    await useTrial(container, companyId);
     admin = await signInAdmin(app, container, "ada.admin@identifiedtalent.com", "Ada Admin");
   });
   afterAll(async () => {
@@ -94,7 +95,8 @@ describe("allowances, plans and alerts", () => {
 
   it("a platform admin changes the plan from the console with a reason: new limits at once, this month's usage kept, audited", async () => {
     const plans = (await (await json(admin, "GET", "/api/v1/admin/plans")).json()) as Array<{ key: string; name: string; limits: Record<string, number | null> }>;
-    expect(plans.map((p) => p.key)).toEqual(expect.arrayContaining(["design_partner", "trial", "core", "growth", "company"]));
+    // what ITS may offer: the four public plans and the private pilot; the retired plans are gone from the list
+    expect(plans.map((p) => p.key).sort()).toEqual(["basic", "design_partner", "free", "pro", "ultra"]);
     expect(plans.find((p) => p.key === "design_partner")).toMatchObject({ name: "Design Partner", limits: { text_screens: 300 } });
     // the owner cannot see or use it
     expect((await json(owner, "GET", "/api/v1/admin/plans")).status).toBe(403);
@@ -204,16 +206,11 @@ describe("allowances, plans and alerts", () => {
   });
 
   it("a plan change needs a person's reason through the API too, and never a retired plan", async () => {
-    expect((await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "core" })).status).toBe(400);
-    expect((await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "core", reason: " ok " })).status).toBe(400);
-    await container.db.update(plans).set({ active: false }).where(eq(plans.key, "company"));
-    try {
-      const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "company", reason: "Testing a retired plan." });
-      expect(r.status).toBe(400);
-      expect(((await r.json()) as { error: { code: string } }).error.code).toBe("inactive_plan");
-    } finally {
-      await container.db.update(plans).set({ active: true }).where(eq(plans.key, "company"));
-    }
+    expect((await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "pro" })).status).toBe(400);
+    expect((await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "pro", reason: " ok " })).status).toBe(400);
+    const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "company", reason: "Testing a retired plan." });
+    expect(r.status).toBe(400);
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("inactive_plan");
   });
 
   it("a critical alert is emailed to the platform administrators once, through the queue; other alerts are not", async () => {
@@ -277,11 +274,13 @@ describe("extending a trial, and putting a customer on Trial", () => {
     owner = await signIn("owner@extend.test");
     // confirmed at sign-up here (COMPANY_CHECK=auto), so its 30 days run from now
     trialCo = await create(owner, "Extend Dental");
+    await useTrial(container, trialCo);
     growthCo = await create(await signIn("owner@growth-plan.test"), "Growth Dental");
     await withPlatform(container.db, (tx) => allowance.applyPlan(tx, growthCo, "growth"));
     // a company on Trial still waiting for the ITS check: no dates yet
     waitingCo = await create(await signIn("owner@waiting.test"), "Waiting Dental");
     await withPlatform(container.db, (tx) => tx.update(companies).set({ settings: sql`${companies.settings} - 'trial' - 'verifiedAt' - 'verifiedBy'` }).where(eq(companies.id, waitingCo)));
+    await useTrial(container, waitingCo);
     admin = await signInAdmin(app, container, "ida.admin@identifiedtalent.com", "Ida Admin");
   });
   afterAll(async () => {
@@ -333,21 +332,30 @@ describe("extending a trial, and putting a customer on Trial", () => {
   });
 
   it("a change of plan to Trial sets the status to trial and starts new dates when the company is confirmed; not before", async () => {
-    const r = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "trial", reason: "Back on Trial while they decide." });
-    expect(r.status).toBe(200);
-    expect(await r.json()).toMatchObject({ planKey: "trial", status: "trial", trialEnded: false });
-    const co = await settingsOf(growthCo);
-    expect(co.settings.trial).toMatchObject({ startedBy: "plan_change" });
-    expect(near(co.settings.trial?.startedAt, Date.now())).toBe(true);
-    expect(Date.parse(co.settings.trial!.endsAt) - Date.parse(co.settings.trial!.startedAt)).toBe(30 * DAY);
-    // and back off Trial: the trial has ended, nothing is written over the dates
-    const off = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "growth", reason: "They chose Growth." });
-    expect(await off.json()).toMatchObject({ planKey: "growth", status: "active", trialEnded: true });
-    expect((await settingsOf(growthCo)).settings.trial).toEqual(co.settings.trial);
-    // a company still waiting for the ITS check gets its dates at the check, not now
-    await withPlatform(container.db, (tx) => allowance.applyPlan(tx, waitingCo, "growth"));
-    expect((await json(admin, "POST", `/api/v1/admin/customers/${waitingCo}/plan`, { planKey: "trial", reason: "Trial until the check." })).status).toBe(200);
-    expect((await settingsOf(waitingCo))).toMatchObject({ status: "trial", planKey: "trial" });
-    expect((await settingsOf(waitingCo)).settings.trial).toBeUndefined();
+    // Trial is retired, so the console no longer offers it; the code stays, for the day ITS brings it back
+    const refused = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "trial", reason: "Back on Trial while they decide." });
+    expect(refused.status).toBe(400);
+    expect(await codeOf(refused)).toMatchObject({ code: "inactive_plan" });
+    await container.db.update(plans).set({ active: true }).where(eq(plans.key, "trial"));
+    try {
+      const r = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "trial", reason: "Back on Trial while they decide." });
+      expect(r.status).toBe(200);
+      expect(await r.json()).toMatchObject({ planKey: "trial", status: "trial", trialEnded: false });
+      const co = await settingsOf(growthCo);
+      expect(co.settings.trial).toMatchObject({ startedBy: "plan_change" });
+      expect(near(co.settings.trial?.startedAt, Date.now())).toBe(true);
+      expect(Date.parse(co.settings.trial!.endsAt) - Date.parse(co.settings.trial!.startedAt)).toBe(30 * DAY);
+      // and back off Trial: the trial has ended, nothing is written over the dates
+      const off = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "pro", reason: "They chose Pro." });
+      expect(await off.json()).toMatchObject({ planKey: "pro", status: "active", trialEnded: true });
+      expect((await settingsOf(growthCo)).settings.trial).toEqual(co.settings.trial);
+      // a company still waiting for the ITS check gets its dates at the check, not now
+      await withPlatform(container.db, (tx) => allowance.applyPlan(tx, waitingCo, "growth"));
+      expect((await json(admin, "POST", `/api/v1/admin/customers/${waitingCo}/plan`, { planKey: "trial", reason: "Trial until the check." })).status).toBe(200);
+      expect((await settingsOf(waitingCo))).toMatchObject({ status: "trial", planKey: "trial" });
+      expect((await settingsOf(waitingCo)).settings.trial).toBeUndefined();
+    } finally {
+      await container.db.update(plans).set({ active: false }).where(eq(plans.key, "trial"));
+    }
   });
 });

@@ -547,7 +547,7 @@ adminRoutes.get("/plans", async (c) => {
 /**
  * Founder decision F8: a platform admin puts a customer on the Design Partner plan (or another plan). Pilot term 90 days,
  * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move.
- * Allowance alerts the new limits clear are resolved.
+ * Allowance alerts the new limits clear are resolved. Any plan other than Trial and Design Partner reads as "active".
  *
  * The Trial plan (founder decision L-02 B): moving a customer to Trial sets its status to "trial" and starts a new 30
  * days when the company is confirmed (otherwise they start at the ITS check). Moving it to another plan ends the trial
@@ -589,7 +589,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     const term = toTrial && isCompanyVerified(co.settings) ? newTrialTerm(clock, "plan_change") : null;
     const { trial: oldTerm, ...others } = co.settings;
     const settings = { ...others, pilot, ...(toTrial ? (term ? { trial: term } : {}) : oldTerm ? { trial: oldTerm } : {}) };
-    const status = onTrialPlan(body.planKey) ? "trial" : body.planKey === "design_partner" ? "design_partner" : co.status === "trial" ? "active" : co.status;
+    const status = onTrialPlan(body.planKey) ? "trial" : body.planKey === "design_partner" ? "design_partner" : "active";
     const [updated] = await tx.update(companies).set({ status, settings }).where(eq(companies.id, companyId)).returning();
     if (leavingTrial) await resolveAlertsFor(tx, TRIAL_ENDED_ALERT, companyId, clock);
     await emit(tx, { type: "plan.changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from: co.planKey, to: body.planKey, pilot, ...(leavingTrial ? { trialEnded: true } : {}) } });

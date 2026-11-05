@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TRIAL_DAYS, TRIAL_ENDED_LINE, TrialExtensionRequest, newTrialTerm, onTrialPlan, seatsFullLine, trialPaused, trialStanding, trialTermOf, type TrialTerm } from "./trial";
+import { TRIAL_DAYS, TRIAL_ENDED_LINE, TrialExtensionRequest, newTrialTerm, onTrialPlan, seatsFullAtSignInLine, seatsFullLine, trialPaused, trialStanding, trialTermOf, type TrialTerm } from "./trial";
 
 /** The Trial plan's 30 days (founder decision L-02 B, 16 October 2026): where a trial stands is worked out in code from its dates. */
 const DAY = 86_400_000;
@@ -61,7 +61,15 @@ describe("where a trial stands", () => {
 describe("the words and the extension request", () => {
   it("says the owner's one line and the seat refusal in plain words", () => {
     expect(TRIAL_ENDED_LINE).toBe("Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan.");
-    expect(seatsFullLine(3)).toBe("Your trial includes 3 people. Choose a plan to add more.");
+    expect(seatsFullLine(3, "trial")).toBe("Your trial includes 3 people. Choose a plan to add more.");
+    expect(seatsFullAtSignInLine(3, "trial")).toBe("This company's trial includes 3 people. Ask the person who invited you to choose a plan to add more.");
+  });
+
+  it("says plan and upgrade on any plan other than Trial, or when the plan is not known", () => {
+    for (const plan of ["free", "basic", "pro", "growth", "design_partner", null, undefined]) {
+      expect(seatsFullLine(2, plan)).toBe("Your plan includes 2 people. Upgrade to add more.");
+      expect(seatsFullAtSignInLine(2, plan)).toBe("This company's plan includes 2 people. Ask the person who invited you to upgrade.");
+    }
   });
 
   it("takes 1 to 90 whole days, a reason of five characters and a confirmation, and nothing else", () => {

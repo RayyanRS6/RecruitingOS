@@ -266,8 +266,9 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   });
 
   it("the month's AI interviews used up (Q17, R20-11): the email says the link follows, ITS and the owner are told, nobody is paged, and the link goes once more are added", async () => {
+    // a limit of the kind an older plan has: on the public plans the AI credit is the one meter, so this path never fires
     const [ent] = await container.db.select().from(entitlements).where(eq(entitlements.key, "text_screens"));
-    await container.db.update(entitlements).set({ used: ent.limit! }).where(eq(entitlements.id, ent.id));
+    await container.db.update(entitlements).set({ limit: 25, used: 25 }).where(eq(entitlements.id, ent.id));
     const a = await apply({ first: "Sam", last: "Nguyen", email: "sam@example.com", resume: "Sam Nguyen\nRegistered Dental Hygienist at Bright Smiles 2017 - present\nRDH license CA active\nPerio therapy, Dentrix" });
     expect(a.stage).toBe("eligible");
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(0);

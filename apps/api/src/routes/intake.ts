@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, isNotNull, or, sql } from "drizzle-orm";
-import { ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, StartIntake, TRIAL_ENDED_LINE, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
+import { ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, MORE_JOBS_UPGRADE_QUESTION, StartIntake, TRIAL_ENDED_LINE, jobsTotalLine, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeEdit, draftIntake, keepDraftFlag, requestIntakeApproval, runIntakeTurn, sessionView, startIntakeSession, type IntakeDeps, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
 import { IntakeEditError, assertCan, can, emit, entitlements, looksLikePastedAd, normalizeFacts, notify, packetToFacts } from "@ros/core";
 import { entitlements as entitlementRows, events, intakeSessions, recruiterEscalations, rolePackets, roles, withTenant, type Tx } from "@ros/db";
@@ -128,6 +128,8 @@ const MORE_ROLES_QUESTION = "We would like to open more roles than our plan incl
 const askAboutPlan = { label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: MORE_ROLES_QUESTION } };
 /** The same request when the trial has ended (founder decision L-02 B): choosing a plan is done by ITS. */
 const askToChoosePlan = { label: "Ask ITS to choose a plan", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: TRIAL_PLAN_QUESTION } };
+/** The same request when the plan's jobs are all used for good: closing a role would not help. */
+const askToUpgrade = { label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: MORE_JOBS_UPGRADE_QUESTION } };
 
 /** A role's state as the room message names it; an open role needs no word. */
 const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting for approval", draft: "sent back for changes", paused: "paused" };
@@ -140,11 +142,13 @@ const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting f
  * about the plan, which never uses one of the plan's recruiter requests). `newRoleId` is a role created in this very
  * transaction, which is not counted against itself. A trial that has ended comes first (founder decision L-02 B): no
  * new job starts until a plan is chosen, whatever room the plan has, and the message is the owner's one line. No roles are
- * listed then: closing one would not help.
+ * listed then: closing one would not help. The same goes for a plan whose jobs ever are all used (`jobs_total`, Free's one
+ * job): nothing closed gives that place back, so no roles are listed, and the way on is to upgrade (`upgrade`).
  */
 async function planRoom(tx: Tx, companyId: string, opts: { newRoleId?: string; now?: Date } = {}): Promise<PlanRoom> {
   const room = await entitlements.roleRoom(tx, companyId, { except: opts.newRoleId });
   if ((await companyTrialStanding(tx, companyId, opts.now ?? new Date()))?.ended) return { ok: false, limit: room.limit, used: room.used, holding: [], message: TRIAL_ENDED_LINE, trialEnded: true };
+  if (room.lifetime?.full) return { ok: false, limit: room.lifetime.limit, used: room.lifetime.used, holding: [], message: jobsTotalLine((await entitlements.planOf(tx, companyId))?.name, room.lifetime.limit), upgrade: true };
   const names = room.holding.map((r) => (PLACE_STATUS_WORD[r.status] ? `${r.title} (${PLACE_STATUS_WORD[r.status]})` : r.title));
   const message = room.ok
     ? null
@@ -153,8 +157,21 @@ async function planRoom(tx: Tx, companyId: string, opts: { newRoleId?: string; n
 }
 
 function limitReached(t: Tenant, room: PlanRoom): HttpError {
-  const ask = room.trialEnded ? askToChoosePlan : askAboutPlan;
-  return new HttpError(402, "limit_reached", room.message ?? "Your plan has no room for another role.", { actions: can(t.role, "escalation.create") ? [ask] : [], room });
+  const ask = room.trialEnded ? askToChoosePlan : room.upgrade ? askToUpgrade : askAboutPlan;
+  return new HttpError(402, "limit_reached", room.message ?? "Your plan has no room for another role.", { actions: can(t.role, "escalation.create") ? [ask] : [], room, ...(room.upgrade ? { upgrade: true } : {}) });
+}
+
+/**
+ * A company with no room stops spending on a job it could not post: the AI routes on a draft that has no role yet (writing
+ * it, changing it by chat) answer as the start of a draft does, before any model call. A draft that already made its role
+ * holds its place, and so does everything done on that role afterwards. Shared with the draft tools in role-packets.ts.
+ */
+export async function assertRoomForDraft(c: Context<Vars>, row: IntakeSessionRow): Promise<void> {
+  if (row.roleId) return;
+  const t = c.get("tenant")!;
+  const container = c.get("container");
+  const room = await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: container.engine.clock() }));
+  if (!room.ok) throw limitReached(t, room);
 }
 
 /** "Hire again" (C14): the facts of the role's latest approved version; pay is carried over to be confirmed again, never as confirmed. */
@@ -232,14 +249,17 @@ intakeRoutes.get("/sessions", requireTenant, async (c) => {
  * job our hiring guides do not know. Only the job's facts go in, never anything about a candidate; every line passed the
  * fairness word check, and refused ones are left out. Same people as starting a draft; no draft is made and the plan's
  * room is not used. A failed or slow run answers with no suggestions (`unavailable: true`), never an error the page must show;
- * so does a person or a company over the hourly allowance of model calls for this (POLICIES.intakeSuggest).
+ * so does a person or a company over the hourly allowance of model calls for this (POLICIES.intakeSuggest), and a company
+ * with no room for another job, which spends nothing here (the page already shows it the room's own alert).
  */
 intakeRoutes.post("/suggestions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertMayDraft(t);
   const body = IntakeSuggestRequest.parse(await c.req.json().catch(() => ({})));
-  if (await checkRateLimits(c, [POLICIES.intakeSuggest])) return c.json({ mustHaves: [], questions: [], unavailable: true as const });
-  return c.json(await suggestForQuickStart(c.get("container"), { companyId: t.companyId, userId: t.userId, body }));
+  const container = c.get("container");
+  const room = await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: container.engine.clock() }));
+  if (!room.ok || (await checkRateLimits(c, [POLICIES.intakeSuggest]))) return c.json({ mustHaves: [], questions: [], unavailable: true as const });
+  return c.json(await suggestForQuickStart(container, { companyId: t.companyId, userId: t.userId, body }));
 });
 
 /** Room on the plan for another role, when the new-role page opens (C13). */
@@ -300,12 +320,14 @@ intakeRoutes.post("/sessions/:id/answers", requireTenant, async (c) => {
  * round of questions, or when the owner said "draft it". No role is created and nobody is asked to approve anything.
  * While it runs, GET /sessions/:id shows `progress.stage` moving through benchmark, writing and checking (the checks and
  * the save), then done. Writing it again replaces the changes saved on the draft since (`readiness.draftEdits`), so the
- * page asks first.
+ * page asks first. A company with no room for another job is refused first (`assertRoomForDraft`): this is the dearest
+ * call the job builder makes.
  */
 intakeRoutes.post("/sessions/:id/draft", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const row = await loadDraft(c, c.req.param("id"));
   if (row.status !== "active") throw new HttpError(409, "not_active", "This draft has already produced a role, or it was set aside.");
+  await assertRoomForDraft(c, row);
   const view = sessionView(row, t.userId);
   if (!view.readiness.mayDraft) throw new HttpError(409, "not_ready", view.readiness.draftBlocker ?? "Not ready to draft yet.", { readiness: view.readiness });
   const container = c.get("container");

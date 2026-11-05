@@ -88,10 +88,10 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
   const result = await withTenant(container.db, tenant.companyId, async (tx) => {
     const [member] = await tx.select({ id: memberships.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.status, "active"), eq(users.email, email))).limit(1);
     if (member) throw new HttpError(409, "already_member", `${email} is already on your team.`);
-    // The plan's people (founder decision L-02 B: 3 on the Trial plan), counting invitations not yet answered; an open
-    // invitation to this same address is replaced below, so it is not counted twice. Taken under the company's seat lock.
+    // The plan's people, counting invitations not yet answered; an open invitation to this same address is replaced below,
+    // so it is not counted twice. Taken under the company's seat lock.
     const seats = await entitlements.seatRoom(tx, tenant.companyId, { now, exceptEmail: email });
-    if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit), { seats: { used: seats.used, limit: seats.limit } });
+    if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit, seats.planKey), { seats: { used: seats.used, limit: seats.limit } });
     // A new invitation replaces any open one for the same address (core createInvitation), which withdraws it: the same
     // ranks as withdrawing it directly apply, so HR cannot quietly replace an admin or owner invitation with a lower one.
     const open = await tx.select({ role: invitations.role }).from(invitations).where(and(eq(invitations.companyId, tenant.companyId), eq(invitations.email, email), eq(invitations.status, "pending")));
@@ -137,7 +137,7 @@ export async function resendMemberInvitation(team: Team, input: { invitationId: 
     const [lapsed] = await tx.select({ email: invitations.email, status: invitations.status, expiresAt: invitations.expiresAt }).from(invitations).where(and(eq(invitations.id, input.invitationId), eq(invitations.companyId, tenant.companyId))).limit(1);
     if (lapsed && invitationState(lapsed, now) === "expired") {
       const seats = await entitlements.seatRoom(tx, tenant.companyId, { now, exceptEmail: lapsed.email });
-      if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit), { seats: { used: seats.used, limit: seats.limit } });
+      if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit, seats.planKey), { seats: { used: seats.used, limit: seats.limit } });
     }
     const rotated = await resendInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now });
     if (!rotated) throw new HttpError(404, "not_found", "No open invitation with that id.");

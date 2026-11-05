@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACTIVE_ROLES, PERIOD_DAYS, TEXT_SCREENS, currentPeriod } from "./entitlements";
+import { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, JOBS_TOTAL, PERIOD_DAYS, TEXT_SCREENS, currentPeriod, isMonthly } from "./entitlements";
 import { alertEmailText } from "./alerts";
 
 /**
@@ -33,6 +33,15 @@ describe("the period a monthly allowance is in", () => {
   it("roles are counted for the life of the plan, and a row without dates keeps its count", () => {
     expect(currentPeriod(row(1, ACTIVE_ROLES), new Date(start + 400 * DAY))).toMatchObject({ used: 1, rolled: false });
     expect(currentPeriod({ key: TEXT_SCREENS, used: 9, periodStart: null, periodEnd: null }, new Date(start + 400 * DAY))).toMatchObject({ used: 9, rolled: false });
+  });
+
+  it("the jobs ever and the total AI credit never start again; the monthly AI credit does, and neither holds money in `used`", () => {
+    for (const key of [JOBS_TOTAL, AI_CREDIT_TOTAL_CENTS]) {
+      expect(isMonthly(key), key).toBe(false);
+      expect(currentPeriod(row(0, key), new Date(start + 400 * DAY)), key).toMatchObject({ used: 0, rolled: false });
+    }
+    expect(isMonthly(AI_CREDIT_MONTHLY_CENTS)).toBe(true);
+    expect(currentPeriod(row(0, AI_CREDIT_MONTHLY_CENTS), new Date(start + 31 * DAY))).toMatchObject({ used: 0, periodStart: row(0).periodEnd, rolled: true });
   });
 });
 

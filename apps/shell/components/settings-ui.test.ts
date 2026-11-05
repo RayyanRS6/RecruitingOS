@@ -21,7 +21,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { Setup } = await import("@ros/web/src/pages/Setup");
+const { Setup, usageLines, usageResets } = await import("@ros/web/src/pages/Setup");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const company = { id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "pilot", status: "active", locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: "2026-10-01T00:00:00.000Z" }, integrations: [{ kind: "jobboard", provider: "linkedin_basic", status: "not_connected" }], ai: { provider: "fake" }, usage: { active_roles: { used: 1, limit: 3 }, text_screens: { used: 4, limit: 50, resetsAt: "2026-10-30T12:00:00.000Z" } } };
@@ -221,6 +221,38 @@ describe("Settings: the Trial plan's 30 days and 3 people (founder decision L-02
     const html = page({ search: "?tab=team", company: onTrial(ending, { used: 3, limit: 3 }) });
     expect(text(html)).toContain("Your trial includes 3 people: 3 in use, counting invitations not yet answered.");
     expect(text(html)).toContain("Your trial includes 3 people. Choose a plan to add more.");
+    expect(html).toMatch(/<button type="submit" class="btn primary" disabled=""[^>]*>Invite<\/button>/);
+  });
+});
+
+describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
+  const onFree = (over: Record<string, unknown> = {}, seats = { used: 1, limit: 2 }) => ({ ...company, planKey: "free", status: "active", plan: { key: "free", name: "Free", limits: { jobs_total: 1, candidates_per_job: 5, seats: 2 } }, usage: { active_roles: { used: 1, limit: 1 }, jobs_total: { used: 1, limit: 1 }, text_screens: { used: 3, limit: null, resetsAt: "2026-12-05T12:00:00.000Z" }, ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" }, recruiter_asks: { used: 0, limit: 1, resetsAt: "2026-12-05T12:00:00.000Z" }, seats }, trial: null, ...over });
+
+  it("Free shows its jobs and its AI help as a percentage, with no trial words, no dollars and no row for candidates per job", () => {
+    const words = text(page({ company: onFree() }));
+    expect(words).toContain("Plan Free");
+    expect(words).not.toContain("trial");
+    expect(words).toContain("jobs: 1 of 1");
+    // the jobs ever take the place of the jobs at a time: with one job, the two would say the same thing twice
+    expect(words).not.toContain("active jobs:");
+    expect(words).toContain("AI help: 18% used");
+    expect(words).not.toContain("18 of 100");
+    expect(words).not.toMatch(/cents|\$\d/);
+    expect(words).not.toContain("candidates per job");
+    expect(words).toContain("AI interviews this month: 3");
+  });
+
+  it("a plan with no limit of jobs ever keeps the jobs at a time, and its monthly AI help says when it starts again", () => {
+    const lines = usageLines({ active_roles: { used: 2, limit: 3 }, ai_credit_monthly_cents: { used: 40, limit: 100, unit: "percent", resetsAt: "2026-12-05T12:00:00.000Z" } });
+    expect(lines).toEqual(["active jobs: 2 of 3", "AI help this month: 40% used"]);
+    expect(usageResets({ ai_credit_monthly_cents: { limit: 100, resetsAt: "2026-12-05T12:00:00.000Z" } })).toBe("Monthly allowances reset on December 5.");
+  });
+
+  it("the Team tab's invite form says the plan's words, on the plan's two people", () => {
+    const html = page({ search: "?tab=team", company: onFree({}, { used: 2, limit: 2 }) });
+    expect(text(html)).toContain("Your plan includes 2 people: 2 in use, counting invitations not yet answered.");
+    expect(text(html)).toContain("Your plan includes 2 people. Upgrade to add more.");
+    expect(text(html)).not.toContain("Your trial includes");
     expect(html).toMatch(/<button type="submit" class="btn primary" disabled=""[^>]*>Invite<\/button>/);
   });
 });

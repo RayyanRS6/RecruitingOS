@@ -329,6 +329,8 @@ export const applications = pgTable(
      */
     toldState: text("told_state").$type<ToldState>().notNull().default("not_told"),
     candidateToldAt: ts("candidate_told_at"),
+    /** Past the plan's candidates per job when it came in (migration 0036): the team cannot read this person. Null means visible. */
+    lockedAt: ts("locked_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

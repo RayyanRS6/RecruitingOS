@@ -43,7 +43,7 @@ export const VERIFICATION_WORDS: Readonly<Record<string, string>> = { pending: "
 export const verificationWords = (code: string) => wordFor(VERIFICATION_WORDS, code);
 
 /** A customer's plan, by its key (the plans table). */
-export const PLAN_WORDS: Readonly<Record<string, string>> = { trial: "Trial", core: "Core", growth: "Growth", company: "Company", design_partner: "Design Partner" };
+export const PLAN_WORDS: Readonly<Record<string, string>> = { free: "Free", basic: "Basic", pro: "Pro", ultra: "Ultra", trial: "Trial", core: "Core", growth: "Growth", company: "Company", design_partner: "Design Partner" };
 export const planWords = (key: string) => wordFor(PLAN_WORDS, key);
 
 /**

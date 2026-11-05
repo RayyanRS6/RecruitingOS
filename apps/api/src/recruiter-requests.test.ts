@@ -5,13 +5,14 @@ import { adminAlerts, applications, candidates, escalationMessages, events, noti
 import type { WorkflowDefinition } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInStaff } from "./test-helpers";
+import { signInStaff, useTrial } from "./test-helpers";
 
 /**
  * Recruiter access honesty (plan item 0.4, founder decision Q31 option A). A request covers one candidate, one role, or
  * all of the company's hiring only when someone chose that; every message states the real access; the system brings a
  * recruiter in only for the candidate or role involved, and a failure with nothing attached goes to ITS administrators.
- * The plan's role allowance offers a request to ITS instead of a dead-end "upgrade".
+ * A plan's roles at a time offer a request to ITS, because closing a role helps; only a plan's jobs ever say to upgrade
+ * (free-plan.test.ts).
  */
 describe("what a recruiter request covers, and saying so", () => {
   let container: Container;
@@ -30,8 +31,9 @@ describe("what a recruiter request covers, and saying so", () => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@scope.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
     owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
-    // a trial company: one active role
+    // a trial company: one active role at a time, and closing it gives its place back
     companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Scope Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    await useTrial(container, companyId);
     const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
     applicationId = await withTenant(container.db, companyId, async (tx) => {
@@ -242,7 +244,7 @@ describe("what a recruiter request covers, and saying so", () => {
     expect(alerts.map((a) => (a.details as { requestId?: string }).requestId)).toEqual([updated.id]);
   });
 
-  it("past the plan's role allowance, the refusal offers a request to ITS instead of an upgrade nobody can make", async () => {
+  it("past a plan's roles at a time, the refusal offers a request to ITS and says closing a role helps", async () => {
     // the trial allows one active role; the second draft is refused before it starts, so no model call is made (plan C13)
     const refused = await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. It's growth. Ceiling $28. I decide. Must-haves: Dentrix. Just draft it." });
     expect(refused.status).toBe(402);

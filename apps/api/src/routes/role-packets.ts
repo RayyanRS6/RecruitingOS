@@ -20,7 +20,7 @@ import { applyCompanyQuestionsEdit, applyFieldEdit } from "../services/packet-fi
 import { withoutUnsentChats } from "../services/screen-visibility";
 import { CLOSED_ROLE_MESSAGE, cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, materialChanges, mayApproveRoles, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
 import type { Container } from "../container";
-import { loadDraft } from "./intake";
+import { assertRoomForDraft, loadDraft } from "./intake";
 
 /**
  * The role page's Interview plan and Activity tabs, and "Request approval again" (docs/spec/21 section 7: B8, B9,
@@ -560,10 +560,14 @@ async function reloadSession(container: Container, companyId: string, sessionId:
   return row ? sessionView(row, viewer) : null;
 }
 
-/** Change the draft by chat (C10): the same proposal as for a role, worked out on the draft as it is now. Pay stays on the pay card. */
+/**
+ * Change the draft by chat (C10): the same proposal as for a role, worked out on the draft as it is now. Pay stays on the
+ * pay card. A company with no room for another job is refused before the model is called.
+ */
 draftPacketRoutes.post("/sessions/:id/revisions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const { row, draft } = await draftOf(c);
+  await assertRoomForDraft(c, row);
   const body = PacketRevisionRequest.parse(await c.req.json());
   const container = c.get("container");
   const actor = actorOf(c);

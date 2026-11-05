@@ -5,7 +5,7 @@ import { entitlements } from "@ros/core";
 import { approvalRequests, auditRecords, companies, entitlements as entitlementRows, events, postings, recruiterEscalations, rolePackets, roles, withPlatform } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs } from "./test-helpers";
+import { signInAs, useTrial } from "./test-helpers";
 
 /**
  * Approving with the boards ticked on the approval card (POST /roles/:id/approve with `channels`; the live smoke test of
@@ -152,6 +152,7 @@ describe("approving with the boards ticked on the approval card", () => {
   it("refused for who is asking or an ended trial, the boards stay as they were; the person who may decide approves with theirs", async () => {
     const own = await signIn("owner@second-boards.test");
     const second = ((await (await post(own, "/api/v1/companies", { name: "Second Boards", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    await useTrial(container, second);
     await roomForRoles(second);
     const first = await newRole(own);
     const later = await newRole(own);

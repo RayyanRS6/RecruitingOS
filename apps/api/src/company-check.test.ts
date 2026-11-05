@@ -10,7 +10,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { createApplication } from "./services/applications";
-import { signInAdmin, signInAs } from "./test-helpers";
+import { signInAdmin, signInAs, useTrial } from "./test-helpers";
 
 /**
  * The one-time ITS check (founder decision B7; plan B1) and the getting-started card (plan B2). A company that signs
@@ -50,6 +50,8 @@ describe("the ITS company check and getting started", () => {
     const r = await json(owner, "POST", "/api/v1/companies", { name: "Check Dental", vertical: "dental", sizeBand: "20-49", website: "checkdental.example", ownerName: "Olive Owner", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(r.status).toBe(201);
     ({ id: companyId, slug } = (await r.json()) as { id: string; slug: string });
+    // on Trial, as a company that signed up earlier is: the check also starts its 30 days (Free has no clock, free-plan.test.ts)
+    await useTrial(container, companyId);
     admin = await signInAdmin(app, container, "ana.admin@identifiedtalent.com", "Ana Admin");
   });
   afterAll(async () => {
