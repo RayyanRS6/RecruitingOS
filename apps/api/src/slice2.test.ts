@@ -6,7 +6,7 @@ import { aiRuns, applications, approvalRequests, assessments, auditRecords, cand
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, useLaterApplyFlow } from "./test-helpers";
+import { signInAs, useLaterApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * Slice 2 through the HTTP layer: evidence-based assessment → screening (web chat and SMS) → scorecard →
@@ -70,6 +70,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     await signIn();
     const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // More people apply to this one job here than Free's five, and each of them goes on to the AI interview: a plan with no candidate limit.
+    await usePlan(container, co.id, "ultra");
     // ITS's old switch, kept on the company's settings: since 20 Oct 2026 nothing reads it (every applicant takes one path).
     await useLaterApplyFlow(container, co.id);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };

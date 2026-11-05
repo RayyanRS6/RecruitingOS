@@ -175,6 +175,8 @@ export function safetyNetShort(input: { policy?: DeclineMessagePolicy | null; ha
 export function safetyNetActed(timeline: readonly TimelineEvent[]): { action: "sent" | "recruiter"; at: string } | null {
   const e = [...timeline].filter((x) => x.type === "application.untold_fallback").sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt))[0];
   if (!e) return null;
+  // Locked when their job closed (Rule 2), with nobody to send it to: nothing went, and no recruiter was brought in either.
+  if (e.payload.locked && e.payload.action !== "sent") return null;
   return { action: e.payload.action === "sent" ? "sent" : "recruiter", at: e.occurredAt };
 }
 
@@ -212,7 +214,7 @@ export function safetyNetLine(input: {
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /** What the closing message's sheet says above the message: who gets it, who is left out and why, and what Send does. */
-export function closingSheetLines(p: Pick<ClosingMessagePreview, "count" | "alreadyTold" | "waitingApproval" | "noEmail" | "optedOut" | "policy" | "waitingApprovalId">): { lead: string; notes: string[] } {
+export function closingSheetLines(p: Pick<ClosingMessagePreview, "count" | "alreadyTold" | "waitingApproval" | "noEmail" | "optedOut" | "policy" | "waitingApprovalId"> & Partial<Pick<ClosingMessagePreview, "locked">>): { lead: string; notes: string[] } {
   const people = (n: number) => (n === 1 ? "1 person" : `${n} people`);
   const lead = p.waitingApprovalId
     ? "The closing message is waiting for approval. Nobody is told until it is approved."
@@ -226,6 +228,7 @@ export function closingSheetLines(p: Pick<ClosingMessagePreview, "count" | "alre
     p.optedOut ? `${people(p.optedOut)} asked not to be kept for future roles; the message does not invite them back.` : "",
     p.policy === "needs_approval" && !p.waitingApprovalId ? "Under your settings it waits for one approval for everyone before it goes." : "",
     p.policy === "not_sent" ? "Under your settings no decision messages are sent. Tell each person yourself, then record it on their page." : "",
+    p.locked ? `${p.locked === 1 ? "1 more person" : `${p.locked} more people`} you have not unlocked ${p.locked === 1 ? "gets" : "get"} the same message.` : "",
   ].filter(Boolean);
   return { lead, notes };
 }

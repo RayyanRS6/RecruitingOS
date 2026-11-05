@@ -8,7 +8,7 @@ import { applications, assessments, candidates, events, screens, withTenant } fr
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { useLaterApplyFlow } from "./test-helpers";
+import { useLaterApplyFlow, usePlan } from "./test-helpers";
 
 type Finding = { claim: string; evidence: { source: string; quote?: string } };
 type Evidence = { needsCloserLook: boolean; reason: string | null; assessmentUnavailable: boolean; resumeUnreadable: boolean; inconsistent: boolean; lowConfidence: boolean; hasProvenMiss: boolean; unknowns: string[]; unknownCount: number; topStrength: Finding | null; topConcern: Finding | null; confidenceReasons: string[] };
@@ -65,6 +65,8 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     cookie = consume.headers.get("set-cookie")!.split(";")[0];
     const co = (await (await json("POST", "/api/v1/companies", { name: "Closer Look Dental", vertical: "dental", sizeBand: "20-49", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // More people apply to this one job here than Free's five, and each of them is read: a plan with no candidate limit.
+    await usePlan(container, co.id, "ultra");
     // The ITS switch is ignored since 20 Oct 2026 (R20-12): every applicant gets the AI interview whatever it says.
     await useLaterApplyFlow(container, co.id);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };

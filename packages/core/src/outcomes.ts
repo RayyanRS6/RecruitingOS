@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { RejectReason, type Actor, type ApplicationStage } from "@ros/contracts";
 import { applications, approvalRequests, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
+import { lockApplicants } from "./candidate-lock";
 import { emit } from "./events";
 import { POSTING_TASK_KINDS } from "./posting-tasks";
 import { BOARD_UP_STATES, isBoardChannel, transitionPosting, type PostingState } from "./postings";
@@ -86,7 +87,8 @@ export type ClosureRequired = { postingId: string; channel: string; externalUrl:
  * Closes the role with its outcome. Separate from the candidate outcome on purpose: the founder asked for a second,
  * explicit confirmation. Every posting closes with it; a board that was posted (or paused after being posted) is marked
  * `closureRequired` and emitted as `posting.closure_required`, so the role page can say what is still up until a person
- * confirms it was removed.
+ * confirms it was removed. Someone locked moves as the others do and stays locked (Rule 2): the stage says the job is over
+ * for them, but they are not among `movedCandidateIds` or the count, because nobody at the company knows them to keep them.
  */
 export async function recordRoleOutcome(
   q: Queryable,
@@ -103,16 +105,18 @@ export async function recordRoleOutcome(
   // move is a private decision like any other (founder decision B6): nobody is told the decision until a person sends the
   // message (the caller's exit cleanup tells someone with a booked time or offered times only that the interview is off).
   // The caller keeps them in the talent pool unless they asked not to be kept, and offers the one closing message (Q30).
-  const open = await q.select({ id: applications.id, stage: applications.stage, candidateId: applications.candidateId }).from(applications).where(eq(applications.roleId, role.id));
+  // Behind the job's own lock: a change of plan opening its applicants goes through the same rows in another order.
+  await lockApplicants(q, role.id);
+  const open = await q.select({ id: applications.id, stage: applications.stage, candidateId: applications.candidateId, lockedAt: applications.lockedAt }).from(applications).where(eq(applications.roleId, role.id));
   const movedApplicationIds: string[] = [];
   const movedCandidateIds: string[] = [];
   for (const a of open) {
     if (!ACTIVE_STAGES.has(a.stage)) continue;
     await transition(q, { applicationId: a.id, companyId: input.companyId, to: "talent_pool", by: input.by, actor: input.actor, reason: `role closed: ${input.outcome}` });
     movedApplicationIds.push(a.id);
-    movedCandidateIds.push(a.candidateId);
+    if (!a.lockedAt) movedCandidateIds.push(a.candidateId);
   }
-  const movedToTalentPool = movedApplicationIds.length;
+  const movedToTalentPool = movedCandidateIds.length;
   // every posting closes with the role; a board that is up on the outside is named for manual removal
   const closureRequired: ClosureRequired[] = [];
   const posts = await q.select().from(postings).where(eq(postings.roleId, role.id));

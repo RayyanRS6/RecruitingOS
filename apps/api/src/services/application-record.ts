@@ -43,10 +43,12 @@ export async function packetOf(tx: Tx, roleId: string, version: number): Promise
  * The record's score (founder decision S7-1): the team's own match score (core/match-score.ts) as the candidate sees it
  * (`candidateScoreView`: only the job page's must-haves named, everything else folded into one line), from the readings
  * the team may see, against the version of the role they were read against. `hiddenDecision`: a private decision the
- * candidate was not told (founder decision B6); a chat it cancelled still reads as waiting for the chat.
+ * candidate was not told (founder decision B6); a chat it cancelled still reads as waiting for the chat. Nothing is said
+ * about a score for someone locked (Rule 2): nothing works one out while they are, and nobody on the team sees them, so the
+ * block, which says the team sees it and is under counsel word for word, stays away whole.
  */
 export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; now: Date }): Promise<RecordScore> {
-  if (!candidateScoreShown(input.companySettings)) return { state: "off", view: null };
+  if (!candidateScoreShown(input.companySettings) || input.app.lockedAt) return { state: "off", view: null };
   const { app } = input;
   const last = input.screens[0];
   const chatOpen = !!last && (OPEN_SCREEN.includes(last.status) || (input.hiddenDecision && last.status === "cancelled"));

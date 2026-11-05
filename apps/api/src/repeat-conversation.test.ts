@@ -8,7 +8,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { CONVERSATIONS_PER_APPLICATION_PER_DAY, DETACHED_EMAILS_PER_DAY, applyVisitNext, confirmRepeat, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, interviewWaitFor, repeatConfirmationView, type ConversationRef } from "./services/apply-conversation";
-import { useOneVisitApplyFlow } from "./test-helpers";
+import { useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * Repeat submissions in the one-visit flow (Q14 x Q15, design (a)): a second application from an address that already
@@ -89,6 +89,8 @@ describe("a repeat submission's conversation is detached until the address owner
     const consume = await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") });
     cookie = consume.headers.get("set-cookie")!.split(";")[0];
     const co = (await (await json("POST", "/api/v1/companies", { name: "Repeat Dental", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
+    // More people apply to this one job here than Free's five, and each of them goes on to the AI interview: a plan with no candidate limit.
+    await usePlan(container, co.id, "ultra");
     // A pilot company: ITS switched the one-visit flow on for it.
     await useOneVisitApplyFlow(container, co.id);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };

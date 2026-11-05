@@ -1,5 +1,5 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, mayDecideApproval, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, withoutSentimentWords, type FollowUpView } from "@ros/core";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
 import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
@@ -191,8 +191,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (shares && publicSince !== null && publicSince >= Date.parse(since)) {
       cards.push({ kind: "share", title: `${role.title} is live. Share it now`, body: "Send it to people you know, a school or a local group. Each place gets its own link, so you can see where applicants come from.", roleId: role.id, actions: [{ label: "Share the job", method: "GET", path: `/roles/${role.id}?tab=posting#share` }] });
     }
-    // A recruiter given one candidate counts and names only that candidate, never the rest of the role's applicants.
-    const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, role.id)))).filter((a) => inStaffScope(scope, { roleId: role.id, applicationId: a.id }));
+    // A recruiter given one candidate counts and names only that candidate, never the rest of the role's applicants. Nobody
+    // past the plan's candidates per job counts here or is named (Rule 2), so what the cards say about those they count is true.
+    const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, role.id), notLocked()))).filter((a) => inStaffScope(scope, { roleId: role.id, applicationId: a.id }));
     const marks = await activeMarksFor(tx, apps.map((a) => a.id));
     const followUps = await activeFollowUpsFor(tx, apps.map((a) => a.id));
     // People under Cancelled (founder decisions 1A to 4A) have the role's one Cancelled card below, and only while nothing
@@ -253,7 +254,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // however long ago it closed, so nobody drops out of sight (the untold safety net). One query for every closed role.
   if (tells) {
     const closedRoles = (await tx.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "closed")))).filter((r) => inStaffScope(scope, { roleId: r.id }));
-    const untoldClosed = closedRoles.length ? await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(inArray(applications.roleId, closedRoles.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt))) : [];
+    // Someone locked hears by themselves, and the team never hears their name (Rule 2).
+    const untoldClosed = closedRoles.length ? await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(inArray(applications.roleId, closedRoles.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt), notLocked())) : [];
     // whose message (their own, or the closing message's one request) waits for an approver: on the approver's card instead
     const waitingClosed = await decisionsWaitingApproval(tx, untoldClosed.map((a) => a.id));
     for (const role of closedRoles) {
@@ -599,7 +601,8 @@ async function longWaitCard(tx: Tx, d: { roleId: string; roleTitle: string; titl
   const [first] = await tx.select({ id: applications.id, stageChangedAt: applications.stageChangedAt, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(applications.id, applicationIds[0])).limit(1);
   if (!first) return null;
   const name = `${first.firstName} ${first.lastName}`.trim() || "A candidate";
-  const days = Math.max(0, Math.floor((Date.now() - Date.parse(first.stageChangedAt)) / 86_400_000));
+  // From when the team could act on them: someone a change of plan opened has waited since then (Rule 2).
+  const days = Math.max(0, Math.floor((Date.now() - waitingSince(first.stageChangedAt, (await unlockedAtFor(tx, [first.id])).get(first.id))) / 86_400_000));
   const others = applicationIds.length - 1;
   const open = `/roles/${d.roleId}/talent?open=${first.id}`;
   const narrowed = askRecruiter === null;

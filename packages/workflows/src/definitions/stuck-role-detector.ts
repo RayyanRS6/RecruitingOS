@@ -1,5 +1,5 @@
-import { and, count, eq, gte, lt, sql } from "drizzle-orm";
-import { detectStuckRoles, runInterventionLadder, runUntoldSafetyNet, sendStillReviewingNotes } from "@ros/agents";
+import { and, count, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
+import { detectStuckRoles, runInterventionLadder, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
 import { emit, notify } from "@ros/core";
 import { applications, approvalRequests, companies, events, roles } from "@ros/db";
 import type { StepContext, WorkflowDefinition } from "../types";
@@ -8,15 +8,16 @@ import { startInterviewAgain } from "../with-application";
 import { startNotificationDigest } from "./notification-digest";
 
 type VolumeAlert = { roleId: string; day: string; count: number; threshold: number };
-type State = { companyId: string; lastRunAt?: string; lastResults?: unknown; lastVolumeAlerts?: VolumeAlert[]; lastSafetyNet?: unknown; lastStillReviewing?: number };
+type State = { companyId: string; lastRunAt?: string; lastResults?: unknown; lastVolumeAlerts?: VolumeAlert[]; lastSafetyNet?: unknown; lastStillReviewing?: number; lastCloseOut?: number };
 
 const EVERY_HOURS = 24;
 
 /**
  * docs/06 `stuck_role_detector`: one run per company, forever. Retires old invite suggestions (`retireInviteSuggestions`),
  * detects, applies the intervention ladder, runs the untold
- * safety net (Q27: a decision nobody told for five working days) and the "still reviewing" notes (plan G10), checks
- * yesterday's application volume, sleeps a day. Started when the company is created; idempotent by company.
+ * safety net (Q27: a decision nobody told for five working days), the "still reviewing" notes (plan G10) and the close-out
+ * notes for anyone locked (Rule 2), checks yesterday's application volume, sleeps a day. Started when the company is created;
+ * idempotent by company.
  */
 export const stuckRoleDetector: WorkflowDefinition<State> = {
   key: "stuck_role_detector",
@@ -36,9 +37,10 @@ export const stuckRoleDetector: WorkflowDefinition<State> = {
       const courtesy = { integrations: ctx.services.integrations, statusBaseUrl: ctx.services.env.jobsBaseUrl, now: ctx.now, actor: { kind: "system" as const, id: "untold_safety_net" } };
       const safetyNet = await runUntoldSafetyNet(ctx.q, courtesy, ctx.companyId);
       const stillReviewing = await sendStillReviewingNotes(ctx.q, { ...courtesy, actor: { kind: "system", id: "still_reviewing" } }, ctx.companyId);
+      const closeOut = await sendCloseOutNotes(ctx.q, { ...courtesy, actor: { kind: "system", id: "close_out" } }, ctx.companyId);
       const volumeAlerts = await checkApplicationVolume(ctx);
       const until = new Date(ctx.now.getTime() + EVERY_HOURS * 3600_000).toISOString();
-      return { kind: "wait", wait: { kind: "timer", until, reason: "daily stuck-role check" }, state: { lastRunAt: ctx.now.toISOString(), lastResults: results, lastVolumeAlerts: volumeAlerts, lastSafetyNet: safetyNet, lastStillReviewing: stillReviewing.length }, resumeStep: "detect" };
+      return { kind: "wait", wait: { kind: "timer", until, reason: "daily stuck-role check" }, state: { lastRunAt: ctx.now.toISOString(), lastResults: results, lastVolumeAlerts: volumeAlerts, lastSafetyNet: safetyNet, lastStillReviewing: stillReviewing.length, lastCloseOut: closeOut.length }, resumeStep: "detect" };
     },
   },
 };
@@ -81,11 +83,13 @@ async function checkApplicationVolume(ctx: StepContext<State>): Promise<VolumeAl
     // once per day: an alert already recorded for this role and this day is not repeated by a retried step or a second worker
     const already = await ctx.q.select({ id: events.id }).from(events).where(and(eq(events.companyId, ctx.companyId), eq(events.type, "role.volume_high"), eq(events.subjectType, "role"), eq(events.subjectId, role.id), sql`${events.payload}->>'day' = ${day}`)).limit(1);
     if (already.length) continue;
+    // A count with no names, which is fine on a job with locked people; but they are not "in the process" for anyone to say so.
+    const [locked] = await ctx.q.select({ n: count() }).from(applications).where(and(eq(applications.roleId, role.id), isNotNull(applications.lockedAt)));
     await notify(ctx.q, {
       companyId: ctx.companyId,
       kind: "volume.high",
       title: `${received} people applied to ${role.title} yesterday`,
-      body: `That is above your limit of ${threshold} a day. Nobody is turned away automatically. If you have enough applicants, stop accepting applications from the Share tab; everyone who already applied stays in the process.`,
+      body: `That is above your limit of ${threshold} a day. Nobody is turned away automatically. If you have enough applicants, stop accepting applications from the Share tab${Number(locked?.n ?? 0) ? "." : "; everyone who already applied stays in the process."}`,
       action: { label: "Open the Share tab", href: `/roles/${role.id}?tab=posting` },
       roles: ["owner", "admin"],
     });

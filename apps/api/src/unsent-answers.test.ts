@@ -8,7 +8,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { applyVisitNext, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
-import { signInAdmin, signInAs, signInStaff, useOneVisitApplyFlow } from "./test-helpers";
+import { signInAdmin, signInAs, signInStaff, useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * "Hide them until they send" (founder decision, 9 October 2026; counsel register item 20). While a candidate is in the
@@ -138,6 +138,8 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const { devLink } = (await r1.json()) as { devLink: string };
     owner = (await request("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") })).headers.get("set-cookie")!.split(";")[0];
     companyId = ((await (await request("POST", "/api/v1/companies", { name: "Unsent Dental", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    // More people apply to this one job here than Free's five, and each of them goes on to the AI interview: a plan with no candidate limit.
+    await usePlan(container, companyId, "ultra");
     await useOneVisitApplyFlow(container, companyId);
     const c1 = (await (await request("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
     await request("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Must-haves: active CA RDH license, perio experience. Deal-breakers: can't work Saturdays." });

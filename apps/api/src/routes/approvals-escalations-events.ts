@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, applicationLocked, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
@@ -536,6 +536,11 @@ async function requestReaders(tx: Tx, e: Pick<EscalationRow, "companyId" | "requ
   return [...new Set([...(e.requestedBy.kind === "user" ? [e.requestedBy.id] : []), ...owners.map((m) => m.userId)])];
 }
 
+/** Whether a request is about someone the team cannot read: a candidate who asked for a person while locked. */
+async function aboutLockedApplicant(tx: Tx, e: Pick<EscalationRow, "applicationId">): Promise<boolean> {
+  return !!e.applicationId && applicationLocked(tx, e.applicationId);
+}
+
 /** What a request is about, for a notice's title: never a candidate's name. */
 async function aboutWords(tx: Tx, e: Pick<EscalationRow, "roleId" | "applicationId">): Promise<string> {
   const [role] = e.roleId ? await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, e.roleId)).limit(1) : [];
@@ -586,7 +591,8 @@ escalationRoutes.post("/:id/resolve", requireRecruiterOrAdmin, async (c) => {
     const task = isPostingTask(e.kind) ? await postingTaskState(tx, e) : null;
     await emit(tx, { type: "recruiter.resolved", companyId: e.companyId, actor, subject: { type: "escalation", id: e.id }, payload: { resolution: body.resolution, minutesSpent: body.minutesSpent ?? null, responseMinutes: e.firstResponseAt ? Math.round((Date.parse(e.firstResponseAt) - Date.parse(e.createdAt)) / 60_000) : null, ...(task ? { postingTask: e.kind, postingId: e.postingId, notDone: task.notDone } : {}) } });
     if (!isPostingTask(e.kind)) {
-      await notify(tx, { companyId: e.companyId, kind: "recruiter.resolved", title: `${actor.name} (ITS recruiter) answered the request about ${await aboutWords(tx, e)}`, body: body.resolution, action: { label: "Read the answer", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
+      // ITS's answer about someone locked goes to them, never to the team (the plans of 5 November 2026, Rule 2): its words can describe the person.
+      if (!(await aboutLockedApplicant(tx, e))) await notify(tx, { companyId: e.companyId, kind: "recruiter.resolved", title: `${actor.name} (ITS recruiter) answered the request about ${await aboutWords(tx, e)}`, body: body.resolution, action: { label: "Read the answer", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
     } else if (task?.notDone) {
       const label = postingTaskLabel(e.kind, task.board);
       await notify(tx, { companyId: e.companyId, kind: "recruiter.posting_not_done", title: `${task.roleTitle}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${actor.name} at ITS wrote: "${body.resolution}" ${POSTING_NOT_DONE_NEXT[e.kind](task.board)}`, action: { label: "Open the Share tab", href: `/roles/${task.roleId}?tab=posting` }, roles: ["owner", "admin"] });
@@ -619,7 +625,7 @@ escalationRoutes.post("/:id/messages", requireRecruiterOrAdmin, async (c) => {
     await recordStaffAccess(tx, { grant, userName: actor.name, method: "POST", path: `/api/v1/escalations/${e.id}/messages`, ip: clientIp(c) });
     const message = await addEscalationReply(tx, { escalation: e, side: "recruiter", author: actor, body: body.body, now });
     if (e.status === "claimed") await tx.update(recruiterEscalations).set({ status: "in_progress" }).where(eq(recruiterEscalations.id, e.id));
-    const told = await notify(tx, { companyId: e.companyId, kind: "recruiter.replied", title: `${actor.name} (ITS recruiter) wrote to you about ${await aboutWords(tx, e)}`, body: body.body, action: { label: "Open the request", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
+    const told = (await aboutLockedApplicant(tx, e)) ? 0 : await notify(tx, { companyId: e.companyId, kind: "recruiter.replied", title: `${actor.name} (ITS recruiter) wrote to you about ${await aboutWords(tx, e)}`, body: body.body, action: { label: "Open the request", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
     return { id: message.id, told };
   });
   return c.json(out, 201);

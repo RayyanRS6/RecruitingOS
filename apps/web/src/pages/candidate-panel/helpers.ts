@@ -444,6 +444,11 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: "Confirmation sent to the candidate" };
     case "application.duplicate_detected":
       return { ...base, what: "Applied again (the original was kept)" };
+    // Only ever read once a person is unlocked: the team cannot open them before then.
+    case "application.locked":
+      return { ...base, what: "Applied past the plan's candidates per job", who: "The system" };
+    case "application.unlocked":
+      return { ...base, what: "Opened by a change of plan" };
     case "resume.ingested":
       return { ...base, what: "Résumé read" };
     case "resume.extraction_failed":
@@ -482,6 +487,8 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       if (p.how === "before_tracking") return { ...base, what: "Counted as told: decided before decisions became private", told: "Their status page already showed the decision." };
       return { ...base, what: p.how === "in_person" ? "Recorded telling the candidate in person" : "The decision message reached the candidate", told: p.how === "in_person" ? "Told in person." : "Told by the decision message." };
     case "application.untold_fallback":
+      // Someone locked when their job closed (Rule 2): the closing message went by itself, because the team could not send it.
+      if (p.locked) return p.action === "sent" ? { ...base, what: "The job closed while the team could not open them, so the closing message went by itself", who: "The system", told: "Told by the decision message." } : { ...base, what: "The job closed while the team could not open them, and there is no address on file to tell them", who: "The system" };
       // The safety net (Q27): five working days after the decision, the standard message went by itself, or a recruiter was brought in.
       if (p.action === "sent") return { ...base, what: "Nobody had told them for five working days, so the standard decision message went by itself", who: "The system", told: "Told by the decision message." };
       return { ...base, what: "Nobody had told them for five working days, so an ITS recruiter was brought in", who: "The system", ...(str(p.why) ? { why: `Nothing was sent, because ${String(p.why)}.` } : {}) };

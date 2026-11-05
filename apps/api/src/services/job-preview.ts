@@ -1,5 +1,5 @@
 import { APPLY_FORM_MINUTES, formatPayRange, isCompanyVerified, oneVisitMinutes, type CompanyQuestions, type DraftRolePacket, type JobPreview, type JobPreviewFact } from "@ros/contracts";
-import { benefitsDescriptionFor, candidateNotices, jobNoticesFor, payShown, payTransparencyApplies, quickQuestionsOf } from "@ros/core";
+import { ON_FILE_LAST_STEP, benefitsDescriptionFor, candidateNotices, jobNoticesFor, payShown, payTransparencyApplies, quickQuestionsOf } from "@ros/core";
 import type { companies } from "@ros/db";
 import { questionHelp } from "../pages/question-help";
 import { approvedAbout, logoMemberPath, profileOf } from "./company-settings-profile";
@@ -23,9 +23,11 @@ type Company = Pick<typeof companies.$inferSelect, "name" | "slug" | "locations"
 /**
  * How a job's applicants meet the AI interview, as its pages tell it (plan E8). Since 20 October 2026 (R20-4, R20-12)
  * every job is "one_visit": a short form, then the AI interview, which opens on the page once the résumé is read and
- * comes by email too. "later" (by email only, if the team's rules invited them) is what jobs said before then.
+ * comes by email too. "later" (by email only, if the team's rules invited them) is what jobs said before then. "on_file"
+ * (the plans of 5 November 2026, Rule 2): the job is past its plan's candidates per job, so a new applicant meets no AI
+ * interview and nothing reads their résumé: the pages say a short form, promise neither, and never say why.
  */
-export type ApplyFlowView = "one_visit" | "later";
+export type ApplyFlowView = "one_visit" | "later" | "on_file";
 /** What every job's pages say since 20 October 2026: ITS's old switch and the invitation rule no longer change it. */
 export const APPLY_FLOW: ApplyFlowView = "one_visit";
 
@@ -41,9 +43,13 @@ export function applyTimeLine(packet: { screening: Pick<DraftRolePacket["screeni
 /**
  * The steps the candidate can expect, the same on every job page, its preview and the job builder's preview. The first
  * is applying and the second the AI interview (the builder's live preview relies on that order). It gives the job's own
- * length, never a number of questions: the chat fixes its plan when it starts.
+ * length, never a number of questions: the chat fixes its plan when it starts. On a job past its limit (`on_file`) there is
+ * no AI interview to name, and the last step is the promise that holds for someone nobody may read: a real answer by a date.
+ * That step is DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts).
  */
 export function applySteps(packet: Pick<DraftRolePacket, "screening" | "interviews">, input: { companyName: string; smsEnabled: boolean; flow: ApplyFlowView }): string[] {
+  const rounds = packet.interviews.plan.map((r) => `${r.title} (${r.durationMinutes} minutes)`);
+  if (input.flow === "on_file") return [`Send a short form, about ${FORM_MINUTES} minutes. We confirm by email.`, ...rounds, ON_FILE_LAST_STEP];
   const first = input.flow === "one_visit"
     ? [
         `Send a short form, about ${FORM_MINUTES} minutes. We confirm by email.`,
@@ -53,7 +59,7 @@ export function applySteps(packet: Pick<DraftRolePacket, "screening" | "intervie
         `Send a short form, about ${FORM_MINUTES} minutes. We confirm by email.`,
         `Possibly a short written conversation with ${input.companyName}'s AI assistant (${input.smsEnabled ? "by text or online" : "online"}, about ${packet.screening.maxMinutes} minutes). If so, we email you the link.`,
       ];
-  return [...first, ...packet.interviews.plan.map((r) => `${r.title} (${r.durationMinutes} minutes)`), "A decision, and a real answer either way."];
+  return [...first, ...rounds, "A decision, and a real answer either way."];
 }
 
 export type PreviewSource = { kind: "draft"; sessionId: string } | { kind: "version"; roleId: string; version: number; status: string; current: boolean; roleStatus: string };

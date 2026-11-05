@@ -65,14 +65,18 @@ const WEB_ACTOR: Actor = { kind: "system", id: "screen_web" };
  * - `receipt`, with why, and no loader, worked out from what was typed alone, so a known address gets the same one:
  *   `held` (an answer to a must-have question was No: the neutral words, never why; R20-10, E7); `used_up` (the month's
  *   AI interviews are used up: the link follows by email; Q17, R20-11); `paused` (the company's trial has ended and this
- *   form was opened before; checked last, so it only ever says the link is on its way when it is).
+ *   form was opened before; checked last, so it only ever says the link is on its way when it is); `on_file` (the job is
+ *   past its plan's candidates per job: no interview, no reading, and the receipt's own words; checked first, from the job
+ *   and never the address typed, so a new, a repeat and a known address read the same, and a must-have "No" reads the same).
  */
-export type ApplyVisitOutcome = { kind: "interview"; applicationId: string | null; conversationId: string | null } | { kind: "receipt"; reason: "held" | "used_up" | "paused" };
+export type ApplyVisitOutcome = { kind: "interview"; applicationId: string | null; conversationId: string | null } | { kind: "receipt"; reason: "on_file" | "held" | "used_up" | "paused" };
 
 export type ApplyVisitInput = {
   /** `createApplication`'s result: the application (the existing one for a repeat), and whether it was a repeat. */
   application: Application;
   duplicate: boolean;
+  /** `createApplication`'s result: the job is past its limit, so nothing follows but the receipt and the on-file email. */
+  onFile?: boolean;
   /** The company had this person before the form was sent (an earlier application to another role; known-bugs row 17). */
   knownPerson?: boolean;
   company: Company;
@@ -97,6 +101,7 @@ export type ApplyVisitInput = {
 /** Called by the apply POST inside its transaction, after `createApplication`: what the page shows next (see above). */
 export async function applyVisitNext(tx: Tx, container: Container, input: ApplyVisitInput): Promise<ApplyVisitOutcome> {
   const { application: app, company, packet } = input;
+  if (input.onFile) return { kind: "receipt", reason: "on_file" };
   if (!evaluateEligibility(packet.requirements.eligibility, input.eligibilityAnswers, container.engine.clock()).passed) return { kind: "receipt", reason: "held" };
   const ent = await entitlements.check(tx, company.id, entitlements.TEXT_SCREENS, 1);
   if (!ent.ok && company.planKey !== "design_partner") return { kind: "receipt", reason: "used_up" };

@@ -5,7 +5,7 @@ import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalat
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { aiInterviewsFor } from "../services/screens";
-import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, boardPostingOf, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion } from "@ros/core";
+import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, boardPostingOf, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion, unlockedAtFor, waitingSince } from "@ros/core";
 import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson, shownReadings } from "../services/pool";
 import { applyBatch, previewBatch } from "../services/review-apply";
 import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
@@ -718,8 +718,8 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const shownScorecard = (s: { status: string; assessmentId: string | null }) => s.status === "completed" && !(s.assessmentId && hiddenReadings.has(s.assessmentId));
     const scorecards = await screenScorecards(tx, scr.map((s) => (shownScorecard(s) ? s : { ...s, assessmentId: null })));
     // The day the untold safety net acts on a decision nobody has told (Q27), in the company's calendar: its time zone,
-    // its working days and the ITS holidays, as the daily check counts them.
-    const untoldFallbackOn = DECISION_STAGES.includes(app.stage) && app.toldState === "not_told" && !decisionMessageWaiting && !cand?.anonymizedAt ? untoldFallbackAt(new Date(app.rejectedAt ?? app.stageChangedAt), await workingDayRulesFor(tx, app.companyId, now)).day : null;
+    // its working days and the ITS holidays, as the daily check counts them: from the unlock, for someone a change of plan opened.
+    const untoldFallbackOn = DECISION_STAGES.includes(app.stage) && app.toldState === "not_told" && !decisionMessageWaiting && !cand?.anonymizedAt ? untoldFallbackAt(new Date(waitingSince(app.rejectedAt ?? app.stageChangedAt, (await unlockedAtFor(tx, [app.id])).get(app.id))), await workingDayRulesFor(tx, app.companyId, now)).day : null;
     const strip = ownerStage(app, mark, followUp);
     const cancelled = strip === "cancelled" && followUp ? cancelledView(followUp, { timeZone: await companyTimeZone(tx, app.companyId) }) : null;
     // The match score with its breakdown (founder decision B2), the must-have line, where the pool board puts them and

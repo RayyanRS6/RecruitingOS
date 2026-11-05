@@ -129,6 +129,14 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("application.told", { how: "message" }, { kind: "system", id: "outbox" }))?.told).toBe("Told by the decision message.");
   });
 
+  it("reads someone a plan's limit kept from the team, once a change of plan opened them (the plans, Rule 2)", () => {
+    const system = { kind: "system", id: "candidate_lock" };
+    expect(historyItem(ev("application.locked", { position: 6, limit: 5, plan: "free" }, system))).toMatchObject({ what: "Applied past the plan's candidates per job", who: "The system" });
+    expect(historyItem(ev("application.unlocked", { cause: "plan_changed", plan: "pro", limit: 100, interview: true }))?.what).toBe("Opened by a change of plan");
+    expect(historyItem(ev("application.untold_fallback", { action: "sent", locked: true }, system))).toMatchObject({ what: "The job closed while the team could not open them, so the closing message went by itself", told: "Told by the decision message." });
+    expect(historyItem(ev("application.untold_fallback", { action: "not_sent", locked: true }, system))?.what).toBe("The job closed while the team could not open them, and there is no address on file to tell them");
+  });
+
   it("explains a mark that ended, and leaves out records that only repeat another", () => {
     expect(historyItem(ev("application.mark_cleared", { mark: "shortlist", reason: "cleared by a person" }))?.what).toBe("Taken off the shortlist");
     expect(historyItem(ev("application.mark_cleared", { mark: "on_hold", reason: "cleared by a person" }))?.what).toBe("Taken off hold");

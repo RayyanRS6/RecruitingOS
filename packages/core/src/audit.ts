@@ -20,6 +20,9 @@ export type AuditAction =
   | "staff.tenant_accessed"
   | "admin.break_glass"
   | "plan.changed"
+  /** An application past the plan's candidates per job, and its opening by a change of plan (Rule 2): why, in arrival order and the plan's numbers, never a name. */
+  | "application.locked"
+  | "application.unlocked"
   /** The Trial plan's 30 days (founder decision L-02 B): started, extended by ITS with a reason (days, end before and after), ended. */
   | "trial.started"
   | "trial.extended"

@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, type Actor, type RolePacket } from "@ros/contracts";
 import { createScreen, sendAcknowledgment, sendScreenInvite, type AcknowledgedInterview } from "@ros/agents";
-import { emit, entitlements, evaluateEligibility, notify, transition } from "@ros/core";
+import { closeOutDayWords, closeOutDueAt, emit, entitlements, evaluateEligibility, notify, transition } from "@ros/core";
 import { applications, assessments, communications, events, screens, workflowRuns, type Tx, type candidates, type companies, type roles } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
 import type { WorkflowEngine } from "./engine";
@@ -115,6 +115,15 @@ async function acknowledgeOnce(q: Tx, deps: Deps, b: Bundle, interview: Acknowle
   return res;
 }
 
+/**
+ * The one email for someone past their plan's candidates per job (the plans of 5 November 2026, Rule 2): in its on-file
+ * form, under the acknowledgment's own key, so an emailed-in applicant's AI notice is still read from it after an upgrade,
+ * and the interview's link, if it ever goes, goes in an email of its own ("Thanks again for applying").
+ */
+export function sendOnFileEmail(q: Tx, deps: Deps, b: Bundle, at: At): Promise<SendResult | null> {
+  return acknowledgeOnce(q, deps, b, { kind: "on_file", byDay: closeOutDayWords(closeOutDueAt(b.app.createdAt), b.company.timezone) }, at);
+}
+
 /** Founder decision F8: a Design Partner's allowance never interrupts a candidate; the owner and ITS are told. */
 export async function overDesignPartnerAllowance(q: Tx, input: { companyId: string; applicationId: string; name: string; ent: { used: number; limit: number | null }; planKey: string; actor: Actor; correlationId: string | null }): Promise<void> {
   await emit(q, { type: "entitlement.exceeded", companyId: input.companyId, actor: input.actor, subject: { type: "application", id: input.applicationId }, payload: { key: entitlements.TEXT_SCREENS, limit: input.ent.limit, used: input.ent.used, plan: input.planKey }, correlationId: input.correlationId });
@@ -191,11 +200,12 @@ export async function interviewsLapsedOnAllowance(q: Tx, applicationIds: readonl
  * in" after the run gave up, an intake or a waiting suggestion from before 20 October 2026. `cutShort`: only when such a
  * run existed before (taking back a decision restores what the decision stopped, nothing more). Under `screen:<id>` when
  * that key was never used, else a key of its own; it waits for the reading like the first, and since the one email went
- * already, the link goes in an email of its own. True when a run was started.
+ * already, the link goes in an email of its own. True when a run was started. Never for a locked application: nothing asks
+ * ten minutes of someone for answers nobody may read, and nothing spends the company's AI credit on them.
  */
 export async function startInterviewAgain(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; applicationId: string; actor: Actor; now: Date; cutShort?: boolean }): Promise<boolean> {
-  const [app] = await q.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(eq(applications.id, input.applicationId)).limit(1);
-  if (!app || (app.stage !== "ineligible" && !OFFER_STAGES.includes(app.stage))) return false;
+  const [app] = await q.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage, lockedAt: applications.lockedAt }).from(applications).where(eq(applications.id, input.applicationId)).limit(1);
+  if (!app || app.lockedAt || (app.stage !== "ineligible" && !OFFER_STAGES.includes(app.stage))) return false;
   const [scr] = await q.select({ id: screens.id }).from(screens).where(eq(screens.applicationId, app.id)).limit(1);
   if (scr || (await interviewRunOn(q, app.id))) return false;
   const first = `screen:${app.id}`;

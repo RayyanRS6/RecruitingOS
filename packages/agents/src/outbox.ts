@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, isCompanyVerified, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, nextContactWindow, notify, raiseAlert } from "@ros/core";
+import { DECISION_STAGES, applicationLocked, autoTimesUnderTakeover, emit, errorForLog, lockedAmong, nextContactWindow, notify, raiseAlert } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviews, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 
@@ -139,9 +139,9 @@ export async function companyConfirmed(q: Queryable, companyId: string): Promise
 /**
  * Invitations to a next step: pointless, and confusing, once the person has left the process. The links and reminders
  * of the conversation that goes with the application (plan Wave E) are among them, and so are the courtesy notes that
- * say the application is still with the team (plan G10).
+ * say the application is still with the team (plan G10), and the close-out note to someone locked (Rule 2).
  */
-const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "interview_slots", "interview_slots_reminder", "interview_slots_lapsed", "interview_confirmation", "screen_later", "screen_idle_reminder", "screen_review_reminder", "screen_not_started_reminder", "screen_resume", "screen_repeat_later", "screen_repeat_resume", "still_reviewing", "screen_expired"]);
+const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "interview_slots", "interview_slots_reminder", "interview_slots_lapsed", "interview_confirmation", "screen_later", "screen_idle_reminder", "screen_review_reminder", "screen_not_started_reminder", "screen_resume", "screen_repeat_later", "screen_repeat_resume", "still_reviewing", "screen_expired", "close_out"]);
 /** Where an application has left the process: the candidate withdrew, or a decision was made. */
 const LEFT_PROCESS = new Set(["withdrawn", "rejected", "declined", "talent_pool"]);
 /** Messages whose link opens a screening conversation: dead once that conversation has ended (expired, closed, done). */
@@ -162,7 +162,8 @@ type WaitingRow = Pick<CommunicationRow, "id" | "companyId" | "channel" | "templ
  * request, an invitation to a next step whose person has since left the process (a closing message, such as the
  * decision or a cancellation, still goes), a link to a step that has ended since (a screening conversation no longer
  * open, interview times no longer on offer: the closing note of the step still goes), the times of an automatic set of
- * new times for a role an ITS recruiter took over meanwhile, or a decision message whose decision no longer applies.
+ * new times for a role an ITS recruiter took over meanwhile, a decision message whose decision no longer applies, or a
+ * close-out note to someone a change of plan has opened since: it says nobody has reviewed them, and the team can now.
  * Read again just before a release and just before a send, because a message can wait for days. The answer to a privacy
  * request always goes.
  */
@@ -180,6 +181,8 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
   const openScreen = new Set((screenApps.length ? await q.select({ a: screens.applicationId }).from(screens).where(and(inArray(screens.applicationId, screenApps), inArray(screens.status, [...SCREEN_PERSON_ROUTE_STATUSES]))) : []).map((s) => s.a));
   const openOffer = new Set((slotApps.length ? await q.select({ a: interviews.applicationId }).from(interviews).where(and(inArray(interviews.applicationId, slotApps), eq(interviews.status, "scheduling"))) : []).map((i) => i.a));
   const takenOver = await autoTimesUnderTakeover(q, relevant.filter((r) => r.templateKey === "interview_slots").map((r) => r.idempotencyKey).filter((k): k is string => !!k));
+  const closeOuts = appsWith(new Set(["close_out"]));
+  const stillLocked = await lockedAmong(q, closeOuts);
   for (const r of relevant) {
     const who = r.candidateId ? people.get(r.candidateId) : undefined;
     const stage = r.applicationId ? stages.get(r.applicationId) : undefined;
@@ -190,6 +193,7 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
       : r.applicationId && ((SCREEN_LINK_TEMPLATES.has(template) && !openScreen.has(r.applicationId)) || (SLOT_LINK_TEMPLATES.has(template) && !openOffer.has(r.applicationId))) ? "the step it invites to has ended since it was written"
       : r.idempotencyKey && takenOver.has(r.idempotencyKey) ? AUTO_TIMES_TAKEN_OVER
       : stage && template.startsWith("disposition:") && !DECISION_STAGES.includes(stage) ? "the decision no longer applies"
+      : r.applicationId && template === "close_out" && !stillLocked.has(r.applicationId) ? "the team can read this application now"
       : null;
     if (reason) out.set(r.id, reason);
   }
@@ -417,7 +421,8 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
     await tx.update(communications).set({ status: "failed", error, sendingAt: null }).where(eq(communications.id, claimed.id));
     await emit(tx, { type: "message.failed", companyId: claimed.companyId, actor, subject: { type: "communication", id: claimed.id }, payload: { ...payload, error }, correlationId: claimed.correlationId });
     await settleDecisionTold(tx, claimed, "failed", ctx.now);
-    if (claimed.candidateId && claimed.applicationId) {
+    // Not about someone locked (Rule 2): it would lead the team to a person they cannot read. ITS's own alert below still goes.
+    if (claimed.candidateId && claimed.applicationId && !(await applicationLocked(tx, claimed.applicationId))) {
       await notify(tx, { companyId: claimed.companyId, kind: "candidate.unreachable", title: `A message to a candidate could not be sent`, body: `${claimed.subject ?? claimed.templateKey ?? "A message"}: ${error}. Please reach them another way.`, action: { label: "Open the candidate", href: "/talent" } });
     }
     return "failed";
@@ -447,8 +452,8 @@ export async function settleDecisionTold(tx: Queryable, row: Pick<CommunicationR
   const where = and(eq(applications.id, row.applicationId), eq(applications.toldState, "queued"));
   if (outcome !== "sent") {
     const notArrived = row.retryOf ? and(eq(applications.id, row.applicationId), inArray(applications.toldState, ["queued", "sent"]), inArray(applications.stage, [...DECISION_STAGES])) : where;
-    const [back] = await tx.update(applications).set({ toldState: "not_told", ...(row.retryOf ? { candidateToldAt: null } : {}) }).where(notArrived).returning({ id: applications.id, roleId: applications.roleId });
-    if (back && outcome === "unknown") await notify(tx, { companyId: row.companyId, kind: "candidate.unreachable", title: "A decision message may not have reached a candidate", body: "Sending it was interrupted, so we cannot tell whether it arrived. They show as not told yet: check with them, or record that you told them yourself, before sending it again.", action: { label: "Open the candidate", href: `/roles/${back.roleId}/talent?open=${back.id}` } });
+    const [back] = await tx.update(applications).set({ toldState: "not_told", ...(row.retryOf ? { candidateToldAt: null } : {}) }).where(notArrived).returning({ id: applications.id, roleId: applications.roleId, lockedAt: applications.lockedAt });
+    if (back && outcome === "unknown" && !back.lockedAt) await notify(tx, { companyId: row.companyId, kind: "candidate.unreachable", title: "A decision message may not have reached a candidate", body: "Sending it was interrupted, so we cannot tell whether it arrived. They show as not told yet: check with them, or record that you told them yourself, before sending it again.", action: { label: "Open the candidate", href: `/roles/${back.roleId}/talent?open=${back.id}` } });
     return;
   }
   const [told] = await tx.update(applications).set({ toldState: "sent", candidateToldAt: now.toISOString() }).where(where).returning({ id: applications.id });

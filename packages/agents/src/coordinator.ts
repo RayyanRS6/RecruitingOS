@@ -1,5 +1,5 @@
 import type { Actor, DecisionWording, RolePacket } from "@ros/contracts";
-import { ADVERSE_DECISION_LINE, emit, disclosureLine } from "@ros/core";
+import { ADVERSE_DECISION_LINE, closeOutNoteLine, emit, disclosureLine, onFileReceiptLine } from "@ros/core";
 import { communications, type Queryable, type applications, type candidates, type companies, type roles } from "@ros/db";
 import { mailbox, replyAddress, type Integrations, type SendResult } from "@ros/integrations";
 import { queueCommunication, type QueueResult } from "./outbox";
@@ -78,9 +78,12 @@ export async function sendFreeformMessage(q: Queryable, integrations: Integratio
  * The AI interview the one email offers (20 Oct 2026, R20-5, R20-10, R20-11):
  * - `link`: its link, with the job's own length (`minutes`, the job's screening length);
  * - `follows`: the month's AI interviews are used up (Q17): the link follows by email once more are added;
- * - `none`: the neutral thank-you, for someone held on a must-have answer or who left the process before it went.
+ * - `none`: the neutral thank-you, for someone held on a must-have answer or who left the process before it went;
+ * - `on_file`: no interview at all, for someone past their plan's candidates per job (the plans of 5 November 2026, Rule 2):
+ *   the words of the receipt, with `byDay`, the day they hear by at the latest. Its wording is DRAFT WORDING PENDING COUNSEL
+ *   (packages/core/src/candidate-lock.ts). Never a word about a plan, and none of "read every application": nobody may.
  */
-export type AcknowledgedInterview = { kind: "link"; url: string; minutes: number } | { kind: "follows"; minutes: number } | { kind: "none" };
+export type AcknowledgedInterview = { kind: "link"; url: string; minutes: number } | { kind: "follows"; minutes: number } | { kind: "none" } | { kind: "on_file"; byDay: string };
 
 /** The address already belonged to someone on the company's records (known-bugs row 17): the email says it was sent using it. */
 const KNOWN_ADDRESS_LINE = "This application was sent using your email address. If you did not send it, reply to this email and a person will look into it.";
@@ -136,6 +139,12 @@ Your next step is a short interview with ${company.name}'s AI assistant, a writt
 You can skip any question, and you can choose to talk to a person instead. If you need an adjustment, such as more time or another format, reply and tell us. Not doing the interview never stops your application. People on the hiring team read every application and make every decision.
 
 Check where things stand at any time: ${statusUrl}${known}`
+      : iv.kind === "on_file"
+        ? `Thank you for applying for the ${title} position at ${company.name}. We received your application.${known}
+
+${onFileReceiptLine(company.name, iv.byDay)} People make every decision.
+
+You can check where things stand any time, withdraw, or ask about your information: ${statusUrl}`
       : `Thank you for applying for the ${title} position at ${company.name}. We received your application. People on the hiring team review it and make every decision.${known}
 
 What happens next:
@@ -147,7 +156,7 @@ You can check where things stand any time: ${statusUrl}`;
     ...input,
     channel: "email",
     templateKey: "acknowledgment",
-    subject: iv.kind === "none" ? `Thank you for applying: ${title} at ${company.name}` : `Thank you for applying: your next step for ${title} at ${company.name}`,
+    subject: iv.kind === "none" || iv.kind === "on_file" ? `Thank you for applying: ${title} at ${company.name}` : `Thank you for applying: your next step for ${title} at ${company.name}`,
     text: `Hi ${candidate.firstName},\n\n${body}\n\n${footer}`,
     idempotencyKey: `ack:${application.id}`,
     eventOnSent: "message.sent",
@@ -211,9 +220,10 @@ export type PersonalLine = { text: string; senderName: string };
  * optional personal line the person wrote (checked before it gets here, `checkPersonalLine`). Below the signature comes
  * the locked footer nobody can edit (Q28): what we keep for future roles and how to say no to it, how to reach a person,
  * Colorado's line about asking for the reasons (plan G5, when `adverseDecisionLine`), and the AI disclosure. Pure, so the
- * page can preview exactly what will go.
+ * page can preview exactly what will go. `locked`: someone nobody at the company could read when a closed role moved them
+ * (Rule 2) is never kept for future roles by it, so what we keep says nothing; everything else stands.
  */
-export function dispositionMessage(input: Pick<MessageInput, "candidate" | "company" | "packet"> & { wording: DecisionWording; cancelledInterviews?: CancelledInterview[]; personalLine?: PersonalLine | null; statusUrl?: string | null; adverseDecisionLine?: boolean }): { subject: string; text: string; templateKey: string; wording: DecisionWording } {
+export function dispositionMessage(input: Pick<MessageInput, "candidate" | "company" | "packet"> & { wording: DecisionWording; cancelledInterviews?: CancelledInterview[]; personalLine?: PersonalLine | null; statusUrl?: string | null; adverseDecisionLine?: boolean; locked?: boolean }): { subject: string; text: string; templateKey: string; wording: DecisionWording } {
   const { candidate, company, packet } = input;
   const when = (startsAt: string, timezone: string | null) => new Date(startsAt).toLocaleString("en-US", { timeZone: timezone ?? "UTC", weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
   const cancelled = (input.cancelledInterviews ?? []).map((iv) => (iv.startsAt ? `The ${iv.title} on ${when(iv.startsAt, iv.timezone)} is cancelled, so there is no need to attend.` : `The times we offered you for the ${iv.title} are no longer available, so there is no need to pick one.`)).join(" ");
@@ -221,7 +231,7 @@ export function dispositionMessage(input: Pick<MessageInput, "candidate" | "comp
   // The status page has the one-click "Don't keep me for future roles" (Wave 0 item 0.11), and the link lands on it;
   // someone who already said so is not offered it again.
   const futureRoles = input.statusUrl && !candidate.preferences.talentPoolOptOut ? `${futureRolesLine(candidate)} You can also choose this on your status page: ${input.statusUrl}#future-roles` : futureRolesLine(candidate);
-  const footer = [futureRoles, packet.communication.humanAlternativeText, input.adverseDecisionLine ? ADVERSE_DECISION_LINE.text : null, packet.communication.disclosureText || disclosureLine(company.name)].filter((x): x is string => !!x);
+  const footer = [input.locked ? null : futureRoles, packet.communication.humanAlternativeText, input.adverseDecisionLine ? ADVERSE_DECISION_LINE.text : null, packet.communication.disclosureText || disclosureLine(company.name)].filter((x): x is string => !!x);
   const text = `Hi ${candidate.firstName},
 
 Thank you for your interest in the ${packet.identity.title} position at ${company.name}.
@@ -244,7 +254,7 @@ ${footer.join("\n\n")}`;
  */
 export async function sendDisposition(q: Queryable, integrations: Integrations, input: MessageInput & { wording: DecisionWording; cancelledInterviews?: CancelledInterview[]; attempt?: number; personalLine?: PersonalLine | null; statusUrl?: string | null; adverseDecisionLine?: boolean; sendAt?: Date | null }): Promise<SendResult> {
   const { application, candidate } = input;
-  const message = dispositionMessage(input);
+  const message = dispositionMessage({ ...input, locked: !!application.lockedAt });
   const again = input.attempt ? `:${input.attempt}` : "";
   const idempotencyKey = input.wording === "role_closed" ? `role_closed:${application.id}${again}` : `disposition:${application.id}:${application.rejectedAt ?? application.stageChangedAt}${again}`;
   return deliver(q, integrations, {
@@ -409,6 +419,28 @@ ${signature(packet, company)}
 
 ${packet.communication.disclosureText || disclosureLine(company.name)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "still_reviewing", subject: `Still reviewing your application: ${packet.identity.title} at ${company.name}`, text, idempotencyKey: `still_reviewing:${application.id}`, eventOnSent: "message.sent", to: candidate.email });
+}
+
+/**
+ * The close-out note (the plans of 5 November 2026, Rule 2): what someone past their plan's candidates per job hears when
+ * the job is still open at the latest date they were promised. It is no decline and moves no stage, and it says nothing
+ * about a plan. Its wording is DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts). Once per application.
+ * Carries the AI disclosure like every automatic email.
+ */
+export const CLOSE_OUT_TEMPLATE = "close_out";
+
+export async function sendCloseOutNote(q: Queryable, integrations: Integrations, input: MessageInput & { statusUrl: string }): Promise<SendResult> {
+  const { application, candidate, company, packet } = input;
+  const text = `Hi ${candidate.firstName},
+
+${closeOutNoteLine({ roleTitle: packet.identity.title, companyName: company.name, statusUrl: input.statusUrl })}
+
+${packet.communication.humanAlternativeText}
+
+${signature(packet, company)}
+
+${packet.communication.disclosureText || disclosureLine(company.name)}`;
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: CLOSE_OUT_TEMPLATE, subject: `Your application: ${packet.identity.title} at ${company.name}`, text, idempotencyKey: `close_out:${application.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**

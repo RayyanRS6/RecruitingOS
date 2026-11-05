@@ -1,8 +1,8 @@
-import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, notInArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { CANCEL_STAGES, DECISION_STAGES, createDataRequest, createEscalation, decisionTold, disclosureLine, followUpParked, humanResponseExpectation, loadBusinessCalendar, notify, openFollowUpOf, raiseAlert, setAutoState } from "@ros/core";
 import { fromAddress, newTimesDayWords, queueCommunication, recordInbound, replyToFor, requestHuman, sendPrivacyAcknowledgment } from "@ros/agents";
-import { applications, candidates, communications, companies, dataRequests, inboundEmails, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
+import { applications, candidates, communications, companies, dataRequests, inboundEmails, recruiterEscalations, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { InboundEmail } from "@ros/integrations";
 import { cancelNewTimesRuns, stopPreparedNewTimes } from "@ros/workflows";
 import type { Container } from "../container";
@@ -19,6 +19,10 @@ import { optOutOfTalentPool } from "./talent-pool";
  * and keeps the person out of the talent pool; before that, the same words are passed to the team as they are. After a decision message, asking for
  * its reasons and a person's review (EXPLAIN, as Colorado's line says) goes to the ITS compliance queue (plan G5).
  * Nothing here ever creates an application or changes a stage.
+ *
+ * While the application is locked (the plans of 5 November 2026, Rule 2) the team may not read this person, so no notice goes
+ * to them and nothing names them: a reply reaches ITS instead (`replyReachesIts`), and so does HUMAN. A request for a person
+ * or an adjustment must reach a person (register item 12), and that is never limited.
  */
 type App = typeof applications.$inferSelect;
 type InboundRow = typeof inboundEmails.$inferSelect;
@@ -116,6 +120,16 @@ async function noThanksMeansFutureRoles(tx: Tx, app: App): Promise<boolean> {
   return (await decisionMessageSent(tx, app)).sent;
 }
 
+/**
+ * A locked applicant wrote back, and nobody on the team may read it: ITS's queue gets it, with the words left on the thread,
+ * so a person reads it. One request at a time: while one stands, the person holding it reads the next reply there too.
+ */
+async function replyReachesIts(tx: Tx, input: { app: App; roleTitle: string; name: string; now: Date }): Promise<void> {
+  const [open] = await tx.select({ id: recruiterEscalations.id }).from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, input.app.id), notInArray(recruiterEscalations.status, ["resolved", "cancelled"]))).limit(1);
+  if (open) return;
+  await createEscalation(tx, { companyId: input.app.companyId, roleId: input.app.roleId, applicationId: input.app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: `${input.name} wrote back about the ${input.roleTitle} role. The hiring team cannot read this application, so a person at ITS answers. Their message is on the application's thread.`, requestedBy: EMAIL_REPLY_ACTOR, now: input.now });
+}
+
 export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; talentPoolOptOut?: boolean; duplicate?: boolean; explanationRequested?: ExplanationAsk }> {
   const { app, mail } = input;
   // Postmark redelivers a message it thinks was not taken (a timeout after this transaction committed, for instance):
@@ -156,9 +170,13 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
     : saidNoThanks && !aboutFutureRoles ? `${quoted}. This may mean they do not want to go ahead with this step.${cancelled.stopped ? " Reply to check with them." : " Nothing was changed; reply to check with them."}`
     : wantsExplanation ? `About ${role.title}: they asked for the reasons for your decision and for a person to review it. ITS's compliance team has the request and answers them; their message is on their page.`
     : quoted;
-  await notify(tx, { companyId: app.companyId, kind: "message.received", title: `${name} wrote back`, body: `${body}${cancelled.sentence}`, action: { label: "Read it", href: open } });
+  if (!app.lockedAt) await notify(tx, { companyId: app.companyId, kind: "message.received", title: `${name} wrote back`, body: `${body}${cancelled.sentence}`, action: { label: "Read it", href: open } });
   if (wantsExplanation) return { communicationId, humanRequested: false, explanationRequested: { candidateId: candidate.id, email: candidate.email ?? mail.from ?? null, companyName: company.name } };
-  if (!wantsHuman) return { communicationId, humanRequested: false, talentPoolOptOut: optedOut };
+  if (!wantsHuman) {
+    // Saying no to being kept is done and confirmed; anything else they wrote needs someone who may read it.
+    if (app.lockedAt && !aboutFutureRoles) await replyReachesIts(tx, { app, roleTitle: role.title, name, now: container.engine.clock() });
+    return { communicationId, humanRequested: false, talentPoolOptOut: optedOut };
+  }
 
   const now = container.engine.clock();
   const calendar = await loadBusinessCalendar(tx, now);
@@ -173,7 +191,7 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
     await requestHuman(tx, screenDeps(container), { screenId: screen.id, reason: "candidate asked for a person by email", actor: EMAIL_REPLY_ACTOR, reply, replyChannel: "web", confirmByEmail: false });
   } else {
     await createEscalation(tx, { companyId: app.companyId, roleId: app.roleId, applicationId: app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: `${name} replied HUMAN to an email about the ${role.title} role and needs a person. Please reach out by email${candidate.phone ? " or phone" : ""} and pick up the conversation.`, requestedBy: EMAIL_REPLY_ACTOR, now });
-    await notify(tx, { companyId: app.companyId, kind: "screen.human_requested", title: `${name} asked for a person`, body: `They replied HUMAN to an email about ${role.title}. A recruiter has the request; you can also reply directly.`, action: { label: "Open the candidate", href: open } });
+    if (!app.lockedAt) await notify(tx, { companyId: app.companyId, kind: "screen.human_requested", title: `${name} asked for a person`, body: `They replied HUMAN to an email about ${role.title}. A recruiter has the request; you can also reply directly.`, action: { label: "Open the candidate", href: open } });
   }
   if (candidate.email) {
     // The response-time sentence goes back the same way every candidate email does: through the outbox, after this transaction commits.

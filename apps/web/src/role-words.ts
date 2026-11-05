@@ -117,6 +117,8 @@ export function describeRoleEvent(e: RoleEvent): string {
     "application.received": "An application arrived",
     "application.acknowledged": "An applicant was acknowledged",
     "application.duplicate_detected": "Someone applied again (the original was kept)",
+    "application.locked": "Someone applied past the plan's candidates per job",
+    "application.unlocked": "A candidate was opened by a change of plan",
     "application.ineligible": "An application was held on an eligibility answer",
     "application.triaged": "An application was assessed",
     "application.stage_changed": `A candidate is now "${STAGE_WORDS[String(p.to ?? "")] ?? String(p.to ?? "").replace(/_/g, " ")}"`,

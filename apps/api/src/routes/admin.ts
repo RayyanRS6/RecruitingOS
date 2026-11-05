@@ -6,6 +6,7 @@ import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, aiCreditLin
 import { AI_CREDIT_AVAILABLE, ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { mailbox } from "@ros/integrations";
+import { unlockApplicants } from "@ros/workflows";
 import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, invitations, jobs, memberships, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
 import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, resolveAlert, resolveAlertsFor, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
@@ -559,7 +560,8 @@ adminRoutes.get("/plans", async (c) => {
  * days when the company is confirmed (otherwise they start at the ITS check). Moving it to another plan ends the trial
  * with nothing to write (only the Trial plan reads the dates, which stay as a record): the "trial ended" alert is
  * resolved, and a company that was paused takes applications again, so the emails held meanwhile are added once this
- * has committed. The answer is the company, with `trialEnded` true when this change ended a trial.
+ * has committed. The answer is the company, with `trialEnded` true when this change ended a trial, and `unlocked`, how many
+ * people locked on its jobs the new plan opened (`unlockApplicants`).
  */
 adminRoutes.post("/customers/:id/plan", async (c) => {
   const s = c.get("session")!;
@@ -575,8 +577,10 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
   const clock = container.engine.clock();
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const result = await withPlatform(container.db, async (tx) => {
-    // Locked: the settings are written back whole, so the ITS check or a customer's change made meanwhile is kept.
-    const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
+    // Locked: the settings are written back whole, so the ITS check or a customer's change made meanwhile is kept. Not "for
+    // update": every insert that names this company takes a key share of its row, and `unlockApplicants` below waits for each
+    // job's applicants' lock, whose holder is about to make such an insert. "For update" would leave the two waiting for each other.
+    const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1).for("no key update");
     if (!co) throw new HttpError(404, "not_found", "Company not found.");
     const [plan] = await tx.select({ key: plans.key, active: plans.active }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
     if (!plan) throw new HttpError(400, "unknown_plan", `There is no plan called ${body.planKey}.`);
@@ -584,6 +588,8 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     if (plan.active === false) throw new HttpError(400, "inactive_plan", `The ${body.planKey} plan is retired and can no longer be given to a customer.`);
     await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
     await entitlements.settleAllowanceAlerts(tx, { companyId });
+    // People a smaller plan left locked open now, oldest first, up to the new limit. A move down opens nobody and locks nobody.
+    const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, actor, reason, now: clock });
     const pilot = body.planKey === "design_partner"
       ? { startedAt: co.settings.pilot?.startedAt ?? now.toISOString(), endsAt: co.settings.pilot?.endsAt ?? new Date(now.getTime() + (body.pilotDays ?? 90) * 86_400_000).toISOString(), ...(body.extendUntil ? { extendedUntil: body.extendUntil } : {}) }
       : co.settings.pilot;
@@ -605,7 +611,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     await emit(tx, { type: "plan.changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from: co.planKey, to: body.planKey, pilot, ...(leavingTrial ? { trialEnded: true } : {}) } });
     await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey, ...(term ? { trial: { startedAt: term.startedAt, endsAt: term.endsAt } } : {}), ...(leavingTrial ? { trialEnded: true } : {}) } });
     if (term) await emit(tx, { type: "trial.started", companyId, actor, subject: { type: "company", id: companyId }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
-    return { updated, wasPaused, leavingTrial };
+    return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked };
   });
   if (result.wasPaused) {
     // Paused no more: the jobs go back on the feeds, and the emails that arrived meanwhile are added to their jobs.
@@ -613,7 +619,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     await replayHeldEmailsForCompany(container, companyId);
   }
   await container.kick();
-  return c.json({ ...result.updated, trialEnded: result.leavingTrial });
+  return c.json({ ...result.updated, trialEnded: result.leavingTrial, unlocked: result.unlocked });
 });
 
 /**

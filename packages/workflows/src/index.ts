@@ -25,6 +25,7 @@ export { ALERT_TEMPLATE, DIGEST_TEMPLATE, NOTIFICATION_DIGEST_KEY, emailNotifica
 export { DISCARD_OBJECT_JOB_KIND, discardUnusedObject, examineQuarantinedDocument, processQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination, type QuarantineOutcome } from "./documents";
 export { FORM_READING_KEEP_MS, FORM_READ_EVENT, FORM_READ_WAIT_MS, formReadSignal, formReadingNoteKey, formReadingOutcome, formReadingRun, linkFormReading } from "./form-reading";
 export { INTERVIEW_LINK_HOURS, READING_SETTLED_EVENT, READING_WAIT_MINUTES, intakeOn, interviewRunOn, interviewUrl, interviewsBeingPrepared, interviewsLapsedOnAllowance, interviewsWaitingForMore, readingSettledSignal, startInterviewAgain } from "./with-application";
+export { UNLOCK_INTERVIEW_DAYS, unlockApplicants } from "./unlock-applicants";
 import { DISCARD_OBJECT_JOB_KIND, discardUnusedObject } from "./documents";
 
 /** Creates the engine with every workflow definition registered. */

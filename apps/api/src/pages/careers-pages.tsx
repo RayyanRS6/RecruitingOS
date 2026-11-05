@@ -3,15 +3,14 @@
 import { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
 import { trialPaused, trialStanding } from "@ros/contracts";
-import { CLOSING_DATE_REASON, applyByLabel, benefitsDescriptionFor, closingDayWords, noticesFor } from "@ros/core";
-import { rolePackets, roles, type companies } from "@ros/db";
+import { CLOSING_DATE_REASON, applyByLabel, benefitsDescriptionFor, closingDayWords, entitlements, noticesFor } from "@ros/core";
+import { rolePackets, roles, withTenant, type companies } from "@ros/db";
 import { LOGO_FILE, jobPostingJsonLd } from "@ros/integrations";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse, profileOf } from "../services/company-settings-profile";
-import { APPLY_FLOW } from "../services/job-preview";
 import { jobUrls } from "../services/job-urls";
-import { acceptingApplications, jobNotices, loadJob, loadPublicCompany } from "./candidate-shared";
+import { acceptingApplications, applyFlowOf, jobNotices, loadJob, loadPublicCompany } from "./candidate-shared";
 import { descriptionExcerpt } from "./description";
 import { Icon } from "./icons";
 import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
@@ -75,9 +74,11 @@ candidatePages.get("/careers/:slug", async (c) => {
   // A trial that ended (L-02 B) shows every job as not taking new applications, in the words a job's own stop uses.
   const paused = trialPaused(company, container.engine.clock());
   // The company's own introduction is the page's lead; without one the page has no lead (fewer words, 23 October 2026).
-  // The link-preview text still falls back to the old default line, which is never on the page itself.
+  // The link-preview text still falls back to the old default line, which is never on the page itself; never for a company
+  // whose plan can leave applicants unread (Rule 2), for whom it would not be true: its job count is enough.
   const intro = company.settings.careersPage?.intro ?? null;
-  const summary = `${open.length ? `${open.length} open ${open.length === 1 ? "job" : "jobs"} at ${company.name}.` : `Jobs at ${company.name}.`} ${view.about ?? intro ?? "We respond to every applicant and keep the process short."}`.slice(0, 300);
+  const respondsToAll = (await withTenant(container.db, company.id, (tx) => entitlements.limitOf(tx, company.id, entitlements.CANDIDATES_PER_JOB))) === null;
+  const summary = `${open.length ? `${open.length} open ${open.length === 1 ? "job" : "jobs"} at ${company.name}.` : `Jobs at ${company.name}.`} ${view.about ?? intro ?? (respondsToAll ? "We respond to every applicant and keep the process short." : "")}`.trim().slice(0, 300);
   return c.html(
     <Layout title={`Careers at ${company.name}`} wide description={summary} share={{ title: `Careers at ${company.name}`, description: summary, url: jobUrls(container.env, { slug: company.slug, roleId: "-" }).careers, siteName: company.name, image: publicLogoUrl(company, container.env) }}>
       <div class="careers">
@@ -175,7 +176,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
       role={jobRoleView(role, trialEnded)}
       notices={allNotices}
       smsEnabled={container.env.SMS_ENABLED}
-      flow={APPLY_FLOW}
+      flow={await applyFlowOf(container, job)}
       benefits={benefitsDescriptionFor(packet.compensation, company.settings)}
       links={{ careers: `/careers/${company.slug}`, apply: `/careers/${company.slug}/jobs/${role.id}/apply` }}
       jsonLd={jsonLd}

@@ -3,6 +3,7 @@
 import { and, desc, eq, gte, inArray, like, or } from "drizzle-orm";
 import { DecisionWording } from "@ros/contracts";
 import { decisionTemplateKey } from "@ros/agents";
+import { LOCKED_THREAD_LINE } from "@ros/core";
 import { communications, type Queryable } from "@ros/db";
 
 /**
@@ -114,13 +115,13 @@ function when(at: string, timeZone: string): string {
   }
 }
 
-export function MessageThread(props: { messages: ThreadMessage[]; more: boolean; companyName: string; timeZone: string }) {
+export function MessageThread(props: { messages: ThreadMessage[]; more: boolean; companyName: string; timeZone: string; /** While locked (Rule 2) a reply reaches ITS, not the team, so the line says "us". */ locked?: boolean }) {
   if (!props.messages.length) return null;
   return (
     <section aria-labelledby="messages">
       <h2 id="messages">Messages about your application</h2>
       {/* There is no reply box here (the link never expires; an email's address proves who wrote), so the line says how to write. */}
-      <p class="meta">{props.more ? `The latest ${THREAD_LIMIT} are shown. ` : ""}To write to the team, reply to any of our emails.</p>
+      <p class="meta">{props.more ? `The latest ${THREAD_LIMIT} are shown. ` : ""}{props.locked ? LOCKED_THREAD_LINE : "To write to the team, reply to any of our emails."}</p>
       <ol class="thread">
         {props.messages.map((m) => {
           const who = m.from === "candidate" ? "You" : props.companyName;

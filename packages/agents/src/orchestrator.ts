@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
-import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, zonedParts } from "@ros/core";
+import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, notLocked, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import { mailbox, type Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -82,10 +82,11 @@ export async function workingDayRulesFor(q: Queryable, companyId: string, now: D
  * The decisions nobody has told the candidate about for two working days or more (declined, or moved to the talent
  * pool; not one whose message waits for an approver): the reminder of the untold safety net. Decisions stay private;
  * the team is reminded, by name, to send the message or record telling them, and hears what happens at five working days
- * (decision-messages.ts `runUntoldSafetyNet`): the standard message goes by itself, or a recruiter is brought in.
+ * (decision-messages.ts `runUntoldSafetyNet`): the standard message goes by itself, or a recruiter is brought in. Someone a
+ * change of plan just opened counts from then (`unlocks`): until then the team could not tell them anything.
  */
-function untoldDecisions(role: { id: string; title: string }, apps: Array<typeof applications.$inferSelect>, waitingApproval: Set<string>, names: Map<string, string>, now: Date, rules: WorkingDayRules): Detection | null {
-  const age = (a: typeof applications.$inferSelect) => workingDaysSince(new Date(a.rejectedAt ?? a.stageChangedAt), now, 60, rules);
+function untoldDecisions(role: { id: string; title: string }, apps: Array<typeof applications.$inferSelect>, waitingApproval: Set<string>, names: Map<string, string>, now: Date, rules: WorkingDayRules, unlocks: Map<string, string>): Detection | null {
+  const age = (a: typeof applications.$inferSelect) => workingDaysSince(new Date(waitingSince(a.rejectedAt ?? a.stageChangedAt, unlocks.get(a.id))), now, 60, rules);
   const late = apps.filter((a) => DECISION_STAGES.includes(a.stage) && a.toldState === "not_told" && !waitingApproval.has(a.id) && age(a) >= UNTOLD_REMIND_WORKING_DAYS);
   if (!late.length) return null;
   const days = Math.max(...late.map(age));
@@ -145,6 +146,10 @@ async function candidateNames(q: Queryable, candidateIds: string[]): Promise<Map
   return new Map(rows.map((r) => [r.id, `${r.firstName} ${r.lastName}`.trim() || "A candidate"]));
 }
 
+/**
+ * Nobody locked counts toward anything here (the plans of 5 November 2026, Rule 2): the team cannot read them or act on them,
+ * so they nag nobody, are named to nobody and climb no ladder.
+ */
 export async function detectStuckRoles(q: Queryable, companyId: string, now: Date): Promise<Detection[]> {
   const out: Detection[] = [];
   // Until ITS confirms the company (founder decision B7) its open roles are not public and its invitations wait in the
@@ -157,18 +162,19 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
   // closed, unless the one closing message for all of them waits for its approval (Q30).
   const closed = await q.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "closed")));
   if (closed.length) {
-    const decidedOnClosed = await q.select().from(applications).where(and(inArray(applications.roleId, closed.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told")));
+    const decidedOnClosed = await q.select().from(applications).where(and(inArray(applications.roleId, closed.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), notLocked()));
     const removed = await removedCandidates(q, decidedOnClosed.map((a) => a.candidateId));
     const untold = decidedOnClosed.filter((a) => !removed.has(a.candidateId));
     const waiting = await decisionsWaitingApproval(q, untold.map((a) => a.id));
     const names = await candidateNames(q, untold.map((a) => a.candidateId));
+    const unlocks = await unlockedAtFor(q, untold.map((a) => a.id));
     for (const role of closed) {
-      const d = untoldDecisions(role, untold.filter((a) => a.roleId === role.id), waiting, names, now, rules);
+      const d = untoldDecisions(role, untold.filter((a) => a.roleId === role.id), waiting, names, now, rules, unlocks);
       if (d) out.push(d);
     }
   }
   for (const role of open) {
-    const apps = await q.select().from(applications).where(eq(applications.roleId, role.id));
+    const apps = await q.select().from(applications).where(and(eq(applications.roleId, role.id), notLocked()));
     // A person on hold or set aside nudges nobody until their hold ends (plan A4); their candidate-facing reminders carry on.
     // Nor does someone under Cancelled whose automatic new times are still to come: nothing waits on the team before that day.
     const marks = await activeMarksFor(q, apps.map((a) => a.id));
@@ -179,14 +185,17 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     // brief.ts), so they are never named here as well.
     const waiting = apps.filter((a) => WAITING_ON_TEAM.includes(a.stage) && !parked(a) && !inCancelled(a.stage, followUps.get(a.id)));
     if (waiting.length) {
-      const oldest = Math.min(...waiting.map((a) => Date.parse(a.stageChangedAt)));
+      // From when the team could act: an upgrade never reads as weeks of neglect.
+      const unlocks = await unlockedAtFor(q, waiting.map((a) => a.id));
+      const since = (a: { id: string; stageChangedAt: string }) => waitingSince(a.stageChangedAt, unlocks.get(a.id));
+      const oldest = Math.min(...waiting.map(since));
       const days = Math.floor((now.getTime() - oldest) / DAYS);
       const finalists = waiting.filter((a) => a.stage === "finalist").length;
       const body = finalists === waiting.length
         ? `${finalists === 1 ? "A finalist is" : `${finalists} finalists are`} waiting to hear what comes next: record an offer made, the next step, or not moving forward. Finalists who wait more than a week often take another job.`
         : "They are ready for a decision: invite to an AI interview, interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.";
       // the people, longest waiting first, so Today can name the first and open them (plan G10)
-      const longestFirst = [...waiting].sort((a, b) => Date.parse(a.stageChangedAt) - Date.parse(b.stageChangedAt)).map((a) => a.id);
+      const longestFirst = [...waiting].sort((a, b) => since(a) - since(b)).map((a) => a.id);
       if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, applicationIds: longestFirst, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body, action: { label: "Review them", href: `/roles/${role.id}/talent` } });
     }
     // An offer made outside the app (plan H2) with no answer recorded: the team checks in with the candidate, then records
@@ -235,7 +244,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     const notTold = apps.filter((a) => DECISION_STAGES.includes(a.stage) && a.toldState === "not_told");
     const removed = await removedCandidates(q, notTold.map((a) => a.candidateId));
     const decided = notTold.filter((a) => !removed.has(a.candidateId));
-    const untold = decided.length ? untoldDecisions(role, decided, await decisionsWaitingApproval(q, decided.map((a) => a.id)), await candidateNames(q, decided.map((a) => a.candidateId)), now, rules) : null;
+    const untold = decided.length ? untoldDecisions(role, decided, await decisionsWaitingApproval(q, decided.map((a) => a.id)), await candidateNames(q, decided.map((a) => a.candidateId)), now, rules, await unlockedAtFor(q, decided.map((a) => a.id))) : null;
     if (untold) out.push(untold);
     const daysOpen = role.openedAt ? Math.floor((now.getTime() - Date.parse(role.openedAt)) / DAYS) : 0;
     if (apps.length === 0 && daysOpen >= 14 && publicNow) {

@@ -4,7 +4,7 @@ import { randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
 import { answerCvLines, chatFactsWithKept } from "@ros/agents";
-import { applicationAnswerSentences, candidateNotices, emit, errorForLog, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
+import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, applicationAnswerSentences, candidateNotices, closeOutDayWords, closeOutDueAt, emit, errorForLog, onFileFormLine, onFileReceiptLine, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey, type UploadGrantPayload } from "../uploads";
@@ -17,9 +17,9 @@ import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, readingAskedAt, readingFor, readi
 import { applyVisitNext, interviewWaitFor, type InterviewWait } from "../services/apply-conversation";
 import { formOpenedBefore, lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { contactLineFor, type ContactLine } from "../services/company-settings-profile";
-import { APPLY_FLOW, applyTimeLine, type ApplyFlowView } from "../services/job-preview";
+import { applyTimeLine, type ApplyFlowView } from "../services/job-preview";
 import { factsToKeep, keepFactsOn, keptFactsOf, reusedDetailsFor, type ReusedDetails } from "../services/profile-facts";
-import { CONVERSATION_COOKIE, CONVERSATION_PURPOSE, acceptingApplications, jobNotices, jobTakesApplications, loadJob, maskEmail, screenPath, type ConversationPayload, type Job } from "./candidate-shared";
+import { CONVERSATION_COOKIE, CONVERSATION_PURPOSE, acceptingApplications, applyFlowOf, jobNotices, jobTakesApplications, loadJob, maskEmail, screenPath, type ConversationPayload, type Job } from "./candidate-shared";
 import { Icon } from "./icons";
 import { JobFacts, publicPay } from "./job-facts";
 import { ContactLink, HelpLine, PreviewNote, type PreviewInfo } from "./job-page";
@@ -42,6 +42,11 @@ import { quickQuestionHelp, withPlainQuestionHelp } from "./question-help";
  * header (Details · Chat · Review & send) sits on top when the chat follows in the same visit. Everything works without
  * script: reading is a button that posts the form, and the page that waits for a slow reading has a Continue button.
  * The form still takes everything as one page, exactly as before (a person may fill it in without reading anything).
+ *
+ * On a job past its plan's candidates per job (`flow` "on_file"; the plans of 5 November 2026, Rule 2) no AI reads anything:
+ * there is no "Read my resume", and its notice goes with the feature, so the form is the fill-in form, with the file scanned
+ * and attached. The required notices keep every word; the line before Send goes beside them. A form opened before the limit
+ * was hit is still sent the same way: what follows is decided at Send (services/applications.ts).
  */
 const candidatePages = new Hono<Vars>();
 export { candidatePages as applyPages };
@@ -176,21 +181,25 @@ export function formQuestions(packet: ApplyFormPacket): QuickQuestionView[] {
  *
  * First view (founder brief, 14 October 2026): three short lines and the privacy link; the full notice, every word of it
  * as before (its own privacy link and the notices included), sits under "Read the full notice", above the box that says
- * the full notice was read (its words name the fold). A form sent back without that box ticked opens the notice.
+ * the full notice was read (its words name the fold). A form sent back without that box ticked opens the notice. `onFile`:
+ * the job is past its limit, and the form says so before Send, beside those notices and never in place of them. Its words
+ * are DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts), recorded among the notices shown.
  */
-function TransparencyBlock(props: { company: { name: string }; notices: Notice[]; privacyEmail: string; acknowledged: boolean; missing: boolean; resumeLost: boolean }) {
+function TransparencyBlock(props: { company: { name: string }; notices: Notice[]; privacyEmail: string; acknowledged: boolean; missing: boolean; resumeLost: boolean; onFile: boolean }) {
   return (
     <section class="card" aria-labelledby="before-you-send">
       <h2 id="before-you-send">Before you send</h2>
       <ul class="steps">
         <li>People at {props.company.name} make every hiring decision.</li>
-        <li>Software helps organize applications and works out a match score.</li>
+        <li>Software helps organize applications and works out a match score.{props.onFile ? ` ${ON_FILE_SOFTWARE_LINE}` : ""}</li>
         <li>You can ask for a person at any time.</li>
       </ul>
+      {props.onFile ? <p class="notice">{onFileFormLine(props.company.name)}</p> : null}
       <p><a href="/privacy">Read how we handle your information</a></p>
       <details class="more" open={props.missing || undefined}>
         <summary>Read the full notice</summary>
         <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision. Software helps organize and summarize applications, and works out a match score from what you send, checked against the job's requirements; the team sees what the score is based on, and a person always decides.</p>
+        {props.onFile ? <p>{ON_FILE_SOFTWARE_LINE}</p> : null}
         <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or your answers about your work, and your answers to the questions above.</p>
         <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
         <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
@@ -384,6 +393,7 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
   const showSummary = !!(v.workSummary ?? "").trim() || checking;
   // Only a form opened from the emailed reuse link lists anything from earlier; a preview never does.
   const earlier = props.preview ? null : props.state?.earlier ?? null;
+  const onFile = props.flow === "on_file";
   return (
     <>
       {reading ? (
@@ -397,10 +407,11 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
           <h2 id="resume-title">Start with your resume</h2>
           {/* The notice at collection comes before the file is chosen: with script, choosing it starts the reading. It is
               the card's one explanation (what reads the file, the person instead, filling the form in by hand); the
-              "about 20 seconds" is said when the reading starts, and "people decide" in "Before you send". */}
-          <p class="notice" id="resume-notice">{RESUME_READ_NOTICE} See <a href="/privacy">how we handle your information</a>. Rather not? Fill in the form below yourself, or email <ContactLink contact={props.company.contact} /> and a person will help. If you do not send your application, the file and what was read from it are deleted within a day.</p>
+              "about 20 seconds" is said when the reading starts, and "people decide" in "Before you send". Past the job's
+              limit nothing reads the file, so the notice goes with the feature. */}
+          {onFile ? null : <p class="notice" id="resume-notice">{RESUME_READ_NOTICE} See <a href="/privacy">how we handle your information</a>. Rather not? Fill in the form below yourself, or email <ContactLink contact={props.company.contact} /> and a person will help. If you do not send your application, the file and what was read from it are deleted within a day.</p>}
           <ResumeInput kept={kept} resumeLost={!!props.state?.resumeLost} />
-          <ReadButton read={props.links.read} preview={!!props.preview} />
+          {onFile ? null : <ReadButton read={props.links.read} preview={!!props.preview} />}
           <NoResumeFold guided={guided} open={noResumeOpen} invalid={missing.has("noResume")} />
         </section>
       )}
@@ -431,7 +442,7 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
       ) : null}
       {earlier?.facts.length ? <EarlierFacts company={props.company.name} earlier={earlier} /> : null}
       <QuickQuestions company={props.company.name} questions={props.questions} answers={answers} missing={missing} suggested={new Set(props.state?.marks?.suggested ?? [])} />
-      <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} />
+      <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} onFile={onFile} />
     </>
   );
 }
@@ -489,6 +500,8 @@ export function ApplyFormPage(props: ApplyFormProps) {
           {reading?.outcome === "read" ? <input type="hidden" name="readShown" value="yes" /> : null}
           <ApplyFields {...props} questions={questions} />
           <input type="hidden" name="noticeVersionsShown" value={noticeVersionsFor(props.notices, props.smsEnabled).join(",")} />
+          {/* This page showed the line before Send, so the application records it among the notices shown (`onFileShown`). */}
+          {props.flow === "on_file" ? <input type="hidden" name="onFileShown" value="yes" /> : null}
           <button class="btn" type="submit">Send my application</button>
           {props.flow === "one_visit" ? <p class="meta">Next comes a short AI interview with {props.company.name}'s AI assistant. It opens here once your résumé is read, usually within a minute, and its link comes by email too: start it straight away, do it later, or ask for a person instead. Your details go to {props.company.name} now; your interview answers go only when you press Send my answers.</p> : null}
           {/* After a reading the résumé field moves below the button, so pressing Enter in a field sends the form, not a new reading. */}
@@ -496,7 +509,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
             <details class="more replace" open={!!props.state?.resumeLost || undefined}>
               <summary>Use a different resume</summary>
               <ResumeInput kept={props.state?.resume ?? null} resumeLost={!!props.state?.resumeLost} />
-              <ReadButton read={props.links.read} preview={false} again />
+              {props.flow === "on_file" ? null : <ReadButton read={props.links.read} preview={false} again />}
             </details>
           ) : null}
         </form>
@@ -845,10 +858,11 @@ const RECEIPT_TTL_MS = 30 * 60_000;
  * an id that names nothing; `until`: the waiting room says "preparing" until then whatever is stored, the same short
  * random wait for every one of them (about as long as a reading takes; founder 21 Oct: "same timing"). All have the same
  * shape, so the sealed value tells nothing either. Cookies from before 20 October say "review" or
- * "conversation_by_email" and read as `check_email` and `used_up`.
+ * "conversation_by_email" and read as `check_email` and `used_up`. `on_file` (the plans of 5 November 2026, Rule 2): the job
+ * is past its plan's candidates per job; `by`: the moment they hear by at the latest, as their email says.
  */
-type ReceiptNext = "interview" | "check_email" | "held" | "used_up" | "paused";
-type ReceiptPayload = { v: 1; roleId: string; to: string; exp: number; next?: ReceiptNext | "review" | "conversation_by_email"; wait?: string; until?: number };
+type ReceiptNext = "interview" | "check_email" | "held" | "used_up" | "paused" | "on_file";
+type ReceiptPayload = { v: 1; roleId: string; to: string; exp: number; next?: ReceiptNext | "review" | "conversation_by_email"; wait?: string; until?: number; by?: string };
 
 function receiptPath(slug: string, roleId: string): string {
   return `/careers/${slug}/jobs/${roleId}/applied`;
@@ -866,7 +880,8 @@ function toReceipt(c: Context<Vars>, job: { company: { slug: string }; role: { i
   const path = receiptPath(job.company.slug, job.role.id);
   const now = container.engine.clock().getTime();
   const waiting = next === "interview" ? { wait: wait ?? uuidv7(), until: now + LOOK_ALIKE_MIN_MS + randomInt(LOOK_ALIKE_SPREAD_MS) } : {};
-  const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: now + RECEIPT_TTL_MS, next, ...waiting };
+  const onFile = next === "on_file" ? { by: closeOutDueAt(new Date(now)).toISOString() } : {};
+  const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: now + RECEIPT_TTL_MS, next, ...waiting, ...onFile };
   setAppCookie(c, RECEIPT_COOKIE, sealPayload(RECEIPT_PURPOSE, payload, container.env.SESSION_SECRET), { path, maxAge: RECEIPT_TTL_MS / 1000 });
   return c.redirect(path);
 }
@@ -968,6 +983,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
   if (!job || !jobTakesApplications(job, container.engine.clock())) return c.notFound();
+  const flow = await applyFlowOf(container, job);
   // Funnel measurement without identity (correction 14): a random per-visit reference, no candidate data, no client script; the source comes from the tracked-link cookie when there is one.
   void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: resolveApplicationSource(c, job.role.id).source } }).catch(() => undefined);
   // Applied to this company before (S7-F): the emailed link fills in the details on file, each marked for checking, and
@@ -975,7 +991,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const reuse = c.req.query("reuse") ?? "";
   const reused = reuse ? await reusedDetailsFor(container, { companyId: job.company.id, roleId: job.role.id, token: reuse }) : null;
   if (reuse) c.header("Cache-Control", "no-store");
-  return c.html(<ApplyFormPage {...applyFormFor(container, job, APPLY_FLOW)} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} state={reused ? reusedState(reused, { token: reuse, timeZone: job.company.timezone }) : undefined} />);
+  return c.html(<ApplyFormPage {...applyFormFor(container, job, flow)} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} state={reused ? reusedState(reused, { token: reuse, timeZone: job.company.timezone }) : undefined} />);
 });
 
 /**
@@ -1027,6 +1043,8 @@ function checkedForm(container: Container, posted: PostedApplyForm, questions: Q
  * grant of a file the browser already uploaded. The file is put in quarantine (the form's own copy) and the worker reads
  * it; this request waits up to about 15 seconds for the reading and then shows "Check your details", or the page that
  * waits a little longer. Nothing to read (Enter pressed before choosing a file) shows the form again with a plain line.
+ * A form opened before the job reached its limit (its button still shows) gets no reading: nothing past the limit is read
+ * by AI, so the file stays attached and the same form comes back to fill in.
  */
 candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POLICY), async (c) => {
   const container = c.get("container");
@@ -1035,12 +1053,12 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   const body = (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   const str = bodyString(body);
   if (!admits(container, job, str("formOpened")).ok) return c.notFound();
-  const flow = APPLY_FLOW;
+  const flow = await applyFlowOf(container, job);
   const form = applyFormFor(container, job, flow);
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock());
   const questions = formQuestions(form.packet);
   const posted = postedApplyForm(body, questions, container.env.SMS_ENABLED);
-  if (posted.website) return toReceipt(c, job, posted.values.email);
+  if (posted.website) return toReceipt(c, job, posted.values.email, flow === "on_file" ? "on_file" : "check_email");
   const now = container.engine.clock();
   // A form opened from the reuse link lists its earlier facts again, as they were ticked (Wave S8).
   const earlier = await earlierFormState(container, job, posted);
@@ -1080,6 +1098,12 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
     return refused ?? sendApplication(c);
   }
   if (!upload) return show("Choose your resume file first, then press Read my resume. Or fill in the form below yourself and press Send my application.", !!posted.grant);
+  if (flow === "on_file") {
+    const attached = container.uploadGrants.seal({ ...upload, readAskedAt: undefined });
+    const unread = checkedForm(container, posted, questions, { grant: attached, filename: upload.filename }, null);
+    c.header("Cache-Control", "no-store");
+    return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={unread.error} state={{ ...unread.state, earlier }} />);
+  }
   const grant = container.uploadGrants.seal(upload);
   const ref = { companyId: upload.companyId, roleId: upload.roleId, uploadId: upload.uploadId, key: upload.key, filename: upload.filename, mime: upload.mime };
 
@@ -1121,7 +1145,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", async (c) => {
   const body = (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   const str = bodyString(body);
   if (!admits(container, job, str("formOpened")).ok) return c.notFound();
-  const flow = APPLY_FLOW;
+  const flow = await applyFlowOf(container, job);
   const form = applyFormFor(container, job, flow);
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock());
   const questions = formQuestions(form.packet);
@@ -1171,11 +1195,13 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   if (!admitted.ok) return c.notFound();
   const { company, role, packet } = job;
   const smsEnabled = container.env.SMS_ENABLED;
-  const form = applyFormFor(container, job, APPLY_FLOW);
+  const form = applyFormFor(container, job, await applyFlowOf(container, job));
   // A form shown again keeps the moment it was first opened, so the closing date's grace still applies to it.
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, role.id, container.engine.clock());
   // The versions recorded as shown are the server's own, computed from the same inputs as the render; a browser cannot claim a different set.
-  const noticeVersionsShown = noticeVersionsFor(form.notices, smsEnabled);
+  // The one exception is the line before Send on a job past its limit: a form opened before the limit was hit never showed
+  // it, whatever the job says now, so only the page itself can say that it did (it adds to the record, and decides nothing).
+  const noticeVersionsShown = [...noticeVersionsFor(form.notices, smsEnabled), ...(str("onFileShown") === "yes" ? [ON_FILE_NOTICE] : [])];
   const questions = formQuestions(form.packet);
   const posted = postedApplyForm(body, questions, smsEnabled);
   const { values, answers, acknowledged, smsConsent, eligibilityAnswers } = posted;
@@ -1200,8 +1226,9 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   if (earlier) c.header("Cache-Control", "no-store");
   const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume, marks: { fromResume: marked.fromResume, suggested: marked.suggested }, reading: resume.resume ? readView : null, earlier });
   const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={state(missing, resume)} />, 400);
-  // Honeypot: a filled hidden field gets the waiting room a person gets (naming nothing), and nothing is recorded.
-  if (posted.website) return toReceipt(c, job, values.email, "interview");
+  // Honeypot: a filled hidden field gets the waiting room a person gets (naming nothing), or on a job past its limit the
+  // receipt a person gets, and nothing is recorded.
+  if (posted.website) return toReceipt(c, job, values.email, form.flow === "on_file" ? "on_file" : "interview");
   const fromCv = [...marked.fromResume, ...marked.suggested];
   const workSummary = values.workSummary.trim();
   const parsed = ApplyRequest.safeParse({
@@ -1314,7 +1341,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
     const kept = keeping && !created.duplicate && created.candidate.id === keeping.candidateId ? keptFactsOf(keeping.facts, container.engine.clock().toISOString()) : [];
     await keepFactsOn(tx, { applicationId: created.application.id, facts: kept });
     // The waiting room or a plain receipt: decided in this transaction, from what was typed.
-    return applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, knownPerson: created.knownPerson, company, role, packet, eligibilityAnswers, quickAnswers: parsed.data.quickAnswers ?? null, typedFirstName: parsed.data.firstName, typedFacts: chatFactsWithKept(typedFacts, kept), pendingReading, trialPaused: admitted.trialGrace });
+    return applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, onFile: created.onFile, knownPerson: created.knownPerson, company, role, packet, eligibilityAnswers, quickAnswers: parsed.data.quickAnswers ?? null, typedFirstName: parsed.data.firstName, typedFacts: chatFactsWithKept(typedFacts, kept), pendingReading, trialPaused: admitted.trialGrace });
   });
   await container.kick();
   clearApplicationSource(c);
@@ -1350,9 +1377,12 @@ export function applyFormProblem(missing: readonly string[]): string {
  * The receipt (Wave 0 item 0.1), in plain words and with no loader: it never names a status link. An answer that did not
  * match a must-have question (E7) and a waiting room that stopped waiting read the same: check your email, the team
  * reviews, you hear either way. When the month's AI interviews are used up (Q17) or the trial ended, it says the AI
- * interview's link comes by email. Worked out from what was typed, so a known address reads as a new one (Q14).
+ * interview's link comes by email. Worked out from what was typed, so a known address reads as a new one (Q14). On a job
+ * past its limit (`onFileBy`, the day they hear by) it says only what is true of them: on file, and when they hear. Those
+ * words are DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts). With its cookie gone there is no day to
+ * name, and nothing about who is asking: on such a job it promises no review.
  */
-function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null; next: Exclude<ReceiptNext, "interview"> }) {
+function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null; next: Exclude<ReceiptNext, "interview">; onFileBy?: string }) {
   const minutes = props.packet.screening.maxMinutes;
   return (
     <Layout title="Check your email">
@@ -1366,8 +1396,18 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
       <ol class="steps">
         {props.next === "used_up" ? <li>Your next step is a short AI interview with {props.company.name}'s AI assistant, about {minutes} minutes. We email you its link as soon as it is ready. You can skip any question, or ask for a person instead.</li> : null}
         {props.next === "paused" ? <li>Your next step is a short AI interview with {props.company.name}'s AI assistant, about {minutes} minutes. We email you its link shortly; do it whenever suits you, or ask for a person instead.</li> : null}
-        <li>The hiring team at {props.company.name} reviews your application. People make every decision.</li>
-        <li>You hear from us by email either way.</li>
+        {props.next === "on_file" ? (
+          <>
+            {props.onFileBy ? <li>{onFileReceiptLine(props.company.name, props.onFileBy)}</li> : null}
+            <li>People make every decision.</li>
+            {props.onFileBy ? null : <li>You hear from us by email either way.</li>}
+          </>
+        ) : (
+          <>
+            <li>The hiring team at {props.company.name} reviews your application. People make every decision.</li>
+            <li>You hear from us by email either way.</li>
+          </>
+        )}
       </ol>
       <NoEmail />
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
@@ -1485,7 +1525,8 @@ async function receiptPage(c: Context<Vars>, job: Job, opts: { again?: boolean; 
     if (wait.state === "preparing") return c.html(<WaitingRoom {...props} grant={sealPayload<WaitGrant>(WAIT_PURPOSE, waitFor, container.env.SESSION_SECRET)} again={opts.again} />);
     return c.html(<Receipt {...props} next={receiptFor(wait.state)} />);
   }
-  const next = !mine ? "check_email" : sealed.next === "conversation_by_email" || sealed.next === "used_up" ? "used_up" : sealed.next === "paused" ? "paused" : "check_email";
+  if (mine && sealed.next === "on_file" && typeof sealed.by === "string") return c.html(<Receipt {...props} next="on_file" onFileBy={closeOutDayWords(sealed.by, job.company.timezone)} />);
+  const next = !mine ? ((await applyFlowOf(container, job)) === "on_file" ? "on_file" : "check_email") : sealed.next === "conversation_by_email" || sealed.next === "used_up" ? "used_up" : sealed.next === "paused" ? "paused" : "check_email";
   return c.html(<Receipt {...props} next={next} />);
 }
 

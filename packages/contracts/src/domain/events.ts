@@ -38,6 +38,9 @@ export const EventType = z.enum([
   "application.moved_to_talent_pool",
   // Private marks (Longlist, Shortlist, On hold, Not a fit for now) and the candidate being told a decision (founder decisions B3, B6).
   "application.marked", "application.mark_cleared", "application.told",
+  // Past the plan's candidates per job when it came in, with its place in arrival order and never a name; opened to the
+  // team by a change of plan, oldest first (the plans of 5 November 2026, Rule 2).
+  "application.locked", "application.unlocked",
   // The untold safety net (Q27): five working days on, the standard message went by itself, or a recruiter was brought
   // in instead; and the one closing message for everyone a closed role left untold (Q30), sent or put to one approval.
   "application.untold_fallback", "role.closing_message",

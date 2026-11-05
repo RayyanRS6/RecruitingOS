@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, emit, nextContactWindow, notify, raiseAlert, suppressAddress } from "@ros/core";
+import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, nextContactWindow, notify, onlyLockedApplications, raiseAlert, suppressAddress } from "@ros/core";
 import { applications, candidates, communications, companies, events, jobs, rolePackets, roles, users, type Queryable } from "@ros/db";
 import { mailbox, type EmailEvent, type Integrations } from "@ros/integrations";
 import { deliverSms } from "./coordinator";
@@ -50,7 +50,7 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
     if (cand) {
       const cid = companyId ?? cand.companyId;
       const fallback = event.complaint ? null : await smsFallback(q, integrations, { candidateId: cand.id, companyId: cid, communication: comm ?? null, appBaseUrl: input.appBaseUrl, now });
-      await notify(q, { companyId: cid, kind: "candidate.unreachable", title: event.complaint ? `${cand.firstName} ${cand.lastName} marked our email as spam` : `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: event.complaint ? "We will not email them again. If you still want to talk with them, call them; nothing further goes out automatically." : `Their address bounced (${event.description}). ${fallback === "sent" ? "We texted them a link to their status page." : fallback === "scheduled" ? "A text with their status link goes out when contact hours open." : cand.phone ? "They did not agree to texts; please call them." : "There is no phone number on file; please reach them another way."}`, action: { label: "Open the candidate", href: comm?.applicationId ? `/roles/${(await roleOf(q, comm.applicationId)) ?? ""}/talent` : "/talent" } });
+      if (!(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId: cid, kind: "candidate.unreachable", title: event.complaint ? `${cand.firstName} ${cand.lastName} marked our email as spam` : `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: event.complaint ? "We will not email them again. If you still want to talk with them, call them; nothing further goes out automatically." : `Their address bounced (${event.description}). ${fallback === "sent" ? "We texted them a link to their status page." : fallback === "scheduled" ? "A text with their status link goes out when contact hours open." : cand.phone ? "They did not agree to texts; please call them." : "There is no phone number on file; please reach them another way."}`, action: { label: "Open the candidate", href: comm?.applicationId ? `/roles/${(await roleOf(q, comm.applicationId)) ?? ""}/talent` : "/talent" } });
     }
     if (user) {
       await raiseAlert(q, { kind: "email.person_unreachable", severity: event.complaint ? "critical" : "high", title: event.complaint ? `A team member's address complained: ${address}` : `A team member's address bounces: ${address}`, body: `${event.description} Sign-in links and notifications to this address will not be delivered until an administrator releases the suppression after confirming the address.`, companyId, details: { userId: user.id, type: event.type } });
@@ -67,7 +67,7 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
     if (comm) await emit(q, { type: "message.suppressed", companyId: comm.companyId, actor, subject: { type: "communication", id: comm.id }, payload: { reason: "soft_bounce_repeated", address } });
     // a decision message that will not be tried again, since the address is now stopped, never reached them
     if (comm) await untellDecision(q, comm);
-    if (cand && companyId) await notify(q, { companyId, kind: "candidate.unreachable", title: `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: "Their mailbox keeps rejecting messages. Please call them or reach them another way.", action: { label: "Open talent", href: "/talent" } });
+    if (cand && companyId && !(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId, kind: "candidate.unreachable", title: `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: "Their mailbox keeps rejecting messages. Please call them or reach them another way.", action: { label: "Open talent", href: "/talent" } });
     return { handled: true, communicationId: comm?.id ?? null, action: "suppressed", suppressionReason: "soft_bounce_repeated" };
   }
   if (comm && comm.retryAttempt < RETRY_DELAYS_MS.length) {
@@ -77,6 +77,15 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
   // no retries left: a decision message among them never reached them
   if (comm) await untellDecision(q, comm);
   return { handled: true, communicationId: comm?.id ?? null, action: "recorded" };
+}
+
+/**
+ * Whether this failure is about someone the team may not read (the plans of 5 November 2026, Rule 2): the message was about a
+ * locked application, or, with no such message, everything the person has here is locked. A notice would name them; the
+ * record of what happened stays. ITS hears of a failed delivery by its own alert, whoever it was to.
+ */
+async function nobodyMayBeTold(q: Queryable, comm: { applicationId: string | null } | undefined, candidateId: string): Promise<boolean> {
+  return comm?.applicationId ? applicationLocked(q, comm.applicationId) : onlyLockedApplications(q, candidateId);
 }
 
 /**

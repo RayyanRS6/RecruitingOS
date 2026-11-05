@@ -267,11 +267,12 @@ export type SendClosingMessage = z.infer<typeof SendClosingMessage>;
  * The closing message's preview (GET /roles/:id/closing-message; also `closingMessage` on POST /roles/:id/outcome):
  * who it goes to (`people`, with `hasEmail` and `optedOut`), the words for one of them with "[first name]" in place of
  * the name, those left out because they were already told or a message waits for approval, and what Send does.
- * `waitingApprovalId` names the one approval request when the batch already waits for it.
+ * `waitingApprovalId` names the one approval request when the batch already waits for it. `locked`: how many past the plan's
+ * candidates per job get the same news as well, a count and nothing else: they are never among `people`.
  */
 export type ClosingMessagePreview = {
   roleId: string; roleTitle: string; count: number; people: Array<{ applicationId: string; name: string; hasEmail: boolean; optedOut: boolean }>;
-  subject: string; text: string; alreadyTold: number; waitingApproval: number; noEmail: number; optedOut: number;
+  subject: string; text: string; alreadyTold: number; waitingApproval: number; noEmail: number; optedOut: number; locked: number;
   policy: "sends" | "needs_approval" | "not_sent"; waitingApprovalId: string | null; sendPath: string;
 };
 /**

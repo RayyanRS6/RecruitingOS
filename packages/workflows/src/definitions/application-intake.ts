@@ -9,7 +9,7 @@ import { waitForCredit } from "../credit-wait";
 import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
 import { FORM_READ_EVENT, FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, linkFormReading } from "../form-reading";
 import { settleSuggestion, type SuggestionState } from "../suggestions";
-import { interviewRunOn, offerInterview, readingSettledSignal, startInterviewAgain } from "../with-application";
+import { interviewRunOn, offerInterview, readingSettledSignal, sendOnFileEmail, startInterviewAgain } from "../with-application";
 
 /**
  * `formUploadId`, `formReadAskedAt` (20 Oct, R20-1): the upload the apply form sent and when the form asked for its
@@ -53,6 +53,10 @@ export const heldDecisionSignal = (applicationId: string): string => `${applicat
  * reading (`readingSettledSignal`, sent at the end of `ready`, when nothing is read by AI, and when an answer holds the
  * application) and then sends the one email with the link. The reading moves no stage while that run is on.
  *
+ * 5 November 2026 (the plans, Rule 2): a locked application goes acknowledge (the one email, in its on-file form) → validate
+ * (the file is still scanned) and stops. No AI interview's run, no AI, no eligibility step, no notice, no timer: nothing
+ * about them moves until a change of plan opens them (`unlockApplicants`), which starts an intake that comes this way again.
+ *
  * The steps that call a provider (`validate` the malware scanner and storage, `extract` and `ready` the model) do so in
  * a prepare phase with no transaction open; their transaction only writes what came back.
  */
@@ -76,6 +80,10 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const { app, candidate, role } = loaded;
       if (app.stage !== "applied") return { kind: "next", step: "validate" };
       await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "received", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
+      if (app.lockedAt) {
+        await sendOnFileEmail(ctx.q, { integrations: ctx.services.integrations, jobsBaseUrl: ctx.services.env.jobsBaseUrl }, { ...loaded, app: { ...app, stage: "received" } }, { now: ctx.now, actor: ctx.actor, correlationId: ctx.run.id, workflowRunId: null });
+        return { kind: "next", step: "validate" };
+      }
       const interview = { applicationId: app.id, roleId: role.id, invitedBy: "system", flow: "one_visit" as const, channel: "web" as const };
       if (byEmailNotice(candidate)) {
         const offer = await offerInterview(ctx.q, { integrations: ctx.services.integrations, jobsBaseUrl: ctx.services.env.jobsBaseUrl }, { ...loaded, app: { ...app, stage: "received" } }, { now: ctx.now, actor: ctx.actor, correlationId: ctx.run.id, workflowRunId: null });
@@ -121,8 +129,13 @@ export const applicationIntake: WorkflowDefinition<State> = {
     /**
      * Known-bugs row 16: an emailed-in applicant's application is read by AI only once the acknowledgment, which carries
      * the AI notice, has gone to them (see `AI_NOTICE_SENT_EVENT`). Anyone who applied on a form saw the notice there.
+     *
+     * A locked application stops here, with the file scanned. The row is held while that is read, so a change of plan either
+     * opens it first, and it goes on, or waits for this run to end and starts it a new one: never neither.
      */
     async ai_notice(ctx) {
+      const [lock] = await ctx.q.select({ lockedAt: applications.lockedAt }).from(applications).where(eq(applications.id, ctx.state.applicationId)).limit(1).for("update");
+      if (lock?.lockedAt) return { kind: "complete" };
       const loaded = await load(ctx.q, ctx.state.applicationId);
       if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
       const { app, candidate, role } = loaded;
