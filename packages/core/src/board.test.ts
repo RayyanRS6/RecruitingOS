@@ -158,6 +158,8 @@ describe("boardPlacement", () => {
       expect(place({ interview: "not_done_yet", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview not done yet", reason: "Scored after the AI interview: they join the board when they finish it." });
       expect(place({ stage: "screen_complete", interview: "being_scored", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview being scored", reason: "Their AI interview is in and being scored: they join the board when it is." });
       expect(place({ interview: "not_done", latest: holding, match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "No AI interview" });
+      // sent, and its scorecard waits for the company's AI credit: the team reads the answers, so it never says "being scored" for ever
+      expect(place({ stage: "screen_complete", interview: "not_scored", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview not scored", reason: "Their AI interview is in, but your plan's AI help is used up, so it was not scored. Read their answers and decide from their own page." });
     }
     expect(place({ interview: "not_done" }).reason).toBe("Their score is from the résumé only, so the board keeps them apart from interviewed people and suggests nothing. Decide from their own page.");
     // the score's own label says it when the caller passes none

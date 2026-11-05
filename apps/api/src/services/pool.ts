@@ -82,7 +82,7 @@ export type ScoredPerson = { latest: AssessmentRow | null; evidence: EvidenceVie
  * a résumé-only score off the board's columns; it never changes the number. `allowanceLapsed`: the interview never came
  * because the month's AI interviews stayed used up (Q17, `interviewsLapsedOnAllowance`), so it reads as not done.
  */
-export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessmentId" | "packetVersion">; assessments: readonly AssessmentRow[]; screens: ReadonlyArray<{ status: string }>; allowanceLapsed?: boolean; packets: Map<number, RolePacket>; currentVersion: number | null; mark: Pick<ActiveMark, "mark" | "remindAt"> | null; resumeUnreadable: boolean; openScreen: boolean }): ScoredPerson {
+export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessmentId" | "packetVersion">; assessments: readonly AssessmentRow[]; screens: Parameters<typeof interviewInScore>[0]; allowanceLapsed?: boolean; packets: Map<number, RolePacket>; currentVersion: number | null; mark: Pick<ActiveMark, "mark" | "remindAt"> | null; resumeUnreadable: boolean; openScreen: boolean }): ScoredPerson {
   const { app } = input;
   const latest = input.assessments.find((x) => x.id === app.latestAssessmentId) ?? null;
   const pair = readingPair(input.assessments);
@@ -154,7 +154,7 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
   const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
   const marks = await activeMarksFor(tx, appIds);
   const followUps = await activeFollowUpsFor(tx, appIds);
-  const scr = await tx.select({ id: screens.id, applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds)).orderBy(desc(screens.createdAt));
+  const scr = await tx.select({ id: screens.id, applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId, scoreWaitsForCredit: sql<string | null>`${screens.progress}->>'scoreWaitsForCredit'` }).from(screens).where(inArray(screens.applicationId, appIds)).orderBy(desc(screens.createdAt));
   const hidden = unsentScreenReadings(scr, asmts);
   const interviewsNow = await aiInterviewsFor(tx, apps, input.now ?? new Date());
   // Whose AI interview never came because the month's allowance stayed used up (Q17): kept apart like a closed link.

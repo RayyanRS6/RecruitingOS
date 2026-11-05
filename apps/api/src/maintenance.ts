@@ -1,7 +1,7 @@
 import { and, eq, inArray, lt, ne, or } from "drizzle-orm";
 import { expireEmptyDrafts, sweepStaleSending } from "@ros/agents";
 import { REMOVED_INBOUND_EMAIL, alertOverdueEscalations, anonymizedCandidates, errorForLog, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData, scrubCandidateWorkflowData, type CancelWorkflowRun } from "@ros/core";
-import { cspReports, inboundEmails, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
+import { aiRuns, cspReports, inboundEmails, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
 import { settleTrials } from "./services/trial";
 import { HEARTBEAT_STALE_MS, queueSnapshot, readWorkerHealth } from "./worker-health";
 
@@ -41,7 +41,7 @@ export const QUEUE_STALE_MS = 30 * 60_000;
 /** A stale worker or queue raises one alert an hour at most, and none while a person already has one open. */
 export const HEALTH_ALERT_WINDOW_MS = 60 * 60_000;
 
-export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; emptyDrafts: number; purgedInboundEmails: number; anonymizedAssessments: number; anonymizedAiRuns: number; anonymizedWorkflowRuns: number; anonymizedWorkflowSteps: number; anonymizedWorkflowEvents: number; cancelledWorkflowRuns: number; healthAlerts: number };
+export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; interruptedAiRuns: number; emptyDrafts: number; purgedInboundEmails: number; anonymizedAssessments: number; anonymizedAiRuns: number; anonymizedWorkflowRuns: number; anonymizedWorkflowSteps: number; anonymizedWorkflowEvents: number; cancelledWorkflowRuns: number; healthAlerts: number };
 
 export type MaintenanceOptions = {
   /** True when the queue runs inside the app process (development): there is no separate worker to watch. */
@@ -118,6 +118,20 @@ async function purgeOldInboundEmails(db: Db, now: Date, opts: MaintenanceOptions
   return cleared;
 }
 
+/** No call runs this long (the /api route stops at 5 minutes, and a worker's call at 4.5): its process went away during it. */
+const AI_RUN_GONE_AFTER_MS = 60 * 60_000;
+
+/**
+ * An AI call still `running` long after any call can end: the route was stopped or the worker died while the model thought.
+ * Nothing will ever say what it cost, so its hold stays as its cost (it may well have been billed), and it now reads as
+ * what it is, among the AI runs that were not OK. What it holds in the company's AI credit does not change.
+ */
+async function closeInterruptedAiRuns(db: Db, now: Date): Promise<number> {
+  const before = new Date(now.getTime() - AI_RUN_GONE_AFTER_MS).toISOString();
+  const closed = await withPlatform(db, (tx) => tx.update(aiRuns).set({ status: "error", error: "interrupted: the process went away during the call, so its hold stays as its cost" }).where(and(eq(aiRuns.status, "running"), lt(aiRuns.createdAt, before))).returning({ id: aiRuns.id }));
+  return closed.length;
+}
+
 export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions = {}): Promise<MaintenanceReport> {
   const before = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
   const swept = await withPlatform(db, async (tx) => {
@@ -131,6 +145,7 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
     return { doneJobs: doneJobs.length, failedJobs: failedJobs.length, sessions: expiredSessions.length, magicLinks: expiredLinks.length, webhookReceipts: receipts.length, cspReports: reports.length, staleHeartbeats: heartbeats.length };
   });
   const interruptedSends = await sweepStaleSending(db, now);
+  const interruptedAiRuns = await closeInterruptedAiRuns(db, now);
   // Drafts nobody wrote anything into are set aside quietly (plan C3); each one is recorded as an event.
   const emptyDrafts = await expireEmptyDrafts(db, now);
   const purgedInboundEmails = await purgeOldInboundEmails(db, now, opts);
@@ -141,7 +156,7 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
   // candidate, so the sweep never holds a long platform transaction, and its cost stays bounded day to day.
   const ai = await scrubDeletedCandidatesAi(db, now, opts);
   const health = await checkOperationalHealth(db, now, opts);
-  const report = { ...swept, interruptedSends, emptyDrafts, purgedInboundEmails, anonymizedAssessments: ai.assessments, anonymizedAiRuns: ai.aiRuns, anonymizedWorkflowRuns: ai.workflowRuns, anonymizedWorkflowSteps: ai.workflowSteps, anonymizedWorkflowEvents: ai.workflowEvents, cancelledWorkflowRuns: ai.cancelledRuns, healthAlerts: health.raised };
+  const report = { ...swept, interruptedSends, interruptedAiRuns, emptyDrafts, purgedInboundEmails, anonymizedAssessments: ai.assessments, anonymizedAiRuns: ai.aiRuns, anonymizedWorkflowRuns: ai.workflowRuns, anonymizedWorkflowSteps: ai.workflowSteps, anonymizedWorkflowEvents: ai.workflowEvents, cancelledWorkflowRuns: ai.cancelledRuns, healthAlerts: health.raised };
   if (Object.values(report).some((n) => n > 0)) console.log(`[maintenance] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
   return report;
 }

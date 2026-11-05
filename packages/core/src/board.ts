@@ -58,9 +58,10 @@ export const NO_AI_INTERVIEW_LANE = { label: "No AI interview yet", reason: "Sco
  * The same lane's words for someone out of that column whose score still has no AI interview in it (R20-9), by where it
  * stands. Neutral like the column's: never how far anyone got or what closed it.
  */
-export const INTERVIEW_APART: Record<"not_done_yet" | "being_scored" | "not_done", { label: string; reason: string }> = {
+export const INTERVIEW_APART: Record<"not_done_yet" | "being_scored" | "not_scored" | "not_done", { label: string; reason: string }> = {
   not_done_yet: { label: "AI interview not done yet", reason: NO_AI_INTERVIEW_LANE.reason },
   being_scored: { label: "AI interview being scored", reason: "Their AI interview is in and being scored: they join the board when it is." },
+  not_scored: { label: "AI interview not scored", reason: "Their AI interview is in, but your plan's AI help is used up, so it was not scored. Read their answers and decide from their own page." },
   not_done: { label: "No AI interview", reason: "Their score is from the résumé only, so the board keeps them apart from interviewed people and suggests nothing. Decide from their own page." },
 };
 
@@ -137,7 +138,7 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
     return { column: "longlist", state: "suggested", doneLabel: null, confident: false, needsYourEye: "Held on an eligibility answer: keep them in or decline from their page.", reason: "An eligibility answer did not match the role's rule.", nextStep: step("check_eligibility", "Only a person can keep them in or decline them."), suggestedAction: null, declineReason: null };
   }
   const interview = input.interview ?? input.match?.interview ?? null;
-  if (interview === "not_done_yet" || interview === "being_scored" || interview === "not_done") return done(null, INTERVIEW_APART[interview].label, INTERVIEW_APART[interview].reason, "waiting");
+  if (interview === "not_done_yet" || interview === "being_scored" || interview === "not_scored" || interview === "not_done") return done(null, INTERVIEW_APART[interview].label, INTERVIEW_APART[interview].reason, "waiting");
   if (!latest) {
     return { column: "longlist", state: "suggested", doneLabel: null, confident: false, needsYourEye: ASSESSMENT_UNAVAILABLE_TEXT, reason: "No AI review to go on.", nextStep: step("read_yourself", "Open the résumé and answers; nothing was read for you."), suggestedAction: "longlist", declineReason: null };
   }

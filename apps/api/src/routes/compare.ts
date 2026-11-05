@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
 import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, screens, withTenant, type Tx } from "@ros/db";
@@ -72,7 +72,7 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026).
   const all = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];
   // Their screens, in any order: also where each one's AI interview stands, for the score's label (R20-9).
-  const scr = apps.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id))) : [];
+  const scr = apps.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId, scoreWaitsForCredit: sql<string | null>`${screens.progress}->>'scoreWaitsForCredit'` }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id))) : [];
   const hidden = unsentScreenReadings(scr, all);
   const asmts = all.filter((x) => !hidden.has(x.id));
   // An AI interview that never came for want of allowance (Q17) reads as not done, as on the list and the board.

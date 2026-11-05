@@ -165,15 +165,22 @@ async function rollIfEnded(q: Queryable, row: EntitlementRow, now: Date): Promis
 }
 
 /**
- * What a company's AI has cost, in whole cents rounded up, summed live from the runs themselves (nothing deletes a run,
- * and a privacy scrub keeps its cost): since a date for the monthly credit, or over the company's whole life. For the
- * server's own checks and for ITS; a customer reads a percentage (`usageOf`), never this.
+ * What a company's AI has cost, in millionths of a dollar (the column's own precision), summed live from the runs
+ * themselves (nothing deletes a run, and a privacy scrub keeps its cost): since a date for the monthly credit, or over the
+ * company's whole life. A call still running counts at its hold, so money in flight is in the sum; `settled` leaves those
+ * out, for what the owner is told. For the server's own checks and for ITS; a customer reads a percentage (`usageOf`), never this.
  */
-export async function aiCreditSpentCents(q: Queryable, companyId: string, opts: { since?: string | null } = {}): Promise<number> {
+export async function aiCreditSpentMicros(q: Queryable, companyId: string, opts: { since?: string | null; settled?: boolean } = {}): Promise<number> {
   const where = [eq(aiRuns.companyId, companyId)];
   if (opts.since) where.push(gte(aiRuns.createdAt, opts.since));
-  const [row] = await q.select({ cents: sql<string>`ceil(coalesce(sum(${aiRuns.costUsd}), 0) * 100)` }).from(aiRuns).where(and(...where));
-  return Number(row?.cents ?? 0);
+  if (opts.settled) where.push(ne(aiRuns.status, "running"));
+  const [row] = await q.select({ micros: sql<string>`coalesce(sum(${aiRuns.costUsd}), 0) * 1000000` }).from(aiRuns).where(and(...where));
+  return Math.round(Number(row?.micros ?? 0));
+}
+
+/** The same in whole cents, rounded up, as the plan's limit is written: a fraction of a cent is never undercounted. */
+export async function aiCreditSpentCents(q: Queryable, companyId: string, opts: { since?: string | null } = {}): Promise<number> {
+  return Math.ceil((await aiCreditSpentMicros(q, companyId, opts)) / 10_000);
 }
 
 /** What an allowance has used at `now`: roles, jobs ever, people and the AI credit counted live, the rest from the row's period. */
@@ -232,7 +239,7 @@ export type UsageLine = { used: number; limit: number | null; resetsAt?: string 
 const NOT_A_COUNT: readonly string[] = [CANDIDATES_PER_JOB, ITS_WORK];
 
 /** A share of the credit in whole percent, never past 100; short of all never reads as all. */
-const creditPercent = (spentCents: number, limitCents: number): number => (limitCents <= 0 ? 100 : Math.min(100, Math.floor((spentCents * 100) / limitCents)));
+export const creditPercent = (spentCents: number, limitCents: number): number => (limitCents <= 0 ? 100 : Math.min(100, Math.floor((spentCents * 100) / limitCents)));
 
 /**
  * The plan's usage as the company's settings show it: roles counted from the roles using a place now, people from the

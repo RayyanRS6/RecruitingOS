@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { MessageStreamParams, TextBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import { z } from "zod";
+import { DEFAULT_MAX_TOKENS } from "../pricing";
 import type { AiProvider, StructuredRequest, StructuredResult, Usage } from "../types";
 
 /**
@@ -141,7 +142,7 @@ export class AnthropicProvider implements AiProvider {
     // Haiku 5.5 and Sonnet 5.5 answer a conversation that ends with an assistant turn (a prefill) with a 400, so a
     // request always ends with a turn from the user.
     if (!messages.length || messages[messages.length - 1]!.role === "assistant") messages.push({ role: "user", content: "Continue." });
-    const base = { model, max_tokens: req.maxTokens ?? 16000, system, messages };
+    const base = { model, max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS, system, messages };
     const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     // The call's own budget, or less when the HTTP request it serves must answer sooner (see CALL_BUDGET_MS).
     const endsAt = Math.min(started + CALL_BUDGET_MS, req.deadlineAt === undefined ? Number.POSITIVE_INFINITY : req.deadlineAt - ROUTE_RESERVE_MS);

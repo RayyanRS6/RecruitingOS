@@ -124,14 +124,15 @@ export async function overDesignPartnerAllowance(q: Tx, input: { companyId: stri
 /**
  * Whether the résumé reading is settled, read from what is stored (a signal sent before anyone waited is not kept): the
  * reading is written, no intake is still on (the first, or one "Review anyway" reopened) or the one on reads nothing by
- * AI, or the application moved on (held on a must-have answer, invited, decided, left).
+ * AI or waits for the company's AI credit (a candidate never waits on money), or the application moved on (held on a
+ * must-have answer, invited, decided, left).
  */
 export async function readingSettled(q: Tx, app: { id: string; stage: string }): Promise<boolean> {
   if (!["applied", "received", "eligible"].includes(app.stage)) return true;
   const [triage] = await q.select({ id: assessments.id }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).limit(1);
   if (triage) return true;
   const on = await q.select({ state: workflowRuns.state }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, "application_intake"), notInArray(workflowRuns.status, [...ENDED_RUN]), sql`${workflowRuns.subject}->>'id' = ${app.id}`));
-  return on.every((run) => !!(run.state as { noAiReading?: boolean }).noAiReading);
+  return on.every((run) => { const state = run.state as { noAiReading?: boolean; creditWaitSince?: string }; return !!state.noAiReading || !!state.creditWaitSince; });
 }
 
 /**

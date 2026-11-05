@@ -4,7 +4,7 @@ import {
   type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact, type IntakeMessage,
   type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole, type RolePacket,
 } from "@ros/contracts";
-import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
+import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
   DECIDER_ROLES, DRAFT_IT_WORDS, ESSENTIAL_LABEL, INTERVIEWERS_DEFAULT_NOTE, SOMEONE_NEW, applyAnswers, applyFactsPatch, basisFromText, dealBreakerOffer, draftFactsKey, emit,
   guardPacket, intakeReadiness, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, screenCriterion, typedByOwner, typedCeiling, unresolvedFlags,
@@ -423,13 +423,15 @@ export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number;
 
 export type IntakeTurnInput = { companyId: string; sessionId: string; actor: Actor; message?: { content: string; kind?: IntakeMessage["kind"] } };
 export type IntakeTurnOk = { turn: IntakeTurn; aiRunId: string; notARole: boolean; benchmark: PayBenchmark | null; benchmarkGap: "basis_unknown" | "no_market_figure" | null };
-export type IntakeTurnOutcome = IntakeTurnOk | { error: string; aiRunId: string };
+/** `noCredit`: the company's AI credit has no room, so the model was not asked: no failure, and the owner's way on is to upgrade. */
+export type IntakeTurnOutcome = IntakeTurnOk | { error: string; aiRunId: string; noCredit?: boolean };
 
 /**
  * The cheap first read of a pasted ad (C5), once per draft, before the market check: the title, the place, the basis
  * and the pay it states go into the facts, so the job is benchmarked as itself. The pay read from an ad is never taken
  * as confirmed; the pay card asks the owner whether it is still current. `deadlineAt` is the request's, which the turn
- * after it shares.
+ * after it shares. With no AI credit left nothing happens: no failure on the record, and the ad stays unread, so it is
+ * read after an upgrade; the turn beside it tells the owner.
  */
 async function readPastedAd(db: Db, deps: IntakeDeps, input: { companyId: string; sessionId: string }, deadlineAt: number): Promise<void> {
   const pending = await withTenant(db, input.companyId, async (q) => {
@@ -441,6 +443,7 @@ async function readPastedAd(db: Db, deps: IntakeDeps, input: { companyId: string
   });
   if (!pending) return;
   const out = await runPromptDetached(db, deps.ai, intakeExtractPrompt, pending, { companyId: input.companyId, inputRef: { sessionId: input.sessionId, read: "pasted_ad" }, deadlineAt });
+  if (outOfCredit(out)) return;
   await withTenant(db, input.companyId, async (q) => {
     const [s] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
     if (!s) return;
@@ -511,6 +514,8 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
   const bench = await resolveBenchmark(deps.comp, inputs);
   const turnNo = inputs.session.messages.filter((m) => m.role === "owner").length;
   const out = await runPromptDetached(db, deps.ai, intakeTurnPrompt, contextFrom(inputs, bench), { companyId: input.companyId, inputRef: { sessionId: input.sessionId, turn: inputs.session.messages.length }, deadlineAt });
+  // The owner's words are saved above, and nothing failed: the route offers an upgrade.
+  if (outOfCredit(out)) return { error: out.error, aiRunId: out.runId, noCredit: true };
   const agent: Actor = { kind: "agent", id: "intake", runId: out.runId };
   return withTenant(db, input.companyId, async (q) => {
     const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
@@ -642,7 +647,8 @@ export async function applyIntakeEdit(db: Db, input: { companyId: string; sessio
   });
 }
 
-export type DraftOutcome = { draft: DraftRolePacket; aiRunId: string } | { error: string; aiRunId: string };
+/** `noCredit`: the company's AI credit has no room for the draft, so the model was not asked: no failure, and the way on is to upgrade. */
+export type DraftOutcome = { draft: DraftRolePacket; aiRunId: string } | { error: string; aiRunId: string; noCredit?: boolean };
 
 async function setProgress(db: Db, companyId: string, sessionId: string, stage: NonNullable<IntakeServerState["progress"]>["stage"]): Promise<void> {
   await withTenant(db, companyId, async (q) => {
@@ -652,6 +658,16 @@ async function setProgress(db: Db, companyId: string, sessionId: string, stage: 
     const at = new Date().toISOString();
     state.progress = { stage, startedAt: stage === "benchmark" ? at : state.progress?.startedAt ?? at, at };
     await q.update(intakeSessions).set({ serverState: state }).where(eq(intakeSessions.id, sessionId));
+  });
+}
+
+/** The draft's progress as it was before a writing that never started (no AI credit): the page never reads "failed". */
+async function putProgressBack(db: Db, companyId: string, sessionId: string, progress: IntakeServerState["progress"]): Promise<void> {
+  await withTenant(db, companyId, async (q) => {
+    const [s] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1);
+    if (!s) return;
+    const { progress: _writing, ...state } = stateOf(s);
+    await q.update(intakeSessions).set({ serverState: progress ? { ...state, progress } : state }).where(eq(intakeSessions.id, sessionId));
   });
 }
 
@@ -668,10 +684,11 @@ export const INTAKE_COMPILE_MAX_TOKENS = 32_000;
  */
 export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: string; sessionId: string; actor: Actor }): Promise<DraftOutcome> {
   const deadlineAt = routeDeadline();
-  await withTenant(db, input.companyId, async (q) => {
-    const [s] = await q.select({ status: intakeSessions.status }).from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
+  const progressBefore = await withTenant(db, input.companyId, async (q) => {
+    const [s] = await q.select({ status: intakeSessions.status, serverState: intakeSessions.serverState }).from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
     if (!s) throw new IntakeSessionError("not_found");
     if (s.status !== "active") throw new IntakeSessionError("not_active");
+    return stateOf(s).progress;
   });
   await setProgress(db, input.companyId, input.sessionId, "benchmark");
   const inputs = await withTenant(db, input.companyId, (q) => loadIntakeInputs(q, input.companyId, input.sessionId));
@@ -679,6 +696,10 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
   await setProgress(db, input.companyId, input.sessionId, "writing");
   const ctx = contextFrom(inputs, bench);
   const out = await runPromptDetached(db, deps.ai, intakeCompilePrompt, ctx, { companyId: input.companyId, inputRef: { sessionId: input.sessionId }, maxTokens: INTAKE_COMPILE_MAX_TOKENS, deadlineAt });
+  if (outOfCredit(out)) {
+    await putProgressBack(db, input.companyId, input.sessionId, progressBefore);
+    return { error: out.error, aiRunId: out.runId, noCredit: true };
+  }
   const agent: Actor = { kind: "agent", id: "intake", runId: out.runId };
   if (!out.ok) {
     await setProgress(db, input.companyId, input.sessionId, "failed");
@@ -806,7 +827,7 @@ function benchmarkOf(b: NonNullable<IntakeContext["benchmark"]>): PayBenchmark {
 }
 
 export type CompiledIntake = { roleId: string; packet: RolePacket; version: number; aiRunId: string };
-export type ApprovalAsk = CompiledIntake | { error: string; aiRunId: string } | { notReady: string[] };
+export type ApprovalAsk = CompiledIntake | { error: string; aiRunId: string; noCredit?: boolean } | { notReady: string[] };
 
 /**
  * "Ask for approval" (C7): creates the role and packet version 1 and hands the transaction to `finalize` (the caller

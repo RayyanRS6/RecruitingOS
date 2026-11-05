@@ -95,15 +95,17 @@ const OPEN_FOR_SCORE: readonly string[] = ["invited", "reminded", "in_progress",
 /**
  * Where the AI interview stands for the match score's label (R20-9; `InterviewInScore`), from every screen of one
  * application in any order (the list loads them unordered) and its stage. Any sent one: `being_scored` (`matchScore`
- * makes it `done` once its scorecard is in the readings). Else any open one, or none yet while the stage says it is
- * being prepared: `not_done_yet`. Else any other (lapsed, left part-way, said no, stopped): `not_done`, one wording
- * whatever closed it; so too an interview that never came because the month's AI interviews stayed used up for the
- * whole wait (`allowanceLapsed`: the run's `screen.allowance_lapsed`, Q17, as the caller read it), since it was offered.
- * No screen at all otherwise: `none` (never offered one, as before 20 October 2026). It reads the status only, never
- * answers, counts or times.
+ * makes it `done` once its scorecard is in the readings), or `not_scored` when its scorecard waits for the company's AI
+ * credit (`scoreWaitsForCredit`, on the screen's progress or as the caller selected it alone), so nobody reads "being
+ * scored" for ever. Else any open one, or none yet while the stage says it is being prepared: `not_done_yet`. Else any
+ * other (lapsed, left part-way, said no, stopped): `not_done`, one wording whatever closed it; so too an interview that
+ * never came because the month's AI interviews stayed used up for the whole wait (`allowanceLapsed`: the run's
+ * `screen.allowance_lapsed`, Q17, as the caller read it), since it was offered. No screen at all otherwise: `none` (never
+ * offered one, as before 20 October 2026). It reads the status only, never answers, counts or times.
  */
-export function interviewInScore(screens: ReadonlyArray<{ status: string }>, stage?: ApplicationStage | string | null, opts: { allowanceLapsed?: boolean } = {}): Exclude<InterviewInScore, "done"> {
-  if (screens.some((s) => s.status === "completed")) return "being_scored";
+export function interviewInScore(screens: ReadonlyArray<{ status: string; scoreWaitsForCredit?: string | null; progress?: { scoreWaitsForCredit?: string } | null }>, stage?: ApplicationStage | string | null, opts: { allowanceLapsed?: boolean } = {}): Exclude<InterviewInScore, "done"> {
+  const sent = screens.filter((s) => s.status === "completed");
+  if (sent.length) return sent.some((s) => s.scoreWaitsForCredit ?? s.progress?.scoreWaitsForCredit) ? "not_scored" : "being_scored";
   if (screens.some((s) => OPEN_FOR_SCORE.includes(s.status))) return "not_done_yet";
   if (screens.length) return "not_done";
   if (stage && AI_INTERVIEW_PHASE.includes(stage as ApplicationStage)) return "not_done_yet";

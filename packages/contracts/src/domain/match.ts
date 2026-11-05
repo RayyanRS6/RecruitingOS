@@ -77,7 +77,8 @@ export type MatchCriterion = {
 /**
  * Whether the AI interview is in the score (20 October 2026, R20-9): every applicant gets one, and the score counts both
  * readings once it is scored. Until then the number is the résumé's alone, and says so. `done`: the interview's scorecard
- * is in the score. `being_scored`: sent, its scorecard not written yet. `not_done_yet`: being prepared, or its link is
+ * is in the score. `being_scored`: sent, its scorecard not written yet. `not_scored`: sent, and its scorecard waits for
+ * the company's AI credit, so the team reads the answers themselves. `not_done_yet`: being prepared, or its link is
  * open (not started, started, paused, or they asked for a person). `not_done`: it closed without being sent (the link
  * lapsed, they stopped part-way or said no, or it was stopped), or it never came because the month's AI interviews
  * stayed used up for the whole sixty-day wait (Q17); one wording for all of these, so the label never says how far
@@ -85,7 +86,7 @@ export type MatchCriterion = {
  * offered one (an application from before 20 October 2026, or one held on an eligibility answer, which the board
  * places as held).
  */
-export const InterviewInScore = z.enum(["done", "being_scored", "not_done_yet", "not_done", "none"]);
+export const InterviewInScore = z.enum(["done", "being_scored", "not_scored", "not_done_yet", "not_done", "none"]);
 export type InterviewInScore = z.infer<typeof InterviewInScore>;
 /**
  * The label beside the score wherever it shows (the board card, the list's tooltip, the candidate panel, Compare), so a
@@ -95,6 +96,7 @@ export type InterviewInScore = z.infer<typeof InterviewInScore>;
 export const SCORE_BASIS_WORDS: Record<InterviewInScore, string> = {
   done: "From the résumé and the AI interview",
   being_scored: "Résumé only for now: AI interview done, being scored",
+  not_scored: "Résumé only: AI interview done, not scored",
   not_done_yet: "Résumé only: AI interview not done yet",
   not_done: "Résumé only: no AI interview",
   none: "Résumé only: no AI interview",

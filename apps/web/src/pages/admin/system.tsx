@@ -7,7 +7,7 @@ import { api, ApiError } from "../../api/client";
 import { toast } from "../../toast";
 import { dayKey } from "../candidate-panel/helpers";
 import { adminKeys, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
-import { aiStatusWords, exactMoney, exactWhen, firstUpper, money, runStatusWords, STEP_STATUS_WORDS, whenWords, wordFor, workflowWords } from "./admin-words";
+import { aiStatusTone, aiStatusWords, exactMoney, exactWhen, firstUpper, money, runStatusWords, STEP_STATUS_WORDS, whenWords, wordFor, workflowWords } from "./admin-words";
 
 /*
  * The console's System and settings section (redesign spec 3.2, Wave S6 slice S6-E): costs, workflow runs, AI runs,
@@ -305,7 +305,7 @@ export function AiRuns() {
             <td className="nowrap text-ink-2"><span title={exactWhen(r.createdAt)}>{whenShort(r.createdAt)}</span></td>
             <td><Button size="sm" variant="quiet" className={NAME_BUTTON} onClick={() => setOpened(r)}>{codeWords(r.task)}</Button></td>
             <td className="small">{r.model}</td>
-            <td><Chip tone={r.status === "ok" ? "good" : "critical"}>{aiStatusWords(r.status)}</Chip></td>
+            <td><Chip tone={aiStatusTone(r.status)}>{aiStatusWords(r.status)}</Chip></td>
             <td className="num"><span title={exactMoney(Number(r.costUsd), 5)}>{money(Number(r.costUsd))}</span><div className="small muted">{r.latencyMs} ms</div></td>
           </tr>
         ))}
@@ -331,7 +331,7 @@ export function AiRunDrawer(props: { row: AiRunRow; onClose: () => void }) {
           <dt>Agent</dt><dd>{codeWords(run.agent)}</dd>
           <dt>Model</dt><dd>{run.model}{detail?.modelVersion ? <span className="small muted"> ({detail.modelVersion})</span> : null}</dd>
           <dt>Prompt</dt><dd>{run.promptKey}, version {run.promptVersion}</dd>
-          <dt>Status</dt><dd><Chip tone={run.status === "ok" ? "good" : "critical"}>{aiStatusWords(run.status)}</Chip></dd>
+          <dt>Status</dt><dd><Chip tone={aiStatusTone(run.status)}>{aiStatusWords(run.status)}</Chip></dd>
           <dt>Tokens</dt><dd>{run.inputTokens} in · {run.outputTokens} out</dd>
           <dt>Cost</dt><dd>{exactMoney(Number(run.costUsd), 5)}</dd>
           <dt>Time taken</dt><dd>{run.latencyMs} ms</dd>

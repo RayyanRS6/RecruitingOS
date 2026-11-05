@@ -230,6 +230,7 @@ describe("whether the AI interview is in the score (20 October 2026, R20-9)", ()
     expect(words(matchScore(pair(resume), packet, { interview: "not_done_yet" })!)).toEqual(["not_done_yet", "Résumé only: AI interview not done yet"]);
     expect(words(matchScore(pair(resume), packet, { interview: "being_scored" })!)).toEqual(["being_scored", "Résumé only for now: AI interview done, being scored"]);
     expect(words(matchScore(pair(resume), packet, { interview: "not_done" })!)).toEqual(["not_done", "Résumé only: no AI interview"]);
+    expect(words(matchScore(pair(resume), packet, { interview: "not_scored" })!)).toEqual(["not_scored", "Résumé only: AI interview done, not scored"]);
     // a caller's "done" with no scorecard among the readings is still being scored
     expect(matchScore(pair(resume), packet, { interview: "done" })!.interview).toBe("being_scored");
   });
@@ -260,6 +261,10 @@ describe("interviewInScore: where the AI interview stands, from the screens in a
   it("reads a sent one first, then an open one, then a closed one, and the stage when there is none yet", () => {
     expect(interviewInScore([{ status: "expired" }, { status: "completed" }, { status: "invited" }])).toBe("being_scored");
     expect(interviewInScore([{ status: "invited" }, { status: "completed" }])).toBe("being_scored");
+    // a sent one whose scorecard waits for the company's AI credit is not "being scored" for ever, read from the screen or as a caller selected it alone
+    expect(interviewInScore([{ status: "completed", progress: { scoreWaitsForCredit: "2026-11-05T10:00:00Z" } }])).toBe("not_scored");
+    expect(interviewInScore([{ status: "expired" }, { status: "completed", scoreWaitsForCredit: "2026-11-05T10:00:00Z" }])).toBe("not_scored");
+    expect(interviewInScore([{ status: "completed", scoreWaitsForCredit: null }])).toBe("being_scored");
     for (const open of ["invited", "reminded", "in_progress", "paused", "human_requested"]) expect(interviewInScore([{ status: "expired" }, { status: open }]), open).toBe("not_done_yet");
     for (const closed of ["expired", "unfinished", "declined_by_candidate", "abandoned", "cancelled"]) expect(interviewInScore([{ status: closed }]), closed).toBe("not_done");
     expect(interviewInScore([], "eligible")).toBe("not_done_yet");

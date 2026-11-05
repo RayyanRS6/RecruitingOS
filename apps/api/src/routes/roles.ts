@@ -438,7 +438,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const marks = await activeMarksFor(tx, appIds);
     const followUps = await activeFollowUpsFor(tx, appIds);
     const timeZone = followUps.size ? await companyTimeZone(tx, t.companyId) : "UTC";
-    const scr = appIds.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds)) : [];
+    const scr = appIds.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId, scoreWaitsForCredit: sql<string | null>`${screens.progress}->>'scoreWaitsForCredit'` }).from(screens).where(inArray(screens.applicationId, appIds)) : [];
     // Never a reading of a conversation the candidate did not send ("hide them until they send", 9 October 2026).
     const hiddenReadings = unsentScreenReadings(scr, asmts);
     const ivs = appIds.length ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, decision: interviews.decision }).from(interviews).where(inArray(interviews.applicationId, appIds)) : [];

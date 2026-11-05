@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, FREE_PLAN_KEY, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, publicPlanView } from "./plans";
+import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_LINE, FREE_PLAN_KEY, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, publicPlanView } from "./plans";
 
 describe("the public plans", () => {
   it("lists Free, Basic, Pro and Ultra, in that order, and starts a new company on Free", () => {
@@ -46,5 +46,23 @@ describe("what a customer may read about a plan", () => {
     expect(jobsTotalLine("Free", 1)).toBe("Your Free plan includes one job. Upgrade to post more.");
     expect(jobsTotalLine("Starter", 2)).toBe("Your Starter plan includes 2 jobs. Upgrade to post more.");
     expect(jobsTotalLine(null, 1)).toBe("Your plan includes one job. Upgrade to post more.");
+  });
+
+  it("says the AI credit in words, never in money, and never tells anyone to try again or to bring in a recruiter", () => {
+    const lines = [...Object.values(AI_HELP_LINE), ...(["warning", "used_up"] as const).flatMap((level) => Object.values(aiCreditNoticeWords(level, { resetsOn: "Friday, December 4" })))];
+    for (const line of lines) {
+      expect(line).not.toMatch(/\$|\bdollars?\b|\bcents?\b|\bcredit\b/i);
+      expect(line).not.toMatch(/try again|recruiter/i);
+    }
+    expect(AI_HELP_LINE.turn).toBe("Your plan's AI help is used up. Your draft is saved. Upgrade to keep going.");
+    expect(AI_HELP_LINE.draft).toBe("Your plan's AI help is used up. Everything you confirmed is kept. Upgrade to write the draft.");
+    expect(AI_HELP_LINE.revise).toBe("Your plan's AI help is used up. Nothing was changed. You can still make the change in the editor.");
+    expect(AI_HELP_LINE.about).toBe("Your plan's AI help is used up. You can write this text yourself; it shows the same way.");
+  });
+
+  it("says when a monthly credit starts again, and only then", () => {
+    expect(aiCreditNoticeWords("used_up").body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade.");
+    expect(aiCreditNoticeWords("used_up", { resetsOn: "Friday, December 4" }).body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade or it starts again on Friday, December 4.");
+    expect(aiCreditNoticeWords("warning")).toEqual({ title: "80% of your plan's AI help used", body: "Nothing has stopped. Upgrade before it runs out." });
   });
 });

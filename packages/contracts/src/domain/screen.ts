@@ -85,6 +85,13 @@ export const ScreenProgress = z.object({
   pausedAt: z.string().optional(),
   retriedAt: z.string().optional(),
   /**
+   * When the scorecard of a sent chat started waiting for the company's AI credit (Rule 4 of the plans of 5 November
+   * 2026): the answers are there for the team, who read them themselves; the `screen` run writes it after an upgrade or
+   * when a monthly credit starts again, and clears this. Everything that says "being scored" reads it, so nobody stays
+   * there for ever (`interviewInScore`, `screenScorecards`, the board's lane).
+   */
+  scoreWaitsForCredit: z.string().optional(),
+  /**
    * A person's "Send a reminder" (20 Oct 2026, R20-7) about an interview already started: it stays open at least until
    * then, beside the idle close after the reminder (the `screen` run's `after_invite`). Unstarted, `expiresAt` says it.
    */

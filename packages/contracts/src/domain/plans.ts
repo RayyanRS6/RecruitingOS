@@ -104,3 +104,51 @@ export function jobsTotalLine(planName: string | null | undefined, limit: number
 
 /** What that refusal's Upgrade asks ITS. */
 export const MORE_JOBS_UPGRADE_QUESTION = "We would like to upgrade our plan so we can post more jobs.";
+
+/**
+ * The company-level signal that a company's AI work waiting for credit should look again (`waitForCredit` in
+ * packages/workflows): Change plan sends it. A monthly credit's new month has no event, so those waits also end at the
+ * period's end.
+ */
+export const AI_CREDIT_AVAILABLE = "ai.credit_available";
+
+/** What an Upgrade asks ITS when the AI help is what ran out. */
+export const AI_HELP_UPGRADE_QUESTION = "We would like to upgrade our plan for more AI help.";
+
+const USED_UP = "Your plan's AI help is used up.";
+/** A call too big for what is left: the credit is not all gone, so it does not say so. */
+const NEARLY_USED_UP = "Your plan's AI help is nearly used up";
+
+/**
+ * What the owner reads when the AI help stops something they asked for: words only, never dollars
+ * (docs/FOUNDER-CONTEXT.md, "AI credit math"). A candidate never reads any of these.
+ */
+export const AI_HELP_LINE = {
+  /** A chat turn in the job builder: their words stay saved. */
+  turn: `${USED_UP} Your draft is saved. Upgrade to keep going.`,
+  /** Writing the job's draft, the dearest call: what they confirmed is kept. */
+  draft: `${USED_UP} Everything you confirmed is kept. Upgrade to write the draft.`,
+  draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. Upgrade to write the draft.`,
+  /** Changing a job by chat: the editor needs no AI. */
+  revise: `${USED_UP} Nothing was changed. You can still make the change in the editor.`,
+  /** The text about the company: the person can write it. */
+  about: `${USED_UP} You can write this text yourself; it shows the same way.`,
+  /** A new job, before anyone types. */
+  newJob: `${USED_UP} Upgrade to keep going.`,
+  newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. Upgrade to keep going.`,
+} as const;
+
+/** Where the AI credit stands for the owner: at the 80% line, used up, or neither. */
+export type AiCreditLevel = "warning" | "used_up";
+
+/** What the owner's notices and the Home row say at each level. `resetsOn`: the day a monthly credit starts again, in words. */
+export function aiCreditNoticeWords(level: AiCreditLevel, opts: { resetsOn?: string | null } = {}): { title: string; body: string } {
+  if (level === "warning") return { title: "80% of your plan's AI help used", body: "Nothing has stopped. Upgrade before it runs out." };
+  return { title: "Your plan's AI help is used up", body: `Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade${opts.resetsOn ? ` or it starts again on ${opts.resetsOn}` : ""}.` };
+}
+
+/**
+ * The AI credit as a customer's browser may receive it (GET /companies/current): a level, a percentage and the words for
+ * the Home row, never an amount. Null when the plan puts no limit on it.
+ */
+export type AiCreditView = { level: AiCreditLevel | null; percent: number; resetsAt: string | null; notice: { title: string; body: string } | null };

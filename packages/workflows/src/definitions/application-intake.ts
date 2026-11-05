@@ -1,10 +1,11 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { ResumeExtraction, type EvidenceAssessment } from "@ros/contracts";
-import type { RunOutcome } from "@ros/ai";
+import { outOfCredit, type RunOutcome } from "@ros/ai";
 import { ASSESSMENT_UNAVAILABLE_TEXT, createEscalation, evaluateEligibility, emit, gate, notify, resolvePolicy, transition } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, communications, companies, documents, rolePackets, roles, screens, type ConsentRecord, type Tx } from "@ros/db";
 import { assessApplication, extractResume, verifyQuotes } from "@ros/agents";
 import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
+import { waitForCredit } from "../credit-wait";
 import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
 import { FORM_READ_EVENT, FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, linkFormReading } from "../form-reading";
 import { settleSuggestion, type SuggestionState } from "../suggestions";
@@ -13,9 +14,10 @@ import { interviewRunOn, offerInterview, readingSettledSignal, startInterviewAga
 /**
  * `formUploadId`, `formReadAskedAt` (20 Oct, R20-1): the upload the apply form sent and when the form asked for its
  * reading, so `extract` ties a reading that finished after Send, or waits a little for one still running, instead of
- * reading the file a second time.
+ * reading the file a second time. `creditWaitSince`: when the reading started waiting for the company's AI credit; nobody
+ * waits for it but the reading itself (`readingSettled`).
  */
-type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number; noticeWaitSince?: string; noAiReading?: boolean; formUploadId?: string; formReadAskedAt?: string } & SuggestionState;
+type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number; noticeWaitSince?: string; noAiReading?: boolean; formUploadId?: string; formReadAskedAt?: string; creditWaitSince?: string } & SuggestionState;
 
 /** What `extract` found before its transaction: a reading (the form's, tied by its upload, or a new one), or a form reading still running. */
 type Extracted = { kind: "read"; documentId: string; out: RunOutcome<ResumeExtraction>; tieUpload?: string } | { kind: "wait"; documentId: string; until: string };
@@ -157,6 +159,8 @@ export const applicationIntake: WorkflowDefinition<State> = {
         const doc = await ctx.read(async (q) => {
           const loaded = await load(q, ctx.state.applicationId);
           if (!loaded || loaded.app.extraction || !loaded.app.resumeDocumentId) return null;
+          // Back from waiting for AI credit: nobody who has left the process since is read, and no credit is spent on them.
+          if (ctx.state.creditWaitSince && !(await readyToAssess(q, loaded.app))) return null;
           const [d] = await q.select().from(documents).where(eq(documents.id, loaded.app.resumeDocumentId)).limit(1);
           return d && d.status === "clean" && d.textExtracted ? d : null;
         });
@@ -185,6 +189,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
         const { app } = loaded;
         if (app.extraction) return { kind: "next", step: "eligibility" };
         if (!app.resumeDocumentId) return { kind: "next", step: "eligibility" };
+        if (ctx.state.creditWaitSince && !(await readyToAssess(ctx.q, app))) return { kind: "next", step: "eligibility" };
         const [doc] = await ctx.q.select().from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1);
         if (doc && doc.status !== "clean") return { kind: "next", step: "eligibility" }; // refused or still quarantined: nothing to read
         if (!doc?.textExtracted) {
@@ -199,6 +204,9 @@ export const applicationIntake: WorkflowDefinition<State> = {
           return { kind: "wait", wait: { kind: "event", eventTypes: [FORM_READ_EVENT], subjectId: uploadId, until: prepared.until, reason: "the apply form's own reading of this résumé is still running; it is used instead of reading the file a second time" }, resumeStep: "extract" };
         }
         const out = prepared.out;
+        // No AI credit left: on to eligibility, which is code, so nobody waits and nothing is declined. Nothing failed, so
+        // the team's history says nothing. After an upgrade `ready` comes back here, while the extraction is still empty.
+        if (outOfCredit(out)) return { kind: "next", step: "eligibility" };
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
           await emit(ctx.q, { type: "resume.extraction_failed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { reason: out.error, aiRunId: out.runId }, correlationId: ctx.run.id });
@@ -343,6 +351,18 @@ export const applicationIntake: WorkflowDefinition<State> = {
         }
         if (!prepared) return { kind: "fail", error: "the application became eligible after the read phase; assessing again", retryable: true };
         const out = prepared.out;
+        // No AI credit left: not a failure, and no candidate waits on money. The application moves on as an unreadable
+        // reading's does (once, however often the run looks again), the one email goes now, and nobody is told about this
+        // person: the owner's one notice is about the company. The run waits, and comes back through `extract` after an
+        // upgrade or at the next month, where a late reading is stored beside whatever happened since and moves nothing.
+        if (outOfCredit(out)) {
+          if (!ctx.state.creditWaitSince && !beside) {
+            if (!withInterview && !(await interviewNow(ctx))) await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "not read by AI: the plan's AI help is used up; manual review", correlationId: ctx.run.id });
+            await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { assessmentId: null, recommendation: "review_manually", reason: "the plan's AI help is used up" }, correlationId: ctx.run.id });
+          }
+          await settleReading(ctx, null);
+          return waitForCredit(ctx, "extract", { creditWaitSince: ctx.state.creditWaitSince ?? ctx.now.toISOString() });
+        }
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
           // Invalid or refused twice: the owner reviews without an assessment; nothing is hidden, and the owner is told in so many words.

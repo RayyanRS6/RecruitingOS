@@ -62,6 +62,12 @@ export type CompanySettings = {
    */
   candidateScoreShown?: boolean;
   candidateScoreSetBy?: { at: string; by: Actor; reason: string };
+  /**
+   * Which period of the AI credit the owner was told about, at 80% and when it was used up, so each is told once
+   * (packages/core/src/ai-credit.ts: "total" or the month's start, never an amount, because this object reaches the
+   * browser). Written by one JSON-merge statement; Change plan clears it, so a new plan's lines are told again.
+   */
+  aiCreditTold?: { warnedFor?: string; usedUpFor?: string };
 };
 
 export const companies = pgTable(

@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import type { ZodError } from "zod";
 import {
-  ApplyRequirementFixes, CompanyQuestionsEdit, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
+  AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag, type PacketRevisionProposal, type RequirementsCheck, type RolePacket,
 } from "@ros/contracts";
 import {
@@ -12,7 +12,8 @@ import {
 import { assertCan, can, closingDateProblem, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
 import { companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
-import { actorOf, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
+import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
+import { aiCreditRefusal } from "../services/ai-credit";
 import { jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
 import { eventTargets, inStaffScope, staffScopeOf } from "../services/staff-scope";
@@ -230,9 +231,13 @@ function takesEffect(role: RoleRow, mayApprove: boolean, openFlags: number, mate
 
 const AI_FAILED = "The assistant could not work out that change. Nothing was changed. Try again, or make the change in the editor.";
 
-/** A failed model call is recorded as an event on what it was about, then answered plainly; nothing was changed. */
-async function revisionFailed(container: Container, companyId: string, subject: { type: "role" | "intake_session"; id: string }, out: { runId: string; reason: string; error: string }): Promise<never> {
-  await withTenant(container.db, companyId, (tx) => emit(tx, { type: "ai.run_failed", companyId, actor: { kind: "agent", id: "intake", runId: out.runId }, subject, payload: { task: "packet.revise", reason: out.reason, error: out.error } }));
+/**
+ * A failed model call is recorded as an event on what it was about, then answered plainly; nothing was changed. No AI credit
+ * left is no failure: nothing goes on the record and there is nothing to try again, and the editor needs no model.
+ */
+async function revisionFailed(container: Container, t: Pick<Tenant, "companyId" | "role">, subject: { type: "role" | "intake_session"; id: string }, out: { runId: string; reason: string; error: string }): Promise<never> {
+  if (out.reason === "no_credit") throw aiCreditRefusal(t, AI_HELP_LINE.revise);
+  await withTenant(container.db, t.companyId, (tx) => emit(tx, { type: "ai.run_failed", companyId: t.companyId, actor: { kind: "agent", id: "intake", runId: out.runId }, subject, payload: { task: "packet.revise", reason: out.reason, error: out.error } }));
   throw new HttpError(502, "ai_failed", AI_FAILED, { aiRunId: out.runId });
 }
 
@@ -287,7 +292,7 @@ rolePacketRoutes.post("/:id/revisions", requireTenant, async (c) => {
   const subject = { type: "role" as const, id: loaded.role.id };
   const declined = base.packet.provenance.declinedCriteria ?? [];
   const out = await proposeRevision(container.db, container.ai, { companyId: t.companyId, companyName: loaded.company.name, actor, target: { kind: "role", roleId: loaded.role.id, baseVersion: base.version, roleStatus: loaded.role.status }, packet: base.packet, message: body.message, declined });
-  if (!out.ok) return revisionFailed(container, t.companyId, subject, out);
+  if (!out.ok) return revisionFailed(container, t, subject, out);
   const merged = mergeRevision<DraftRolePacket>(base.packet, out.output, "role");
   const guarded = guardedChange(base.packet, merged.packet, { company: loaded.company, actor, declined, full: true });
   if (!guarded.ok) return revisionInvalid(container, t.companyId, subject, out.runId, guarded.problem);
@@ -575,7 +580,7 @@ draftPacketRoutes.post("/sessions/:id/revisions", requireTenant, async (c) => {
   const subject = { type: "intake_session" as const, id: row.id };
   const declined = draftDeclined(row, draft);
   const out = await proposeRevision(container.db, container.ai, { companyId: t.companyId, companyName: company?.name ?? "", actor, target: { kind: "draft", sessionId: row.id, baseHash: packetFingerprint(draft) }, packet: draft, message: body.message, declined });
-  if (!out.ok) return revisionFailed(container, t.companyId, subject, out);
+  if (!out.ok) return revisionFailed(container, t, subject, out);
   const merged = mergeRevision(draft, out.output, "draft");
   const guarded = guardedChange(draft, merged.packet, { company: { name: company?.name ?? "", locations: company?.locations ?? [] }, actor, declined, full: false });
   if (!guarded.ok) return revisionInvalid(container, t.companyId, subject, out.runId, guarded.problem);

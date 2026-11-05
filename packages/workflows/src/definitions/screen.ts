@@ -1,7 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { ScreenAssessment, ScreenChannel, ScreenTurn } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
-import { runPromptDetached, screenTurnPrompt } from "@ros/ai";
+import { outOfCredit, runPromptDetached, screenTurnPrompt } from "@ros/ai";
 import { audit, emit, entitlements, evaluateEligibility, gate, humanResponseExpectation, isOneVisitFlow, loadBusinessCalendar, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@ros/agents";
 import type { SendResult } from "@ros/integrations";
 import { twoPhase, type StepContext, type StepResult, type WorkflowDefinition } from "../types";
+import { waitForCredit } from "../credit-wait";
 import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
 import { INTERVIEW_LINK_HOURS, READING_SETTLED_EVENT, READING_WAIT_MINUTES, offerInterview, overDesignPartnerAllowance, readingSettled, readingSettledSignal } from "../with-application";
 import { HELD_DECISION_EVENT, aiNoticeSentSignal } from "./application-intake";
@@ -179,7 +180,7 @@ export const screen: WorkflowDefinition<State> = {
         let opening: string | null = null;
         if (channel === "sms") {
           if (prepared.channel !== "sms") return { kind: "fail", error: "the channel changed after the read phase; preparing the opening again", retryable: true };
-          const o = await applyScreenOpening(ctx.q, { companyId: ctx.companyId, screenId: scr.id, packet, out: prepared.opening });
+          const o = await applyScreenOpening(ctx.q, { companyId: ctx.companyId, companyName: company.name, screenId: scr.id, packet, out: prepared.opening });
           if ("error" in o) return { kind: "fail", error: `could not open the screen: ${o.error}`, retryable: true };
           opening = o.message;
         }
@@ -355,7 +356,8 @@ export const screen: WorkflowDefinition<State> = {
     /**
      * E5: the assistant stopped working part-way. The candidate's last message is tried again every half hour; once the
      * assistant answers, the conversation is open again and the candidate is emailed to finish. After a day a person
-     * takes it over. "I'd rather talk to a person" works the whole time.
+     * takes it over. "I'd rather talk to a person" works the whole time. No AI credit left is not the assistant being down:
+     * the turn is worked out in code (`finishScreenTurn`) and the candidate is emailed to finish, with no recruiter brought in.
      */
     retry_paused: twoPhase<State, { screenId: string; latest: string; out: RunOutcome<ScreenTurn> } | null>({
       async prepare(ctx) {
@@ -387,7 +389,7 @@ export const screen: WorkflowDefinition<State> = {
           const expectation = humanResponseExpectation(ctx.now, await loadBusinessCalendar(ctx.q));
           await sendConversationHandedOver(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id }, expectation });
         };
-        if (!prepared || prepared.screenId !== scr.id || !prepared.out.ok) {
+        if (!prepared || prepared.screenId !== scr.id || (!prepared.out.ok && !outOfCredit(prepared.out))) {
           if (ctx.now.getTime() - Date.parse(pausedAt) >= PAUSE_GIVE_UP_HOURS * HOUR) {
             await requestHuman(ctx.q, deps, { screenId: scr.id, reason: "assistant failed for a day after pausing the AI interview", actor: ctx.actor, reply: null, replyChannel: "web" });
             await handedOver();
@@ -407,12 +409,19 @@ export const screen: WorkflowDefinition<State> = {
       },
     }),
 
-    /** Only a complete conversation is read (`assessScreen`); one the candidate did not send never is. */
+    /**
+     * Only a complete conversation is read (`assessScreen`); one the candidate did not send never is. With no AI credit left
+     * nothing failed: the answers were sent and the team reads them, so the screen is marked (`scoreWaitsForCredit`, which
+     * everything that says "being scored" reads, leading to "read it yourself"), and the run waits for credit, with no
+     * notice about the person: the owner's one notice is about the company. Someone who left the process during that wait is
+     * not read when it ends, and no credit is spent on them.
+     */
     assess: twoPhase<State, { screenId: string; out: RunOutcome<ScreenAssessment> } | null>({
       async prepare(ctx) {
         const pending = await ctx.read(async (q) => {
           const [scr] = await q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
-          return scr && !scr.assessmentId && scr.status === "completed" ? scr.id : null;
+          if (!scr || scr.assessmentId || scr.status !== "completed" || (await leftWhileWaiting(q, scr))) return null;
+          return scr.id;
         });
         if (!pending) return null;
         const out = await assessScreen(ctx.db, ctx.services.ai, { companyId: ctx.companyId, screenId: pending, workflowRunId: ctx.run.id });
@@ -422,6 +431,7 @@ export const screen: WorkflowDefinition<State> = {
         const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
         if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
         if (scr.assessmentId) return { kind: "next", step: "recommend" };
+        if (await leftWhileWaiting(ctx.q, scr)) return { kind: "complete" };
         if (scr.status !== "completed") {
           // A run that reached this step for a conversation closed without being sent (one under way when this rule
           // came in, 9 October 2026): nothing is read. Unfinished, it stays under "No AI interview yet" (R20-7, no alert);
@@ -432,6 +442,10 @@ export const screen: WorkflowDefinition<State> = {
         }
         if (!prepared || prepared.screenId !== scr.id) return { kind: "fail", error: "the screen changed after the read phase; assessing again", retryable: true };
         const out = prepared.out;
+        if (outOfCredit(out)) {
+          if (!scr.progress.scoreWaitsForCredit) await ctx.q.update(screens).set({ progress: { ...scr.progress, scoreWaitsForCredit: ctx.now.toISOString() } }).where(eq(screens.id, scr.id));
+          return waitForCredit(ctx, "assess");
+        }
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
           await emit(ctx.q, { type: "ai.output_invalid", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: scr.id }, payload: { error: out.error }, correlationId: ctx.run.id });
@@ -443,7 +457,8 @@ export const screen: WorkflowDefinition<State> = {
           .insert(assessments)
           .values({ companyId: ctx.companyId, applicationId: scr.applicationId, kind: "screen", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output, overall: out.output.overall, confidence: out.output.confidence, secondaryScore: null })
           .returning({ id: assessments.id });
-        await ctx.q.update(screens).set({ assessmentId: row.id }).where(eq(screens.id, scr.id));
+        const { scoreWaitsForCredit: _scored, ...progress } = scr.progress;
+        await ctx.q.update(screens).set({ assessmentId: row.id, progress }).where(eq(screens.id, scr.id));
         await ctx.q.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, scr.applicationId));
         await emit(ctx.q, { type: "screen.assessed", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: scr.id }, payload: { assessmentId: row.id, recommendation: out.output.recommendation, confidence: out.output.confidence, incomplete: PARTIAL.includes(scr.status) }, correlationId: ctx.run.id });
         await emit(ctx.q, { type: "assessment.created", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "application", id: scr.applicationId }, payload: { kind: "screen", assessmentId: row.id, overall: out.output.overall }, correlationId: ctx.run.id });
@@ -466,7 +481,7 @@ export const screen: WorkflowDefinition<State> = {
       const { app, candidate, role, packet } = b;
       const name = `${candidate.firstName} ${candidate.lastName}`;
       // They left the process while the scorecard was being written: nothing to suggest or announce.
-      if (["hired", "withdrawn", "rejected", "declined", "talent_pool"].includes(app.stage)) return { kind: "complete" };
+      if (LEFT_THE_PROCESS.includes(app.stage)) return { kind: "complete" };
       if (PARTIAL.includes(scr.status)) {
         // Unfinished: under "No AI interview yet", with no per-person alert (R20-7).
         if (scr.status === "declined_by_candidate") await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.declined_by_candidate", title: `${name} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
@@ -510,6 +525,16 @@ export const screen: WorkflowDefinition<State> = {
  */
 function byPerson(state: State): boolean {
   return !!state.invitedBy && state.invitedBy !== "system" && state.invitedBy !== "apply";
+}
+
+/** The stages of someone no longer in the process. */
+const LEFT_THE_PROCESS: readonly string[] = ["hired", "withdrawn", "rejected", "declined", "talent_pool"];
+
+/** Whether the scorecard of a chat has been waiting for AI credit, and its candidate has left the process since. */
+async function leftWhileWaiting(q: Tx, scr: { applicationId: string; progress: { scoreWaitsForCredit?: string } }): Promise<boolean> {
+  if (!scr.progress.scoreWaitsForCredit) return false;
+  const [app] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, scr.applicationId)).limit(1);
+  return !app || LEFT_THE_PROCESS.includes(app.stage);
 }
 
 /** A must-have "No" (R20-10): looked at again every day, and given up after sixty days still held; "Keep them in" later starts it again (`startInterviewAgain`). */

@@ -2,8 +2,8 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { desc, eq, gt, gte, inArray, ne, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
-import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
+import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, aiCreditLines, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, settleAiCreditAlerts, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
+import { AI_CREDIT_AVAILABLE, ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { mailbox } from "@ros/integrations";
 import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, invitations, jobs, memberships, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
@@ -46,6 +46,9 @@ adminRoutes.get("/customers", async (c) => {
   const heldCounts = byCompany(await db.select({ companyId: communications.companyId, n: sql<number>`count(*)` }).from(communications).where(eq(communications.status, HELD_STATUS)).groupBy(communications.companyId));
   // Allowance alerts whose period ended or whose limit was raised leave the list first (Wave S2 F1).
   await entitlements.settleAllowanceAlerts(db);
+  await settleAiCreditAlerts(db);
+  // Where each company stands on its AI credit, in dollars (only ITS reads this): beside the lifetime spend above.
+  const aiCredit = await aiCreditLines(db, { now: c.get("container").engine.clock() });
   // Each monthly allowance counts only its current period: a period that ended reads as a new one, nothing used yet.
   const allowanceOf = async (key: string) => byCompany((await db.select().from(entitlementRows).where(eq(entitlementRows.key, key))).map((r) => { const p = entitlements.currentPeriod(r); return { companyId: r.companyId, used: p.used, limit: r.limit, resetsAt: p.periodEnd }; }));
   // Where each company stands against its recruiter requests (Q33): going over never refuses one; ITS talks about billing.
@@ -69,6 +72,7 @@ adminRoutes.get("/customers", async (c) => {
     roles: Number(roleCounts.get(co.id)?.n ?? 0),
     applications: Number(appCounts.get(co.id)?.n ?? 0),
     aiCostUsd: Number(costs.get(co.id)?.usd ?? 0),
+    aiCredit: aiCredit.get(co.id) ?? null,
     lastActivityAt: lastActivity.get(co.id)?.at ?? null,
     escalations: Number(escalationCounts.get(co.id)?.n ?? 0),
     verifiedAt: companyVerifiedAt(co.settings),
@@ -301,8 +305,10 @@ adminRoutes.get("/failures", async (c) => {
   const db = c.get("container").db;
   const failedRuns = await db.select().from(workflowRuns).where(eq(workflowRuns.status, "failed")).orderBy(desc(workflowRuns.updatedAt)).limit(100);
   const failedJobs = await db.select().from(jobs).where(eq(jobs.status, "failed")).orderBy(desc(jobs.createdAt)).limit(100);
-  const failedAi = (await withoutUnsentAnswers(db, { runs: await db.select().from(aiRuns).where(sql`${aiRuns.status} <> 'ok'`).orderBy(desc(aiRuns.createdAt)).limit(100), events: [] })).runs;
+  // A call still `running` holds its place in the AI credit and has not failed: it is not on this list.
+  const failedAi = (await withoutUnsentAnswers(db, { runs: await db.select().from(aiRuns).where(sql`${aiRuns.status} not in ('ok', 'running')`).orderBy(desc(aiRuns.createdAt)).limit(100), events: [] })).runs;
   await entitlements.settleAllowanceAlerts(db);
+  await settleAiCreditAlerts(db);
   const alerts = await openAlerts(db);
   const pendingDeletions = await pendingCredentialDeletions(db);
   return c.json({ failedRuns, failedJobs, failedAi, alerts, pendingDeletions });
@@ -587,10 +593,14 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     const leavingTrial = onTrialPlan(co.planKey) && !onTrialPlan(body.planKey);
     const wasPaused = leavingTrial && trialStanding(co, clock)?.ended === true;
     const term = toTrial && isCompanyVerified(co.settings) ? newTrialTerm(clock, "plan_change") : null;
-    const { trial: oldTerm, ...others } = co.settings;
+    // What the owner was told about the AI credit goes: a new plan's lines are told again.
+    const { trial: oldTerm, aiCreditTold: _told, ...others } = co.settings;
     const settings = { ...others, pilot, ...(toTrial ? (term ? { trial: term } : {}) : oldTerm ? { trial: oldTerm } : {}) };
     const status = onTrialPlan(body.planKey) ? "trial" : body.planKey === "design_partner" ? "design_partner" : "active";
     const [updated] = await tx.update(companies).set({ status, settings }).where(eq(companies.id, companyId)).returning();
+    await settleAiCreditAlerts(tx, { companyId, now: clock });
+    // AI work waiting for credit looks again now: each run woken passes the same check at the credit's own gate.
+    await container.engine.signal(tx, { companyId, key: AI_CREDIT_AVAILABLE });
     if (leavingTrial) await resolveAlertsFor(tx, TRIAL_ENDED_ALERT, companyId, clock);
     await emit(tx, { type: "plan.changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from: co.planKey, to: body.planKey, pilot, ...(leavingTrial ? { trialEnded: true } : {}) } });
     await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey, ...(term ? { trial: { startedAt: term.startedAt, endsAt: term.endsAt } } : {}), ...(leavingTrial ? { trialEnded: true } : {}) } });
@@ -601,8 +611,8 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     // Paused no more: the jobs go back on the feeds, and the emails that arrived meanwhile are added to their jobs.
     resetPublicFeedCache(container);
     await replayHeldEmailsForCompany(container, companyId);
-    await container.kick();
   }
+  await container.kick();
   return c.json({ ...result.updated, trialEnded: result.leavingTrial });
 });
 

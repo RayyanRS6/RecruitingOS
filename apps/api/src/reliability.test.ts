@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
+import { AI_CREDIT_USED_UP } from "@ros/ai";
 import { SEND_MAX_ATTEMPTS } from "@ros/agents";
 import { ESCALATION_OVERDUE_ALERT_KIND, ESCALATION_QUEUE_EMAIL_JOB_KIND, createEscalation, raisedWithoutAPerson, setEscalationQueueEmails } from "@ros/core";
 import { adminAlerts, communications, companies, jobs, recruiterEscalations, withTenant, workflowRuns } from "@ros/db";
@@ -39,6 +40,8 @@ describe("the retry schedules outlast an hour's outage", () => {
     // the whole account refused (a bad key, billing): held like an outage, with an alert that says to check the key or billing
     expect(providerProblem("provider error: 401 {\"type\":\"authentication_error\"}")).toBe("account");
     expect(providerProblem("provider error: 403 permission denied")).toBe("account");
+    // Anthropic's billing_error, whatever its words say: a workspace's spend limit stops every company, so it must stay loud
+    expect(providerProblem("provider error: 402 {\"type\":\"billing_error\",\"message\":\"Workspace spend limit reached\"}")).toBe("account");
     expect(providerProblem("provider error: 400 Your credit balance is too low to access the Anthropic API")).toBe("account");
     expect(providerProblem("provider error: 503 service unavailable")).toBe("outage");
     // a local error the adapter wrapped is a bug, not an outage: it fails like any other error
@@ -47,6 +50,10 @@ describe("the retry schedules outlast an hour's outage", () => {
     expect(isProviderOutage("provider refused: claude-x is not allowed")).toBe(false);
     expect(isProviderOutage("fake invalid output")).toBe(false);
     expect(isProviderOutage("application not found")).toBe(false);
+    // one company's AI credit used up is no outage: its text never starts with "provider", or it would page ITS and hold other customers' work
+    expect(AI_CREDIT_USED_UP.startsWith("provider")).toBe(false);
+    expect(isProviderOutage(AI_CREDIT_USED_UP)).toBe(false);
+    expect(providerProblem(AI_CREDIT_USED_UP)).toBeNull();
   });
 });
 

@@ -79,6 +79,7 @@ const HEADLINES: Record<string, string> = {
   "company.trial_extended": "ITS extended your trial",
   "company.trial_ended": "Your trial has ended",
   "entitlement.text_screens": "News about your plan's AI interviews",
+  "entitlement.ai_credit": "News about your plan's AI help",
 };
 
 /** When a kind has no headline of its own, its group's. */

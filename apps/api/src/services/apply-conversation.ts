@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ChatCounter, type ReviewItem, type RolePacket, type ScreenProgress, type ScreenStatus, type ScreenTranscriptEntry, type ScreenTurn, type ScreenWriteup, type TapAnswer, type TapFormat, type UnconfirmedIntent, type WrittenQuestionView } from "@ros/contracts";
-import { runPromptDetached, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
+import { outOfCredit, runPromptDetached, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
 import {
   CHAT_CAP_CLOSING, EMPTY_SCREEN_PROGRESS, MOVED_ON_MESSAGE, REVIEW_MESSAGE, SCREEN_COMPLETE_MESSAGE, SKIPPED_MESSAGE, TURN_CAP_REVIEW_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, cvLinesOf, visitChatFacts, chatOpening, chatPacket, enforceChatTurn, withChatPlan, modelTurnCap, modelTurnsUsed, answerWithdrawPrompt, answersOf, countConversation, createScreen, currentQuestion, declineConversation, editScreenAnswer, enforceTurnRules, flagAllowance,
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
-  sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
+  sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, turnWithoutModel, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
 import { addBusinessHours, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, errorForLog, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
@@ -405,13 +405,16 @@ async function beginDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, inp
   return { ctx: detachedContext(d, state, message), turn: transcript.length };
 }
 
-/** The second transaction of a detached turn, mirroring `finishScreenTurn`. Also finishes a retry after an outage. */
+/**
+ * The second transaction of a detached turn, mirroring `finishScreenTurn`, the turn worked out in code included (no AI
+ * credit left: `turnWithoutModel`, so the two kinds read the same). Also finishes a retry after an outage.
+ */
 async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, out: RunOutcome<ScreenTurn>): Promise<TurnResult> {
   const d = await loadDetached(tx, id, { lock: true });
   if (!d) return { kind: "error", message: "This conversation is no longer available." };
   const { row, packet, company } = d;
   const now = deps.engine.clock();
-  if (!out.ok) {
+  if (!out.ok && !outOfCredit(out)) {
     if (row.status === "paused") return { kind: "error", message: pausedMessage(company.name) };
     const failures = (row.progress.failures ?? 0) + 1;
     if (failures >= 2) {
@@ -426,11 +429,19 @@ async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, ou
   }
   // A Kanvis-style chat is held to its own rules, exactly as a first application's (`finishScreenTurn`).
   const latest = [...row.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
-  const enforced = row.progress.chat ? enforceChatTurn(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }) : { turn: enforceTurnRules(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }), move: null };
+  const enforced = out.ok
+    ? row.progress.chat ? enforceChatTurn(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }) : { turn: enforceTurnRules(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }), move: null }
+    : turnWithoutModel({ packet, progress: row.progress, answers: row.answers, transcript: row.transcript, latest: latest ?? "" });
+  // With nothing being asked and no AI credit left, it ends as it does at the cap.
+  if (!enforced) {
+    const ended: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: true, humanRequested: false };
+    return detachedReply(tx, d, { status: "in_progress", transcript: row.transcript, answers: row.answers, progress: { ...advanceProgress(row.progress, ended), pausedAt: undefined }, message: TURN_CAP_REVIEW_MESSAGE, reviewMessage: TURN_CAP_REVIEW_MESSAGE, questionKey: null, done: true, closing: CHAT_CAP_CLOSING });
+  }
+  const aiRunId = out.ok ? out.runId : undefined;
   let turn = enforced.turn;
   if (turn.humanRequested) {
     turn = !/business/i.test(turn.messageToCandidate) ? { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(new Date(), await loadBusinessCalendar(tx))}.` } : turn;
-    await tx.update(unconfirmedScreens).set({ transcript: [...row.transcript, { role: "assistant", content: turn.messageToCandidate, at: now.toISOString(), channel: "web", aiRunId: out.runId }] }).where(eq(unconfirmedScreens.id, row.id));
+    await tx.update(unconfirmedScreens).set({ transcript: [...row.transcript, { role: "assistant", content: turn.messageToCandidate, at: now.toISOString(), channel: "web", aiRunId }] }).where(eq(unconfirmedScreens.id, row.id));
     const fresh = (await loadDetached(tx, id))!;
     await detachedPerson(tx, deps, fresh, "contact_me", { silent: true });
     return { kind: "reply", message: turn.messageToCandidate, done: false, humanRequested: true };
@@ -443,7 +454,8 @@ async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, ou
     else answers[turn.answerRecorded.questionKey] = recorded;
   }
   if (row.status === "paused") progress = { ...progress, pausedAt: undefined };
-  return detachedReply(tx, d, { status: "in_progress", transcript: row.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId, closing: turn.done ? turn.messageToCandidate : null });
+  const closing = !turn.done ? null : out.ok ? turn.messageToCandidate : `Thank you, ${row.firstName || "there"}.`;
+  return detachedReply(tx, d, { status: "in_progress", transcript: row.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId, closing });
 }
 
 /**

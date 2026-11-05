@@ -1,6 +1,6 @@
 import { and, asc, eq, or, sql } from "drizzle-orm";
 import { MAX_RESUME_BYTES, inspectResumeFile, type QuickQuestionView, type ResumeExtraction } from "@ros/contracts";
-import { resumeExtractPrompt, runPromptDetached, type AiRuntime } from "@ros/ai";
+import { outOfCredit, resumeExtractPrompt, runPromptDetached, type AiRuntime } from "@ros/ai";
 import { cvLinesOf, documentToText, verifyQuotes } from "@ros/agents";
 import { errorForLog, scrubAiRun } from "@ros/core";
 import { aiRuns, jobs, withTenant, type Db, type Queryable } from "@ros/db";
@@ -188,7 +188,8 @@ async function readAndFinish(deps: ReadingDeps, ref: ResumeReadRef, last: boolea
   const out = await runPromptDetached(deps.db, deps.ai, resumeExtractPrompt, { text, filename: ref.filename }, { companyId: ref.companyId, workflowRunId: null, inputRef: { uploadId: ref.uploadId, roleId: ref.roleId, purpose: "apply_form", chars: text.length } });
   if (!out.ok) {
     if (out.reason === "error" && !last) throw new Error(out.error);
-    return finish("failed", out.runId);
+    // No AI credit left: no run was written and nothing is tried again. The candidate reads the same neutral line and fills in the form.
+    return finish("failed", outOfCredit(out) ? null : out.runId);
   }
   return finish("read", out.runId, verifyQuotes(out.output, text));
 }
