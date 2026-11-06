@@ -88,6 +88,9 @@ test("a remote job from the owner's first words to its public page: greyed Appro
   // what the software will do by itself stays in sight
   await expect(card.getByText(/^Once it is live:/)).toBeVisible();
   await expectAccessible(page, "approval card held by the law");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expectAccessible(page, "approval card held by the law, in the dark theme");
+  await page.emulateMedia({ colorScheme: "light" });
 
   // pressed while greyed it goes to the field, and approves nothing (Playwright treats aria-disabled as not enabled, so force)
   const approvals: string[] = [];
