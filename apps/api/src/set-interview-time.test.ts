@@ -543,10 +543,11 @@ describe("a person sets the date and time", () => {
       expect(anyway.status, await anyway.clone().text()).toBe(201);
       const { id } = (await anyway.json()) as Booked;
       expect((await eventsOf(id, "interview.booked"))[0].payload).toMatchObject({ clashAllowed: true, setByPerson: true });
-      // route B, excluding the interview itself: moving it fifteen minutes overlaps only itself and the other, so it names Dana for the other
-      const ownClash = await routeB(id, { ...chosen, durationMinutes: 30 });
+      // route B, too: moving it fifteen minutes still overlaps the other one, so it names Dana for that
+      const ownClash = await routeB(id, { ...chosen, time: "14:15", durationMinutes: 30 });
       expect(ownClash.status).toBe(409);
       expect((await errorOf(ownClash)).code).toBe("interviewer_busy");
+      // the interview's own time is no clash: alone on its day, it moves onto a time it overlaps
       const alone = await book("Abe", "Stone");
       const self = await routeB(alone.booked.id, { date: zonedParts(new Date(alone.row.startsAt!), TZ).dayKey, time: "14:15" });
       expect(self.status, await self.clone().text()).toBe(200);
@@ -776,6 +777,22 @@ describe("a person sets the date and time", () => {
       setClock(BASE);
     });
 
+    it("the same time and place pressed again changes nothing and emails nobody twice; a change of place alone is a change", async () => {
+      const chosen = { ...fresh(), durationMinutes: 30, place: { kind: "address", text: "12 Main St, Tustin" } };
+      const { cand, booked } = await book("Mya", "Moore", chosen);
+      const first = mailTo(cand.email).length;
+      const again = await routeB(booked.id, chosen);
+      expect(again.status, await again.clone().text()).toBe(200);
+      expect(((await again.json()) as Booked)).toMatchObject({ attempt: 1, moved: false, status: "scheduled" });
+      await container.drain();
+      expect(mailTo(cand.email)).toHaveLength(first);
+      expect((await runs(booked.id)).filter((x) => x.status === "cancelled")).toHaveLength(0);
+      const elsewhere = await routeB(booked.id, { ...chosen, place: { kind: "address", text: "45 Elm St, Irvine" } });
+      expect(((await elsewhere.json()) as Booked)).toMatchObject({ attempt: 2, moved: true });
+      await container.drain();
+      expect(mailTo(cand.email).at(-1)!.text).toContain("Where: 45 Elm St, Irvine");
+    });
+
     it("with no reason given, it says only that it moved; the same person can be moved again", async () => {
       const { cand, booked } = await book("Lex", "Moore");
       expect((await routeB(booked.id)).status).toBe(200);
@@ -957,6 +974,14 @@ describe("a person sets the date and time", () => {
       expect(await noticesAbout("interview.accessibility", "Uri asked for an accommodation")).toHaveLength(count);
       await form(`/c/schedule/${token}/accommodation`, { accessibilityNote: "x".repeat(900) });
       expect((await interview(booked.id)).candidateAvailability?.accessibilityNote).toHaveLength(500);
+    });
+
+    it("saying none of the times work keeps an accommodation they asked for earlier", async () => {
+      const { booked, token } = await book("Quo", "West");
+      await form(`/c/schedule/${token}/accommodation`, { accessibilityNote: "Captions on, please." });
+      await container.db.update(interviews).set({ status: "scheduling" }).where(eq(interviews.id, booked.id));
+      expect((await form(`/c/schedule/${token}/none-work`, { note: "Mornings suit me better." })).status).toBe(200);
+      expect((await interview(booked.id)).candidateAvailability).toMatchObject({ accessibilityNote: "Captions on, please.", note: "Mornings suit me better." });
     });
 
     it("a deletion at their request takes what they told us about a time with it, and calls the booked time off", async () => {

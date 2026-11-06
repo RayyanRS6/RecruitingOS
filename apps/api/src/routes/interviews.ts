@@ -448,6 +448,8 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     if (!interviewerUserIds.length) throw new HttpError(409, "no_interviewers", "Nobody is on this interview. Cancel it and set up a new one.");
     const place = placeOnInterview(body.place, iv.format);
     const slot = slotFromPerson(body, { companyTimezone: company.timezone, interviewerUserIds, address: place.address, now });
+    // The same time and place again (a second press, or two people at once): nothing changes, and nobody is emailed twice.
+    if (iv.status === "scheduled" && iv.selectedSlot?.id === slot.id && iv.selectedSlot.address === slot.address && iv.durationMinutes === body.durationMinutes && iv.format === place.format && (place.linkSource === "calendar" || iv.meetingUrl === place.meetingUrl)) return { id: iv.id, moved: false };
     const clashes = await refuseClash(tx, { companyId: t.companyId, interviewId: iv.id, userIds: interviewerUserIds, slot, allowClash: body.allowClash });
 
     // The run that was working on it stops, wherever it was: one waiting for hours, for a pick, or for the ITS check.

@@ -286,7 +286,7 @@ schedulePages.post("/c/schedule/:token", rateLimit(POLICIES.schedule), async (c)
     const woken = await container.engine.signal(tx, { companyId: b.company.id, key: `${b.iv.id}:interview.slot_selected`, payload: { slotId: slot.id } });
     const where = await routePick(tx, { iv: current, slot, woken, now: container.engine.clock() });
     if (where === "taken" || where === "stale") return { where };
-    const [picked] = await tx.update(interviews).set({ selectedSlot: slot, schedulingWindow: { ...current.schedulingWindow, candidateTimezone: tzOf(b, parsed.data.timezone) }, candidateAvailability: parsed.data.accessibilityNote ? { ...(current.candidateAvailability ?? {}), note: current.candidateAvailability?.note, timezone: tzOf(b, parsed.data.timezone), preferred: current.candidateAvailability?.preferred ?? [], at: new Date().toISOString(), accessibilityNote: parsed.data.accessibilityNote } as never : current.candidateAvailability }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, current.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
+    const [picked] = await tx.update(interviews).set({ selectedSlot: slot, schedulingWindow: { ...current.schedulingWindow, candidateTimezone: tzOf(b, parsed.data.timezone) }, candidateAvailability: parsed.data.accessibilityNote ? { ...(current.candidateAvailability ?? {}), note: current.candidateAvailability?.note, timezone: tzOf(b, parsed.data.timezone), preferred: current.candidateAvailability?.preferred ?? [], at: new Date().toISOString(), accessibilityNote: parsed.data.accessibilityNote } : current.candidateAvailability }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, current.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
     if (!picked) return { where: "changed" as const };
     await emit(tx, { type: "interview.slot_selected", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, timezone: tzOf(b, parsed.data.timezone), accessibilityNote: !!parsed.data.accessibilityNote, booking: where } });
     if (parsed.data.accessibilityNote) await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.accessibility", title: `${b.candidate.firstName} asked for an accommodation`, body: parsed.data.accessibilityNote, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
@@ -316,7 +316,8 @@ schedulePages.post("/c/schedule/:token/none-work", rateLimit(POLICIES.scheduleNo
   const parsed = CandidateAvailability.safeParse({ timezone: form.timezone || undefined, note: form.note || undefined, preferred: [] });
   const data = parsed.success ? parsed.data : { preferred: [] as never[] };
   await withTenant(container.db, b.company.id, async (tx) => {
-    await tx.update(interviews).set({ candidateAvailability: { ...data, at: new Date().toISOString() } }).where(eq(interviews.id, b.iv.id));
+    // What they asked for earlier stays: an accommodation is not undone by saying these times do not work.
+    await tx.update(interviews).set({ candidateAvailability: { ...(b.iv.candidateAvailability ?? {}), ...data, at: new Date().toISOString() } }).where(eq(interviews.id, b.iv.id));
     await emit(tx, { type: "interview.candidate_availability", companyId: b.company.id, actor: { kind: "candidate", id: b.candidate.id }, subject: { type: "interview", id: b.iv.id }, payload: { hasNote: !!data.note } });
     await container.engine.signal(tx, { companyId: b.company.id, key: `${b.iv.id}:interview.none_work`, payload: {} });
   });
