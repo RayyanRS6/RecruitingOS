@@ -16,11 +16,11 @@ import { canChangeCompany, canSeeActivity, canStartHire } from "../roles";
 import { SETTINGS_TABS, type SettingsTab, defaultTab, leadAndRest, settingsHref, settingsLanding, setupSections, tabFrom } from "../setup-sections";
 import { browserStorage, SHORTCUT_CHANGED_EVENT, START_HIRE_KEY, setStartHireShortcut, startHireShortcutOn } from "../start-hire";
 import { toast } from "../toast";
-import { trialPlanLine, trialRow } from "../trial";
+import { trialDate, trialPlanLine, trialRow } from "../trial";
 import { Upgrade } from "../components/Upgrade";
 import { NotificationsCard } from "./NotificationsCard";
 import { TeamCard } from "./TeamCard";
-import { ITS_POSTING_UPGRADE_QUESTION, mayOfferUpgrade, type TrialStanding } from "@ros/contracts";
+import { ITS_POSTING_UPGRADE_QUESTION, isAiCreditKey, mayOfferUpgrade, type TrialStanding } from "@ros/contracts";
 
 type BusinessHours = { days: number[]; start: string; end: string };
 /**
@@ -644,22 +644,24 @@ const NEVER_BUILT: ReadonlySet<string> = new Set(["voice_minutes", "sourcing_con
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /**
- * The Usage row's lines: "label: used of limit", and "label: 18% used" for the AI credit. A limit of jobs ever takes the
- * place of the jobs at a time: with one job ever, the two would say the same thing twice.
+ * The Usage row's lines: "label: used of limit", and "label: 18% used" for the AI credit, with the day a monthly credit starts
+ * again, on the company's calendar as Home says it: its month starts with an upgrade, so it has its own date. A limit of jobs
+ * ever takes the place of the jobs at a time: with one job ever, the two would say the same thing twice.
  */
-export function usageLines(usage: Record<string, UsageRow>): string[] {
+export function usageLines(usage: Record<string, UsageRow>, timeZone?: string | null): string[] {
   const jobsEver = usage.jobs_total?.limit !== null && usage.jobs_total?.limit !== undefined;
   return Object.entries(usage)
     .filter(([k]) => !NEVER_BUILT.has(k) && !(jobsEver && k === "active_roles"))
-    .map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.unit === "percent" ? `${v.used}% used` : `${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`}`);
+    .map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.unit === "percent" ? `${v.used}% used${v.resetsAt ? `, starts again ${trialDate(v.resetsAt, timeZone)}` : ""}` : `${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`}`);
 }
 
 /**
  * When the monthly allowances start again from zero (GET /companies/current `usage[key].resetsAt`; roles never reset):
- * "Monthly allowances reset on October 30.", or null when no limited allowance has a reset date.
+ * "Monthly allowances reset on October 30.", or null when no limited allowance has a reset date. Not the AI credit, whose
+ * month may not line up with theirs: `usageLines` gives it its own date.
  */
 export function usageResets(usage: Record<string, { limit: number | null; resetsAt?: string | null }> | null | undefined): string | null {
-  const dates = Object.values(usage ?? {}).filter((v) => v.limit !== null && v.resetsAt).map((v) => Date.parse(v.resetsAt!)).filter(Number.isFinite);
+  const dates = Object.entries(usage ?? {}).filter(([k, v]) => !isAiCreditKey(k) && v.limit !== null && v.resetsAt).map(([, v]) => Date.parse(v.resetsAt!)).filter(Number.isFinite);
   if (!dates.length) return null;
   return `Monthly allowances reset on ${new Date(Math.min(...dates)).toLocaleDateString("en-US", { month: "long", day: "numeric" })}.`;
 }
@@ -734,7 +736,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
             <dt>Website</dt><dd>{c.settings.website || <span className="muted">not set</span>}</dd>
             <dt>Locations</dt><dd>{c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}</dd>
             <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{trialLine ? <span className="small muted"> · {trialLine}</span> : null}{c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; jobs in progress are never cut off</span> : null}{mayOfferUpgrade(c.planKey) ? <span className="ms-2 inline-block align-middle"><Upgrade size="sm" /></span> : null}</dd>
-            {c.usage ? <><dt>Usage</dt><dd className="small">{usageLines(c.usage).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}{c.usage.recruiter_asks ?<span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
+            {c.usage ? <><dt>Usage</dt><dd className="small">{usageLines(c.usage, c.timezone).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}{c.usage.recruiter_asks ?<span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
           </dl>
           {/* The rest of the company's details, one click away. The plan and its usage stay on view: "See usage" links land here. */}
           <details className="more mt-4">

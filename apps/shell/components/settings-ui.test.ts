@@ -244,8 +244,22 @@ describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
 
   it("a plan with no limit of jobs ever keeps the jobs at a time, and its monthly AI help says when it starts again", () => {
     const lines = usageLines({ active_roles: { used: 2, limit: 3 }, ai_credit_monthly_cents: { used: 40, limit: 100, unit: "percent", resetsAt: "2026-12-05T12:00:00.000Z" } });
-    expect(lines).toEqual(["active jobs: 2 of 3", "AI help this month: 40% used"]);
-    expect(usageResets({ ai_credit_monthly_cents: { limit: 100, resetsAt: "2026-12-05T12:00:00.000Z" } })).toBe("Monthly allowances reset on December 5.");
+    expect(lines).toEqual(["active jobs: 2 of 3", "AI help this month: 40% used, starts again December 5"]);
+    // its own date, so it is not said again as a month for everything
+    expect(usageResets({ ai_credit_monthly_cents: { limit: 100, resetsAt: "2026-12-05T12:00:00.000Z" } })).toBeNull();
+  });
+
+  it("after an upgrade the AI help's month and the other allowances' dates differ, and each says its own: Free on October 1, Basic on November 5", () => {
+    // the upgrade starts the credit's month, November 5 to December 5; recruiter requests keep rolling from sign-up, to November 30
+    const usage = { ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent" as const, resetsAt: "2026-12-05T18:00:00.000Z" }, recruiter_asks: { used: 0, limit: 1, resetsAt: "2026-11-30T18:00:00.000Z" } };
+    expect(usageLines(usage)).toEqual(["AI help this month: 18% used, starts again December 5", "recruiter requests: 0 of 1"]);
+    expect(usageResets(usage)).toBe("Monthly allowances reset on November 30.");
+    const words = text(page({ company: onFree({ usage }) }));
+    expect(words).toContain("AI help this month: 18% used, starts again December 5 · recruiter requests: 0 of 1 Monthly allowances reset on November 30.");
+    // on the company's calendar, as Home says it, whichever server draws it: 2 a.m. in UTC on the 5th is still the 4th in Los Angeles
+    expect(usageLines({ ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent", resetsAt: "2026-12-05T02:00:00.000Z" } }, "America/Los_Angeles")).toEqual(["AI help this month: 18% used, starts again December 4"]);
+    // the AI help on Free never starts again, so it names no day
+    expect(usageLines({ ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" } })).toEqual(["AI help: 18% used"]);
   });
 
   it("the Team tab's invite form says the plan's words, on the plan's two people", () => {
