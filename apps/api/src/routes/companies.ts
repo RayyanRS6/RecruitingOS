@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { desc, eq } from "drizzle-orm";
 import { CreateCompany, InviteMember, UpdateMember, limitsForCustomers, trialStanding } from "@ros/contracts";
-import { aiCreditView, assertCan, audit, entitlements, planIncludesItsPosting, raiseAlert, setActiveCompany, revokeStaffGrant, whoPostsBoards } from "@ros/core";
+import { aiCreditView, assertCan, audit, entitlements, hiddenAmong, planIncludesItsPosting, raiseAlert, setActiveCompany, revokeStaffGrant, whoPostsBoards } from "@ros/core";
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
@@ -156,10 +156,12 @@ companyRoutes.get("/current/staff-access", requireTenant, async (c) => {
   const grants = await withTenant(container.db, t.companyId, async (tx) => {
     const list = await tx.select({ id: staffAccessGrants.id, userId: staffAccessGrants.userId, kind: staffAccessGrants.kind, purpose: staffAccessGrants.purpose, escalationId: staffAccessGrants.escalationId, roleId: staffAccessGrants.roleId, applicationId: staffAccessGrants.applicationId, startsAt: staffAccessGrants.startsAt, expiresAt: staffAccessGrants.expiresAt, endedAt: staffAccessGrants.endedAt, revokedAt: staffAccessGrants.revokedAt, revokeReason: staffAccessGrants.revokeReason })
       .from(staffAccessGrants).where(eq(staffAccessGrants.companyId, t.companyId)).orderBy(desc(staffAccessGrants.createdAt)).limit(100);
+    // A grant about someone the reader cannot read (Rule 3 of the plans) still says it covers one candidate, and not which one.
+    const hidden = await hiddenAmong(tx, t, list.flatMap((g) => (g.applicationId ? [g.applicationId] : [])));
     const out = [];
     for (const g of list) {
       const role = g.roleId ? (await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, g.roleId)).limit(1))[0] : null;
-      out.push({ ...g, roleTitle: role?.title ?? null, active: !g.endedAt && Date.parse(g.expiresAt) > Date.now() });
+      out.push({ ...g, applicationId: g.applicationId && hidden.has(g.applicationId) ? null : g.applicationId, oneCandidate: !!g.applicationId, roleTitle: role?.title ?? null, active: !g.endedAt && Date.parse(g.expiresAt) > Date.now() });
     }
     return out;
   });

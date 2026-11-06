@@ -117,7 +117,8 @@ export async function stopNewTimes(tx: Tx, container: Container, input: { compan
 export async function sendNewTimesBatch(container: Container, input: { roleId: string; tenant: Tenant; actor: Actor; body: SendNewTimesBatch }): Promise<SendNewTimesBatchResult> {
   const { tenant: t, actor } = input;
   assertCan(t.role, "interview.manage");
-  const ids = [...new Set(input.body.applicationIds)];
+  // The body's check lets capitals through, and the database writes none: said its way, so `hidden` and `inScope` below recognise the id.
+  const ids = [...new Set(input.body.applicationIds.map((id) => id.toLowerCase()))];
   const only = t.staff?.scope.applicationId ?? null;
   const inScope = (id: string) => !only || id === only;
   const { names, hidden } = await withTenant(container.db, t.companyId, async (tx) => {

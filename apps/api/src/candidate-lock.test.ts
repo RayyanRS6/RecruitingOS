@@ -5,8 +5,12 @@ import { LOCKED_REQUEST_LINE, MORE_CANDIDATES_LINE, MORE_CANDIDATES_UPGRADE_QUES
 import { MORE_APPLIED_KIND } from "@ros/core";
 import { aiRuns, applications, approvalRequests, auditRecords, candidates, communications, documents, entitlements, events, interviewParticipants, interviews, notifications, plans, postings, recruiterEscalations, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
+import { Hono } from "hono";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { errorHandler } from "./middleware/errors";
+import { sessionMiddleware, type Vars } from "./middleware/session";
+import { interviewRoutes } from "./routes/interviews";
 import { putOnInterview, signInAdmin, signInAs, signInStaff, usePlan } from "./test-helpers";
 
 const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
@@ -280,6 +284,8 @@ describe("the team cannot read a locked person", () => {
     expect((await json(named, "POST", `/api/v1/escalations/${ids.lockedRequest}/claim`)).status).toBe(200);
     expect((await json(named, "POST", "/api/v1/auth/switch", { companyId: job.id })).status).toBe(200);
 
+    // Only as the database writes the id, even for them.
+    expect((await json(named, "GET", `/api/v1/applications/${ids.locked.replace(/-/g, "")}`)).status).toBe(404);
     const detail = await json(named, "GET", `/api/v1/applications/${ids.locked}`);
     expect(detail.status).toBe(200);
     const text = await detail.text();
@@ -341,6 +347,114 @@ describe("the team cannot read a locked person", () => {
     expect((await json(owner, "GET", `/api/v1/applications/${ids.visible}`)).status).toBe(200);
     expect((await json(owner, "GET", `/api/v1/applications/${ids.visible}/documents/${ids.lockedDoc}/inline`)).status).toBe(404);
     expect((await json(owner, "GET", `/api/v1/applications/${ids.visible}/documents/${ids.lockedDoc}/file`)).status).toBe(404);
+  }, 300_000);
+
+  /** The same id as Postgres's uuid input also reads it, and finds the row: every way of writing it but the database's own. */
+  const respelled = (id: string): Array<[string, string]> => {
+    const hex = id.replace(/-/g, "");
+    return [["no hyphens", hex], ["braces", `{${id}}`], ["no hyphens, in braces", `{${hex}}`], ["hyphens elsewhere", hex.replace(/(.{4})(?=.)/g, "$1-")], ["capitals", id.toUpperCase()]];
+  };
+
+  it("an id written any other way Postgres would read answers 404 before any handler, for everyone, on every route under the two prefixes, and nothing is read or written", async () => {
+    const viewed = async () => (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "candidate.viewed"))).length;
+    const opened = async () => (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "document.read"))).length;
+    const [viewedBefore, openedBefore] = [await viewed(), await opened()];
+    const refused = async (who: string, cookie: string, method: string, path: string, words: string) => {
+      const r = await json(cookie, method, path, method === "GET" ? undefined : {});
+      const body = await r.text();
+      expect(r.status, `${who}: ${method} ${path} answered ${r.status}: ${body.slice(0, 200)}`).toBe(404);
+      expect(JSON.parse(body).error).toMatchObject({ code: "not_found", message: words });
+      expect(leaks(body)).toEqual([]);
+    };
+    // Everyone who reads the team's lists: the record, the file and the interview, which each answered with the person before.
+    for (const [who, cookie] of readers) {
+      for (const [how, spelled] of respelled(ids.locked)) {
+        for (const path of [`/api/v1/applications/${spelled}`, `/api/v1/applications/${spelled}/documents/${ids.lockedDoc}/inline`, `/api/v1/applications/${spelled}/documents/${ids.lockedDoc}/file`]) await refused(`${who} (${how})`, cookie, "GET", path, "Application not found.");
+      }
+      for (const [how, spelled] of respelled(ids.interview)) await refused(`${who} (${how})`, cookie, "GET", `/api/v1/interviews/${spelled}`, "Interview not found.");
+    }
+    // Every route under the two prefixes, whatever the method: the guard does not know which handler would have answered.
+    for (const method of ["GET", "POST", "PUT", "DELETE", "PATCH"]) {
+      for (const route of routesOf(method).filter((r) => r.startsWith("/api/v1/applications/:id") || r.startsWith("/api/v1/interviews/:id"))) {
+        const interview = route.startsWith("/api/v1/interviews");
+        for (const [how, spelled] of respelled(interview ? ids.interview : ids.locked)) {
+          const path = route.replace(":id", spelled).replace(":documentId", ids.lockedDoc).replace(/:[A-Za-z]+/g, "00000000-0000-0000-0000-000000000000");
+          await refused(`the owner (${how})`, owner, method, path, interview ? "Interview not found." : "Application not found.");
+        }
+      }
+    }
+    expect(await viewed()).toBe(viewedBefore);
+    expect(await opened()).toBe(openedBefore);
+    // Someone visible is no different: an id is written the database's way, or it names nobody. Written that way they open as usual.
+    for (const [how, spelled] of respelled(ids.visible)) await refused(`the owner (${how})`, owner, "GET", `/api/v1/applications/${spelled}`, "Application not found.");
+    expect((await json(owner, "GET", `/api/v1/applications/${ids.visible}`)).status).toBe(200);
+    // Something that is no id at all answers the same, not a database error.
+    await refused("the owner", owner, "GET", "/api/v1/applications/not-an-id", "Application not found.");
+    await refused("the owner", owner, "GET", "/api/v1/interviews/not-an-id", "Interview not found.");
+    // Nobody signed in still hears that first.
+    expect((await app.request(`/api/v1/applications/${ids.locked.replace(/-/g, "")}`)).status).toBe(401);
+  }, 300_000);
+
+  it("the interview scope guard refuses another spelling itself, with no help from the guard at the prefix", async () => {
+    const bare = new Hono<Vars>();
+    bare.onError(errorHandler);
+    bare.use("*", sessionMiddleware(container));
+    bare.route("/api/v1/interviews", interviewRoutes);
+    const open = (id: string) => bare.request(`/api/v1/interviews/${id}`, { headers: { cookie: recruiter } });
+    // The canonical id reaches the handler here, so the refusals below are the guard's and nothing else's.
+    expect((await open(ids.interview)).status).toBe(200);
+    for (const [how, spelled] of respelled(ids.interview)) expect((await open(spelled)).status, how).toBe(404);
+  }, 60_000);
+
+  it("an interviewer cannot read a job they do not interview for by writing its id another way", async () => {
+    const company = await newCompany();
+    await usePlan(container, company.id, "ultra");
+    const theirs = await openRole(company);
+    const other = await openRole(company);
+    const onIt = await signInAs(container, app, { companyId: company.id, role: "interviewer" });
+    await putOnInterview(container, app, { cookie: onIt, roleId: theirs.roleId });
+    expect((await json(onIt, "GET", `/api/v1/roles/${theirs.roleId}`)).status).toBe(200);
+    expect((await json(onIt, "GET", `/api/v1/roles/${other.roleId}`)).status).toBe(404);
+    for (const [how, spelled] of respelled(other.roleId)) {
+      for (const path of [`/api/v1/roles/${spelled}`, `/api/v1/roles/${spelled}/packets`, `/api/v1/roles/${spelled}/interviews`]) {
+        const r = await json(onIt, "GET", path);
+        expect(r.status, `${how}: GET ${path}`).toBe(404);
+        expect((await read<{ error: { message: string } }>(r)).error.message).toBe("Role not found.");
+      }
+    }
+    // Their own job, written another way, is not looked up either: the same answer for every id not written the database's way.
+    expect((await json(onIt, "GET", `/api/v1/roles/${theirs.roleId.replace(/-/g, "")}`)).status).toBe(404);
+  }, 300_000);
+
+  it("Settings' recruiter access says a grant covers one candidate and leaves out which, for someone the reader cannot read", async () => {
+    const company = await newCompany();
+    await setLimit(company.id, 1);
+    const j = await openRole(company);
+    const seen = await apply(j, person("Sia", "Open"));
+    const email = "zqgrantmark@people.test";
+    const hidden = await apply(j, { first: "Zqgrantfirst", last: "Zqgrantlast", email });
+    expect((await reply(hidden, email, "HUMAN", "grant-human")).status).toBe(200);
+    await container.drain();
+    const about = await json(company.cookie, "POST", "/api/v1/escalations", { kind: "review", applicationId: seen.id, question: "Please look at this person." });
+    expect(about.status, await about.clone().text()).toBe(201);
+    const [lockedAsk] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, hidden.id));
+    const staffOnHidden = await signInStaff(app, container, "hope@its.test", "its_recruiter", "Hope Recruiter");
+    const staffOnSeen = await signInStaff(app, container, "seth@its.test", "its_recruiter", "Seth Recruiter");
+    expect((await json(staffOnHidden, "POST", `/api/v1/escalations/${lockedAsk.id}/claim`)).status).toBe(200);
+    expect((await json(staffOnSeen, "POST", `/api/v1/escalations/${(await read<{ id: string }>(about)).id}/claim`)).status).toBe(200);
+
+    type Row = { recruiterEmail: string; applicationId: string | null; oneCandidate: boolean };
+    const listed = await json(company.cookie, "GET", "/api/v1/companies/current/staff-access");
+    const text = await listed.text();
+    expect(listed.status, text).toBe(200);
+    expect(text).not.toContain(hidden.id);
+    const rows = JSON.parse(text) as Row[];
+    expect(rows.find((g) => g.recruiterEmail === "hope@its.test")).toMatchObject({ applicationId: null, oneCandidate: true });
+    expect(rows.find((g) => g.recruiterEmail === "seth@its.test")).toMatchObject({ applicationId: seen.id, oneCandidate: true });
+    // The recruiter under that grant may read that person, so their own list may say who it is.
+    expect((await json(staffOnHidden, "POST", "/api/v1/auth/switch", { companyId: company.id })).status).toBe(200);
+    const own = await read<Row[]>(await json(staffOnHidden, "GET", "/api/v1/companies/current/staff-access"));
+    expect(own.find((g) => g.recruiterEmail === "hope@its.test")?.applicationId).toBe(hidden.id);
   }, 300_000);
 
   it("the list: nobody locked is a row, whatever the order or the filter; `locked` holds where they came in and when, and nothing else; counts cover those shown, and only the total says more applied", async () => {
@@ -426,6 +540,9 @@ describe("the team cannot read a locked person", () => {
     const timesText = await times.text();
     expect(leaks(timesText)).toEqual([]);
     expect(JSON.parse(timesText).results[0]).toEqual({ applicationId: ids.locked, name: "This candidate", ok: false, code: "not_found", message: "Application not found." });
+    // The body's check lets an id in capitals through, and it is the same person.
+    const inCapitals = await read<{ results: Array<{ code: string }> }>(await json(owner, "POST", `/api/v1/roles/${ids.role}/new-times`, { applicationIds: [ids.locked.toUpperCase()] }));
+    expect(inCapitals.results[0]).toMatchObject({ code: "not_found" });
 
     // Bringing in a recruiter on them is refused; on the role it goes on as ever.
     const asked2 = await json(owner, "POST", "/api/v1/escalations", { kind: "review", applicationId: ids.locked, question: "Who is this?" });

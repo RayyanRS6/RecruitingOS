@@ -6,7 +6,7 @@ import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFoll
 import { applications, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { cancelNewTimesRuns } from "@ros/workflows";
-import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
+import { actorOf, applicationScopeGuard, isCanonicalId, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { TERMINAL_STAGES } from "../services/application-actions";
 import { cancelInterviewInTx } from "../services/interview-cancel";
@@ -175,7 +175,8 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
 const interviewScopeGuard: MiddlewareHandler<Vars> = async (c, next) => {
   const t = c.get("tenant");
   const id = c.req.param("id");
-  if (t?.staff && id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+  if (t?.staff && id) {
+    if (!isCanonicalId(id)) throw new HttpError(404, "not_found", "Interview not found.");
     const scope = { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId };
     const [row] = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select({ applicationId: interviews.applicationId, roleId: applications.roleId }).from(interviews).innerJoin(applications, eq(applications.id, interviews.applicationId)).where(and(eq(interviews.id, id), eq(interviews.companyId, t.companyId))).limit(1));
     if (row && !scopeAllows(scope, { roleId: row.roleId, applicationId: row.applicationId })) throw new HttpError(403, "staff_scope", "Your access is limited to the role and candidate of the escalation you accepted.");
