@@ -77,7 +77,7 @@ Every workflow definition declares: trigger, preconditions, steps (actions), suc
 - **Failure:** HRIS API error → retry ×3 → handoff packet fallback with a flag; no start confirmation → nudge → escalation.
 
 ### `stuck_role_detector` (Slice 2)
-- **Trigger:** daily timer per company (and after any brief).
+- **Trigger:** daily timer per company (and after any brief). A request for access under `SIGNUP_MODE=approval` has no run until Accept starts it (6 November 2026).
 - **Detectors:** no owner action ≥ N days with candidates waiting; candidates in `triaged` or `interview_recommended` ≥ 3 days; interviews unscored ≥ 24h; offer pending approval ≥ 2 days; screen invites unanswered ≥ 3 days; scorecards incomplete ≥ 48h.
 - **Ladder:** brief line → direct message with a one-tap action → offer recruiter → escalation `stuck_role`. Cooldowns and thresholds are policies (`intervention.*`). On a plan with no ITS staff time (`its_work` 0: Free and Basic) it stops at the message (`NO_ITS_WORK_TOP`). Nobody locked counts toward any rung, and what someone opened by a change of plan waits for counts from the unlock.
 - **Close-out note (the plans of 5 November 2026):** the daily run also sends `sendCloseOutNotes`: one fixed note to someone still locked when their job is still open, from day 29, so "at the latest 30 days" holds. It declines nobody and moves no stage.

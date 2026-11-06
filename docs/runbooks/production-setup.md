@@ -560,7 +560,7 @@ Existing test accounts keep working; a new tester is added in the dashboard firs
 ## The plans
 
 Status: written 6 November 2026 from the code on branch `plans`, not yet run on production. Decisions:
-`docs/workflow-decisions.md`, "5 November 2026". A new company starts on Free. Every number is one edit in
+`docs/workflow-decisions.md`, "5 November 2026" and "6 November 2026". A new company starts on Free. Every number is one edit in
 `packages/db/src/seed.ts`, written by the first boot after a deploy; a company takes a new number only the next time its
 plan is applied. The repository is public, so what a real tester or customer is called goes in the private launch
 to-do document, never here.
@@ -633,11 +633,10 @@ real AI money up to its credit, and only a person's press lets one in.
    it, so open the website with care. Five rows at most, the longest waiting first, then "N more companies are asking for
    access", which opens **Customers**, **Waiting for the ITS check**. While email is not live this row is the only thing that
    tells you ("While testers are on").
-4. Look before you press, because Accept is also the one-time ITS check, so it opens their public side and there is no second
-   look. Nothing in the code refuses a job in NYC, Illinois, California or Colorado, or a remote one (`docs/workflow-decisions.md`,
-   PQ-16), asks for signed terms (PQ-14) or checks that applicants are made up (PQ-3). Ask them from your own mailbox, at the address
-   on the row.
-5. **Accept**, then **Yes**. Their screen goes to Home by itself within 30 seconds, on Free, with no clock, and they can draft
+4. Look before you press. Accept is also the one-time ITS check: it opens their public side, and there is no second look. Nothing
+   in the code refuses a job in NYC, Illinois, California or Colorado, or a remote one (`docs/workflow-decisions.md`, PQ-16), asks for
+   signed terms (PQ-14) or checks that applicants are made up (PQ-3). Ask them from your own mailbox, at the address on the row.
+5. **Accept**, then **Yes**. A screen still open goes to Home by itself within 30 seconds, on Free, with no clock, and they can draft
    and approve at once. Their careers page, job pages and candidate emails work from now on, with no **Confirm the company** after it.
 6. Or **Decline**, then **Yes**. Their screen says "We can't offer access right now" with the reply mailbox. No reason is typed,
    and they cannot send a second request. It is not final: **Customers**, the **Declined** filter, the company, **Accept**.

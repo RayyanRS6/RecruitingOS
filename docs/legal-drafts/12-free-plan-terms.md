@@ -2,7 +2,7 @@
 
 # Free plan terms for testers
 
-Prepared 6 November 2026 by the production team as input for counsel and the founder (`docs/spec/11` items 15, 32 and 35). The pilot agreement (`01`) is for one design partner and terms of service are not written, while the plans of 5 November 2026 (`docs/workflow-decisions.md`) let companies ITS lets in use the product on Free. This is the short agreement recommended for each tester to sign before a real job. Risk R-LEGAL-1 applies: nobody signs this for real use until the founder has accepted the risk again in writing, or counsel has answered (`docs/spec/00` section Q). Every choice the founder must make is in [square brackets].
+Prepared 6 November 2026 by the production team as input for counsel and the founder (`docs/spec/11` items 15 and 32). The pilot agreement (`01`) is for one design partner and terms of service are not written, while the plans of 5 November 2026 (`docs/workflow-decisions.md`) let companies ITS lets in use the product on Free. This is the short agreement recommended for each tester to sign before a real job. Risk R-LEGAL-1 applies: nobody signs this for real use until the founder has accepted the risk again in writing, or counsel has answered (`docs/spec/00` section Q). Every choice the founder must make is in [square brackets].
 
 Between **Identified Talent Solutions** ("ITS") and **[Tester's legal name]** ("Tester"), effective on the date of the last signature.
 
