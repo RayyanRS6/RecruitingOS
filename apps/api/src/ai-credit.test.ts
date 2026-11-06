@@ -5,7 +5,7 @@ import { AI_CREDIT_USED_UP, creditHoldUsd, estimateCostUsd, outOfCredit, runProm
 import { INTAKE_COMPILE_MAX_TOKENS, runIntakeTurn, runScreenTurn, startIntakeSession } from "@ros/agents";
 import { AI_CREDIT_AVAILABLE, AI_HELP_BUSY_LINE, AI_HELP_LINE, AI_HELP_UPGRADE_QUESTION } from "@ros/contracts";
 import { AI_CREDIT_SLACK_USD, aiCreditRoomForJob, aiCreditRoomSoon, aiCreditStanding, entitlements as allowance, holdAiCreditRows, reserveAiCredit } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, intakeSessions, notifications, recruiterEscalations, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, workflowSteps } from "@ros/db";
+import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, intakeSessions, notifications, recruiterEscalations, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, workflowSteps, type Tx } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider, FakeSmsAdapter } from "@ros/integrations";
 import { AI_OUTAGE_ALERT_KIND } from "@ros/workflows";
 import { createApp } from "./app";
@@ -1378,6 +1378,63 @@ describe("the AI credit", () => {
       const open = (await creditAlerts(id)).filter((a) => a.status === "open");
       expect(open.map((a) => a.kind)).toEqual(["billing.ai_credit_warning"]);
       expect(open[0].body).toContain("this month");
+    });
+
+    /**
+     * A Basic company with $19.89 settled, not told yet, whose next call settles. PGlite has one connection, so a Change plan cannot
+     * really hold the company's row from another: `whileLocking` runs at the moment the step asks for that row, which is when a
+     * Change plan holding it has committed. The handle counts how often the row was asked for.
+     */
+    const settleOnBasic = async (settled: string, whileLocking: (tx: Tx, id: string) => Promise<void> = async () => {}) => {
+      const { id, cookie } = await newCompany();
+      await usePlan(container, id, "basic");
+      await spend(id, settled);
+      await spend(id, "0.000000", { status: "running" });
+      const [run] = await container.db.select({ id: aiRuns.id }).from(aiRuns).where(and(eq(aiRuns.companyId, id), eq(aiRuns.status, "running")));
+      let asked = 0;
+      const watched = new Proxy(container.db, {
+        get(target, prop) {
+          if (prop !== "transaction") return Reflect.get(target, prop);
+          return (fn: (tx: Tx) => Promise<unknown>) => target.transaction((tx) => fn(new Proxy(tx as unknown as Tx, {
+            get(t, p) {
+              if (p !== "execute") return Reflect.get(t, p);
+              return async (statement: Parameters<Tx["execute"]>[0]) => {
+                if ((statement as unknown as { queryChunks: Array<{ value?: unknown }> }).queryChunks.some((c) => Array.isArray(c.value) && c.value.join("").includes("for no key update"))) {
+                  asked += 1;
+                  await whileLocking(t, id);
+                }
+                return t.execute(statement);
+              };
+            },
+          })));
+        },
+      });
+      await container.ai.credit!.settle(watched, { companyId: id, runId: run.id, values: { status: "ok", costUsd: "0.000000" } });
+      return { id, cookie, asked: () => asked };
+    };
+
+    it("a line that looks due while Change plan runs is read again behind the company's row: on Pro at 33% nobody reads used up, and a new job is not refused", async () => {
+      // $19.89 + 2 cents is past Basic's $19.90, so used up looks due; Change plan to Pro, $60, commits first
+      const { id, cookie, asked } = await settleOnBasic("19.890000", async (tx, company) => {
+        await tx.update(entitlements).set({ limit: 6000 }).where(and(eq(entitlements.companyId, company), eq(entitlements.key, "ai_credit_monthly_cents")));
+      });
+      expect(asked()).toBe(1);
+      expect((await container.db.select().from(companies).where(eq(companies.id, id)))[0].settings.aiCreditTold).toBeUndefined();
+      expect(await creditNotes(id)).toEqual([]);
+      expect(await creditAlerts(id)).toEqual([]);
+      const current = await read<{ aiCredit: { level: string | null; percent: number } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      expect(current.aiCredit).toMatchObject({ level: null, percent: 33 });
+      expect(await withTenant(container.db, id, (tx) => aiCreditRoomForJob(tx, id))).toBe("ok");
+    });
+
+    it("with no Change plan the same line is told, once; and a call with nothing to tell takes no lock", async () => {
+      const due = await settleOnBasic("19.890000");
+      expect(due.asked()).toBe(1);
+      expect((await creditNotes(due.id)).map((n) => n.title)).toEqual(["Your plan's AI help is used up"]);
+      expect((await container.db.select().from(companies).where(eq(companies.id, due.id)))[0].settings.aiCreditTold).toBeTruthy();
+      const quiet = await settleOnBasic("5.000000");
+      expect(quiet.asked()).toBe(0);
+      expect(await creditNotes(quiet.id)).toEqual([]);
     });
 
     it("a new month resolves last month's alerts on the console's next look", async () => {

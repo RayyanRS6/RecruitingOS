@@ -168,6 +168,18 @@ export async function aiCreditView(q: Queryable, companyId: string, opts: { now?
 /** What ITS's alert says, in dollars. */
 type CreditNote = { level: AiCreditLevel; companyId: string; companyName: string; standing: AiCreditStanding };
 
+/** The line the owner has not been told yet, if the company has reached one. */
+async function lineDue(q: Queryable, input: { companyId: string; now: Date; refusedHoldUsd?: number }): Promise<{ standing: AiCreditStanding; level: AiCreditLevel } | null> {
+  const standing = await aiCreditStanding(q, input.companyId, { now: input.now, settled: true });
+  if (!standing) return null;
+  const goneForThisCall = input.refusedHoldUsd !== undefined && standing.spentMicros + toMicros(input.refusedHoldUsd) > standing.limitMicros - SLACK;
+  const level: AiCreditLevel | null = goneForThisCall ? "used_up" : standing.level;
+  if (!level) return null;
+  const { periodKey, told } = standing;
+  if (level === "used_up" ? told.usedUpFor === periodKey : told.warnedFor === periodKey || told.usedUpFor === periodKey) return null;
+  return { standing, level };
+}
+
 /**
  * Tells the owner once that the credit reached a line, and hands back what ITS's alert needs. Each line is stamped on the
  * company's settings by one statement that matches only a period not told yet, as the trial's notices are, so two calls
@@ -175,16 +187,20 @@ type CreditNote = { level: AiCreditLevel; companyId: string; companyName: string
  * acknowledgement is a day old. Used up covers 80%: a credit that jumps past both is told once. Read from money actually
  * spent, so a big hold that comes back does not cry wolf: `refusedHoldUsd`, a small call was just refused, says the credit
  * is gone only when what is spent would refuse it by itself (money spent never comes back, so that stays true for the period).
+ *
+ * A line that looks due is read again behind the company's row, because this read and the stamp must see one plan: a Change
+ * plan holds that row, and writes the settings without the stamps; a stamp waiting for it would go on the settings it just
+ * cleaned, from a limit it just replaced, and an upgraded company would read used up for the month. Only then, so a call with
+ * nothing to tell takes no lock.
  */
 async function tellOwner(db: Db, input: { companyId: string; now: Date; refusedHoldUsd?: number }): Promise<CreditNote | null> {
   return withTenant(db, input.companyId, async (q) => {
-    const standing = await aiCreditStanding(q, input.companyId, { now: input.now, settled: true });
-    if (!standing) return null;
-    const goneForThisCall = input.refusedHoldUsd !== undefined && standing.spentMicros + toMicros(input.refusedHoldUsd) > standing.limitMicros - SLACK;
-    const level: AiCreditLevel | null = goneForThisCall ? "used_up" : standing.level;
-    if (!level) return null;
-    const { periodKey, told } = standing;
-    if (level === "used_up" ? told.usedUpFor === periodKey : told.warnedFor === periodKey || told.usedUpFor === periodKey) return null;
+    if (!(await lineDue(q, input))) return null;
+    await q.execute(sql`select 1 from ${companies} where ${companies.id} = ${input.companyId} for no key update`);
+    const due = await lineDue(q, input);
+    if (!due) return null;
+    const { standing, level } = due;
+    const { periodKey } = standing;
     const stamp = JSON.stringify(level === "used_up" ? { warnedFor: periodKey, usedUpFor: periodKey } : { warnedFor: periodKey });
     const field = sql.raw(level === "used_up" ? "'usedUpFor'" : "'warnedFor'");
     const [company] = await q
