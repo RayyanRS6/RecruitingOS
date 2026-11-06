@@ -26,7 +26,8 @@ export const REVIEWING_REFRESH_SECONDS = 15;
  * - `after_chat`: a screening chat is open or paused: the score waits until they send it (a reading of an unsent chat
  *   never counts). A chat a private decision cancelled reads the same as before, so nothing hints at the decision.
  * - `reviewing`: sent a moment ago and the reading is not written yet: "Working out your match score…", with "Check again".
- * - `not_ready`: no score after the reviewing window (the reading failed, or a résumé could not be read).
+ * - `not_ready`: no score after the reviewing window (the reading failed, a résumé could not be read), or a sent AI interview
+ *   whose scorecard is not written yet, for as long as that takes: never a résumé-only number for someone who did it.
  * - `ready`: the score and its breakdown (`view`).
  */
 export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "ready"; view: CandidateScoreView | null };
@@ -62,13 +63,14 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   // Labelled with where their AI interview stands (R20-9): "From your résumé only" until its scorecard is in.
   const match = packet && own.length ? matchScore(readingPair(own), packet, { packetVersion: readAgainst, interview: interviewInScore(input.screens, app.stage) }) : null;
   const view = packet ? candidateScoreView(match, packet) : null;
-  // A chat sent a moment ago whose scorecard is not written yet: the score is about to change, so it waits for it.
+  // A chat they sent whose scorecard is not written yet (a moment ago, or waiting for the company's AI credit): the score is
+  // about to change, and the résumé's number would read low for someone who did what was asked, so it waits for it.
   const sent = last && screenAnswersSent(last) ? last : null;
   const scorecardDue = !!sent && !sent.assessmentId;
   const since = Date.parse(sent?.completedAt ?? app.createdAt);
   const recent = input.now.getTime() - since < REVIEWING_WINDOW_MS;
   if ((scorecardDue || !view) && recent) return { state: "reviewing", view: null };
-  return view ? { state: "ready", view } : { state: "not_ready", view: null };
+  return view && !scorecardDue ? { state: "ready", view } : { state: "not_ready", view: null };
 }
 
 /** One answer from the chat as it was sent: the question in the company's words, the answer, and how it came to be. */

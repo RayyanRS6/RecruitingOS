@@ -134,7 +134,7 @@ export function editorFocusFrom(value: string | null | undefined): EditorFocus |
 }
 
 /** How each kind of requirement counts in the match score, in one line for the editor and the role page. */
-export const SCORE_WEIGHTS_LINE = "In the match score, must-haves count the most, then Essential skills, then Important, then Helpful. Anything the evidence does not show either way is left out, never counted against anyone.";
+export const SCORE_WEIGHTS_LINE = "In the match score, must-haves count the most, then Essential skills, then Important, then Helpful. Anything not shown yet earns no points, and is never read as a no.";
 
 /**
  * What a saved change does to the scores: each person is scored against the version of the role their reading was made
@@ -143,7 +143,7 @@ export const SCORE_WEIGHTS_LINE = "In the match score, must-haves count the most
 export const READ_FROM_NOW_ON = "A change counts for people read from now on; anyone already read keeps the version they were read against, and their page says which.";
 
 /** Under the must-haves on the role page: what they do to the match score. */
-export const MUST_HAVES_SCORE_LINE = `Must-haves count the most in each applicant's match score. One their own words show is missing holds the score at ${MISSING_MUST_HAVE_CAP} at most and is named on their card; one the evidence does not mention is left out, never counted against them.`;
+export const MUST_HAVES_SCORE_LINE = `Must-haves count the most in each applicant's match score. One their own words show is missing holds the score at ${MISSING_MUST_HAVE_CAP} at most and is named on their card; one the evidence does not mention earns no points yet, and the AI interview asks about it.`;
 
 /** A skill's importance in words (Essential, Important, Helpful): the one a person picked, or the one its weight stands for. */
 export function importanceLabel(c: { weight: number; importance?: Importance | null }): string {

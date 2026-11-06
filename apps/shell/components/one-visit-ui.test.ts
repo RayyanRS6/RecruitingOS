@@ -26,6 +26,7 @@ vi.mock("@ros/web/src/components/use-is-client", () => ({ useIsClient: () => tru
 
 (globalThis as { React?: typeof React }).React = React;
 const { People } = await import("@ros/web/src/pages/People");
+const { applyView, defaultView } = await import("@ros/web/src/talent-list");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 const { ScreeningCard } = await import("@ros/web/src/pages/RoleReport");
 const { RoleApplyMode } = await import("@ros/web/src/components/ApplyMode");
@@ -74,10 +75,14 @@ describe("No AI interview yet, the strip's first column (20 Oct 2026, R20-7; it 
     expect(html).toContain('<span class="tab-label" data-label="No AI interview yet">No AI interview yet</span> <span class="count">2</span>');
     expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">1</span>');
     expect(text(html)).not.toContain("Still applying");
-    // the page opens on "waiting on you": Maria only; never Theo, whose group says so
+    // the page opens on everyone, best first; the chip counts Maria only, never Theo, whose group says so
     expect(text(html)).toContain("Waiting on you 1");
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
-    expect(html).not.toContain('class="talent-name">Theo Park</button>');
+    expect(html).toContain('class="talent-name">Theo Park</button>');
+    expect(html.indexOf('class="talent-name">Maria Reyes</button>')).toBeLessThan(html.indexOf('class="talent-name">Theo Park</button>'));
+    // with the chip on: Maria only
+    const waiting = { ...defaultView(new URLSearchParams()), waiting: true };
+    expect(applyView([maria, sofia, theo] as never, waiting).map((a) => a.id)).toEqual([maria.id]);
   });
 
   it("shows the column with its chips and one calm line, each row saying where they stand (also from an older 'still applying' link)", () => {
@@ -149,7 +154,7 @@ describe("the candidate panel (plan E3, E10, E11)", () => {
     const html = panel(client(), detail(), "screen");
     const words = text(html);
     expect(words).toContain("2 answered, 1 not answered by choice");
-    expect(words).toContain('"Chose not to answer" is never held against them');
+    expect(words).toContain('"Chose not to answer" is never read as a no; it counts as not known yet.');
     expect(html).toContain("<dt>What pay are you looking for?</dt><dd class=\"whitespace-pre-wrap\"><span class=\"muted\"><em>Chose not to answer</em></span></dd>");
     expect(html).toMatch(/I can start on Monday, November 2, 2026\. <span class="chip neutral">Changed before sending<\/span>/);
     expect(words).toContain("Yes (picked from the choices)");

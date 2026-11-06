@@ -206,7 +206,7 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("screen.question_skipped", { questionKey: "q_pay" }, cand))).toMatchObject({ what: "Chose not to answer a screening question", who: "The candidate" });
     expect(historyItem(ev("screen.answer_edited", { questionKey: "q_start" }, cand))?.what).toBe("Changed an answer before sending");
     expect(historyItem(ev("screen.answer_tapped", { questionKey: "q_days" }, cand))).toBeNull();
-    expect(historyItem(ev("screen.declined_by_candidate", { answered: 0, questions: 5 }, cand))).toMatchObject({ what: "Sent the application without the AI interview", why: "Their own choice; it is never held against them." });
+    expect(historyItem(ev("screen.declined_by_candidate", { answered: 0, questions: 5 }, cand))).toMatchObject({ what: "Sent the application without the AI interview", why: "Their own choice. Nobody is declined for it; their score is from the résumé alone." });
     expect(historyItem(ev("screen.idle_reminded", { answered: 2 }, { kind: "system", id: "wf" }))?.what).toBe("Reminded once to finish the AI interview");
     // never how far they got: they did not send their answers (founder decision of 9 October 2026)
     expect(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Didn't finish the AI interview; it closed after one reminder", why: "They never sent their answers, so they are not shown." });

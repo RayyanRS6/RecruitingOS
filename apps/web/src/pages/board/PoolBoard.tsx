@@ -6,7 +6,7 @@ import type { BoardCard, BoardView } from "../../api/client";
 import { Link } from "../../nav";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { boardLockedWords } from "../../upgrade";
-import { BOARD_COLUMNS, NO_AI_INTERVIEW_LANE, RECRUITER_CHECK, SORT_TEXT, SORT_TITLE, cardChip, cardFacts, confidenceChip, evidenceLines, headerCounts, laneRow, reasonLine, scoreText, sortedText, summarySentences, type TalentMode } from "./board-model";
+import { BOARD_COLUMNS, NO_AI_INTERVIEW_LANE, RECRUITER_CHECK, SORT_TEXT, VIEW_SWITCH_LABEL, cardChip, cardFacts, confidenceChip, evidenceLines, headerCounts, laneRow, reasonLine, scoreText, sortedText, summarySentences, type TalentMode } from "./board-model";
 
 /** A column: a soft rounded lane on the warm sunken grey; the three appear one after another (motion-safe, CSS only).
  *  It may shrink to its track (min-w-0), so a long chip wraps inside its card instead of pushing the lane wider.
@@ -35,22 +35,23 @@ function sortedAt(generatedAt: string | null): string | null {
 }
 
 /**
- * The bar above the Candidates list and board (plan F6; Wave S1): the Board / List switch, on the board the time it was
- * sorted, and one button. On the list the button opens the board; on the board it sorts again (the board is worked out
- * afresh from the stored evidence every time). Nothing moves and nothing is sent from here: what sorting does, and that
- * promise, are the button's title (founder, 23 Oct 2026: no sentence in the bar).
+ * The bar above the Candidates list and board (plan F6; Wave S1): the Board / List switch, which is the way between them,
+ * and on the board the time it was worked out and Refresh (it is worked out afresh from the stored evidence every time).
+ * No control here says "Sort": the list's "Sort:" menu is the one that sorts (the owner, 6 November 2026). Nothing moves and
+ * nothing is sent from here: what the board does, and that promise, are the button's title (founder, 23 Oct 2026: no
+ * sentence in the bar).
  */
-export function SortStrip(props: { mode: TalentMode; onMode: (mode: TalentMode) => void; onSort: () => void; sorting: boolean; generatedAt: string | null }) {
+export function ViewSwitch(props: { mode: TalentMode; onMode: (mode: TalentMode) => void; onRefresh: () => void; refreshing: boolean; generatedAt: string | null }) {
   const board = props.mode === "board";
   const at = board ? sortedAt(props.generatedAt) : null;
   return (
     // sort-strip is a hook for tests (no CSS)
-    <section className="sort-strip flex flex-wrap items-center justify-between gap-x-4 gap-y-2" aria-label={SORT_TITLE}>
+    <section className="sort-strip flex flex-wrap items-center justify-between gap-x-4 gap-y-2" aria-label={VIEW_SWITCH_LABEL}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
         <Segmented ariaLabel="Show as" value={props.mode} onChange={props.onMode} options={[{ value: "board", label: "Board" }, { value: "list", label: "List" }]} />
         {at ? <span className="text-[13px] text-ink-3 tabular-nums" title={sortedText(props.generatedAt)}>{at}</span> : null}
       </div>
-      {board ? <Button icon="refresh" loading={props.sorting} title={SORT_TEXT} onClick={props.onSort}>Sort again</Button> : <Button variant="primary" icon="assistant" title={SORT_TEXT} onClick={props.onSort}>{SORT_TITLE}</Button>}
+      {board ? <Button icon="refresh" loading={props.refreshing} title={SORT_TEXT} onClick={props.onRefresh}>Refresh</Button> : null}
     </section>
   );
 }
@@ -170,7 +171,7 @@ export function PoolBoard(props: { roleId: string; board: BoardView; only: { ids
 function BoardCardView({ card, onOpen }: { card: BoardCard; onOpen: (applicationId: string) => void }) {
   const chip = cardChip(card);
   const confidence = confidenceChip(card);
-  const score = scoreText(card.score?.score);
+  const score = scoreText(card.score?.score, card.score?.fit);
   const lines = evidenceLines(card);
   const facts = cardFacts(card);
   const next = card.placement.state === "suggested" ? card.placement.nextStep : null;

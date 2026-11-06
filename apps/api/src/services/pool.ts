@@ -1,5 +1,5 @@
 import { and, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
-import { BOARD_COLUMN_LABEL, BoardColumn, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
+import { BOARD_COLUMN_LABEL, BoardColumn, MATCH_FIT_LABEL, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchFit, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
 import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, hiddenFrom, interviewInScore, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, visibleTo, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, documents, events, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
@@ -100,11 +100,38 @@ export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessme
 }
 
 /**
- * The list rows' score fields (founder decision B2): the number, its band, the coverage and the missing must-haves, and
- * (R20-9) whether the AI interview is in it (`interview`) and the label (`basis`); null both without a score.
+ * The list rows' score fields (founder decision B2): the number, its band, the one verdict word (`fit`), the coverage and
+ * the missing must-haves, and (R20-9) whether the AI interview is in it (`interview`) and the label (`basis`); null without
+ * a reading.
  */
 export function scoreFields(match: MatchScore | null) {
-  return { score: match?.score ?? null, band: match?.band ?? null, bandLabel: match?.bandLabel ?? null, coverage: match?.coverage ?? null, missingMustHave: match?.missingMustHave ?? [], interview: match?.interview ?? null, basis: match?.basis ?? null };
+  return { score: match?.score ?? null, band: match?.band ?? null, bandLabel: match?.bandLabel ?? null, fit: match?.fit ?? null, coverage: match?.coverage ?? null, missingMustHave: match?.missingMustHave ?? [], interview: match?.interview ?? null, basis: match?.basis ?? null };
+}
+
+/**
+ * The one verdict word of each application given, for counts over many people (Home's "N strong candidates ready"): worked
+ * out as the list works it out, from the readings the team may see (never one of a conversation the candidate did not send)
+ * against the version of the role they were read against. One query per kind of fact. An application with no reading, or no
+ * packet to read it against, is left out.
+ */
+export async function fitsOf(tx: Tx, apps: ReadonlyArray<Pick<AppRow, "id" | "roleId" | "packetVersion" | "latestAssessmentId">>): Promise<Map<string, MatchFit>> {
+  const out = new Map<string, MatchFit>();
+  if (!apps.length) return out;
+  const appIds = apps.map((a) => a.id);
+  const asmts = await tx.select().from(assessments).where(inArray(assessments.applicationId, appIds)).orderBy(desc(assessments.createdAt));
+  if (!asmts.length) return out;
+  const scr = await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds));
+  const hidden = unsentScreenReadings(scr, asmts);
+  const versions = await tx.select({ roleId: rolePackets.roleId, version: rolePackets.version, packet: rolePackets.packet }).from(rolePackets).where(inArray(rolePackets.roleId, [...new Set(apps.map((a) => a.roleId))]));
+  const packetOf = (roleId: string, version: number) => versions.find((v) => v.roleId === roleId && v.version === version)?.packet ?? null;
+  for (const loaded of apps) {
+    const { app, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hidden);
+    const latest = own.find((x) => x.id === app.latestAssessmentId) ?? null;
+    const packet = packetOf(app.roleId, latest?.packetVersion ?? app.packetVersion) ?? packetOf(app.roleId, app.packetVersion);
+    const match = packet ? matchScore(readingPair(own), packet) : null;
+    if (match) out.set(app.id, match.fit);
+  }
+  return out;
 }
 
 export type PoolRow = ScoredPerson & {
@@ -206,8 +233,6 @@ export function poolPersonOf(row: PoolRow): PoolPerson {
 /** Where a person opens: their panel on the role's Talent page. */
 export const openPath = (roleId: string, applicationId: string) => `/roles/${roleId}/talent?open=${applicationId}`;
 
-const READING_WORDS: Record<string, string> = { strong: "Strong match", potential: "Potential match", weak: "Weak match", unknown: "Insufficient evidence" };
-
 export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
   const { app, latest, match } = row;
   // The board keeps its three columns (`boardPlacement`); someone under Cancelled is labelled so on their card.
@@ -229,7 +254,7 @@ export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
     score: match,
     mustHaves: row.mustHaves,
     confidence: match?.confidence ?? null,
-    reading: latest ? (row.evidence.needsCloserLook ? CLOSER_LOOK_LABEL : READING_WORDS[latest.overall] ?? null) : null,
+    reading: latest ? (row.evidence.needsCloserLook ? CLOSER_LOOK_LABEL : match ? MATCH_FIT_LABEL[match.fit] : null) : null,
     strengths: (latest?.result.strengths ?? []).slice(0, 2).map(quoteOf),
     gap,
     placement: row.placement,

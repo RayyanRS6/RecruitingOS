@@ -156,22 +156,31 @@ test.describe("the pool board", () => {
     await createCompanyThroughTheForm(page, `Board Dental ${run}`);
     const { roleId, emails } = await seedPool(page.request, browser, baseURL!);
 
-    // The list: the strip offers to sort the pool; each row has its match score, and the list sorts by it
+    // The list opens on everyone, best first: each row has its match score, and the only control that says Sort sorts (the
+    // owner, 6 Nov 2026); the Board / List switch is the way to the board
     await page.goto(`/roles/${roleId}/talent`);
-    // no sentence in the bar (founder, 23 Oct 2026): what sorting does, and that nothing is sent, is the button's title
-    await expect(page.getByRole("region", { name: "Sort the pool" }).getByRole("button", { name: "Sort the pool" })).toHaveAttribute("title", /Nothing moves until you apply it, and nothing is sent to anyone\.$/, { timeout: 30_000 });
+    await expect(page.getByRole("region", { name: "Board or list" }).getByRole("button", { name: "List", exact: true, pressed: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Sort the pool" })).toHaveCount(0);
     await expect(page.locator(".talent-row .score-slot .score").first()).toBeVisible({ timeout: 30_000 });
-    // the order is a dropdown chip (Wave S6): its list ticks the order in force, and choosing Score sorts by it
-    await page.getByRole("button", { name: /^Sort: / }).click();
+    await expect(page.locator(".talent-row")).toHaveCount(3);
+    await expect(page.locator(".talent-row .talent-name").first()).toHaveText("Ana Holt");
+    await expect(page.getByRole("button", { name: /^Waiting on you/, pressed: false })).toBeVisible();
+    // the order is a dropdown chip (Wave S6): it opens on Score, its list ticks the order in force, and choosing one sorts by it
+    await page.getByRole("button", { name: "Sort: Score" }).click();
     await expect(page.locator('[role="menuitemradio"][aria-checked="true"] svg')).toHaveCount(1);
+    await page.getByRole("menuitemradio", { name: /^Name/ }).click();
+    await expect(page.getByRole("button", { name: "Sort: Name" })).toBeVisible();
+    await page.getByRole("button", { name: "Sort: Name" }).click();
     await page.getByRole("menuitemradio", { name: /^Score/ }).click();
     await expect(page.getByRole("button", { name: "Sort: Score" })).toBeVisible();
-    await expectAccessible(page, "talent list with the sort strip");
+    await expectAccessible(page, "talent list with the Board / List switch");
 
     // The board: three columns in our words, the summary, a card per person with the reason
-    await page.getByRole("region", { name: "Sort the pool" }).getByRole("button", { name: "Sort the pool" }).click();
+    await page.getByRole("region", { name: "Board or list" }).getByRole("button", { name: "Board", exact: true }).click();
     await expect(page).toHaveURL(/view=board/);
     await expect(page.getByRole("button", { name: "Board", exact: true, pressed: true })).toBeVisible();
+    // no sentence in the bar (founder, 23 Oct 2026): what the board does, and that nothing is sent, is Refresh's title
+    await expect(page.getByRole("region", { name: "Board or list" }).getByRole("button", { name: "Refresh" })).toHaveAttribute("title", /Nothing moves until you apply it, and nothing is sent to anyone\.$/, { timeout: 30_000 });
     await expect(page.getByText(/^To sort: \d+ shortlist · \d+ longlist · \d+ not moving forward( · \d+ already sorted or decided)?$/)).toBeVisible({ timeout: 30_000 });
     for (const column of ["Shortlist", "Longlist", "Not moving forward"]) await expect(page.getByRole("heading", { level: 3, name: new RegExp(`^${column} \\d+$`) })).toBeVisible();
     await expect(page.getByRole("heading", { name: "What the pool looks like" })).toBeVisible();
@@ -180,11 +189,15 @@ test.describe("the pool board", () => {
     const cleoCard = page.locator(".board-card").filter({ hasText: "Cleo Park" });
     await expect(cleoCard.locator(".chip.critical")).toHaveText(/^Missing must-have: /);
     await expect(page.locator(".board-col[data-column='not_moving_forward']")).toContainText("Cleo Park");
-    await expect(page.locator(".board-card").filter({ hasText: "Ana Holt" }).locator(".board-card-score")).toContainText(/(Very high|High|Medium|Low) · \d+/);
-    // each card says what its score rests on, and the reading's own confidence sits apart
+    // one verdict word beside the number
+    const anaCard = page.locator(".board-card").filter({ hasText: "Ana Holt" });
+    await expect(anaCard.locator(".board-card-score")).toContainText(/^Strong match · \d+$/);
+    await expect(cleoCard.locator(".board-card-score")).toContainText(/^Missing a must-have · \d+$/);
+    // each card says what its score rests on, and the reading's own confidence sits apart, beside Strong or Potential only
     await expect(cleoCard.locator(".board-card-facts")).toContainText(/Must-haves: \d+ of \d+ shown/);
     await expect(cleoCard.locator(".board-card-facts")).toContainText("From the résumé and the AI interview");
-    await expect(cleoCard.getByText(/^(High|Medium|Low) confidence$/)).toBeVisible();
+    await expect(anaCard.getByText(/^(High|Medium|Low) confidence$/)).toBeVisible();
+    await expect(cleoCard.getByText(/^(High|Medium|Low) confidence$/)).toHaveCount(0);
     await expectAccessible(page, "the pool board");
 
     // "Have a recruiter check this" opens the request filled in; nothing is sent until Send

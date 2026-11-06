@@ -1,4 +1,4 @@
-import type { ActiveMark, AiInterviewGroup, AiInterviewView, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CancelledView, CandidateNotice, ChatPlan, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, InterviewFollowUpRef, InterviewInScore, LegalCheck, LockedApplicants, MatchBand, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ScreenWriteup, ShareTarget, ShareView, StageMove, ToldState, WrittenQuestionView } from "@ros/contracts";
+import type { ActiveMark, AiInterviewGroup, AiInterviewView, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CancelledView, CandidateNotice, ChatPlan, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, InterviewFollowUpRef, InterviewInScore, LegalCheck, LockedApplicants, MatchBand, MatchFit, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ScreenWriteup, ShareTarget, ShareView, StageMove, ToldState, WrittenQuestionView } from "@ros/contracts";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
 // The Cancelled column (founder decisions 1A to 4A): who is there and why, where their new times stand, the team's
@@ -140,14 +140,15 @@ export type ApplicationSummary = ApplicationCore & {
   stillApplying?: boolean;
   /**
    * The match score (founder decision B2), worked out by code from the checked findings, never by the model: the number
-   * (null when nothing could be judged yet), its band, what it rests on and the must-haves shown missing by a quote.
-   * `interview` and `basis` (R20-9): whether the AI interview is in the score, and the label ("Résumé only: AI interview
-   * not done yet"); null without a score. `placement` and `nextStep` are where the pool board puts the person and the
-   * step it suggests. Older answers leave them all out.
+   * (null when nothing could be judged yet), its band, the one verdict word (`fit`), what it rests on and the must-haves
+   * shown missing by a quote. `interview` and `basis` (R20-9): whether the AI interview is in the score, and the label
+   * ("Résumé only: AI interview not done yet"); null without a score. `placement` and `nextStep` are where the pool board
+   * puts the person and the step it suggests. Older answers leave them all out.
    */
   score?: number | null;
   band?: MatchBand | null;
   bandLabel?: string | null;
+  fit?: MatchFit | null;
   coverage?: { known: number; total: number; words: string } | null;
   interview?: InterviewInScore | null;
   basis?: string | null;

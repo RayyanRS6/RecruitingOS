@@ -67,7 +67,7 @@ export const ScreenProgress = z.object({
   flow: z.enum(["one_visit"]).optional(),
   /** "review": every question is answered or skipped and the candidate is checking their answers before sending (E10). */
   phase: z.enum(["conversation", "review"]).optional(),
-  /** Questions the candidate chose to skip (E11): unknown in the scorecard, never held against them. */
+  /** Questions the candidate chose to skip (E11): unknown in the scorecard, never read as a no. */
   declined: z.array(z.string()).optional(),
   /** How many times each answer was changed on the "check your answers" page (E10). */
   edits: z.record(z.string(), z.number()).optional(),

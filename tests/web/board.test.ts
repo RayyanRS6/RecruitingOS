@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BoardCard, BoardPlacement, BoardView, MatchScore, PoolSummary } from "../../apps/web/src/api/client";
 import {
-  BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, NEEDS_EYE_WARNING, NO_DECLINE_HERE, POOL_CARD_NOTE, RECRUITER_CHECK, REVIEW_FOOT, REVIEW_SUB, SORT_TEXT,
+  BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, NEEDS_EYE_WARNING, NO_DECLINE_HERE, POOL_CARD_NOTE, RECRUITER_CHECK, REVIEW_FOOT, REVIEW_SUB, SORT_TEXT, VIEW_SWITCH_LABEL,
   answerPath, appliedNote, appliedToast, applyLabel, batchItems, boardOrder, boardPersonPath, boardSearch, cardChip, cardFacts, confidenceChip, countsLine, evidenceLines, headerCounts, extraWarnings, groupCount, initialReview, isTicked, laneRow,
   lookedAtLine, modeFrom, needsReason, poolCardView, previewByPerson, previewItems, readyCounts, readyLine, reasonLine, reviewFootNote, reviewRows, rowWarnings, scoreText, snapshotOf, snapshotPlace, snapshotScore,
   sortedText, summarySentences, tickable, togglePick, type ReviewState,
@@ -16,7 +16,7 @@ import { SAFETY_NET_NOTE } from "../../apps/web/src/talent-list";
 let n = 0;
 function score(value: number | null, over: Partial<MatchScore> = {}): MatchScore {
   const band = value === null ? null : value >= 85 ? "very_high" : value >= 70 ? "high" : value >= 55 ? "medium" : "low";
-  return { score: value, band, bandLabel: null, coverage: { known: 3, total: 4, words: "Based on 3 of 4 requirements" }, breakdown: [], unknown: [], fullMarks: 3, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume", interview: "none", basis: "Résumé only: no AI interview", packetVersion: 1, ...over };
+  return { score: value, band, bandLabel: null, fit: value === null ? "insufficient" : value >= 70 ? "strong" : value >= 55 ? "potential" : "weak", coverage: { known: 3, total: 4, words: "Based on 3 of 4 requirements" }, breakdown: [], unknown: [], openPoints: 0, fullMarks: 3, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume", interview: "none", basis: "Résumé only: no AI interview", packetVersion: 1, ...over };
 }
 function placed(column: BoardPlacement["column"], over: Partial<BoardPlacement> = {}): BoardPlacement {
   return { column, state: "suggested", doneLabel: null, confident: true, needsYourEye: null, reason: "Match score 91: every requirement judged so far is met.", nextStep: { kind: "interview", label: "Interview", reason: "Strong evidence on every must-have." }, suggestedAction: column, declineReason: null, ...over };
@@ -63,7 +63,12 @@ describe("the board's address and strip", () => {
     expect(boardSearch("view=board", { mode: "list" })).toBe("");
   });
 
-  it("says what sorting does, that nothing moves until applied, and that nothing is sent, in one short line", () => {
+  it("never calls the bar a sort: the list's Sort menu is the one control that sorts (the owner, 6 November 2026)", () => {
+    expect(VIEW_SWITCH_LABEL).toBe("Board or list");
+    expect(VIEW_SWITCH_LABEL).not.toMatch(/sort/i);
+  });
+
+  it("says what the board does, that nothing moves until applied, and that nothing is sent, in one short line", () => {
     expect(SORT_TEXT).toBe("Groups everyone who finished applying, with a reason for each. Nothing moves until you apply it, and nothing is sent to anyone.");
     expect(SORT_TEXT).toMatch(/finished applying/);
     expect(SORT_TEXT).toMatch(/a reason for each/);
@@ -76,7 +81,7 @@ describe("the board's address and strip", () => {
 
 describe("the board", () => {
   it("names the columns in our words, with a line under each", () => {
-    expect(BOARD_COLUMNS.map((c) => `${c.title}: ${c.sub}`)).toEqual(["Shortlist: Good evidence on the must-haves", "Longlist: Some evidence, or more to find out", "Not moving forward: A must-have shown missing, or a low score on what is known"]);
+    expect(BOARD_COLUMNS.map((c) => `${c.title}: ${c.sub}`)).toEqual(["Shortlist: Good evidence on the must-haves", "Longlist: Some evidence, or more to find out", "Not moving forward: A must-have shown missing, or a low score with nothing left to find out"]);
   });
 
   it("counts each column in the header line: the people still to sort, then everyone already sorted or decided", () => {
@@ -92,6 +97,11 @@ describe("the board", () => {
     expect(confidenceChip({ confidence: "high" })).toMatchObject({ label: "High confidence", tone: "neutral", title: "How sure the AI was about its review. It is not part of the score." });
     expect(confidenceChip({ confidence: "low" })).toMatchObject({ label: "Low confidence", tone: "caution" });
     expect(confidenceChip({ confidence: null })).toBeNull();
+  });
+
+  it("shows that chip only beside Strong or Potential: beside any other word it says nothing new", () => {
+    for (const fit of ["strong", "potential"] as const) expect(confidenceChip({ confidence: "low", score: { fit } }), fit).toMatchObject({ label: "Low confidence" });
+    for (const fit of ["weak", "missing_must_have", "insufficient"] as const) expect(confidenceChip({ confidence: "low", score: { fit } }), fit).toBeNull();
   });
 
   it("lists the small facts under a card: the must-have line, what the score rests on, an older version, what happened", () => {
@@ -124,7 +134,12 @@ describe("the board", () => {
     expect(laneRow(stopped, now)).toMatchObject({ name: "Uma Reed", state: "No AI interview" });
   });
 
-  it("writes the score as the band's word and the number, coloured like the badge", () => {
+  it("writes the score as its one verdict word and the number, coloured like the badge", () => {
+    expect(scoreText(91, "strong")).toEqual({ text: "Strong match · 91", tone: "good", label: "Match score 91 out of 100 (strong match)" });
+    expect(scoreText(78, "potential")).toMatchObject({ text: "Potential match · 78", tone: "good" });
+    expect(scoreText(29, "insufficient")).toMatchObject({ text: "Not enough evidence · 29", tone: "neutral" });
+    expect(scoreText(54, "missing_must_have")).toMatchObject({ text: "Missing a must-have · 54", tone: "neutral" });
+    // an older answer without the word: the band's
     expect(scoreText(91)).toMatchObject({ text: "Very high · 91", tone: "good" });
     expect(scoreText(78)).toMatchObject({ text: "High · 78", tone: "good" });
     expect(scoreText(62)).toMatchObject({ text: "Medium · 62", tone: "caution" });

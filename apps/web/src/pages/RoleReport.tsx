@@ -57,7 +57,7 @@ export function isOneCandidateLimit(err: unknown): boolean {
 /**
  * The Report tab: the ten figures for one role, and the two downloads. Fewer words (23 Oct 2026): what each figure
  * means, and the definitions the cards once carried under their tables, are in one closed disclosure at the end; a card
- * keeps only its fairness and accountability lines ("People make every decision", "never held against anyone",
+ * keeps only its fairness and accountability lines ("People make every decision", "never read as a no",
  * "recorded with the person's name and reason", "Counts only; nobody is named here").
  */
 export function ReportTab({ roleId }: { roleId: string }) {
@@ -104,7 +104,7 @@ export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<
             </Table>
           </div>
           {m.stricter ? <p className="small mt-3 text-ink-2">{m.stricter.words} {links ? <Link to={m.stricter.editPath}>Look at the must-haves</Link> : null}</p> : null}
-          <p className="small muted mt-3">"Not met" counts only when the candidate's own words show it; anything else is "not known yet" and is never held against anyone. Someone read before a must-have was added is left out of its count. Counts only; nobody is named here.</p>
+          <p className="small muted mt-3">"Not met" counts only when the candidate's own words show it; anything else is "not known yet", never a no. Someone read before a must-have was added is left out of its count. Counts only; nobody is named here.</p>
         </>
       )}
     </Card>
@@ -146,7 +146,7 @@ export function ScreeningCard({ roleId }: { roleId: string }) {
           {f.stillApplying ? <div className="row mt-3"><Link to={`/roles/${roleId}/talent?ownerStage=no_ai_interview`} className="text-link min-h-10">See who has no AI interview yet<Icon name="arrow-right" /></Link></div> : null}
           {/* what "typical" means is in the figures' disclosure; the fairness rule and the no-names assurance stay here,
               as on the must-haves card */}
-          <p className="small muted mt-3">Choosing a person or not answering a question is never held against anyone. Counts only; nobody is named here.</p>
+          <p className="small muted mt-3">Choosing a person or not answering a question is never read as a no. Counts only; nobody is named here.</p>
         </>
       )}
     </Card>

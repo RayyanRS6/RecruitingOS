@@ -8,8 +8,7 @@ import { api, type NoteView } from "../../api/client";
 import { Link } from "../../nav";
 import { noteExcerpt } from "../../notes";
 import { resumeOnlyChip } from "../../talent-list";
-import { overallLabel } from "../candidate-panel/assessment";
-import { REC_LABEL } from "../candidate-panel/helpers";
+import { REC_CHIP } from "../candidate-panel/helpers";
 import { COMPARE_MAX, COMPARE_ORDERS, cellFigures, criterionCell, hasTeamNotes, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView, type CompareOrder, type CompareView } from "./compare-view";
 
 /** A cell's small figures (% met, points it cost, what the score rests on). */
@@ -116,7 +115,7 @@ export function CompareTable({ data }: { data: CompareView }) {
             return (
               <td key={c.applicationId}>
                 <div className={CELL}>
-                  <span className="row gap-1.5"><ScoreBadge score={s.score} size="sm" />{s.band ? <span className="small">{s.band}</span> : null}</span>
+                  <span className="row gap-1.5"><ScoreBadge score={s.score} size="sm" />{s.verdict ? <span className="small">{s.verdict}</span> : null}</span>
                   {s.coverage ? <span className={FIGURES}>{s.coverage}</span> : null}
                   {s.basis ? <span className={FIGURES}>{s.basis}</span> : null}
                   {/* a long "Missing must-have: …" wraps inside its cell */}
@@ -132,8 +131,7 @@ export function CompareTable({ data }: { data: CompareView }) {
           const tag = skillTag(cands, x.key);
           return <tr key={`sk:${x.key}`}><th scope="row" className="small" title={x.definition}>{tag ? <><span className="sbar-tag">{tag}</span> </> : null}{x.name}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={x.key} mustHave={false} /></td>)}</tr>;
         })}
-        <tr><th scope="row" className="small muted">AI interview</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no AI interview yet</span>}</td>)}</tr>
-        <tr><th scope="row" className="small muted">AI review of the résumé</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not reviewed yet</span>}</td>)}</tr>
+        <tr><th scope="row" className="small muted">AI interview</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_CHIP[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no AI interview yet</span>}</td>)}</tr>
         <tr><th scope="row" className="small muted">Still unknown</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
         {/* The team's private notes (plan H3), for those who read notes; never the candidate's, never the AI's. */}
         {withNotes ? <tr><th scope="row" className="small muted">Team notes <span className="sr-only">(private)</span></th>{cands.map((c) => <td key={c.applicationId}><NotesCell notes={c.notes ?? []} /></td>)}</tr> : null}

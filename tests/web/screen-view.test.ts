@@ -61,7 +61,7 @@ describe("how the conversation reached them", () => {
     expect(overviewScreenLine(a(screen({ invitedVia: "with_application" })))).toBe("Applied, then did the AI interview.");
     expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "invited" })))).toBe("AI interview not sent yet: their answers appear here once they send them. Nothing about Sofia waits on you until then.");
     expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "paused" })))).toContain("paused while the assistant is not working");
-    expect(overviewScreenLine(a(screen({ status: "declined_by_candidate" })))).toContain("never held against them");
+    expect(overviewScreenLine(a(screen({ status: "declined_by_candidate" })))).toContain("Nobody is declined for it; their score is from the résumé alone.");
     expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("A recruiter contacts them");
     expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("was not sent, so you won't see it");
     // closed unfinished: that it happened, never what they said nor how far they got (founder decision of 9 October 2026)

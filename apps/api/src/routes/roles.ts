@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, DecisionMessagePreviewRequest, SendClosingMessage, RecordOfferMade, AiInterviewGroup, importanceOf, type ActiveMark, type AssessmentFlagKind, type CancelledReason, type CandidateNotice, type ClosingMessagePreview, type DecisionMessagePreview, type PoolAnswer } from "@ros/contracts";
+import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, DecisionMessagePreviewRequest, SendClosingMessage, RecordOfferMade, AiInterviewGroup, importanceOf, scoreRank, type ActiveMark, type AssessmentFlagKind, type CancelledReason, type CandidateNotice, type ClosingMessagePreview, type DecisionMessagePreview, type PoolAnswer } from "@ros/contracts";
 import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, applicationAnswerSentences, createEscalation, hiddenTextNoteOf, maskCandidateLinks, poolQuestions, resolveApplyMode, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents, writtenQuestionsOf } from "@ros/core";
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
@@ -526,11 +526,9 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
       if (r.aiInterview) counts.aiInterview[r.aiInterview.group] += 1;
     }
     const nameOf = (r: (typeof rows)[number]) => r.candidate?.name.toLowerCase() ?? "";
-    // By score (R20-9, like with like): people whose score counts the AI interview first, then résumé-only scores, each
-    // highest first; people with no score yet last, newest first among equals (the rows come newest first). The same
-    // rule as the page's own sort (apps/web/src/talent-list.ts `scoreRank`).
-    const scoreRank = (r: (typeof rows)[number]) => (r.score === null ? 2 : r.interview === "done" ? 0 : 1);
-    const byScore = (x: (typeof rows)[number], y: (typeof rows)[number]) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1);
+    // By score (`scoreRank`, 6 November 2026): final numbers first, then people whose AI interview is still coming, then no
+    // score; highest first, and among equals the longest wait. The same rule as the page's own sort (apps/web/src/talent-list.ts).
+    const byScore = (x: (typeof rows)[number], y: (typeof rows)[number]) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1) || Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt);
     const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : q.order === "score" ? [...rows].sort(byScore) : rows;
     const shown = ordered.filter((r) => (!q.group || r.group === q.group) && (!q.stage || r.stage === q.stage) && (!q.ownerStage || r.ownerStage === q.ownerStage) && (!q.told || r.toldState === q.told) && (!q.aiInterview || r.aiInterview?.group === q.aiInterview));
     return { shown, counts, locked };

@@ -368,7 +368,12 @@ describe("role report", () => {
       if (rows.some((a) => ["rejected", "talent_pool"].includes(a.stage) && a.toldState === "not_told")) needsMe += 1;
     }
     expect(Number(m![1])).toBe(needsMe);
-    const strongIds = new Set((await container.db.select().from(assessments).where(and(eq(assessments.companyId, companyId), eq(assessments.overall, "strong")))).map((a) => a.applicationId));
+    // strong in the same word the list shows beside each number (6 November 2026), never a reading's stored word
+    const strongIds = new Set<string>();
+    for (const rid of [roleId, role2Id]) {
+      const listed = (await (await json(owner, "GET", `/api/v1/roles/${rid}/applications`)).json()) as Array<{ id: string; fit: string | null }>;
+      for (const r of listed) if (r.fit === "strong") strongIds.add(r.id);
+    }
     const strong = (await waitsOnYou(await container.db.select().from(applications).where(eq(applications.companyId, companyId)))).filter((a) => strongIds.has(a.id)).length;
     expect(Number(m![2])).toBe(strong);
     expect(Number(m![3])).toBe(brief.cards.filter((c) => c.kind === "stuck").length + report.escalations.open);

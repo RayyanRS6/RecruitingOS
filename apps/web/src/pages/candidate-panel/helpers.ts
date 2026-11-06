@@ -221,7 +221,7 @@ export function panelQuestions(labels: Pick<PacketLabels, "questions" | "written
 type WriteupAnswerView = NonNullable<Screen["progress"]["writeup"]>["answers"][number];
 type Tone = "good" | "accent" | "neutral" | "caution";
 
-/** What became of a written question, in the panel's words. Not answering is never held against anyone. */
+/** What became of a written question, in the panel's words. Not answering is never read as a no. */
 export const WRITEUP_STATUS: Readonly<Record<WriteupAnswerView["status"], { words: string; tone: Tone }>> = {
   answered: { words: "Answered", tone: "good" },
   partly: { words: "Partly answered", tone: "accent" },
@@ -358,6 +358,8 @@ export function offersNewInterviewLink(a: Pick<ApplicationDetail, "screens">): b
 
 /** The assistant's suggestion after reading the résumé or the screen. Its "hold" means thin evidence, never the On hold mark. */
 export const REC_LABEL: Record<string, string> = { screen: "Worth an AI interview", hold: "Thin evidence: your call", review_manually: "Needs a closer look", strong_interview: "Strong: interview", interview: "Interview", decline_recommended: "Concern raised" };
+/** The same suggestion as a chip near the person's one verdict word (6 November 2026): what it suggests doing, never a second verdict. */
+export const REC_CHIP: Record<string, string> = { ...REC_LABEL, hold: "Your call", strong_interview: "Suggests an interview", interview: "Suggests an interview" };
 
 /** Owner Mode never shows raw stage names (docs/07); mirrors STAGE_LABEL in packages/core, in the staff glossary's words (screening chat). */
 export const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview", screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Interview to set up", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
@@ -587,7 +589,7 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: p.via === "recruiter_call" ? "Screening finished with a recruiter's notes from a call" : "Finished the AI interview" };
     // Wave E: the conversation in the same visit as applying.
     case "screen.declined_by_candidate":
-      return { ...base, what: "Sent the application without the AI interview", why: "Their own choice; it is never held against them." };
+      return { ...base, what: "Sent the application without the AI interview", why: "Their own choice. Nobody is declined for it; their score is from the résumé alone." };
     case "screen.idle_reminded":
       return { ...base, what: "Reminded once to finish the AI interview", who: "The system" };
     case "screen.unfinished":

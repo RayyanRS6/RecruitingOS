@@ -1,13 +1,14 @@
 import { IMPORTANCE_LABEL, MISSING_MUST_HAVE_CAP, type BoardPlacement, type Importance, type MatchCriterion, type MatchScore, type MustHaveSummary, type OwnerStage, type ReadingVersion } from "@ros/contracts";
+import type { Tone } from "@ros/ui";
 import type { ApplicationDetail } from "../../api/client";
-import { scoreBasis } from "../../talent-list";
+import { READING, scoreBasis } from "../../talent-list";
 
 /**
  * The match score on the candidate panel (founder decision B2; docs/spec/22 section 5), kept free of React so it can be
  * tested (tests/web/match-panel.test.ts): the words around the number, the bars (the costliest first, then "N more at
- * full marks"), what was left out of the score, the version label (plan F4), and the order the evidence is listed in
- * (plan F2). The number itself comes from the API (`matchScore`, worked out by code in packages/core from the checked
- * findings); nothing here works it out again.
+ * full marks"), what is not known yet, the version label (plan F4), and the order the evidence is listed in (plan F2). The
+ * number itself comes from the API (`matchScore`, worked out by code in packages/core from the checked findings); nothing
+ * here works it out again.
  */
 
 export const MATCH_TITLE = "Against your must-haves";
@@ -131,6 +132,11 @@ export function basisLine(m: MatchScore | null | undefined): string | null {
   return basis ? `${basis}.` : null;
 }
 
+/** The one verdict word beside the number, in the list's words and colours; null on an older answer without it. */
+export function fitWord(m: Pick<MatchScore, "fit"> | null | undefined): { label: string; tone: Tone } | null {
+  return m?.fit ? READING[m.fit] : null;
+}
+
 const CONFIDENCE_WORD: Record<string, string> = { high: "High", medium: "Medium", low: "Low" };
 
 /**
@@ -189,14 +195,14 @@ export function cappedLine(m: MatchScore): string | null {
   return m.capped ? `A must-have their own words show is not met holds the score at ${MISSING_MUST_HAVE_CAP} at most.` : null;
 }
 
-/** The requirements the evidence says nothing about: left out of the score, never counted against them. */
+/** The requirements the evidence says nothing about: no points so far, and never read as a no. */
 export function leftOut(m: MatchScore): { heading: string; items: Array<{ key: string; label: string; tag: string }>; note: string } | null {
   if (!m.unknown.length) return null;
   const n = m.unknown.length;
   return {
     heading: n === 1 ? "1 requirement not known yet" : `${n} requirements not known yet`,
     items: m.unknown.map((u) => ({ key: u.key, label: u.label, tag: criterionTag(u) })),
-    note: `Left out of the score, never counted against them. Ask about ${n === 1 ? "it" : "them"} in the AI interview or a call.`,
+    note: `Not shown yet: no points so far, never counted as a no. Ask about ${n === 1 ? "it" : "them"} in the AI interview or a call.`,
   };
 }
 

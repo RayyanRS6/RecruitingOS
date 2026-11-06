@@ -437,7 +437,7 @@ export const screen: WorkflowDefinition<State> = {
           // came in, 9 October 2026): nothing is read. Unfinished, it stays under "No AI interview yet" (R20-7, no alert);
           // sent without the conversation, the team hears it as Q16's choice does.
           const b = scr.status === "declined_by_candidate" ? await load(ctx.q, ctx.state.applicationId) : null;
-          if (b) await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "screen.declined_by_candidate", title: `${b.candidate.firstName} ${b.candidate.lastName} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${b.packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+          if (b) await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "screen.declined_by_candidate", title: `${b.candidate.firstName} ${b.candidate.lastName} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${b.packet.identity.title}. Nobody is declined for it; their score is from the résumé alone. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
           return { kind: "complete" };
         }
         if (!prepared || prepared.screenId !== scr.id) return { kind: "fail", error: "the screen changed after the read phase; assessing again", retryable: true };
@@ -489,7 +489,7 @@ export const screen: WorkflowDefinition<State> = {
       if (LEFT_THE_PROCESS.includes(app.stage)) return { kind: "complete" };
       if (PARTIAL.includes(scr.status)) {
         // Unfinished: under "No AI interview yet", with no per-person alert (R20-7).
-        if (scr.status === "declined_by_candidate") await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "screen.declined_by_candidate", title: `${name} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        if (scr.status === "declined_by_candidate") await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "screen.declined_by_candidate", title: `${name} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${packet.identity.title}. Nobody is declined for it; their score is from the résumé alone. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       const check = readingConsistency(asmt, packet);

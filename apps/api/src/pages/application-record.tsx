@@ -444,11 +444,13 @@ function ScoreBar(props: { row: CandidateScoreRow }) {
  * review before real candidates in NYC, IL, CA or CO). While it is worked out: "Working out your match score…", with a
  * plain "Check again" link (never a timed reload: the page holds forms a candidate may be typing in, WCAG 2.2.1). Then the number, its band, what it rests
  * on ("From your résumé and your AI interview", or "From your résumé only" until the AI interview is in it; R20-9) and the bars: only the
- * job page's must-haves by name, every other requirement in one line; what nothing showed yet is listed as not shown,
- * never held against them. Nothing at all when ITS switched it off for the company.
+ * job page's must-haves by name, every other requirement in one line; what nothing showed yet is listed as not shown: it
+ * earns no points yet, and is never read as a no. Nothing at all when ITS switched it off for the company.
  *
  * Every word here, the eyebrows included, stays exactly as drafted until counsel signs off: a block under counsel review
- * is outside the fewer-words pass (23 October 2026). That pass had cut two of its lines; both are back, word for word.
+ * is outside the fewer-words pass (23 October 2026). That pass had cut two of its lines; both are back, word for word. Two
+ * sentences changed on 6 November 2026 because the score changed and they would have become false, and the register's items
+ * 20 and 21 carry the new words. They are still drafts.
  */
 function ScoreSection(props: { score: RecordScore; companyName: string; chatSent: boolean; statusPath: string }) {
   const { score } = props;
@@ -476,14 +478,14 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
     <section class="card" id="score" aria-labelledby="score-h">
       <p class="eyebrow">Your match score is ready</p>
       <h2 id="score-h" class="score-head"><span class="score-num">{v.score}<small>/100</small></span><span>{v.bandLabel} match</span></h2>
-      <p class="meta">{v.basis ? `${v.basis}. ` : ""}{v.coverage}. Anything the team could not see in what you sent is left out of the number, never held against you.</p>
+      <p class="meta">{v.basis ? `${v.basis}. ` : ""}{v.coverage}. Anything the team could not see in what you sent earns no points yet, and is never read as a no.</p>
       {v.capped ? <p>What you sent shows a must-have from the job page as not met, so the score stays below 55 however much else is shown.</p> : null}
       <h3>How it breaks down</h3>
       <ul class="bars">
         {v.rows.map((row) => <ScoreBar row={row} />)}
         {v.other ? <ScoreBar row={v.other} /> : null}
       </ul>
-      {v.notYetShown.length ? <p><strong>Not shown yet:</strong> {v.notYetShown.join("; ")}. Nothing you sent says either way, so these are left out.</p> : null}
+      {v.notYetShown.length ? <p><strong>Not shown yet:</strong> {v.notYetShown.join("; ")}. Nothing you sent says either way, so these earn no points yet.</p> : null}
       <p>The hiring team at {props.companyName} sees this score with your application{props.chatSent ? " and your chat" : ""}.</p>
       <p class="meta">The team sees what you sent; their private notes are never shared with you. A person makes every decision: the score never decides anything on its own.</p>
     </section>

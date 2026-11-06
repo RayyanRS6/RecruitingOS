@@ -161,8 +161,7 @@ describe("the application record (status page) after sending", () => {
     const must = packet.requirements.mustHaves[0];
     expect(score).toContain(`<li class="strong"><div class="bar-head"><span>${must.text}</span><span>100% met · Shown</span></div><progress max="100" value="100" aria-label="${must.text}: 100% met">100%</progress></li>`);
     if (packet.competencies.length) {
-      // the skills the team looks for are not on the job page: one line, never a skill's name
-      // the share the number counted (a partly shown skill can count for more than half), so bars and number agree
+      // the skills the team looks for are not on the job page: one line, never a skill's name, so bars and number agree
       const shown = Number(score.match(/<span class="score-num">(\d{1,3})</)?.[1]);
       expect(score).toMatch(/<span>Other things the team looks for<\/span><span>\d{1,3}% met<\/span>/);
       if (shown === 100) expect(score).toContain("<span>Other things the team looks for</span><span>100% met</span>");
@@ -171,7 +170,9 @@ describe("the application record (status page) after sending", () => {
     // a must-have nothing showed is listed as not shown yet; skills nothing showed are private and stay unnamed
     if (packet.requirements.mustHaves.length > 1) expect(score).toContain("Not shown yet:");
     for (const m of packet.requirements.mustHaves.slice(1)) expect(score).toContain(m.text);
-    expect(score).toMatch(/Based on \d+ of \d+ requirements\. Anything the team could not see in what you sent is left out of the number, never held against you\./);
+    expect(score).toMatch(/Based on \d+ of \d+ requirements\. Anything the team could not see in what you sent earns no points yet, and is never read as a no\./);
+    expect(score).not.toMatch(/left out|held against/);
+    if (packet.requirements.mustHaves.length > 1) expect(score).toContain("Nothing you sent says either way, so these earn no points yet.");
     // she sent it without the AI interview: the number is her résumé's alone, and says so (R20-9)
     expect(score).toContain('<p class="meta">From your résumé only. Based on ');
     expect(score).toContain("The team sees what you sent; their private notes are never shared with you.");
@@ -219,6 +220,28 @@ describe("the application record (status page) after sending", () => {
     // once the reading is there, the score shows
     await readingFor(a);
     expect((await page(`/c/status/${a.statusToken}`)).html).toContain("Your match score is ready");
+  });
+
+  it("while an AI interview they sent has no scorecard, never a résumé-only number: 'Working out…', then 'Not ready yet', for as long as it takes (6 November 2026)", async () => {
+    const a = await applyAs("Noor", "noor.record@example.com");
+    await readingFor(a);
+    // it was sent, and its scorecard waits (the company's AI credit ran out): the résumé's number would read low for someone who did what was asked
+    const sent = await addScreen(a, { status: "completed", progress: progressOf({ submittedAt: at(1), scoreWaitsForCredit: at(1) }), completedAt: at(1) });
+    const scoreOf = async () => (await page(`/c/status/${a.statusToken}`)).html;
+    let html = await scoreOf();
+    expect(html).toContain('<h2 id="score-h">Working out your match score…</h2>');
+    expect(html).not.toContain("Your match score is ready");
+    expect(html).not.toContain("From your résumé only");
+    // past the window, however long it waits: never the number
+    await container.db.update(screens).set({ completedAt: at(-30 * 60) }).where(eq(screens.id, sent.id));
+    html = await scoreOf();
+    expect(html).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Not ready yet</h2>');
+    expect(html).not.toContain("Your match score is ready");
+    expect(html).not.toContain("From your résumé only");
+    // and no word about a plan or AI credit in what it tells them
+    const scoreCard = html.slice(html.indexOf('<section class="card" id="score"'), html.indexOf("</section>", html.indexOf('<section class="card" id="score"')));
+    expect(scoreCard).toContain("Not ready yet");
+    expect(scoreCard).not.toMatch(/\b(credit|upgrade|plan)\b/i);
   });
 
   it("S7-2: 'Your answers' reads back exactly what was sent: the form's questions in sentences and the sent chat, the assistant's note apart; an unsent chat shows nothing and holds the score back", async () => {

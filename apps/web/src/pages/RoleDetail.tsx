@@ -289,7 +289,7 @@ export function RoleDetail() {
                 <Card title="What we look for">
                   <ul className={ROWS}>{p.competencies.map((c) => <li key={c.key} className={cn(ROW, "grid gap-1")}><span className="flex flex-wrap items-center gap-x-2 gap-y-1"><strong>{c.name}</strong> <span className="sbar-tag">{importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip></span><span className="small muted">{c.definition}</span></li>)}</ul>
                   {/* Kept visible for everyone, not only in the editor: how the levels weigh in the match score and the
-                      fairness rule (unknown is never counted against anyone). e2e match-panel.spec.ts reads it here. */}
+                      fairness rule (not shown yet is never read as a no). e2e match-panel.spec.ts reads it here. */}
                   <p className="small muted mt-4">{SCORE_WEIGHTS_LINE}</p>
                   {editPacket ? <div className="row mt-4"><Button size="sm" icon="edit" onClick={() => openEditor("skills")}>Change the skills or how much each counts</Button>{mayTryWeights ? <Button size="sm" onClick={() => setWeightsOpen(true)}>Try different weights</Button> : null}</div> : null}
                 </Card>

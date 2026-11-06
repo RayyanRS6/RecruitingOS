@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * The Candidates page and the candidate panel (Wave A; founder decisions B3 and B6; Wave S1) as the server first draws
  * them, from answers shaped like the API's: the job's shared header and tab strip (also on the job page), the stage
- * strip with its counts and "More stages", the calm rows with at most two chips, the "waiting on you" view it opens on,
+ * strip with its counts and "More stages", the calm rows with at most two chips, the list of everyone, best first, it opens on,
  * the panel's header with the stage button, what needs you, and the steps a stage choice opens; and the Jobs page.
  */
 const nav = vi.hoisted(() => ({ search: "", params: { id: "r1" } as Record<string, string> }));
@@ -96,7 +96,7 @@ const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(create
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
 describe("the Candidates page", () => {
-  it("heads the page with the job's shared header and tabs, and opens on the people waiting on you", () => {
+  it("heads the page with the job's shared header and tabs, and opens on everyone, best first", () => {
     nav.search = "";
     const html = render(client([]), createElement(People));
     // no "Job · company" eyebrow above the title (fewer words, 23 Oct 2026): the rail names the company
@@ -124,10 +124,12 @@ describe("the Candidates page", () => {
     expect(html).not.toContain('data-label="Longlist"');
     expect(html).not.toContain('data-label="On hold"');
     expect(html).toContain('aria-label="More stages"');
-    // waiting on you is on, so only Maria is listed; the decision nobody has told is one click away
-    expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="true">Waiting on you/);
+    // everyone is listed, Maria's score first and Luis, with none, after her; waiting on you is a chip, off until pressed; the
+    // decision nobody has told is one click away
+    expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="false">Waiting on you/);
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
-    expect(html).not.toContain('class="talent-name">Luis Ortega</button>');
+    expect(html).toContain('class="talent-name">Luis Ortega</button>');
+    expect(html.indexOf('class="talent-name">Maria Reyes</button>')).toBeLessThan(html.indexOf('class="talent-name">Luis Ortega</button>'));
     expect(text(html)).toContain("Not told yet 1");
     expect(text(html)).toContain("Waiting on you 3 days");
     expect(text(html)).toContain("Applied 4 days ago");
@@ -135,16 +137,16 @@ describe("the Candidates page", () => {
     // the stage button on the row, and the match score's badge (founder decision B2)
     expect(html).toContain('aria-label="Stage: New. Move to another stage"');
     expect(html).toMatch(/<span class="score-slot"><span class="score good sm" title="Match score 91 out of 100">/);
-    // Match and the order are dropdown chips naming the choice in force (Wave S6): the people waiting longest first here
+    // Match and the order are dropdown chips naming the choice in force (Wave S6): the score, best first, here
     expect(html).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Match: All matches<svg');
-    expect(html).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Sort: Waiting longest<svg');
+    expect(html).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Sort: Score<svg');
     expect(html).not.toContain("<select");
-    // the filter in force is a chip that removes it, with Clear all beside it
-    expect(text(html)).toContain("Filters on");
-    expect(html).toContain('<button type="button" class="toggle-chip"><span class="sr-only">Remove the filter: </span>Waiting on you<svg');
-    expect(text(html)).toContain("Clear all");
-    // the strip above the list offers to sort the pool onto the board
-    expect(text(html)).toContain("Sort the pool");
+    // no filter is in force, so nothing offers to remove one
+    expect(text(html)).not.toContain("Filters on");
+    expect(html).not.toContain("Remove the filter: ");
+    expect(text(html)).not.toContain("Clear all");
+    // the switch above the list is the way to the board; no button there says Sort
+    expect(text(html)).not.toContain("Sort the pool");
     expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">List<\/button>/);
   });
 
@@ -178,11 +180,11 @@ describe("the Candidates page", () => {
     expect(text(html).match(/Clear filters/g)).toHaveLength(1);
     expect(text(html)).not.toContain("Show everyone");
     // an empty view with closer words of its own keeps them, with the same one way out
-    nav.search = "";
+    nav.search = "ownerStage=cancelled";
     const qc = client([]);
     qc.setQueryData(["applications", "r1"], { applications: [luis], counts });
     const none = text(render(qc, createElement(People)));
-    expect(none).toContain("Nobody is waiting on you");
+    expect(none).toContain("Nobody is under Cancelled");
     expect(none.match(/Clear filters/g)).toHaveLength(1);
   });
 
@@ -233,8 +235,8 @@ describe("the Candidates page", () => {
     expect(text(html)).not.toMatch(/Applied \w{3} \d{1,2}, \d{4} · Dental Hygienist/);
     expect(text(html)).toContain("Email");
     expect(html.match(/aria-label="Stage: New\. Move to another stage"/g)?.length).toBe(2);
-    // the list it opened from: one person, so next and previous say so
-    expect(text(html)).toContain("1 of 1");
+    // the list it opened from: everyone, so next and previous say where she is in it
+    expect(text(html)).toContain("1 of 2");
     // the assistant's suggestion, with Yes and Not now (there is no "Invite to a screen?" card since 20 Oct 2026, R20-4)
     expect(text(html)).toContain("The assistant suggests an interview");
     expect(text(html)).toContain("Yes, interview");

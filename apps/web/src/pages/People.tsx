@@ -31,7 +31,7 @@ import { STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candida
 import type { ActionBody } from "./candidate-panel/hooks";
 import { ComparePanel } from "./compare/ComparePanel";
 import { AskPool } from "./board/AskPool";
-import { PoolBoard, SortStrip } from "./board/PoolBoard";
+import { PoolBoard, ViewSwitch } from "./board/PoolBoard";
 import { ReviewApply } from "./board/ReviewApply";
 import { boardOrder, boardSearch, modeFrom, type TalentMode } from "./board/board-model";
 import { JobHeader, JobMenu, JobTabs, jobFactsFor } from "./JobHeader";
@@ -88,9 +88,9 @@ const LEGEND = "mb-2 text-[13px] font-semibold text-ink";
  * come to one. Its chips split it by what each person chose ("Asked for new times", "No longer interested", "No-show"),
  * each row says where their new times stand, and "Send new times…" sends them to several people at once.
  *
- * The pool board (plan F6-F10; founder decisions B2, B4, B5): "Sort the pool" switches to the board (`?view=board`),
- * where the people who finished applying sit in Shortlist, Longlist and Not moving forward with the reason for each,
- * under a summary in plain words. "Review and apply" (`&review=1`, also Home's link) files the ticked people privately;
+ * The pool board (plan F6-F10; founder decisions B2, B4, B5): the Board and List switch opens it (`?view=board`), where the
+ * people who finished applying sit in Shortlist, Longlist and Not moving forward with the reason for each, under a summary
+ * in plain words. "Review and apply" (`&review=1`, also Home's link) files the ticked people privately;
  * "Ask about this pool" opens the one-click questions. Nothing moves until a person applies it, and nobody is emailed.
  *
  * The header's More menu: Compare, and what the job page offers (pause, the accepting switch, close, the closing
@@ -126,10 +126,10 @@ export function People() {
   const noInterviewCount = counts?.byOwnerStage.no_ai_interview ?? rows.filter((a) => a.ownerStage === "no_ai_interview").length;
   const aiCounts = aiInterviewCounts(counts, rows);
 
-  // The view: what a link asked for, otherwise "waiting on you" when anyone does; changed by the strip and the filters.
+  // The view: what a link asked for, otherwise everyone, best first; changed by the strip and the filters.
   const key = linkKey(search);
   const [viewState, setViewState] = useState<{ key: string; view: TalentView } | null>(null);
-  const view = viewState?.key === key ? viewState.view : defaultView(search, counts ? { byGroup: { ...counts.byGroup, waiting_on_you: waitingCount } } : counts);
+  const view = viewState?.key === key ? viewState.view : defaultView(search);
   const setView = (patch: Partial<TalentView>) => setViewState({ key, view: { ...view, ...patch } });
   /** Takes the link's step filter (`?stage=`) off, from the address too, so a reload does not bring it back. */
   const clearStageLink = () => {
@@ -257,7 +257,7 @@ export function People() {
   const clearFilters = () => {
     const next = new URLSearchParams(search);
     for (const k of LINK_FILTERS) next.delete(k);
-    setViewState({ key: linkKey(next), view: { ...defaultView(next, null), order: view.order } });
+    setViewState({ key: linkKey(next), view: { ...defaultView(next), order: view.order } });
     const qs = next.toString();
     if (qs !== search.toString()) nav(`${window.location.pathname}${qs ? `?${qs}` : ""}`, { replace: true });
   };
@@ -338,11 +338,11 @@ export function People() {
       {/* Closing lists who is still in process, then shows the one closing message for them all (founder decision Q30). */}
       {closing && roleId ? <CloseRoleCard roleId={roleId} initialOutcome="filled_outside_platform" mayTell={mayTell} onClose={() => setClosing(false)} /> : null}
       {closingMessage && !closing && roleId && status === "closed" && mayTell ? <ClosingMessageCard roleId={roleId} onDone={() => setClosingMessage(false)} /> : null}
-      {roleId && (total > 0 || mode === "board") ? <SortStrip mode={mode} onMode={setMode} onSort={() => (mode === "board" ? board.refetch() : setMode("board"))} sorting={board.isFetching} generatedAt={board.data?.generatedAt ?? null} /> : null}
+      {roleId && (total > 0 || mode === "board") ? <ViewSwitch mode={mode} onMode={setMode} onRefresh={() => board.refetch()} refreshing={board.isFetching} generatedAt={board.data?.generatedAt ?? null} /> : null}
       {!roleId ? (
         jobListLoading ? <Skeleton lines={4} /> : <EmptyState icon="talent" title="No jobs yet" body="Open a job first; its candidates show here." action={<Link to="/" className="btn primary">Go to Home</Link>} />
       ) : mode === "board" ? (
-        board.isLoading ? <Skeleton lines={6} /> : board.error ? <ErrorState message="Could not sort the pool just now." onRetry={() => board.refetch()} /> : board.data ? (
+        board.isLoading ? <Skeleton lines={6} /> : board.error ? <ErrorState message="Could not load the board just now." onRetry={() => board.refetch()} /> : board.data ? (
           <PoolBoard roleId={roleId} board={board.data} only={only} onClearOnly={() => setOnlyFor(null)} onOpen={(id) => openPanel(id)} onReview={() => goTo(boardSearch(search, { review: true }))} onAsk={() => setAsking(true)} mayApply={mayApply} />
         ) : null
       ) : (
@@ -357,7 +357,7 @@ export function People() {
           </div>
           {/* The filters as pills, the search as a rounded field, Match and the order as dropdown pills on the right. */}
           <div className="flex flex-wrap items-center gap-2">
-            {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
+            {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
             {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false, cancelledReason: null, aiInterview: null })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
             {/* under Cancelled: what each person chose, or that they did not come (founder decision 2A) */}
             {/* under "No AI interview yet": where people stand with it (R20-7), never how far anyone got */}

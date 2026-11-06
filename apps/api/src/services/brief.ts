@@ -10,7 +10,7 @@ import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
 import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
-import { boardView, loadPool, shownLatestReadings } from "./pool";
+import { boardView, fitsOf, loadPool } from "./pool";
 import { aiInterviewsFor } from "./screens";
 import { backupsWarmCards } from "./hire-sheet";
 
@@ -359,14 +359,13 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   }
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
   const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review").length;
-  // Strong by each person's latest reading only (plan F5): an earlier Strong résumé reading a scorecard has since replaced
-  // does not count. A reading of a conversation the candidate never sent is never theirs to be counted by (9 October
-  // 2026): they count by the newest reading left, their résumé's, as the Talent list and the board show them.
-  const strongIds = new Set([...(await shownLatestReadings(tx, { companyId })).values()].filter((r) => r.overall === "strong").map((r) => r.applicationId));
-  const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(and(eq(applications.companyId, companyId), notLocked()))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
-  const companyMarks = await activeMarksFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
-  const companyFollowUps = await activeFollowUpsFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
-  const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && groupFor(a, companyMarks.get(a.id), now, companyFollowUps.get(a.id)) === "waiting_on_you").length;
+  // Strong in the same word the list shows beside their number (`fit`, 6 November 2026): worked out from both readings, never
+  // from one reading's stored word. A reading of a conversation the candidate never sent is never counted (9 October 2026).
+  const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage, packetVersion: applications.packetVersion, latestAssessmentId: applications.latestAssessmentId }).from(applications).where(and(eq(applications.companyId, companyId), notLocked()))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
+  const companyMarks = await activeMarksFor(tx, companyApps.map((a) => a.id));
+  const companyFollowUps = await activeFollowUpsFor(tx, companyApps.map((a) => a.id));
+  const waitingOnYou = companyApps.filter((a) => groupFor(a, companyMarks.get(a.id), now, companyFollowUps.get(a.id)) === "waiting_on_you");
+  const strongWaiting = [...(await fitsOf(tx, waitingOnYou)).values()].filter((fit) => fit === "strong").length;
   // A request to upgrade puts no hire at risk.
   const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.filter((e) => !isPlanRequest(e)).length;
   const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);

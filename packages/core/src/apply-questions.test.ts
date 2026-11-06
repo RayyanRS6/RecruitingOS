@@ -3,6 +3,7 @@ import { CANDIDATE_SCORE_OTHER_LABEL, ChatPlan, CompanyQuestions, DraftRolePacke
 import { answerSentence, applicationAnswerSentences } from "./answer-sentences";
 import { chatCounter, quickQuestionsOf, writtenQuestionsOf } from "./apply-questions";
 import { candidateScoreView } from "./candidate-score";
+import { matchScore } from "./match-score";
 import { teamScreenView, withoutCandidateWords } from "./screen-answers";
 
 /**
@@ -126,7 +127,7 @@ describe("the write-up is the candidate's words: hidden until Send, erased with 
 describe("the score a candidate sees", () => {
   const packet = { requirements: { mustHaves: [{ key: "licence", text: "An active CA RDH license", rationale: "PRIVATE-RATIONALE", evidencedBy: ["resume" as const] }, { key: "perio", text: "Periodontal charting", rationale: "r", evidencedBy: ["resume" as const] }, { key: "dentrix", text: "Dentrix", rationale: "r", evidencedBy: ["resume" as const] }], niceToHaves: [], eligibility: [] } };
   const score: MatchScore = {
-    score: 72, band: "high", bandLabel: "High",
+    score: 72, band: "high", bandLabel: "High", fit: "potential", openPoints: 30,
     coverage: { known: 4, total: 5, words: "Based on 4 of 5 requirements" },
     breakdown: [
       { key: "perio", label: "Periodontal charting", mustHave: true, importance: null, weightPct: 31, pctMet: 50, pointsLost: 15, finding: "Partly shown", source: "resume", quote: "perio", unquoted: false },
@@ -134,7 +135,7 @@ describe("the score a candidate sees", () => {
       { key: "licence", label: "An active CA RDH license", mustHave: true, importance: null, weightPct: 31, pctMet: 100, pointsLost: 0, finding: "Shown", source: "resume", quote: "RDH", unquoted: false },
       { key: "infection", label: "ANOTHER PRIVATE SKILL", mustHave: false, importance: "helpful", weightPct: 15, pctMet: 100, pointsLost: 0, finding: "Shown", source: "resume", quote: "y", unquoted: false },
     ],
-    unknown: [{ key: "dentrix", label: "Dentrix", mustHave: true, importance: null }, { key: "teamwork", label: "PRIVATE UNKNOWN", mustHave: false, importance: "important" }],
+    unknown: [{ key: "dentrix", label: "Dentrix", mustHave: true, importance: null, weightPct: 20, pointsLost: 20 }, { key: "teamwork", label: "PRIVATE UNKNOWN", mustHave: false, importance: "important", weightPct: 10, pointsLost: 10 }],
     fullMarks: 2, missingMustHave: [], capped: false, confidence: "medium", basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview", packetVersion: 1,
   };
 
@@ -145,15 +146,18 @@ describe("the score a candidate sees", () => {
       { key: "licence", label: "An active CA RDH license", pctMet: 100, tone: "strong", words: "Shown" },
       { key: "perio", label: "Periodontal charting", pctMet: 50, tone: "partial", words: "Partly shown" },
     ]);
-    // weighted as the score weighs them: (50 x 23 + 100 x 15) / 38
-    expect(view.other).toEqual({ key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: 70, tone: "partial", words: "70% shown" });
+    // weighted as the score weighs them, what nothing showed at nothing: (50 x 23 + 100 x 15 + 0 x 10) / 48
+    expect(view.other).toEqual({ key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: 55, tone: "partial", words: "55% shown" });
     expect(JSON.stringify(view)).not.toMatch(/PRIVATE/);
   });
 
-  it("is nothing without a number, and the folded line is left out when no other requirement was judged", () => {
+  it("is nothing without a number, and the folded line is left out only when the job has no other requirement", () => {
     expect(candidateScoreView(null, packet)).toBeNull();
     expect(candidateScoreView({ ...score, score: null, band: null, bandLabel: null }, packet)).toBeNull();
-    expect(candidateScoreView({ ...score, breakdown: score.breakdown.filter((c) => c.mustHave) }, packet)?.other).toBeNull();
+    const publicOnly = score.breakdown.filter((c) => c.mustHave);
+    expect(candidateScoreView({ ...score, breakdown: publicOnly, unknown: score.unknown.filter((u) => u.mustHave) }, packet)?.other).toBeNull();
+    // nothing shown of the rest yet: the line says so, rather than leaving the number unexplained
+    expect(candidateScoreView({ ...score, breakdown: publicOnly }, packet)?.other).toEqual({ key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: 0, tone: "short", words: "0% shown" });
     expect(candidateScoreView({ ...score, breakdown: [{ ...score.breakdown[0], pctMet: 0, finding: "Not met" }] }, packet)?.rows[0].tone).toBe("short");
   });
 
@@ -165,16 +169,24 @@ describe("the score a candidate sees", () => {
     }
   });
 
-  it("shows what the number counted for a partly shown requirement, so the bars and the number agree (review of Wave S7)", () => {
-    const counted = { ...score, breakdown: score.breakdown.map((c) => (c.key === "perio" ? { ...c, countedPct: 86 } : c.key === "chairside" ? { ...c, countedPct: 80 } : c)) };
-    const view = candidateScoreView(counted, packet)!;
-    expect(view.rows.find((r) => r.key === "perio")).toMatchObject({ pctMet: 86, tone: "strong", words: "Partly shown" });
-    // (80 x 23 + 100 x 15) / 38
-    expect(view.other?.pctMet).toBe(88);
-    // every bar weighted as the score weighs it adds up to the share the breakdown counted
-    const total = counted.breakdown.reduce((n, c) => n + (c.countedPct ?? c.pctMet) * c.weightPct, 0) / counted.breakdown.reduce((n, c) => n + c.weightPct, 0);
-    const fromBars = (view.rows.reduce((n, r) => n + r.pctMet * (counted.breakdown.find((c) => c.key === r.key)?.weightPct ?? 0), 0) + (view.other?.pctMet ?? 0) * 38) / 100;
-    expect(Math.abs(fromBars - total)).toBeLessThan(1);
+  it("counts what nothing showed at nothing in the folded line too, so the bars and the number agree (6 November 2026)", () => {
+    const role = { ...packet, competencies: [["chairside", 5], ["infection", 1], ["teamwork", 3]].map(([key, weight]) => ({ key, name: `PRIVATE ${key}`, definition: "d", weight, evaluatedIn: "both", indicators: ["x"] })) } as never;
+    const quoted = (quote: string) => ({ source: "resume" as const, quote });
+    const m = matchScore({ resume: { kind: "triage", result: { requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: quoted("RDH") }, { requirementKey: "perio", met: "partially", evidence: quoted("some") }], competencyFindings: [{ competencyKey: "chairside", finding: "partially_evidenced", evidence: quoted("assisted") }, { competencyKey: "infection", finding: "evidenced", evidence: quoted("sterile") }] } }, screen: null }, role)!;
+    // licence 4, perio 2 of 4, dentrix 0 of 4, chairside 1.5 of 3, teamwork 0 of 2, infection 1: 8.5 of 18
+    expect(m.score).toBe(47);
+    const view = candidateScoreView(m, role)!;
+    expect(view.rows).toEqual([
+      { key: "licence", label: "An active CA RDH license", pctMet: 100, tone: "strong", words: "Shown" },
+      { key: "perio", label: "Periodontal charting", pctMet: 50, tone: "partial", words: "Partly shown" },
+    ]);
+    expect(view.notYetShown).toEqual(["Dentrix"]);
+    // (50 x 17 + 100 x 6 + 0 x 11) / 34: never 100% beside a low number
+    expect(view.other).toMatchObject({ pctMet: 43, tone: "partial" });
+    // every bar weighted as the score weighs it, the must-have not shown at nothing, adds up to the number
+    const shareOf = (key: string) => m.breakdown.find((c) => c.key === key)?.weightPct ?? 0;
+    const fromBars = (view.rows.reduce((n, r) => n + r.pctMet * shareOf(r.key), 0) + view.other!.pctMet * 34) / 100;
+    expect(Math.abs(fromBars - m.score!)).toBeLessThan(2);
   });
 
   it("is shown unless ITS turned it off for the company", () => {

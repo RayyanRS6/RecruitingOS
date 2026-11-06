@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 /**
  * The pool board on the Talent page (plan F6-F10; founder decisions B2, B4, B5, B6) as the server first draws it, from
- * answers shaped like the API's: the "Sort the pool" strip and the Board / List switch, the board's header and counts,
+ * answers shaped like the API's: the Board / List switch and the board's Refresh, the board's header and counts,
  * the green summary with next steps naming people, three columns of cards, Review and apply with its groups, ticks,
  * reasons and private footer, the one-click questions panel, Today's pool card, and the board a recruiter is asked to
  * check.
@@ -36,7 +36,8 @@ const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfie
 function score(value: number, over: Record<string, unknown> = {}) {
   const band = value >= 85 ? "very_high" : value >= 70 ? "high" : value >= 55 ? "medium" : "low";
   // on the board's columns everyone's score counts the AI interview (R20-9); résumé-only scores wait in the lane
-  return { score: value, band, bandLabel: null, coverage: { known: 2, total: 2, words: "Based on 2 of 2 requirements" }, breakdown: [], unknown: [], fullMarks: 2, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview", packetVersion: 1, ...over };
+  const fit = over.missingMustHave ? "missing_must_have" : value >= 70 ? "strong" : value >= 55 ? "potential" : "weak";
+  return { score: value, band, bandLabel: null, fit, openPoints: 0, coverage: { known: 2, total: 2, words: "Based on 2 of 2 requirements" }, breakdown: [], unknown: [], fullMarks: 2, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview", packetVersion: 1, ...over };
 }
 function placed(column: string, over: Record<string, unknown> = {}) {
   return { column, state: "suggested", doneLabel: null, confident: true, needsYourEye: null, reason: "Match score 91: every requirement judged so far is met.", nextStep: { kind: "interview", label: "Interview", reason: "Strong evidence on every must-have." }, suggestedAction: column, declineReason: null, ...over };
@@ -80,24 +81,35 @@ function client() {
 }
 
 describe("the pool board on the Candidates page", () => {
-  it("offers to sort the pool from the list with its button and the Board / List switch; what it does and that nothing is sent is the button's title", () => {
+  it("goes from the list to the board by the Board / List switch alone: no button says Sort, and the one control that does sorts", () => {
     nav.search = "";
     const html = render(client(), createElement(People));
     const words = text(html);
-    // the switch and the button (Wave S1); no sentence in the bar (founder, 23 Oct 2026): it is the button's title
-    expect(html).toMatch(/<section class="sort-strip[^"]*" aria-label="Sort the pool">/);
-    expect(words).toContain("Board List Sort the pool");
+    // the owner, 6 Nov 2026: two controls said "Sort", and the big one only opened the board, which this switch already does
+    expect(html).toMatch(/<section class="sort-strip[^"]*" aria-label="Board or list">/);
+    expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">List<\/button>/);
+    expect(html).toMatch(/<button type="button"( class="")? aria-pressed="false">Board<\/button>/);
+    expect(words).toContain("Board List");
+    expect(words).not.toContain("Sort the pool");
+    expect(words).not.toContain("Sort again");
+    expect(words).not.toContain("Refresh");
+    expect(html).not.toMatch(/<button type="button" class="btn [^"]*"[^>]*>[^<]*Sort/);
+    // no sentence in the bar (founder, 23 Oct 2026)
     expect(words).not.toContain("Groups everyone who finished applying");
-    expect(html).toMatch(/<button type="button" class="btn primary" title="Groups everyone who finished applying, with a reason for each\. Nothing moves until you apply it, and nothing is sent to anyone\.">.*Sort the pool<\/button>/);
+    expect(html).toContain('aria-expanded="false">Sort: Score<svg');
   });
 
   it("draws the board: header, counts, the summary with next steps naming people, three columns and the cards", () => {
     nav.search = "view=board";
     const html = render(client(), createElement(People));
     const words = text(html);
-    // the switch shows the board; the bar says when it was sorted, the rest of the sentence (nothing moves until applied) on hover
+    // the switch shows the board; the bar says when it was worked out and offers to do it again under the plain word Refresh;
+    // what it does and that nothing moves or is sent is that button's title, the rest of the sentence on hover of the time
     expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">Board<\/button>/);
-    expect(words).toMatch(/Board List Sorted at \d{1,2}:\d{2}\s?(AM|PM) Sort again/);
+    expect(words).toMatch(/Board List Sorted at \d{1,2}:\d{2}\s?(AM|PM) Refresh/);
+    expect(words).not.toContain("Sort again");
+    expect(words).not.toContain("Sort the pool");
+    expect(html).toMatch(/<button type="button" class="btn secondary" title="Groups everyone who finished applying, with a reason for each\. Nothing moves until you apply it, and nothing is sent to anyone\."( aria-busy="false")?>.*Refresh<\/button>/);
     expect(words).not.toContain("by fixed rules");
     expect(html).toMatch(/title="Sorted at \d{1,2}:\d{2}\s?(AM|PM) by fixed rules from the checked evidence\. Nothing moves until you apply it, and nothing is sent to anyone\.">Sorted at /);
     // the header: the counts are the board's heading ("Board" to a screen reader), never the job's title again (the page's
@@ -118,13 +130,14 @@ describe("the pool board on the Candidates page", () => {
     // three columns with their counts; what puts someone in each is its heading's title, not a line under it (23 Oct 2026)
     expect(html).toMatch(/<h3 id="board-col-shortlist" class="[^"]*" title="Good evidence on the must-haves">Shortlist(<!-- -->)? <span[^>]*>2<\/span><\/h3>/);
     expect(html).toMatch(/<h3 id="board-col-longlist" class="[^"]*" title="Some evidence, or more to find out">Longlist(<!-- -->)? <span[^>]*>1<\/span><\/h3>/);
-    expect(html).toMatch(/<h3 id="board-col-not_moving_forward" class="[^"]*" title="A must-have shown missing, or a low score on what is known">Not moving forward(<!-- -->)? <span[^>]*>1<\/span><\/h3>/);
+    expect(html).toMatch(/<h3 id="board-col-not_moving_forward" class="[^"]*" title="A must-have shown missing, or a low score with nothing left to find out">Not moving forward(<!-- -->)? <span[^>]*>1<\/span><\/h3>/);
     expect(words).toContain("Shortlist 2 MR Maria Reyes");
     expect(words).not.toContain("Good evidence on the must-haves");
-    // Maria: initials, name, band and score, Ready to apply and the confidence apart, the reason, the facts, two strengths and the gap with sources, the next step
+    // Maria: initials, name, the one verdict word and score, Ready to apply and the confidence apart, the reason, the facts, two strengths and the gap with sources, the next step
     expect(html).toContain('<span class="avatar" aria-hidden="true">MR</span>');
     expect(html).toContain('class="board-card-name">Maria Reyes</button>');
-    expect(words).toContain("Match score 91 out of 100 (very high) Very high · 91");
+    expect(words).toContain("Match score 91 out of 100 (strong match) Strong match · 91");
+    expect(words).not.toContain("Very high");
     expect(html).toContain('<span class="chip neutral">Ready to apply</span>');
     expect(html).toContain('<span class="chip neutral">High confidence</span>');
     expect(html).not.toContain('<span class="chip good">');

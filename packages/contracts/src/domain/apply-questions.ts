@@ -237,9 +237,9 @@ export type CandidateScoreRow = { key: string; label: string; pctMet: number; to
 /**
  * The match score as the candidate sees it after sending (founder decision S7-1): the existing match score
  * (core/match-score.ts) and its breakdown, never a new scoring. Only the job page's own must-haves are named; every
- * other requirement the score counted (the skills the team looks for, which are not on the job page) is folded into
- * one line, `other`. A must-have nothing showed either way is listed as not shown yet: missing information is never
- * held against anyone. `basis` (R20-9): whether their AI interview is in the number (`CANDIDATE_SCORE_BASIS`).
+ * other requirement the score counts (the skills the team looks for, which are not on the job page) is folded into
+ * one line, `other`. A must-have nothing showed either way is listed as not shown yet: it earns no points yet and is never
+ * read as a no. `basis` (R20-9): whether their AI interview is in the number (`CANDIDATE_SCORE_BASIS`).
  */
 export type CandidateScoreView = {
   score: number;

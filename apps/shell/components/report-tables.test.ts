@@ -119,7 +119,7 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html).toContain('<td>What pay are you looking for?</td><td class="num">3</td>');
     // the fairness rule and the no-names assurance stay on the card, as on the must-haves card; what "typical" means is
     // in the Report tab's disclosure (fewer words, 23 Oct 2026)
-    expect(html).toContain("Choosing a person or not answering a question is never held against anyone. Counts only; nobody is named here.");
+    expect(html).toContain("Choosing a person or not answering a question is never read as a no. Counts only; nobody is named here.");
     expect(html).not.toContain("is the middle value");
     // the old inline 28px figure is gone: the look comes from the stylesheet
     expect(html).not.toContain("font-size:28px");
@@ -208,6 +208,16 @@ describe("tables elsewhere on a role", () => {
     expect(html).toContain('<th scope="col">Maria Reyes</th>');
     expect(html).not.toContain("th-sort");
     expect(html).not.toContain('role="status"');
+  });
+
+  it("gives each person one verdict word on Compare: the word beside their number, never a reading's stored word lower down (6 November 2026)", () => {
+    const score = { score: 62, band: "medium", bandLabel: "Medium", fit: "potential", openPoints: 0, coverage: { known: 2, total: 2, words: "Based on all 2 requirements" }, breakdown: [], unknown: [], fullMarks: 0, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview", packetVersion: 1 };
+    const person = { applicationId: "a1", name: "Maria Reyes", stage: "triaged", stageLabel: "Ready", group: "waiting_on_you", mustHaves: {}, competencies: {}, screen: null, resume: { overall: "strong", confidence: "high", summary: "s" }, unknownCount: 0, open: "/roles/r1/talent?open=a1", score, notes: [] };
+    const data = { role: { id: "r1", title: "Dental Hygienist" }, mustHaves: [], competencies: [], max: 5, reminder: "People decide.", candidates: [person] };
+    const html = render(client(), createElement(CompareTable, { data: data as never }));
+    expect(html).toContain("Potential match");
+    expect(html).not.toContain("Strong match");
+    expect(html).not.toContain("Medium");
   });
 
   it("right-aligns the visits of each tracked link and the counts of applications by source", () => {
