@@ -3,12 +3,13 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
 import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
 import { CANDIDATE_WROTE_BACK, CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileNoDateLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
-import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, interviews, jobs, lowercaseToken, notifications, plans, policies, postings, randomToken, recruiterEscalations, roles, rowsOf, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, interviews, jobs, lowercaseToken, notifications, plans, policies, postings, randomToken, recruiterEscalations, roles, rowsOf, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider, type MemoryStorageAdapter } from "@ros/integrations";
 import { DISCARD_OBJECT_JOB_KIND, UNLOCK_INTERVIEW_DAYS, discardUnusedObject, startInterviewAgain, unlockApplicants } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { RESUME_READ_NOTICE } from "./pages/apply-form";
+import { createApplication } from "./services/applications";
 import { RESUME_READING_KEEP_MS } from "./services/apply-details";
 import { followApply, signInAdmin, signInStaff, usePlan } from "./test-helpers";
 
@@ -1429,6 +1430,86 @@ describe("locked candidates", () => {
     });
   });
 
+  describe("a file received with the application, and the job's lock", () => {
+    /** Applies by the path of the no-script form and of an emailed application: the bytes arrive with the submission. */
+    const bytesFrom = (job: Job, p: Person) => ({ companyId: job.id, roleId: job.roleId, source: "careers_page", firstName: p.first, lastName: p.last, email: p.email, phone: null, smsConsent: false, consentSource: "careers_page_apply", noticeVersionsShown: ["privacy@2026-09-01"], eligibilityAnswers: {}, resume: { kind: "bytes" as const, filename: "cv.txt", mime: "text/plain", bytes: new TextEncoder().encode(`${p.first} ${p.last}\nRegistered Dental Hygienist at Coastal Dental 2019 - present\nRDH license active`), via: "server" as const } });
+    const isJobLock = (statement: unknown) => (statement as { queryChunks?: Array<{ value?: unknown }> }).queryChunks?.some((c) => Array.isArray(c.value) && c.value.join("").includes("pg_advisory_xact_lock")) ?? false;
+    /** What happens around the job's lock, in order, with `atLock` running at the moment it is asked for. */
+    const watch = async <T>(run: (spied: { tx: (q: Tx) => Tx }) => Promise<T>, atLock: (q: Tx) => Promise<void> = async () => {}) => {
+      const order: string[] = [];
+      const stored: string[] = [];
+      const removed: string[] = [];
+      const storage = container.integrations.storage;
+      const { put, delete: del } = storage;
+      storage.put = async (...args: Parameters<typeof put>) => { order.push("stored"); stored.push(args[0]); return put.apply(storage, args); };
+      storage.delete = async (...args: Parameters<typeof del>) => { removed.push(args[0]); return del.apply(storage, args); };
+      const tx = (q: Tx) => new Proxy(q, {
+        get(target, prop) {
+          if (prop !== "execute") return Reflect.get(target, prop);
+          return async (statement: Parameters<Tx["execute"]>[0]) => {
+            if (isJobLock(statement)) {
+              order.push("lock");
+              await atLock(target);
+            }
+            return target.execute(statement);
+          };
+        },
+      });
+      try {
+        return { result: await run({ tx }).catch((err: Error) => err), order, stored, removed };
+      } finally {
+        storage.put = put;
+        storage.delete = del;
+      }
+    };
+
+    it("goes to storage before the job's lock, so a slow write never holds up everyone applying to the job", async () => {
+      const job = await openJob();
+      const p = person("Ona");
+      const seen = await watch(({ tx }) => withTenant(container.db, job.id, (q) => createApplication(tx(q), container, bytesFrom(job, p), { kind: "candidate", id: "applicant" })));
+      expect(seen.order).toEqual(["stored", "lock"]);
+      const row = await rowOf(job, p);
+      const [doc] = await container.db.select().from(documents).where(eq(documents.applicationId, row.id));
+      expect(doc.storageKey).toBe(seen.stored[0]);
+      expect(seen.removed).toEqual([]);
+      await container.drain();
+    });
+
+    it("is removed when the job's lock times out, and nothing else is left: the person is not on the job, and can send it again", async () => {
+      const job = await openJob();
+      const p = person("Pax");
+      const seen = await watch(
+        ({ tx }) => withTenant(container.db, job.id, (q) => createApplication(tx(q), container, bytesFrom(job, p), { kind: "candidate", id: "applicant" })),
+        async () => { throw Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" }); },
+      );
+      expect((seen.result as Error).message).toContain("lock timeout");
+      expect(seen.stored).toHaveLength(1);
+      expect(seen.removed).toEqual(seen.stored);
+      expect(await container.db.select().from(candidates).where(and(eq(candidates.companyId, job.id), eq(candidates.email, p.email)))).toEqual([]);
+      // sent again, it goes
+      expect((await apply(job, p)).lockedAt).toBeNull();
+    });
+
+    it("is removed when a double press finds the other's application behind the lock, as a repeat's file is", async () => {
+      const job = await openJob();
+      const p = person("Quo");
+      const [{ packetVersion }] = await fill(job, 1);
+      // the other press got there first: its row appears only once this one holds the job's lock
+      const seen = await watch(
+        ({ tx }) => withTenant(container.db, job.id, (q) => createApplication(tx(q), container, bytesFrom(job, p), { kind: "candidate", id: "applicant" })),
+        async (q) => {
+          const [cand] = await q.select({ id: candidates.id }).from(candidates).where(and(eq(candidates.companyId, job.id), eq(candidates.email, p.email)));
+          await q.insert(applications).values({ companyId: job.id, roleId: job.roleId, candidateId: cand.id, packetVersion, source: "careers_page", stage: "applied", answers: {}, statusToken: randomToken(24), replyToken: lowercaseToken(16) });
+        },
+      );
+      const { duplicate, application } = seen.result as { duplicate: boolean; application: { id: string } };
+      expect(duplicate).toBe(true);
+      expect(seen.stored).toHaveLength(1);
+      expect(seen.removed).toEqual(seen.stored);
+      expect(await container.db.select().from(documents).where(eq(documents.applicationId, application.id))).toEqual([]);
+    });
+  });
+
   describe("a change of plan", () => {
     it("takes the lock of every job, also one with nobody locked yet, so the first person past the limit never stays locked under a plan with room", async () => {
       // A Free job with exactly its 5, and a second job nobody applied to. Number 6 is being decided at this very moment, on Free's old limit.
@@ -1458,7 +1539,7 @@ describe("locked candidates", () => {
             };
           },
         });
-        const opened = await unlockApplicants(watched, container.engine, { companyId: company.id, planKey: "basic", actor: { kind: "system", id: "test" }, reason: "They asked to upgrade.", now: new Date() });
+        const opened = await unlockApplicants(watched, container.engine, { companyId: company.id, planKey: "basic", limit: 25, actor: { kind: "system", id: "test" }, reason: "They asked to upgrade.", now: new Date() });
         // Behind each job's lock, in the same transaction: both jobs' locks are held until it commits, so an applicant can only wait and read the new limit.
         const keys = rowsOf<{ a: string; b: string }>(await tx.execute(sql`select (hashtext(${`applicants:${job.roleId}`})::bigint & 4294967295)::text as a, (hashtext(${`applicants:${empty.roleId}`})::bigint & 4294967295)::text as b`))[0];
         const held = rowsOf<{ objid: string }>(await tx.execute(sql`select objid::text as objid from pg_locks where locktype = 'advisory' and granted`)).map((r) => r.objid);        return { opened, keys, held };
@@ -1471,6 +1552,29 @@ describe("locked candidates", () => {
       await container.drain();
       const seven = await apply(job, person("Sev"));
       expect(seven.lockedAt).toBeNull();
+    });
+
+    it("writes the plan's rows after it opens people, so the company's AI calls are not held up behind them; those opened follow the new plan", async () => {
+      const job = await openJob();
+      await fill(job, 5);
+      const six = await apply(job, person("Sid"));
+      expect(six.lockedAt).not.toBeNull();
+      const limitIn = async (q: Parameters<typeof withTenant>[2] extends (tx: infer T) => unknown ? T : never) => (await q.select({ limit: entitlements.limit }).from(entitlements).where(and(eq(entitlements.companyId, job.id), eq(entitlements.key, "candidates_per_job"))))[0].limit;
+      const start = container.engine.start;
+      const seen: Array<number | null> = [];
+      container.engine.start = async (q, input) => {
+        if (input.idempotencyKey?.endsWith(":unlocked")) seen.push(await limitIn(q as Parameters<typeof limitIn>[0]));
+        return start.call(container.engine, q, input);
+      };
+      try {
+        expect((await changePlan(job.id, "basic")).unlocked).toBe(1);
+      } finally {
+        container.engine.start = start;
+      }
+      // while this person was opened the rows still said Free's 5, in the very transaction opening them; once it committed they say Basic's 25
+      expect(seen).toEqual([5]);
+      expect(await withPlatform(container.db, limitIn)).toBe(25);
+      expect((await applicationOf(six.id)).lockedAt).toBeNull();
     });
 
     it("a move down locks nobody who could be read, and new arrivals follow the new limit", async () => {

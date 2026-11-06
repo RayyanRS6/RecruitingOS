@@ -5,7 +5,7 @@ import { z } from "zod";
 import { creditHoldUsd, estimateCostUsd } from "./pricing";
 import type { PromptDef } from "./prompts/registry";
 import { AnthropicProvider } from "./providers/anthropic";
-import { API_ROUTE_LIMIT_MS, callPrompt, routeDeadline, runPromptDetached, type AiCreditGate, type AiRunValues, type AiRuntime } from "./runner";
+import { AI_CREDIT_BUSY, API_ROUTE_LIMIT_MS, callPrompt, routeDeadline, runPromptDetached, type AiCreditGate, type AiRunValues, type AiRuntime } from "./runner";
 import type { AiProvider, StructuredRequest, StructuredResult } from "./types";
 
 /**
@@ -156,6 +156,20 @@ describe("what a failed call settles at", () => {
   };
   const hold = creditHoldUsd(HAIKU, { promptChars: "You draft roles.Draft it.".length });
   const connectionError = () => new Anthropic.APIConnectionError({ message: undefined });
+
+  it("a hold that timed out on the lock is an ordinary failed call, with nothing to settle; any other error goes on up", async () => {
+    const provider: AiProvider = { id: "never", structured: async () => { throw new Error("the model was asked"); } };
+    const asked = (error: unknown) => runPromptDetached({} as Db, { provider, models: { judgment: HAIKU, standard: HAIKU, fast: HAIKU }, credit: { hold: async () => { throw error; }, settle: async () => { throw new Error("settled"); } } }, turn, null, { companyId: "c1" });
+    // however the driver and the query builder wrap it
+    for (const error of [Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" }), Object.assign(new Error("Failed query"), { cause: { code: "55P03" } })]) {
+      const out = await asked(error);
+      expect(out).toMatchObject({ ok: false, reason: "error", error: AI_CREDIT_BUSY });
+      // not an outage to the engine, which goes by this word
+      expect(out.ok === false && out.error.startsWith("provider")).toBe(false);
+    }
+    await expect(asked(new Error("boom"))).rejects.toThrow("boom");
+    await expect(asked(Object.assign(new Error("deadlock detected"), { code: "40P01" }))).rejects.toThrow("deadlock");
+  });
 
   it("the hold really is about 1.6 cents, so the money below is real", () => {
     expect(hold).toBeGreaterThan(0.015);

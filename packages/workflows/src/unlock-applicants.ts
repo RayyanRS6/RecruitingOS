@@ -1,7 +1,7 @@
 import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import { CLOSE_OUT_TEMPLATE } from "@ros/agents";
 import type { Actor } from "@ros/contracts";
-import { audit, emit, entitlements, evaluateEligibility, lockApplicants, lockedAndWaiting, transition } from "@ros/core";
+import { audit, emit, evaluateEligibility, lockApplicants, lockedAndWaiting, transition } from "@ros/core";
 import { applications, communications, rolePackets, roles, workflowRuns, type Tx } from "@ros/db";
 import type { WorkflowEngine } from "./engine";
 import { intakeOn } from "./with-application";
@@ -28,12 +28,12 @@ const CLOSE_OUT_LEFT = ["sending", "sent", "delivered", "opened", "clicked", "un
  * Runs in the transaction that changed the plan, behind each job's lock, so an application being decided at this moment takes
  * its place before this or under the new limit after it. Every job of the company, in id order, also one with nobody locked
  * yet: the first person past the limit may be being decided right now, on the old limit, in a transaction nothing here can
- * see. Behind the lock they have either committed, and are read and opened, or they wait, and read the new limit. Returns how
- * many were opened, and how many of them go on to the interview by themselves.
+ * see. Behind the lock they have either committed, and are read and opened, or they wait, and read the new limit. `limit` is
+ * the new plan's own: the caller writes the plan's rows after this (POST /admin/customers/:id/plan). Returns how many were
+ * opened, and how many of them go on to the interview by themselves.
  */
-export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; planKey: string; actor: Actor; reason: string; now: Date }): Promise<{ unlocked: number; interviews: number }> {
-  const { companyId, planKey, actor, now } = input;
-  const limit = await entitlements.limitOf(q, companyId, entitlements.CANDIDATES_PER_JOB);
+export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; planKey: string; limit: number | null; actor: Actor; reason: string; now: Date }): Promise<{ unlocked: number; interviews: number }> {
+  const { companyId, planKey, limit, actor, now } = input;
   const jobs = await q.select({ roleId: roles.id }).from(roles).where(eq(roles.companyId, companyId)).orderBy(asc(roles.id));
   let unlocked = 0;
   let interviews = 0;

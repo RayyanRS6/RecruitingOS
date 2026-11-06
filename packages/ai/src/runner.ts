@@ -1,4 +1,4 @@
-import { aiRuns, uuidv7, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
+import { aiRuns, isLockTimeout, uuidv7, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { creditHoldUsd, estimateCostUsd } from "./pricing";
 import { promptHash, type PromptDef } from "./prompts/registry";
 import { ALLOWED_MODELS, TASK_TIER, effortForTask, effortsFromEnv, isAllowedModel, modelForTask, modelTableFromEnv, type Effort, type ModelTable } from "./routing";
@@ -43,6 +43,8 @@ export type RunOutcome<T> =
 
 /** Why a call was not made when the company's AI credit has no room for it (`RunOutcome`). */
 export const AI_CREDIT_USED_UP = "AI credit used up";
+/** Why a call was not made when the credit's row could not be read in time. Never starts with "provider": this is no outage. */
+export const AI_CREDIT_BUSY = "the AI credit could not be read in time, so the model was not asked";
 
 /** Whether the model was not asked because the company's AI credit has no room: not a failure of any kind. */
 export function outOfCredit<T>(out: RunOutcome<T>): out is Extract<RunOutcome<T>, { ok: false }> & { reason: "no_credit"; refusedHoldUsd: number } {
@@ -193,11 +195,19 @@ export async function runPromptsDetached<TInput, TOutput>(db: Db, rt: AiRuntime,
   const runIds = metas.map(() => uuidv7());
   const hash = promptHash(system);
   const holdUsd = holds.reduce((sum, hold) => sum + hold, 0);
-  const verdict = await gate.hold(db, {
-    companyId,
-    holdUsd,
-    runs: metas.map((meta, i) => ({ id: runIds[i], ...runIdentity(rt, prompt, meta, model, hash), inputRef: meta.inputRef ?? {}, costUsd: String(holds[i]), status: "running" })),
-  });
+  let verdict: Awaited<ReturnType<AiCreditGate["hold"]>>;
+  try {
+    verdict = await gate.hold(db, {
+      companyId,
+      holdUsd,
+      runs: metas.map((meta, i) => ({ id: runIds[i], ...runIdentity(rt, prompt, meta, model, hash), inputRef: meta.inputRef ?? {}, costUsd: String(holds[i]), status: "running" })),
+    });
+  } catch (err) {
+    // The credit's row stayed locked past the lock timeout: the model was not asked, and nothing was written. An ordinary failed
+    // call, so each caller has its own way on (a chat's "send that again"), and not a word that any credit is gone.
+    if (!isLockTimeout(err)) throw err;
+    return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "error", error: AI_CREDIT_BUSY }));
+  }
   if (verdict === "unmetered") return Promise.all(metas.map((meta) => callThenRecord(db, rt, prompt, input, meta)));
   if (verdict === "refused") return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "no_credit", error: AI_CREDIT_USED_UP, refusedHoldUsd: holdUsd }));
   return Promise.all(

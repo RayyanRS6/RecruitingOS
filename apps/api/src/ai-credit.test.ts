@@ -1140,6 +1140,42 @@ describe("the AI credit", () => {
       await noFalseAlarm(job.id, [a.id]);
     });
 
+    it("a turn that cannot read the credit in time says to send that again on the page it is on, never a raw error, and then goes on; a repeat's chat too", async () => {
+      const job = await openJob();
+      const p = { first: "Tess", last: "Abel", email: "tess@ai-credit.test" };
+      const a = await apply(job, p);
+      const ref = await interviewOf(a.id);
+      await conversationStart(container, ref);
+      const gate = container.ai.credit!;
+      const hold = gate.hold;
+      // as the driver and the query builder report it, 15 seconds behind a long Change plan
+      const timedOut = () => Object.assign(new Error("Failed query"), { cause: Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" }) });
+      gate.hold = async () => { throw timedOut(); };
+      try {
+        const posted = await app.request(`/c/screen/${ref.token}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ message: ANSWER }).toString() });
+        expect(posted.status).toBe(302);
+        const location = posted.headers.get("location")!;
+        expect(location).toContain("error=trouble");
+        const page = (await (await app.request(location)).text()).replace(/&#39;/g, "'").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<script[\s\S]*?<\/script>/g, " ");
+        expect(page).toContain("Something went wrong on our end. Please send that again in a minute.");
+        expect(page).not.toMatch(/\bplan\b|credit|upgrade|lock timeout/i);
+        // no outage, no alert and nothing about money
+        expect(await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, AI_OUTAGE_ALERT_KIND))).toEqual([]);
+        expect(await creditNotes(job.id)).toEqual([]);
+
+        // the same on a repeat submission's chat
+        const res = await postApplication(job, p);
+        const { token } = await followApply(app, res, container);
+        const detached = (await findConversation(container.db, token!))!;
+        await conversationStart(container, detached);
+        expect(await conversationTurn(container, detached, { message: ANSWER })).toMatchObject({ kind: "error", message: "Sorry, something went wrong on our end. Please send that again in a minute." });
+      } finally {
+        gate.hold = hold;
+      }
+      // sent again, it goes on
+      expect((await conversationTurn(container, ref, { message: ANSWER })).kind).toBe("reply");
+    });
+
     it("a skip and HUMAN work as ever: neither needs the model", async () => {
       const job = await openJob();
       await spend(job.id, "9.950000");

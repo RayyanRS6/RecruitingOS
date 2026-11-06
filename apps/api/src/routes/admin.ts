@@ -637,17 +637,20 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     if (!co) throw new HttpError(404, "not_found", "Company not found.");
     // Accept lets a person in on the Free plan; a plan is chosen once they are in.
     await refuseWhileAccessOpen(tx, companyId);
-    const [plan] = await tx.select({ key: plans.key, name: plans.name, active: plans.active }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
+    const [plan] = await tx.select({ key: plans.key, name: plans.name, active: plans.active, limits: plans.limits }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
     if (!plan) throw new HttpError(400, "unknown_plan", `There is no plan called ${body.planKey}.`);
     // a retired plan (hidden from GET /admin/plans) is not offered by the API either
     if (plan.active === false) throw new HttpError(400, "inactive_plan", `The ${body.planKey} plan is retired and can no longer be given to a customer.`);
     const [fromPlan] = await tx.select({ name: plans.name }).from(plans).where(eq(plans.key, co.planKey)).limit(1);
     // Who posts on the boards before the change: the plan decides that too (Rule 6), read against what it decides after.
     const postedBy = await whoPostsBoards(tx, companyId, co.settings);
+    // People a smaller plan left locked open now, oldest first, up to the new limit. A move down opens nobody and locks nobody.
+    // Before the plan's rows are written, because opening many takes a while and every AI call of this company waits on those
+    // rows: until they are written its calls go on under the old plan, and they wait only for the short rest of this transaction.
+    const limit = entitlements.CANDIDATES_PER_JOB in plan.limits ? plan.limits[entitlements.CANDIDATES_PER_JOB] : await entitlements.limitOf(tx, companyId, entitlements.CANDIDATES_PER_JOB);
+    const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, limit, actor, reason, now: clock });
     await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
     await entitlements.settleAllowanceAlerts(tx, { companyId });
-    // People a smaller plan left locked open now, oldest first, up to the new limit. A move down opens nobody and locks nobody.
-    const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, actor, reason, now: clock });
     const pilot = body.planKey === "design_partner"
       ? { startedAt: co.settings.pilot?.startedAt ?? now.toISOString(), endsAt: co.settings.pilot?.endsAt ?? new Date(now.getTime() + (body.pilotDays ?? 90) * 86_400_000).toISOString(), ...(body.extendUntil ? { extendedUntil: body.extendUntil } : {}) }
       : co.settings.pilot;
