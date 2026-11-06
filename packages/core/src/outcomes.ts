@@ -161,6 +161,8 @@ export async function correctOutcome(
   if (!allowed.includes(newOutcome)) throw new OutcomeError("bad_outcome", `"${newOutcome}" is not a ${applicationLevel ? "candidate" : "role"} outcome.`);
   if (newOutcome === "hired_externally" && !input.hireDate && !original.hireDate) throw new OutcomeError("hire_date_required", "A corrected hire needs the hire date.");
   if (!applicationLevel && original.roleId && newOutcome === "voided") {
+    // The job's lock first, then the plan's row, in the order a change of plan takes them, so the two never wait for each other.
+    await lockApplicants(q, original.roleId);
     await q.select({ id: entitlements.id }).from(entitlements).where(and(eq(entitlements.companyId, original.companyId), eq(entitlements.key, ACTIVE_ROLES))).for("update");
     const room = await roleRoom(q, original.companyId, { except: original.roleId });
     if (!room.ok) throw new OutcomeError("no_room_on_plan", "Reopening this job needs a place on the company's plan, and none is free. Change the plan first, then void this outcome.");
