@@ -267,7 +267,9 @@ async function holdInboundEmail(container: Container, input: { inbound: InboundR
  * accepting switch reopens and after a resume; a no-op while either gate is still shut, so both callers are safe. Each
  * email runs on its own so one bad one does not stop the rest; the outcome lands on its inbound row exactly as a live
  * email's would (matched with the application id, or error with the reason), the parked résumé leaves storage, and the
- * team's held notice is updated to say what happened. Never rejects anyone.
+ * team's held notice is updated to say what happened. Never rejects anyone. Anyone among them past the plan's candidates per
+ * job (Rule 3) is not on the role's list for the team to read, so the notice counts only who is: of the rest it says that more
+ * applied, as `settleHeldEmailsOnClose` does.
  */
 export async function replayHeldEmails(container: Container, input: { companyId: string; roleId: string }): Promise<{ replayed: number; failed: number }> {
   const { companyId, roleId } = input;
@@ -280,14 +282,15 @@ export async function replayHeldEmails(container: Container, input: { companyId:
     return { role, held: await heldEmailsFor(tx, container, companyId, roleId) };
   });
   if (!found?.held.length) return { replayed: 0, failed: 0 };
-  const { replayed, failed } = await admitHeldEmails(container, { companyId, roleId, held: found.held });
+  const { replayed, failed, locked } = await admitHeldEmails(container, { companyId, roleId, held: found.held });
+  const kept = replayed - locked;
   await withTenant(container.db, companyId, async (tx) => {
     const unread = await unreadHeldNotices(tx, companyId, roleId);
     if (!unread.length) return;
-    const one = replayed === 1;
-    const added = replayed ? `Applications for ${found.role.title} are open again, so the ${one ? "application" : `${replayed} applications`} that arrived by email while they were closed ${one ? "has" : "have"} been added to the role's applications.` : `Applications for ${found.role.title} are open again.`;
+    const one = kept === 1;
+    const added = kept ? `Applications for ${found.role.title} are open again, so the ${one ? "application" : `${kept} applications`} that arrived by email while they were closed ${one ? "has" : "have"} been added to the role's applications.${locked ? ` ${MORE_CANDIDATES_LINE}` : ""}` : locked ? MORE_CANDIDATES_LINE : `Applications for ${found.role.title} are open again.`;
     const trouble = failed ? ` ${failed === 1 ? "One email" : `${failed} emails`} could not be read as an application and ${failed === 1 ? "is" : "are"} kept for a person to look at.` : "";
-    await tx.update(notifications).set({ title: replayed ? `${one ? "A held email application was" : `${replayed} held email applications were`} added to ${found.role.title}` : `Held email applications for ${found.role.title} need a look`, body: added + trouble }).where(inArray(notifications.id, unread));
+    await tx.update(notifications).set({ title: kept ? `${one ? "A held email application was" : `${kept} held email applications were`} added to ${found.role.title}` : locked ? moreAppliedTitle(found.role.title) : `Held email applications for ${found.role.title} need a look`, body: added + trouble }).where(inArray(notifications.id, unread));
   });
   await container.kick();
   return { replayed, failed };

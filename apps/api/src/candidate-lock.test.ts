@@ -920,6 +920,49 @@ describe("the team cannot read a locked person", () => {
     expect(again.status).toBe(409);
   }, 120_000);
 
+  it("held emails let in when a job resumes: the notice counts only who the team can read, and says of the rest that more applied", async () => {
+    const heldNotices = (companyId: string) => container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "application.email_held")));
+    const hold = async (j: Job, mark: string, names: string[]) => {
+      const [emailIn] = await container.db.select().from(postings).where(and(eq(postings.roleId, j.roleId), eq(postings.channel, "email_in")));
+      expect((await json(j.cookie, "POST", `/api/v1/roles/${j.roleId}/pause`, {})).status).toBe(200);
+      for (const n of names) expect(await read(await inbound({ From: `${n}@people.test`, FromName: `${n} Sender`, To: `apply-${emailIn.intakeToken}@${container.integrations.env.intakeDomain}`, Subject: `${n} applying`, TextBody: "Please consider me.", Attachments: [], MessageID: `${mark}-${n}` }))).toMatchObject({ matched: true, held: true });
+      const resumed = await json(j.cookie, "POST", `/api/v1/roles/${j.roleId}/resume`, {});
+      expect(resumed.status, await resumed.clone().text()).toBe(200);
+      await container.drain();
+    };
+
+    // Everyone past the limit: nobody was added to anything the team can read.
+    const full = await newCompany();
+    await setLimit(full.id, 1);
+    const allLocked = await openRole(full);
+    await apply(allLocked, { first: "Una", last: "Visible", email: "una.replayed@people.test" });
+    await hold(allLocked, "replay-all", ["zqreplaya", "zqreplayb"]);
+    const [all] = await heldNotices(full.id);
+    expect(all).toMatchObject({ title: `More people applied to ${allLocked.title}.`, body: MORE_CANDIDATES_LINE });
+    expect(`${all.title} ${all.body}`).not.toMatch(/\badded\b|\b2\b/);
+
+    // One within the limit and one past it: the notice counts the one, and says more applied.
+    const some = await newCompany();
+    await setLimit(some.id, 2);
+    const oneRoom = await openRole(some);
+    await apply(oneRoom, { first: "Vic", last: "Visible", email: "vic.replayed@people.test" });
+    await hold(oneRoom, "replay-some", ["zqreplayc", "zqreplayd"]);
+    const [mixed] = await heldNotices(some.id);
+    expect(mixed.title).toBe(`A held email application was added to ${oneRoom.title}`);
+    expect(mixed.body).toContain("so the application that arrived by email while they were closed has been added to the role's applications.");
+    expect(mixed.body).toContain(MORE_CANDIDATES_LINE);
+    expect(`${mixed.title} ${mixed.body}`).not.toMatch(/zqreplay|2 applications/i);
+
+    // Within the limit it reads as it always did.
+    const open = await newCompany();
+    await usePlan(container, open.id, "ultra");
+    const noLimit = await openRole(open);
+    await hold(noLimit, "replay-open", ["zqreplaye", "zqreplayf"]);
+    const [plain] = await heldNotices(open.id);
+    expect(plain.title).toBe(`2 held email applications were added to ${noLimit.title}`);
+    expect(plain.body).not.toContain(MORE_CANDIDATES_LINE);
+  }, 300_000);
+
   it("an emailed-in applicant's address and subject stay out of the two lists that return raw payloads, and the close notice for a held email counts only who the team can read", async () => {
     const company = await newCompany();
     await setLimit(company.id, 1);
