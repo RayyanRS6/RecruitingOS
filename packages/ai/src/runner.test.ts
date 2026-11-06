@@ -1,7 +1,11 @@
+import Anthropic from "@anthropic-ai/sdk";
+import type { Db } from "@ros/db";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { creditHoldUsd, estimateCostUsd } from "./pricing";
 import type { PromptDef } from "./prompts/registry";
-import { API_ROUTE_LIMIT_MS, callPrompt, routeDeadline, type AiRuntime } from "./runner";
+import { AnthropicProvider } from "./providers/anthropic";
+import { API_ROUTE_LIMIT_MS, callPrompt, routeDeadline, runPromptDetached, type AiCreditGate, type AiRunValues, type AiRuntime } from "./runner";
 import type { AiProvider, StructuredRequest, StructuredResult } from "./types";
 
 /**
@@ -109,5 +113,71 @@ describe("the deadline of the request a call serves", () => {
     const { rt, requests } = runtime([ok]);
     await callPrompt(rt, prompt, null, { companyId: null });
     expect(requests[0]!.deadlineAt).toBeUndefined();
+  });
+});
+
+/**
+ * What a call that failed costs on the company's AI credit, through the real Anthropic adapter against a stand-in client:
+ * the hold is about 1.6 cents on Haiku 5.5, and it stays only where a reply began (the SDK's stream says "connect").
+ */
+describe("what a failed call settles at", () => {
+  const HAIKU = "claude-haiku-5-5";
+  const turn: PromptDef<null, Draft> = { ...prompt, task: "screen.turn" };
+  type Next = { fails: Error; began?: boolean } | { text: string };
+  const firstReply = { input_tokens: 1000, output_tokens: 1000, cache_read_input_tokens: 0 };
+
+  /** The stand-in client: each request fails before or after "connect", or answers. */
+  const clientOf = (answers: Next[]) => ({
+    messages: {
+      stream() {
+        const next = answers.shift()!;
+        let connected = () => {};
+        const stream = {
+          on(event: string, listener: () => void) { if (event === "connect") connected = listener; return stream; },
+          finalMessage: async () => {
+            if ("text" in next) { connected(); return { content: [{ type: "text", text: next.text }], stop_reason: "end_turn", stop_details: null, usage: firstReply }; }
+            if (next.began) connected();
+            throw next.fails;
+          },
+        };
+        return stream;
+      },
+    },
+  }) as unknown as Anthropic;
+
+  const settledAt = async (answers: Next[]) => {
+    const settled: Array<Partial<AiRunValues>> = [];
+    const credit: AiCreditGate = { hold: async () => "held", settle: async (_db, input) => { settled.push(input.values); } };
+    const rt: AiRuntime = { provider: new AnthropicProvider(undefined, clientOf(answers)), models: { judgment: HAIKU, standard: HAIKU, fast: HAIKU }, credit };
+    const out = await runPromptDetached({} as Db, rt, turn, null, { companyId: "c1" });
+    expect(out.ok).toBe(false);
+    expect(settled).toHaveLength(1);
+    return Number(settled[0]!.costUsd);
+  };
+  const hold = creditHoldUsd(HAIKU, { promptChars: "You draft roles.Draft it.".length });
+  const connectionError = () => new Anthropic.APIConnectionError({ message: undefined });
+
+  it("the hold really is about 1.6 cents, so the money below is real", () => {
+    expect(hold).toBeGreaterThan(0.015);
+    expect(hold).toBeLessThan(0.017);
+  });
+
+  it("nothing for a connection that never opened", async () => {
+    expect(await settledAt([{ fails: connectionError() }])).toBe(0);
+  });
+
+  it("nothing for an answer with an HTTP status", async () => {
+    expect(await settledAt([{ fails: new Anthropic.InternalServerError(529, { type: "overloaded_error" }, undefined, new Headers()) }])).toBe(0);
+  });
+
+  it("the whole hold for a reply that began and was cut", async () => {
+    expect(await settledAt([{ fails: new Error("terminated"), began: true }])).toBeCloseTo(hold, 6);
+  });
+
+  it("the first reply's cost for a correction turn lost before it began, and the hold for one cut part-way", async () => {
+    const reply = estimateCostUsd(HAIKU, { inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 0 });
+    expect(reply).toBeLessThan(hold);
+    expect(await settledAt([{ text: '{"title":1}' }, { fails: connectionError() }])).toBeCloseTo(reply, 6);
+    expect(await settledAt([{ text: '{"title":1}' }, { fails: new Error("terminated"), began: true }])).toBeCloseTo(hold, 6);
   });
 });

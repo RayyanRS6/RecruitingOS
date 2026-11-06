@@ -360,19 +360,31 @@ describe("the AI credit", () => {
       const { id } = await newCompany();
       const hold = creditHoldUsd(HAIKU, { promptChars: charsOf(chatPrompt, INPUT) });
       const provider = new PricedProvider();
-      const said = (error: string, usage: Usage = NO_USAGE) => { provider.answer = (_req, model) => ({ kind: "invalid", error, model, usage, latencyMs: 5, final: true }); };
+      const said = (error: string, usage: Usage = NO_USAGE, over: { usageUnknown?: boolean } = {}) => { provider.answer = (_req, model) => ({ kind: "invalid", error, model, usage, latencyMs: 5, final: true, ...over }); };
       const lastCost = async () => { const rows = await runsOf(id); return Number(rows[rows.length - 1].costUsd); };
-      // stopped at the deadline, or dropped part-way: it may well have been billed
-      said("provider error: the model did not finish within 270 seconds, so the call was stopped");
+      // stopped at the deadline, or dropped part-way after a reply began: it may well have been billed
+      said("provider error: the model did not finish within 270 seconds, so the call was stopped", NO_USAGE, { usageUnknown: true });
       expect(await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id })).toMatchObject({ ok: false, reason: "error" });
       expect(await lastCost()).toBeCloseTo(hold, 6);
+      said("provider error: terminated", NO_USAGE, { usageUnknown: true });
+      await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id });
+      expect(await lastCost()).toBeCloseTo(hold, 6);
+      // the same words with no reply begun: a connection that never opened billed nothing
       said("provider error: Connection error.");
       await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id });
-      expect(await lastCost()).toBeCloseTo(hold, 6);
-      // a correction turn lost after a first reply that was counted: never less than that reply cost, never less than the hold
-      said("provider error: terminated", { inputTokens: 10, outputTokens: 10, cacheReadTokens: 0 });
+      expect(await lastCost()).toBe(0);
+      // a correction turn cut part-way after a first reply that was counted: never less than that reply cost, never less than the hold
+      said("provider error: terminated", { inputTokens: 10, outputTokens: 10, cacheReadTokens: 0 }, { usageUnknown: true });
       await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id });
       expect(await lastCost()).toBeCloseTo(hold, 6);
+      // a correction turn lost before any reply: the first reply's cost is all of it
+      said("provider error: Connection error.", { inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 0 });
+      await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id });
+      expect(await lastCost()).toBeCloseTo(estimateCostUsd(HAIKU, { inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 0 }), 6);
+      // a local error wrapped the same way never reached anyone
+      said("provider error: Cannot read properties of undefined (reading 'type')");
+      await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id });
+      expect(await lastCost()).toBe(0);
       // an answer with an HTTP status wrote nothing, and a call never sent cost nothing
       said("provider error: 529 {\"type\":\"overloaded_error\"}");
       expect(await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id })).toMatchObject({ ok: false, reason: "error" });
@@ -388,6 +400,37 @@ describe("the AI credit", () => {
       provider.answer = () => { throw new Error("boom"); };
       expect(await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id })).toMatchObject({ ok: false, reason: "error" });
       expect(await lastCost()).toBeCloseTo(hold, 6);
+    });
+
+    it("an hour with no answer from the provider costs a Free company nothing: not $1.60 for one applicant, and not 80% of its credit for five", async () => {
+      const { id, cookie } = await newCompany();
+      const provider = new PricedProvider();
+      provider.answer = (_req, model) => ({ kind: "invalid", error: "provider error: Connection error.", model, usage: NO_USAGE, latencyMs: 5, final: true });
+      // what one no-résumé applicant's reading tried in the outage: three readings and their three second tries, each of the 15 tries the engine gives it
+      const hold = creditHoldUsd(HAIKU, { promptChars: charsOf(chatPrompt, INPUT) });
+      for (let attempt = 0; attempt < 15; attempt++) {
+        const [one, two, three] = await runPromptsDetached(container.db, runtime(provider), chatPrompt, INPUT, [1, 2, 3].map((reading) => ({ companyId: id, inputRef: { reading } })));
+        for (const out of [one, two, three]) expect(out).toMatchObject({ ok: false, reason: "error" });
+        for (const reading of [1, 2, 3]) await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id, inputRef: { reading } });
+      }
+      expect(provider.calls).toBe(90);
+      // the same 90 calls, each keeping its hold of about 1.6 cents, were $1.44 of the $10 for this one applicant
+      expect(90 * hold).toBeGreaterThan(1.4);
+      expect(await spent(id)).toBe(0);
+      const rows = await runsOf(id);
+      expect(rows).toHaveLength(90);
+      expect(rows.every((r) => r.status === "error" && Number(r.costUsd) === 0)).toBe(true);
+      // five such applicants: nobody is told anything, and Home and ITS's page read what was really billed
+      expect(await creditNotes(id)).toEqual([]);
+      expect(await creditAlerts(id)).toEqual([]);
+      const current = await read<{ aiCredit: { level: string | null; percent: number } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      expect(current.aiCredit).toMatchObject({ level: null, percent: 0 });
+      // a stream that started and was cut still counts, at its hold of about 1.6 cents, so the real money in an outage stays in the sum
+      provider.answer = (_req, model) => ({ kind: "invalid", error: "provider error: terminated", model, usage: NO_USAGE, latencyMs: 5, final: true, usageUnknown: true });
+      await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id });
+      expect(await spent(id)).toBeCloseTo(hold, 6);
+      expect(hold).toBeGreaterThan(0.015);
+      expect(hold).toBeLessThan(0.017);
     });
 
     it("a call whose process went away stays counted at its hold, is no failure while it could still be running, and reads as one after", async () => {

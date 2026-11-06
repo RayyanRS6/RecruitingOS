@@ -159,13 +159,14 @@ export async function recordRun<TInput, TOutput>(q: Queryable, rt: AiRuntime, pr
 }
 
 /**
- * Whether a call that failed may have cost more than the usage it recorded, so its hold stays as its cost: the stream was
- * stopped at the deadline or dropped part-way (usage is added only once a reply has ended, providers/anthropic.ts), or a
- * provider threw. An answer that carries an HTTP status wrote nothing, and a call never sent cost nothing: those are exact.
+ * Whether a call that failed may have cost more than the usage it recorded, so its hold stays as its cost: the provider says so
+ * (a reply that had begun was stopped at the deadline or dropped part-way, `usageUnknown`, providers/anthropic.ts), or a provider
+ * threw. Everything else is exact: a connection that never opened and an answer with an HTTP status wrote nothing, a call never
+ * sent cost nothing, and a local error never reached anyone, so an hour's outage costs the company nothing.
  */
 function usageUnknown<TOutput>(result: StructuredResult<TOutput>): boolean {
   if (result.kind !== "invalid" || !result.error.startsWith("provider")) return false;
-  return !/^provider refused:|^provider (?:error|threw): \d{3}\b|so it was not asked$/.test(result.error);
+  return !!result.usageUnknown || /^provider threw: (?!\d{3}\b)/.test(result.error);
 }
 
 /** The call as it was before the AI credit: the model first, then its row, in its own short transaction. */
