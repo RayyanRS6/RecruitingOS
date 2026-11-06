@@ -217,12 +217,22 @@ export function onFileStatusLine(companyName: string, byDay: string): string {
   return `Your application is on file with ${companyName}. They may not be able to review every application. We will email you when the job closes, or by ${byDay}.`;
 }
 
-/** The status page's next-step line once the close-out note went: the date above has passed, and this is what they were told. */
+/** The status page's next-step line once the job has closed and nothing has told them yet, or what told them did not arrive: no date, and no email promised, because neither might be true. */
+export function onFileNoDateLine(companyName: string): string {
+  return `Your application is on file with ${companyName}. They may not be able to review every application. You do not need to do anything.`;
+}
+
+/** The status page's next-step line once the close-out note went, or once the date above has passed without it reaching them: this is what it says. */
 export const CLOSED_OUT_STATUS_LINE = "Your application has not been reviewed, and we cannot say whether it will be. You do not need to do anything.";
 
 /** The close-out note: what makes "a real answer either way" true for someone nobody may read. It declines nobody and moves no stage. */
 export function closeOutNoteLine(input: { roleTitle: string; companyName: string; statusUrl: string }): string {
   return `Your application for ${input.roleTitle} at ${input.companyName} has not been reviewed, and we cannot say whether it will be. You do not need to do anything. If this changes, the team will contact you. You can withdraw or ask about your information from your page: ${input.statusUrl}`;
+}
+
+/** Beside what their earlier chats here added, on a job past its limit: nobody at the company may read what they keep unless their application is reviewed. */
+export function onFileEarlierFactsLine(companyName: string): string {
+  return `If ${companyName} reviews your application, they see what you keep.`;
 }
 
 /** The line above the messages on the status page while locked: a reply reaches ITS, not the team. */

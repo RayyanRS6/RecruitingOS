@@ -5,7 +5,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { CandidatePrivacyRequest, CandidateSmsPreference, isCompanyVerified, type ApplicationStage, type CandidateScoreRow, type CandidateStep, type DecisionWording, type RolePacket } from "@ros/contracts";
 import { CLOSE_OUT_TEMPLATE, newTimesDayWords, sendPrivacyAcknowledgment } from "@ros/agents";
-import { CLOSED_OUT_STATUS_LINE, DECISION_STAGES, audit, candidateNewTimesPromise, candidateStep, closeOutDayWords, closeOutDueAt, createDataRequest, decisionTold, emit, fulfilSmsOptOut, mayWithdraw, notify, onFileStatusLine, openFollowUpOf, openHumanReview, transition, type NewTimesPromise } from "@ros/core";
+import { CLOSED_OUT_STATUS_LINE, DECISION_STAGES, audit, candidateNewTimesPromise, candidateStep, closeOutDayWords, closeOutDueAt, createDataRequest, decisionTold, emit, fulfilSmsOptOut, mayWithdraw, notify, onFileNoDateLine, onFileStatusLine, openFollowUpOf, openHumanReview, transition, unlockedAtFor, type NewTimesPromise } from "@ros/core";
 import { applications, candidates, communications, companies, dataRequests, events, interviewFollowups, interviews, rolePackets, roles, screens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
@@ -209,8 +209,8 @@ async function visibleStage(container: Container, app: typeof applications.$infe
  * A decision in the words of the message that told it (plan G6): the closing message of a closed role (Q30), a filled
  * position, a decline after an interview or on an eligibility answer. Any other approved wording, and a decision a
  * person told them themselves, read the standard way. Never a reason beyond the eligibility answer, which the candidate
- * can correct, and never before they were told (founder decision B6). `locked`: a closed job moved someone nobody at the
- * company could read (Rule 2), and nobody kept them, so the page says nothing about keeping them.
+ * can correct, and never before they were told (founder decision B6). `locked`: they reached this while nobody at the
+ * company could read them (Rule 2), and nobody kept them, so the page says nothing about keeping them, whichever decision it was.
  */
 function decisionLine(input: { stage: ApplicationStage; wording: DecisionWording | null; poolOptOut: boolean; companyName: string; locked?: boolean }): string {
   const { wording, poolOptOut, companyName } = input;
@@ -221,12 +221,12 @@ function decisionLine(input: { stage: ApplicationStage; wording: DecisionWording
     if (wording === "after_interview") return `Thank you for meeting the team. This role is not moving forward for you.${pool}`;
     return `This role is not moving forward for you.${pool}`;
   }
-  const keep = poolOptOut ? "" : " We will keep you in mind for future openings unless you ask us not to.";
+  const keep = poolOptOut || input.locked ? "" : " We will keep you in mind for future openings unless you ask us not to.";
   if (wording === "eligibility") return `Based on your answers to the eligibility questions, this role needs something you said you do not have right now. If that has changed, or you answered in error, reply to our email and a person will take a look.${keep}`;
   if (wording === "role_closed") return `${companyName} has closed this position, so your application for it will not go any further.${keep}`;
   if (wording === "position_filled") return `The position has been filled, so your application for this role will not go any further. Thank you for applying.${keep}`;
   if (wording === "after_interview") return `Thank you for meeting the team. They have decided not to move forward with your application for this role.${keep}`;
-  return poolOptOut ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.";
+  return poolOptOut || input.locked ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.";
 }
 
 /**
@@ -290,16 +290,28 @@ async function interviewComing(tx: Tx, app: { id: string; stage: string }): Prom
 }
 
 /**
- * Someone past their plan's candidates per job (the plans of 5 November 2026, Rule 2): `byDay`, the day they hear by, and
- * `closedOut`, that they have had the close-out note. Their page never says the team is reviewing them. The moment they are
- * unlocked the page goes back to its usual words by itself. DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts).
+ * Someone past their plan's candidates per job (the plans of 5 November 2026, Rule 2): `byDay`, the day they hear by,
+ * `closedOut`, that they have had the close-out note, `datePassed`, that the day has gone by, and `jobClosed`, that the job has
+ * closed. Their page never says the team is reviewing them, and promises no email or date once that may not be true: a note or
+ * a closing message that bounced is not sent again. The moment they are unlocked the page goes back to its usual words by itself.
+ * DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts).
  */
-type OnFile = { byDay: string; closedOut: boolean };
+type OnFile = { byDay: string; closedOut: boolean; datePassed: boolean; jobClosed: boolean };
 
-/** The line under the steps, in the candidate's words: what is happening now and what they can do. */
-function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string; coming?: InterviewComing; onFile?: OnFile | null }): string {
+/** Their line while the page stands before any decision they were told. */
+function onFileLine(onFile: OnFile, companyName: string): string {
+  if (onFile.closedOut) return CLOSED_OUT_STATUS_LINE;
+  if (onFile.jobClosed) return onFileNoDateLine(companyName);
+  return onFile.datePassed ? CLOSED_OUT_STATUS_LINE : onFileStatusLine(companyName, onFile.byDay);
+}
+
+/**
+ * The line under the steps, in the candidate's words: what is happening now and what they can do. `unreviewed`: they
+ * reached the decision before anyone at the company could read them, so nobody kept them, whatever has opened them since.
+ */
+function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string; coming?: InterviewComing; onFile?: OnFile | null; unreviewed?: boolean }): string {
   const { step, stage, poolOptOut } = input;
-  if (input.onFile && (step === "received" || step === "under_review")) return input.onFile.closedOut ? CLOSED_OUT_STATUS_LINE : onFileStatusLine(input.companyName, input.onFile.byDay);
+  if (input.onFile && (step === "received" || step === "under_review")) return onFileLine(input.onFile, input.companyName);
   const news = input.news ?? {};
   const coming = input.coming === "soon" ? "We are reading your application. Your AI interview link arrives by email within about 10 minutes." : input.coming === "later" ? "Your application is in. Your AI interview link follows by email as soon as it is ready." : null;
   if (step === "received") return coming ?? (stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.");
@@ -331,7 +343,7 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
   if (stage === "offer_sent" || stage === "negotiation") return "The team has made you an offer. They will go through it with you directly. If you have a question, reply to any of our emails.";
   if (stage === "declined") return "You turned down the offer. Thank you for your time with us.";
   if (stage === "withdrawn") return "You withdrew this application. Thank you for your time.";
-  return decisionLine({ stage, wording: input.wording, poolOptOut, companyName: input.companyName, locked: !!input.onFile });
+  return decisionLine({ stage, wording: input.wording, poolOptOut, companyName: input.companyName, locked: input.unreviewed });
 }
 
 /** The steps of the progress line the status page leads with (Wave S2, slice K4), in the candidate's words. */
@@ -343,11 +355,12 @@ export const PROGRESS_STEP_LABEL: Record<ProgressStep, string> = { applied: "App
  * step (`candidateStep`, which never shows a private decision): Received is Applied; Under review is the AI interview
  * while one is open or paused, else Review. The AI interview is a step only for an application that has, or had, one
  * (so an eligibility answer that did not match is never hinted at, E7); at the decision, the interview is a step only
- * when there was one. Every step before the current one is done.
+ * when there was one. Every step before the current one is done. `unreviewed`: nobody at the company could read them (Rule 2),
+ * so Review is never where they are, and it is not on the line once they reached a decision, where it would read as done.
  */
-export function progressLine(input: { step: CandidateStep; hasChat: boolean; chatOpen: boolean; hadInterview: boolean }): { steps: ProgressStep[]; current: ProgressStep } {
-  const current: ProgressStep = input.step === "received" ? "applied" : input.step === "under_review" ? (input.hasChat && input.chatOpen ? "screening" : "review") : input.step;
-  const steps: ProgressStep[] = ["applied", ...(input.hasChat ? (["screening"] as const) : []), "review", ...(current !== "decision" || input.hadInterview ? (["interview"] as const) : []), "decision"];
+export function progressLine(input: { step: CandidateStep; hasChat: boolean; chatOpen: boolean; hadInterview: boolean; unreviewed?: boolean }): { steps: ProgressStep[]; current: ProgressStep } {
+  const current: ProgressStep = input.step === "received" ? "applied" : input.step === "under_review" ? (input.hasChat && input.chatOpen ? "screening" : input.unreviewed ? "applied" : "review") : input.step;
+  const steps: ProgressStep[] = ["applied", ...(input.hasChat ? (["screening"] as const) : []), ...(input.unreviewed && current === "decision" ? [] : (["review"] as const)), ...(current !== "decision" || input.hadInterview ? (["interview"] as const) : []), "decision"];
   return { steps, current };
 }
 
@@ -612,12 +625,16 @@ candidatePages.get("/c/status/:token", async (c) => {
   const [company] = await db.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
   const view = await visibleStage(container, app);
   const told = !view.hidden && DECISION_STAGES.includes(app.stage);
-  const { thread, wording, closedOut } = await withTenant(container.db, app.companyId, async (tx) => ({
+  const { thread, wording, closedOut, unlockedAt } = await withTenant(container.db, app.companyId, async (tx) => ({
     thread: await threadOf(tx, app.id),
     wording: told ? await toldWording(tx, { applicationId: app.id, decidedAt: app.stageChangedAt }) : null,
     // Only what left us: a note still waiting has told them nothing yet.
     closedOut: !!app.lockedAt && (await tx.select({ id: communications.id }).from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.templateKey, CLOSE_OUT_TEMPLATE), inArray(communications.status, ["sent", "delivered", "opened", "clicked"]))).limit(1)).length > 0,
+    unlockedAt: told && !app.lockedAt ? (await unlockedAtFor(tx, [app.id])).get(app.id) ?? null : null,
   }));
+  // Nobody at the company could read them when they reached this: still locked, or opened by a change of plan only after it.
+  // Nobody reviewed them and nobody kept them, so the page says neither (Rule 2).
+  const unreviewed = !!app.lockedAt || (!!unlockedAt && Date.parse(unlockedAt) >= Date.parse(app.stageChangedAt));
   // Nothing about a private decision shows, and nothing it closed is offered (its screens and interviews were cancelled with it).
   // A conversation paused while the assistant is down (plan E5) is mentioned, without a link: an email brings it back.
   // Whether there ever was one only decides whether the progress line has an AI interview step, the same before and after a private decision.
@@ -645,7 +662,7 @@ candidatePages.get("/c/status/:token", async (c) => {
   const invitedToInterview = (!!iv && iv.status !== "proposed" && (!!iv.startsAt || iv.offeredSlots.length > 0)) || wording === "after_interview";
   // A private decision cancels an open chat: the line keeps its step as it was, so nothing hints at the decision.
   const chatStep = chatCounts(lastScreen, !!(openScreen_ ?? pausedScreen) || (view.hidden && lastScreen?.status === "cancelled"));
-  const progress = progressLine({ step, hasChat: chatStep, chatOpen: !!(openScreen_ ?? pausedScreen), hadInterview: invitedToInterview });
+  const progress = progressLine({ step, hasChat: chatStep, chatOpen: !!(openScreen_ ?? pausedScreen), hadInterview: invitedToInterview, unreviewed });
   // The AI interview still being prepared (20 Oct 2026): its run waits for the reading, or for more interviews (Q17).
   const coming = !lastScreen && !view.hidden ? await withTenant(container.db, app.companyId, (tx) => interviewComing(tx, app)) : null;
   // "Don't keep me for future roles", from the decision message's link (#future-roles) or the button: it says it was saved.
@@ -653,7 +670,7 @@ candidatePages.get("/c/status/:token", async (c) => {
   const poolSaved = (pool === "out" && poolOptOut) || (pool === "in" && !poolOptOut);
   // Dates on the page are the company's days, never the server's (known-bugs row 73).
   const companyZone = company?.timezone ?? "America/Los_Angeles";
-  const onFile: OnFile | null = app.lockedAt ? { byDay: closeOutDayWords(closeOutDueAt(app.createdAt), companyZone), closedOut } : null;
+  const onFile: OnFile | null = app.lockedAt ? { byDay: closeOutDayWords(closeOutDueAt(app.createdAt), companyZone), closedOut, datePassed: container.engine.clock().getTime() >= closeOutDueAt(app.createdAt).getTime(), jobClosed: ["closed", "filled"].includes(role?.status ?? "") } : null;
   // The record's own parts (Wave S7, S7-E): the score, what they sent, the job, their other applications here, and what
   // their sent chats taught their record. All read in the company's transaction, from what the team may see.
   const companyName = company?.name ?? "the company";
@@ -693,10 +710,10 @@ candidatePages.get("/c/status/:token", async (c) => {
           drawn together as the "your next step" card (`next-step`, October 2026 redesign). */}
       <div class="next-step">
         <h2>What happens next</h2>
-        <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming, onFile })}</p>
-        {/* The choice the decision message points to (Q30), one click away from the decision itself. Someone locked was not
-            offered it: nobody kept them, and their closing message says nothing about it. The button stays below. */}
-        {told && !poolOptOut && !onFile ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
+        <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming, onFile, unreviewed })}</p>
+        {/* The choice the decision message points to (Q30), one click away from the decision itself. Someone locked when they
+            reached it was not offered it: nobody kept them, and their closing message says nothing about it. The button stays below. */}
+        {told && !poolOptOut && !unreviewed ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
         {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
         {/* The line above already says the team would like to interview them: the card is the time to pick and its button. */}
         {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
