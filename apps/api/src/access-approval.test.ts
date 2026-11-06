@@ -417,6 +417,12 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect((await w.json(asker.cookie, "POST", `/api/v1/admin/customers/${asker.id}/access`, body)).status).toBe(403);
     const recruiter = await signInStaff(w.app, w.container, "rae@identifiedtalent.com", "its_recruiter", "Rae Recruiter");
     expect((await w.json(recruiter, "POST", `/api/v1/admin/customers/${asker.id}/access`, body)).status).toBe(403);
+    // an administrator whose session carries no second factor
+    const second = await signInAdmin(w.app, w.container, "second.admin@identifiedtalent.com", "Second Admin");
+    await withPlatform(w.container.db, (tx) => tx.update(sessions).set({ aal: "aal1" }).where(sql`${sessions.userId} = (select id from users where email = 'second.admin@identifiedtalent.com')`));
+    const noFactor = await w.json(second, "POST", `/api/v1/admin/customers/${asker.id}/access`, body);
+    expect(noFactor.status).toBe(403);
+    expect(await w.code(noFactor)).toBe("mfa_required");
     // a bad body changes nothing
     for (const bad of [{ decision: "accept" }, { decision: "accept", confirm: false }, { decision: "maybe", confirm: true }, { decision: "accept", confirm: true, reason: "no reason is typed" }, {}]) {
       const r = await w.json(adminCookie, "POST", `/api/v1/admin/customers/${asker.id}/access`, bad);
