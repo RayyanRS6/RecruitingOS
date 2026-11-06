@@ -688,7 +688,7 @@ async function afterInterviewCards(tx: Tx, role: { id: string; title: string }, 
       continue;
     }
     const latest = mine.find((i) => ["completed", "no_show"].includes(i.status));
-    if (who.requests && latest?.decision === "next_round") out.push({ kind: "decision", title: `Set up the next round: ${name}`, body: `You chose the next round after ${latest.title}. Approve it from the candidate's page and times go out to them.`, roleId: role.id, applicationId: app.id, actions: [{ label: "Approve the next round", method: "GET", path: `${open}&step=interview` }] });
+    if (who.requests && latest?.decision === "next_round") out.push({ kind: "decision", title: `Set up the next round: ${name}`, body: `You chose the next round after ${latest.title}. Set its date and time from the candidate's page.`, roleId: role.id, applicationId: app.id, actions: [{ label: "Set a date and time", method: "GET", path: `${open}&step=interview` }] });
   }
   return out;
 }

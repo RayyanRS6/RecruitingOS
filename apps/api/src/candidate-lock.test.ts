@@ -343,6 +343,31 @@ describe("the team cannot read a locked person", () => {
     expect((await json(owner, "GET", `/api/v1/applications/${ids.visible}/documents/${ids.lockedDoc}/file`)).status).toBe(404);
   }, 300_000);
 
+  it("setting a date and time, with a real time and a real body: both routes refuse someone locked before any handler, and nothing is booked, sent or said", async () => {
+    // both are in the sweep above, by the route table: this is the same refusal with a body that would book
+    expect(routesOf("POST")).toEqual(expect.arrayContaining(["/api/v1/applications/:id/interviews", "/api/v1/interviews/:id/set-time"]));
+    const setTime = { date: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10), time: "14:00", durationMinutes: 30, place: { kind: "phone" } };
+    const me = await read<{ user: { id: string } }>(await json(owner, "GET", "/api/v1/auth/me"));
+    const [before] = await container.db.select().from(interviews).where(eq(interviews.id, ids.interview));
+    const lockedInterviews = await container.db.select().from(interviews).where(eq(interviews.applicationId, ids.locked));
+    await container.drain();
+    const mail = (container.integrations.email as FakeEmailAdapter).sent.length;
+    for (const [who, cookie] of readers) {
+      for (const [path, body] of [[`/api/v1/applications/${ids.locked}/interviews`, { roundKey: "r1", interviewerUserIds: [me.user.id], setTime }], [`/api/v1/interviews/${ids.interview}/set-time`, setTime]] as const) {
+        const r = await json(cookie, "POST", path, body);
+        const text = await r.text();
+        expect(r.status, `${who}: ${path} answered ${r.status}: ${text.slice(0, 200)}`).toBe(402);
+        expect(JSON.parse(text).error.code).toBe("candidate_locked");
+        expect(leaks(text)).toEqual([]);
+      }
+    }
+    await container.drain();
+    const [after] = await container.db.select().from(interviews).where(eq(interviews.id, ids.interview));
+    expect(after).toMatchObject({ status: before.status, attempt: before.attempt, startsAt: before.startsAt });
+    expect(await container.db.select().from(interviews).where(eq(interviews.applicationId, ids.locked))).toHaveLength(lockedInterviews.length);
+    expect((container.integrations.email as FakeEmailAdapter).sent.length).toBe(mail);
+  }, 120_000);
+
   it("the list: nobody locked is a row, whatever the order or the filter; `locked` holds where they came in and when, and nothing else; counts cover those shown, and only the total says more applied", async () => {
     const lockedCount = (await container.db.select().from(applications).where(and(eq(applications.roleId, ids.role), sql`${applications.lockedAt} is not null`))).length;
     expect(lockedCount).toBeGreaterThanOrEqual(4);

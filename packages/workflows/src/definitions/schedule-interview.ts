@@ -35,8 +35,10 @@ import type { StepContext, WorkflowDefinition } from "../types";
  *
  * A person set the date and time (the owner's words, 6 November 2026: "nadine sets date and time"):
  * - `setByPerson`: the route already wrote the booking, because the worker may not run for a while and the sheet must be
- *   right at once. This run only puts it on calendars (only the worker may read a connection's credential), emails the
- *   candidate, reminds and closes. It never reaches `propose_slots` or `book`, so no calendar or declared hours are needed.
+ *   right at once. This run starts at `place_on_calendars` (`startStep`, not `prepare`: during a release an older worker
+ *   puts a step it does not know back for a newer one, where it would fail a booked interview at `prepare`). It only puts it
+ *   on calendars (only the worker may read a connection's credential), emails the candidate, reminds and closes, so it never
+ *   reaches `propose_slots` or `book`, and no calendar or declared hours are needed.
  * - `moved`: it replaces a time the candidate was told; the one email says so, with the team's reason when they gave one.
  * - `bookedAt`: when the person pressed. Reminder moments already past by then are skipped, so a time set for this
  *   afternoon never gets "Your interview is tomorrow".
@@ -199,8 +201,6 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       const b = await load(ctx);
       if (!b) return { kind: "fail", error: "interview not found", retryable: false };
       if (stale(b, ctx)) return { kind: "complete" };
-      // A person set the date and time, and the route booked it: nothing here is worked out or offered.
-      if (ctx.state.setByPerson) return b.iv.status === "scheduled" ? { kind: "next", step: "place_on_calendars" } : { kind: "complete" };
       if (!["proposed", "scheduling"].includes(b.iv.status)) return { kind: "fail", error: `interview is ${b.iv.status}; nothing to schedule`, retryable: false };
       if (!b.packet || !b.round) return { kind: "fail", error: "the interview round is not in the approved packet", retryable: false };
       if (!b.participants.length) return { kind: "fail", error: "no interviewers on the interview", retryable: false };

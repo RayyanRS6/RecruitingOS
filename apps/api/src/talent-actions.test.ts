@@ -28,7 +28,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       const hr = applicationActionState(facts({ role: "hr" }));
       expect(hr.allowed).toEqual(["invite_screen", "advance_to_interview", "hold", "move_to_talent_pool", "record_outcome", "set_mark"]);
       expect(hr.blockedReasons.reject).toBe("Your role can't decline candidates; ask an owner, an admin, a hiring manager or a recruiter.");
-      expect(hr.blockedReasons.interview).toBe("Your role can't approve interviews; ask an owner, an admin, a hiring manager or a recruiter.");
+      expect(hr.blockedReasons.interview).toBe("Your role can't set up interviews; ask an owner, an admin, a hiring manager or a recruiter.");
       expect(applicationActionState(facts({ role: "hr", stage: "rejected" })).blockedReasons.send_decision).toBe("Your role can't tell candidates about a decision; ask an owner, an admin, a hiring manager or a recruiter.");
       // a recruiter declines and interviews, but recording a hiring outcome is the customer's
       const recruiter = applicationActionState(facts({ role: "recruiter" }));
@@ -177,7 +177,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       const moves = Object.fromEntries(stageMoves(under()).map((m) => [m.to, m]));
       expect(Object.keys(moves)).toHaveLength(10);
       expect(moves.cancelled).toMatchObject({ current: true, allowed: false, via: "none" });
-      expect(moves.interviewing).toMatchObject({ allowed: false, via: "none", blockedReason: "They move back to Interviewing when they book a time. Send them new times from their page." });
+      expect(moves.interviewing).toMatchObject({ allowed: false, via: "none", blockedReason: "They move back to Interviewing when a time is booked. Set a date and time from their page." });
       // a hold takes them out of Cancelled; a decline is the private decline; the earlier steps keep their reasons
       expect(moves.on_hold).toMatchObject({ allowed: true, via: "set_mark", mark: "on_hold" });
       expect(moves.not_moving_forward).toMatchObject({ allowed: true, via: "decline" });
@@ -362,7 +362,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(before.cancelled!.status).toMatch(/^New times go out automatically /);
       expect(before.allowedActions).toEqual(expect.arrayContaining(["send_new_times", "stop_new_times"]));
       expect(before.stageMoves.find((m) => m.to === "cancelled")).toMatchObject({ current: true, allowed: false });
-      expect(before.stageMoves.find((m) => m.to === "interviewing")).toMatchObject({ allowed: false, blockedReason: "They move back to Interviewing when they book a time. Send them new times from their page." });
+      expect(before.stageMoves.find((m) => m.to === "interviewing")).toMatchObject({ allowed: false, blockedReason: "They move back to Interviewing when a time is booked. Set a date and time from their page." });
       // HR may not send or stop new times, and is told who can
       const asHr = (await (await json(hr, "GET", `/api/v1/applications/${ana}`)).json()) as Row;
       expect(asHr.allowedActions).not.toContain("send_new_times");

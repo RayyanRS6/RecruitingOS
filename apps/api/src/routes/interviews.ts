@@ -10,7 +10,7 @@ import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Var
 import { HttpError } from "../middleware/errors";
 import { TERMINAL_STAGES } from "../services/application-actions";
 import { cancelInterviewInTx } from "../services/interview-cancel";
-import { INTERVIEW_ALREADY_OPEN, INTERVIEW_FROM, OPEN_INTERVIEW, bookingFields, candidateEmailStates, candidateNoticeOfBooking, createApprovedInterview, placeOnInterview, refuseClash, refuseClosedRole, slotFromPerson } from "../services/interview-create";
+import { BOOKED_RUN_STARTS_AT, INTERVIEW_ALREADY_OPEN, INTERVIEW_FROM, OPEN_INTERVIEW, bookingFields, candidateEmailStates, candidateNoticeOfBooking, createApprovedInterview, placeOnInterview, refuseClash, refuseClosedRole, slotFromPerson } from "../services/interview-create";
 import { exitCleanup } from "../services/exit-cleanup";
 import { interviewBriefFor } from "../services/interviewer-view";
 import { hireFollowUp } from "../services/hire-sheet";
@@ -306,9 +306,9 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
         noShowOpened = opened.created;
       }
     }
-    if (app && noShowOpened) await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.no_show", title: `${name} did not come to the interview`, body: `${iv.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: send new times for the same round, or decide.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+    if (app && noShowOpened) await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.no_show", title: `${name} did not come to the interview`, body: `${iv.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: set a new date and time from their page, or decide.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     // Our side missed it (founder decision L-12): the approval card offers the same round again, and its invitation says sorry.
-    else if (app && body.outcome === "no_show_interviewer" && INTERVIEW_FROM.includes(moved ? "interview_complete" : app.stage)) await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.decision", title: `${name}'s interview did not happen`, body: `Our interviewer missed ${iv.title}. Approve the same round again from their page; the new invitation says sorry. You can pick another round instead.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}&step=interview` } });
+    else if (app && body.outcome === "no_show_interviewer" && INTERVIEW_FROM.includes(moved ? "interview_complete" : app.stage)) await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.decision", title: `${name}'s interview did not happen`, body: `Our interviewer missed ${iv.title}. Set the same round again from their page; the new email says sorry. You can pick another round instead.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}&step=interview` } });
     else if (app && moved) await notify(tx, { companyId: t.companyId, about: app.id, kind: "interview.decision", title: `How did it go with ${name}?`, body: `${iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     return summary(tx, u);
   });
@@ -461,7 +461,7 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     const followUp = await openFollowUpOf(tx, app.id, { lock: true });
     const carried = followUp && CANCEL_STAGES.includes(app.stage) ? (followUp.choice === "new_times" ? ("new_times_asked" as const) : ("new_times_team" as const)) : null;
     const attempt = iv.attempt + 1;
-    const [u] = await tx.update(interviews).set({ ...bookingFields(slot, place, { durationMinutes: body.durationMinutes, companyTimezone: company.timezone, token: iv.scheduleToken }), attempt, reminders: {} }).where(and(eq(interviews.id, iv.id), eq(interviews.attempt, iv.attempt))).returning();
+    await tx.update(interviews).set({ ...bookingFields(slot, place, { durationMinutes: body.durationMinutes, companyTimezone: company.timezone, token: iv.scheduleToken }), attempt, reminders: {} }).where(eq(interviews.id, iv.id));
     await tx.update(interviewParticipants).set({ status: "confirmed" }).where(eq(interviewParticipants.interviewId, iv.id));
     if (app.stage !== "interview_scheduled") {
       // Also ends a hold for someone already at the interview step (founder decision B3), and takes them out of Cancelled as rebooked.
@@ -473,12 +473,12 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     await audit(tx, { companyId: t.companyId, actor, action: "interview.booked_on_behalf", target: { type: "interview", id: iv.id }, reason: "a person set the date and time", details: { applicationId: app.id, slotId: slot.id, startsAt: slot.startsAt, moved: wasBooked } });
     // The personal line they have not read yet comes along (Q28); one already in an email they got is not said again.
     const note = !moved ? ((run?.state ?? {}) as { invitationNote?: InvitationNote | null }).invitationNote ?? null : null;
-    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: iv.roundKey, attempt, setByPerson: true, bookedAt: now.toISOString(), ...(moved ? { moved: { reason: body.reason?.trim() || null } } : {}), ...(note ? { invitationNote: note } : {}), ...(carried ? { offerKind: carried } : {}) }, idempotencyKey: `schedule:${iv.id}:${attempt}`, actor });
-    return { row: u, moved };
+    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: iv.roundKey, attempt, setByPerson: true, bookedAt: now.toISOString(), ...(moved ? { moved: { reason: body.reason?.trim() || null } } : {}), ...(note ? { invitationNote: note } : {}), ...(carried ? { offerKind: carried } : {}) }, idempotencyKey: `schedule:${iv.id}:${attempt}`, actor, startStep: BOOKED_RUN_STARTS_AT });
+    return { id: iv.id, moved };
   });
   await container.kick();
   const answer = await withTenant(container.db, t.companyId, async (tx) => {
-    const row = await summary(tx, done.row);
+    const row = await summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, done.id)))[0]);
     return { ...row, candidateNotice: await candidateNoticeOfBooking(tx, { companyId: t.companyId, hasEmail: row.candidate.hasEmail }), moved: done.moved };
   });
   return c.json(answer);

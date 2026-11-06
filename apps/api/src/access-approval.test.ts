@@ -1163,6 +1163,26 @@ describe("a waiting and a declined person reach nothing, by any route", () => {
     expect(await w.runsOf(declined.id)).toEqual([]);
   }, 300_000);
 
+  it("setting a date and time, with a real time and a real body: someone waiting or declined meets the wall, and the candidate's new pages answer as if the token did not exist", async () => {
+    // all of them are in the sweep above, by the route table: this is the same wall with a body that would book
+    expect(everyRoute(w.app).map((r) => `${r.method} ${r.route}`)).toEqual(expect.arrayContaining(["POST /api/v1/applications/:id/interviews", "POST /api/v1/interviews/:id/set-time", "POST /c/schedule/:token/timezone", "POST /c/schedule/:token/accommodation"]));
+    const setTime = { date: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10), time: "14:00", durationMinutes: 30, place: { kind: "phone" } };
+    for (const [person, targets] of [[waiting, waitingTargets], [declined, declinedTargets]] as const) {
+      const cookie = await w.google(person.email);
+      const before = await snapshot(w, [person.id, other.id]);
+      for (const t of [targets, otherTargets]) {
+        for (const [path, body] of [[`/api/v1/applications/${t.application}/interviews`, { roundKey: "r1", interviewerUserIds: [t.userId], setTime }], [`/api/v1/interviews/${t.interview}/set-time`, setTime]] as const) {
+          const r = await w.json(cookie, "POST", path, body);
+          expect(r.status, path).toBe(403);
+          expect(await w.code(r), path).toBe("no_company");
+        }
+      }
+      for (const page of ["timezone", "accommodation"]) expect((await w.json(cookie, "POST", `/c/schedule/${NOT_A_TOKEN}/${page}`, {})).status, page).toBe(404);
+      await w.container.drain();
+      expect(await snapshot(w, [person.id, other.id])).toEqual(before);
+    }
+  }, 120_000);
+
   it("the sweep would see a reader that forgot to filter on active: a membership read at any status, a route with no filling", async () => {
     const leaky = createApp(w.container);
     leaky.get("/api/v1/leak-check", async (c) => c.json(await w.container.db.select({ name: companies.name }).from(memberships).innerJoin(companies, eq(companies.id, memberships.companyId)).where(eq(memberships.userId, c.get("session")?.user.id ?? ""))));

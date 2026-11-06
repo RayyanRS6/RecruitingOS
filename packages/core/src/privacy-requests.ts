@@ -231,7 +231,8 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
   // The team's private notes (plan H3) lose their words, earlier versions included (the counsel default, register item
   // 25), and so does the note recorded with each decision after an interview. Who wrote a note, and when, stays.
   await q.update(applicationNotes).set({ body: "", previousVersions: [], deletedAt: sql`coalesce(${applicationNotes.deletedAt}, ${now.toISOString()}::timestamptz)` }).where(inArray(applicationNotes.applicationId, appIds));
-  await q.update(interviews).set({ decisionNote: null }).where(inArray(interviews.applicationId, appIds));
+  // What they told us about a time goes too: what suits them, and an accommodation they asked for.
+  await q.update(interviews).set({ decisionNote: null, candidateAvailability: null }).where(inArray(interviews.applicationId, appIds));
   // The team's free-text notes were copied into the history as it happened (a mark, a decline, "I told them myself", a
   // decision after an interview): they are blanked there too. What happened, who did it and when stay.
   await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{note}', 'null'::jsonb)` }).where(and(eq(events.subjectType, "application"), inArray(events.subjectId, appIds), sql`${events.payload}->>'note' is not null`));

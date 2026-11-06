@@ -13,6 +13,8 @@ export const INTERVIEW_FROM: readonly string[] = ["triaged", "screen_complete", 
 /** Interviews with times being worked out, offered or booked: an application has one at a time. */
 export const OPEN_INTERVIEW: string[] = ["proposed", "scheduling", "scheduled"];
 export const INTERVIEW_ALREADY_OPEN = "This candidate already has an interview set up. Open it to move or cancel it.";
+/** Where the run of a time a person set begins: the route already booked it, so nothing is worked out or offered. */
+export const BOOKED_RUN_STARTS_AT = "place_on_calendars";
 
 /**
  * What the place a person chose writes on the interview. A link left empty asks a live calendar to make one
@@ -208,6 +210,6 @@ export async function createApprovedInterview(tx: Tx, container: Container, inpu
   await transition(tx, { applicationId: app.id, companyId, to: "interview_scheduled", by: input.by, actor, reason: "a person set the date and time", now });
   await emit(tx, { type: "interview.booked", companyId, actor, subject: { type: "interview", id: iv.id }, payload: { setByPerson: true, slotId: slot.id, startsAt: slot.startsAt, endsAt: slot.endsAt, attempt: 1, clashAllowed: clashes.length > 0 } });
   await audit(tx, { companyId, actor, action: "interview.booked_on_behalf", target: { type: "interview", id: iv.id }, reason: "a person set the date and time", details: { applicationId: app.id, slotId: slot.id, startsAt: slot.startsAt } });
-  await container.engine.start(tx, { workflowKey: "schedule_interview", companyId, subject: { type: "interview", id: iv.id }, state: { ...firstRun, setByPerson: true, bookedAt: now.toISOString(), ...(newTimes ? { offerKind: newTimes.offerKind } : {}) }, idempotencyKey: `schedule:${iv.id}:1`, actor });
+  await container.engine.start(tx, { workflowKey: "schedule_interview", companyId, subject: { type: "interview", id: iv.id }, state: { ...firstRun, setByPerson: true, bookedAt: now.toISOString(), ...(newTimes ? { offerKind: newTimes.offerKind } : {}) }, idempotencyKey: `schedule:${iv.id}:1`, actor, startStep: BOOKED_RUN_STARTS_AT });
   return { interviewId: iv.id, followUpId: carries?.id ?? null, candidateNotice: await candidateNoticeOfBooking(tx, { companyId, hasEmail: !!cand?.email }) };
 }

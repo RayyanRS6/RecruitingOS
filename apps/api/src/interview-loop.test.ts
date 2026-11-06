@@ -187,7 +187,7 @@ describe("the loop after an interview", () => {
     const nudge = (await brief(owner)).cards.find((c) => c.applicationId === cand.id);
     expect(nudge).toMatchObject({ kind: "decision", title: "Set up the next round: Ana Silva" });
     // the card opens the interview approval itself, filled in with the next round from the plan
-    expect(nudge!.actions[0]).toEqual({ label: "Approve the next round", method: "GET", path: `/roles/${roleId}/talent?open=${cand.id}&step=interview` });
+    expect(nudge!.actions[0]).toEqual({ label: "Set a date and time", method: "GET", path: `/roles/${roleId}/talent?open=${cand.id}&step=interview` });
     const next = await requestInterview(cand.id, { roundKey: body.nextRoundKey });
     expect((await interview(next.id)).roundKey).toBe(plan[1].key);
     expect((await brief(owner)).cards.find((c) => c.applicationId === cand.id)).toBeUndefined();

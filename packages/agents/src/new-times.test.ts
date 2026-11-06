@@ -3,11 +3,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { openFollowUp, setMark, type FollowUpEntryAuto } from "@ros/core";
-import { createDb, migrate, withTenant, type DbHandle, type Tx } from "@ros/db";
+import { createDb, interviewParticipants, interviewerAvailability, memberships, migrate, users, withTenant, type DbHandle, type Tx } from "@ros/db";
 import { createIntegrations } from "@ros/integrations";
 import { sendStillReviewingNotes } from "./decision-messages";
 import { samplePacket } from "./fixtures/sample-packet";
-import { MAX_CANDIDATE_RESCHEDULES, autoNewTimesPlan, newTimesDayWords, newTimesDue, workingDaysLater } from "./new-times";
+import { MAX_CANDIDATE_RESCHEDULES, autoNewTimesPlan, interviewHasNoHours, newTimesDayWords, newTimesDue, workingDaysLater } from "./new-times";
 import { detectStuckRoles } from "./orchestrator";
 
 /**
@@ -162,6 +162,54 @@ describe("the automatic set: when and whether", () => {
     const p = await person();
     await tenant(p.companyId, (tx) => setMark(tx, { companyId: p.companyId, app: { id: p.applicationId, stage: "interview_scheduled" }, mark: "on_hold", actor: owner, now: FRIDAY_2PM }));
     expect(await p.plan()).toEqual({ arm: false, reason: "was_on_hold" });
+  });
+
+  describe("the interview they are cancelling has someone with no hours to offer", () => {
+    /** A person on the team, optionally on the interview, with declared hours or none. */
+    async function teammate(p: { companyId: string }, interviewId: string, opts: { hours?: boolean; role?: "interviewer" | "optional"; status?: "active" | "removed" } = {}) {
+      const userId = randomUUID();
+      await handle.db.insert(users).values({ id: userId, email: `t-${userId}@example.com`, name: "Tess Mate" });
+      await handle.db.insert(memberships).values({ companyId: p.companyId, userId, role: "hiring_manager", status: opts.status ?? "active" });
+      await handle.db.insert(interviewParticipants).values({ companyId: p.companyId, interviewId, userId, role: opts.role ?? "interviewer", status: "confirmed" });
+      if (opts.hours) await handle.db.insert(interviewerAvailability).values({ companyId: p.companyId, userId, timezone: LA, windows: [{ day: 1, start: "09:00", end: "17:00" }], bufferMinutes: 15, maxPerDay: 3 });
+      return userId;
+    }
+    async function bookedPerson(settings: Record<string, unknown> = VERIFIED) {
+      const p = await person(settings);
+      const interviewId = randomUUID();
+      await handle.db.execute(sql`INSERT INTO interviews (id, company_id, application_id, round_key, title, format, duration_minutes, status, attempt) VALUES (${interviewId}, ${p.companyId}, ${p.applicationId}, 'first', 'First interview', 'video', 30, 'scheduled', 1)`);
+      const plan = () => tenant(p.companyId, (tx) => autoNewTimesPlan(tx, { companyId: p.companyId, roleId: p.roleId, applicationId: p.applicationId, rescheduleCount: 0, now: FRIDAY_2PM, interviewId }));
+      return { ...p, interviewId, plan };
+    }
+
+    it("promises no day when a required interviewer has neither a calendar nor hours: it could never be kept", async () => {
+      const p = await bookedPerson();
+      await teammate(p, p.interviewId, { hours: true });
+      await teammate(p, p.interviewId);
+      const plan = await p.plan();
+      expect(plan).toEqual({ arm: false, reason: "no_hours" });
+      expect(plan).not.toHaveProperty("dueAt");
+      expect(await tenant(p.companyId, (tx) => interviewHasNoHours(tx, { companyId: p.companyId, interviewId: p.interviewId }))).toBe(true);
+      // asked with no interview, nothing is read about hours
+      expect((await tenant(p.companyId, (tx) => autoNewTimesPlan(tx, { companyId: p.companyId, roleId: p.roleId, applicationId: p.applicationId, rescheduleCount: 0, now: FRIDAY_2PM }))).arm).toBe(true);
+    });
+
+    it("arms as usual where everyone required has hours (founder decision 3A stands): an optional interviewer and someone who left the team do not count", async () => {
+      const p = await bookedPerson();
+      await teammate(p, p.interviewId, { hours: true });
+      await teammate(p, p.interviewId, { role: "optional" });
+      await teammate(p, p.interviewId, { status: "removed" });
+      expect(await p.plan()).toMatchObject({ arm: true, day: "2026-10-15" });
+    });
+
+    it("is read after the reasons a person already knows: they are told those instead", async () => {
+      const off = await bookedPerson({ newTimesAfterCancel: { auto: false, workingDays: 3 } });
+      await teammate(off, off.interviewId);
+      expect(await off.plan()).toEqual({ arm: false, reason: "switched_off" });
+      const held = await bookedPerson({});
+      await teammate(held, held.interviewId);
+      expect(await held.plan()).toEqual({ arm: false, reason: "company_not_checked" });
+    });
   });
 });
 

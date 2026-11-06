@@ -248,7 +248,10 @@ export async function sendInterviewConfirmation(q: Queryable, integrations: Inte
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_confirmation", subject: message.subject, text: message.text, idempotencyKey: `confirm:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email, attachments: [{ filename: "interview.ics", contentType: "text/calendar; method=REQUEST", contentBase64: Buffer.from(ics).toString("base64") }] });
 }
 
-export async function sendInterviewReminder(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { which: "before24h" | "before2h" }): Promise<SendResult> {
+type ReminderInput = InterviewMessageInput & { which: "before24h" | "before2h" };
+
+/** A reminder, written but not sent. */
+export function interviewReminderMessage(input: ReminderInput): { subject: string; text: string } {
   const { candidate, company, packet, interview } = input;
   const start = interview.startsAt!;
   const text = `Hi ${candidate.firstName},
@@ -259,7 +262,13 @@ ${interviewPlaceLine(input) ?? ""}
 Need to change it? ${scheduleUrl(input.appBaseUrl, interview)}/confirmed
 
 ${footer(packet, company)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: `interview_reminder_${input.which}`, subject: `${input.which === "before24h" ? "Tomorrow" : "Soon"}: ${interview.title} at ${company.name}`, text, idempotencyKey: `iv_reminder:${interview.id}:${interview.attempt}:${input.which}`, eventOnSent: "message.sent", to: candidate.email });
+  return { subject: `${input.which === "before24h" ? "Tomorrow" : "Soon"}: ${interview.title} at ${company.name}`, text };
+}
+
+export async function sendInterviewReminder(q: Queryable, integrations: Integrations, input: ReminderInput): Promise<SendResult> {
+  const { candidate, interview } = input;
+  const message = interviewReminderMessage(input);
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: `interview_reminder_${input.which}`, subject: message.subject, text: message.text, idempotencyKey: `iv_reminder:${interview.id}:${interview.attempt}:${input.which}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**

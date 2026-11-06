@@ -505,7 +505,7 @@ export const screen: WorkflowDefinition<State> = {
         await emit(ctx.q, { type: "candidate.recommended", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, subject: { type: "application", id: app.id }, payload: { recommendation: rec, assessmentId: asmt.id }, correlationId: ctx.run.id });
         // "Only a person": they stay where they are, and the one notice opens their page, never a step that books anything.
         if (g.outcome === "human_only") await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "screen.completed", title: `${name} finished the AI interview`, body: asmt.result.summary, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
-        else if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong AI interview. " : ""}${asmt.result.summary}`, action: { label: "Approve an interview", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
+        else if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong AI interview. " : ""}${asmt.result.summary}`, action: { label: "Set a date and time", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
         return { kind: "complete" };
       }
       // hold / decline_recommended: nothing moves; the owner sees the scorecard and decides.

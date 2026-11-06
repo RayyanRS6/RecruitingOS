@@ -410,7 +410,7 @@ describe("interview scheduling", () => {
     expect(await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "interview_new_times"))).toHaveLength(0);
     const notes = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_show")))).filter((x) => x.title === "Tom Berg did not come to the interview");
     expect(notes).toHaveLength(1);
-    expect(notes[0].body).toBe(`${row.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: send new times for the same round, or decide.`);
+    expect(notes[0].body).toBe(`${row.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: set a new date and time from their page, or decide.`);
     expect(notes[0].action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${cand.id}` });
     expect(await decide("Tom Berg")).toHaveLength(0);
     // a second outcome on the same interview is refused, as today, and writes nothing more
@@ -427,7 +427,7 @@ describe("interview scheduling", () => {
     expect(await decide("Lena Vogel")).toHaveLength(0);
     const missed = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.decision")))).filter((x) => x.title === "Lena Vogel's interview did not happen");
     expect(missed).toHaveLength(1);
-    expect(missed[0].body).toContain("Approve the same round again");
+    expect(missed[0].body).toContain("Set the same round again");
     expect(missed[0].action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${other.id}&step=interview` });
     // the approval card proposes the same round; the new invitation says sorry, and the missed interview stops asking for a decision
     const draft = (await (await json(owner, "GET", `/api/v1/applications/${other.id}/interview-draft`)).json()) as { roundKey: string; nextRound: boolean; sameRoundAgain?: string };

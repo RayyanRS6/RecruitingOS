@@ -699,7 +699,8 @@ candidatePages.get("/c/status/:token", async (c) => {
         {/* The choice the decision message points to (Q30), one click away from the decision itself. Someone locked was not
             offered it: nobody kept them, and their closing message says nothing about it. The button stays below. */}
         {told && !poolOptOut && !onFile ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
-        {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
+        {/* A person booked them before they did the AI interview: the booked time is what happens next, so no button says otherwise. Its link keeps working. */}
+        {openScreen_ && !booked ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
         {/* The line above already says the team would like to interview them: the card is the time to pick and its button. */}
         {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
         {/* "What to prepare:" names the round's topics (its purpose); the sentence after it is the one thing to bring, kept. */}

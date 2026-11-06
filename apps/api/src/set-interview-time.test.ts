@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { INTERVIEW_CHANGED_SINCE, NEVER_HEARD_OF_IT, REMINDER_TOO_LATE } from "@ros/agents";
-import { entitlements, zonedParts, zonedToUtc } from "@ros/core";
-import { applications, auditRecords, candidates, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, roles, users, withPlatform, workflowRuns } from "@ros/db";
+import { anonymizeCandidate, entitlements, zonedParts, zonedToUtc } from "@ros/core";
+import { applications, auditRecords, candidates, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, roles, screens, users, withPlatform, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, FakeGoogleCalendarProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -169,6 +169,10 @@ describe("a person sets the date and time", () => {
       expect((await eventsOf(out.id, "interview.booked"))[0].payload).toMatchObject({ setByPerson: true, attempt: 1, clashAllowed: false });
       const audits = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "interview.booked_on_behalf")));
       expect(audits.filter((a) => a.target?.id === out.id)[0]).toMatchObject({ reason: "a person set the date and time" });
+      // the run starts past `prepare`, so it never asks for hours, and an older worker in a release puts it back rather than failing it
+      await container.drain();
+      const [run] = await runs(out.id);
+      expect((await container.db.select({ step: workflowSteps.stepKey }).from(workflowSteps).where(eq(workflowSteps.runId, run.id)).orderBy(asc(workflowSteps.seq))).map((s) => s.step)).toEqual(["place_on_calendars", "confirm", "on_timer"]);
     });
 
     it("the candidate gets one email with the date, the time named by its zone, where, the calendar file and a way to ask for a change; the interviewer gets the brief; nobody is asked for hours", async () => {
@@ -286,13 +290,20 @@ describe("a person sets the date and time", () => {
       expect(await container.db.select().from(interviews).where(eq(interviews.applicationId, other.id))).toHaveLength(0);
     });
 
-    it("a mid AI interview candidate, and one from New, may be booked; the AI interview stays as it was", async () => {
+    it("someone who has not done the AI interview may be booked: its link stays open, and their page says the booked time is what happens next", async () => {
       const cand = await apply("Kit", "Moss");
-      const before = (await application(cand.id)).stage;
-      expect(["screen_invited", "screening", "triaged", "screen_complete"]).toContain(before);
+      expect((await application(cand.id)).stage).toBe("screen_invited");
+      const page = async () => (await app.request(`/c/status/${cand.statusToken}`)).text();
+      expect(await page()).toContain("Start your AI interview");
       const r = await routeA(cand.id);
       expect(r.status, await r.clone().text()).toBe(201);
       expect((await application(cand.id)).stage).toBe("interview_scheduled");
+      const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, cand.id));
+      expect(scr.status).toBe("invited");
+      const booked = await page();
+      expect(booked).toContain("Your interview is booked. The details are below and in your email.");
+      expect(booked).not.toMatch(/<a class="btn" href="\/c\/screen\//);
+      expect((await app.request(`/c/screen/${scr.token}`)).status).toBe(200);
     });
 
     it("who may press: an owner, an admin, a hiring manager and an ITS recruiter's roles hold it; HR and an interviewer see the time and cannot set it", async () => {
@@ -910,6 +921,17 @@ describe("a person sets the date and time", () => {
       expect(await noticesAbout("interview.accessibility", "Uri asked for an accommodation")).toHaveLength(count);
       await form(`/c/schedule/${token}/accommodation`, { accessibilityNote: "x".repeat(900) });
       expect((await interview(booked.id)).candidateAvailability?.accessibilityNote).toHaveLength(500);
+    });
+
+    it("a deletion at their request takes what they told us about a time with it, and calls the booked time off", async () => {
+      const { cand, booked, token } = await book("Uma", "Erased");
+      await form(`/c/schedule/${token}/accommodation`, { accessibilityNote: "Captions on, please." });
+      await form(`/c/schedule/${token}/reschedule`, { note: "Mornings suit me better." });
+      expect((await interview(booked.id)).candidateAvailability).toMatchObject({ accessibilityNote: "Captions on, please.", note: "Mornings suit me better." });
+      await withTenant(container.db, companyId, (tx) => anonymizeCandidate(tx, { companyId, candidateId: cand.candidateId, actor: { kind: "system", id: "set-interview-time.test" }, deleteFile: async () => undefined, now: container.engine.clock() }));
+      await container.drain();
+      expect(await interview(booked.id)).toMatchObject({ status: "cancelled", candidateAvailability: null });
+      expect((await application(cand.id)).stage).toBe("withdrawn");
     });
 
     it("the time zone they save is used by the page and by later reminders; one that does not exist is ignored; the email already sent named the company's", async () => {

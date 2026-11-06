@@ -52,7 +52,7 @@ export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
 const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: string }> = {
   invite_screen: { permission: "application.act", what: "send candidates an AI interview link" },
   ask_in_screen: { permission: "application.act", what: "send candidates an AI interview link" },
-  interview: { permission: "interview.request", what: "approve interviews" },
+  interview: { permission: "interview.request", what: "set up interviews" },
   advance_to_interview: { permission: "application.act", what: "move candidates forward" },
   hold: { permission: "application.act", what: "hold candidates" },
   move_to_talent_pool: { permission: "application.act", what: "move candidates to the talent pool" },
@@ -270,7 +270,7 @@ export function stageMoves(f: ApplicationFacts): StageMove[] {
       case "cancelled":
         return move(to, "none", null, { reason: "Only the candidate's own cancellation, or an interview they missed, puts someone here." });
       case "interviewing":
-        if (current === "cancelled") return move(to, "none", null, { reason: "They move back to Interviewing when they book a time. Send them new times from their page." });
+        if (current === "cancelled") return move(to, "none", null, { reason: "They move back to Interviewing when a time is booked. Set a date and time from their page." });
         return base === "new" || base === "no_ai_interview" ? move(to, "interview", "interview") : move(to, "none", null, { reason: base === "interviewing" ? null : past });
       case "offer":
         return base === "hired" || base === "not_moving_forward" ? move(to, "offer", null, { reason: past }) : move(to, "offer", "record_offer");
@@ -708,7 +708,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by, actor, reason: body.note ?? "owner decision" });
       await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { by: "human" } });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "advance_to_interview", note: body.note ?? null } });
-      return { ok: true, stage: "interview_recommended", ownerStage: "interviewing", candidateNotice: "not_told", next: "Marked for interview. Open the candidate and choose \"Approve an interview\" to pick the round and interviewers; times go out to the candidate from there." };
+      return { ok: true, stage: "interview_recommended", ownerStage: "interviewing", candidateNotice: "not_told", next: "Marked for interview. Open the candidate and choose \"Set a date and time\"." };
     }
   }
 }

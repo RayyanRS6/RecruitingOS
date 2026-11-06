@@ -173,6 +173,7 @@ export class WorkflowEngine {
   async start(q: Queryable, input: StartInput): Promise<{ runId: string; created: boolean }> {
     const def = this.defs.get(input.workflowKey);
     if (!def) throw new Error(`unknown workflow ${input.workflowKey}`);
+    if (input.startStep && !def.steps[input.startStep]) throw new Error(`workflow ${input.workflowKey} has no step ${input.startStep}`);
     if (input.idempotencyKey) {
       const existing = await q.select({ id: workflowRuns.id }).from(workflowRuns).where(eq(workflowRuns.idempotencyKey, input.idempotencyKey)).limit(1);
       if (existing[0]) return { runId: existing[0].id, created: false };
@@ -185,7 +186,7 @@ export class WorkflowEngine {
         workflowVersion: def.version,
         subject: input.subject,
         status: "running",
-        currentStep: def.initialStep,
+        currentStep: input.startStep ?? def.initialStep,
         state: input.state ?? {},
         idempotencyKey: input.idempotencyKey ?? null,
       })
