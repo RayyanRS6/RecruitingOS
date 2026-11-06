@@ -226,9 +226,10 @@ describe("the recruiter queue shows the draft a request is about (plan C12)", ()
     expect(workspaceHref({ roleId: "r1", applicationId: "a1", kind: CANDIDATE_ASKED_FOR_PERSON, message: true, contextSnapshot: {} })).toBe("/roles/r1/talent?open=a1&message=1");
     for (const words of [LOCKED_ANSWER_LABEL, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST]) {
       expect(words).toMatch(/only ITS reads/i);
-      expect(words).toMatch(/the candidate is not sent it/);
       expect(words).not.toMatch(/customer/i);
     }
+    expect(LOCKED_ANSWER_LABEL).toMatch(/the candidate is not sent it/);
+    for (const toast of [LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST]) expect(toast).toContain("To reach the candidate, write to them from their panel");
     const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
     expect(queue).toContain('toast(r?.lockedForCompany ? LOCKED_NOTE_TOAST : "Sent to the customer.")');
     expect(queue).toContain('r?.lockedForCompany ? LOCKED_RESOLVED_TOAST : "Resolved. The customer has your answer in full; your access ends in 24 hours."');

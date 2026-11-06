@@ -144,8 +144,8 @@ export const LOCKED_CALL_NOTES_HINT = "This candidate wrote to us or asked for a
  * see no thread), and it does not reach the candidate either, who is written to from their panel.
  */
 export const LOCKED_ANSWER_LABEL = "What you did or advised (only ITS reads this, and the candidate is not sent it)";
-export const LOCKED_NOTE_TOAST = "Kept on this request. Only ITS reads it, and the candidate is not sent it.";
-export const LOCKED_RESOLVED_TOAST = "Resolved. Only ITS reads your note, and the candidate is not sent it; your access ends in 24 hours.";
+export const LOCKED_NOTE_TOAST = "Kept on this request. Only ITS reads it. To reach the candidate, write to them from their panel.";
+export const LOCKED_RESOLVED_TOAST = "Resolved. Only ITS reads your note. To reach the candidate, write to them from their panel before your access ends in 24 hours.";
 
 const PAY_PER: Record<string, string> = { hourly: "an hour", salary: "a year" };
 const money = (n: unknown) => (typeof n === "number" ? `$${n.toLocaleString("en-US")}` : null);
