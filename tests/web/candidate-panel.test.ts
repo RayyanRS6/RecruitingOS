@@ -300,6 +300,15 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(suggestionAndDecision(timeline)).toEqual({ suggested: "Worth an AI interview", decided: "Shortlist", decidedBy: "Dana Whitfield" });
     expect(suggestionAndDecision(timeline.slice(0, 2))).toEqual({ suggested: "Worth an AI interview", decided: null, decidedBy: null });
     expect(suggestionAndDecision([])).toEqual({ suggested: null, decided: null, decidedBy: null });
+    // once the AI interview is read the card says what it leaned to, never "Worth an AI interview" after they did it
+    const read = (recommendation: string) => ev("screen.assessed", { recommendation, assessmentId: "a2" }, { kind: "agent", id: "screening" }, "2026-10-03T10:00:00.000Z");
+    expect(suggestionAndDecision([...timeline.slice(0, 2), read("strong_interview")])).toEqual({ suggested: "an interview", decided: null, decidedBy: null });
+    expect(suggestionAndDecision([...timeline.slice(0, 2), read("hold")]).suggested).toBe("a closer look before deciding");
+    expect(suggestionAndDecision([...timeline.slice(0, 2), read("decline_recommended")]).suggested).toBe("not moving forward");
+    // what a person decided before the AI interview came in still counts: nobody says "Nobody has decided yet" of a shortlisted person
+    expect(suggestionAndDecision([...timeline, read("interview")])).toEqual({ suggested: "an interview", decided: "Shortlist", decidedBy: "Dana Whitfield" });
+    // the record itself has no line of its own: "AI review of the AI interview written" says it
+    expect(historyItem(read("interview"))).toBeNull();
   });
 });
 

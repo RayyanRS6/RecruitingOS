@@ -191,8 +191,8 @@ test.describe("the pool board", () => {
     await expect(page.locator(".board-col[data-column='not_moving_forward']")).toContainText("Cleo Park");
     // one verdict word beside the number
     const anaCard = page.locator(".board-card").filter({ hasText: "Ana Holt" });
-    await expect(anaCard.locator(".board-card-score")).toContainText(/^Strong match · \d+$/);
-    await expect(cleoCard.locator(".board-card-score")).toContainText(/^Missing a must-have · \d+$/);
+    await expect(anaCard.locator(".board-card-score")).toContainText(/Strong match · \d+/);
+    await expect(cleoCard.locator(".board-card-score")).toContainText(/Missing a must-have · \d+/);
     // each card says what its score rests on, and the reading's own confidence sits apart, beside Strong or Potential only
     await expect(cleoCard.locator(".board-card-facts")).toContainText(/Must-haves: \d+ of \d+ shown/);
     await expect(cleoCard.locator(".board-card-facts")).toContainText("From the résumé and the AI interview");

@@ -152,6 +152,11 @@ describe("boardPlacement", () => {
     const skill = score(86, { breakdown: [{ ...partly.breakdown[0]!, mustHave: false, importance: "helpful" }] });
     expect(place({ match: skill })).toMatchObject({ column: "shortlist", reason: "Match score 86: Perio charting partly shown." });
     expect(place({ match: score(100, { breakdown: [] }) }).reason).toBe("Match score 100: every requirement judged so far is met.");
+    // everything judged is met and the number is low all the same: the line says why, counting what is open and naming none of it
+    const open = { key: "s", label: "A skill", mustHave: false, importance: "helpful", weightPct: 30, pointsLost: 30 } as const;
+    const thin = place({ latest: holding, match: score(33, { breakdown: [], unknown: [open, { ...open, key: "t" }], openPoints: 67, coverage: { known: 2, total: 4, words: "Based on 2 of 4 requirements" } }) });
+    expect(thin.reason).toBe("Match score 33: 2 of 4 requirements not shown yet.");
+    expect(thin.reason).not.toContain("A skill");
   });
 
   it("holds an eligibility answer for a person, with nothing to apply", () => {

@@ -171,6 +171,8 @@ describe("the match card", () => {
     expect(out.items).toEqual([{ key: "perio", label: "Perio charting experience", tag: "Must-have" }, { key: "chairside", label: "Chairside skill", tag: "Essential" }, { key: "patients", label: "Patient care", tag: "Important" }, { key: "software", label: "Dental software", tag: "Helpful" }]);
     expect(out.note).toBe("Not shown yet: no points so far, never counted as a no. Ask about them in the AI interview or a call.");
     expect(out.note).not.toMatch(/left out|counted against/);
+    // once the AI interview is done no second one is offered, so the way to ask is a call
+    expect(leftOut({ ...score(reading("triage", [must("rdh_license", "yes", "RDH")])), interview: "done" })!.note).toBe("Not shown yet: no points so far, never counted as a no. Ask about them on a call.");
     expect(leftOut(score(reading("triage", [must("rdh_license", "yes", "a"), must("perio", "yes", "b")], [skill("chairside", "evidenced", "c"), skill("patients", "evidenced", "d"), skill("software", "evidenced", "e")])))).toBeNull();
   });
 

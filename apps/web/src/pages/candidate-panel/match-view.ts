@@ -195,14 +195,17 @@ export function cappedLine(m: MatchScore): string | null {
   return m.capped ? `A must-have their own words show is not met holds the score at ${MISSING_MUST_HAVE_CAP} at most.` : null;
 }
 
-/** The requirements the evidence says nothing about: no points so far, and never read as a no. */
+/**
+ * The requirements the evidence says nothing about: no points so far, and never read as a no. Where to ask follows where the
+ * AI interview stands: once it is done no second one is offered, so it is a call.
+ */
 export function leftOut(m: MatchScore): { heading: string; items: Array<{ key: string; label: string; tag: string }>; note: string } | null {
   if (!m.unknown.length) return null;
   const n = m.unknown.length;
   return {
     heading: n === 1 ? "1 requirement not known yet" : `${n} requirements not known yet`,
     items: m.unknown.map((u) => ({ key: u.key, label: u.label, tag: criterionTag(u) })),
-    note: `Not shown yet: no points so far, never counted as a no. Ask about ${n === 1 ? "it" : "them"} in the AI interview or a call.`,
+    note: `Not shown yet: no points so far, never counted as a no. Ask about ${n === 1 ? "it" : "them"} ${m.interview === "done" ? "on a call" : "in the AI interview or a call"}.`,
   };
 }
 

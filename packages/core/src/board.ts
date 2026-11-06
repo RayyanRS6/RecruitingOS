@@ -72,12 +72,14 @@ const step = (kind: NextStepKind, reason: string): NextStep => ({ kind, label: N
 
 /**
  * "Match score 62: Perio charting partly shown." The costliest requirement judged in a line, or one not met in full whose
- * cost rounds to nothing; the score alone when every one judged is met. A requirement not shown yet is never named here.
+ * cost rounds to nothing. When every one judged is met, what keeps the number down is what nothing has shown yet, counted and
+ * never named ("Match score 33: 4 of 6 requirements not shown yet."); with nothing open, the score alone.
  */
 function scoreLine(match: MatchScore): string {
   const top = costliest(match) ?? match.breakdown.find((c) => c.pctMet < 100) ?? null;
   const head = `Match score ${match.score}`;
-  return top ? `${head}: ${top.label} ${top.finding.toLowerCase()}.` : `${head}: every requirement judged so far is met.`;
+  if (top) return `${head}: ${top.label} ${top.finding.toLowerCase()}.`;
+  return match.unknown.length ? `${head}: ${match.unknown.length} of ${match.coverage.total} requirements not shown yet.` : `${head}: every requirement judged so far is met.`;
 }
 
 function costliest(match: MatchScore | null): MatchCriterion | null {

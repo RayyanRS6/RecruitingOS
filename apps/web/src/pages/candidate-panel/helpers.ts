@@ -471,6 +471,9 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: `AI review of the résumé: ${REC_LABEL[String(p.recommendation ?? "")] ?? "done"}` };
     case "assessment.created":
       return { ...base, what: p.kind === "screen" ? "AI review of the AI interview written" : "AI review of the résumé written" };
+    // the line above says it, and "The assistant suggested an interview" says where it leaned
+    case "screen.assessed":
+      return null;
     case "application.stage_changed":
       return { ...base, what: `Now "${STAGE_LABEL[String(p.to ?? "")] ?? String(p.to ?? "").replace(/_/g, " ")}"`, ...(str(p.reason) && !REJECT_REASON_LABEL[String(p.reason)] ? { why: String(p.reason) } : {}) };
     case "application.rejected":
@@ -661,17 +664,22 @@ export function recruiterEventsFor(applicationId: string, events: ReadonlyArray<
   return events.filter((e) => e.subjectType === "escalation" && e.subjectId && ids.has(e.subjectId));
 }
 
+/** What the assistant suggested once it has read the AI interview, in words that finish "The assistant suggested …". */
+const SUGGESTED_AFTER_INTERVIEW: Record<string, string> = { strong_interview: "an interview", interview: "an interview", hold: "a closer look before deciding", decline_recommended: "not moving forward" };
+
 /**
- * "The assistant suggested Y; you decided X" (plan A10): the latest suggestion and the first thing a person decided
- * after it, so a reader sees at once where the two differ. Null parts when there is none yet.
+ * "The assistant suggested Y; you decided X" (plan A10): the latest suggestion, the AI interview's once it has been read (never
+ * "Worth an AI interview" after they did it), and the first thing a person decided since the assistant first suggested
+ * anything, so a reader sees at once where the two differ. Null parts when there is none yet.
  */
 export function suggestionAndDecision(timeline: readonly TimelineEvent[]): { suggested: string | null; decided: string | null; decidedBy: string | null } {
   const ordered = [...timeline].sort((x, y) => Date.parse(x.occurredAt) - Date.parse(y.occurredAt));
-  let at = -1;
-  for (let i = ordered.length - 1; i >= 0; i--) if (ordered[i].type === "application.triaged" && ordered[i].payload.recommendation) { at = i; break; }
-  if (at < 0) return { suggested: null, decided: null, decidedBy: null };
-  const suggested = REC_LABEL[String(ordered[at].payload.recommendation)] ?? String(ordered[at].payload.recommendation).replace(/_/g, " ");
-  for (const e of ordered.slice(at + 1)) {
+  const suggestions = ordered.filter((e) => (e.type === "application.triaged" || e.type === "screen.assessed") && e.payload.recommendation);
+  const latest = suggestions.at(-1);
+  if (!latest) return { suggested: null, decided: null, decidedBy: null };
+  const rec = String(latest.payload.recommendation);
+  const suggested = (latest.type === "screen.assessed" ? SUGGESTED_AFTER_INTERVIEW[rec] : null) ?? REC_LABEL[rec] ?? rec.replace(/_/g, " ");
+  for (const e of ordered.slice(ordered.indexOf(suggestions[0]) + 1)) {
     if (e.actor.kind !== "user" && e.actor.kind !== "recruiter") continue;
     const p = e.payload as Record<string, unknown>;
     let decided: string | null = null;
