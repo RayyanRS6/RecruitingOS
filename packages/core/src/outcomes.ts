@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from "drizzle-orm";
 import { RejectReason, type Actor, type ApplicationStage } from "@ros/contracts";
 import { applications, approvalRequests, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
@@ -141,7 +141,9 @@ export async function recordRoleOutcome(
  * the application returns to the stage the corrected outcome implies (or the stage it had before, when the outcome is voided).
  * A correction to "we declined the candidate" is filed under one of the fixed reasons (`declineReason`, plan G2; the
  * original's when left out). A role outcome voided reopens the role, and its closing message waiting for approval (Q30)
- * is withdrawn: the closing message is only for a closed role.
+ * is withdrawn: the closing message is only for a closed role. Someone the team can read stays where the close left them, for
+ * the team to move. Someone locked it moved and nobody has told has nobody who could (Rule 2): they go back to waiting, so the
+ * date they were promised, the close-out note and an upgrade all work as if the job had not closed.
  */
 export async function correctOutcome(
   q: Queryable,
@@ -188,7 +190,10 @@ export async function correctOutcome(
       const before = (original.details as { previousStatus?: string }).previousStatus ?? "open";
       const previous = before === "pending_approval" ? "draft" : before;
       await q.update(roles).set({ status: previous, closedAt: null, closeReason: null }).where(eq(roles.id, original.roleId));
-      const closing = (await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, original.roleId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")))).filter((r) => (r.proposal as { kind?: unknown }).kind === "role_closed");
+      await lockApplicants(q, original.roleId);
+      const waitingAgain = await q.update(applications).set({ stage: "received", stageChangedAt: now.toISOString() }).where(and(eq(applications.roleId, original.roleId), eq(applications.stage, "talent_pool"), isNotNull(applications.lockedAt), eq(applications.toldState, "not_told"))).returning({ id: applications.id });
+      for (const a of waitingAgain) await emit(q, { type: "application.stage_changed", companyId: original.companyId, actor: input.actor, subject: { type: "application", id: a.id }, payload: { from: "talent_pool", to: "received", reason: "the role was reopened" } });
+      const closing =(await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, original.roleId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")))).filter((r) => (r.proposal as { kind?: unknown }).kind === "role_closed");
       for (const r of closing) {
         await q.update(approvalRequests).set({ status: "cancelled", decidedAt: now.toISOString(), decisionNote: "the role was reopened" }).where(eq(approvalRequests.id, r.id));
         await emit(q, { type: "approval.cancelled", companyId: original.companyId, actor: input.actor, subject: { type: "approval_request", id: r.id }, payload: { actionType: "disposition.send", applicationId: null, by: "outcome_corrected" } });
