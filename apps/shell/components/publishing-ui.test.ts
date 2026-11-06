@@ -204,7 +204,7 @@ describe("the approval card (D1, D5, D6, D9)", () => {
   });
 
   it("'Use for every job' is a small link, only for those who may change the company", () => {
-    expect(html).toContain('<a href="/setup#setup-company" class="small w-fit">Use for every job</a>');
+    expect(html).toMatch(/<a class="link-btn small [^"]*" href="\/setup#setup-company">Use for every job<\/a>/);
     for (const canChangeCompany of [false, undefined]) {
       const manager = cardOf(role, { canChangeCompany });
       expect(manager).not.toContain("Use for every job");

@@ -424,7 +424,7 @@ function BenefitsField({ roleId, version, item, canChangeCompany, refresh, toApp
           <Button type="submit" size="sm" variant="primary" loading={save.isPending} disabled={!ready}>Save</Button>
         </div>
       </Field>
-      {canChangeCompany ? <Link to="/setup#setup-company" className="small w-fit">Use for every job</Link> : null}
+      {canChangeCompany ? <Link to="/setup#setup-company" className="link-btn small inline-flex w-fit items-center pointer-coarse:min-h-10">Use for every job</Link> : null}
     </form>
   );
 }
