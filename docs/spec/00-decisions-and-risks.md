@@ -481,7 +481,9 @@ all but one plan, with software hiding some applicants from the employer by a pl
 unpaid partner, one role, and none of this. It has **not** been accepted again. Until the founder accepts it again in
 writing, dated here, or counsel has answered: testers use made-up applicants only, no real company goes on Free, and the
 counsel register's items 27 to 34 stay open like any other (`docs/spec/11`; `docs/workflow-decisions.md`, PQ-3).
-Recommended: nothing real until the founder has signed and counsel has at least answered item 27.
+Recommended: nothing real until the founder has signed and counsel has at least answered item 27. Since 6 November 2026
+(`SIGNUP_MODE=approval`; `docs/workflow-decisions.md`, "6 November 2026") anyone with a Google or Microsoft account can ask, and
+nothing but an administrator's Accept stands between them and a real job: the code checks none of this, so it is held at that press.
 
 CI note, 22 September: the browser journeys run in CI against the Next.js development server, which reset one
 connection mid-test on a documentation-only commit (run 35783580371, `ECONNRESET` on a request the same test had made

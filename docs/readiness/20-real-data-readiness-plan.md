@@ -116,4 +116,6 @@ a price on all but one plan, and hide some applicants from the employer by a pla
 (section C) and has its own open questions (`docs/spec/11` items 27 to 34; `docs/workflow-decisions.md`, PQ-1 to PQ-18).
 Testers use made-up applicants only. No real company goes on one of these plans, and no real candidate applies to one,
 until the founder accepts the risk again in writing, dated in `docs/spec/00` section Q, or counsel has answered, and
-every blocker in section B still holds for them. Email must also be live: "we email you either way" depends on it.
+every blocker in section B still holds for them. Email must also be live: "we email you either way" depends on it. Since
+6 November 2026 (`SIGNUP_MODE=approval`) anyone with a Google or Microsoft account can ask, and the code checks none of this: it
+is held at the administrator's Accept.

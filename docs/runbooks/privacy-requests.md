@@ -26,6 +26,10 @@ Status: built with synthetic data on 18 September 2026 (admin console → Privac
 6. **Confirm completion** to the requester from `privacy@`, stating what was done and what was retained and why (in plain language).
 7. **Close the record** with the completion date, the handler, and a link to the confirmation.
 
+## Someone who asked for access (6 November 2026)
+
+A person who signed in and sent the company form under `SIGNUP_MODE=approval`, waiting or declined, is not a candidate. The public form answers as if their company did not exist, so the privacy mailbox is how they reach us. **Record a request from the privacy mailbox** can record it against their company, but access, correction and deletion all need a candidate, which they are not, so the console cannot carry it out. What we keep about them and for how long is not decided (register item 35; `docs/workflow-decisions.md`, AQ-1). Until it is, delete nothing by hand: tell the founder the same day, treat the 45 days as running, and say from `privacy@` what we hold.
+
 ## Someone locked (the plans of 5 November 2026)
 
 An application past a plan's candidates per job is locked: the hiring team cannot read it, and no AI has. Every step above works the same for them, from the same console. Decided defaults, for counsel to confirm (register items 30, 31 and 33; `docs/workflow-decisions.md`, PQ-6, PQ-13, PQ-15):
