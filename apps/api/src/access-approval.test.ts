@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
 import { CreateCompany, FREE_PLAN_KEY, oneLine, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
-import { createApplicationLink, createInvitation } from "@ros/core";
+import { createApplicationLink, createInvitation, renderAlertEmail } from "@ros/core";
 import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
@@ -12,7 +12,7 @@ import { loadEnv, signupModeOf } from "./env";
 import { runHourlyChecks, runMaintenance } from "./maintenance";
 import { POLICIES } from "./middleware/rate-limit";
 import { resetPublicFeedCache } from "./pages/public-feeds";
-import { companyRequestDetails, sendAccessRequest } from "./services/access-requests";
+import { companyRequestDetails, decideAccess, sendAccessRequest } from "./services/access-requests";
 import { emailReallyLeft } from "./services/company-trust";
 import { signupDoor } from "./services/companies";
 import { backfillPublishing } from "./services/publishing-backfill";
@@ -164,6 +164,16 @@ describe("a person's words are data", () => {
     expect(hand.locations[0].region).toBe("T X");
     // what is left of a name that was only line breaks is no name
     expect(() => companyRequestDetails({ ...body, name: " \r\n\t " })).toThrow(/missing or invalid/);
+  });
+
+  it("the accepted email says the company's name in one line, whatever is in the row", () => {
+    const { subject, text } = renderAlertEmail({ kind: "company.access_accepted", recipientName: "Sam Asker", companyName: "Acme\r\nBcc: evil@example.test", roleTitle: null, link: "https://app.example/", appBaseUrl: "https://app.example" });
+    expect(subject).toBe("Your request was approved");
+    expect(text).toContain("Your request was approved.");
+    expect(text).toContain("Company: Acme Bcc: evil@example.test\n");
+    expect(text).toContain("Open it: https://app.example/\n");
+    expect(text).toContain("This email is always sent");
+    expect(text.split("\n").filter((l) => l.startsWith("Bcc:"))).toEqual([]);
   });
 });
 
@@ -406,6 +416,24 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.statusOf(race.id)).toBe("active");
     expect(await w.eventsOf(race.id, "company.access_accepted")).toHaveLength(1);
     expect(await w.noticesOf(race.id)).toHaveLength(1);
+  });
+
+  it("a decision holds the company's row until it commits, which is what makes the second press wait and then read the first", async () => {
+    // PGlite runs one connection, so it cannot show a second transaction waiting (on Postgres, the presses above race for
+    // real). What it can show is the row lock itself: a row locked FOR UPDATE carries the locking transaction's id in xmax.
+    const asker = await w.ask("locked@stranger.test", "Locked Dental");
+    const actor = { kind: "user" as const, id: "ada", name: "Ada Admin" };
+    await withPlatform(w.container.db, async (tx) => {
+      const lock = async () => {
+        const result: unknown = await tx.execute(sql`select xmax::text as xmax, pg_current_xact_id()::text as me from companies where id = ${asker.id}`);
+        return ((Array.isArray(result) ? result : (result as { rows: unknown[] }).rows) as Array<{ xmax: string; me: string }>)[0];
+      };
+      expect((await lock()).xmax).toBe("0");
+      await decideAccess(tx, w.container, { companyId: asker.id, decision: "decline", actor, now: w.container.engine.clock() });
+      const held = await lock();
+      expect(held.xmax).toBe(held.me);
+    });
+    expect(await w.statusOf(asker.id)).toBe("declined");
   });
 
   it("only a platform administrator with a second factor, a confirmation, and a real company", async () => {
