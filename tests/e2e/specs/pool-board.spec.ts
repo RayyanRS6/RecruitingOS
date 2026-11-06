@@ -95,10 +95,6 @@ async function sendTheAiInterview(cand: Page, persona: Persona) {
  * the board places them once it is scored.
  */
 async function seedPool(request: APIRequestContext, browser: Browser, base: string) {
-  // This team sorts the pool itself: "Recommend who to interview" is "Only a person", so a strong AI interview stays in
-  // New for the board instead of moving on to "Recommended for interview" by itself (the default, "Do it and tell me").
-  const policy = await request.put(`${base}/api/v1/policies`, { data: { actionType: "application.recommend_interview", level: "human_only", approverRoles: [] } });
-  expect(policy.ok(), await policy.text()).toBeTruthy();
   const s = (await (await request.post(`${base}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license, periodontal charting. Just draft it." } })).json()) as { session: { id: string } };
   const { roleId } = (await (await request.post(`${base}/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string };
   expect((await request.post(`${base}/api/v1/roles/${roleId}/approve`, { data: { version: 1, note: "Looks right." } })).ok()).toBeTruthy();

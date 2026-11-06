@@ -390,7 +390,7 @@ describe("role report", () => {
     const col = (name: string, column: (typeof APPLICANT_COLUMNS)[number]) => cells(name)[APPLICANT_COLUMNS.indexOf(column)];
     expect(col("Ben Osei", "Source")).toBe("Referral");
     expect(col("Ben Osei", "Source detail")).toBe("Dr. Patel");
-    expect(col("Ben Osei", "Stage")).toBe("Recommended for interview");
+    expect(col("Ben Osei", "Stage")).toBe("Interview to set up");
     expect(col("Ben Osei", "Decision")).toBe("Moved to interview");
     expect(col("Cara Diaz", "Source")).toBe("Indeed");
     expect(col("Dev Patel", "Source detail")).toBe("LinkedIn campaign");

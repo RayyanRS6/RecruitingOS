@@ -294,14 +294,15 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     for (const f of (asmt.result as { questionFindings: Array<{ evidence?: { quote?: string } }> }).questionFindings) if (f.evidence?.quote) expect(said).toContain(f.evidence.quote.toLowerCase());
     for (const s of asmt.result.strengths) if (s.evidence.quote) expect(said).toContain(s.evidence.quote.toLowerCase());
     expect(["strong_interview", "interview"]).toContain((asmt.result as { recommendation: string }).recommendation);
-    // policy application.recommend_interview = auto_notify: the stage moves and the owner is told; nobody is rejected
-    expect((await container.db.select().from(applications).where(eq(applications.id, a.id)))[0].stage).toBe("interview_recommended");
+    // policy application.recommend_interview = human_only by default (6 November 2026): a person decides who to interview,
+    // so she stays in New and the owner is told once; the assistant's suggestion stays in her history; nobody is rejected
+    expect((await container.db.select().from(applications).where(eq(applications.id, a.id)))[0].stage).toBe("screen_complete");
     expect(await eventsOf("screen.started")).toHaveLength(1);
     expect(await eventsOf("screen.completed")).toHaveLength(1);
     expect(await eventsOf("screen.assessed")).toHaveLength(1);
     expect(await eventsOf("candidate.recommended")).toHaveLength(1);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
-    expect(notes.some((n) => n.kind === "candidate.recommended" && /Maria/.test(n.title))).toBe(true);
+    expect(notes.filter((n) => /Maria/.test(n.title)).map((n) => n.title)).toEqual(["Maria Reyes finished the AI interview"]);
     expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).length).toBeGreaterThanOrEqual(1);
   });
 
@@ -358,7 +359,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     const rungs = async () => (await container.db.select().from(interventions).where(eq(interventions.detector, "candidates_waiting"))).sort((x, y) => (x.sentAt < y.sentAt ? -1 : 1)).map((i) => i.ladderLevel);
     // the ladder's own email reaches whoever wants roles that need attention as they happen (plan B3); Dana does
     expect((await json("PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "stuck", cadence: "immediate" }] })).status).toBe(200);
-    await advance(4 * days); // Maria has been "recommended for interview" with no owner action
+    await advance(4 * days); // Maria has waited in New since her AI interview, with no owner action
     expect(await rungs()).toEqual(["brief"]);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string }>;
     expect(notes.some((n) => n.kind === "stuck.candidates_waiting")).toBe(true);
@@ -386,7 +387,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
   it("Step 11, Scheduling: the owner approves the round and interviewers; times go out; the candidate picks in her own zone; booked once, confirmed with an invitation, reminded, closed (Slice 5)", async () => {
     const H = 3600_000;
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    expect(a.stage).toBe("interview_recommended");
+    expect(a.stage).toBe("screen_complete");
     ownerUserId = ((await (await json("GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
     // preconditions: the owner declares hours (no calendar connected in this scenario)
     expect((await json("PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3 })).status).toBe(200);

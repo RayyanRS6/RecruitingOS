@@ -43,7 +43,7 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString
 
 const maria = {
   id: "a1", stage: "triaged", stageLabel: "Ready for your review", group: "waiting_on_you", source: "careers_page", createdAt: daysAgo(4), eligibility: { passed: true, failedRules: [], unverifiable: [] },
-  ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [] as string[], stageMoves: moves("new", { offer: 'Record an offer once they are a finalist (they are at "Ready for your review").' }), toldState: null as string | null,
+  ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [] as string[], stageMoves: moves("new", { offer: "Record an offer once they are a finalist." }), toldState: null as string | null,
   candidate: { id: "c1", name: "Maria Reyes", email: "maria@example.com", phone: null, locationText: "Tustin, CA" }, extractionSummary: null,
   assessment: { overall: "strong", confidence: "high", summary: "Active RDH license.", strengths: [], concerns: [] }, evidence,
   appliedAt: daysAgo(4), stageChangedAt: daysAgo(3), daysInStage: 3, candidateToldAt: null, decisionMessageWaiting: false, score: 91 as number | null, cancelled: null,
@@ -538,7 +538,7 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
     ...over,
   });
   const ana = {
-    ...maria, id: "a3", stage: "interview_recommended", stageLabel: "Recommended for interview", group: "in_process", ownerStage: "cancelled", ownerStageLabel: "Asked for new times", stageMoves: moves("cancelled"), score: 70,
+    ...maria, id: "a3", stage: "interview_recommended", stageLabel: "Interview to set up", group: "in_process", ownerStage: "cancelled", ownerStageLabel: "Asked for new times", stageMoves: moves("cancelled"), score: 70,
     candidate: { id: "c3", name: "Ana Lopez", email: "ana@example.com", phone: null, locationText: null }, cancelled: view(),
   };
   const cleo = {

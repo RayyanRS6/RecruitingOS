@@ -348,11 +348,19 @@ export const REJECT_REASON_LABEL: Record<string, string> = {
 /** The reasons a person picks when moving someone to Not moving forward (the fixed list; eligibility has its own card). */
 export const DECLINE_REASONS: ReadonlyArray<[string, string]> = ["not_a_match_experience", "not_a_match_skills", "compensation_mismatch", "location_or_schedule", "position_filled", "candidate_unresponsive", "other"].map((k) => [k, REJECT_REASON_LABEL[k]]);
 
+/**
+ * Whether More offers "Send a new AI interview link": until they have sent one. After that there is nothing more to send, and
+ * "interview" means one with a person (the owner, 6 November 2026: "when the interview has been done by AI it can interview again").
+ */
+export function offersNewInterviewLink(a: Pick<ApplicationDetail, "screens">): boolean {
+  return !a.screens.some((s) => s.status === "completed");
+}
+
 /** The assistant's suggestion after reading the résumé or the screen. Its "hold" means thin evidence, never the On hold mark. */
 export const REC_LABEL: Record<string, string> = { screen: "Worth an AI interview", hold: "Thin evidence: your call", review_manually: "Needs a closer look", strong_interview: "Strong: interview", interview: "Interview", decline_recommended: "Concern raised" };
 
 /** Owner Mode never shows raw stage names (docs/07); mirrors STAGE_LABEL in packages/core, in the staff glossary's words (screening chat). */
-export const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview", screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
+export const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview", screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Interview to set up", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
 
 const MARK_DONE: Record<MarkKind, string> = { longlist: "Put on the longlist", shortlist: "Put on the shortlist", on_hold: "Put on hold", not_a_fit_for_now: "Set aside: not a fit for now" };
 
@@ -515,7 +523,7 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
     case "candidate.recommended":
       if (p.by === "approval") return { ...base, what: "Moved to Interviewing", who: `Suggested by the assistant, approved by ${e.actor.name ?? "a team member"}` };
       if (p.by === "human") return { ...base, what: "Marked for interview" };
-      return { ...base, what: "Recommended for interview" };
+      return { ...base, what: "The assistant suggested an interview" };
     case "interview.decision_recorded":
       return { ...base, what: `Decision after the interview: ${String(p.decision ?? "").replace(/_/g, " ")}`, ...(note ? { why: note } : {}) };
     // The Cancelled column (founder decisions 1A to 4A): in, out, and what became of the new times.

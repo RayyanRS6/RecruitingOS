@@ -277,11 +277,11 @@ describe("the stage button's choices", () => {
   it("greys out every move that is not allowed, with its reason, and never the current stage", () => {
     const blocked = stageBlocked([
       move({ to: "new", via: "none", allowed: false, current: true, blockedReason: "They are here now." }),
-      move({ to: "offer", via: "offer", allowed: false, blockedReason: 'Record an offer once they are a finalist (they are at "Ready for your review").' }),
+      move({ to: "offer", via: "offer", allowed: false, blockedReason: "Record an offer once they are a finalist." }),
       move({ to: "hired", via: "record_hire", allowed: false }),
       move({}),
     ]);
-    expect(blocked).toEqual({ offer: 'Record an offer once they are a finalist (they are at "Ready for your review").', hired: "Not available at this step." });
+    expect(blocked).toEqual({ offer: "Record an offer once they are a finalist.", hired: "Not available at this step." });
   });
 });
 

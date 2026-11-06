@@ -252,7 +252,9 @@ export type MarkView = { mark: MarkKind; remindAt?: string | null } | null | und
 export const AI_INTERVIEW_PHASE: readonly ApplicationStage[] = ["applied", "received", "eligible", "screen_invited", "screening"];
 /** New: the AI interview done, the team reviewing without it (the reading failed, or "Stop this screening chat"), or held on an eligibility answer. */
 const NEW_PHASE: readonly ApplicationStage[] = ["ineligible", "triaged", "screen_complete"];
-// interview_recommended is the decision to interview (a person's, or the assistant's under the company's settings), so it sits with the interviews
+// "Interviewing" means a person decided (6 November 2026): an interview is being arranged, is booked, was held or is being
+// decided on. interview_recommended is that decision, so it sits with the interviews; the assistant writes it only for a
+// company that chose "Do it and tell me" (policy application.recommend_interview).
 const INTERVIEW_PHASE: readonly ApplicationStage[] = ["interview_recommended", "interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check"];
 const OFFER_PHASE: readonly ApplicationStage[] = ["offer_draft", "offer_approval", "offer_sent", "negotiation", "accepted", "onboarding"];
 
@@ -399,7 +401,7 @@ export const STAGE_LABEL: Record<ApplicationStage, string> = {
   screen_invited: "Invited to an AI interview",
   screening: "In the AI interview",
   screen_complete: "AI interview done",
-  interview_recommended: "Recommended for interview",
+  interview_recommended: "Interview to set up",
   interview_scheduled: "Interviewing",
   interview_complete: "Interview done: decision needed",
   debrief: "Deciding",

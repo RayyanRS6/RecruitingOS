@@ -10,7 +10,7 @@ import { canSeeActivity } from "../../roles";
 import { isTextEntry } from "../../start-hire";
 import { stageBlocked, stageIntent, type PanelStep } from "../../talent-actions";
 import { resumeOnlyChip } from "../../talent-list";
-import { NO_COMPOSE, PANEL_TABS, composeFor, hasUnsent, latestByTab, markSeen, neighbours, unreadTabs, type PanelTab, type SeenTabs } from "./helpers";
+import { NO_COMPOSE, PANEL_TABS, composeFor, hasUnsent, latestByTab, markSeen, neighbours, offersNewInterviewLink, unreadTabs, type PanelTab, type SeenTabs } from "./helpers";
 import { DraftContext, useCandidateAction, useViewer } from "./hooks";
 import { matchOf, type NextStepAction } from "./match-view";
 import { NeedsYou } from "./needs-you";
@@ -159,7 +159,7 @@ export function CandidatePanel(props: PanelProps) {
   const more: MenuItem[] = a
     ? [
         // Every applicant gets the AI interview by itself (20 Oct 2026); a person's invitation is a new link.
-        { id: "invite_screen", label: "Send a new AI interview link", icon: "send", disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen },
+        ...(offersNewInterviewLink(a) ? [{ id: "invite_screen", label: "Send a new AI interview link", icon: "send" as const, disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen }] : []),
         { id: "record_outcome", label: "Record an outcome", icon: "edit", disabled: !a.allowedActions.includes("record_outcome"), reason: a.blockedReasons.record_outcome },
       ]
     : [];

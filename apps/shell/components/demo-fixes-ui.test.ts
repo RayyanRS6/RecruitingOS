@@ -85,7 +85,7 @@ describe("an interview's Link line", () => {
   const interview = (over: Record<string, unknown> = {}) => ({
     id: "iv1", applicationId: "a1", roleId: "r1", roleTitle: "Dental Hygienist", roundKey: "r1", title: "Conversation with the office manager", format: "video", durationMinutes: 30, status: "scheduling", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, linkSource: "calendar", attempt: 1,
     offeredSlots: [], selectedSlot: null, candidateAvailability: null, schedulingWindow: { fromDate: "2026-10-14", toDate: "2026-10-23" }, rescheduleCountCandidate: 0, outcome: null, decision: null, decisionNote: null, reminders: {}, cancelReason: null, scheduleTokenExpiresAt: null, createdAt: daysAgo(1),
-    candidate: { firstName: "Maria", lastName: "Reyes", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, participants: [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", status: "invited" }], calendarRefs: {}, followUp: null,
+    candidate: { firstName: "Maria", lastName: "Reyes", timezone: null, stage: "interview_recommended", stageLabel: "Interview to set up" }, participants: [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", status: "invited" }], calendarRefs: {}, followUp: null,
     timeline: [], availabilitySources: [{ userId: "u1", source: "declared" as "calendar" | "declared" | "none", calendarStatus: null as string | null }], brief: null,
     ...over,
   });
@@ -133,7 +133,7 @@ describe("Setup's calendar line", () => {
 
 describe("the interview approval's meeting link", () => {
   const maria = {
-    id: "a1", roleId: "r1", stage: "interview_recommended", stageLabel: "Recommended for interview", group: "waiting_on_you", source: "careers_page", createdAt: daysAgo(4), ownerStage: "interviewing", ownerStageLabel: "Interviewing", mark: null, tags: [], stageMoves: [], toldState: null, cancelled: null, score: null,
+    id: "a1", roleId: "r1", stage: "interview_recommended", stageLabel: "Interview to set up", group: "waiting_on_you", source: "careers_page", createdAt: daysAgo(4), ownerStage: "interviewing", ownerStageLabel: "Interviewing", mark: null, tags: [], stageMoves: [], toldState: null, cancelled: null, score: null,
     eligibility: { passed: true, failedRules: [], unverifiable: [] }, evidence: { needsCloserLook: false, reason: null, assessmentUnavailable: false, resumeUnreadable: false, unknowns: [], unknownCount: 0, topStrength: null, topConcern: null, confidenceReasons: [] },
     candidateToldAt: null, rejectReason: null, rejectNote: null, declineMessage: "sends", allowedActions: ["interview", "reject", "record_outcome", "set_mark"], blockedReasons: {}, interviews: [],
     interviewPlan: [{ key: "r1", title: "Conversation with the office manager", durationMinutes: 30, format: "video", interviewerUserIds: ["u1"], purpose: "" }],

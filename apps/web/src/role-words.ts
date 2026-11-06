@@ -48,7 +48,7 @@ export function actorWords(actor: RoleEvent["actor"]): string {
 /** Mirrors STAGE_LABEL in packages/core, in the staff glossary's words (screening chat). */
 const STAGE_WORDS: Record<string, string> = {
   applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview",
-  screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done",
+  screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Interview to set up", interview_scheduled: "Interviewing", interview_complete: "Interview done",
   debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out",
   negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool",
 };
@@ -125,7 +125,7 @@ export function describeRoleEvent(e: RoleEvent): string {
     "application.rejected": "A candidate was declined by a person",
     "application.withdrawn": "A candidate withdrew",
     "application.moved_to_talent_pool": "A candidate was added to the talent pool",
-    "candidate.recommended": "A candidate was recommended for interview",
+    "candidate.recommended": p.by ? "A candidate was moved to interview" : "The assistant suggested an interview",
     "screen.invited": "A candidate was invited to an AI interview",
     "screen.completed": "A candidate finished the AI interview",
     "screen.cancelled": p.reason === "stopped_by_team" ? "An AI interview invitation was stopped by the team" : p.reason === "deletion_request" ? "An AI interview was closed: the candidate's information was deleted" : "An AI interview was closed: the candidate is no longer in the process",

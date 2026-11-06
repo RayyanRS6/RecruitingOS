@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Actor, ApplicationStage, MembershipRole, OfferMadeResult, RecordOfferMade } from "@ros/contracts";
-import { STAGE_LABEL, audit, companyToday, emit, openEscalationsFor, transition } from "@ros/core";
+import { audit, companyToday, emit, openEscalationsFor, transition } from "@ros/core";
 import { type applications, companies, offers, roles, users, withPlatform, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { HttpError } from "../middleware/errors";
@@ -24,7 +24,8 @@ type App = typeof applications.$inferSelect;
 export function offerBlockedReason(stage: ApplicationStage): string | null {
   if (OFFER_FROM.includes(stage)) return null;
   if (stage === "offer_sent" || stage === "negotiation") return "An offer is already recorded for them. Record whether they accepted or declined.";
-  return `Record an offer once they are a finalist (they are at "${STAGE_LABEL[stage]}").`;
+  // The stage menu's line, so it never names an internal step.
+  return "Record an offer once they are a finalist.";
 }
 
 export async function recordOfferMade(tx: Tx, input: { app: App; by: MembershipRole; actor: Actor; body: RecordOfferMade; now: Date }): Promise<OfferMadeResult> {

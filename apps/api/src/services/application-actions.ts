@@ -708,7 +708,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by, actor, reason: body.note ?? "owner decision" });
       await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { by: "human" } });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "advance_to_interview", note: body.note ?? null } });
-      return { ok: true, stage: "interview_recommended", ownerStage: "interviewing", candidateNotice: "not_told", next: "Marked as recommended for interview. Open the candidate and choose \"Approve an interview\" to pick the round and interviewers; times go out to the candidate from there." };
+      return { ok: true, stage: "interview_recommended", ownerStage: "interviewing", candidateNotice: "not_told", next: "Marked for interview. Open the candidate and choose \"Approve an interview\" to pick the round and interviewers; times go out to the candidate from there." };
     }
   }
 }

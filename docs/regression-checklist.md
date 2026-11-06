@@ -1023,16 +1023,16 @@ Who: someone signing in for the first time (on a phone too) and the platform adm
 The founder's rule: no change may lose or quietly alter existing companies, roles, applications, interviews, messages or history.
 
 - [ ] **Migrations only add.** Add tables, columns and indexes. Never use `DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, or a `DELETE` without `WHERE`. The validator refuses these unless the statement carries `-- allow-destructive: <reason>` (`packages/db/src/cli/validate.ts:16,45-46`). Any such comment needs the founder's written OK and a confirmed backup first.
-- [ ] A new migration takes the next number (the latest is `0036_application_locked_at.sql`, so the next is `0037_…`). The production runbook counts migrations (`docs/runbooks/production-setup.md`, step 3 and "The plans"), so bring that count up too. A migration file that has already been applied anywhere is never edited; add a new one instead.
+- [ ] A new migration takes the next number (the latest is `0037_person_decides_who_to_interview.sql`, so the next is `0038_…`). The production runbook counts migrations (`docs/runbooks/production-setup.md`, step 3 and "The plans"), so bring that count up too. A migration file that has already been applied anywhere is never edited; add a new one instead.
 - [ ] New columns are nullable or have a default, so existing rows stay valid. Any backfill happens in the same migration and records what it changed, once. Examples: 0027 records `company.verified` events; 0035 records one history event per row.
 - [ ] Every new company-owned table has row-level security, a policy on `company_id`, and the right tenant grants. The validator checks this, and so does `db/rls.test.ts` ("every table with a company_id has row-level security enabled and a tenant policy").
 - [ ] Every new query runs inside `withTenant` (or `withPlatform` on purpose). The raw-query ratchet `policy/raw-db-access.test.ts` has blind spots (KB #47), so check this by reading the code as well.
-- [ ] **A data-migration test** for any migration that changes existing data. Follow the pattern of the three that exist:
+- [ ] **A data-migration test** for any migration that changes existing data. Follow the pattern of the four that exist:
   1. copy the migrations numbered below N into a temporary folder and migrate;
   2. insert rows shaped the old way;
   3. add migration N and migrate again;
   4. check the backfill happened exactly once, the history was written once, the policy and grants exist, and nothing can be deleted.
-  The three examples are `db/marks-told-migration.test.ts` (0026), `db/company-verification-migration.test.ts` (0027) and `db/followups-migration.test.ts` (0035).
+  The four examples are `db/marks-told-migration.test.ts` (0026), `db/company-verification-migration.test.ts` (0027), `db/followups-migration.test.ts` (0035) and `db/stage-repair-migration.test.ts` (0037).
 - [ ] `db/schema-drift.test.ts` passes: the code's schema matches the migrated database.
 - [ ] `db/migrate.test.ts` passes. Each file is applied whole, a half-applied file is repaired, and the real migrations still apply to a fresh database.
 - [ ] `db/migrations-ledger.test.ts` passes. The app and worker roles can read the ledger and cannot change it. The production app refuses to start while a migration is pending.

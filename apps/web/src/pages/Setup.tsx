@@ -367,7 +367,7 @@ function actionLabel(a: string): string {
     "role_packet.approve": "Approve a drafted job, pay included", "posting.sponsor_spend": "Spend on sponsored ads within budget",
     "application.triage": "Read and assess applicants (information only)", "application.hold_ineligible": "Hold an applicant who answers no to an eligibility question", "application.reject_ineligible": "Decline an applicant held on an eligibility answer",
     "application.reject_on_assessment": "Decline a candidate on judgment", "application.invite_screen": "Invite every applicant to the AI interview", "screen.conduct": "Run the AI interview",
-    "application.recommend_interview": "Recommend who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate",
+    "application.recommend_interview": "Suggest who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate",
     "disposition.send": "Send the decision message when someone presses Send",
     "message.still_reviewing": STILL_REVIEWING_LABEL,
     "interview.request": "Advance someone to an interview", "interview.schedule": "Book interviews on calendars",
@@ -392,6 +392,7 @@ const ACTION_NOTE: Record<string, string> = {
  * message says what happens after five working days in every case (founder decision D-03 = A, 14 Oct 2026).
  */
 const ACTION_MORE: Record<string, string> = {
+  "application.recommend_interview": "Only a person: nobody moves after the AI interview. They stay in New, you hear about each one once, and you decide. Ask me first: the assistant's suggestion waits on a card for your yes or no. Do it and tell me: the assistant moves the ones it likes to Interviewing and tells you. Do it: the same, without telling you.",
   "disposition.send": "Declining never sends anything by itself. Do it: the message goes when someone presses Send, and if nobody has told someone five working days after a decision, the standard message goes by itself and you are told. Ask me first: a second person approves it, and a recruiter is brought in instead of the message going by itself. Only a person: the app sends none and you tell candidates yourself, and if nobody has after five working days a recruiter is brought in to make sure they hear from you.",
 };
 

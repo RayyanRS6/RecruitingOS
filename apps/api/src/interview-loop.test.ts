@@ -586,7 +586,7 @@ describe("the loop after an interview", () => {
       expect(statusWord(html), stage).toBe(word);
       expect(html, stage).toContain('aria-current="step"');
       expect(html, stage).toContain("make every decision about your application");
-      expect(html, stage).not.toMatch(/Recommended for interview|Finalist|eligibility answers did not match|reactivate/i);
+      expect(html, stage).not.toMatch(/Interview to set up|Recommended for interview|Finalist|eligibility answers did not match|reactivate/i);
     }
   });
 

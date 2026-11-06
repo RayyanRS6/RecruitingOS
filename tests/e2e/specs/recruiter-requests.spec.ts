@@ -84,18 +84,25 @@ test("loosening an AI rule asks first; the planned rules fold under Coming later
   await createCompanyThroughTheForm(page, `Rules Dental ${run}`);
   await page.goto("/setup?tab=rules"); // the Settings page's Hiring rules tab
   const rules = page.locator(".card", { has: page.getByRole("heading", { name: "What the AI may do on its own" }) });
-  // a rule a setting still changes ("Do it and tell me" by default); the AI interview's invitation is no longer one (R20-4)
-  const recommend = rules.getByRole("group", { name: "Recommend who to interview" });
+  // a rule a setting still changes ("Only a person" by default since 6 November 2026); the AI interview's invitation is no longer one (R20-4)
+  const recommend = rules.getByRole("group", { name: "Suggest who to interview" });
   await expect(recommend).toBeVisible({ timeout: 30_000 });
+  await expect(recommend.getByRole("button", { name: "Only a person" })).toHaveAttribute("aria-pressed", "true");
   await recommend.getByRole("button", { name: "Do it", exact: true }).click();
   await expect(rules.getByText(/From now on it goes ahead without waiting for a person to approve it, and you are not told each time/)).toBeVisible();
   await expectAccessible(page, "loosening confirmation");
   await rules.getByRole("button", { name: "Keep it as it is" }).click();
   await expect(rules.getByRole("button", { name: "Yes, change it" })).toHaveCount(0);
+  await expect(recommend.getByRole("button", { name: "Only a person" })).toHaveAttribute("aria-pressed", "true");
+  // a company may still choose it, once it has said so
+  await recommend.getByRole("button", { name: "Do it and tell me" }).click();
+  await rules.getByRole("button", { name: "Yes, change it" }).click();
   await expect(recommend.getByRole("button", { name: "Do it and tell me" })).toHaveAttribute("aria-pressed", "true");
   // tightening saves at once
   await recommend.getByRole("button", { name: "Ask me first" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Saved." })).toBeVisible();
+  await expect(rules.getByRole("button", { name: "Yes, change it" })).toHaveCount(0);
+  await expect(recommend.getByRole("button", { name: "Ask me first" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("status").filter({ hasText: "Saved." }).first()).toBeVisible();
   // planned rules are listed, not offered; "always a person" rows stay in view
   await expect(rules.getByText(/^Coming later \(\d+\)$/)).toBeVisible();
   await expect(rules.getByRole("group", { name: "Send an offer" })).toHaveCount(0);

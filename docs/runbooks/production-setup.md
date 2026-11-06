@@ -21,10 +21,11 @@ changing anything: some plans and settings differ from step 1, to stay inside th
 - **Not run yet:** a Microsoft sign-in from outside ITS (check first that the app registration in use takes outside
   accounts, see step 1), a second administrator (step 7, item 6), branch protection (step 4), the uptime monitor (step 9),
   go-live (step 10) and locking down staging (step 11).
-- **Not released yet:** the plans of 5 November 2026 and first sign-in asks for approval of 6 November 2026 ("The plans"
-  below), which go in one release. The plans add migration 0036, the 37th, so production is one behind until that release,
-  and this file's counts already say 37. Asking for approval adds no migration, and production stays on `SIGNUP_MODE=invite`
-  until the code that knows `approval` is live.
+- **Not released yet:** the plans of 5 November 2026, first sign-in asks for approval of 6 November 2026 and the hiring
+  fixes of 6 November 2026 ("The plans" below), which go in one release. The plans add migration 0036, the 37th, and the
+  hiring fixes add 0037, the 38th, so production is two behind until that release, and this file's counts already say 38.
+  Asking for approval adds no migration, and production stays on `SIGNUP_MODE=invite` until the code that knows `approval`
+  is live.
 
 ## Before you start
 
@@ -235,18 +236,18 @@ From the root of an up-to-date checkout of `main`, in Windows PowerShell. Paste 
    ```
    It asks for the **Session pooler** string (Supabase, **Connect**, Session pooler) exactly as shown, with
    `[YOUR-PASSWORD]` still in it; then the database password, typed and never shown; then the certificate (Return
-   accepts the file it offers). On the new project it reports 37 migrations pending and exits with 3.
+   accepts the file it offers). On the new project it reports 38 migrations pending and exits with 3.
 3. The setup, with the same three answers:
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\db-setup.ps1 -Environment production -ProjectRef <prod-ref>
    ```
-   It applies the 37 migrations, gives `ros_app` and `ros_worker` fresh passwords and their safety limits, applies the
+   It applies the 38 migrations, gives `ros_app` and `ros_worker` fresh passwords and their safety limits, applies the
    Vault grants and checks both roles. Then it puts `DATABASE_URL` on the clipboard: paste it into 1Password, item
    "Recruiting OS production database", field `DATABASE_URL`, and type `pasted`; then the same for
    `WORKER_DATABASE_URL`. Win+V lists neither.
 4. If it reports the Vault grants as skipped: enable `supabase_vault` (Database, Extensions) and run the same command
    with `-Mode grants` at the end.
-5. The status command again: `migrations applied: 37`, `migrations pending: 0`, both roles able to log in with their
+5. The status command again: `migrations applied: 38`, `migrations pending: 0`, both roles able to log in with their
    safety limits in place, the Vault grants in place, table privileges 0 for the three Data API roles, and "everything
    is in place" (exit 0).
 
@@ -570,11 +571,13 @@ or the lawyer has answered (`docs/workflow-decisions.md`, PQ-3; `docs/spec/00` s
 10's list still holds for any real data. Under `SIGNUP_MODE=approval` anyone with a Google or Microsoft account can ask, and
 nothing in the code holds any of this: it rests on whoever presses Accept.
 
-### The release (migration 0036, and `SIGNUP_MODE=approval` after it)
+### The release (migrations 0036 and 0037, and `SIGNUP_MODE=approval` after them)
 
 Migration `0036_application_locked_at.sql` adds one empty column, `applications.locked_at`, with no default and no backfill:
-every application that exists stays visible. The older code keeps running on the new schema and ignores it. First sign-in
-asks for approval goes in the same release and adds no migration: a person waiting is a membership in a status the code
+every application that exists stays visible. The older code keeps running on the new schema and ignores it. Migration
+`0037_person_decides_who_to_interview.sql` changes no schema: it puts the people the assistant moved to "Interview to set up"
+under the old default back in New, so they can be shortlisted, and records each move in their history. It sends nothing. First
+sign-in asks for approval goes in the same release and adds no migration: a person waiting is a membership in a status the code
 already leaves out. Order, as in "Every later release":
 
 1. GitHub, **Settings**, **Environments**: `production-database` exists with its two secrets, its variable and its branches
@@ -584,8 +587,8 @@ already leaves out. Order, as in "Every later release":
 2. The latest commit on `main` has a green `verify`, and nothing else merges into it until the release is live.
 3. **Actions**, **migrate**, **Run workflow**: **Use workflow from** `main`, environment **production-database**. The log says
    `status: migrations applied: 36 (last: 0035_interview_followups.sql)` and
-   `status: migrations pending: 1 (next: 0036_application_locked_at.sql)`, then `applied: 0036_application_locked_at.sql`, and
-   **Confirm no migration is pending** is green. Until this has run, a new build refuses to start (step 6's table).
+   `status: migrations pending: 2 (next: 0036_application_locked_at.sql)`, then `applied: 0036_application_locked_at.sql` and
+   `applied: 0037_person_decides_who_to_interview.sql`, and **Confirm no migration is pending** is green. Until this has run, a new build refuses to start (step 6's table).
 4. The release pull request, merged with a merge commit (step 6, item 3). The worker, then the app (step 6, items 4 and 5).
    The first boot of either writes the plans: there is no SQL to run and nothing to press. Trial, Core, Growth and Company
    stop being offered, and their rows stay.

@@ -471,6 +471,11 @@ export const screen: WorkflowDefinition<State> = {
      * A8): a scorecard that disagrees with its own must-have findings holds the step for a person, with the reason. A
      * suggestion that waits for approval expires after a week (plan A6). A conversation that was not sent is never read,
      * so it never comes here; a reading made of one before 9 October 2026 suggests nothing and is never quoted.
+     *
+     * A person decides who to interview (6 November 2026): under the default, "Only a person", nobody moves, and they stay in
+     * New whichever way the assistant leans. A company that chose "Do it and tell me" keeps the move. Whichever path it
+     * takes, the team hears about each person once (R20-8): `candidate.recommended` records the assistant's suggestion in
+     * their history and tells nobody by itself.
      */
     async recommend(ctx) {
       const b = await load(ctx.q, ctx.state.applicationId);
@@ -495,13 +500,12 @@ export const screen: WorkflowDefinition<State> = {
       }
       if (rec === "strong_interview" || rec === "interview") {
         const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.recommend_interview", subject: { type: "application", id: app.id }, proposal: { recommendation: rec, assessmentId: asmt.id }, rationale: `${name} finished the AI interview: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: SUGGESTION_WINDOW_HOURS });
-        if (g.outcome === "execute") {
-          if (app.stage === "screen_complete") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "interview_recommended", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
-          await emit(ctx.q, { type: "candidate.recommended", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, subject: { type: "application", id: app.id }, payload: { recommendation: rec, assessmentId: asmt.id }, correlationId: ctx.run.id });
-          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong AI interview. " : ""}${asmt.result.summary}`, action: { label: "Approve an interview", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
-        } else if (g.outcome === "wait_for_approval") {
-          return waitForSuggestion(ctx, g.approvalRequestId, "on_decision");
-        }
+        if (g.outcome === "wait_for_approval") return waitForSuggestion(ctx, g.approvalRequestId, "on_decision");
+        if (g.outcome === "execute" && app.stage === "screen_complete") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "interview_recommended", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
+        await emit(ctx.q, { type: "candidate.recommended", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, subject: { type: "application", id: app.id }, payload: { recommendation: rec, assessmentId: asmt.id }, correlationId: ctx.run.id });
+        // "Only a person": they stay where they are, and the one notice opens their page, never a step that books anything.
+        if (g.outcome === "human_only") await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "screen.completed", title: `${name} finished the AI interview`, body: asmt.result.summary, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        else if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong AI interview. " : ""}${asmt.result.summary}`, action: { label: "Approve an interview", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
         return { kind: "complete" };
       }
       // hold / decline_recommended: nothing moves; the owner sees the scorecard and decides.

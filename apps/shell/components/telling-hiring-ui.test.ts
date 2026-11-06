@@ -471,7 +471,7 @@ describe("the Interviews page for someone under Cancelled (founder decisions 1A 
   const iv = (over: Record<string, unknown> = {}) => ({
     id: "iv1", applicationId: "a1", roleId: "r1", roleTitle: "Dental Hygienist", roundKey: "working", title: "Working interview", format: "in_person", durationMinutes: 45, status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, linkSource: "calendar", attempt: 2,
     offeredSlots: [], selectedSlot: null, candidateAvailability: null, schedulingWindow: { fromDate: "2026-10-12", toDate: "2026-10-23" }, rescheduleCountCandidate: 0, outcome: null, decision: null, decisionNote: null, reminders: {}, cancelReason: "cancelled by the candidate", scheduleTokenExpiresAt: null, createdAt: daysAgo(3),
-    candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, participants: [], calendarRefs: {}, followUp: { id: "f1", reason: "asked_new_times", times: "none" },
+    candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Interview to set up" }, participants: [], calendarRefs: {}, followUp: { id: "f1", reason: "asked_new_times", times: "none" },
     ...over,
   });
   const sheet = (i: ReturnType<typeof iv>, extra: Array<[unknown[], unknown]> = []) => {
@@ -508,7 +508,7 @@ describe("the Interviews page for someone under Cancelled (founder decisions 1A 
   });
 
   it("names the decision a team send records on a missed interview", () => {
-    const sent = sheet(iv({ status: "no_show", outcome: "no_show_candidate", decision: "new_times", decisionNote: "New times sent after the candidate did not attend", candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, followUp: null }));
+    const sent = sheet(iv({ status: "no_show", outcome: "no_show_candidate", decision: "new_times", decisionNote: "New times sent after the candidate did not attend", candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Interview to set up" }, followUp: null }));
     expect(sent).toContain("Decision: New times sent");
     expect(sent).not.toContain("new_times");
   });

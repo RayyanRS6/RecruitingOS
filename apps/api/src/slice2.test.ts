@@ -136,8 +136,9 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(scr.status).toBe("completed");
     expect(scr.progress.submittedAt).toBeTruthy();
 
+    // A person decides who to interview (6 November 2026): a good scorecard moves nobody under the default, "Only a person"
     const a = await reload(mariaId);
-    expect(a.stage).toBe("interview_recommended");
+    expect(a.stage).toBe("screen_complete");
     const asmts = await container.db.select().from(assessments).where(eq(assessments.applicationId, mariaId));
     const screenAsmt = asmts.find((x) => x.kind === "screen")!;
     expect(screenAsmt).toBeTruthy();
@@ -152,12 +153,24 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     // the scorecard is read three times and keeps the middle answer, like the résumé (Wave S5)
     expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.assess"))).toHaveLength(SCORECARD_READINGS);
     // the team hears about Maria once, now that her interview is scored
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
-    expect(notes.filter((n) => /Maria Reyes/.test(n.title)).map((n) => n.kind)).toEqual(["candidate.recommended"]);
-    // the assistant's suggestion is the team's business: the candidate's page says Review, never "Recommended for interview"
+    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string; action: { label: string; href: string } }>;
+    const told = notes.filter((n) => /Maria Reyes/.test(n.title));
+    expect(told.map((n) => n.title)).toEqual(["Maria Reyes finished the AI interview"]);
+    // the one notice opens her page, and never a step that sets an interview up
+    expect(told[0]).toMatchObject({ kind: "screen.completed", action: { label: "Review", href: `/roles/${roleId}/talent?open=${mariaId}` } });
+    // the assistant's suggestion is the team's business: the candidate's page says Review, never "Interview to set up"
     const status = await (await app.request(`/c/status/${a.statusToken}`)).text();
     expect(status).toMatch(/<span>Status<\/span><strong>Review<\/strong>/);
-    expect(status).not.toMatch(/Recommended for interview/);
+    expect(status).not.toMatch(/Interview to set up|Recommended for interview/);
+    // she is in New, a person may shortlist her, and the stage menu's Offer line names no internal step
+    const row = ((await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; ownerStage: string; group: string; stageMoves: Array<{ to: string; allowed: boolean; blockedReason?: string }> }>).find((x) => x.id === mariaId)!;
+    expect(row).toMatchObject({ ownerStage: "new", group: "waiting_on_you" });
+    expect(row.stageMoves.find((m) => m.to === "shortlist")).toMatchObject({ allowed: true });
+    expect(row.stageMoves.find((m) => m.to === "offer")).toMatchObject({ allowed: false, blockedReason: "Record an offer once they are a finalist." });
+    expect((await json("POST", `/api/v1/applications/${mariaId}/actions`, { action: "set_mark", mark: "shortlist" })).status).toBe(200);
+    const marked = ((await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; ownerStage: string }>).find((x) => x.id === mariaId)!;
+    expect(marked.ownerStage).toBe("shortlist");
+    expect((await json("POST", `/api/v1/applications/${mariaId}/actions`, { action: "clear_mark" })).status).toBe(200);
     const detail = (await (await json("GET", `/api/v1/applications/${mariaId}`)).json()) as { screens: Array<{ status: string; transcript: unknown[] }>; assessments: Array<{ kind: string }> };
     expect(detail.screens[0].status).toBe("completed");
     expect(detail.assessments.map((x) => x.kind).sort()).toEqual(["screen", "triage"]);
@@ -484,7 +497,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const interview = await pendingOf(b.id, "application.recommend_interview");
     expect(interview.status).toBe("pending");
     expect(Date.parse(interview.expiresAt!) - container.engine.clock().getTime()).toBe(7 * DAY);
-    expect((await json("PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "auto_notify", approverRoles: [] })).status).toBe(200);
+    expect((await json("PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "human_only", approverRoles: [] })).status).toBe(200);
     // six days on, it still waits; a day later it has lapsed, nothing was sent and nothing moved
     await advance(6 * DAY);
     expect((await pendingOf(b.id, "application.recommend_interview")).status).toBe("pending");
@@ -498,6 +511,44 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(runs).toHaveLength(0);
     // and nobody was ever asked whether to invite Uma: her AI interview went by itself
     expect(await pendingOf(b.id, "application.invite_screen")).toBeUndefined();
+  });
+
+  describe("who moves after the AI interview, and how often the team is told (6 November 2026, R20-8)", () => {
+    const notesAbout = async (name: string) => ((await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string; action: { label: string; href: string } }>).filter((n) => n.title.startsWith(name));
+    const scripted = (recommendation: string, overall = "potential") => {
+      for (let i = 0; i < SCORECARD_READINGS; i++) container.fake!.scriptNext("screen.assess", { overall, confidence: "medium", summary: "Answered every question.", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation, rationale: "Scripted." });
+    };
+
+    it("whichever way the assistant leans, nobody moves under the default and the team hears once", async () => {
+      await container.db.delete(policies).where(eq(policies.actionType, "application.recommend_interview"));
+      for (const [first, recommendation, overall] of [["Sage", "strong_interview", "strong"], ["Tess", "interview", "potential"], ["Uri", "hold", "potential"], ["Vera", "decline_recommended", "weak"]] as const) {
+        const a = await apply({ first, last: "Lean", email: `${first.toLowerCase()}@example.com`, resume: `${first} Lean\nRegistered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPerio charting, Dentrix` });
+        scripted(recommendation, overall);
+        await finishScreen(a.id);
+        container.fake!.clearScripts();
+        expect((await reload(a.id)).stage, recommendation).toBe("screen_complete");
+        const told = await notesAbout(`${first} Lean`);
+        expect(told.map((n) => n.title), recommendation).toEqual([`${first} Lean finished the AI interview`]);
+        expect(told[0].action, recommendation).toEqual({ label: "Review", href: `/roles/${roleId}/talent?open=${a.id}` });
+        // the assistant's suggestion stays in their history, and only when it made one
+        expect((await eventsOf("candidate.recommended")).some((e) => e.subjectId === a.id), recommendation).toBe(recommendation === "strong_interview" || recommendation === "interview");
+      }
+    });
+
+    it("a company that chose \"Do it and tell me\" keeps the move, with its own one notice, and \"Do it\" moves them with none", async () => {
+      await signIn();
+      expect((await json("PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "auto_notify", approverRoles: [] })).status).toBe(200);
+      const a = await apply({ first: "Wyn", last: "Told", email: "wyn@example.com", resume: "Wyn Told\nRegistered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPerio charting, Dentrix" });
+      await finishScreen(a.id);
+      expect((await reload(a.id)).stage).toBe("interview_recommended");
+      expect((await notesAbout("Wyn Told")).map((n) => [n.kind, n.title])).toEqual([["candidate.recommended", "Wyn Told is ready to interview"]]);
+      expect((await json("PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "auto", approverRoles: [] })).status).toBe(200);
+      const b = await apply({ first: "Xan", last: "Quiet", email: "xan@example.com", resume: "Xan Quiet\nRegistered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPerio charting, Dentrix" });
+      await finishScreen(b.id);
+      expect((await reload(b.id)).stage).toBe("interview_recommended");
+      expect(await notesAbout("Xan Quiet")).toHaveLength(0);
+      await container.db.delete(policies).where(eq(policies.actionType, "application.recommend_interview"));
+    });
   });
 
   it("a scorecard that does not add up holds the interview suggestion for a person, with the reason (plan A8)", async () => {
