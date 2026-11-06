@@ -262,7 +262,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const accepted = await w.decide(adminCookie, asker.id, "accept");
     expect(accepted.status).toBe(200);
     expect(await w.read<CustomerAccessAnswer>(accepted)).toEqual({ ok: true, companyId: asker.id, decision: "accept", status: "active", changed: true, message: "Harbor Dental was accepted." });
-    await w.container.drain();
+    // no draining here: the route kicks the worker itself, as the verification route does
     expect(await w.statusOf(asker.id)).toBe("active");
     const after = await w.rowOf(asker.id);
     // on Free, and the one approval counts as the one-time check: confirmed by the administrator who pressed
@@ -620,6 +620,13 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(toIts.text).toContain("Person: Sam Asker <typed@stranger.test>");
     expect(toIts.text).toContain("City and state: Aus tin, T X");
     expect(toIts.text.split("\n").find((l) => l.startsWith("Website: "))!.length).toBeLessThanOrEqual(209);
+    // the door that goes in directly keeps what was typed, as in every mode, and its email to ITS is one line each all the same
+    const direct = await w.google("typed.direct@listed-domain.test", "Typed Direct");
+    expect((await w.json(direct, "POST", "/api/v1/companies", w.form("Direct\r\nBcc: evil@example.test", { website: `https://direct.example/${"y".repeat(5000)}\r\nBcc: evil@example.test` }))).status).toBe(201);
+    const check = w.mailTo("queue@its.example").find((m) => m.subject.includes("[company check] Direct"))!;
+    expect(check.subject).toBe("[company check] Direct Bcc: evil@example.test is waiting for the ITS check");
+    expect(check.text.split("\n").filter((l) => l.startsWith("Bcc:"))).toEqual([]);
+    expect(check.text.length).toBeLessThan(1_000);
     // a name past the form's own limit is refused before anything is made, as in every mode
     const cookie = await w.google("toolong@stranger.test");
     expect((await w.json(cookie, "POST", "/api/v1/companies", w.form("x".repeat(121)))).status).toBe(400);
@@ -848,7 +855,7 @@ describe.each(["its", "auto"] as const)("a request or a declined company shows n
     expect((await w.rowOf(waiting.id)).settings.verifiedBy).toMatchObject({ kind: "user", name: "Ada Admin" });
     expect((await w.app.request(`/careers/${waiting.slug}`)).status).toBe(200);
     expect(await (await w.app.request(`/careers/${waiting.slug}`)).text()).toContain("Zqpublicrole");
-    resetPublicFeedCache(w.container);
+    // no reset here: the route rebuilds the feeds itself, as the verification route does
     expect(await (await w.app.request("/feeds/jobs.json")).text()).toContain(waiting.slug);
     // one notice under either value
     expect((await w.noticesOf(waiting.id)).map((n) => n.kind)).toEqual(["company.access_accepted"]);
