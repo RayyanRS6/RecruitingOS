@@ -115,6 +115,14 @@ export async function readingAskedAt(db: Db, ref: Pick<ResumeReadRef, "companyId
   return Number.isFinite(at) ? Math.floor(at / 1000) : null;
 }
 
+/**
+ * A file the form holds goes a day later unless an application holds it by then (the discard job checks), read or not: until it
+ * is sent it has no row, so nobody could find it to remove it, and the form promises it goes. Queued as soon as a file can exist.
+ */
+export async function queueUnsentFileDiscard(deps: { db: Db; engine: Pick<WorkflowEngine, "enqueue"> }, input: { companyId: string; key: string; now: Date }): Promise<void> {
+  await deps.engine.enqueue(deps.db, { kind: DISCARD_OBJECT_JOB_KIND, payload: { companyId: input.companyId, key: input.key }, runAt: new Date(input.now.getTime() + RESUME_READING_KEEP_MS) });
+}
+
 /** Asks the worker to read an uploaded résumé. Safe to call twice: the job does nothing once a reading exists. */
 export async function startResumeReading(deps: { db: Db; engine: Pick<WorkflowEngine, "enqueue"> }, ref: ResumeReadRef): Promise<void> {
   await deps.engine.enqueue(deps.db, { kind: RESUME_READING_JOB_KIND, payload: { ...ref }, maxAttempts: 3 });

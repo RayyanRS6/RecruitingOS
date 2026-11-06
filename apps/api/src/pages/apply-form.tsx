@@ -4,7 +4,7 @@ import { randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
 import { answerCvLines, chatFactsWithKept } from "@ros/agents";
-import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, applicationAnswerSentences, candidateNotices, closeOutDayWords, closeOutDueAt, emit, errorForLog, onFileFormLine, onFileReceiptLine, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
+import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, applicationAnswerSentences, candidateNotices, closeOutDayWords, closeOutDueAt, emit, errorForLog, onFileEarlierFactsLine, onFileFormLine, onFileReceiptLine, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey, type UploadGrantPayload } from "../uploads";
@@ -13,7 +13,7 @@ import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware/rate-limit";
 import { createApplication, markUploadUsed, uploadAlreadyUsed, type ResumeInput as ResumeUpload } from "../services/applications";
-import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, readingAskedAt, readingFor, readingGaveUp, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
+import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, queueUnsentFileDiscard, readingAskedAt, readingFor, readingGaveUp, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
 import { applyVisitNext, interviewWaitFor, type InterviewWait } from "../services/apply-conversation";
 import { formOpenedBefore, lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { contactLineFor, type ContactLine } from "../services/company-settings-profile";
@@ -348,14 +348,14 @@ function QuickQuestions(props: { company: string; questions: QuickQuestionView[]
  * application; only the facts' ids are sent back, with the sealed link so Send can read them again. Plain boxes inside
  * the form: it works without script.
  */
-function EarlierFacts(props: { company: string; earlier: EarlierFactsState }) {
+function EarlierFacts(props: { company: string; earlier: EarlierFactsState; onFile: boolean }) {
   const { earlier } = props;
   const kept = new Set(earlier.kept);
   return (
     <div class="card earlier">
       <fieldset aria-describedby="earlier-note">
         <legend>From your earlier chats at {props.company}</legend>
-        <p class="meta" id="earlier-note">Untick anything that is no longer true. {props.company} sees what you keep as part of this application.</p>
+        <p class="meta" id="earlier-note">Untick anything that is no longer true. {props.onFile ? onFileEarlierFactsLine(props.company) : `${props.company} sees what you keep as part of this application.`}</p>
         <input type="hidden" name="reuse" value={earlier.token} />
         <ul>
           {earlier.facts.map((f) => (
@@ -440,7 +440,7 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
           <textarea id="workSummary" name="workSummary" rows={5} maxlength={WORK_SUMMARY_MAX} aria-invalid={invalid("workSummary")} aria-describedby={described("workSummary")}>{v.workSummary ?? ""}</textarea>
         </>
       ) : null}
-      {earlier?.facts.length ? <EarlierFacts company={props.company.name} earlier={earlier} /> : null}
+      {earlier?.facts.length ? <EarlierFacts company={props.company.name} earlier={earlier} onFile={onFile} /> : null}
       <QuickQuestions company={props.company.name} questions={props.questions} answers={answers} missing={missing} suggested={new Set(props.state?.marks?.suggested ?? [])} />
       <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} onFile={onFile} />
     </>
@@ -1010,6 +1010,8 @@ candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLIC
   const uploadId = uuidv7();
   const key = quarantineKey(job.company.id, job.role.id, uploadId, intent.extension);
   const now = container.engine.clock();
+  // Before there can be a file: someone may upload and leave, on a form sent back or with no reading to follow.
+  await queueUnsentFileDiscard(container, { companyId: job.company.id, key, now });
   const upload = await container.integrations.storage.createUploadUrl(key, { contentType: intent.mime, expiresSeconds: UPLOAD_URL_TTL_SECONDS });
   const grant = container.uploadGrants.seal({ v: 1, companyId: job.company.id, roleId: job.role.id, uploadId, key, filename: intent.filename, mime: intent.mime, size: intent.size, exp: Math.floor(now.getTime() / 1000) + UPLOAD_GRANT_TTL_SECONDS });
   await withTenant(container.db, job.company.id, (tx) => emit(tx, { type: "document.upload_authorized", companyId: job.company.id, actor: { kind: "candidate", id: "applicant" }, subject: { type: "role", id: job.role.id }, payload: { uploadId, extension: intent.extension, sizeBytes: intent.size } }));
@@ -1099,6 +1101,8 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   }
   if (!upload) return show("Choose your resume file first, then press Read my resume. Or fill in the form below yourself and press Send my application.", !!posted.grant);
   if (flow === "on_file") {
+    // No reading, so nothing else would clear it away; the form they opened may have promised it goes within a day.
+    await queueUnsentFileDiscard(container, { companyId: job.company.id, key: upload.key, now });
     const attached = container.uploadGrants.seal({ ...upload, readAskedAt: undefined });
     const unread = checkedForm(container, posted, questions, { grant: attached, filename: upload.filename }, null);
     c.header("Cache-Control", "no-store");
