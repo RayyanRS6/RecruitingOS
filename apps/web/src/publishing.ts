@@ -210,11 +210,6 @@ export function legalLines(check: LegalCheck | null | undefined): { missing: Leg
   return { missing, inOrder: check.items.filter((i) => !missing.includes(i)) };
 }
 
-/** Whether the reason approval is held is the legal check (the card then lists the items instead of repeating it). */
-export function isLegalReason(reason: string | null | undefined): boolean {
-  return !!reason && reason.startsWith("Before this job can go live, the law where it is asks for");
-}
-
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Live edits (D4, founder decision Q10)                                                                          */
 /* ------------------------------------------------------------------------------------------------------------ */

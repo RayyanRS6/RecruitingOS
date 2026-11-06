@@ -9,7 +9,7 @@ import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { useCompanyCheck } from "../components/use-company-check";
-import { canApproveRole, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canTryWeights } from "../roles";
+import { canApproveRole, canChangeCompany, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canTryWeights } from "../roles";
 import { outdatedBoardsLine } from "../publishing";
 import { payShownLabel } from "../role-words";
 import { REASON_WORD } from "./new-role/rules";
@@ -228,7 +228,7 @@ export function RoleDetail() {
       {closing ? <CloseRoleCard roleId={r.id} initialOutcome={closing.outcome} mayTell={canDecline(myRole)} onClose={() => setClosing(null)} /> : null}
       {closingMessage && !closing && r.status === "closed" && canDecline(myRole) ? <ClosingMessageCard roleId={r.id} onDone={() => { setClosingMessage(false); if (search.get("closingMessage")) navigate(`/roles/${r.id}`, { replace: true }); }} /> : null}
 
-      {p ? <PacketApprovalCard role={r} onEdit={() => openEditor()} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); setApprovedVersion(r.packetApproval?.pending?.version ?? newestVersion); }} /> : null}
+      {p ? <PacketApprovalCard role={r} onEdit={(focus) => openEditor(focus ?? null)} canEdit={editPacket} canManage={manage} canChangeCompany={canChangeCompany(myRole)} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); setApprovedVersion(r.packetApproval?.pending?.version ?? newestVersion); }} /> : null}
 
       {p ? (
         <>

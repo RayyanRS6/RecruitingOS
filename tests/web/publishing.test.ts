@@ -7,7 +7,7 @@ import { shareTargets } from "../../apps/api/src/services/job-urls";
 import type { PostingView, PostingsResponse, RolePacket } from "../../apps/web/src/api/client";
 import {
   aboutDraftOf, aboutProblem, addDays, approveRequest, autoActionsLine, boardsOnTheLine, boardStatus, boardTicksToast, careersStatus, closingDateLine, closingDateProblem, closingDateRequiredFor,
-  closingDateToast, dayWords, destinationsOf, draftClosingDateKey, googleStatus, interviewersNote, isClosingDateAction, isLegalReason, isPostingTaskKind, legalLines,
+  closingDateToast, dayWords, destinationsOf, draftClosingDateKey, googleStatus, interviewersNote, isClosingDateAction, isPostingTaskKind, legalLines,
   liveEditWords, logoProblem, logoUrlOf, materialChangesOf, noBoardsLine, opensOwnApp, outdatedBoardsLine, pollInterval, previewHref, previewOfEdit, previewPageHref, queueKindLabel,
   readDraftClosingDate, savedBoardsKey, savedVersionToast, shareSubject, shareTargetsFor, shareTextFor, todayIn, unsavedBoards, writeDraftClosingDate,
 } from "../../apps/web/src/publishing";
@@ -152,9 +152,6 @@ describe("what starts on its own, and the legal check, on the approval card (D9,
     expect(lines.missing.map((i) => i.key)).toEqual(["benefits"]);
     expect(lines.inOrder.map((i) => i.key)).toEqual(["pay_range", "closing_date"]);
     expect(legalLines(null)).toEqual({ missing: [], inOrder: [] });
-    // the card lists the items instead of repeating the server's sentence
-    expect(isLegalReason("Before this job can go live, the law where it is asks for: a short description of the benefits.")).toBe(true);
-    expect(isLegalReason("You started this role, so someone else approves it.")).toBe(false);
   });
 });
 

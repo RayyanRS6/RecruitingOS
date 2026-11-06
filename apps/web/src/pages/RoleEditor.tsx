@@ -289,7 +289,7 @@ function problemWith(input: { form: PacketForm; description: string; mustHaves: 
  * and keys it by that version, so every opening starts from what is there now, never from what the page first loaded.
  * `proposed` says the version is the one waiting for approval (a teammate's edit to an open role); saving builds on it.
  * When a version is saved elsewhere while the editor is open (`newerVersion`), it says so before anyone saves over it.
- * `focus` opens it at the must-haves or the skills (a link such as the role report's "stricter than needed" prompt).
+ * `focus` opens it at the must-haves or the skills (a link such as the role report's "stricter than needed" prompt), or at the pay ("Edit the pay" on the approval card).
  */
 export function EditPacket({ open, onClose, roleId, packet, version, proposed, currentVersion, newerVersion, advanced, roleStatus = "draft", mayApprove = false, whoPosts = "its", closingDate = null, canManage = false, focus = null }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket; version: number; proposed: boolean; currentVersion: number | null; newerVersion: number | null; advanced: boolean; roleStatus?: string; mayApprove?: boolean; whoPosts?: WhoPosts; closingDate?: ClosingDateView | null; canManage?: boolean; focus?: EditorFocus | null }) {
   const qc = useQueryClient();
@@ -413,7 +413,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
               <div className={SOLO}>
                 <Field label="Public description" htmlFor="desc"><textarea id="desc" className="textarea min-h-[180px]" value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
               </div>
-              <RequirementGroup legend="Pay" seen={PAY_SEEN}>
+              <RequirementGroup id="ed-pay" legend="Pay" seen={PAY_SEEN}>
                 <Field label="Paid" htmlFor="ed-basis">
                   <select id="ed-basis" className="select" value={form.basis} onChange={(e) => set({ basis: e.target.value as PacketForm["basis"] })}>
                     <option value="hourly">By the hour</option>

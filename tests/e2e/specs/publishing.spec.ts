@@ -33,7 +33,8 @@ test("approve a role, see where it is going, share it and give it a closing date
   await expectAccessible(page, "approval card");
 
   // approving opens the confirmation: where the job is going, nothing ticked before it was checked
-  // the must-haves are on the job page, and the card says so (plan D10)
+  // the must-haves are on the job page, and the card says so under More (plan D10)
+  await card.getByText("More", { exact: true }).click();
   await expect(card.getByText(/The job page lists what you are looking for:/)).toBeVisible();
   await card.getByRole("button", { name: "Approve and publish" }).click();
   const done = page.getByRole("dialog", { name: "Your job is approved" });

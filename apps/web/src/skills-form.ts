@@ -127,8 +127,9 @@ export function newSkillRow(): SkillRow {
   return { key: null, name: "", definition: "", importance: "important", evaluatedIn: "both" };
 }
 
-/** The sections a link can open the role editor at (`?edit=must-haves` or `?edit=skills` on the role page). */
-export type EditorFocus = "must-haves" | "skills";
+/** The sections the role editor can open at: `pay` from the approval card's "Edit the pay", the others from a button or a link too. */
+export type EditorFocus = "must-haves" | "skills" | "pay";
+/** The sections a link can open it at (`?edit=must-haves` or `?edit=skills` on the role page). */
 export function editorFocusFrom(value: string | null | undefined): EditorFocus | null {
   return value === "must-haves" || value === "skills" ? value : null;
 }

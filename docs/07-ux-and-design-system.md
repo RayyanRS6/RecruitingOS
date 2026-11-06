@@ -149,7 +149,7 @@ Round 3 (23 October 2026), the small options screens had been copying locally. E
 - Every other `card` has 16px sides and 20px above and below on a phone (640px and under), a needs-you card too; screens no longer add `max-sm:px-4 max-sm:py-5`.
 - `Field aside`: a node beside the label on its line (an `IconLabel`), in `div.field-head`; without it the label stays the field's first child.
 - `Table wrapHeads` (class `wrap-heads` on `table-wrap`): long column headings wrap, a figure column's too.
-- `Pill busy`: the spinner in the dot's place, hidden from screen readers (the word says the state). `Button keyshortcuts`: `aria-keyshortcuts` with no key cap drawn, for a shortcut the fewer-words rule took off the screen (give it a `title` too); `kbd` still draws and announces one.
+- `Pill busy`: the spinner in the dot's place, hidden from screen readers (the word says the state). `Button keyshortcuts`: `aria-keyshortcuts` with no key cap drawn, for a shortcut the fewer-words rule took off the screen (give it a `title` too); `kbd` still draws and announces one. `Button ariaDisabled`: greyed like `disabled`, but it can still be focused and pressed, so a press can show what is missing (`describedBy` is the id of the words that say why); left out, neither attribute is written.
 - `IconChip size="xs"`: 28px with a 14px icon. `Eyebrow as="h2"` or `"h3"`: a section's heading in the eyebrow's look.
 - Classes: `ordinal` (the 24px numbered circle: lavender, plum mono 11px), `inline-tag` (a small lavender mono tag in a line of text, "(you)"), `list-row-title wrap` (a row title that wraps at every width), and an `IconLabel` beside a card's title sits on the title's middle.
 

@@ -30,12 +30,14 @@ export type ChipTone = "lavender" | "peach" | "plum" | "good" | "caution" | "neu
  * with nothing drawn, for a shortcut the fewer-words rule took off the screen (put it in `title` too). `ariaPressed`
  * makes it a toggle a screen reader hears as pressed or not, for a choice shown only by its fill (left out, the button is
  * a plain button). `block` fills the width (its class is `wide`: Tailwind's `block` utility would turn the button into a
- * plain block). `className` adds classes after the kit's (spacing, a placement), never a second look.
+ * plain block). `className` adds classes after the kit's (spacing, a placement), never a second look. `ariaDisabled`
+ * greys it as `disabled` does, but it can still be focused and pressed, so a press can show what is missing (`onClick`
+ * decides what it does); `describedBy` is the id of the words that say why. Left out, neither attribute is written.
  */
-export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; keyshortcuts?: string; ariaLabel?: string; ariaPressed?: boolean; block?: boolean; className?: string }) {
+export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; keyshortcuts?: string; ariaLabel?: string; ariaPressed?: boolean; ariaDisabled?: boolean; describedBy?: string; block?: boolean; className?: string }) {
   const { variant = "secondary", size = "md" } = props;
   return (
-    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.keyshortcuts ?? props.kbd}>
+    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.keyshortcuts ?? props.kbd} {...(props.ariaDisabled ? { "aria-disabled": true, "aria-describedby": props.describedBy } : {})}>
       {props.loading ? (
         <>
           <span className="spinner" aria-hidden="true" />

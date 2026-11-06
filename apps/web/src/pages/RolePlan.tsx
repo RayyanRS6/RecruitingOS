@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PACKET_VISIBILITY_LABEL } from "@ros/contracts";
 import { Alert, Avatar, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, IconLabel, Pill, Skeleton, Timeline } from "@ros/ui";
-import { api, ApiError, type DecisionMaker, type InterviewPlanView, type LegalCheck, type PacketFlag, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
+import { api, ApiError, type DecisionMaker, type InterviewPlanView, type LegalCheck, type LegalCheckItem, type PacketFlag, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
 import { APPROVE_WAITS_FOR_CHECK, approvedToast } from "../company-check";
+import { AskRecruiter } from "../components/AskRecruiter";
 import { BoardTicks } from "../components/BoardTicks";
 import { ClosingDateField } from "../components/ClosingDate";
 import { useCompanyCheck } from "../components/use-company-check";
+import { scrollBehavior } from "../motion";
 import { Link } from "../nav";
-import { approveRequest, autoActionsLine, boardsOnTheLine, isLegalReason, legalLines, previewHref, savedBoardsKey, wordsList } from "../publishing";
+import { approveRequest, autoActionsLine, boardsOnTheLine, legalLines, previewHref, savedBoardsKey, wordsList } from "../publishing";
+import type { EditorFocus } from "../skills-form";
 import { toast } from "../toast";
+import { TRIAL_ASK } from "../trial";
 import { actorWords, describeRoleEvent, roleWords } from "../role-words";
 import { evidencedInWords } from "./role/evidence";
 
@@ -119,8 +123,12 @@ export function PreferencesCard({ packet, decisionMaker }: { packet: RolePacket;
  * where the job goes once approved with the board ticks (D6), lists what the law of the job's places still asks for
  * (D5; approving waits for it) and says in one line what starts on its own once the job is live (D9). After approving,
  * `onApproved` opens the screen that shows where the job is going (D2).
+ *
+ * Approve is always drawn, at the top beside the title (the owner, 6 November 2026: "where can I approve this job"): plum
+ * when this person may decide, greyed otherwise. Greyed, a press goes to whatever they can deal with here (the benefits,
+ * the flagged wording); if someone else decides, the reason sits directly under the title. What only describes is folded.
  */
-export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay, showingProposed, onShowProposed, onApproved }: { role: RoleDetail; onEdit: () => void; canEdit: boolean; canManage: boolean; canSeePay: boolean; showingProposed: boolean; onShowProposed: (show: boolean) => void; onApproved: (info: { editWhileOpen: boolean }) => void }) {
+export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canChangeCompany = false, canSeePay, showingProposed, onShowProposed, onApproved }: { role: RoleDetail; onEdit: (focus?: EditorFocus) => void; canEdit: boolean; canManage: boolean; canChangeCompany?: boolean; canSeePay: boolean; showingProposed: boolean; onShowProposed: (show: boolean) => void; onApproved: (info: { editWhileOpen: boolean }) => void }) {
   const qc = useQueryClient();
   const refresh = async () => {
     await qc.invalidateQueries({ queryKey: ["role", role.id] });
@@ -140,13 +148,16 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
   // the boards", and the job still went to Indeed). They last as long as their list (BoardTicks clears them as it goes),
   // and the list goes when the request waiting changes (WhereItGoes below is keyed on it).
   const [unsaved, setUnsaved] = useState<string[] | null>(null);
+  // What holds Approve, where a press while greyed goes; and Approve itself, where the keyboard's place goes once the benefits are saved.
+  const blockersRef = useRef<HTMLDivElement | null>(null);
+  const approveRef = useRef<HTMLSpanElement | null>(null);
   const approve = useMutation({
     mutationFn: (editWhileOpen: boolean) => api.post(`/api/v1/roles/${role.id}/approve`, approveRequest({ version: pending!.version, editWhileOpen, unsaved })),
     // Cleared once the role has been read again, so the line never goes back to the old boards meanwhile.
     onSuccess: async (_r, editWhileOpen) => { toast(approvedToast({ editWhileOpen: !!pending?.editWhileOpen, check })); onApproved({ editWhileOpen }); await refresh(); setUnsaved(null); },
-    // A refusal by the legal check (D5) names what is missing; the card lists it once the role is read again. A page left
-    // behind (someone else decided, or a newer version waits) catches up the same way; nothing changed on the server.
-    onError: async (e) => { toast(e instanceof ApiError ? e.message : "Could not approve."); if (e instanceof ApiError && ["legal_check", "nothing_pending", "version_mismatch"].includes(e.code)) await refresh(); },
+    // A refusal says why; the card shows the same once the role is read again. A page left behind (someone else decided, a
+    // newer version waits, new wording to check, the trial ended meanwhile) catches up this way; nothing changed on the server.
+    onError: async (e) => { toast(e instanceof ApiError ? e.message : "Could not approve."); if (e instanceof ApiError && ["legal_check", "packet_flags", "self_approval", "named_decider", "wrong_role", "trial_ended", "nothing_pending", "version_mismatch"].includes(e.code)) await refresh(); },
   });
   // Sent back from this card: the API keeps saying the role waits for approval until the worker makes it a draft again,
   // so the card says it was sent back meanwhile. Once the role is no longer waiting, this is done with: asking for
@@ -178,7 +189,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
         {canEdit ? (
           <div className="row mt-5">
             <Button variant="primary" loading={again.isPending} onClick={() => again.mutate()}>Request approval again</Button>
-            <Button onClick={onEdit}>Edit first</Button>
+            <Button onClick={() => onEdit()}>Edit first</Button>
           </div>
         ) : <p className="small muted mt-1.5">An owner, an admin or a hiring manager edits it and asks for approval again.</p>}
       </Card>
@@ -193,34 +204,53 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
   const autoLine = autoActionsLine(role.autoActionsOnOpen);
   const musts = packet?.requirements?.mustHaves ?? [];
   const nices = packet?.requirements?.niceToHaves ?? [];
-  // The person's own reason, or the state while a live job's change waits; a new job's buttons and "Once approved it
-  // goes to…" already say what approving does, so it needs no sentence of its own.
+  // The person's own reason, or the state while a live job's change waits (that shows at once); on a new job it only
+  // describes what the buttons and "Once approved it goes to…" already say, so it is folded.
   const lead = pending.rationale ?? (pending.editWhileOpen ? "The job keeps running on its approved version until you decide." : null);
-  // Reserved for someone (a name), and the date it lapses: the decision's only facts beyond the buttons.
-  const decides = [pending.decisionMaker ? `Reserved for ${pending.decisionMaker.name ?? pending.decisionMaker.email}; an owner can also decide.` : "", expires ? `Waits until ${expires}, then goes back to a draft.` : ""].filter(Boolean).join(" ");
+  const reserved = pending.decisionMaker ? `Reserved for ${pending.decisionMaker.name ?? pending.decisionMaker.email}; an owner can also decide.` : null;
+  // This person can approve once what the card lists is dealt with; anyone else is told why, directly under the title.
+  const fixesFirst = pending.viewer.blockedBy === "flags" || pending.viewer.blockedBy === "legal";
+  const toBlockers = () => {
+    const box = blockersRef.current;
+    if (!box) return;
+    // Words already typed are saved by this press too; otherwise the first thing to fill or press takes the focus.
+    const form = box.querySelector("form");
+    if ((form?.querySelector("input")?.value.trim().length ?? 0) >= BENEFITS_MIN) return form?.requestSubmit();
+    box.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
+    box.querySelector<HTMLElement>("input, button, a[href]")?.focus({ preventScroll: true });
+  };
+  const hasFolded = (!pending.editWhileOpen && !!lead) || musts.length > 0 || nices.length > 0 || !!expires;
   // The page's one next step (screenshot 1's "Your next step"): the kit's needsYou wash with its hero-sized title.
   return (
-    <Card needsYou hero lift title={pending.editWhileOpen ? `Approve version ${pending.version} of ${role.title}` : "Approve this job"}>
+    <Card
+      needsYou
+      hero
+      lift
+      title={pending.editWhileOpen ? `Approve version ${pending.version} of ${role.title}` : "Approve this job"}
+      aside={
+        // Always drawn. Greyed it can still be focused and pressed, as "Ask for approval" is in the job builder (Builder.tsx). `self-center`: the title row aligns on the baseline.
+        <span ref={approveRef} className="self-center">
+          <Button variant="primary" loading={approve.isPending} ariaDisabled={!pending.viewer.mayDecide} describedBy={pending.viewer.mayDecide ? undefined : "approve-why"} onClick={() => { if (pending.viewer.mayDecide) approve.mutate(!!pending.editWhileOpen); else if (fixesFirst) toBlockers(); }}>
+            {pending.editWhileOpen ? "Approve this version" : "Approve and publish"}
+          </Button>
+        </span>
+      }
+    >
       <div className="stack gap-3">
-        {lead ? <p className="max-w-[68ch] text-ink-2">{lead}</p> : null}
+        {!pending.viewer.mayDecide && !fixesFirst ? <div id="approve-why"><Alert tone="info">{pending.viewer.reason ?? "Someone else on your team decides this one."}</Alert></div> : null}
+        {pending.viewer.blockedBy === "trial_ended" ? <div className="row"><AskRecruiter label="Ask ITS to choose a plan" size="sm" variant="secondary" preset={TRIAL_ASK} /></div> : null}
+        {reserved && (pending.viewer.mayDecide || fixesFirst) ? <p className="small muted">{reserved}</p> : null}
         {!pending.editWhileOpen && check === "waiting" ? <Alert tone="info">{APPROVE_WAITS_FOR_CHECK}</Alert> : null}
-        {canSeePay ? (
-          // what the preview is, as the link's tooltip
-          <div className="row">
-            <a className="btn secondary sm" href={previewHref(role.id, pending.version)} target="_blank" rel="noopener noreferrer" title={`Version ${pending.version} exactly as candidates will see it. The preview is not public and search engines never see it.`}><Icon name="eye" />Preview the job page<span className="sr-only"> (opens in a new tab)</span></a>
+        {pending.editWhileOpen && lead ? <p className="max-w-[68ch] text-ink-2">{lead}</p> : null}
+        {/* What holds Approve, in the order the server refuses, so the first thing to press is the first thing it asks for: a press while greyed comes here. */}
+        {pending.flags.length || legal.missing.length || legal.inOrder.length ? (
+          <div ref={blockersRef} id={fixesFirst ? "approve-why" : undefined} className="stack gap-3">
+            {pending.flags.length ? <ApprovalFlags roleId={role.id} version={pending.version} flags={pending.flags} canKeep={canEdit} onEdit={() => onEdit()} onKept={refresh} /> : null}
+            {legal.missing.length || legal.inOrder.length ? <LegalCheckList role={role} version={pending.version} check={pending.legalCheck ?? null} canEdit={canEdit} canManage={canManage} canChangeCompany={canChangeCompany} onEdit={onEdit} refresh={refresh} toApprove={() => approveRef.current?.querySelector("button")?.focus()} /> : null}
           </div>
         ) : null}
         {!pending.editWhileOpen ? <WhereItGoes key={pending.id} role={role} canManage={canManage} unsaved={unsaved} mayDecide={pending.viewer.mayDecide} busy={approve.isPending} onUnsaved={setUnsaved} /> : null}
-        {musts.length || nices.length ? (
-          // The job page lists them (plan D10), so the approver sees them as candidates will; the eye says so, and the
-          // lock says why each one matters stays with the team (both words are the marks' names and tooltips).
-          <p className="small text-ink-2">
-            <CandidatesSeeThis /> The job page lists what you are looking for: {musts.map((m) => m.text).join("; ") || "nothing yet"}.
-            {nices.length ? ` Nice to have: ${nices.map((m) => m.text).join("; ")}.` : ""}{" "}
-            <IconLabel icon="lock" label={WHY_STAYS_WITH_TEAM} className="align-text-bottom" />
-          </p>
-        ) : null}
-        {legal.missing.length || legal.inOrder.length ? <LegalCheckList role={role} check={pending.legalCheck ?? null} canEdit={canEdit} canManage={canManage} onEdit={onEdit} /> : null}
+        {/* What the software will do by itself once the job is live: the employer reads this before saying yes, so it is never folded. */}
         {autoLine ? <p className="small muted">{autoLine} <Link to={role.autoActionsOnOpen.changeHref}>Change these rules</Link></p> : null}
         {pending.editWhileOpen && role.proposedPacket ? (
           <div className="row gap-x-3">
@@ -228,15 +258,6 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
             <Button size="sm" onClick={() => onShowProposed(!showingProposed)}>{showingProposed ? `Back to version ${role.currentPacket?.version ?? "?"}` : `Show version ${role.proposedPacket.version}`}</Button>
           </div>
         ) : null}
-        {decides ? <p className="small muted">{decides}</p> : null}
-        {assumptions.length ? (
-          <div className="alert caution">
-            <strong>Assumptions the assistant made:</strong>
-            <ul className="mt-1.5 list-disc pl-[18px]">{assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
-          </div>
-        ) : null}
-        {pending.flags.length ? <ApprovalFlags roleId={role.id} version={pending.version} flags={pending.flags} canKeep={canEdit} onEdit={onEdit} onKept={refresh} /> : null}
-        {!pending.viewer.mayDecide && !(legal.missing.length && isLegalReason(pending.viewer.reason)) ? <Alert tone="info">{pending.viewer.reason ?? "Someone else on your team decides this one."}</Alert> : null}
       </div>
       {sendingBack ? (
         <div className="stack mt-5 max-w-[520px] gap-2">
@@ -248,11 +269,42 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
         </div>
       ) : (
         <div className="row mt-5">
-          {pending.viewer.mayDecide ? <Button variant="primary" loading={approve.isPending} onClick={() => approve.mutate(!!pending.editWhileOpen)}>{pending.editWhileOpen ? "Approve this version" : "Approve and publish"}</Button> : null}
+          {canSeePay ? (
+            // what the preview is, as the link's tooltip
+            <a className="btn secondary" href={previewHref(role.id, pending.version)} target="_blank" rel="noopener noreferrer" title={`Version ${pending.version} exactly as candidates will see it. The preview is not public and search engines never see it.`}><Icon name="eye" />Preview the job page<span className="sr-only"> (opens in a new tab)</span></a>
+          ) : null}
           {pending.viewer.maySendBack ? <Button onClick={() => setSendingBack(true)}>Send back with a note</Button> : null}
-          {canEdit ? <Button onClick={onEdit}>{pending.viewer.mayDecide ? "Edit first" : "Edit"}</Button> : null}
+          {canEdit ? <Button onClick={() => onEdit()}>{pending.viewer.mayDecide ? "Edit first" : "Edit"}</Button> : null}
         </div>
       )}
+      {assumptions.length || hasFolded ? (
+        <div className="stack mt-4 gap-2">
+          {assumptions.length ? (
+            <details className="more small">
+              <summary>Assumptions the assistant made ({assumptions.length})</summary>
+              <ul className="list-disc pl-[18px]">{assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
+            </details>
+          ) : null}
+          {hasFolded ? (
+            <details className="more small">
+              <summary>More</summary>
+              <div className="stack gap-2">
+                {!pending.editWhileOpen && lead ? <p className="text-ink-2">{lead}</p> : null}
+                {musts.length || nices.length ? (
+                  // The job page lists them (plan D10), so the approver sees them as candidates will; the eye says so, and the
+                  // lock says why each one matters stays with the team (both words are the marks' names and tooltips).
+                  <p className="text-ink-2">
+                    <CandidatesSeeThis /> The job page lists what you are looking for: {musts.map((m) => m.text).join("; ") || "nothing yet"}.
+                    {nices.length ? ` Nice to have: ${nices.map((m) => m.text).join("; ")}.` : ""}{" "}
+                    <IconLabel icon="lock" label={WHY_STAYS_WITH_TEAM} className="align-text-bottom" />
+                  </p>
+                ) : null}
+                {expires ? <p className="muted">Waits until {expires}, then goes back to a draft.</p> : null}
+              </div>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -279,10 +331,11 @@ export function CatchingUpCard({ latest, sentBackHere }: { latest: RoleDetail["p
 }
 
 /**
- * Where the job goes once approved (plan D6): the careers page, Google and the ticked boards, and who posts on the
- * boards. Those who manage postings change the ticks here, before approving; they can change them after too. For someone
- * who may decide, the line names what is ticked (`unsaved`), saved or not: approving takes it. For anyone else it names
- * what is saved. The list starts again from the saved boards whenever they change, and holds still while approving (`busy`).
+ * Where the job goes once approved (plan D6): the careers page, Google and the ticked boards, and, when the team posts on
+ * the boards, that it is up to them (when ITS posts, the next screen and the Share tab say so). Those who manage postings
+ * change the ticks here, before approving; they can change them after too. For someone who may decide, the line names what
+ * is ticked (`unsaved`), saved or not: approving takes it. For anyone else it names what is saved. The list starts again
+ * from the saved boards whenever they change, and holds still while approving (`busy`).
  */
 function WhereItGoes({ role, canManage, unsaved, mayDecide, busy, onUnsaved }: { role: RoleDetail; canManage: boolean; unsaved: string[] | null; mayDecide: boolean; busy: boolean; onUnsaved: (channels: string[] | null) => void }) {
   const [changing, setChanging] = useState(false);
@@ -291,7 +344,7 @@ function WhereItGoes({ role, canManage, unsaved, mayDecide, busy, onUnsaved }: {
   return (
     <div className="stack gap-1.5">
       <p className="small text-ink-2">
-        Once approved it goes to {places}. {boards.length ? (role.whoPosts === "its" ? "ITS posts it on the job boards from your company's own accounts." : "You post it on the job boards from your own accounts.") : ""}
+        Once approved it goes to {places}. {boards.length && role.whoPosts !== "its" ? "You post it on the job boards from your own accounts." : ""}
         {canManage && !changing ? <> <button type="button" className="link-btn" onClick={() => setChanging(true)}>Change the boards</button></> : null}
       </p>
       {changing ? <BoardTicks key={savedBoardsKey(role.boards)} roleId={role.id} boards={role.boards} roleStatus={role.status} whoPosts={role.whoPosts} canManage={canManage} busy={busy} onDone={() => setChanging(false)} onUnsaved={onUnsaved} /> : null}
@@ -302,21 +355,25 @@ function WhereItGoes({ role, canManage, unsaved, mayDecide, busy, onUnsaved }: {
 /**
  * What the law of the job's places asks of the ad (plan D5): what is still missing, each with how to put it right
  * (approving waits for these), then what is in order. Places our lawyer has not confirmed yet are named as a note and
- * never hold approval. A Colorado role's closing date can be set right here.
+ * never hold approval. The benefits are typed right here, and a Colorado role's closing date can be set here too; the
+ * pay is two figures and a ceiling, so it stays a real edit and opens the editor at the pay.
  */
-function LegalCheckList({ role, check, canEdit, canManage, onEdit }: { role: RoleDetail; check: LegalCheck | null; canEdit: boolean; canManage: boolean; onEdit: () => void }) {
+function LegalCheckList({ role, version, check, canEdit, canManage, canChangeCompany, onEdit, refresh, toApprove }: { role: RoleDetail; version: number; check: LegalCheck | null; canEdit: boolean; canManage: boolean; canChangeCompany: boolean; onEdit: (focus?: EditorFocus) => void; refresh: () => Promise<void>; toApprove: () => void }) {
   const { missing, inOrder } = legalLines(check);
   return (
     <section aria-label="What the law asks of this job ad" className="stack gap-2">
       {missing.length ? (
         <div className="alert caution">
           <strong>Before this job can go live</strong>
-          <ul className="mt-1.5 grid list-disc gap-2 pl-[18px]">
+          {/* no bullets: a field beside a bullet reads badly */}
+          <ul className="mt-2 grid gap-3">
             {missing.map((i) => (
               <li key={i.key}>
-                <strong>{i.label}.</strong> {i.detail}{i.fix ? ` ${i.fix}` : ""}
-                {i.key === "pay_range" && canEdit ? <div className="row mt-2"><Button size="sm" onClick={onEdit}>Edit the pay</Button></div> : null}
-                {i.key === "benefits" ? <div className="row mt-2"><Link to="/setup#setup-company" className="btn secondary sm">Describe the benefits in Settings</Link>{canEdit ? <Button size="sm" variant="ghost" onClick={onEdit}>Or only for this job</Button> : null}</div> : null}
+                {i.key === "benefits" && canEdit
+                  ? <BenefitsField roleId={role.id} version={version} item={i} canChangeCompany={canChangeCompany} refresh={refresh} toApprove={toApprove} />
+                  // Someone who cannot edit reads what is asked for, without a how-to meant for those who can.
+                  : <><strong>{i.label}.</strong> {i.detail}{i.fix && i.key !== "benefits" ? ` ${i.fix}` : ""}</>}
+                {i.key === "pay_range" && canEdit ? <div className="row mt-2"><Button size="sm" onClick={() => onEdit("pay")}>Edit the pay</Button></div> : null}
                 {i.key === "closing_date" ? <div className="mt-2"><ClosingDateField roleId={role.id} closingDate={role.closingDate} canEdit={canManage} roleStatus={role.status} idBase="legal" /></div> : null}
               </li>
             ))}
@@ -338,6 +395,37 @@ function LegalCheckList({ role, check, canEdit, canManage, onEdit }: { role: Rol
         </details>
       ) : null}
     </section>
+  );
+}
+
+/** Fewer letters than this is not a description: the same limit as the server's. */
+const BENEFITS_MIN = 2;
+
+/**
+ * The benefits the law asks of the ad (plan D5), written here: one field, one press, and the person stays on the page. The
+ * compliance layer's own words name the field and sit under it. The server fills in the version waiting, and its check has
+ * the last word. Saved, the item moves to "in order", Approve wakes, and the keyboard's place moves up to it.
+ */
+function BenefitsField({ roleId, version, item, canChangeCompany, refresh, toApprove }: { roleId: string; version: number; item: LegalCheckItem; canChangeCompany: boolean; refresh: () => Promise<void>; toApprove: () => void }) {
+  const [text, setText] = useState("");
+  const id = `legal-benefits-${roleId}`;
+  const ready = text.trim().length >= BENEFITS_MIN;
+  const save = useMutation({
+    mutationFn: () => api.post(`/api/v1/roles/${roleId}/packets/${version}/benefits`, { text: text.trim() }),
+    onSuccess: async () => { toast("Benefits saved."); await refresh(); toApprove(); },
+    // A page left behind (a newer version waits, or someone just wrote them) catches up, and what was typed stays.
+    onError: async (e) => { toast(e instanceof ApiError ? e.message : "Could not save the benefits."); if (e instanceof ApiError && e.status === 409) await refresh(); },
+  });
+  return (
+    <form className="stack gap-1.5" onSubmit={(e) => { e.preventDefault(); if (ready && !save.isPending) save.mutate(); }}>
+      <Field label={item.label} htmlFor={id} hint={item.detail}>
+        <div className="flex flex-wrap items-center gap-2">
+          <input id={id} className="input min-w-0 flex-[1_1_14rem]" maxLength={2000} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. Health, dental, 401(k), paid time off" />
+          <Button type="submit" size="sm" variant="primary" loading={save.isPending} disabled={!ready}>Save</Button>
+        </div>
+      </Field>
+      {canChangeCompany ? <Link to="/setup#setup-company" className="small w-fit">Use for every job</Link> : null}
+    </form>
   );
 }
 
@@ -377,7 +465,7 @@ function ApprovalFlags({ roleId, version, flags, canKeep, onEdit, onKept }: { ro
               </div>
             ) : canKeep ? (
               <div className="row">
-                <Button size="sm" variant="primary" onClick={onEdit}>Change the wording</Button>
+                <Button size="sm" variant="primary" onClick={() => onEdit()}>Change the wording</Button>
                 <Button size="sm" onClick={() => { setOpen(f.id); setReason(""); }}>Keep it…</Button>
               </div>
             ) : <p className="small muted">Someone who can edit the role changes the wording, or keeps it and says why.</p>}

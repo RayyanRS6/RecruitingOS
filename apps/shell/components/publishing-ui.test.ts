@@ -141,11 +141,11 @@ describe("the approval card (D1, D5, D6, D9)", () => {
           jurisdictions: ["US-CO"], remote: false,
           items: [
             { key: "pay_range", label: "Pay range on the job ad", met: true, blocking: true, jurisdictions: ["US-CO"], pendingCounsel: [], detail: "The pay range is on the job ad.", fix: null },
-            { key: "benefits", label: "A short description of the benefits", met: false, blocking: true, jurisdictions: ["US-CO"], pendingCounsel: [], detail: "The law in Colorado asks for a short description of the benefits on the job ad.", fix: "Describe the benefits in Setup (used for every job), or in this role's pay section." },
+            { key: "benefits", label: "A short description of the benefits", met: false, blocking: true, jurisdictions: ["US-CO"], pendingCounsel: [], detail: "The law in Colorado asks for a short description of the benefits on the job ad.", fix: "Describe the benefits on the job's approval card, or in Settings (used for every job)." },
           ],
           missing: [],
         },
-        viewer: { mayDecide: false, maySendBack: true, reason: "Before this job can go live, the law where it is asks for: a short description of the benefits. Describe the benefits in Setup." },
+        viewer: { mayDecide: false, maySendBack: true, reason: "Before this job can go live, the law where it is asks for: a short description of the benefits. Describe the benefits on the job's approval card, or in Settings (used for every job).", blockedBy: "legal" },
       },
       latest: null,
     },
@@ -153,7 +153,14 @@ describe("the approval card (D1, D5, D6, D9)", () => {
     autoActionsOnOpen: { lines: [{ actionType: "message.send_templated", level: "auto", text: "Every applicant gets an email confirming their application, sent on its own in the approved wording." }, { actionType: "application.invite_screen", level: "approval", text: "Invitations to the screening conversation wait for your approval." }], changeHref: "/setup#setup-rules" },
     boards, whoPosts: "its", closingDate: { ...closingDate, closesOn: null, applyBy: null, requiredByLaw: true, defaultIfMissing: "2026-11-07" }, boardsShowingOldVersion: [],
   };
-  const html = render(client(), createElement(PacketApprovalCard, { role: role as never, onEdit: () => undefined, canEdit: true, canManage: true, canSeePay: true, showingProposed: false, onShowProposed: () => undefined, onApproved: () => undefined }));
+  const cardProps = { onEdit: () => undefined, canEdit: true, canManage: true, canChangeCompany: true, canSeePay: true, showingProposed: false, onShowProposed: () => undefined, onApproved: () => undefined };
+  const cardOf = (r: unknown, over: Record<string, unknown> = {}, qc = client()) => render(qc, createElement(PacketApprovalCard, { role: r as never, ...cardProps, ...over }));
+  const withPending = (over: Record<string, unknown>, roleOver: Record<string, unknown> = {}) => ({ ...role, ...roleOver, packetApproval: { pending: { ...role.packetApproval.pending, ...over }, latest: null } });
+  const viewer = (over: Record<string, unknown>) => ({ viewer: { mayDecide: false, maySendBack: true, reason: null, blockedBy: null, ...over } });
+  const lawMet = { legalCheck: { jurisdictions: ["US-CO"], remote: false, items: [{ key: "benefits", label: "A short description of the benefits", met: true, blocking: true, jurisdictions: ["US-CO"], pendingCounsel: [], detail: "The job ad describes the benefits.", fix: null }], missing: [] } };
+  /** The button in the card's title row, and whether it is the first thing after the title. */
+  const approveOf = (html: string) => /<div class="card-title"><h2>[^<]*<\/h2><span class="self-center"><button ([^>]*)>([^<]*)<\/button><\/span><\/div>/.exec(html);
+  const html = cardOf(role);
   const words = text(html);
 
   it("opens the job page preview of the version waiting in a new tab", () => {
@@ -161,25 +168,173 @@ describe("the approval card (D1, D5, D6, D9)", () => {
     expect(words).toContain("Preview the job page (opens in a new tab)");
   });
 
-  it("says where the job goes and who posts it, what the law still asks for, and what starts on its own", () => {
-    expect(words).toContain("Once approved it goes to your careers page, Google and Indeed. ITS posts it on the job boards from your company's own accounts.");
+  it("says where the job goes, what the law still asks for, and what starts on its own", () => {
+    expect(words).toContain("Once approved it goes to your careers page, Google and Indeed.");
+    // when ITS posts, the next screen and the Share tab say so; when the team posts, it is something they will have to do
+    expect(words).not.toContain("ITS posts it on the job boards");
+    expect(text(cardOf(withPending({}, { whoPosts: "self" })))).toContain("Once approved it goes to your careers page, Google and Indeed. You post it on the job boards from your own accounts.");
     expect(words).toContain("Before this job can go live");
-    expect(words).toContain("A short description of the benefits.");
-    expect(html).toContain('href="/setup#setup-company"');
+    expect(words).toContain("A short description of the benefits");
     expect(words).toContain("Pay range on the job ad: The pay range is on the job ad.");
     expect(words).toContain("Once it is live: Every applicant gets an email confirming their application, sent on its own in the approved wording. Invitations to the screening conversation wait for your approval.");
     expect(html).toContain('href="/setup#setup-rules"');
-    // the legal sentence is not said twice, and Approve is not offered while it waits
+    // what the software does by itself is read before saying yes: above the fold, and the buttons come after it
+    expect(html.indexOf("Once it is live:")).toBeLessThan(html.indexOf("Send back with a note"));
+    expect(html.slice(0, html.indexOf("Once it is live:"))).not.toContain("<details class=\"more small\"><summary>More</summary>");
+    // the legal sentence is not said twice
     expect(words).not.toContain("the law where it is asks for: a short description");
-    expect(words).not.toContain("Approve and publish");
     // what is already in order is folded away
     expect(html).toContain("<summary");
     expect(words).toContain("What the law asks of this job ad is in order (1)");
   });
 
+  it("the benefits are a field with the compliance layer's own words, and a small Save; the old ways out are gone", () => {
+    expect(html).toContain('<label for="legal-benefits-r1">A short description of the benefits</label>');
+    expect(html).toContain('<input id="legal-benefits-r1" class="input min-w-0 flex-[1_1_14rem]" maxLength="2000" placeholder="e.g. Health, dental, 401(k), paid time off" value=""/>');
+    expect(html).toContain('<span class="hint">The law in Colorado asks for a short description of the benefits on the job ad.</span>');
+    expect(html).toMatch(/<button type="submit" class="btn primary sm" disabled=""[^>]*>Save<\/button>/);
+    // the how-to the field replaces is still the layer's (Home and the refusal say it), and is not drawn beside the field
+    expect(words).not.toContain("Describe the benefits");
+    expect(words).not.toContain("Or only for this job");
+    expect(words).not.toContain("this job's pay section");
+    // one form, inside the box the press goes to, and no list bullets beside it
+    expect(html.match(/<form /g)).toHaveLength(1);
+    expect(html.indexOf('id="approve-why"')).toBeLessThan(html.indexOf("Before this job can go live"));
+    expect(html).toContain('<ul class="mt-2 grid gap-3">');
+  });
+
+  it("'Use for every job' is a small link, only for those who may change the company", () => {
+    expect(html).toContain('<a href="/setup#setup-company" class="small w-fit">Use for every job</a>');
+    for (const canChangeCompany of [false, undefined]) {
+      const manager = cardOf(role, { canChangeCompany });
+      expect(manager).not.toContain("Use for every job");
+      expect(manager).not.toContain("/setup#setup-company");
+      expect(manager).toContain('id="legal-benefits-r1"');
+    }
+  });
+
+  it("someone who cannot edit reads what the law asks, with no field and no how-to meant for others", () => {
+    const hr = cardOf(withPending(viewer({ maySendBack: false, reason: "Your role cannot approve jobs; an owner, admin or hiring manager does.", blockedBy: "role" })), { canEdit: false, canManage: false, canChangeCompany: false });
+    const out = text(hr);
+    expect(hr).not.toContain("<form");
+    expect(out).toContain("A short description of the benefits. The law in Colorado asks for a short description of the benefits on the job ad.");
+    expect(out).not.toContain("Describe the benefits");
+    expect(out).not.toContain("Send back with a note");
+    expect(out).not.toContain("Edit");
+  });
+
+  it("Approve is drawn at the top in every state: greyed, focusable and pressable, whatever holds it", () => {
+    const reasons: Array<[string, string]> = [
+      ["legal", "Before this job can go live, the law where it is asks for: a short description of the benefits."],
+      ["flags", "One phrase in this role needs a decision first."],
+      ["role", "Your role cannot approve jobs; an owner, admin or hiring manager does."],
+      ["reserved", "This decision is reserved for Hank Manager; an owner can also decide it."],
+      ["self_approval", "You started this role, so another owner, admin or hiring manager needs to approve it."],
+      ["kept_own_flag", "You kept wording the fairness check flagged in this version, so someone else says yes before it goes live."],
+      ["trial_ended", "Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan."],
+    ];
+    for (const [blockedBy, reason] of reasons) {
+      const out = cardOf(withPending(viewer({ reason, blockedBy })));
+      const [, attrs, label] = approveOf(out) ?? [];
+      expect(label, blockedBy).toBe("Approve and publish");
+      expect(attrs, blockedBy).toContain('class="btn primary"');
+      expect(attrs, blockedBy).toContain('aria-disabled="true"');
+      expect(attrs, blockedBy).toContain('aria-describedby="approve-why"');
+      // never the kit's disabled, which would make it unfocusable
+      expect(attrs, blockedBy).not.toMatch(/(^| )disabled=/);
+      // what it points at is on the page, once
+      expect(out.match(/id="approve-why"/g), blockedBy).toHaveLength(1);
+    }
+    // a change to a live job says which version
+    const live = cardOf(withPending({ ...viewer({ blockedBy: "legal" }), editWhileOpen: true, version: 2 }, { proposedPacket: { ...role.currentPacket, version: 2, changeSummary: "Fully remote", createdAt: "2026-10-08T10:00:00.000Z", createdBy: { kind: "user", id: "u1", name: "Dana" } } }));
+    expect(approveOf(live)?.[2]).toBe("Approve this version");
+  });
+
+  it("free to decide: Approve is plain plum at the top, and nothing says it is held", () => {
+    const out = cardOf(withPending({ ...lawMet, ...viewer({ mayDecide: true }) }));
+    const [, attrs, label] = approveOf(out) ?? [];
+    expect(label).toBe("Approve and publish");
+    expect(attrs).toContain('class="btn primary"');
+    expect(attrs).not.toContain("aria-disabled");
+    expect(attrs).not.toContain("aria-describedby");
+    expect(out).not.toContain('id="approve-why"');
+    expect(out).not.toContain('class="alert caution"');
+    expect(text(out)).toContain("Edit first");
+    expect(text(out)).not.toMatch(/\bEdit (?!first)/);
+  });
+
+  it("if someone else decides, the reason sits directly under the title, once, and the field is still there for whoever can type it", () => {
+    const reason = "You started this role, so another owner, admin or hiring manager needs to approve it.";
+    const out = cardOf(withPending(viewer({ reason, blockedBy: "self_approval" })));
+    const after = out.slice(out.indexOf("</div>", out.indexOf('class="card-title"')));
+    // the first thing under the title row
+    expect(after).toMatch(new RegExp(`^</div><div class="stack gap-3"><div id="approve-why"><div class="alert info" role="status">${reason}</div></div>`));
+    expect(text(out).split(reason)).toHaveLength(2);
+    // the box is not the reason here: it carries no id, and can still be filled in for the other owner
+    expect(out.indexOf('id="approve-why"')).toBeLessThan(out.indexOf("Before this job can go live"));
+    expect(out.match(/id="approve-why"/g)).toHaveLength(1);
+    expect(out).toContain('id="legal-benefits-r1"');
+    expect(text(out)).toContain("Edit");
+  });
+
+  it("while the law or wording holds it, the box is what Approve points at, with no second copy of the reason", () => {
+    const reason = "Before this job can go live, the law where it is asks for: a short description of the benefits.";
+    const out = cardOf(withPending(viewer({ reason, blockedBy: "legal" })));
+    expect(text(out)).not.toContain(reason);
+    expect(out).toContain('<div id="approve-why" class="stack gap-3">');
+    const flags = [{ id: "f1", rule: "age", text: "young and energetic", path: "description.publicJobDescription", reason: "This can read as a preference about age.", alternative: "energetic" }];
+    const held = cardOf(withPending({ flags, ...viewer({ reason: "One phrase in this role needs a decision first.", blockedBy: "flags" }) }));
+    expect(text(held)).not.toContain("One phrase in this role needs a decision first.");
+    expect(held.indexOf('id="approve-why"')).toBeLessThan(held.indexOf("Check this wording before approving"));
+    // in the order the server refuses: what a press goes to first is what it asks for first
+    expect(held.indexOf("Check this wording before approving")).toBeLessThan(held.indexOf("Before this job can go live"));
+    expect(text(held)).toContain("Change the wording");
+    expect(text(held)).toContain("Keep it…");
+  });
+
+  it("an ended trial: greyed, its line under the title, and the one way on, for someone at the company", () => {
+    const line = "Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan.";
+    const out = cardOf(withPending(viewer({ reason: line, blockedBy: "trial_ended" })));
+    const words = text(out);
+    expect(words).toContain(line);
+    expect(words).toContain("Ask ITS to choose a plan");
+    expect(out.indexOf(line)).toBeLessThan(out.indexOf("Ask ITS to choose a plan"));
+    expect(out.indexOf("Ask ITS to choose a plan")).toBeLessThan(out.indexOf("Before this job can go live"));
+    expect(text(cardOf(withPending(viewer({ reason: "You started this role.", blockedBy: "self_approval" }))))).not.toContain("Ask ITS to choose a plan");
+  });
+
+  it("folds what only describes, and keeps what must be acted on or was promised", () => {
+    const rich = withPending({ ...lawMet, ...viewer({ mayDecide: true }), rationale: "The job builder wrote the job details. Approve them to open the job and start posting.", expiresAt: "2026-11-20T10:00:00.000Z", decisionMaker: { userId: "u9", name: "Hank Manager", email: "hank@bright.test" } }, { currentPacket: { ...role.currentPacket, packet: { provenance: { assumptions: ["The job is remote.", "You did not name any deal-breakers, so none are listed."] }, requirements: { mustHaves: [{ key: "m1", text: "Active RDH license", rationale: "Required by the state", evidencedBy: ["resume"] }], niceToHaves: [], eligibility: [] } } } });
+    const out = cardOf(rich);
+    const more = out.slice(out.indexOf("<summary>More</summary>"));
+    for (const folded of ["The job builder wrote the job details.", "The job page lists what you are looking for:", "then goes back to a draft."]) {
+      expect(out.indexOf(folded), folded).toBeGreaterThan(out.indexOf("<summary>More</summary>"));
+      expect(more, folded).toContain(folded);
+    }
+    // the assumptions keep their own fold, with how many
+    expect(out).toContain('<details class="more small"><summary>Assumptions the assistant made (2)</summary><ul class="list-disc pl-[18px]"><li>The job is remote.</li>');
+    // who may decide stays in sight for whoever may decide
+    const reserved = text(out).indexOf("Reserved for Hank Manager; an owner can also decide.");
+    expect(reserved).toBeGreaterThan(-1);
+    expect(reserved).toBeLessThan(text(out).indexOf("Once approved it goes to"));
+    // with nothing to fold there is no empty More
+    expect(cardOf(withPending({ ...lawMet, rationale: null, expiresAt: null, ...viewer({ mayDecide: true }) }))).not.toContain("<summary>More</summary>");
+  });
+
+  it("a change to a live job keeps its state and what changed in sight", () => {
+    const rationale = "Dana changed the details of the live job: new pay. Approve to make version 2 current; until then the job keeps running on version 1.";
+    const live = cardOf(withPending({ ...viewer({ mayDecide: true }), editWhileOpen: true, version: 2, rationale, ...lawMet }, { status: "open", currentPacketVersion: 1, proposedPacket: { version: 2, status: "proposed", changeSummary: "New pay", createdAt: "2026-10-08T10:00:00.000Z", createdBy: { kind: "user", id: "u1", name: "Dana" }, packet: { provenance: { assumptions: [] } } } }));
+    expect(text(live)).toContain(rationale);
+    expect(live.indexOf(rationale)).toBeLessThan(live.indexOf("Send back with a note"));
+    expect(text(live)).toContain("What changed: New pay · by Dana");
+    expect(text(live)).toContain("Show version 2");
+    // nothing about where a new job goes
+    expect(text(live)).not.toContain("Once approved it goes to");
+  });
+
   it("marks the must-haves and nice-to-haves as on the job page (D10)", () => {
     const withLists = { ...role, currentPacket: { ...role.currentPacket, packet: { provenance: { assumptions: [] }, requirements: { mustHaves: [{ key: "m1", text: "Active RDH license", rationale: "Required by the state", evidencedBy: ["resume"] }], niceToHaves: [{ key: "n1", text: "Dentrix", rationale: "We use it", evidencedBy: ["resume"] }], eligibility: [] } } } };
-    const html = render(client(), createElement(PacketApprovalCard, { role: withLists as never, onEdit: () => undefined, canEdit: true, canManage: true, canSeePay: true, showingProposed: false, onShowProposed: () => undefined, onApproved: () => undefined }));
+    const html = cardOf(withLists);
     const out = text(html);
     expect(out).toContain("Candidates see this The job page lists what you are looking for: Active RDH license. Nice to have: Dentrix.");
     expect(out).not.toContain("Required by the state");
@@ -643,6 +798,9 @@ describe("Setup: how candidates see the company, and the job boards (Q13, D3, Q1
     // the empty state's one line, then its two ways forward (founder, 23 October 2026: fewer words)
     expect(words).toContain("About the company Nothing yet.");
     expect(words).not.toContain("Job pages show the job without an \"about the company\" part");
+    // the company's benefits are on the read view, where "Use for every job" on an approval card lands, before anyone presses Edit
+    expect(words).toContain("Benefits not set");
+    expect(text(page({ benefitsSummary: "Health and dental." }))).toContain("Benefits Health and dental.");
     expect(words).not.toContain("What candidates see on your careers page and every job page.");
     expect(words).toContain("Draft it with the assistant");
     expect(words).toContain("Write it yourself");

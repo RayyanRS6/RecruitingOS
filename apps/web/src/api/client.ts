@@ -68,13 +68,18 @@ export type DecisionMaker = { userId: string; name: string | null; email: string
 /** Whether candidates see a packet's pay range by the public pages' rule, and whether a pay transparency law is why. */
 export type PacketPayView = { payShown?: boolean; payRequiredByLaw?: boolean };
 /**
+ * What holds Approve for the signed-in person, in the order the approve route refuses (the API's `viewer.blockedBy`):
+ * `flags` and `legal` are dealt with on the card; the others wait on someone or something else, and `reason` says who or what.
+ */
+export type ApprovalBlock = "role" | "reserved" | "trial_ended" | "self_approval" | "kept_own_flag" | "flags" | "legal";
+/**
  * The packet approval on a role: what waits, what the signed-in person may do about it, and how a sent-back role got
  * there. `flags` are the wording checks on the version waiting (open ones hold approval until changed or kept with a
  * reason); sending back is never held up by them (`maySendBack`).
  */
 export type PacketApproval = {
   /** `legalCheck`: what the law of the job's places asks of the ad (plan D5); approving waits while `missing` has anything. */
-  pending: { id: string; version: number; rationale: string | null; requestedBy: { kind: string; id: string; name?: string }; requiredRoles: string[]; requiredUserIds: string[]; decisionMaker: DecisionMaker | null; createdAt: string; expiresAt: string | null; editWhileOpen: boolean; flags: PacketFlag[]; legalCheck?: LegalCheck | null; viewer: { mayDecide: boolean; maySendBack: boolean; reason: string | null } } | null;
+  pending: { id: string; version: number; rationale: string | null; requestedBy: { kind: string; id: string; name?: string }; requiredRoles: string[]; requiredUserIds: string[]; decisionMaker: DecisionMaker | null; createdAt: string; expiresAt: string | null; editWhileOpen: boolean; flags: PacketFlag[]; legalCheck?: LegalCheck | null; viewer: { mayDecide: boolean; maySendBack: boolean; reason: string | null; blockedBy: ApprovalBlock | null } } | null;
   latest: { id: string; status: string; version: number; decisionNote: string | null; decidedAt: string | null; decidedBy: { id: string; name: string } | null } | null;
 };
 /**
