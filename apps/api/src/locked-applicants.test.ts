@@ -664,6 +664,61 @@ describe("locked candidates", () => {
       expect((await noticesOf(job.id)).filter((n) => n.kind === "message.received")).toEqual([]);
     });
 
+    it("a text with no conversation open reaches a person: ITS for someone locked, on the locked application's own company, and the team for anyone else", async () => {
+      const text = (from: string, body: string, sid: string) => app.request("/webhooks/twilio/inbound", form({ From: from, To: "+15550001111", Body: body, MessageSid: sid }));
+      const requestsOf = (applicationId: string) => container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, applicationId));
+      const inboundOf = async (applicationId: string) => (await commsOf(applicationId)).filter((c) => c.direction === "inbound").map((c) => c.bodyText);
+
+      // The same number at two companies: read at the first, which comes first in the list, and locked at the second.
+      const seenAt = await newCompany();
+      await usePlan(container, seenAt.id, "ultra");
+      const seenJob = await openRole(seenAt);
+      const same = "(949) 555-0190";
+      const seen = await apply(seenJob, person("Tia", "Visible"), { phone: same });
+      await container.db.update(screens).set({ status: "expired" }).where(eq(screens.applicationId, seen.id));
+      const job = await openJob(1);
+      await fill(job, 1);
+      const row = await apply(job, person("Tam"), { phone: same });
+      expect(row.lockedAt).not.toBeNull();
+
+      expect((await text("+19495550190", "HUMAN", "SM-tam-1")).status).toBe(200);
+      await container.drain();
+      const [asked] = await requestsOf(row.id);
+      expect(asked).toMatchObject({ kind: "candidate_issue", companyId: job.id });
+      expect(await inboundOf(row.id)).toEqual(["HUMAN"]);
+      // Not on the other company's record, and neither team hears.
+      expect(await requestsOf(seen.id)).toEqual([]);
+      expect(await inboundOf(seen.id)).toEqual([]);
+      expect((await noticesOf(job.id)).filter((n) => ["screen.human_requested", "message.received"].includes(n.kind))).toEqual([]);
+      expect((await noticesOf(seenAt.id)).filter((n) => ["screen.human_requested", "message.received"].includes(n.kind))).toEqual([]);
+      await noTeamNoticeNames(job.id);
+      // One request at a time; their other words wait on the thread, and anything they text reaches ITS, not only HUMAN.
+      expect((await text("+19495550190", "Any news?", "SM-tam-2")).status).toBe(200);
+      await container.drain();
+      expect(await requestsOf(row.id)).toHaveLength(1);
+      expect(await inboundOf(row.id)).toEqual(expect.arrayContaining(["HUMAN", "Any news?"]));
+      const other = await apply(job, person("Tod"), { phone: "(949) 555-0191" });
+      expect((await text("+19495550191", "When will I hear?", "SM-tod-1")).status).toBe(200);
+      await container.drain();
+      expect(await requestsOf(other.id)).toHaveLength(1);
+
+      // Someone the team can read: the team is told, and HUMAN brings in a recruiter too.
+      const openCompany = await newCompany();
+      await usePlan(container, openCompany.id, "ultra");
+      const openJobRow = await openRole(openCompany);
+      const read2 = person("Ula", "Visible");
+      const visible = await apply(openJobRow, read2, { phone: "(949) 555-0192" });
+      await container.db.update(screens).set({ status: "expired" }).where(eq(screens.applicationId, visible.id));
+      expect((await text("+19495550192", "When will I hear?", "SM-ula-1")).status).toBe(200);
+      await container.drain();
+      expect((await noticesOf(openCompany.id)).find((n) => n.kind === "message.received")).toMatchObject({ title: `${read2.first} ${read2.last} wrote back` });
+      expect(await requestsOf(visible.id)).toEqual([]);
+      expect((await text("+19495550192", "HUMAN", "SM-ula-2")).status).toBe(200);
+      await container.drain();
+      expect((await requestsOf(visible.id)).map((e) => e.kind)).toEqual(["candidate_issue"]);
+      expect((await noticesOf(openCompany.id)).find((n) => n.kind === "screen.human_requested")).toMatchObject({ title: `${read2.first} ${read2.last} asked for a person` });
+    }, 180_000);
+
     it("what ITS writes about someone locked stays with ITS", async () => {
       const job = await openJob(1);
       await fill(job, 1);

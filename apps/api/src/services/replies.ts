@@ -124,10 +124,27 @@ async function noThanksMeansFutureRoles(tx: Tx, app: App): Promise<boolean> {
  * A locked applicant wrote back, and nobody on the team may read it: ITS's queue gets it, with the words left on the thread,
  * so a person reads it. One request at a time: while one stands, the person holding it reads the next reply there too.
  */
-async function replyReachesIts(tx: Tx, input: { app: App; roleTitle: string; name: string; now: Date }): Promise<void> {
+async function replyReachesIts(tx: Tx, input: { app: App; roleTitle: string; name: string; now: Date; question?: string; actor?: Actor }): Promise<void> {
   const [open] = await tx.select({ id: recruiterEscalations.id }).from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, input.app.id), notInArray(recruiterEscalations.status, ["resolved", "cancelled"]))).limit(1);
   if (open) return;
-  await createEscalation(tx, { companyId: input.app.companyId, roleId: input.app.roleId, applicationId: input.app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: `${input.name} wrote back about the ${input.roleTitle} role. The hiring team cannot read this application, so a person at ITS answers. Their message is on the application's thread.`, requestedBy: EMAIL_REPLY_ACTOR, now: input.now });
+  await createEscalation(tx, { companyId: input.app.companyId, roleId: input.app.roleId, applicationId: input.app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: input.question ?? `${input.name} wrote back about the ${input.roleTitle} role. The hiring team cannot read this application, so a person at ITS answers. Their message is on the application's thread.`, requestedBy: input.actor ?? EMAIL_REPLY_ACTOR, now: input.now });
+}
+
+/**
+ * A text from someone with no conversation open (webhooks/twilio.ts), once it is on their thread. The fallback text promises
+ * "Reply HUMAN for a person", so as with an email it reaches one: someone locked reaches ITS whatever they wrote, because nobody
+ * on the team may read it; anyone else's team is told, and HUMAN also brings in a recruiter. Nothing goes back to them by text.
+ */
+export async function textWithNoConversation(tx: Tx, container: Container, input: { app: App; candidate: { firstName: string; lastName: string }; text: string }): Promise<void> {
+  const { app, text } = input;
+  const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
+  const roleTitle = role?.title ?? "this";
+  const name = `${input.candidate.firstName} ${input.candidate.lastName}`.trim() || "A candidate";
+  const at = { app, roleTitle, name, now: container.engine.clock(), actor: { kind: "system", id: "sms_inbound" } as const };
+  if (app.lockedAt) return replyReachesIts(tx, at);
+  const wantsHuman = humanRequested(text);
+  if (wantsHuman) await replyReachesIts(tx, { ...at, question: `${name} replied HUMAN to a text about the ${roleTitle} role and needs a person. Please reach out by phone and pick up the conversation.` });
+  await notify(tx, { companyId: app.companyId, about: app.id, kind: wantsHuman ? "screen.human_requested" : "message.received", title: wantsHuman ? `${name} asked for a person` : `${name} wrote back`, body: wantsHuman ? `They replied HUMAN to a text about ${roleTitle}. A recruiter has the request; you can also call them.` : `By text, about ${roleTitle}: "${firstLine(text).slice(0, 140)}"`, action: { label: "Read it", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
 }
 
 export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; talentPoolOptOut?: boolean; duplicate?: boolean; explanationRequested?: ExplanationAsk }> {

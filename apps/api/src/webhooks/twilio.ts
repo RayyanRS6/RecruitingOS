@@ -1,11 +1,12 @@
 import { Hono } from "hono";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { emit, errorForLog, normalizePhone } from "@ros/core";
 import { applications, candidates, communications, screens, withTenant } from "@ros/db";
 import { parseTwilioInbound, smsKeyword, verifyTwilioSignature } from "@ros/integrations";
 import { runScreenTurn } from "@ros/agents";
 import type { Vars } from "../middleware/session";
 import { learnFromSentChat } from "../services/profile-facts";
+import { textWithNoConversation } from "../services/replies";
 import { screenDeps } from "../services/screens";
 
 /**
@@ -64,15 +65,29 @@ twilioWebhook.post("/inbound", async (c) => {
     if (rows[0] && (!target || rows[0].updatedAt > (target as { updatedAt?: string }).updatedAt!)) target = { screenId: rows[0].screenId, companyId: rows[0].companyId, applicationId: rows[0].applicationId };
   }
   if (!target) {
-    // No open conversation: keep the message on the record so a person can answer it.
-    const p = people[0];
-    await withTenant(container.db, p.companyId, async (tx) => {
-      const apps = await tx.select({ id: applications.id }).from(applications).where(eq(applications.candidateId, p.id)).orderBy(desc(applications.createdAt)).limit(1);
-      if (apps[0]) {
-        const [row] = await tx.insert(communications).values({ companyId: p.companyId, candidateId: p.id, applicationId: apps[0].id, direction: "inbound", channel: "sms", fromAddress: phone, bodyText: sms.body, provider: "twilio", providerMessageId: sms.messageSid ?? null, status: "received", disclosureIncluded: false, sentBy: { kind: "candidate", id: p.id } }).returning({ id: communications.id });
-        await emit(tx, { type: "message.received", companyId: p.companyId, actor: { kind: "candidate", id: p.id }, subject: { type: "communication", id: row.id }, payload: { channel: "sms", applicationId: apps[0].id, unmatched: true } });
+    // No open conversation: keep the message on the record, and tell a person who can answer it (`textWithNoConversation`).
+    // A number can be on several companies' records, and someone locked is looked for first, on any of them: nobody on a team
+    // may read them, so only a request to ITS brings the person the text they were sent promises.
+    let p = people[0];
+    let app: typeof applications.$inferSelect | null = null;
+    for (const person of people) {
+      const [newest] = await withTenant(container.db, person.companyId, (tx) => tx.select().from(applications).where(eq(applications.candidateId, person.id)).orderBy(sql`${applications.lockedAt} is null`, desc(applications.createdAt)).limit(1));
+      if (person === people[0]) app = newest ?? null;
+      if (newest?.lockedAt) {
+        p = person;
+        app = newest;
+        break;
       }
-    });
+    }
+    if (app) {
+      const at = app;
+      await withTenant(container.db, p.companyId, async (tx) => {
+        const [row] = await tx.insert(communications).values({ companyId: p.companyId, candidateId: p.id, applicationId: at.id, direction: "inbound", channel: "sms", fromAddress: phone, bodyText: sms.body, provider: "twilio", providerMessageId: sms.messageSid ?? null, status: "received", disclosureIncluded: false, sentBy: { kind: "candidate", id: p.id } }).returning({ id: communications.id });
+        await emit(tx, { type: "message.received", companyId: p.companyId, actor: { kind: "candidate", id: p.id }, subject: { type: "communication", id: row.id }, payload: { channel: "sms", applicationId: at.id, unmatched: true } });
+        await textWithNoConversation(tx, container, { app: at, candidate: p, text: sms.body });
+      });
+      await container.kick();
+    }
     return c.body(EMPTY_TWIML, 200, { "Content-Type": "text/xml" });
   }
   const t = target;
