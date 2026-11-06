@@ -2,13 +2,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
 import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
-import { CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
-import { aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, interviews, notifications, plans, policies, postings, recruiterEscalations, roles, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns } from "@ros/db";
-import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
-import { UNLOCK_INTERVIEW_DAYS, startInterviewAgain } from "@ros/workflows";
+import { CANDIDATE_WROTE_BACK, CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileNoDateLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
+import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, interviews, jobs, notifications, plans, policies, postings, recruiterEscalations, roles, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider, type MemoryStorageAdapter } from "@ros/integrations";
+import { DISCARD_OBJECT_JOB_KIND, UNLOCK_INTERVIEW_DAYS, discardUnusedObject, startInterviewAgain } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { RESUME_READ_NOTICE } from "./pages/apply-form";
+import { RESUME_READING_KEEP_MS } from "./services/apply-details";
 import { followApply, signInAdmin, signInStaff, usePlan } from "./test-helpers";
 
 const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
@@ -131,6 +132,9 @@ describe("locked candidates", () => {
     expect(named.map((n) => `${n.kind}: ${n.title}`)).toEqual([]);
   };
   const statusOf = (row: { statusToken: string }) => page(`/c/status/${row.statusToken}`);
+  /** The progress line as a person reads it: each step, and whether it is done or where they are. */
+  const stepsOf = (html: string) => [...(/<ol class="track"[\s\S]*?<\/ol>/.exec(html)?.[0] ?? "").matchAll(/<li(?: class="(\w+)")?[^>]*>[\s\S]*?<span>([^<]+)<\/span>/g)].map((m) => (m[1] ? `${m[2]} (${m[1]})` : m[2]));
+  const bounce = (providerMessageId: string, email: string) => app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakePostmarkEvent({ providerMessageId, email, type: "HardBounce" })) });
   const changePlan = async (companyId: string, planKey: string) => {
     const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey, reason: "They asked to upgrade." });
     expect(r.status, await r.clone().text()).toBe(200);
@@ -277,6 +281,8 @@ describe("locked candidates", () => {
     expect((await applicationOf(wesRow.id)).stage).toBe("withdrawn");
     expect(mailsTo(wes.email).length).toBe(2);
     expect((await noticesOf(job.id)).filter((n) => n.kind === "candidate.withdrawn")).toEqual([]);
+    // Nobody read him: his page goes from Applied to his own decision, with no Review ticked.
+    expect(stepsOf(await statusOf(wesRow))).toEqual(["Applied (done)", "Decision (current)"]);
 
     // Asking about their information works, and a person's review reaches ITS, not the team.
     expect((await app.request(`/c/status/${noraRow.statusToken}/privacy`, form({ kind: "access" }))).status).toBe(302);
@@ -327,6 +333,8 @@ describe("locked candidates", () => {
     expect(lenaMail).toHaveLength(2);
     expect(lenaMail[1].text).toContain("Thanks again for applying");
     expect(lenaMail[1].text).toContain(`/c/screen/${scr.token}`);
+    // Their one email was the on-file one, with no AI interview in it: this is the first they hear they can ask for an adjustment to it.
+    expect(lenaMail[1].text).toContain("If you need an adjustment, such as more time or another format, reply and tell us.");
     expect((await commsOf(lenaRow.id)).filter((c) => c.templateKey === "acknowledgment")).toHaveLength(1);
     // Her page goes back to its usual words by itself.
     const openPage = await statusOf(lenaRow);
@@ -390,6 +398,8 @@ describe("locked candidates", () => {
     expect(closedPage).not.toContain("We are keeping you in mind");
     expect(closedPage).not.toContain("Would you rather we did not keep");
     expect((await applicationOf(noraRow.id)).lockedAt).not.toBeNull();
+    // ... and nothing that says anyone reviewed her: the line goes from Applied to the decision.
+    expect(stepsOf(closedPage)).toEqual(["Applied (done)", "Decision (current)"]);
   });
 
   describe("the place", () => {
@@ -485,6 +495,10 @@ describe("locked candidates", () => {
       expect(mailsTo("bo.lockwood@people.test")).toEqual([]);
       expect((await runsOf(job.id)).length).toBe(before);
       await noTeamNoticeNames(job.id);
+      // They never stood at any step before the pool: their page never says Review is where they are.
+      const boPage = await statusOf(bo);
+      expect(stepsOf(boPage)).toEqual(["Applied (current)", "Review", "Interview", "Decision"]);
+      expect(boPage).toContain(onFileNoDateLine(job.name));
 
       const oneOf = (x: { applicationId: string }) => x.applicationId === ann.id || x.applicationId === bo.id;
       expect((await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON))).filter(oneOf).map((x) => x.action)).toEqual(["sent", "sent"]);
@@ -614,6 +628,58 @@ describe("locked candidates", () => {
       expect((await runsOf(job.id)).length).toBe(before);
     });
 
+    it("a file nobody sends goes within a day, as the form they opened may have said, read or not: chosen on a form that reads nothing, or uploaded by a form sent back", async () => {
+      const job = await openJob(1);
+      const discardsOf = async (key: string) => (await container.db.select().from(jobs).where(eq(jobs.kind, DISCARD_OBJECT_JOB_KIND))).filter((j) => j.payload.key === key);
+      const stored = container.integrations.storage as MemoryStorageAdapter;
+      // A form opened while there was room: its button still shows, so the file comes here, and nothing reads it.
+      await fill(job, 1);
+      const p = person("Ria");
+      const chosen = new FormData();
+      chosen.set("firstName", p.first); chosen.set("lastName", p.last); chosen.set("email", p.email);
+      chosen.set("resume", new File([`${p.first} ${p.last}\nRegistered Dental Hygienist`], "ria.txt", { type: "text/plain" }));
+      const attached = await app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply/read`, { method: "POST", body: chosen, headers: { "x-forwarded-for": "198.51.100.202" } });
+      expect(attached.status).toBe(200);
+      const grant = /name="uploadGrant" value="([^"]+)"/.exec(decode(await attached.text()))![1];
+      const held = container.uploadGrants.open(grant)!;
+      expect(stored.has(held.key)).toBe(true);
+      const [queued] = await discardsOf(held.key);
+      expect(queued).toMatchObject({ payload: { companyId: job.id, key: held.key } });
+      expect(Math.abs(Date.parse(queued.runAt) - Date.now() - RESUME_READING_KEEP_MS)).toBeLessThan(60_000);
+
+      // A form that went straight to the upload at Send, sent back over a phone number, say: authorized, so it is queued already.
+      const intent = await app.request(`/careers/${job.slug}/jobs/${job.roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.203" }, body: JSON.stringify({ filename: "sam.txt", size: 40, type: "text/plain" }) });
+      expect(intent.status, await intent.clone().text()).toBe(200);
+      const authorized = container.uploadGrants.open((await read<{ grant: string }>(intent)).grant)!;
+      expect(await discardsOf(authorized.key)).toHaveLength(1);
+
+      // Sent in time, the file is the application's: the job, when it comes, leaves what a row points at.
+      const send = new FormData();
+      send.set("firstName", p.first); send.set("lastName", p.last); send.set("email", p.email); send.set("uploadGrant", grant); send.set("acknowledged", "yes"); send.set("onFileShown", "yes");
+      for (const rule of job.eligibility) send.set(`elig_${rule.key}`, "yes");
+      expect((await app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply`, { method: "POST", body: send, headers: { "x-forwarded-for": "198.51.100.204" } })).status).toBe(302);
+      await container.drain();
+      const [doc] = await container.db.select().from(documents).where(eq(documents.id, (await rowOf(job, p)).resumeDocumentId!));
+      await discardUnusedObject(container.db, stored, { companyId: job.id, key: doc.storageKey });
+      expect(stored.has(doc.storageKey)).toBe(true);
+
+      // Not sent, the day comes and it is gone.
+      const left = person("Sol");
+      const leaving = new FormData();
+      leaving.set("firstName", left.first); leaving.set("lastName", left.last); leaving.set("email", left.email);
+      leaving.set("resume", new File([`${left.first} ${left.last}\nDental Assistant`], "sol.txt", { type: "text/plain" }));
+      const gone = /name="uploadGrant" value="([^"]+)"/.exec(decode(await (await app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply/read`, { method: "POST", body: leaving, headers: { "x-forwarded-for": "198.51.100.205" } })).text()))![1];
+      const orphan = container.uploadGrants.open(gone)!;
+      expect(stored.has(orphan.key)).toBe(true);
+      moveClock(Date.now() + RESUME_READING_KEEP_MS + 60_000);
+      try {
+        await container.drain();
+      } finally {
+        moveClock(null);
+      }
+      expect(stored.has(orphan.key)).toBe(false);
+    }, 120_000);
+
     it("a receipt opened later, with the page's cookie gone, promises no review on a job past its limit", async () => {
       const job = await openJob(1);
       const usual = await page(`/careers/${job.slug}/jobs/${job.roleId}/applied`);
@@ -719,7 +785,7 @@ describe("locked candidates", () => {
       expect((await noticesOf(openCompany.id)).find((n) => n.kind === "screen.human_requested")).toMatchObject({ title: `${read2.first} ${read2.last} asked for a person` });
     }, 180_000);
 
-    it("what ITS writes about someone locked stays with ITS", async () => {
+    it("what ITS writes about someone locked stays with ITS, and the queue is told so by what the API answers", async () => {
       const job = await openJob(1);
       await fill(job, 1);
       const p = person("Eli");
@@ -733,11 +799,87 @@ describe("locked candidates", () => {
       const claimed = (await noticesOf(job.id)).filter((n) => n.kind === "recruiter.claimed");
       expect(claimed.length).toBeGreaterThan(0);
       expect(claimed[0].body).toContain("A candidate needed a person");
+      // From a page left open, where the box is still there: it is kept, and the answer says nobody at the company has it.
+      const written = await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/messages`, { body: `Eli ${LOCKED}: left a voicemail.` });
+      expect(written.status, await written.clone().text()).toBe(201);
+      expect(await read(written)).toMatchObject({ told: 0, lockedForCompany: true });
       const answered = await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/resolve`, { resolution: `Spoke to Eli ${LOCKED}: a strong hygienist.` });
       expect(answered.status, await answered.clone().text()).toBe(200);
+      expect(await read(answered)).toMatchObject({ status: "resolved", lockedForCompany: true });
       await noTeamNoticeNames(job.id);
       expect((await noticesOf(job.id)).filter((n) => n.kind === "recruiter.resolved")).toEqual([]);
     });
+
+    it("a later reply reaches the recruiter holding the request, and the team hears nothing: a line with no words on its thread, and an email of its own", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const p = person("Gwen");
+      const row = await apply(job, p);
+      expect((await reply(row, p.email, "HUMAN", "msg-gwen-1")).status).toBe(200);
+      await container.drain();
+      const requests = () => container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, row.id));
+      const [esc] = await requests();
+      const email = "gil.holder@identifiedtalent.com";
+      const recruiter = await signInStaff(app, container, email, "its_recruiter", "Gil Holder");
+      const holderMail = () => mailsTo(email).filter((m) => m.tags?.template === "escalation_candidate_reply");
+      const thread = async () => (await read<{ thread: Array<{ kind: string; side: string; body: string; raisedBy?: string }> }>(await json(recruiter, "GET", `/api/v1/escalations/${esc.id}`))).thread;
+
+      // A reply while nobody holds it: whoever picks it up reads the thread, so nobody is told and nothing is added.
+      expect((await reply(row, p.email, "Any news?", "msg-gwen-2")).status).toBe(200);
+      await container.drain();
+      expect(await requests()).toHaveLength(1);
+      expect(holderMail()).toEqual([]);
+
+      expect((await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
+      expect((await thread()).filter((m) => m.raisedBy === "candidate" && m.kind === "reply")).toEqual([]);
+      const words = "I need this in large print because of a disability.";
+      expect((await reply(row, p.email, words, "msg-gwen-3")).status).toBe(200);
+      await container.drain();
+      // Still one request; the holder is told, in words of its own: not the customer's note, and neither what they wrote nor who they are.
+      expect(await requests()).toHaveLength(1);
+      expect(holderMail()).toHaveLength(1);
+      const [told] = holderMail();
+      expect(told.subject).toBe("[candidate_issue] The candidate wrote back on a request you hold");
+      expect(told.text).toContain(`/recruiter/queue/${esc.id}`);
+      expect(`${told.subject} ${told.text}`).not.toMatch(/large print|disability|customer added a note/);
+      expect(`${told.subject} ${told.text}`).not.toContain(LOCKED);
+      expect(`${told.subject} ${told.text}`).not.toContain(p.first);
+      // A line on the thread that says so, with none of their words, which are where they always were.
+      const lines = (await thread()).filter((m) => m.raisedBy === "candidate" && m.kind === "reply");
+      expect(lines).toEqual([expect.objectContaining({ side: "customer", body: CANDIDATE_WROTE_BACK })]);
+      expect(JSON.stringify(await thread())).not.toContain("large print");
+      expect((await commsOf(row.id)).some((c) => c.direction === "inbound" && c.bodyText === words)).toBe(true);
+      // The same reply delivered again tells nobody twice.
+      expect((await reply(row, p.email, words, "msg-gwen-3")).status).toBe(200);
+      await container.drain();
+      expect(holderMail()).toHaveLength(1);
+      // Nobody at the company hears of it, and the queue's request is the only place it shows.
+      expect((await noticesOf(job.id)).filter((n) => n.kind === "message.received")).toEqual([]);
+      await noTeamNoticeNames(job.id);
+      expect(await read(await json(job.cookie, "GET", "/api/v1/escalations/mine"))).toEqual([expect.objectContaining({ id: esc.id, locked: true, thread: [] })]);
+
+      // Saying no to being kept needs nobody: their no is done, so the holder is not told.
+      await container.db.update(applications).set({ stage: "talent_pool", toldState: "sent" }).where(eq(applications.id, row.id));
+      expect((await reply(row, p.email, "no thanks", "msg-gwen-4")).status).toBe(200);
+      await container.drain();
+      expect(holderMail()).toHaveLength(1);
+      await container.db.update(applications).set({ stage: "received", toldState: "not_told" }).where(eq(applications.id, row.id));
+
+      // A text reaches them the same way.
+      await container.db.update(candidates).set({ phone: "+19495550193" }).where(eq(candidates.id, row.candidateId));
+      expect((await app.request("/webhooks/twilio/inbound", form({ From: "+19495550193", To: "+15550001111", Body: "Are you there?", MessageSid: "SM-gwen-1" }))).status).toBe(200);
+      await container.drain();
+      expect(await requests()).toHaveLength(1);
+      expect(holderMail()).toHaveLength(2);
+
+      // When the email cannot go, ITS is put in front of it to tell them another way, with nothing of what they wrote.
+      (container.integrations.email as FakeEmailAdapter).failNext();
+      expect((await reply(row, p.email, "One more thing about my disability.", "msg-gwen-5")).status).toBe(200);
+      const alerts = (await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "recruiter.notify_failed"))).filter((a) => a.target?.id === esc.id);
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].title).toBe("A recruiter was not told a candidate wrote back");
+      expect(JSON.stringify(alerts[0])).not.toMatch(/disability|Gwen|Lockwood/);
+    }, 120_000);
 
     it("a bounce or a message that could not go tells ITS and never the team", async () => {
       const job = await openJob(1);
@@ -816,6 +958,30 @@ describe("locked candidates", () => {
       const noted = await withTenant(container.db, job.id, (tx) => sendStillReviewingNotes(tx, courtesy(new Date(), "still_reviewing"), job.id));
       expect(noted).not.toContain(row.id);
       expect((await commsOf(row.id)).filter((c) => c.templateKey === "still_reviewing")).toEqual([]);
+    });
+
+    it("the still-reviewing note counts from the unlock, so it reaches someone opened a week or more after applying, and only within its week", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const row = await apply(job, person("Ola"));
+      await setPolicy(job.id, "message.still_reviewing", "auto");
+      // Applied ten days ago, and opened today with nothing to follow: the job is paused, so they wait on the team.
+      await container.db.update(applications).set({ createdAt: new Date(Date.now() - 10 * DAY).toISOString() }).where(eq(applications.id, row.id));
+      expect((await json(job.cookie, "POST", `/api/v1/roles/${job.roleId}/pause`, {})).status).toBe(200);
+      await changePlan(job.id, "pro");
+      expect(await applicationOf(row.id)).toMatchObject({ stage: "triaged", lockedAt: null });
+      const notes = (at: number) => withTenant(container.db, job.id, (tx) => sendStillReviewingNotes(tx, courtesy(new Date(at), "still_reviewing"), job.id));
+      const now = Date.now();
+      // Thirty days after applying: they have waited on the team for only twenty.
+      expect(await notes(now + 20 * DAY)).not.toContain(row.id);
+      // Past the week after the thirty days from the unlock: never, months after the fact.
+      expect(await notes(now + 38 * DAY)).not.toContain(row.id);
+      // Thirty days from the unlock, forty after applying: long outside a window counted from when they applied.
+      expect(await notes(now + 30 * DAY + 60_000)).toContain(row.id);
+      await container.drain();
+      expect((await commsOf(row.id)).filter((c) => c.templateKey === "still_reviewing")).toHaveLength(1);
+      // Once.
+      expect(await notes(now + 31 * DAY)).not.toContain(row.id);
     });
   });
 
@@ -952,6 +1118,12 @@ describe("locked candidates", () => {
         expect(lines.map((l) => (l.details as { actionType: string }).actionType).sort()).toEqual(["disposition.send", "message.send_freeform"]);
         expect(lines[0].reason).toBe("Nobody at the company may read someone locked, so nobody there can approve a message to them.");
         await noTeamNoticeNames(job.id);
+        // Their page tells the decision as the message did: nothing about keeping them, and nothing about a review.
+        const toldPage = await statusOf(row);
+        expect(toldPage).toContain("The position has been filled, so your application for this role will not go any further. Thank you for applying.");
+        expect(toldPage).not.toContain("keep you in mind");
+        expect(toldPage).not.toContain("Would you rather we did not keep");
+        expect(stepsOf(toldPage)).toEqual(["Applied (done)", "Decision (current)"]);
       }, 120_000);
     }
 
@@ -1031,6 +1203,94 @@ describe("locked candidates", () => {
       expect(note.status).toBe("cancelled");
       expect(mailsTo(p.email).filter((m) => /has not been reviewed/.test(m.text))).toEqual([]);
     });
+
+    it("a note that did not reach them is not sent again: once the date has passed the page says what it said, with no date and no email promised", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const p = person("Bay");
+      const row = await apply(job, p);
+      const applied = Date.parse(row.createdAt);
+      const byDay = closeOutDayWords(closeOutDueAt(row.createdAt), job.timezone);
+      expect(await closeOutNotes(job.id, new Date(applied + 29 * DAY + 60_000))).toEqual([row.id]);
+      await container.drain();
+      const [note] = (await commsOf(row.id)).filter((c) => c.templateKey === "close_out");
+      expect((await bounce(note.providerMessageId!, p.email)).status).toBe(200);
+      expect((await commsOf(row.id)).find((c) => c.templateKey === "close_out")?.status).toBe("bounced");
+      // The date still stands.
+      expect(await statusOf(row)).toContain(onFileStatusLine(job.name, byDay));
+      moveClock(applied + CLOSE_OUT_DAYS * DAY + 60_000);
+      try {
+        const passed = await statusOf(row);
+        expect(passed).toContain(CLOSED_OUT_STATUS_LINE);
+        expect(passed).not.toContain("We will email you");
+      } finally {
+        moveClock(null);
+      }
+      expect(await closeOutNotes(job.id, new Date(applied + 31 * DAY))).toEqual([]);
+    });
+
+    it("someone with no address on file reads the same once the date has passed: nothing was ever going to reach them", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const row = await apply(job, person("Noe"));
+      await container.db.update(candidates).set({ email: null }).where(eq(candidates.id, row.candidateId));
+      const applied = Date.parse(row.createdAt);
+      expect(await closeOutNotes(job.id, new Date(applied + 31 * DAY))).toEqual([]);
+      moveClock(applied + 31 * DAY);
+      try {
+        const passed = await statusOf(row);
+        expect(passed).toContain(CLOSED_OUT_STATUS_LINE);
+        expect(passed).not.toContain("We will email you");
+      } finally {
+        moveClock(null);
+      }
+    });
+
+    it("a job reopened by ITS after it closed: someone locked it moved still hears by their date, and someone already told does not hear again", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const p = person("Vea");
+      const row = await apply(job, p);
+      await close(job);
+      expect((await applicationOf(row.id)).stage).toBe("talent_pool");
+      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, job.roleId));
+      const voided = await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." });
+      expect(voided.status, await voided.clone().text()).toBe(200);
+      const [reopened] = await container.db.select().from(roles).where(eq(roles.id, job.roleId));
+      expect(reopened.status).toBe("open");
+      // Open again, they wait again: the date they were promised stands on their page, and it is kept.
+      const again = await applicationOf(row.id);
+      expect(again).toMatchObject({ stage: "received", toldState: "not_told" });
+      expect(again.lockedAt).not.toBeNull();
+      expect((await eventsOf(row.id, "application.stage_changed")).at(-1)?.payload).toMatchObject({ from: "talent_pool", to: "received" });
+      const applied = Date.parse(row.createdAt);
+      const byDay = closeOutDayWords(closeOutDueAt(row.createdAt), job.timezone);
+      expect(await statusOf(row)).toContain(onFileStatusLine(job.name, byDay));
+      expect(await closeOutNotes(job.id, new Date(applied + 28 * DAY))).toEqual([]);
+      expect(await closeOutNotes(job.id, new Date(applied + 29 * DAY + 60_000))).toEqual([row.id]);
+      await container.drain();
+      expect(mailsTo(p.email).at(-1)?.text).toContain(closeOutNoteLine({ roleTitle: job.title, companyName: job.name, statusUrl: `${container.env.JOBS_BASE_URL}/c/status/${row.statusToken}` }));
+      expect(await statusOf(row)).toContain(CLOSED_OUT_STATUS_LINE);
+      await noTeamNoticeNames(job.id);
+      // If it closes again, they are told it closed as anyone is.
+      await close(job);
+      expect((await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON))).filter((x) => x.applicationId === row.id)).toEqual([{ applicationId: row.id, action: "sent" }]);
+
+      // Told the job closed before it was reopened: that was their answer, and no note follows it.
+      const toldJob = await openJob(1);
+      await fill(toldJob, 1);
+      const q = person("Wen");
+      const told = await apply(toldJob, q);
+      await close(toldJob);
+      expect((await json(toldJob.cookie, "POST", `/api/v1/roles/${toldJob.roleId}/closing-message`, { confirm: true })).status).toBe(200);
+      await container.drain();
+      expect((await applicationOf(told.id)).toldState).toBe("sent");
+      const [closedOutcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, toldJob.roleId));
+      expect((await json(admin, "POST", `/api/v1/admin/outcomes/${closedOutcome.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." })).status).toBe(200);
+      expect((await applicationOf(told.id)).stage).toBe("talent_pool");
+      expect(await closeOutNotes(toldJob.id, new Date(Date.parse(told.createdAt) + 31 * DAY))).toEqual([]);
+      expect((await commsOf(told.id)).filter((c) => c.templateKey === "close_out")).toEqual([]);
+    }, 120_000);
   });
 
   describe("when the job closes", () => {
@@ -1103,6 +1363,55 @@ describe("locked candidates", () => {
       // Nobody is reminded about them either.
       const detected = await withTenant(container.db, job.id, (tx) => detectStuckRoles(tx, job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON)));
       expect(detected.flatMap((d) => d.applicationIds ?? [])).not.toContain(row.id);
+    });
+
+    it("the date they were promised stands when the job closes just before it: the closing message goes by then, not five working days on", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const nearly = person("Nan");
+      const nearlyRow = await apply(job, nearly);
+      const fresh = person("Lem");
+      const freshRow = await apply(job, fresh);
+      // Applied 28 days and a half ago: the promise falls due in a day and a half.
+      await container.db.update(applications).set({ createdAt: new Date(Date.now() - 28.5 * DAY).toISOString() }).where(eq(applications.id, nearlyRow.id));
+      await close(job);
+      const of = (results: Array<{ applicationId: string }>, id: string) => results.filter((r) => r.applicationId === id);
+      expect(await safetyNet(job.id, new Date())).toEqual([]);
+      // The last day before it, as the close-out note goes: the daily check looks once a day, and the promise says "at the latest".
+      const net = await safetyNet(job.id, new Date(Date.now() + 13 * 3_600_000));
+      expect(of(net, nearlyRow.id)).toEqual([{ applicationId: nearlyRow.id, action: "sent" }]);
+      expect(of(net, freshRow.id)).toEqual([]);
+      await container.drain();
+      expect(mailsTo(nearly.email).filter((m) => m.subject === `Your application to ${job.name}`)).toHaveLength(1);
+      expect(mailsTo(fresh.email).filter((m) => m.subject === `Your application to ${job.name}`)).toEqual([]);
+      // Once, and the rest at five working days as ever; no name to the team.
+      const later = await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON));
+      expect(of(later, nearlyRow.id)).toEqual([]);
+      expect(of(later, freshRow.id)).toEqual([{ applicationId: freshRow.id, action: "sent" }]);
+      await noTeamNoticeNames(job.id);
+    });
+
+    it("a closed job promises no date and no email: not while the message waits, and not once it failed to reach them, when nothing goes again", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const p = person("Oak");
+      const row = await apply(job, p);
+      await close(job);
+      const waiting = await statusOf(row);
+      expect(waiting).toContain(onFileNoDateLine(job.name));
+      expect(waiting).not.toContain("We will email you");
+      expect(stepsOf(waiting)).toEqual(["Applied (current)", "Review", "Interview", "Decision"]);
+
+      expect((await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON))).filter((x) => x.applicationId === row.id)).toEqual([{ applicationId: row.id, action: "sent" }]);
+      await container.drain();
+      expect((await applicationOf(row.id)).toldState).toBe("sent");
+      const [closing] = (await commsOf(row.id)).filter((c) => c.idempotencyKey === `role_closed:${row.id}`);
+      expect((await bounce(closing.providerMessageId!, p.email)).status).toBe(200);
+      expect((await applicationOf(row.id)).toldState).toBe("not_told");
+      const bounced = await statusOf(row);
+      expect(bounced).toContain(onFileNoDateLine(job.name));
+      expect(bounced).not.toContain("We will email you");
+      expect((await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON + DAY))).filter((x) => x.applicationId === row.id)).toEqual([]);
     });
 
     it("someone with no address on file cannot be told, and nobody is brought in to find them", async () => {
@@ -1250,6 +1559,29 @@ describe("locked candidates", () => {
       expect(await screenRunsOf(pooledRow.id)).toEqual([]);
       expect(mailsTo(pooled.email).length).toBe(before);
       expect((await eventsOf(pooledRow.id, "application.unlocked"))[0].payload).toMatchObject({ interview: false });
+    });
+
+    it("someone told their job closed and opened only after it is not told they were kept or reviewed: nobody kept them; someone the team could read still is", async () => {
+      const job = await openJob(1);
+      const [visible] = await fill(job, 1);
+      const p = person("Ike");
+      const row = await apply(job, p);
+      await close(job);
+      expect((await json(job.cookie, "POST", `/api/v1/roles/${job.roleId}/closing-message`, { confirm: true })).status).toBe(200);
+      await container.drain();
+      expect((await applicationOf(row.id)).toldState).toBe("sent");
+      await changePlan(job.id, "pro");
+      expect((await applicationOf(row.id))).toMatchObject({ stage: "talent_pool", lockedAt: null });
+      const opened = await statusOf(row);
+      expect(opened).toContain(`${job.name} has closed this position, so your application for it will not go any further.`);
+      expect(opened).not.toContain("We are keeping you in mind");
+      expect(opened).not.toContain("Would you rather we did not keep");
+      expect(stepsOf(opened)).toEqual(["Applied (done)", "Decision (current)"]);
+      // The words stay for someone the team could read, who is kept.
+      const read2 = await statusOf(visible);
+      expect(read2).toContain("We are keeping you in mind for future openings.");
+      expect(read2).toContain("Would you rather we did not keep");
+      expect(stepsOf(read2)).toContain("Review (done)");
     });
 
     it("someone whose job is paused is opened where they are, with nothing read and nothing sent; someone whose details were deleted is not opened", async () => {
