@@ -225,10 +225,16 @@ export type AiCreditLevel = "warning" | "used_up";
 /**
  * What the owner's notices and the Home row say at each level. `resetsOn`: the day a monthly credit starts again, in words.
  * `newJobsStopped`: past the 80% line a draft may no longer fit (`aiCreditRoomForJob`), and then something has stopped.
+ * `planKey`: on the last plan nothing is above theirs (`mayOfferUpgrade`), so nothing tells them to upgrade: the way on is ITS.
  */
-export function aiCreditNoticeWords(level: AiCreditLevel, opts: { resetsOn?: string | null; newJobsStopped?: boolean } = {}): { title: string; body: string } {
-  if (level === "warning") return { title: "80% of your plan's AI help used", body: opts.newJobsStopped ? "New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out." : "Nothing has stopped. Upgrade before it runs out." };
-  return { title: "Your plan's AI help is used up", body: `Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade${opts.resetsOn ? ` or it starts again on ${opts.resetsOn}` : ""}.` };
+export function aiCreditNoticeWords(level: AiCreditLevel, opts: { resetsOn?: string | null; newJobsStopped?: boolean; planKey?: string | null } = {}): { title: string; body: string } {
+  const nothingAbove = opts.planKey !== undefined && !mayOfferUpgrade(opts.planKey);
+  if (level === "warning") {
+    const before = nothingAbove ? "Talk with ITS before" : "Upgrade before";
+    return { title: "80% of your plan's AI help used", body: opts.newJobsStopped ? `New jobs have stopped: writing one needs more than is left. ${before} the rest runs out.` : `Nothing has stopped. ${before} it runs out.` };
+  }
+  const until = nothingAbove ? (opts.resetsOn ? `until it starts again on ${opts.resetsOn}` : "until ITS changes your plan") : `until you upgrade${opts.resetsOn ? ` or it starts again on ${opts.resetsOn}` : ""}`;
+  return { title: "Your plan's AI help is used up", body: `Applications still come in and candidates can still finish. New applicants are not read by AI ${until}.` };
 }
 
 /**

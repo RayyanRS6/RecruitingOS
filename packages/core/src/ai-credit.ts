@@ -162,10 +162,10 @@ const dayWords = (iso: string | null, timeZone: string | null | undefined): stri
  * The AI credit as a customer's browser receives it (GET /companies/current): no amounts. From money actually spent, as the
  * notices are, so Home's row does not come and go with a draft's hold. Null when the plan puts no limit on it.
  */
-export async function aiCreditView(q: Queryable, companyId: string, opts: { now?: Date; timeZone?: string | null } = {}): Promise<AiCreditView | null> {
+export async function aiCreditView(q: Queryable, companyId: string, opts: { now?: Date; timeZone?: string | null; planKey?: string | null } = {}): Promise<AiCreditView | null> {
   const s = await aiCreditStanding(q, companyId, { now: opts.now, settled: true });
   if (!s) return null;
-  return { level: s.level, percent: s.percent, resetsAt: s.resetsAt, notice: s.level ? aiCreditNoticeWords(s.level, { resetsOn: dayWords(s.resetsAt, opts.timeZone), newJobsStopped: draftNoLongerFits(s) }) : null };
+  return { level: s.level, percent: s.percent, resetsAt: s.resetsAt, notice: s.level ? aiCreditNoticeWords(s.level, { resetsOn: dayWords(s.resetsAt, opts.timeZone), newJobsStopped: draftNoLongerFits(s), planKey: opts.planKey }) : null };
 }
 
 /** What ITS's alert says, in dollars. */
@@ -210,11 +210,11 @@ async function tellOwner(db: Db, input: { companyId: string; now: Date; refusedH
       .update(companies)
       .set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('aiCreditTold', coalesce(${companies.settings}->'aiCreditTold', '{}'::jsonb) || ${stamp}::jsonb)` })
       .where(and(eq(companies.id, input.companyId), sql`(${companies.settings}->'aiCreditTold'->>${field}) is distinct from ${periodKey}`))
-      .returning({ name: companies.name, timezone: companies.timezone });
+      .returning({ name: companies.name, timezone: companies.timezone, planKey: companies.planKey });
     if (!company) return null;
     const usedUp = level === "used_up";
     await emit(q, { type: usedUp ? "entitlement.exceeded" : "entitlement.warning", companyId: input.companyId, actor: { kind: "system", id: "allowance" }, subject: { type: "company", id: input.companyId }, payload: { key: standing.key, percent: standing.percent } });
-    const { title, body } = aiCreditNoticeWords(level, { resetsOn: dayWords(standing.resetsAt, company.timezone), newJobsStopped: draftNoLongerFits(standing) });
+    const { title, body } = aiCreditNoticeWords(level, { resetsOn: dayWords(standing.resetsAt, company.timezone), newJobsStopped: draftNoLongerFits(standing), planKey: company.planKey });
     await notify(q, { companyId: input.companyId, kind: "entitlement.ai_credit", title, body, action: { label: "See usage", href: "/setup" }, roles: ["owner", "admin"] });
     return { level, companyId: input.companyId, companyName: company.name, standing };
   });

@@ -1431,6 +1431,24 @@ describe("the AI credit", () => {
       expect(current.aiCredit).toMatchObject({ level: "used_up", percent: 98 });
     });
 
+    it("an Ultra owner is never told to upgrade: past $160 and at $199.90 the row and the notice name what is true, on the last plan there is", async () => {
+      const { id, cookie } = await newCompany();
+      await usePlan(container, id, "ultra");
+      const call = () => runPromptDetached(container.db, runtime(new PricedProvider()), chatPrompt, INPUT, { companyId: id });
+      await spend(id, "170.000000");
+      expect((await call()).ok).toBe(true);
+      const at85 = await read<{ aiCredit: { level: string; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      expect(at85.aiCredit).toMatchObject({ level: "warning", notice: { body: "Nothing has stopped. Talk with ITS before it runs out." } });
+      await spend(id, "29.950000");
+      expect(outOfCredit(await call())).toBe(true);
+      const gone = await read<{ timezone: string; aiCredit: { level: string; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      expect(gone.aiCredit.level).toBe("used_up");
+      expect(gone.aiCredit.notice.body).toMatch(/^Applications still come in and candidates can still finish\. New applicants are not read by AI until it starts again on \w+, \w+ \d+\.$/);
+      const notes = await creditNotes(id);
+      expect(notes.map((n) => n.title).sort()).toEqual(["80% of your plan's AI help used", "Your plan's AI help is used up"]);
+      for (const n of notes) expect(`${n.title} ${n.body}`).not.toMatch(/upgrade/i);
+    });
+
     it("a big draft refused is not the credit used up, and a hold that comes back cries no wolf", async () => {
       const { id } = await newCompany();
       const provider = new PricedProvider();

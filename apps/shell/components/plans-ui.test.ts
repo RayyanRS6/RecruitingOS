@@ -109,12 +109,14 @@ describe("the one Upgrade and its sheet", () => {
     for (const not of ["will see", "every candidate", "access", "How urgent", "What do you want help with", "Send to a recruiter", "Bring in a recruiter", "$10", "cents"]) expect(words, not).not.toContain(not);
   });
 
-  it("on the last plan nothing below is chosen for them, and they can still talk with ITS", () => {
+  it("on the last plan nothing below is chosen for them, and they can still talk with ITS, in words that do not send them to a plan that is not there", () => {
     const html = sheet({ requested: false, plans: plans.plans.map((p) => ({ ...p, current: p.key === "ultra" })) });
     expect(html.match(/type="radio"/g)).toHaveLength(3);
     expect(html).not.toContain('checked=""');
-    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS to upgrade<\/button>/);
-    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Ask ITS to upgrade/);
+    expect(html).toContain('aria-label="Your plan"');
+    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS about our plan<\/button>/);
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Ask ITS about our plan/);
+    expect(text(html)).not.toContain("Ask ITS to upgrade");
   });
 
   it("on a plan not in the list (the pilot, Trial, a retired one) Free is not chosen for them: they pick one, or ask with none picked", () => {
@@ -239,12 +241,14 @@ describe("Home", () => {
     expect(gone).toContain("See usage");
   });
 
-  it("nothing below the line, nothing to a hiring manager, and no Upgrade at the top of the plans", () => {
+  it("nothing below the line, nothing to a hiring manager, and at the top of the plans no Upgrade, but a way to ITS: the row always has something to press", () => {
     expect(text(page({ credit: { level: null, percent: 40, resetsAt: null, notice: null } }))).not.toContain("AI help");
     expect(text(page({ credit: warning, role: "hiring_manager" }))).not.toContain("AI help");
     const top = text(page({ credit: { ...usedUp, resetsAt: "2026-12-05T00:00:00Z" }, planKey: "ultra" }));
     expect(top).toContain("Your plan's AI help is used up");
     expect(top).not.toContain("Upgrade See usage");
+    expect(top).toContain("Talk to ITS See usage");
+    expect(text(page({ credit: warning, planKey: "pro" }))).toContain("Upgrade See usage");
   });
 
   it("a card's Upgrade opens the sheet: a button of its own, with the card's other ways on beside it", () => {

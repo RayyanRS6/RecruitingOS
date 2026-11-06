@@ -59,7 +59,7 @@ companyRoutes.get("/current", requireTenant, async (c) => {
     // usage and nothing in the limits, because customers never read it in dollars.
     const usage = await entitlements.usageOf(tx, t.companyId, { now });
     // Home's row about the AI credit: its level, its percentage and its words; null when the plan puts no limit on it.
-    const aiCredit = await aiCreditView(tx, t.companyId, { now, timeZone: co.timezone });
+    const aiCredit = await aiCreditView(tx, t.companyId, { now, timeZone: co.timezone, planKey: co.planKey });
     // Who really posts on the boards (Rule 6), and whether the plan leaves that choice to the company at all.
     const itsPosting = await planIncludesItsPosting(tx, t.companyId);
     const whoPosts = await whoPostsBoards(tx, t.companyId, co.settings);

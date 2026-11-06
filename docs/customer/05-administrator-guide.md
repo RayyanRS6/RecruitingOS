@@ -193,7 +193,7 @@ Only owners and admins can change these settings, and only after a recent sign-i
 - **Screening**: who is invited, answering now, or completed since yesterday.
 - **Stuck**: a role where nothing has moved for a while, with a suggested action and **Have a recruiter review**. On Free and Basic the reminders stop at an email; the product does not bring a recruiter in, and you still can.
 - **Recruiter**: a request you sent, shown as "A recruiter will pick this up" or "A recruiter is on it", with **See the request**. A request about your plan says "ITS has your request." and never counts as at risk.
-- **AI help**, for owners and admins: "80% of your plan's AI help used" or "Your plan's AI help is used up", with **Upgrade** and **See usage**.
+- **AI help**, for owners and admins: "80% of your plan's AI help used" or "Your plan's AI help is used up", with **Upgrade** and **See usage**. On Ultra, with no plan above it, the button says **Talk to ITS** and opens the same sheet.
 - **Getting started**: for a new company, the setup steps each person can do (company details, team, interview hours, the first role, the AI rules, and job-board access on a plan where ITS posts), each with a line on why it matters, ticked as they are done; **Hide these steps** hides them for you only. While ITS has not yet confirmed your company the card says so, with how many emails to candidates are waiting, and nobody can hide that part.
 - **Ready to sort**: an open role with two or more people the pool board can sort, with a link to **Review and apply**.
 - **Draft**: a draft of your own still in progress.

@@ -95,6 +95,18 @@ describe("what a customer may read about a plan", () => {
     expect(aiCreditNoticeWords("warning")).toEqual({ title: "80% of your plan's AI help used", body: "Nothing has stopped. Upgrade before it runs out." });
   });
 
+  it("on the last plan it never says upgrade, because nothing is above theirs", () => {
+    expect(aiCreditNoticeWords("warning", { planKey: "ultra" }).body).toBe("Nothing has stopped. Talk with ITS before it runs out.");
+    expect(aiCreditNoticeWords("warning", { planKey: "ultra", newJobsStopped: true }).body).toBe("New jobs have stopped: writing one needs more than is left. Talk with ITS before the rest runs out.");
+    expect(aiCreditNoticeWords("used_up", { planKey: "ultra", resetsOn: "Friday, December 4" }).body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until it starts again on Friday, December 4.");
+    expect(aiCreditNoticeWords("used_up", { planKey: "ultra" }).body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until ITS changes your plan.");
+    // every other plan has somewhere to go
+    for (const planKey of ["free", "basic", "pro", "trial"]) {
+      expect(aiCreditNoticeWords("warning", { planKey }).body, planKey).toBe("Nothing has stopped. Upgrade before it runs out.");
+      expect(aiCreditNoticeWords("used_up", { planKey }).body, planKey).toContain("until you upgrade");
+    }
+  });
+
   it("does not say nothing has stopped once a new job has", () => {
     expect(aiCreditNoticeWords("warning", { newJobsStopped: true })).toEqual({ title: "80% of your plan's AI help used", body: "New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out." });
     expect(aiCreditNoticeWords("warning", { newJobsStopped: false }).body).toContain("Nothing has stopped.");
