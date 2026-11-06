@@ -6,9 +6,9 @@ import type { PublicPlan } from "@ros/contracts";
  * compares a plan's name: what a plan offers comes with it from GET /api/v1/plans.
  */
 
-/** "$49 a month", or "$0" for a plan that costs nothing: the sheet's price line. */
-export function priceWords(monthlyUsd: number): string {
-  return monthlyUsd > 0 ? `$${monthlyUsd.toLocaleString("en-US")} a month` : "$0";
+/** The sheet's price line: "$49" and "a month", or "$0" alone for a plan that costs nothing. */
+export function priceWords(monthlyUsd: number): { amount: string; per: string | null } {
+  return { amount: `$${monthlyUsd.toLocaleString("en-US")}`, per: monthlyUsd > 0 ? "a month" : null };
 }
 
 /** What a plan includes, in the sheet's order: jobs, candidates per job, people, AI help. A null number means no limit. */
@@ -22,10 +22,9 @@ export function planFacts(plan: PublicPlan): Array<{ label: string; value: strin
   ];
 }
 
-/** The plan already chosen when the sheet opens: the next one above the company's, or the first it is not on. */
+/** The plan already chosen when the sheet opens: the next one above the company's, or the first when it is on none of them. On the last, none: a plan below is never chosen for anyone. */
 export function firstChoice(plans: readonly PublicPlan[]): PublicPlan | null {
-  const at = plans.findIndex((p) => p.current);
-  return plans[at + 1] ?? plans.find((p) => !p.current) ?? null;
+  return plans[plans.findIndex((p) => p.current) + 1] ?? null;
 }
 
 /** An action the API offers (a card's, a refusal's) that is a request about the plan: it opens the upgrade sheet, never sends in one click. */

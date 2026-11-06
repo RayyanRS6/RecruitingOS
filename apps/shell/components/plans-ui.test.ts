@@ -106,6 +106,14 @@ describe("the one Upgrade and its sheet", () => {
     for (const not of ["will see", "every candidate", "access", "How urgent", "What do you want help with", "Send to a recruiter", "Bring in a recruiter", "$10", "cents"]) expect(words, not).not.toContain(not);
   });
 
+  it("on the last plan nothing below is chosen for them, and they can still talk with ITS", () => {
+    const html = sheet({ requested: false, plans: plans.plans.map((p) => ({ ...p, current: p.key === "ultra" })) });
+    expect(html.match(/type="radio"/g)).toHaveLength(3);
+    expect(html).not.toContain('checked=""');
+    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS to upgrade<\/button>/);
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Ask ITS to upgrade/);
+  });
+
   it("says softly that ITS has the request, and asks nothing more", () => {
     const words = text(sheet({ ...plans, requested: true }));
     expect(words).toContain("ITS has your request.");

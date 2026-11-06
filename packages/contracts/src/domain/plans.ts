@@ -120,9 +120,9 @@ export const PLAN_REQUEST_OPEN_LINE = "ITS has your request.";
 /** The upgrade sheet's one plain line: there is no payment system. */
 export const UPGRADE_SHEET_LINE = "No card is charged. ITS will contact you, and nothing changes until then.";
 
-/** The question a plan request carries: the plan by name, then why, then the person's own note. */
-export function planRequestQuestion(planName: string, opts: { reason?: string | null; note?: string | null } = {}): string {
-  return [`We would like to move to the ${planName} plan.`, opts.reason?.trim(), opts.note?.trim()].filter(Boolean).join(" ");
+/** The question a plan request carries: the plan by name, then why, then the person's own note. Null: no plan to name, because nothing is above theirs. */
+export function planRequestQuestion(planName: string | null, opts: { reason?: string | null; note?: string | null } = {}): string {
+  return [planName ? `We would like to move to the ${planName} plan.` : "We would like to talk about our plan.", opts.reason?.trim(), opts.note?.trim()].filter(Boolean).join(" ");
 }
 
 /** What the team is told when ITS changes the plan, and the answer it puts on the open plan request. `opened`: how many locked people the new plan opened. */

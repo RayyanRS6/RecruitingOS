@@ -11,6 +11,8 @@ describe("asking for a bigger plan", () => {
     expect(planRequestQuestion("Pro")).toBe("We would like to move to the Pro plan.");
     expect(planRequestQuestion("Pro", { reason: MORE_CANDIDATES_UPGRADE_QUESTION, note: "  From next month.  " })).toBe("We would like to move to the Pro plan. We would like to view more candidates. From next month.");
     expect(planRequestQuestion("Ultra", { note: "   " })).toBe("We would like to move to the Ultra plan.");
+    // nothing above theirs to name, and they can still talk with ITS
+    expect(planRequestQuestion(null, { reason: "We would like more AI help." })).toBe("We would like to talk about our plan. We would like more AI help.");
   });
 
   it("what the team is told when ITS changes the plan: no dollars, and how many it opened", () => {

@@ -114,7 +114,11 @@ test.describe("a Free company past its five candidates", () => {
 
     // ITS's answer reached the team: it closed their request, and Settings says the new plan
     await page.goto("/");
-    await expect(page.getByText("Your plan is now Pro").first()).toBeVisible({ timeout: 30_000 });
+    const requests = page.getByRole("list", { name: "Your recruiter requests" });
+    await expect(requests.getByText("Your plan", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(requests.getByText("Your company is on the Pro plan now.")).toBeVisible();
+    await page.getByText(/^Recent activity/).click();
+    await expect(page.getByText("Your plan is now Pro")).toBeVisible();
     await page.goto("/setup#setup-company");
     await expect(page.locator("#setup-company").getByText("Pro", { exact: true })).toBeVisible({ timeout: 30_000 });
   });

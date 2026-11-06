@@ -19,9 +19,9 @@ const ultra = plan({ key: "ultra", name: "Ultra", monthlyUsd: 399, activeRoles: 
 
 describe("what the sheet says of each plan", () => {
   it("the price in dollars, and what it includes in the sheet's order: one job ever, jobs at a time, no limit", () => {
-    expect(priceWords(0)).toBe("$0");
-    expect(priceWords(49)).toBe("$49 a month");
-    expect(priceWords(1499)).toBe("$1,499 a month");
+    expect(priceWords(0)).toEqual({ amount: "$0", per: null });
+    expect(priceWords(49)).toEqual({ amount: "$49", per: "a month" });
+    expect(priceWords(1499)).toEqual({ amount: "$1,499", per: "a month" });
     expect(planFacts(free)).toEqual([{ label: "Jobs", value: "1" }, { label: "Candidates per job", value: "5" }, { label: "People", value: "2" }, { label: "AI help", value: "Included, up to a limit" }]);
     expect(planFacts(basic).map((f) => f.value)).toEqual(["3 at a time", "25", "3", "About 600 candidates a month"]);
     expect(planFacts(ultra).map((f) => f.value)).toEqual(["30 at a time", "No limit", "No limit", "About 6,000"]);
@@ -32,13 +32,13 @@ describe("what the sheet says of each plan", () => {
     for (const p of [free, basic, pro, ultra]) expect(JSON.stringify(planFacts(p))).not.toMatch(/\$|cents/);
   });
 
-  it("chooses the next plan up to start with; a company on no public plan starts on the first, and the top has nothing above it", () => {
+  it("chooses the next plan up to start with; a company on no public plan starts on the first, and on the top none is chosen for it", () => {
     const all = (current: string) => [free, basic, pro, ultra].map((p) => ({ ...p, current: p.key === current }));
     expect(firstChoice(all("free"))?.key).toBe("basic");
     expect(firstChoice(all("basic"))?.key).toBe("pro");
     expect(firstChoice(all("pro"))?.key).toBe("ultra");
     expect(firstChoice(all("growth"))?.key).toBe("free");
-    expect(firstChoice(all("ultra"))?.key).toBe("free");
+    expect(firstChoice(all("ultra"))).toBeNull();
     expect(firstChoice([])).toBeNull();
   });
 });

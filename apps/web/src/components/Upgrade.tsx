@@ -13,9 +13,10 @@ import { useAskRole } from "./use-ask-role";
 const PLAN = "option-row min-w-0 flex-col items-stretch gap-2.5";
 
 function PlanWords({ plan }: { plan: PublicPlan }) {
+  const price = priceWords(plan.monthlyUsd);
   return (
     <>
-      <span className="font-display text-xl font-bold tracking-[-0.015em] tabular-nums text-ink">{priceWords(plan.monthlyUsd)}</span>
+      <span className="flex flex-wrap items-baseline gap-x-1.5"><span className="font-display text-xl font-bold tracking-[-0.015em] tabular-nums text-ink">{price.amount}</span>{" "}{price.per ? <span className="text-[13px] text-ink-3">{price.per}</span> : null}</span>
       <span className="grid gap-1.5 text-[13px] leading-snug">
         {planFacts(plan).map((f) => <span key={f.label} className="grid"><span className="text-ink-3">{f.label}</span><span className="font-medium text-ink">{f.value}</span></span>)}
       </span>
@@ -39,7 +40,7 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
   const plans = q.data?.plans ?? [];
   const choice = plans.find((p) => p.key === picked && !p.current) ?? firstChoice(plans);
   const send = useMutation({
-    mutationFn: (plan: PublicPlan) => api.post<{ id: string; message: string; alreadyAsked?: boolean }>("/api/v1/escalations", { kind: "ask", scope: "company", topic: "plan", question: planRequestQuestion(plan.name, { reason: props.reason, note }) }),
+    mutationFn: (plan: PublicPlan | null) => api.post<{ id: string; message: string; alreadyAsked?: boolean }>("/api/v1/escalations", { kind: "ask", scope: "company", topic: "plan", question: planRequestQuestion(plan?.name ?? null, { reason: props.reason, note }) }),
     onSuccess: (r) => {
       setDone(r.message);
       if (!r.alreadyAsked) toast("Sent to ITS.");
@@ -85,7 +86,7 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
               <div className="stack gap-3 border-t border-line pt-5">
                 <p className="small text-ink-2">{UPGRADE_SHEET_LINE}</p>
                 {send.error ? <Alert tone="critical">{send.error instanceof ApiError ? send.error.message : "Could not send."}</Alert> : null}
-                <div className="row"><Button variant="primary" disabled={!choice} loading={send.isPending} onClick={() => { if (choice) send.mutate(choice); }}>Ask ITS to upgrade</Button></div>
+                <div className="row"><Button variant="primary" loading={send.isPending} onClick={() => send.mutate(choice)}>Ask ITS to upgrade</Button></div>
               </div>
             </>
           )}
