@@ -853,7 +853,8 @@ describe("the team cannot read a locked person", () => {
       expect((await container.db.select().from(aiRuns).where(eq(aiRuns.companyId, company.id))).length).toBeGreaterThan(runsBefore);
       const list = await read<{ applications: Array<{ id: string }>; locked: { count: number } }>(await json(company.cookie, "GET", `/api/v1/roles/${j.roleId}/applications?counts=1`));
       expect(list.applications.map((a) => a.id)).toContain(row.id);
-      expect(list.locked.count).toBe(1);
+      // Nobody is left to open: the one still locked withdrew while locked, so they have no card, and stay unread.
+      expect(list.locked.count).toBe(0);
 
       // A move back down locks nobody: they stay readable.
       await withPlatform(container.db, (tx) => tx.insert(plans).values({ key: "test_one_here", name: "One", limits: { candidates_per_job: 1 } }).onConflictDoNothing());

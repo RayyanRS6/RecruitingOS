@@ -30,7 +30,7 @@ import { keepInTalentPool } from "../services/talent-pool";
 import { screenScorecards } from "../services/screen-scorecards";
 import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
 import { interviewerApplicationView } from "../services/interviewer-view";
-import { hireFollowUp } from "../services/hire-sheet";
+import { hireFollowUp, lockedStillInProcess } from "../services/hire-sheet";
 import { recordOfferMade, settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
 import { staffMayAsk, staffScopeOf } from "../services/staff-scope";
 
@@ -438,6 +438,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
   const result = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, c.req.param("id")), visibleTo(t))).orderBy(desc(applications.createdAt))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId);
     const locked = q.counts ? await lockedCardsOf(tx, c.req.param("id"), t) : { count: 0, cards: [] };
+    // For the close card's "and N more you cannot see yet" under who is still in process: fewer than the cards when someone locked was decided or moved on.
+    const lockedInProcess = locked.count ? await lockedStillInProcess(tx, c.req.param("id")) : 0;
     const ids = apps.map((a) => a.candidateId);
     const appIds = apps.map((a) => a.id);
     const cands = ids.length ? await tx.select().from(candidates).where(inArray(candidates.id, ids)) : [];
@@ -533,9 +535,9 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const byScore = (x: (typeof rows)[number], y: (typeof rows)[number]) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1);
     const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : q.order === "score" ? [...rows].sort(byScore) : rows;
     const shown = ordered.filter((r) => (!q.group || r.group === q.group) && (!q.stage || r.stage === q.stage) && (!q.ownerStage || r.ownerStage === q.ownerStage) && (!q.told || r.toldState === q.told) && (!q.aiInterview || r.aiInterview?.group === q.aiInterview));
-    return { shown, counts, locked };
+    return { shown, counts, locked, lockedInProcess };
   });
-  return c.json(q.counts ? { applications: result.shown, counts: result.counts, locked: result.locked } : result.shown);
+  return c.json(q.counts ? { applications: result.shown, counts: result.counts, locked: result.locked, lockedInProcess: result.lockedInProcess } : result.shown);
 });
 
 /**

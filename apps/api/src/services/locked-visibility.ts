@@ -1,6 +1,6 @@
 import { asc, eq, inArray, sql } from "drizzle-orm";
 import type { LockedApplicants } from "@ros/contracts";
-import { companyHasLocked, hiddenAmong, type LockReader } from "@ros/core";
+import { companyHasLocked, hiddenAmong, lockedAndWaiting, type LockReader } from "@ros/core";
 import { applications, communications, recruiterEscalations, workflowRuns, type Tx } from "@ros/db";
 import { eventTargets } from "./staff-scope";
 
@@ -14,12 +14,13 @@ const NO_ONE: LockedApplicants = { count: 0, cards: [] };
 
 /**
  * The locked people of one job as the team may read them, in arrival order: where they came in, and when. A list for a grant
- * about one candidate says nothing of anyone else, as that list always did, and break glass reads them as rows.
+ * about one candidate says nothing of anyone else, as that list always did, and break glass reads them as rows. Someone who
+ * withdrew or was deleted while locked has no card (`lockedAndWaiting`), and still holds their place in the order.
  */
 export async function lockedCardsOf(tx: Tx, roleId: string, reader: LockReader): Promise<LockedApplicants> {
   if (reader?.staff?.kind === "break_glass" || reader?.staff?.scope.applicationId) return NO_ONE;
-  const rows = await tx.select({ createdAt: applications.createdAt, lockedAt: applications.lockedAt }).from(applications).where(eq(applications.roleId, roleId)).orderBy(asc(applications.createdAt), asc(applications.id));
-  const cards = rows.flatMap((r, i) => (r.lockedAt ? [{ position: i + 1, appliedAt: new Date(r.createdAt).toISOString() }] : []));
+  const rows = await tx.select({ createdAt: applications.createdAt, waiting: sql<boolean>`${lockedAndWaiting()}` }).from(applications).where(eq(applications.roleId, roleId)).orderBy(asc(applications.createdAt), asc(applications.id));
+  const cards = rows.flatMap((r, i) => (r.waiting ? [{ position: i + 1, appliedAt: new Date(r.createdAt).toISOString() }] : []));
   return { count: cards.length, cards };
 }
 

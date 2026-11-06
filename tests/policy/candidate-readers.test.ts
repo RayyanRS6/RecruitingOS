@@ -78,7 +78,6 @@ const CANDIDATE_READERS: Record<string, number> = {
   "packages/workflows/src/definitions/schedule-interview.ts": 1,
   "packages/workflows/src/definitions/screen.ts": 1,
   "packages/workflows/src/new-times-reopen.ts": 3,
-  "packages/workflows/src/unlock-applicants.ts": 1,
 };
 
 /** Where the parenthesis opened at `open` closes: strings and templates skipped, a template's `${...}` read as code, so a template inside one is too. */

@@ -1,6 +1,6 @@
 import { and, count, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { CANDIDATES_PER_JOB, MORE_CANDIDATES_LINE, moreAppliedTitle } from "@ros/contracts";
-import { applications, companies, events, notifications, type Queryable } from "@ros/db";
+import { applications, candidates, companies, events, notifications, type Queryable } from "@ros/db";
 import { zonedParts } from "./business-hours";
 import { limitOf, planOf } from "./entitlements";
 import { notify } from "./notifications";
@@ -98,11 +98,21 @@ export function visibleTo(reader: LockReader): SQL | undefined {
   return named ? or(notLocked(), eq(applications.id, named)) : notLocked();
 }
 
-/** The opposite filter: the locked applications this reader may not read, to count them. Null for break glass, who has none. */
+/**
+ * Of those locked, who an upgrade could still open: not someone who withdrew or was deleted while locked. Their place was taken
+ * once and never comes back, so `decideLock` goes on counting them; but they use no room when a change of plan opens people, and
+ * they have no card, no place in "N more" and no part in "view more", because nobody would open. Nothing about them changes:
+ * they stay as they are, and stay unread. (The owner's decision of 6 November 2026.)
+ */
+export function lockedAndWaiting(): SQL {
+  return and(isNotNull(applications.lockedAt), ne(applications.stage, "withdrawn"), sql`not exists (select 1 from ${candidates} where ${candidates.id} = ${applications.candidateId} and ${candidates.anonymizedAt} is not null)`) as SQL;
+}
+
+/** The locked applications this reader may not read, to count them, if an upgrade could still open them (`lockedAndWaiting`). Null for break glass, who has none. */
 export function hiddenFrom(reader: LockReader): SQL | null {
   if (readsEveryone(reader)) return null;
   const named = reader?.staff?.scope.applicationId;
-  return named ? (and(isNotNull(applications.lockedAt), ne(applications.id, named)) as SQL) : isNotNull(applications.lockedAt);
+  return named ? (and(lockedAndWaiting(), ne(applications.id, named)) as SQL) : lockedAndWaiting();
 }
 
 /** The applications among these this reader may not read. */

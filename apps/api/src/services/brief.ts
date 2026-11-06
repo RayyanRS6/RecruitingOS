@@ -1,5 +1,5 @@
-import { and, count, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPlanRequest, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, lockedAndWaiting, inCancelled, isBoardChannel, isPlanRequest, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, type FollowUpView } from "@ros/core";
 import { withoutLockedApprovals, withoutLockedEvents } from "./locked-visibility";
 import { askToViewMore } from "../middleware/candidate-lock";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
@@ -225,7 +225,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "Each gets the AI interview link by email once their résumé is read.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
     // People past the plan's candidates per job (Rule 3): that more applied, in a neutral line and no number, and the way to read them. Not for ITS staff, who cannot ask for a company's plan.
-    if (viewer?.role !== "recruiter" && (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, role.id), isNotNull(applications.lockedAt), gte(applications.createdAt, since))).limit(1)).length) {
+    if (viewer?.role !== "recruiter" && (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, role.id), lockedAndWaiting(), gte(applications.createdAt, since))).limit(1)).length) {
       cards.push({ kind: "new_applicants", title: moreAppliedTitle(role.title), body: MORE_CANDIDATES_LINE, roleId: role.id, actions: [...(!viewer || can(viewer.role, "escalation.create") ? [askToViewMore] : []), { label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
     if (waiting.length) {

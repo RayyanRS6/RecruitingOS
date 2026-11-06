@@ -315,6 +315,12 @@ describe("a person past the plan's candidates per job", () => {
     expect(html.match(/class="locked-card /g)).toHaveLength(2);
   });
 
+  it("the close card's 'and N more you cannot see yet' is who is still in process, not every card an upgrade would open", () => {
+    const close = (lockedInProcess: number) => text(render(client([[["applications", "r1"], { applications: [vera], counts: counts(3), locked: { count: 2, cards }, lockedInProcess }]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled", mayTell: true, onClose: () => undefined })));
+    expect(close(1)).toContain("and 1 more you cannot see yet");
+    expect(close(0)).not.toContain("you cannot see yet");
+  });
+
   it("a direct link to them shows the same card in the panel, not an error, with no name and no way to read them", () => {
     const qc = client();
     refused(qc, ["application", "a9"], locked402);

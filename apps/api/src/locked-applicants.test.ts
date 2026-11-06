@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
 import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
 import { CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
@@ -1175,7 +1175,7 @@ describe("locked candidates", () => {
       expect(mailsTo(p.email).at(-1)!.text).toContain("Thanks again for applying");
     });
 
-    it("someone whose job closed or left the process is opened where they are, with nothing started", async () => {
+    it("someone whose job closed is opened where they are, with nothing started; someone who left the process stays as they are", async () => {
       const job = await openJob(1);
       await fill(job, 1);
       const left = await apply(job, person("Zed"));
@@ -1186,14 +1186,15 @@ describe("locked candidates", () => {
       await close(job);
       const before = mailsTo(pooled.email).length;
       await changePlan(job.id, "pro");
-      expect((await applicationOf(left.id))).toMatchObject({ stage: "withdrawn", lockedAt: null });
+      expect((await applicationOf(left.id))).toMatchObject({ stage: "withdrawn", lockedAt: left.lockedAt });
+      expect(await eventsOf(left.id, "application.unlocked")).toEqual([]);
       expect((await applicationOf(pooledRow.id))).toMatchObject({ stage: "talent_pool", lockedAt: null });
       expect(await screenRunsOf(pooledRow.id)).toEqual([]);
       expect(mailsTo(pooled.email).length).toBe(before);
       expect((await eventsOf(pooledRow.id, "application.unlocked"))[0].payload).toMatchObject({ interview: false });
     });
 
-    it("someone whose details were deleted, or whose job is paused, is opened where they are too, with nothing read and nothing sent", async () => {
+    it("someone whose job is paused is opened where they are, with nothing read and nothing sent; someone whose details were deleted is not opened", async () => {
       const job = await openJob(1);
       await fill(job, 1);
       const deleted = await apply(job, person("Dov"));
@@ -1203,14 +1204,88 @@ describe("locked candidates", () => {
       expect((await json(job.cookie, "POST", `/api/v1/roles/${job.roleId}/pause`, {})).status).toBe(200);
       const aiBefore = (await runsOf(job.id)).length;
       const mailsBefore = mailsTo(paused.email).length;
-      expect((await changePlan(job.id, "pro")).unlocked).toBe(2);
-      expect(await applicationOf(deleted.id)).toMatchObject({ stage: "withdrawn", lockedAt: null });
+      expect((await changePlan(job.id, "pro")).unlocked).toBe(1);
+      expect(await applicationOf(deleted.id)).toMatchObject({ stage: "withdrawn", lockedAt: deleted.lockedAt });
       expect(await applicationOf(pausedRow.id)).toMatchObject({ stage: "triaged", lockedAt: null });
       expect((await eventsOf(pausedRow.id, "application.unlocked"))[0].payload).toMatchObject({ interview: false });
       expect((await runsOf(job.id)).length).toBe(aiBefore);
       expect(await screenRunsOf(pausedRow.id)).toEqual([]);
       expect(mailsTo(paused.email).length).toBe(mailsBefore);
     });
+
+    it("someone who withdrew or was deleted while locked uses no room on an upgrade and has no card and no place in 'view more'; their place is still taken and nothing about them changes", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const left = await apply(job, person("Lev"));
+      expect((await app.request(`/c/status/${left.statusToken}/withdraw`, form({ confirm: "yes" }))).status).toBe(302);
+      await container.drain();
+      // Home's line about more people applying is for people an upgrade would open.
+      const moreApplied = async () => (await read<{ cards: Array<{ title: string }> }>(await json(job.cookie, "GET", "/api/v1/brief"))).cards.filter((c) => c.title === `More people applied to ${job.title}.`);
+      expect(await moreApplied()).toEqual([]);
+      const gone = await apply(job, person("Dia"));
+      await withTenant(container.db, job.id, (tx) => anonymizeCandidate(tx, { companyId: job.id, candidateId: gone.candidateId, actor: { kind: "system", id: "locked-applicants.test" }, deleteFile: async () => undefined }));
+      expect(await moreApplied()).toEqual([]);
+      const waiting = await apply(job, person("Rea"));
+      const last = await apply(job, person("Las"));
+      expect(await moreApplied()).toHaveLength(1);
+
+      // The team's numbers all say two: on the list, the jobs list, the job's page, the board and the report. The cards keep the places they came in at.
+      const list = await read<{ locked: { count: number; cards: Array<{ position: number }> }; counts: { total: number } }>(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/applications?counts=1`));
+      expect(list.locked.count).toBe(2);
+      expect(list.locked.cards.map((c) => c.position)).toEqual([4, 5]);
+      expect(list.counts.total).toBe(3);
+      const jobs = await read<Array<{ id: string; lockedCount: number; counts: { total: number } }>>(await json(job.cookie, "GET", "/api/v1/roles"));
+      expect(jobs.find((j) => j.id === job.roleId)).toMatchObject({ lockedCount: 2, counts: { total: 3 } });
+      expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}`))).toMatchObject({ lockedCount: 2 });
+      expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/board`))).toMatchObject({ lockedCount: 2 });
+      expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/report`))).toMatchObject({ applicants: { locked: 2 } });
+
+      // A place is taken once: the next person still comes in behind all of them.
+      const next = await apply(job, person("Nix"));
+      expect((await eventsOf(next.id, "application.locked"))[0].payload).toMatchObject({ position: 6 });
+
+      // An upgrade with room for one more opens the oldest who can still be read, and nobody who left.
+      expect((await changePlan(job.id, "test_two")).unlocked).toBe(1);
+      expect((await applicationOf(waiting.id)).lockedAt).toBeNull();
+      expect((await applicationOf(last.id)).lockedAt).not.toBeNull();
+      // An upgrade with no limit opens everyone who is left, and still nobody who left.
+      expect((await changePlan(job.id, "ultra")).unlocked).toBe(2);
+      expect((await applicationOf(last.id)).lockedAt).toBeNull();
+      for (const row of [left, gone]) {
+        expect(await applicationOf(row.id)).toMatchObject({ stage: "withdrawn", lockedAt: row.lockedAt });
+        expect(await eventsOf(row.id, "application.unlocked")).toEqual([]);
+        expect((await json(job.cookie, "GET", `/api/v1/applications/${row.id}`)).status).toBe(402);
+      }
+      expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/applications?counts=1`))).toMatchObject({ locked: { count: 0, cards: [] }, lockedInProcess: 0 });
+    }, 120_000);
+
+    it("'and N more you cannot see yet' is who is still in the running: not someone who withdrew, was deleted, or was already decided", async () => {
+      const job = await openJob(2);
+      const [hired, backup] = await fill(job, 2);
+      await container.db.update(applications).set({ stage: "interview_complete" }).where(inArray(applications.id, [hired.id, backup.id]));
+      const stillIn = await apply(job, person("Sia"));
+      const left = await apply(job, person("Wyn"));
+      expect((await app.request(`/c/status/${left.statusToken}/withdraw`, form({ confirm: "yes" }))).status).toBe(302);
+      const gone = await apply(job, person("Gia"));
+      await withTenant(container.db, job.id, (tx) => anonymizeCandidate(tx, { companyId: job.id, candidateId: gone.candidateId, actor: { kind: "system", id: "locked-applicants.test" }, deleteFile: async () => undefined }));
+      const decided = await apply(job, person("Dex"));
+      await container.db.update(applications).set({ stage: "rejected" }).where(eq(applications.id, decided.id));
+      await container.drain();
+
+      // The close card reads the list: the one in the running, beside cards for everyone an upgrade could open.
+      expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/applications?counts=1`))).toMatchObject({ locked: { count: 2 }, lockedInProcess: 1 });
+      expect((await applicationOf(stillIn.id)).lockedAt).not.toBeNull();
+
+      const recorded = await json(job.cookie, "POST", `/api/v1/applications/${hired.id}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: new Date(Date.now() + 14 * DAY).toISOString().slice(0, 10), offerAcceptedAt: new Date().toISOString().slice(0, 10) });
+      const text = await recorded.text();
+      expect(recorded.status, text).toBe(201);
+      const { hire } = JSON.parse(text) as { hire: { backups: { count: number; locked?: number } } };
+      expect(hire.backups).toMatchObject({ count: 1, locked: 1 });
+
+      // Nobody else in the running: the line goes.
+      await container.db.update(applications).set({ stage: "rejected" }).where(eq(applications.id, stillIn.id));
+      expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/applications?counts=1`))).toMatchObject({ lockedInProcess: 0 });
+    }, 120_000);
 
     it("each job is counted apart: the oldest on each is opened, up to the new limit, and each new arrival takes the place their own job has", async () => {
       const company = await newCompany();

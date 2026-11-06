@@ -167,7 +167,7 @@ export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage,
 /** Everyone under Cancelled, by reason: the three chips above the list while that column is shown. */
 export type CancelledCounts = { askedNewTimes: number; notInterested: number; noShow: number };
 /** `locked`: the people past the plan's candidates per job (the plans of 5 November 2026, Rule 3): where they came in and when, nothing else. `counts.total` includes them, and no other count does. */
-export type ApplicationsWithCounts = { applications: ApplicationSummary[]; counts: StageStripCounts; locked?: LockedApplicants };
+export type ApplicationsWithCounts = { applications: ApplicationSummary[]; counts: StageStripCounts; locked?: LockedApplicants; /** Of the locked, how many are still in process: the close card's "and N more you cannot see yet". */ lockedInProcess?: number };
 /** Where a claim came from. `unquoted`: a claim about the candidate with nothing verified quoted from them (packages/agents/src/triage.ts), shown as "no quote". */
 export type EvidenceRef = { source: string; quote?: string; unquoted?: boolean };
 export type Finding = { claim: string; evidence: EvidenceRef };
