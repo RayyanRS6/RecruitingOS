@@ -21,8 +21,10 @@ changing anything: some plans and settings differ from step 1, to stay inside th
 - **Not run yet:** a Microsoft sign-in from outside ITS (check first that the app registration in use takes outside
   accounts, see step 1), a second administrator (step 7, item 6), branch protection (step 4), the uptime monitor (step 9),
   go-live (step 10) and locking down staging (step 11).
-- **Not released yet:** the plans of 5 November 2026 ("The plans" below). They add migration 0036, the 37th, so production
-  is one behind until that release, and this file's counts already say 37.
+- **Not released yet:** the plans of 5 November 2026 and first sign-in asks for approval of 6 November 2026 ("The plans"
+  below), which go in one release. The plans add migration 0036, the 37th, so production is one behind until that release,
+  and this file's counts already say 37. Asking for approval adds no migration, and production stays on `SIGNUP_MODE=invite`
+  until the code that knows `approval` is live.
 
 ## Before you start
 
@@ -318,8 +320,8 @@ optional); basic auth with any user name and the password `POSTMARK_WEBHOOK_SECR
 | `SUPABASE_ANON_KEY` | the publishable key (step 1) | same | no: public by design |
 | `AUTH_SIGNIN_PROVIDERS` | `azure,google`; `azure` while Google is not published | not set | no |
 | `ITS_STAFF_EMAIL_DOMAINS` | `identifiedtalent.com` | not set | no |
-| `SIGNUP_MODE` | `invite` (the app refuses to start without it) | not set | no |
-| `SIGNUP_ALLOWED_EMAILS` | not set at first; the partner's owner address or `@<partner domain>` at go-live (step 10); each tester's address ("Letting a tester in") | not set | no |
+| `SIGNUP_MODE` | `invite` (the app refuses to start without it); `approval` once the code that knows it is live ("The release", item 6) | not set | no |
+| `SIGNUP_ALLOWED_EMAILS` | not set at first; the partner's owner address or `@<partner domain>` at go-live (step 10); anyone else who should go straight in without asking ("Letting a tester in") | not set | no |
 | `BOOTSTRAP_ADMIN_EMAILS` | the first administrator's `@identifiedtalent.com` address, removed in step 7 | not set | no |
 | `DATABASE_URL` | 1Password "Recruiting OS production database", field `DATABASE_URL` (`ros_app`) | never | yes |
 | `WORKER_DATABASE_URL` | never | the same item, field `WORKER_DATABASE_URL` (`ros_worker`) | yes |
@@ -402,6 +404,7 @@ If a process refuses to start, its log says why (Vercel, **Logs**; Railway, the 
 |---|---|
 | `refusing to start: … not applied` | run the migrate workflow (item 2); the app comes up on its next request, the worker after a **Redeploy** if it has not come up by itself |
 | `… must be set on the production deployment`, `… must be "…"` | the named variable is missing or wrong on that side |
+| `SIGNUP_MODE must be "open" or "invite" (it is "approval")` | this build is older than first sign-in asks for approval and does not know that mode: set `SIGNUP_MODE=invite` and redeploy, then release the new code before setting `approval` ("The release", item 6) |
 | `DEPLOY_ENV must be "production" or "staging" …` | Railway: add `DEPLOY_ENV=production` (the worker's only way to know) |
 | `… names staging's Supabase project` | that variable was copied from staging: copy it from the production project |
 | `DEPLOY_ENV=production is set on a Vercel Preview deployment` | a production variable also went to Preview: edit it to Production only |
@@ -434,7 +437,7 @@ Test data in production follows these rules:
 - Made-up people and documents only; nothing is copied from staging. Never run `scripts/load-apply.ts` against
   production.
 - One ITS test company, **ITS Internal Test - not hiring**, opened once by the first administrator at
-  `https://<host>/setup/company` (an administrator may open a company while sign-up is by invitation). Then **Console,
+  `https://<host>/setup/company` (an administrator opens a company directly under `invite` and `approval` alike). Then **Console,
   Customers**, the company, **Change plan**: Design Partner, reason "ITS test company". Since the plans, a new company
   starts on Free, so this is what keeps its one job and its test applicants from running into Free's limits.
 - Opening it sends the queue mailbox one notice about the new company. Until email is live that send fails and
@@ -464,8 +467,9 @@ The check:
 1. `curl.exe -s https://<host>/robots.txt` shows `Allow: /careers/` and a `Sitemap:` line; `curl.exe -sI
    https://<host>/welcome` shows no `x-robots-tag`.
 2. Sign-in: the first administrator with Microsoft and the authenticator; a Microsoft account from outside ITS (a
-   personal one, or another company's) and, if offered, a Google account. Each outside account signs in, and the company
-   step says "Recruiting OS is by invitation for now" with the reply mailbox.
+   personal one, or another company's) and, if offered, a Google account. Each outside account signs in. Under
+   `SIGNUP_MODE=invite` the company step says "Recruiting OS is by invitation for now" with the reply mailbox. Under
+   `approval` it shows the form with **Send my request**: leave it unsent, because one account makes one request.
 3. **Console, Customers**, the test company: **Confirm the company**, reason "smoke test". From the second check on,
    also the role's **More** menu, **Accept applications again**.
 4. In a private window, the role's job page (its **Share** tab has the link): apply as "Test Candidate `<date>`" with
@@ -520,7 +524,8 @@ Real people's data enters production only after:
 Then:
 
 1. Vercel Production: `SIGNUP_ALLOWED_EMAILS` = the partner's owner address, or `@<partner domain>`; redeploy the
-   latest Production deployment.
+   latest Production deployment. The list counts under `SIGNUP_MODE=approval` too, and it is needed there: without it the
+   partner sends a request, and Accept confirms the company at once, before item 3 says it may be.
 2. Send the partner `https://<host>`. They sign in with Microsoft or Google and open their company. If their Microsoft
    365 asks for an administrator's approval, their IT administrator approves the app once.
 3. ITS confirms the company (**Console, Customers**, **Confirm the company**) only once the agreement is signed, then
@@ -562,13 +567,15 @@ to-do document, never here.
 
 **Before a real company or a real applicant.** Made-up applicants only until risk R-LEGAL-1 is accepted again in writing,
 or the lawyer has answered (`docs/workflow-decisions.md`, PQ-3; `docs/spec/00` section Q), and email is live (PQ-18). Step
-10's list still holds for any real data.
+10's list still holds for any real data. Under `SIGNUP_MODE=approval` anyone with a Google or Microsoft account can ask, and
+nothing in the code holds any of this: it rests on whoever presses Accept.
 
-### The release (migration 0036)
+### The release (migration 0036, and `SIGNUP_MODE=approval` after it)
 
 Migration `0036_application_locked_at.sql` adds one empty column, `applications.locked_at`, with no default and no backfill:
-every application that exists stays visible. The older code keeps running on the new schema and ignores it. Order, as in
-"Every later release":
+every application that exists stays visible. The older code keeps running on the new schema and ignores it. First sign-in
+asks for approval goes in the same release and adds no migration: a person waiting is a membership in a status the code
+already leaves out. Order, as in "Every later release":
 
 1. GitHub, **Settings**, **Environments**: `production-database` exists with its two secrets, its variable and its branches
    (step 4, item 4). Check this first: production's 36 migrations went on through the setup script, so this may be the first
@@ -585,13 +592,20 @@ every application that exists stays visible. The older code keeps running on the
 5. **Console, Customers**, the test company, **Plan**: the list reads Free, Basic, Pro, Ultra and Design Partner, each with its
    price and limits. The test company stays on Design Partner. Every existing company keeps what it had until someone changes
    its plan.
-6. The short smoke test (step 8, items 3, 4 and 9), then the plans check below.
+6. **Now, and only now, `SIGNUP_MODE=approval`.** The new code must already be live, because a build from before it refuses to
+   start on a mode it does not know, with `SIGNUP_MODE must be "open" or "invite"` in its log. Vercel, **Environment Variables**,
+   Production, `SIGNUP_MODE`: `approval`. Then **Deployments**, the latest Production deployment, the three-dot menu, **Redeploy**:
+   the value is read at start, so nothing changes until then. Railway needs nothing, as the worker has no `SIGNUP_MODE`. Check
+   with an account from outside ITS, in a private window: `https://<host>/setup/company` shows the form with **Send my request**
+   (leave it unsent: one account makes one request), and `https://<host>/welcome` has no "Get help with your next hire" link.
+7. The short smoke test (step 8, items 3, 4 and 9), then the plans check below.
 
 **The plans check**, with made-up data and the rules of step 8:
 
-1. Add one account from outside ITS as a tester ("Letting a tester in"). It opens a company named
-   **ITS Plans Test - not hiring**. **Settings**, **Company** reads Free, with no word about a trial, and **Upgrade** beside it.
-2. **Console, Customers**, that company, **Confirm the company**, reason "plans check". Draft and approve one job,
+1. An account from outside ITS signs in and sends the form for a company named **ITS Plans Test - not hiring** ("Letting a
+   tester in"). **Console, Overview**, its row, **Accept**, **Yes**. **Settings**, **Company** reads Free, with no word about a
+   trial, and **Upgrade** beside it.
+2. Accept was the ITS check, so there is no **Confirm the company** to press. Draft and approve one job,
    **TEST - not a real job**. **Start a hire** then says "Your Free plan includes one job. Upgrade to post more."
 3. Apply six times from a private window, each with a new name at `blackhole.postmarkapp.com`. The job's **Candidates** lists
    five people and one card that says **Locked**, with no name. The sixth's receipt says the application is on file, with no
@@ -601,32 +615,58 @@ every application that exists stays visible. The older code keeps running on the
 5. **Change plan** to Basic with a reason. The toast says "1 locked candidate opens now."; the card becomes the person; the
    request closes with "Your company is on the Basic plan now."; and **Settings**, **Audit history** shows the change with
    the reason.
-6. **Take back the confirmation**, reason "plans check done". Take the account off `SIGNUP_ALLOWED_EMAILS` and redeploy.
+6. **Take back the confirmation**, reason "plans check done". The account keeps its company ("Ending a tester's access", below).
 
 ### Letting a tester in
 
-Sign-up stays by invitation (`SIGNUP_MODE=invite`). A new company costs real AI money up to its credit, so full addresses are
-better than `@domain`: `@domain` admits everyone at that domain, each with a new company and a new credit.
+Since 6 November 2026 a tester asks and an administrator accepts (`SIGNUP_MODE=approval`; decisions:
+`docs/workflow-decisions.md`, "6 November 2026"). There is no list to change and no redeploy for each person. A new company costs
+real AI money up to its credit, and only a person's press lets one in.
 
-1. Vercel, **Environment Variables**, Production, `SIGNUP_ALLOWED_EMAILS`: add the tester's address. Full addresses and
-   `@domain` entries (that domain only, not its subdomains), comma-separated, any case. An entry that is neither stops the app
-   from starting, and the log says which.
-2. **Deployments**, the latest Production deployment, the three-dot menu, **Redeploy**. The list is read at start.
-3. The tester signs in at `https://<host>/login` with the address. Check first which sign-in works for someone outside ITS:
-   `AUTH_SIGNIN_PROVIDERS` and step 1 (a Microsoft sign-in from outside ITS has not been run on production).
-4. They fill in the company form and land on Home on Free, with no clock. They can draft and approve at once. Their careers
-   page, job pages and candidate emails wait for the ITS check.
-5. **Console, Customers**, their company, **Confirm the company**, with a reason. Nothing in the code refuses a job in NYC,
-   Illinois, California or Colorado, or a remote one (`docs/workflow-decisions.md`, PQ-16), so ask what they will post.
+1. The tester signs in at `https://<host>/login` with Google or Microsoft. Check first which sign-in works for someone outside
+   ITS: `AUTH_SIGNIN_PROVIDERS` and step 1 (a Microsoft sign-in from outside ITS has not been run on production).
+2. They fill in **Tell us about your company** and press **Send my request**. Their screen says "Your request has been sent" and
+   "Please wait for approval." Nothing else works for them: no job, no AI, nothing public, and every address they open lands on
+   this screen. One account makes one request.
+3. **Console, Overview**, at the very top of **Needs attention**: "<Company> is asking for access", with the person's name and
+   email, the kind of business, the size, the city and state, the website and how long they have waited. A stranger typed all of
+   it, so open the website with care. Five rows at most, the longest waiting first, then "N more companies are asking for
+   access", which opens **Customers**, **Waiting for the ITS check**. While email is not live this row is the only thing that
+   tells you ("While testers are on").
+4. Look before you press, because Accept is also the one-time ITS check, so it opens their public side and there is no second
+   look. Nothing in the code refuses a job in NYC, Illinois, California or Colorado, or a remote one (`docs/workflow-decisions.md`,
+   PQ-16), asks for signed terms (PQ-14) or checks that applicants are made up (PQ-3). Ask them from your own mailbox, at the address
+   on the row.
+5. **Accept**, then **Yes**. Their screen goes to Home by itself within 30 seconds, on Free, with no clock, and they can draft
+   and approve at once. Their careers page, job pages and candidate emails work from now on, with no **Confirm the company** after it.
+6. Or **Decline**, then **Yes**. Their screen says "We can't offer access right now" with the reply mailbox. No reason is typed,
+   and they cannot send a second request. It is not final: **Customers**, the **Declined** filter, the company, **Accept**.
 
-To end a tester's access: **Take back the confirmation**, then take the address off the list and redeploy. Their company and
-its records stay.
+**Who goes straight in.** A platform administrator, and an address on `SIGNUP_ALLOWED_EMAILS`. They see **Create my hiring
+workspace**, land on Home on Free and can draft and approve at once, and their careers page, job pages and candidate emails wait
+for **Console, Customers**, **Confirm the company**, with a reason. Use the list for someone whose agreement must be signed before
+anything of theirs goes public (step 10). Full addresses are better than `@domain`, which admits everyone at that domain, each with
+a new company and a new credit. Entries are full addresses and `@domain` (that domain only, not its subdomains), comma-separated, any
+case; one that is neither stops the app from starting, and the log says which. Someone who already sent a request does not move by
+going on the list: accept them.
+
+**Changing the door.** `SIGNUP_MODE` and the list are read at start, so every change is Vercel, **Environment Variables**,
+Production, then **Deployments**, the latest Production deployment, the three-dot menu, **Redeploy**. `SIGNUP_MODE=invite` shuts the
+door again: a stranger reads "Recruiting OS is by invitation for now" where the form was, and `POST /api/v1/companies` answers 403.
+Anyone already waiting keeps their screen, stays on the Overview and can still be accepted or declined. `approval` opens the door
+again. Any other value stops the app.
+
+**Ending a tester's access.** There is no button for it. Once a company is accepted, Decline answers that it already has access.
+**Take back the confirmation**, with a reason, takes its pages, feeds and candidate emails offline at once, so press that first. Its
+people can still sign in, read what they have and draft with what is left of the AI credit, and **Sign someone out everywhere** ends
+their sessions, not their way back. Taking them off altogether needs an engineer today. Their company and its records stay.
 
 ### How ITS changes a plan
 
 A company asks with **Upgrade**, which reaches the **Queue** as "A customer asked about their plan." and shows **Asked to upgrade**
 on its row. Accepting it opens what the customer wrote and gives no access to their hiring. Only a platform administrator changes
-a plan; the queue says so to anyone else, with a link to the console's Plan tab for an administrator.
+a plan; the queue says so to anyone else, with a link to the console's Plan tab for an administrator. A company still asking for
+access has no **Plan** tab: Accept puts it on Free, and a plan is changed after that.
 
 1. **Console, Customers**, the company, **Plan**. Pick a plan. A retired plan stays shown while a company is on it, and cannot be
    chosen again once left.
@@ -643,11 +683,14 @@ company moved down to Free gets no second credit.
 
 ### While testers are on
 
-Email is not live, so the queue mailbox hears nothing: every failed send raises an alert instead, and a tester's team invitations
-reach nobody. Read the console every business day: **Overview**, **Customers** (filter **Waiting for the ITS check** and
-**Running low**, the chip **Asked to upgrade**), **Queue** and **Problems**. An AI credit at 80% or used up is a line in dollars
-on the company's row, and **Running low** counts it; it is never critical and pages nobody. The Anthropic workspace's monthly limit
-(step 1) stays the guard over the whole account.
+Email is not live, so the queue mailbox hears nothing, and a tester's team invitations reach nobody. A failed send raises an alert
+instead, with one exception on purpose: no email about a request for access raises one, whether to the person or to ITS, so **the
+Overview's row is the only thing that says someone is waiting**. The person's screen claims nothing about email until one really
+left: it says "Keep this page open, or sign in again later to check." Once email is live their copy says ITS reviews each company
+"usually within one business day", so someone must look that often. Read the console every business day: **Overview**, **Customers**
+(filter **Waiting for the ITS check** and **Running low**, the chip **Asked to upgrade**), **Queue** and **Problems**. An AI credit
+at 80% or used up is a line in dollars on the company's row, and **Running low** counts it; it is never critical and pages nobody.
+The Anthropic workspace's monthly limit (step 1) stays the guard over the whole account.
 
 ## Every later release
 
@@ -675,6 +718,10 @@ on the company's row, and **Running low** counts it; it is never critical and pa
 - **Back past the plans.** A build from before them does not read `locked_at` and has no AI credit: anyone locked becomes
   readable by their team, a company's AI spend has no limit, and new companies start on Trial again. With testers on, take back
   each one's confirmation first, and release the fix soon. The plan rows stay; the older build rewrites only the five it knows.
+- **Back past first sign-in asks for approval.** A build from before it refuses to start on `SIGNUP_MODE=approval` (step 6's
+  table). If its log says so, set `SIGNUP_MODE=invite` and redeploy that build. On it someone waiting reads the by-invitation line,
+  and their company reads as an ordinary one waiting for the ITS check: do not confirm it there, because that makes it public with
+  nobody able to get in. Their request is still there when the new code comes back.
 
 ## Hotfix
 

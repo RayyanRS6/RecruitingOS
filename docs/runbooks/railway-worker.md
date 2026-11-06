@@ -126,7 +126,7 @@ Secrets, one **New Variable** each, then **Seal**:
 Not set on purpose: `DATABASE_URL` (the worker uses `WORKER_DATABASE_URL` and refuses to start without it),
 `MIGRATE_DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SENTRY_DSN` (no project yet), `BOOTSTRAP_ADMIN_EMAILS` (the
 worker never signs anyone in), `SIGNUP_MODE` and `SIGNUP_ALLOWED_EMAILS` (the worker never opens a company, though a
-`SIGNUP_MODE` other than `open` or `invite` would stop it), and `COOKIE_DOMAIN`.
+`SIGNUP_MODE` other than `open`, `invite` or `approval` would stop it), and `COOKIE_DOMAIN`.
 
 ## Screen 4: deploy and verify
 
