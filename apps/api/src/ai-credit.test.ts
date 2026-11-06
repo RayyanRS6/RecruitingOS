@@ -1370,6 +1370,28 @@ describe("the AI credit", () => {
       expect(row.aiCredit!.spentUsd).toBeCloseTo(row.aiCostUsd, 5);
     });
 
+    it("Settings reads money actually spent, as Home does: a draft's hold does not move it to 29% and back to 25%, and the two never differ", async () => {
+      const { id, cookie } = await newCompany();
+      await usePlan(container, id, "basic");
+      const figures = async () => {
+        const c = await read<{ usage: { ai_credit_monthly_cents: { used: number } }; aiCredit: { percent: number } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+        return [c.usage.ai_credit_monthly_cents.used, c.aiCredit.percent];
+      };
+      // $5.00 of Basic's $20, then a draft holds about $0.80 for two minutes
+      await spend(id, "5.000000");
+      expect(await figures()).toEqual([25, 25]);
+      await spend(id, "0.800000", { status: "running" });
+      expect(await figures()).toEqual([25, 25]);
+      // the gate and `check` still count it, so no number of calls at once can pass the limit
+      expect((await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.AI_CREDIT_MONTHLY_CENTS))).used).toBe(580);
+      // it settles at about $0.10: $5.10 is still 25%
+      await withPlatform(container.db, (tx) => tx.update(aiRuns).set({ status: "ok", costUsd: "0.100000" }).where(and(eq(aiRuns.companyId, id), eq(aiRuns.status, "running"))));
+      expect(await figures()).toEqual([25, 25]);
+      // a fraction of a cent cannot part them either: $5.998 is 29.99% on both, never 30% on one
+      await spend(id, "0.898000");
+      expect(await figures()).toEqual([29, 29]);
+    });
+
     it("a big draft refused is not the credit used up, and a hold that comes back cries no wolf", async () => {
       const { id } = await newCompany();
       const provider = new PricedProvider();

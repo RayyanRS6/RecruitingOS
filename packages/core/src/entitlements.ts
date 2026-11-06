@@ -238,14 +238,17 @@ export type UsageLine = { used: number; limit: number | null; resetsAt?: string 
 /** Limits that are not a count of anything used, so they have no "used of limit" line: read them with `limitOf`. */
 const NOT_A_COUNT: readonly string[] = [CANDIDATES_PER_JOB, ITS_WORK];
 
-/** A share of the credit in whole percent, never past 100; short of all never reads as all. */
-export const creditPercent = (spentCents: number, limitCents: number): number => (limitCents <= 0 ? 100 : Math.min(100, Math.floor((spentCents * 100) / limitCents)));
+const MICROS_PER_CENT = 10_000;
+
+/** A share of the credit in whole percent, never past 100; short of all never reads as all. Spent and limit in one unit. */
+export const creditPercent = (spent: number, limit: number): number => (limit <= 0 ? 100 : Math.min(100, Math.floor((spent * 100) / limit)));
 
 /**
  * The plan's usage as the company's settings show it: roles counted from the roles using a place now, people from the
  * members and open invitations now (known bug 128: the stored count never moved), jobs ever from the roles (only with a
  * limit: without one there is nothing to say), the AI credit as a percentage (only with a limit), the rest within their
- * period.
+ * period. The credit's percentage is money actually spent, worked out as Home's is (`aiCreditView`), so a draft's hold does
+ * not move it up and back down, and the two pages read one figure. `check` and the gate go on counting holds.
  */
 export async function usageOf(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<Record<string, UsageLine>> {
   const rows = await q.select().from(entitlements).where(eq(entitlements.companyId, companyId));
@@ -255,9 +258,13 @@ export async function usageOf(q: Queryable, companyId: string, opts: { now?: Dat
     if (NOT_A_COUNT.includes(e.key)) continue;
     const credit = isAiCreditKey(e.key);
     if ((credit || e.key === JOBS_TOTAL) && e.limit === null) continue;
-    const used = await usedNow(q, companyId, e, now);
     const resets = isMonthly(e.key) ? { resetsAt: currentPeriod(e, now).periodEnd } : {};
-    out[e.key] = credit ? { used: creditPercent(used, e.limit ?? 0), limit: 100, unit: "percent", ...resets } : { used, limit: e.limit, ...resets };
+    if (credit) {
+      const spent = await aiCreditSpentMicros(q, companyId, { since: isMonthly(e.key) ? currentPeriod(e, now).periodStart : null, settled: true });
+      out[e.key] = { used: creditPercent(spent, (e.limit ?? 0) * MICROS_PER_CENT), limit: 100, unit: "percent", ...resets };
+    } else {
+      out[e.key] = { used: await usedNow(q, companyId, e, now), limit: e.limit, ...resets };
+    }
   }
   return out;
 }
