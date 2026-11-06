@@ -11,6 +11,7 @@ import { AI_OUTAGE_ALERT_KIND } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { runMaintenance } from "./maintenance";
+import { SENT_RECORD_LINE, SENT_RECORD_NO_SCORE_LINE } from "./pages/chat-pages";
 import { conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ConversationRef } from "./services/apply-conversation";
 import { readingFor, runResumeReading } from "./services/apply-details";
 import { screenDeps } from "./services/screens";
@@ -719,6 +720,20 @@ describe("the AI credit", () => {
       expect(await creditNotes(job.id)).toHaveLength(1);
       expect((await container.db.select().from(notifications).where(eq(notifications.companyId, job.id))).filter((n) => JSON.stringify(n).includes("Eva"))).toEqual([]);
 
+      // no score can come for now: nothing promises one, not the page they sent it from and not their record, whatever the time
+      const decoded = async (path: string) => (await (await app.request(path)).text()).replace(/&#39;/g, "'");
+      const closing = () => decoded(`/c/screen/${ref.token}`);
+      const record = () => decoded(`/c/status/${a.statusToken}`);
+      expect(await closing()).toContain(SENT_RECORD_NO_SCORE_LINE);
+      expect(await closing()).not.toContain("match score");
+      expect(await record()).not.toMatch(/match score|Not ready yet/i);
+      moveClock(Date.now() + 2 * 3_600_000);
+      try {
+        expect(await record()).not.toMatch(/match score|Not ready yet/i);
+      } finally {
+        moveClock(null);
+      }
+
       // the team reads the answers, and every place that says "being scored" says to read it instead
       const detail = await read<{ screens: Array<{ scorecard: string; answersShared: boolean; answers: Record<string, string> }>; placement: { doneLabel: string; reason: string; column: string | null } }>(await json(job.cookie, "GET", `/api/v1/applications/${a.id}`));
       expect(detail.screens[0].scorecard).toBe("waiting_for_credit");
@@ -741,6 +756,29 @@ describe("the AI credit", () => {
       expect(scored.screens[0].scorecard).toBe("ready");
       expect((await runOf("screen", a.id)).status).not.toBe("failed");
       await noFalseAlarm(job.id, [a.id]);
+      // and now both say so, as they do for anyone
+      expect(await closing()).toContain(SENT_RECORD_LINE);
+      expect(await record()).toContain("Your match score is ready");
+    });
+
+    it("someone whose résumé was read before the credit ran out keeps their score and its promise, and it is never 'working out' while the scorecard waits", async () => {
+      const job = await openJob();
+      const a = await apply(job, { first: "Rae", last: "Inge", email: "rae@ai-credit.test" });
+      const ref = await interviewOf(a.id);
+      await conversationStart(container, ref);
+      expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).toHaveLength(1);
+      await spend(job.id, "9.950000");
+      expect((await answerToTheEnd(ref)).phase).toBe("review");
+      expect(await ensureWriteup(container, ref)).toBe("written");
+      expect(await conversationSubmit(container, ref)).toBe(true);
+      await container.drain();
+      expect((await screenOf(a.id)).progress.scoreWaitsForCredit).toBeTruthy();
+      const closed = (await (await app.request(`/c/screen/${ref.token}`)).text()).replace(/&#39;/g, "'");
+      expect(closed).toContain(SENT_RECORD_LINE);
+      const record = (await (await app.request(`/c/status/${a.statusToken}`)).text()).replace(/&#39;/g, "'");
+      expect(record).toContain("Your match score is ready");
+      expect(record).toContain("From your résumé only");
+      expect(record).not.toContain("Working out your match score");
     });
 
     it("someone who left while the AI work waited for credit is not read after an upgrade, and no credit is spent on them", async () => {

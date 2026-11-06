@@ -278,6 +278,12 @@ describe("the application record (status page) after sending", () => {
     expect(html).not.toContain('id="score"');
     expect(html).not.toContain('href="#score"');
     expect(html).not.toMatch(/match score/i);
+    // nor the page a sent chat closes on: no score is coming
+    const sentChat = await addScreen(a, { status: "completed", completedAt: at(-30 * 60), progress: progressOf({ submittedAt: at(-30 * 60) }) });
+    const closed = (await page(`/c/screen/${sentChat.token}`)).html;
+    expect(closed).toContain("<h1>Thanks, your answers are sent</h1>");
+    expect(closed).not.toMatch(/match score/i);
+    expect(closed).toContain("Everything you sent will be on your application page.");
     // recorded with who, when and why, as a change to the company's settings the customer's history lists
     const recorded = (await container.db.select().from(auditRecords).where(eq(auditRecords.companyId, companyId))).filter((r) => r.action === "company.updated" && (r.details as { fields?: string[] }).fields?.includes("candidateScoreShown"));
     expect(recorded.at(-1)).toMatchObject({ reason: "Customer asked to wait for counsel", details: { candidateScoreShown: { from: true, to: false } } });
