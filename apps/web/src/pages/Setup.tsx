@@ -638,7 +638,9 @@ const NOTICE_LABEL: Record<string, string> = { ai_use: "How we use AI (shown on 
 const NOTICE_SHORT: Record<string, string> = { ai_use: "AI notice", privacy: "privacy notice", pay_transparency: "pay range notice", adverse_decision_explanation: "decision review notice" };
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 /** The plan's allowances in the company card's words (recruiter_asks counts the team's own requests, founder decision Q33). */
-const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", jobs_total: "jobs", text_screens: "AI interviews this month", screen_person_requests: "requests for a person instead of the AI interview", voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "people (invitations not yet answered count too)", ai_credit_total_cents: "AI help", ai_credit_monthly_cents: "AI help this month" };
+const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", jobs_total: "jobs", text_screens: "AI interviews this month", screen_person_requests: "requests for a person instead of the AI interview", recruiter_asks: "recruiter requests", seats: "people (invitations not yet answered count too)", ai_credit_total_cents: "AI help", ai_credit_monthly_cents: "AI help this month" };
+/** Limits for what was never built: nothing is used of them, and a company moved off an older plan still has their rows (a change of plan clears no key). */
+const NEVER_BUILT: ReadonlySet<string> = new Set(["voice_minutes", "sourcing_contacts"]);
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /**
@@ -648,7 +650,7 @@ const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export function usageLines(usage: Record<string, UsageRow>): string[] {
   const jobsEver = usage.jobs_total?.limit !== null && usage.jobs_total?.limit !== undefined;
   return Object.entries(usage)
-    .filter(([k]) => !(jobsEver && k === "active_roles"))
+    .filter(([k]) => !NEVER_BUILT.has(k) && !(jobsEver && k === "active_roles"))
     .map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.unit === "percent" ? `${v.used}% used` : `${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`}`);
 }
 

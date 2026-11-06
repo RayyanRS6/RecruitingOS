@@ -185,6 +185,14 @@ describe("the team card and Settings", () => {
     expect(words).not.toContain("0 of 5");
   });
 
+  it("a company moved off an older plan: the rows it keeps for what was never built are not printed", () => {
+    const words = text(page(company({ planKey: "pro", plan: { key: "pro", name: "Pro", limits: {} }, usage: { active_roles: { used: 1, limit: 10 }, voice_minutes: { used: 0, limit: 300 }, sourcing_contacts: { used: 0, limit: 50 }, ai_credit_monthly_cents: { used: 4, limit: 100, unit: "percent" } } })));
+    expect(words).toContain("active jobs: 1 of 10");
+    expect(words).toContain("AI help this month: 4% used");
+    expect(words).not.toContain("voice");
+    expect(words).not.toContain("sourcing");
+  });
+
   it("no Upgrade where nothing is above: the last public plan and the private pilot; any other plan has one", () => {
     expect(text(page(company({ planKey: "ultra", plan: { key: "ultra", name: "Ultra", limits: {} }, itsPosting: true })))).not.toContain("Upgrade");
     expect(text(page(company({ planKey: "design_partner", plan: { key: "design_partner", name: "Design Partner", limits: {} }, itsPosting: true })))).not.toContain("Upgrade");
