@@ -439,7 +439,7 @@ describe("team invitations, members and roles", () => {
     expect(told[0].title).toBe("Wes Leaving was removed; an interview was cancelled");
     expect(told[0].body).toContain("Working interview: Wes Leaving was the only interviewer, so that interview was cancelled.");
     expect(told[0].body).toContain("The candidate was told the interview is off.");
-    expect(told[0].body).toContain("approve a new interview with another interviewer");
+    expect(told[0].body).toContain("set a date and time with another interviewer");
     expect(told[0].body).toContain("Chairside interview: goes ahead with the other interviewers.");
     expect(told[0].body).not.toContain("add an interviewer");
     expect(await container.db.select().from(events).where(and(eq(events.type, "member.removed"), eq(events.subjectId, wesId)))).toHaveLength(1);

@@ -343,6 +343,21 @@ const ABOUT_AN_INTERVIEW = ["interview_slots", "interview_slots_reminder", "inte
 /** A message in one of these never left us, so nothing it says has reached them. */
 export const NEVER_LEFT = ["queued", HELD_STATUS, "failed", "cancelled"];
 
+/** Whether a message is really on its way: it did not fail, and it does not wait for the ITS check. What a screen may say "was sent" about. */
+export function onItsWay(result: SendResult): boolean {
+  return result.status !== "failed" && !(result.status === "pending" && result.reason === HELD_REASON);
+}
+
+/**
+ * Whether any email about this interview has left us: what the candidate can know of it. Someone a person booked hears of it
+ * only by email, which goes a moment after the press, or once ITS confirms the company, so a time called off before that is
+ * one they never heard of. Read by the interview's id in each email's key (`slots:<id>:<attempt>`, `confirm:<id>:<attempt>`).
+ */
+export async function interviewReachedThem(q: Queryable, input: { applicationId: string; interviewId: string }): Promise<boolean> {
+  const told = await q.select({ key: communications.idempotencyKey }).from(communications).where(and(eq(communications.applicationId, input.applicationId), inArray(communications.templateKey, ABOUT_AN_INTERVIEW), notInArray(communications.status, NEVER_LEFT)));
+  return told.some((t) => (t.key ?? "").split(":")[1] === input.interviewId);
+}
+
 /**
  * Of the messages being released, the news that an interview is off (`iv_cancel:<id>:<attempt>`, `iv_moved:<id>:<attempt>`)
  * about an interview nothing ever told them of: a company waiting for the ITS check can book a time and call it off, and

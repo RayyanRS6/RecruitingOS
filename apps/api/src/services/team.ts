@@ -278,7 +278,7 @@ async function endMembershipInTx(tx: Tx, team: Team, input: { userId: string; ta
   }
   // An interview that counted on nobody else cannot take place and nothing adds an interviewer to an existing one, so
   // it is cancelled through the one cancellation path: its scheduling run ends, a candidate with a booked time is
-  // told, and the candidate goes back to "Interview approved" for the team to approve a new interview. An interview
+  // told, and the candidate goes back to "Interview to set up" for the team to set a new date and time. An interview
   // with other interviewers goes ahead with them.
   const cancelled: Array<{ title: string; candidateTold: boolean }> = [];
   const continuing: string[] = [];
@@ -354,7 +354,7 @@ function removalNotice(who: string, cancelled: Array<{ title: string; candidateT
     const told = cancelled.filter((x) => x.candidateTold).length;
     // A candidate hears about it when they knew of it: a booked time, or times they were offered to pick from.
     const toldLine = told ? ` ${told === 1 ? "The candidate was" : `The ${told} candidates were`} told the interview is off.` : "";
-    parts.push(`${list(cancelled.map((x) => x.title))}: ${who} was the only interviewer, so ${one ? "that interview was" : `those ${cancelled.length} interviews were`} cancelled.${toldLine} To go on with ${one ? "the candidate" : "those candidates"}, approve a new interview with another interviewer from ${one ? "their" : "each candidate's"} page.`);
+    parts.push(`${list(cancelled.map((x) => x.title))}: ${who} was the only interviewer, so ${one ? "that interview was" : `those ${cancelled.length} interviews were`} cancelled.${toldLine} To go on with ${one ? "the candidate" : "those candidates"}, set a date and time with another interviewer from ${one ? "their" : "each candidate's"} page.`);
   }
   if (continuing.length) parts.push(`${list(continuing)}: ${continuing.length === 1 ? "goes" : "go"} ahead with the other interviewers.`);
   const title = cancelled.length

@@ -13,6 +13,8 @@ export const INTERVIEW_FROM: readonly string[] = ["triaged", "screen_complete", 
 /** Interviews with times being worked out, offered or booked: an application has one at a time. */
 export const OPEN_INTERVIEW: string[] = ["proposed", "scheduling", "scheduled"];
 export const INTERVIEW_ALREADY_OPEN = "This candidate already has an interview set up. Open it to move or cancel it.";
+/** Nobody can pick from times nobody has hours for: what stops a send or a re-offer that would only wait for ever. */
+export const NO_HOURS = "Nobody on this interview has hours to offer. Set a date and time instead.";
 /** Where the run of a time a person set begins: the route already booked it, so nothing is worked out or offered. */
 export const BOOKED_RUN_STARTS_AT = "place_on_calendars";
 

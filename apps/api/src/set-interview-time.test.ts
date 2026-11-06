@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { INTERVIEW_CHANGED_SINCE, NEVER_HEARD_OF_IT, REMINDER_TOO_LATE } from "@ros/agents";
+import { INTERVIEW_CHANGED_SINCE, NEVER_HEARD_OF_IT, REMINDER_TOO_LATE, interviewsCalledOff } from "@ros/agents";
 import { anonymizeCandidate, entitlements, zonedParts, zonedToUtc } from "@ros/core";
 import { applications, auditRecords, candidates, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, roles, screens, users, withPlatform, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, FakeGoogleCalendarProvider } from "@ros/integrations";
@@ -112,6 +112,16 @@ describe("a person sets the date and time", () => {
   };
   const approveOnly = async (first: string, last: string, extra: Record<string, unknown> = {}) => approveFor(await apply(first, last), extra);
   const confirmedPage = async (token: string, query = "") => (await app.request(`/c/schedule/${token}/confirmed${query}`)).text();
+  /** As in production: `kick` runs nothing, and the worker gets to it when it gets to it. Everything inside sees what a person sees before that. */
+  const withWorkerStopped = async <T>(during: () => Promise<T>): Promise<T> => {
+    const kick = container.kick;
+    container.kick = async () => undefined;
+    try {
+      return await during();
+    } finally {
+      container.kick = kick;
+    }
+  };
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
@@ -174,6 +184,40 @@ describe("a person sets the date and time", () => {
       await container.drain();
       const [run] = await runs(out.id);
       expect((await container.db.select({ step: workflowSteps.stepKey }).from(workflowSteps).where(eq(workflowSteps.runId, run.id)).orderBy(asc(workflowSteps.seq))).map((s) => s.step)).toEqual(["place_on_calendars", "confirm", "on_timer"]);
+    });
+
+    it("as in production, where the route's kick runs nothing: the answer, the stage, the sheet, the list and their status page are right before the worker has run; moved meanwhile, the one email it then sends is their first", async () => {
+      const cand = await apply("Ott", "Early");
+      const before = mailTo(cand.email).length;
+      const id = await withWorkerStopped(async () => {
+        const r = await routeA(cand.id);
+        expect(r.status, await r.clone().text()).toBe(201);
+        const out = (await r.json()) as Booked;
+        expect(out).toMatchObject({ status: "scheduled", candidateNotice: "queued", candidate: { stage: "interview_scheduled" } });
+        // the run has not started, and nothing has been written to them yet
+        expect((await runs(out.id))[0]).toMatchObject({ status: "running", currentStep: "place_on_calendars" });
+        expect(await emailOf(`confirm:${out.id}:1`)).toBeUndefined();
+        expect(((await (await json(owner, "GET", `/api/v1/interviews/${out.id}`)).json()) as { status: string; candidateEmail: string | null })).toMatchObject({ status: "scheduled", candidateEmail: null });
+        const list = (await (await json(owner, "GET", "/api/v1/interviews?status=scheduled")).json()) as Array<{ id: string }>;
+        expect(list.some((i) => i.id === out.id)).toBe(true);
+        expect(((await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { ownerStage: string }).ownerStage).toBe("interviewing");
+        const status = await (await app.request(`/c/status/${cand.statusToken}`)).text();
+        expect(status).toContain("Your interview is booked. The details are below and in your email.");
+        // moved at once: its old run stops, and nothing says "moved" to someone who has heard nothing
+        const m = await routeB(out.id);
+        expect(m.status, await m.clone().text()).toBe(200);
+        expect((await m.json()) as Booked).toMatchObject({ status: "scheduled", attempt: 2, moved: false, candidateNotice: "queued" });
+        expect((await runs(out.id)).find((x) => x.idempotencyKey === `schedule:${out.id}:1`)?.status).toBe("cancelled");
+        expect(mailTo(cand.email)).toHaveLength(before);
+        return out.id;
+      });
+      await container.drain();
+      const mail = mailTo(cand.email).slice(before);
+      expect(mail).toHaveLength(1);
+      expect(mail[0].subject).toMatch(/^Your interview: /);
+      expect(mail[0].text).toContain("Good news:");
+      expect(await emailOf(`confirm:${id}:1`)).toBeUndefined();
+      expect((await emailOf(`confirm:${id}:2`)).status).toBe("sent");
     });
 
     it("the candidate gets one email with the date, the time named by its zone, where, the calendar file and a way to ask for a change; the interviewer gets the brief; nobody is asked for hours", async () => {
@@ -350,6 +394,15 @@ describe("a person sets the date and time", () => {
       // HR reads the time; the sheet carries it for anyone who may read interviews
       expect(((await (await json(hr, "GET", `/api/v1/interviews/${id}`)).json()) as { status: string }).status).toBe("scheduled");
       expect((await routeB(id, {}, manager)).status).toBe(200);
+      // the press is the approval for every role that holds it: no second person, on either route
+      for (const role of ["admin", "recruiter"] as const) {
+        const cookie = await signInAs(container, app, { companyId, role, email: `${role}.presser@settime.test`, name: `${role} Presser` });
+        const theirs = await apply("Max", role === "admin" ? "Admin" : "Recruiter");
+        const set = await routeA(theirs.id, {}, {}, cookie);
+        expect(set.status, await set.clone().text()).toBe(201);
+        const { id: theirId } = (await set.json()) as Booked;
+        expect((await routeB(theirId, {}, cookie)).status, role).toBe(200);
+      }
     });
   });
 
@@ -360,6 +413,8 @@ describe("a person sets the date and time", () => {
       expect(stuck).toMatchObject({ status: "proposed", attempt: 1, offeredSlots: [], scheduleToken: null });
       expect((await application(cand.id)).stage).toBe("interview_recommended");
       expect((await runs(id))[0]).toMatchObject({ status: "waiting", currentStep: "prepare" });
+      // the notice says what to do about it
+      expect((await noticesAbout("interview.no_availability", "Mae's interview"))[0].action).toEqual({ label: "Set a date and time", href: `/interviews/${id}` });
       const before = mailTo(cand.email).length;
       const chosen = fresh();
       const r = await routeB(id, { ...chosen, durationMinutes: 30, place: { kind: "address", text: "12 Main St, Tustin" } });
@@ -384,6 +439,61 @@ describe("a person sets the date and time", () => {
       expect(mail[0].text).toContain("A note from Dana Whitfield: We loved your application.");
       expect(icsOf(mail[0])).toContain("SEQUENCE:2");
       expect(await eventsOf(id, "interview.booked")).toHaveLength(1);
+    });
+
+    it("the old re-offer never takes a booked time away for times nobody has hours to offer: nobody is told new times are coming that never would, and the time stands; one nothing was booked for still takes a time", async () => {
+      const { cand, booked, row, token } = await book("Ren", "Hours");
+      const before = mailTo(cand.email).length;
+      const r = await json(owner, "POST", `/api/v1/interviews/${booked.id}/reschedule`, { reason: "A clash at our end." });
+      expect(r.status).toBe(409);
+      expect(await errorOf(r)).toMatchObject({ code: "no_hours", message: "Nobody on this interview has hours to offer. Set a date and time instead." });
+      await container.drain();
+      expect(await interview(booked.id)).toMatchObject({ status: "scheduled", attempt: row.attempt, scheduleToken: token });
+      expect((await application(cand.id)).stage).toBe("interview_scheduled");
+      expect(mailTo(cand.email)).toHaveLength(before);
+      // from a page left open on a stuck interview, nothing reaches anyone and it stays without a time: the form still books it
+      const stuck = await approveOnly("Sia", "Hours");
+      const mails = mailTo(stuck.cand.email).length;
+      expect((await json(owner, "POST", `/api/v1/interviews/${stuck.id}/reschedule`, {})).status).toBe(200);
+      await container.drain();
+      expect(await interview(stuck.id)).toMatchObject({ status: "scheduling", attempt: 2, offeredSlots: [], startsAt: null });
+      expect(mailTo(stuck.cand.email)).toHaveLength(mails);
+      const set = await routeB(stuck.id);
+      expect(set.status, await set.clone().text()).toBe(200);
+      await container.drain();
+      expect(await interview(stuck.id)).toMatchObject({ status: "scheduled", attempt: 3 });
+      expect(mailTo(stuck.cand.email).slice(mails).map((m) => m.subject)).toEqual([expect.stringMatching(/^Your interview: /)]);
+    });
+
+    it("with hours known, the fold's re-offer of a time a person set still works: they are told it is off, and pick from new times; one nobody told them of says nothing and the times are their first email", async () => {
+      const wes = await signInAs(container, app, { companyId, role: "hiring_manager", email: "wes@settime.test", name: "Wes Park" });
+      const wesId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "wes@settime.test")))[0].id;
+      expect((await json(wes, "PUT", "/api/v1/me/availability", { timezone: TZ, windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 12 })).status).toBe(200);
+      const told = await book("Tad", "Fold", {}, { interviewerUserIds: [wesId] });
+      const before = mailTo(told.cand.email).length;
+      const r = await json(wes, "POST", `/api/v1/interviews/${told.booked.id}/reschedule`, { reason: "A clash at our end." });
+      expect(r.status, await r.clone().text()).toBe(200);
+      expect(await r.json()).toMatchObject({ candidateTold: true, status: "scheduling" });
+      await container.drain();
+      const mail = mailTo(told.cand.email).slice(before);
+      expect(mail.map((m) => m.subject)).toEqual([expect.stringMatching(/^Your interview time has changed/), expect.stringMatching(/^New times for your interview/)]);
+      expect(await interview(told.booked.id)).toMatchObject({ status: "scheduling", selectedSlot: null });
+
+      const unheard = await apply("Uli", "Fold");
+      const { id, before: first } = await withWorkerStopped(async () => {
+        const set = await routeA(unheard.id, {}, { interviewerUserIds: [wesId] });
+        expect(set.status, await set.clone().text()).toBe(201);
+        const { id: bookedId } = (await set.json()) as Booked;
+        const again = await json(wes, "POST", `/api/v1/interviews/${bookedId}/reschedule`, { reason: "A clash at our end." });
+        expect(again.status, await again.clone().text()).toBe(200);
+        expect(await again.json()).toMatchObject({ candidateTold: false, status: "scheduling" });
+        return { id: bookedId, before: mailTo(unheard.email).length };
+      });
+      await container.drain();
+      expect(await emailOf(`iv_moved:${id}:1`)).toBeUndefined();
+      const firstMail = mailTo(unheard.email).slice(first);
+      expect(firstMail.map((m) => m.subject)).toEqual([expect.stringMatching(/^Pick a time for your interview/)]);
+      expect(firstMail[0].text).toContain("Good news:");
     });
 
     it("an interview whose times are out, from someone's declared hours: a person sets another; the old link goes to the booked page, and a pick from it changes nothing", async () => {
@@ -413,6 +523,7 @@ describe("a person sets the date and time", () => {
       setClock(BASE + 98 * H);
       await container.drain();
       expect(await interview(lapsing.id)).toMatchObject({ status: "offer_expired", scheduleToken: null });
+      expect((await noticesAbout("interview.offer_expired", "Ola Bloom"))[0]).toMatchObject({ body: "Four days passed with a reminder. Set a date and time, decide, or bring in a recruiter.", action: { label: "Set a date and time", href: `/interviews/${lapsing.id}` } });
       const set = await routeB(lapsing.id, {}, wes);
       expect(set.status, await set.clone().text()).toBe(200);
       await container.drain();
@@ -774,6 +885,13 @@ describe("a person sets the date and time", () => {
       setClock(oldStart - 23 * H);
       await container.drain();
       expect(mailTo(cand.email).filter((m) => m.subject.startsWith("Tomorrow:"))).toHaveLength(0);
+      // the new time's do, on its own moments, with its own place
+      setClock(instant(chosen.date, chosen.time) - 23 * H);
+      await container.drain();
+      const tomorrow = mailTo(cand.email).filter((m) => m.subject.startsWith("Tomorrow:"));
+      expect(tomorrow).toHaveLength(1);
+      expect(tomorrow[0].text).toContain("Your interview is tomorrow.");
+      expect(tomorrow[0].text).toContain("Where: 45 Elm St, Irvine");
       setClock(BASE);
     });
 
@@ -805,6 +923,96 @@ describe("a person sets the date and time", () => {
       const twice = mailTo(cand.email).at(-1)!;
       expect(Number(/SEQUENCE:(\d+)/.exec(icsOf(twice))![1])).toBe(4);
       expect(mailTo(cand.email).filter((m) => m.subject.startsWith("New time for your interview:"))).toHaveLength(2);
+    });
+  });
+
+  describe("calling a time off", () => {
+    it("told of it: one cancellation with the calendar file that takes it out, the sheet's answer says it went, they go back to Interview to set up, and the old link says it is off", async () => {
+      const { cand, booked, token } = await book("Ana", "Off");
+      const before = mailTo(cand.email).length;
+      const r = await json(owner, "POST", `/api/v1/interviews/${booked.id}/cancel`, { reason: "The interviewer is out this week." });
+      expect(r.status, await r.clone().text()).toBe(200);
+      const out = (await r.json()) as Booked & { candidateNotice?: string };
+      expect(out).toMatchObject({ status: "cancelled", candidateTold: true, interviewersTold: true });
+      expect(out.candidateNotice).toBeUndefined();
+      await container.drain();
+      const mail = mailTo(cand.email).slice(before);
+      expect(mail).toHaveLength(1);
+      expect(mail[0].subject).toMatch(/^Cancelled: /);
+      expect(mail[0].text).toContain(`${companyName} had to cancel your interview`);
+      const file = icsOf(mail[0]);
+      expect(file).toContain("METHOD:CANCEL");
+      expect(file).toContain("STATUS:CANCELLED");
+      expect(file).toContain("SEQUENCE:1");
+      expect(file).toContain(`UID:interview-${booked.id}@`);
+      expect((await application(cand.id)).stage).toBe("interview_recommended");
+      expect(await confirmedPage(token)).toContain("This interview was cancelled");
+    });
+
+    it("called off before the email left, on a confirmed company: nothing goes in either direction, and the answer does not claim it did", async () => {
+      const cand = await apply("Pam", "Off");
+      const before = mailTo(cand.email).length;
+      const id = await withWorkerStopped(async () => {
+        const r = await routeA(cand.id);
+        expect(r.status, await r.clone().text()).toBe(201);
+        const { id: bookedId } = (await r.json()) as Booked;
+        const off = await json(owner, "POST", `/api/v1/interviews/${bookedId}/cancel`, { reason: "We changed our minds." });
+        expect(off.status, await off.clone().text()).toBe(200);
+        const out = (await off.json()) as { candidateTold: boolean; interviewersTold: boolean; candidateNotice?: string };
+        expect(out).toMatchObject({ candidateTold: false, interviewersTold: true });
+        expect(out.candidateNotice).toBeUndefined();
+        return bookedId;
+      });
+      await container.drain();
+      expect(mailTo(cand.email)).toHaveLength(before);
+      expect(await emailOf(`confirm:${id}:1`)).toBeUndefined();
+      expect(await emailOf(`iv_cancel:${id}:1`)).toBeUndefined();
+      expect((await eventsOf(id, "interview.cancelled"))[0].payload).toMatchObject({ candidateTold: false, neverHeard: true });
+      expect(await interview(id)).toMatchObject({ status: "cancelled" });
+    });
+
+    it("an email that could not be delivered never told them either; no email on file is the same", async () => {
+      const bounced = await book("Rod", "Off");
+      await container.db.update(communications).set({ status: "failed", error: "provider refused" }).where(eq(communications.idempotencyKey, `confirm:${bounced.booked.id}:1`));
+      const a = await json(owner, "POST", `/api/v1/interviews/${bounced.booked.id}/cancel`, { reason: "A clash at our end." });
+      expect(await a.json()).toMatchObject({ candidateTold: false });
+      await container.drain();
+      expect(await emailOf(`iv_cancel:${bounced.booked.id}:1`)).toBeUndefined();
+
+      const nobody = await apply("Sal", "Off");
+      await withPlatform(container.db, (tx) => tx.update(candidates).set({ email: null }).where(eq(candidates.id, nobody.candidateId)));
+      const set = await routeA(nobody.id);
+      expect(set.status, await set.clone().text()).toBe(201);
+      const { id } = (await set.json()) as Booked;
+      await container.drain();
+      const b = await json(owner, "POST", `/api/v1/interviews/${id}/cancel`, { reason: "A clash at our end." });
+      expect(await b.json()).toMatchObject({ candidateTold: false });
+    });
+
+    it("a decline while the email has not left: no note, the toast's count says none, and the decision message never names an interview they never heard of", async () => {
+      const cand = await apply("Sue", "Off");
+      await withWorkerStopped(async () => {
+        expect((await routeA(cand.id)).status).toBe(201);
+        const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Wants a front-desk role." });
+        expect(r.status, await r.clone().text()).toBe(200);
+        expect(await r.json()).toMatchObject({ stage: "rejected", candidateNotice: "not_told", interviewsCancelled: 1, interviewOffNotes: 0 });
+      });
+      await container.drain();
+      expect(mailTo(cand.email).filter((m) => /^(Your interview|Cancelled):/.test(m.subject))).toHaveLength(0);
+      const row = await application(cand.id);
+      expect(await withTenant(container.db, companyId, (tx) => interviewsCalledOff(tx, row, container.engine.clock()))).toEqual([]);
+    });
+
+    it("told of it and then declined: the short note goes, and the decision message leaves it out as before", async () => {
+      const { cand, booked } = await book("Tom", "Off");
+      const before = mailTo(cand.email).length;
+      const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/actions`, { action: "reject", reason: "not_a_match_experience" });
+      expect(await r.json()).toMatchObject({ interviewsCancelled: 1, interviewOffNotes: 1 });
+      await container.drain();
+      expect(mailTo(cand.email).slice(before).map((m) => m.subject)).toEqual([expect.stringMatching(/^Cancelled: /)]);
+      expect((await eventsOf(booked.id, "interview.cancelled"))[0].payload).toMatchObject({ candidateTold: true });
+      const row = await application(cand.id);
+      expect(await withTenant(container.db, companyId, (tx) => interviewsCalledOff(tx, row, container.engine.clock()))).toEqual([]);
     });
   });
 
@@ -1158,6 +1366,9 @@ describe("a person sets the date and time", () => {
         expect(sent[0].text).not.toContain("https://meet.example/old");
         expect(Number(/SEQUENCE:(\d+)/.exec(icsOf(sent[0]))![1])).toBe(4);
         expect(((await (await json(owner, "GET", `/api/v1/interviews/${out.id}`)).json()) as { candidateEmail: string | null }).candidateEmail).toBeNull();
+        // team mail is never held, so the interviewer heard of each time: the later two say it moved, even though the candidate's says it is new
+        expect(mailTo("owner@settime.test").filter((x) => x.subject.startsWith("Interview booked: Ada Held"))).toHaveLength(1);
+        expect(mailTo("owner@settime.test").filter((x) => x.subject.startsWith("Interview moved: Ada Held"))).toHaveLength(2);
       } finally {
         await its(true);
       }
@@ -1238,13 +1449,29 @@ describe("a person sets the date and time", () => {
       await its(false);
       try {
         const { cand, booked } = await bookFor(fia);
-        expect((await json(owner, "POST", `/api/v1/interviews/${booked.id}/cancel`, { reason: "We changed our minds." })).status).toBe(200);
+        const off = await json(owner, "POST", `/api/v1/interviews/${booked.id}/cancel`, { reason: "We changed our minds." });
+        expect(off.status).toBe(200);
+        expect(await off.json()).toMatchObject({ candidateTold: false, interviewersTold: true });
         await container.drain();
-        expect((await emailOf(`iv_cancel:${booked.id}:1`)).status).toBe("held");
+        expect(await emailOf(`iv_cancel:${booked.id}:1`)).toBeUndefined();
         await its(true);
-        expect(await emailOf(`iv_cancel:${booked.id}:1`)).toMatchObject({ status: "cancelled", error: NEVER_HEARD_OF_IT });
         expect(await emailOf(`confirm:${booked.id}:1`)).toMatchObject({ status: "cancelled", error: INTERVIEW_CHANGED_SINCE });
         expect(mailTo(cand.email).filter((m) => /^(Cancelled|Your interview):/.test(m.subject))).toHaveLength(0);
+      } finally {
+        await its(true);
+      }
+    });
+
+    it("news that slipped through before anything reached them is withdrawn on release, a moved note as much as a cancellation", async () => {
+      const gus = await apply("Gus", "Held");
+      await its(false);
+      try {
+        const { booked } = await bookFor(gus);
+        const held = (key: string, templateKey: string) => withTenant(container.db, companyId, (tx) => tx.insert(communications).values({ companyId, candidateId: gus.candidateId, applicationId: gus.id, direction: "outbound", channel: "email", fromAddress: "x@settime.test", toAddress: gus.email, subject: "News", bodyText: "News", templateKey, provider: "fake", status: "held", sentBy: { kind: "system", id: "test" }, idempotencyKey: key }));
+        await held(`iv_cancel:${booked.id}:9`, "interview_cancelled");
+        await held(`iv_moved:${booked.id}:9`, "interview_moved");
+        await its(true);
+        for (const key of [`iv_cancel:${booked.id}:9`, `iv_moved:${booked.id}:9`]) expect(await emailOf(key), key).toMatchObject({ status: "cancelled", error: NEVER_HEARD_OF_IT });
       } finally {
         await its(true);
       }
@@ -1259,7 +1486,10 @@ describe("a person sets the date and time", () => {
         const m = await routeB(told.booked.id);
         expect(((await m.json()) as Booked)).toMatchObject({ moved: true, candidateNotice: "held" });
         await container.drain();
-        expect((await json(owner, "POST", `/api/v1/interviews/${toldToo.booked.id}/cancel`, { reason: "A clash at our end." })).status).toBe(200);
+        const off = await json(owner, "POST", `/api/v1/interviews/${toldToo.booked.id}/cancel`, { reason: "A clash at our end." });
+        expect(off.status).toBe(200);
+        // it has not left: the toast says it waits, never that it went
+        expect(await off.json()).toMatchObject({ candidateTold: false, candidateNotice: "held" });
         await container.drain();
         await its(true);
         expect(mailTo(told.cand.email).filter((x) => x.subject.startsWith("New time for your interview:"))).toHaveLength(1);

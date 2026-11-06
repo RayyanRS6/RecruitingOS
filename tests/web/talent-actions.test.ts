@@ -199,7 +199,9 @@ describe("the private decline step", () => {
 describe("cancelling an interview on the Interviews page", () => {
   it("says exactly who was told, from the API's answer", () => {
     expect(interviewCancelToast({ candidateTold: true, interviewersTold: true })).toEqual({ title: "Interview cancelled.", detail: "The candidate was sent a cancellation. The interviewers were told." });
-    expect(interviewCancelToast({ candidateTold: false, interviewersTold: false }).detail).toBe("The candidate had no time booked or offered, so nothing was sent to them.");
+    // never a claim that an email left: nothing about it had reached them, or the note waits for the ITS check
+    expect(interviewCancelToast({ candidateTold: false, interviewersTold: false }).detail).toBe("No email about it had reached the candidate, so nothing was sent to them.");
+    expect(interviewCancelToast({ candidateTold: false, candidateNotice: "held", interviewersTold: true }).detail).toBe("The cancellation waits for ITS to confirm your company. The interviewers were told.");
   });
 });
 

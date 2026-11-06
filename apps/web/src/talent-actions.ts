@@ -282,8 +282,9 @@ export function interviewWords(iv: InterviewRef): string {
 }
 
 /** The toast after "Cancel interview" on the Interviews page: exactly who was told (POST /interviews/:id/cancel). */
-export function interviewCancelToast(r: { candidateTold?: boolean; interviewersTold?: boolean }): ToastParts {
-  return { title: "Interview cancelled.", detail: `${r.candidateTold ? "The candidate was sent a cancellation." : "The candidate had no time booked or offered, so nothing was sent to them."}${r.interviewersTold ? " The interviewers were told." : ""}` };
+export function interviewCancelToast(r: { candidateTold?: boolean; interviewersTold?: boolean; candidateNotice?: string }): ToastParts {
+  const candidate = r.candidateTold ? "The candidate was sent a cancellation." : r.candidateNotice === "held" ? "The cancellation waits for ITS to confirm your company." : "No email about it had reached the candidate, so nothing was sent to them.";
+  return { title: "Interview cancelled.", detail: `${candidate}${r.interviewersTold ? " The interviewers were told." : ""}` };
 }
 
 /**

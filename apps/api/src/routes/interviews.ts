@@ -1,7 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { and, desc, eq, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordInterviewDecision, RequestInterviewWithLine, RescheduleInterview, SetInterviewTime, type Actor, type CandidateNotice, type HireFollowUp, type InterviewDraft, type InterviewFollowUpRef, type OfferedSlot } from "@ros/contracts";
-import { HELD_REASON, NEVER_LEFT, checkPersonalLine, clashesWithBookings, participantsOf, sendInterviewMoved, type InvitationNote } from "@ros/agents";
+import { NEVER_LEFT, checkPersonalLine, clashesWithBookings, interviewHasNoHours, interviewReachedThem, onItsWay, participantsOf, sendInterviewMoved, type InvitationNote } from "@ros/agents";
 import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, canTransition, defaultSchedulingWindow, emit, endMarkOnMove, formatInZone, freshSchedulingWindow, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, slotStillAhead, transition, upsertAvailability, visibleTo, type FollowUpView } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Container } from "../container";
@@ -10,7 +10,7 @@ import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Var
 import { HttpError } from "../middleware/errors";
 import { TERMINAL_STAGES } from "../services/application-actions";
 import { cancelInterviewInTx } from "../services/interview-cancel";
-import { BOOKED_RUN_STARTS_AT, INTERVIEW_ALREADY_OPEN, INTERVIEW_FROM, OPEN_INTERVIEW, bookingFields, candidateEmailStates, candidateNoticeOfBooking, createApprovedInterview, placeOnInterview, refuseClash, refuseClosedRole, slotFromPerson } from "../services/interview-create";
+import { BOOKED_RUN_STARTS_AT, INTERVIEW_ALREADY_OPEN, INTERVIEW_FROM, NO_HOURS, OPEN_INTERVIEW, bookingFields, candidateEmailStates, candidateNoticeOfBooking, createApprovedInterview, placeOnInterview, refuseClash, refuseClosedRole, slotFromPerson } from "../services/interview-create";
 import { exitCleanup } from "../services/exit-cleanup";
 import { interviewBriefFor } from "../services/interviewer-view";
 import { hireFollowUp } from "../services/hire-sheet";
@@ -115,7 +115,7 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
       // The one cancellation path (services/interview-cancel.ts): it also queues the calendar events' removal, and says
       // whether the candidate was told (only someone who had a booked time or times to pick from is).
       const done = await cancelInterviewInTx(tx, container, { companyId: t.companyId, interview: iv, actor, by: t.role, reason: input.reason, byCandidate: input.byCandidate, now });
-      return { id: iv.id, candidateTold: done.candidateTold };
+      return { id: iv.id, candidateTold: done.candidateTold, held: done.held };
     }
     // A fresh window from tomorrow, as long as the old one, never the old dates (which may have passed); dates the
     // person sent win. "Offer times again" after an offer lapsed comes here too.
@@ -130,6 +130,10 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
     if (sent.toDate && !sent.fromDate) sent.fromDate = Date.parse(`${sent.toDate}T00:00:00Z`) < Date.parse(`${fresh.fromDate}T00:00:00Z`) ? sent.toDate : fresh.fromDate;
     const window = { ...fresh, ...sent };
     const booked = iv.status === "scheduled" && !!iv.startsAt;
+    // A booked time is not taken away for new times nobody has hours to offer: they would be told it is off and that times are coming, and none would.
+    if (booked && (await interviewHasNoHours(tx, { companyId: t.companyId, interviewId: iv.id }))) throw new HttpError(409, "no_hours", NO_HOURS);
+    // A time a person set that no email has told them of yet: nothing says it is off, and the next email is their first.
+    const heardOfTheTime = booked && (iv.selectedSlot?.source !== "person" || (await interviewReachedThem(tx, { applicationId: app.id, interviewId: iv.id })));
     await tx.update(interviews).set({ status: "scheduling", attempt: iv.attempt + 1, selectedSlot: null, offeredSlots: [], startsAt: null, endsAt: null, scheduleToken: null, scheduleTokenExpiresAt: null, schedulingWindow: window, rescheduleCountCandidate: input.byCandidate ? iv.rescheduleCountCandidate + 1 : iv.rescheduleCountCandidate, reminders: {}, meetingUrl: iv.linkSource === "pasted" ? iv.meetingUrl : null }).where(eq(interviews.id, iv.id));
     // The booked time is gone, so the interviewers are back to invited until the workflow books the next one.
     await tx.update(interviewParticipants).set({ status: "invited" }).where(eq(interviewParticipants.interviewId, iv.id));
@@ -137,10 +141,10 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
     const followUp = await openFollowUpOf(tx, app.id, { lock: true });
     const carried = followUp?.currentInterviewId === iv.id ? { offerKind: followUp.choice === "new_times" ? ("new_times_asked" as const) : ("new_times_team" as const), followUpId: followUp.id, via: "person" as const } : null;
     // Times the candidate already knew about (booked, or offered to pick from): the next email says these are new times.
-    const knew = booked || (iv.status === "scheduling" && iv.offeredSlots.length > 0) || iv.status === "offer_expired";
+    const knew = heardOfTheTime || (iv.status === "scheduling" && iv.offeredSlots.length > 0) || iv.status === "offer_expired";
     // A booked time the team moved: the candidate is told at once that it is off, with a calendar file that removes it.
     let candidateTold = false;
-    if (booked) {
+    if (heardOfTheTime) {
       const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
       const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
       const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
@@ -148,7 +152,7 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
         const parts = await participantsOf(tx, iv.id);
         const sentMoved = await sendInterviewMoved(tx, container.integrations, { application: app, candidate: cand, role, company, packet: pv.packet, actor, appBaseUrl: container.env.APP_BASE_URL, interview: iv, interviewerFirstNames: parts.map((p) => p.firstName), candidateTimezone: iv.schedulingWindow.candidateTimezone ?? cand.location?.timezone ?? company.timezone, companyTimezone: company.timezone, reason: input.reason });
         // told only when the message is on its way: not when it failed (no address), nor while it waits for the ITS check
-        candidateTold = sentMoved.status !== "failed" && !(sentMoved.status === "pending" && (sentMoved as { reason?: string }).reason === HELD_REASON);
+        candidateTold = onItsWay(sentMoved);
       }
     }
     await emit(tx, { type: "interview.rescheduled", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, attempt: iv.attempt + 1, hadEvents, wasBooked: booked, candidateTold, ...(carried ? { newTimes: true, via: carried.via, followUpId: carried.followUpId } : {}) } });
@@ -162,7 +166,7 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
     }
     await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: iv.applicationId, roleId: app.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1, ...(knew ? { rescheduled: true } : {}), ...(carried ?? {}) }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId: t.companyId, actor }, runAt: now.toISOString(), maxAttempts: 5 });
-    return { id: iv.id, candidateTold: booked ? candidateTold : null };
+    return { id: iv.id, candidateTold: booked ? candidateTold : null, held: false };
   });
   await container.kick();
   return result;
@@ -250,14 +254,18 @@ interviewRoutes.post("/:id/reschedule", requireTenant, async (c) => {
   return c.json({ ...row, candidateTold });
 });
 
-/** `candidateTold` says whether the candidate was sent the cancellation, so the page's confirmation says exactly that. */
+/**
+ * `candidateTold` says whether the cancellation is on its way to the candidate, so the page's confirmation says exactly
+ * that; `candidateNotice: "held"` when it waits for ITS to confirm the company. No email about the interview having reached
+ * them, nothing is sent (`cancelInterviewInTx`), and both stay out.
+ */
 interviewRoutes.post("/:id/cancel", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "interview.manage");
   const body = CancelInterview.parse(await c.req.json());
-  const { id, candidateTold } = await supersede(c, { interviewId: c.req.param("id"), mode: "cancel", reason: body.reason });
+  const { id, candidateTold, held } = await supersede(c, { interviewId: c.req.param("id"), mode: "cancel", reason: body.reason });
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, id)))[0]));
-  return c.json({ ...row, candidateTold: !!candidateTold, interviewersTold: row.participants.length > 0 });
+  return c.json({ ...row, candidateTold: !!candidateTold, ...(held ? { candidateNotice: "held" as const } : {}), interviewersTold: row.participants.length > 0 });
 });
 
 /**
@@ -475,7 +483,7 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     await audit(tx, { companyId: t.companyId, actor, action: "interview.booked_on_behalf", target: { type: "interview", id: iv.id }, reason: "a person set the date and time", details: { applicationId: app.id, slotId: slot.id, startsAt: slot.startsAt, moved: wasBooked } });
     // The personal line they have not read yet comes along (Q28); one already in an email they got is not said again.
     const note = !moved ? ((run?.state ?? {}) as { invitationNote?: InvitationNote | null }).invitationNote ?? null : null;
-    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: iv.roundKey, attempt, setByPerson: true, bookedAt: now.toISOString(), ...(moved ? { moved: { reason: body.reason?.trim() || null } } : {}), ...(note ? { invitationNote: note } : {}), ...(carried ? { offerKind: carried } : {}) }, idempotencyKey: `schedule:${iv.id}:${attempt}`, actor, startStep: BOOKED_RUN_STARTS_AT });
+    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: iv.roundKey, attempt, setByPerson: true, bookedAt: now.toISOString(), ...(wasBooked ? { wasBooked: true } : {}), ...(moved ? { moved: { reason: body.reason?.trim() || null } } : {}), ...(note ? { invitationNote: note } : {}), ...(carried ? { offerKind: carried } : {}) }, idempotencyKey: `schedule:${iv.id}:${attempt}`, actor, startStep: BOOKED_RUN_STARTS_AT });
     return { id: iv.id, moved };
   });
   await container.kick();

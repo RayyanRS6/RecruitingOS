@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { emit, notify, openFollowUpOf, resolveOpenFollowUp, transition } from "@ros/core";
-import { sendInterviewCancelled } from "@ros/agents";
+import { HELD_REASON, interviewReachedThem, onItsWay, sendInterviewCancelled } from "@ros/agents";
 import { applications, candidates, companies, interviewParticipants, interviews, jobs, rolePackets, roles, type Tx } from "@ros/db";
 import type { Container } from "../container";
 
@@ -39,17 +39,26 @@ function candidateKnows(iv: InterviewRow): { booked: boolean; offered: boolean }
  * takes them out of the column when the team cancels it (`team_cancelled`): a team cancellation never keeps anyone there.
  * The application is locked first, as the automatic set of new times and a person's send lock it, so a cancel and a
  * reopen at the same moment take turns.
+ *
+ * Nobody hears of a cancellation of something they never heard of. A time they picked, they know of. Times on offer, or a time
+ * a person set, they know of only once an email about it has left: called off before that (the worker had not got to it, it
+ * waited for the ITS check, or it could not be delivered), no note is written, the waiting email is withdrawn by the outbox,
+ * and the decision message leaves it out (`neverHeard` on the event). `candidateTold` answers the screen: a note is really on
+ * its way, so it may say so. `held`: a note waits for the ITS check.
  */
 export async function cancelInterviewInTx(
   tx: Tx,
   container: Container,
   input: { companyId: string; interview: InterviewRow; actor: Actor; by: Mover; reason: string | null; byCandidate?: boolean; cause?: string; now: Date; notice?: CancelNotice; leftProcess?: boolean; interviewerNote?: string },
-): Promise<{ hadEvents: boolean; candidateTold: boolean }> {
+): Promise<{ hadEvents: boolean; candidateTold: boolean; held: boolean }> {
   const { companyId, actor } = input;
   const iv = input.interview;
   const hadEvents = Object.keys((iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
   const knows = candidateKnows(iv);
-  const tell = (input.notice ?? "known") === "known" && (knows.booked || knows.offered);
+  const theirOwnPick = knows.booked && iv.selectedSlot?.source !== "person";
+  const heard = theirOwnPick || ((knows.booked || knows.offered) && (await interviewReachedThem(tx, { applicationId: iv.applicationId, interviewId: iv.id })));
+  const neverHeard = (knows.booked || knows.offered) && !heard;
+  const tell = (input.notice ?? "known") === "known" && heard;
   const [app] = await tx.select().from(applications).where(eq(applications.id, iv.applicationId)).limit(1).for("update");
   await tx.update(interviews).set({ status: "cancelled", cancelReason: input.reason, attempt: iv.attempt + 1 }).where(eq(interviews.id, iv.id));
   const followUp = app ? await openFollowUpOf(tx, app.id, { lock: true }) : null;
@@ -59,7 +68,10 @@ export async function cancelInterviewInTx(
   const parts = await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
   // With nobody left on the interview there is no interviewer to tell; the caller tells the owners itself.
   if (parts.length) await notify(tx, { companyId, kind: "interview.cancelled", title: `Interview cancelled: ${iv.title}`, body: input.interviewerNote ?? input.reason ?? "Cancelled.", action: { label: "Open interviews", href: "/interviews" }, userIds: parts.map((p) => p.userId) });
+  // Written is not the same as on its way: the event says a note was written, so the decision message does not repeat it.
+  let noteWritten = false;
   let candidateTold = false;
+  let held = false;
   if (tell && app) {
     const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
     const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
@@ -68,11 +80,13 @@ export async function cancelInterviewInTx(
     if (cand && role && company && pv) {
       // The team's own words reach the candidate only from the Cancel button; never the internal reason for a removal or an exit.
       const reason = input.leftProcess || input.cause === "interviewer_removed" ? null : input.reason;
-      await sendInterviewCancelled(tx, container.integrations, { application: app, candidate: cand, role, company, packet: pv.packet, actor, appBaseUrl: container.env.APP_BASE_URL, interview: { ...iv, status: "cancelled" }, interviewerFirstNames: [], candidateTimezone: iv.schedulingWindow.candidateTimezone ?? cand.location?.timezone ?? company.timezone, companyTimezone: company.timezone, byCandidate: !!input.byCandidate, reason, leftProcess: !!input.leftProcess });
-      candidateTold = true;
+      const sent = await sendInterviewCancelled(tx, container.integrations, { application: app, candidate: cand, role, company, packet: pv.packet, actor, appBaseUrl: container.env.APP_BASE_URL, interview: { ...iv, status: "cancelled" }, interviewerFirstNames: [], candidateTimezone: iv.schedulingWindow.candidateTimezone ?? cand.location?.timezone ?? company.timezone, companyTimezone: company.timezone, byCandidate: !!input.byCandidate, reason, leftProcess: !!input.leftProcess });
+      noteWritten = true;
+      candidateTold = onItsWay(sent);
+      held = sent.status === "pending" && sent.reason === HELD_REASON;
     }
   }
-  await emit(tx, { type: "interview.cancelled", companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, hadEvents, candidateTold, ...(input.cause ? { cause: input.cause } : {}) } });
+  await emit(tx, { type: "interview.cancelled", companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, hadEvents, candidateTold: noteWritten, ...(neverHeard ? { neverHeard: true } : {}), ...(input.cause ? { cause: input.cause } : {}) } });
   if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId, actor }, runAt: input.now.toISOString(), maxAttempts: 5 });
-  return { hadEvents, candidateTold };
+  return { hadEvents, candidateTold, held };
 }

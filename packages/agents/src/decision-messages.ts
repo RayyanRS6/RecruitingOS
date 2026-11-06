@@ -52,13 +52,14 @@ export function statusUrlPlaceholder(baseUrl: string): string {
  * Interviews the decision called off that the candidate knew about (a booked time still to come, or times they were
  * offered and had not picked) and has not yet been told are off. A private decision tells the candidate at once, in a
  * short note with no reason, that such an interview is off, so the decision message leaves those out. It names one only
- * when nobody told them yet (the `interview.cancelled` event records whether they were).
+ * when nobody told them yet (the `interview.cancelled` event records whether they were), and never one no email about ever
+ * reached them (`neverHeard` on that event): a time a person set and called off before they heard of it.
  */
 export async function interviewsCalledOff(q: Queryable, app: Pick<App, "id" | "rejectedAt" | "stageChangedAt">, now: Date): Promise<CancelledInterview[]> {
   const since = app.rejectedAt ?? app.stageChangedAt;
   const rows = await q.select({ id: interviews.id, title: interviews.title, startsAt: interviews.startsAt, timezone: interviews.timezone, offeredSlots: interviews.offeredSlots }).from(interviews).where(and(eq(interviews.applicationId, app.id), eq(interviews.status, "cancelled"), gte(interviews.updatedAt, since)));
   if (!rows.length) return [];
-  const told = new Set((await q.select({ id: events.subjectId }).from(events).where(and(eq(events.type, "interview.cancelled"), inArray(events.subjectId, rows.map((r) => r.id)), sql`${events.payload}->>'candidateTold' = 'true'`))).map((r) => r.id));
+  const told = new Set((await q.select({ id: events.subjectId }).from(events).where(and(eq(events.type, "interview.cancelled"), inArray(events.subjectId, rows.map((r) => r.id)), sql`(${events.payload}->>'candidateTold' = 'true' or ${events.payload}->>'neverHeard' = 'true')`))).map((r) => r.id));
   const known = (r: (typeof rows)[number]) => (r.startsAt ? Date.parse(r.startsAt) > now.getTime() : r.offeredSlots.length > 0);
   return rows.filter((r) => known(r) && !told.has(r.id)).map(({ title, startsAt, timezone }) => ({ title, startsAt, timezone }));
 }

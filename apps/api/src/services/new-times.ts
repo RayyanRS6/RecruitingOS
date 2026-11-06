@@ -8,7 +8,7 @@ import type { Container } from "../container";
 import { HttpError, PERMISSION_MESSAGE } from "../middleware/errors";
 import { reportError } from "../observability";
 import type { Tenant } from "../middleware/session";
-import { createApprovedInterview } from "./interview-create";
+import { NO_HOURS, createApprovedInterview } from "./interview-create";
 
 /**
  * The team's new times for someone under Cancelled (founder decision 2A: "the team can send new times to one person or
@@ -22,11 +22,10 @@ const NOT_IN_CANCELLED = "They are not under Cancelled any more.";
 const TIMES_OUT = "New times are already being prepared or are out to them.";
 const NO_EMAIL = "We have no email address for them. Call them, then book a time from the interview page.";
 const COMPANY_NOT_CHECKED = "New times can go out once ITS confirms your company. Until then, emails to candidates wait.";
-const NO_INTERVIEWERS = "Nobody who ran that interview is still on your team. Approve a new interview from their page and choose the interviewers.";
+const NO_INTERVIEWERS = "Nobody who ran that interview is still on your team. Set a date and time from their page and choose the interviewers.";
 const CHANGED = "Something changed a moment ago. Refresh to see where they are now.";
 const NOTHING_DUE = "Nothing is due to go to them automatically.";
 const STAFF_SCOPE = "Your access covers one candidate, so you can send new times to them only.";
-const NO_HOURS = "Nobody on this interview has hours to offer. Set a date and time instead.";
 
 type SendInput = { companyId: string; applicationId: string; actor: Actor; role: MembershipRole; approvedBy: string; via: "person" | "batch"; now: Date; /** the batch's role: an application of another role is refused */ roleId?: string };
 

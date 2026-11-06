@@ -209,6 +209,10 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
     expect(((await denied.json()) as { error: { code: string } }).error.code).toBe("staff_scope");
     expect((await json(recruiter, "POST", `/api/v1/interviews/${inB}/cancel`, { reason: "no" })).status).toBe(403);
     expect((await json(recruiter, "POST", `/api/v1/interviews/${inB}/reschedule`, {})).status).toBe(403);
+    // setting a date and time too, with a body that would book it, on an interview and on a new one
+    const setTime = { date: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10), time: "14:00", durationMinutes: 30, place: { kind: "phone" } };
+    expect((await json(recruiter, "POST", `/api/v1/interviews/${inB}/set-time`, setTime)).status).toBe(403);
+    expect((await json(recruiter, "POST", `/api/v1/applications/${bea}/interviews`, { roundKey: "r1", interviewerUserIds: [ownerId], setTime })).status).toBe(403);
     expect((await container.db.select().from(interviews).where(eq(interviews.id, inB)))[0].status).toBe("scheduling");
     const list = (await (await json(recruiter, "GET", "/api/v1/interviews")).json()) as Array<{ id: string }>;
     expect(list.map((i) => i.id)).toContain(inA);
