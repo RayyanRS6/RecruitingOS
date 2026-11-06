@@ -11,7 +11,7 @@ Screen names and button labels in **bold** are the ones you will see in the prod
 1. Open the sign-in page your ITS contact gave you.
 2. Press **Continue with Google** or **Continue with Microsoft**. Use the work account your company controls.
 3. Your Google or Microsoft account handles the sign-in, including any two-step verification you have turned on there. ITS never sees or keeps a password.
-4. The first time, you land on **Tell us about your company** (section 2). After that you land on **Home**.
+4. The first time, you land on **Tell us about your company** (section 2). Once ITS has let you in, you land on **Home**.
 
 Your session lasts up to thirty days of inactivity. Press **Sign out** at the bottom of the left rail (at the end of the top bar on a phone or tablet) to end it sooner. **Your sessions** in **Settings** (on the **Security** tab) lists every place you are signed in (section 5).
 
@@ -29,11 +29,22 @@ Only one person does this: the owner. Fill in **Tell us about your company**:
 - **Time zone**: filled in from your computer. Interview times and the hours candidates may be texted use it, so check it.
 - **Website (optional)**
 
-Press **Create my hiring workspace**. You are now the owner, and your company is on the Free plan (section 5). Everything you invite others into lives inside this workspace. If you signed in with the wrong account, press **Sign out** at the top of the form.
+Then press the button at the end of the form. For most people it reads **Send my request** ("Asking for access", below). If ITS added your address first, it reads **Create my hiring workspace** and you go straight in. Once you are in you are the owner, and your company is on the Free plan (section 5). Everything you invite others into lives inside this workspace. If you signed in with the wrong account, press **Sign out** at the top of the form.
 
 To change these details later, and to add more, use the **Company** card in **Settings** (section 5).
 
 You create one company of your own this way. To open another one, contact ITS: the form answers "To open another company, contact ITS." If someone invites you into their company, you keep it alongside your own and move between them with **Switch company**.
+
+### Asking for access
+
+A person at ITS looks at each new company. After you press **Send my request**, the screen says **Your request has been sent** and **Please wait for approval**. ITS reviews each company, usually within one business day. Until then nothing else in the product works for you, whatever page you open, the assistant does no work for you, and nothing of your company is public.
+
+If we were able to email you, the screen says so, and we email you when it is decided. If not, it asks you to keep the page open or sign in again later. Either is fine: an open page moves on by itself within 30 seconds of the decision, and signing in again brings you to the same place.
+
+- **Accepted.** You go to **Home**, on the Free plan. This also counts as ITS's one-time check of your company, so there is nothing more to wait for: your careers page and job pages go public once you approve a job.
+- **Not accepted.** The screen says **We can't offer access right now**, with an address to write to, and we email you the same if we can. You cannot use the product or send a second request. ITS can still let you in later, and you then go to **Home** by yourself.
+
+An invitation into someone else's company works as usual, whatever became of your own request.
 
 ## 3. The screens at a glance
 
@@ -110,7 +121,7 @@ Someone locked gets no AI: no reading of the resume and no AI interview. They ar
 
 **AI help.** Your plan includes a limit on the assistant's work. Owners and admins are told at 80% and when it is used up, and **Home** has a row saying so, with **Upgrade** and **See usage**. Once it is used up, nothing is lost and nobody is stopped: applications still come in, and candidates can still answer your questions and send their answers. New applicants are not read by the assistant, and an AI interview that was sent is not scored: you read the answers and decide yourself. Writing a new job with the assistant stops, with your words kept, and a draft already written can still go for approval. Candidates are never told. Free's AI help is for the life of the company; on a monthly plan it starts again every 30 days.
 
-**Upgrade.** Press **Upgrade** in **Settings**, on a locked card, on **Home**'s rows, or where the product says your plan has run out of something. It shows the four plans side by side with yours marked, each with its price, jobs, candidates per job, people and AI help. Pick one, add a note if you like, and press **Ask ITS to upgrade**. No card is charged, ITS contacts you, and nothing changes until then. The request does not use one of your recruiter requests and gives ITS no access to your hiring. You follow it under **Your recruiter requests** on **Home**, and while one is open a second press just says "ITS has your request." When ITS changes your plan, the new limits apply at once and owners and admins are told, with how many candidates opened, and the request closes with the answer. People who were locked open, oldest first, up to the new number. Someone who applied in the last 60 days to a job still open, and was not already told their application was not reviewed, gets their AI interview link by email; anyone else simply appears on your list. Owners, admins, hiring managers and HR can ask; interviewers cannot. Sign-up is by invitation for now, and there is no public pricing page.
+**Upgrade.** Press **Upgrade** in **Settings**, on a locked card, on **Home**'s rows, or where the product says your plan has run out of something. It shows the four plans side by side with yours marked, each with its price, jobs, candidates per job, people and AI help. Pick one, add a note if you like, and press **Ask ITS to upgrade**. No card is charged, ITS contacts you, and nothing changes until then. The request does not use one of your recruiter requests and gives ITS no access to your hiring. You follow it under **Your recruiter requests** on **Home**, and while one is open a second press just says "ITS has your request." When ITS changes your plan, the new limits apply at once and owners and admins are told, with how many candidates opened, and the request closes with the answer. People who were locked open, oldest first, up to the new number. Someone who applied in the last 60 days to a job still open, and was not already told their application was not reviewed, gets their AI interview link by email; anyone else simply appears on your list. Owners, admins, hiring managers and HR can ask; interviewers cannot. A new company waits for ITS to let it in (section 2), and there is no public pricing page.
 
 **If your company is on the older Trial plan.** New companies start on Free now, so this applies only to a company already on Trial. The trial lasts 30 days from the day ITS confirms your company, and **Plan** shows the day it ends ("trial until October 30"). It includes 3 people: everyone on your team counts, whatever their role, and so does each invitation not yet answered; ITS recruiters never count. When all 3 places are in use, **Invite** waits and says "Your trial includes 3 people. Choose a plan to add more." (withdrawing an invitation frees its place; nobody already on the team is ever removed). In the last 7 days, owners and admins see "Your trial ends on …" on Home and here. When the trial ends without a plan, your jobs stop taking new applications (candidates simply read that the job is not taking new applications right now; they are never told about a trial), and no new job, new chat or reopening starts. Everything already started carries on: people part-way through applying finish, your team can read everything, move candidates, schedule interviews, send decisions and messages, and applications sent by email are kept and added once you have a plan. To choose a plan, or to ask for more time, contact ITS with **Ask ITS to choose a plan**; ITS changes the plan in its console.
 

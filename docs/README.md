@@ -14,6 +14,8 @@
 
 **The plans (5 and 6 November 2026, branch `plans`):** Free, Basic, Pro and Ultra, locked candidates, the AI credit and Upgrade. Decisions and the open questions for the owner and the lawyer: [workflow-decisions.md](workflow-decisions.md), "5 November 2026". Release and testers: [production-setup.md](runbooks/production-setup.md), "The plans".
 
+**First sign-in asks for approval (6 November 2026, branch `plans`):** someone signing in for the first time waits for an administrator's Accept on the console's Overview. Decisions and the open question: [workflow-decisions.md](workflow-decisions.md), "6 November 2026". How a tester gets in now, and the release step: [production-setup.md](runbooks/production-setup.md), "Letting a tester in" and "The release". The console: [16-admin.md](16-admin.md), "Asking for access".
+
 Governing context: [FOUNDER-CONTEXT.md](FOUNDER-CONTEXT.md) (the consultant-completed founder intake, 14 September 2026) and [17-founder-context-reconciliation.md](17-founder-context-reconciliation.md) (what it changed and what remains sequenced).
 
 The product requirements document is the set of documents below, read in order. They are kept in sync with the code; a pull request that changes behavior updates the matching document.
@@ -84,4 +86,4 @@ Drafted 30 September 2026 for the Founding Partner Program and checked again the
 | 05 | [Administrator guide](customer/05-administrator-guide.md) | For the owner: sign-in, creating the company, invitations, roles and removal, Setup (the company card, sessions, "confirm it's you", the audit history), the daily brief, posting, the report, recruiters, outcomes, closing, privacy, Development mode |
 | 06 | [Hiring manager guide](customer/06-hiring-manager-guide.md) | For the person running a hire: intake, the packet, approval, the Posting tab and the accepting switch, Talent and "Needs a closer look", comparing candidates, screens, scorecards, interviews, the decision after an interview, declines, outcomes, writing to candidates, the report |
 | legal 11 | [Founding Partner Agreement additions](legal-drafts/11-founding-partner-agreement-additions.md) | Draft sections for counsel: fees, term, support, limitations, security, data processing, subprocessors, job boards; bracketed placeholders for the founder's decisions |
-| legal 12 | [Free plan terms](legal-drafts/12-free-plan-terms.md) | A short draft for counsel, for each invited tester to sign before a real job; bracketed placeholders for the founder's decisions |
+| legal 12 | [Free plan terms](legal-drafts/12-free-plan-terms.md) | A short draft for counsel, for each tester to sign before a real job; bracketed placeholders for the founder's decisions |

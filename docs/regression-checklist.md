@@ -39,8 +39,9 @@ Built on 14 October 2026 from the verified product audit (`docs/audit/01-platfor
 | The database (new tables, columns, migrations) | 0, 1, 5 |
 | Emails, texts or notifications | 0, 1, 4.8, 4.12, 6 |
 | Interviews and scheduling | 0, 1, 4.9, 6 (calendar) |
-| The ITS queue, the admin console, plans | 0, 1, 3, 4.11, 4.14, 4.19 |
+| The ITS queue, the admin console, plans | 0, 1, 3, 4.11, 4.14, 4.19, 4.20 |
 | Anything that reads candidates, spends AI or opens ITS work | 0, 1, 4.19 |
+| Who may open a company, `SIGNUP_MODE`, the company form, anything that reads `memberships` | 0, 1, 2.3, 3.7, 4.1, 4.20 |
 | Any Kanvis-inspired change | 4.17 (strengths over Kanvis with no other check), plus the rows above |
 | Anything at all | Section 9: say what you could not verify |
 
@@ -79,6 +80,7 @@ The "Kanvis difference" column uses the research labels. OBSERVED means seen on 
 | A candidate never reads a word about a plan or money. | PL-6 (5 Nov) | `api/locked-applicants.test.ts`, `api/ai-credit.test.ts` | n/a |
 | A plan's AI credit is a hard stop with no overshoot. Customers read words or a percentage, never dollars. A candidate is never stuck, cut off or told. | PL-10 (5 Nov) | `api/ai-credit.test.ts`, `policy/ai-gate.test.ts`, `agents/turn-without-model.test.ts` | n/a |
 | Upgrade asks ITS, charges nothing and gives ITS no access to the company's hiring. Product code never compares a plan's name. | PL-11 (5 Nov) | `api/plan-upgrade.test.ts`, `policy/plan-names.test.ts`, `web/upgrade.test.ts` | n/a |
+| Under `SIGNUP_MODE=approval` someone signing in for the first time can do nothing until a platform administrator accepts them, and Accept is the one approval: it counts as the ITS check too. A failed email stops nothing and raises no alert. | AP-1 to AP-5 (6 Nov) | `api/access-approval.test.ts`, `policy/membership-readers.test.ts`, `shell/company-setup-ui.test.ts`, `e2e/access-approval.spec.ts` | n/a |
 | Hosting stays Vercel + Supabase + Railway. | 9 Oct | (no test: `apps/shell/vercel.json` and the Railway worker's dashboard settings must not change without the founder; `railway.json` was removed on 15 Oct (to-do item 6)) | n/a |
 
 - [ ] The change undoes none of the rules above, and every test named above still passes.
@@ -206,6 +208,7 @@ node node_modules\@playwright\test\cli.js test -c playwright.local.config.ts    
 - [ ] Nothing else is listening on port 3010. The local config reuses any server it finds, and an old server holds an old in-memory database.
 - [ ] Keep the laptop awake for the whole run (the network once dropped mid-run), and do not edit app source while it runs, because `next dev` reloads.
 - [ ] The test server always uses fakes: sign-in, email, AI, calendar and storage are fake, with `COMPANY_CHECK=auto` and `BOOTSTRAP_ADMIN_EMAILS=admin-e2e@identifiedtalent.com` (`tests/e2e/playwright.config.ts:47-60`).
+- [ ] `specs/access-approval.spec.ts` is skipped unless the server is in `SIGNUP_MODE=approval`. Stop any server on port 3010, because a reused server in another mode fails it, then from `tests\e2e`: `$env:SIGNUP_MODE = "approval"; node node_modules\@playwright\test\cli.js test -c playwright.local.config.ts --project=chromium specs/access-approval.spec.ts` (about 5 minutes).
 
 ### 1.5 CI (GitHub Actions)
 
@@ -220,7 +223,7 @@ The required check on `main` is the job named **`verify`** (`.github/workflows/c
 7. vitest.
 8. AI evals on the fake provider.
 9. The Next.js production build.
-10. The browser journeys with accessibility (axe) checks, in **three passes, each with its own dev server**: shard 1/2 and shard 2/2 (without the route inventory), then `specs/routes.spec.ts` alone.
+10. The browser journeys with accessibility (axe) checks, in **four passes, each with its own dev server**: shard 1/2 and shard 2/2 (without the route inventory), then `specs/routes.spec.ts` alone, then `specs/access-approval.spec.ts` alone with `SIGNUP_MODE=approval`.
 
 The browser passes take about 50 minutes, after about 20 minutes of other checks, inside a 90-minute limit. CI allows **one retry per test**, so a flaky journey can pass. The HTML report is kept 7 days.
 
@@ -325,6 +328,8 @@ Seven signed-in pages are reached by **no** vitest test, only by browser journey
   Automated: 17 of the 18 browser specs (all but `e2e/staff-mfa.spec.ts`) create their company through this form, with `createCompanyThroughTheForm` (`tests/e2e/specs/helpers.ts:70`). The signed-out check skips it.
 - [ ] **By invitation** (`SIGNUP_MODE=invite`, GATE-V2; the production app refuses to start without `SIGNUP_MODE`). **Do:** sign in with an account that is not on `SIGNUP_ALLOWED_EMAILS` and open `/setup/company`. **Expect:** "Recruiting OS is by invitation for now" with the ITS inbox instead of the form, Sign out still there, and `POST /api/v1/companies` answers 403 `signup_invite_only`. **Do:** the same as a listed address or a platform administrator. **Expect:** the form, as before; the welcome page offers no "Get help with your next hire" link.
   Automated: `api/signup-invite.test.ts`, `shell/components/company-setup-ui.test.ts`, `shell/components/welcome-page.test.ts`.
+- [ ] **By approval** (`SIGNUP_MODE=approval`, 6 Nov 2026). **Do:** sign in with an account that is not on `SIGNUP_ALLOWED_EMAILS` and open `/setup/company`. **Expect:** the form, with **Send my request**; once sent, "Your request has been sent", with Sign out, at whatever signed-in address they open. The whole journey is 4.20.
+  Automated: `api/access-approval.test.ts`, `shell/company-setup-ui.test.ts`, `shell/welcome-page.test.ts`, `web/access-approval.test.ts`, `e2e/access-approval.spec.ts`.
 
 ### 2.4 The company's team: pages
 
@@ -399,6 +404,7 @@ These are for the owner, admin, hiring manager, HR, interviewer, and an ITS recr
 | API group | Console tab | Automated |
 |---|---|---|
 | customers, verification, job boards, apply flow, report | Customers | `api/company-check.test.ts`, `api/apply-conversation.test.ts`, `shell/report-tables.test.ts`, `e2e/company-check.spec.ts`, `e2e/one-visit-owner.spec.ts` |
+| `POST /customers/:id/access` | Overview, Customers (the drawer's ITS check) | `api/access-approval.test.ts`, `shell/console-overview.test.ts`, `shell/admin-customers-ui.test.ts`, `e2e/access-approval.spec.ts` |
 | `POST /customers/:id/plan` | **none** | used only by the browser-test helper `usePlan` (`tests/e2e/specs/helpers.ts:108`); KB #1 |
 | runs, retry | Workflows | `api/app.test.ts` ("exposes runs to admins"), `api/job-failures.test.ts` (failed runs reach the error reporter); the tab itself: manual |
 | ai-runs | AI runs | `api/unsent-answers.test.ts` (unsent outputs withheld); manual |
@@ -570,6 +576,7 @@ The rules live in `packages/core/src/permissions.ts:44-74`. Each role has things
 
 - [ ] **Still allowed** (with a second factor, every request audited):
   - confirming or un-confirming companies;
+  - accepting or declining a request for access, with a second press and no reason typed;
   - job-board access and the apply flow;
   - privacy requests;
   - granting and revoking platform roles, with a reason;
@@ -580,6 +587,8 @@ The rules live in `packages/core/src/permissions.ts:44-74`. Each role has things
   - granting themselves a role, or revoking the last admin;
   - acting without a second factor;
   - entering a customer without break-glass or an accepted request;
+  - any other change to a company asking for access or declined (409 `access_request_open`), break-glass included;
+  - declining a company already accepted (409 `already_accepted`);
   - reading the AI output of conversations nobody sent.
 - [ ] Known issues, do not make worse:
   - the plan change and other actions have no screen (KB #1);
@@ -588,7 +597,7 @@ The rules live in `packages/core/src/permissions.ts:44-74`. Each role has things
   - unconfirmed repeat-submission conversations are visible (KB #107);
   - a spam complaint can be released by API (KB #122);
   - the reason header is optional (`01-platform.md` drift 17).
-- [ ] Automated: `api/platform-roles.test.ts`, `api/app.test.ts`, `api/mfa.test.ts`, `api/staff-access.test.ts` (break-glass), `e2e/routes.spec.ts`.
+- [ ] Automated: `api/platform-roles.test.ts`, `api/app.test.ts`, `api/mfa.test.ts`, `api/staff-access.test.ts` (break-glass), `api/access-approval.test.ts`, `e2e/routes.spec.ts`.
 
 ### 3.8 Candidate holding a link
 
@@ -615,7 +624,7 @@ The rules live in `packages/core/src/permissions.ts:44-74`. Each role has things
 
 - [ ] **Still allowed:** pages of confirmed companies, applying, uploads, tracked links, the privacy notice and the public privacy form, Lost your link?, the feeds, and `/healthz`.
 - [ ] **Still refused:**
-  - an unconfirmed company's pages (404);
+  - an unconfirmed company's pages (404), and a company asking for access or declined is named nowhere in public, the public privacy form included;
   - the apply form of a role that is not taking applications (404);
   - every signed-in page (sent to `/login`);
   - change requests from another site;
@@ -637,7 +646,7 @@ Do each journey at desktop width **and** at phone width (Section 8).
 
 ### 4.1 Company sign-up and the ITS company check
 
-Who: a new owner and the ITS platform admin.
+Who: a new owner and the ITS platform admin. Under `SIGNUP_MODE=approval` this journey is for a platform administrator or an address on `SIGNUP_ALLOWED_EMAILS`; anyone else takes 4.20.
 
 - [ ] **Do:** sign in with Google at `/login` as a new person. **Expect:** you land on `/setup/company` (a short form plus time zone, Q3). There is no menu yet.
 - [ ] **Do:** fill in the form and save. **Expect:** Home opens with the getting-started card; Settings shows the plan as Free, with no word about a trial (PL-2). Home shows no number tiles (4A).
@@ -988,6 +997,25 @@ Who: owners and hiring managers, candidates (on a phone first), ITS recruiters a
 - [ ] Not verified: real Postgres under load (PGlite runs one connection; `TEST_DATABASE_URL` runs the credit's race), the real model's costs against the holds, anything with a real candidate, and whether the wording is acceptable (`docs/spec/11` items 27 to 34).
 - [ ] Known issues, do not make worse: no cap on locked applicants per job, on their emails or on the ITS requests their replies open (PQ-1); no bot check (PQ-17); no limit of one draft at a time per session. Any new suite that applies more than five times to one job on a new company must name its plan.
 
+### 4.20 First sign-in asks for approval (6 November 2026)
+
+Who: someone signing in for the first time (on a phone too) and the platform admin. Decisions: `docs/workflow-decisions.md`, AP-1 to AP-8. It needs a server in `SIGNUP_MODE=approval`, and made-up companies only. On a hosted deployment with the fake email adapter (staging) no email counts as having left, so the email line never shows there.
+
+- [ ] **The request.** **Do:** sign in as someone new, not on `SIGNUP_ALLOWED_EMAILS`. **Expect:** **Tell us about your company**, with **Send my request**. **Do:** send it. **Expect:** "Your request has been sent", "Please wait for approval." and the company's name, with Sign out beside the title. "We sent a copy to <address>, and we will email you when it is decided." shows only if the email really left; otherwise "Keep this page open, or sign in again later to check." Two emails, the person's ("Your request has been sent") and ITS's ("[access request] <company> is asking for access"), and no "[company check]".
+- [ ] **The wall.** **Do:** open `/`, `/roles`, `/roles/new`, `/talent`, `/interviews`, `/setup`, `/updates`, `/people`, `/recruiter/queue`, `/admin`, `/admin/customers` and `/login`, reload, sign out and in again. **Expect:** the same screen each time, no menu, no loop and no script error. `GET /api/v1/companies/current` answers `no_company`. No `ai_runs` row, no workflow run, no notice. The careers page, job pages, feeds, sitemap, a tracked link and the public privacy form say nothing of the company.
+- [ ] **One request.** **Do:** send the form again from a second tab, or call `POST /api/v1/companies`. **Expect:** 409 "To open another company, contact ITS."; the page shows where the request stands instead of an error.
+- [ ] **The row.** **Do:** as the platform admin, open `/admin`. **Expect:** "<company> is asking for access" at the very top of **Needs attention**, with the person's name and email, the kind of business, the size, the city and state, the website (a link only for http and https, opening in a new tab) and how long they have waited, and **Accept** and **Decline** on the row. Up to five rows, the longest waiting first, then "N more companies are asking for access". The greeting counts each one. **Waiting for the ITS check** in the strip counts it; **Customers** and the Customers card leave it out. At 360px the row wraps with no sideways scroll, and the buttons keep 40px.
+- [ ] **Accept.** **Do:** **Accept**, then at "Accept <company>?" **No**, then **Accept**, **Yes**. **Expect:** a toast, and the row leaves. Within 30 seconds the waiting screen goes to Home, with no reload and no script error, on Free. The company is confirmed by that administrator, with no second confirmation to press; one notice, "Your request was approved", never "ITS confirmed your company" as well; one `stuck_role_detector` run; and their history says "ITS accepted your request for access."
+- [ ] **Decline, then Accept.** **Do:** **Decline**, **Yes**. **Expect:** no reason asked. Within 30 seconds "We can't offer access right now" with "Questions? <contact>", one email, and a second request refused. **Do:** open **Customers**, **Declined**. **Expect:** it is there, in no other filter, with the date and who, and **Accept** alone in the drawer. **Do:** **Accept**, **Yes**. **Expect:** as above, and the declined screen goes Home by itself.
+- [ ] **Second presses.** **Do:** press as two administrators at once. **Expect:** one change, and the second is told so. **Do:** decline a company already accepted. **Expect:** a calm toast in the API's words (409 `already_accepted`). A failed press is a toast, and the row stays.
+- [ ] **One door.** **Do:** on a request and on a declined company, call `/verification`, `/job-boards`, `/apply-flow`, `/trial`, `/candidate-score`, `/plan` and break-glass. **Expect:** 409 `access_request_open` pointing at `/access`, and nothing moved. The drawer has only **Overview** and **ITS check**, and its Overview tab offers no change. Accepted, every tab is back at once.
+- [ ] **A failed email.** **Do:** make the email provider refuse. **Expect:** the request, Accept and Decline all go through, no "We sent a copy" line, and no alert. A bounce from someone who has only asked raises nothing about a team member. A spam complaint still raises its own alert.
+- [ ] **The other doors.** **Do:** sign in as a platform administrator, or an address on the list. **Expect:** **Create my hiring workspace**, Home at once on Free, and the normal ITS check (4.1). An address added to the list after sending a request stays waiting until accepted. **Do:** invite someone waiting into another company. **Expect:** the invitation works, and their own request stands as it was.
+- [ ] **The setting.** **Do:** set `SIGNUP_MODE=invite` and restart. **Expect:** a new person reads "Recruiting OS is by invitation for now" and gets 403 `signup_invite_only`; someone already waiting keeps their screen and their row, and can still be accepted. The welcome page has no "Get help with your next hire" link under either. A build from before this refuses to start on `approval`, so the code goes live first (`docs/runbooks/production-setup.md`, "The release", item 6).
+- [ ] Automated: `api/access-approval.test.ts` (a sweep of Hono's route table as someone waiting and someone declined, under both values of `COMPANY_CHECK`), `api/signup-invite.test.ts`, `shell/company-setup-ui.test.ts`, `shell/console-overview.test.ts`, `shell/admin-customers-ui.test.ts`, `shell/welcome-page.test.ts`, `web/access-approval.test.ts`, `core/notify.test.ts`, `policy/membership-readers.test.ts`, `e2e/access-approval.spec.ts` (section 1.4 says how to run it).
+- [ ] Not verified: anything on staging or production; a real Google or Microsoft account from outside ITS (not run on production yet); a real email leaving or being refused (Postmark is not live); two presses racing on real Postgres (PGlite runs one connection, so a test reads the row lock itself); and whether the wording and what is kept are acceptable (`docs/spec/11` items 32 and 35).
+- [ ] Known issues, do not make worse: no button takes an accepted company's access away; a declined company keeps its row and its careers address, with no rule yet for how long (AQ-1); a search under All does not reach a declined company; nothing limits how many accounts may ask, and each request sends two emails; Accept checks none of PQ-3, PQ-14 or PQ-16.
+
 ---
 
 ## 5. Data integrity: existing records must survive
@@ -1203,7 +1231,7 @@ These could not be confirmed from the code on 14 Oct 2026. A change that depends
 - [ ] **Load:** there is no automated load or performance check; only the manual `scripts/load-apply.ts`.
 - [ ] **This laptop versus CI:** local vitest took about 16 minutes against the 4 to 6 expected, and `node_modules` here is laid out differently from pnpm's.
 - [ ] **Kanvis:** their recruiter side was never used (waitlist only). On the candidate side, one complete application (the AI interview and the score included) was observed on 15 Oct 2026 on the founder's own account. Anything marked INFERRED or UNKNOWN about Kanvis is not evidence for how our product should behave.
-- [ ] **Counsel:** the answers in `docs/spec/11-counsel-register.md` are still open, so live use with real candidates waits on them. That includes items 27 to 34 (hiding applicants by plan) and risk R-LEGAL-1, which the plans raise again.
+- [ ] **Counsel:** the answers in `docs/spec/11-counsel-register.md` are still open, so live use with real candidates waits on them. That includes items 27 to 34 (hiding applicants by plan) and risk R-LEGAL-1, which the plans raise again. Item 35 (what we keep about a declined request) applies sooner: from the first stranger who asks.
 
 ---
 
