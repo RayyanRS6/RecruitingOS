@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import type { ZodError } from "zod";
 import {
-  AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
+  AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DescribeBenefits, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag, type PacketRevisionProposal, type RequirementsCheck, type RolePacket,
 } from "@ros/contracts";
 import {
@@ -10,7 +10,7 @@ import {
   type IntakeSessionRow, type MergedRevision, type StoredRevision,
 } from "@ros/agents";
 import { assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
-import { companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
+import { approvalRequests, companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
 import { aiCreditRefusal } from "../services/ai-credit";
@@ -469,6 +469,38 @@ rolePacketRoutes.post("/:id/packets/:version/flags/keep", requireTenant, async (
     await tx.update(rolePackets).set({ packet }).where(eq(rolePackets.id, pv.id));
     await emit(tx, { type: "packet.flag_kept", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${pv.version}` }, payload: { roleId: role.id, version: pv.version, flagId: flag.id, rule: flag.rule, reason: body.reason } });
     return { version: pv.version, flags: packet.provenance.flags, openFlags: unresolvedFlags(packet).length };
+  });
+  return c.json(out);
+});
+
+/**
+ * The benefits, written on the approval card (plan D5): the one thing the law asks of the ad that a person fixes by typing.
+ * Like keeping a flag, it fills in the version waiting and starts no new one, so the approval already asked for stands and
+ * whoever typed it may still decide. It only fills a blank: words already on the version change through Edit, as a new
+ * version. The legal check reads it from then on; nothing is public until someone approves.
+ */
+rolePacketRoutes.post("/:id/packets/:version/benefits", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "packet.edit");
+  const body = DescribeBenefits.parse(await c.req.json());
+  const container = c.get("container");
+  const actor = actorOf(c);
+  const out = await withTenant(container.db, t.companyId, async (tx) => {
+    const { role, versions } = await loadRolePackets(tx, c.req.param("id") ?? "", { forWrite: true });
+    refuseClosed(role);
+    const pv = versions.find((v) => String(v.version) === c.req.param("version"));
+    if (!pv) throw new HttpError(404, "version_not_found", "That version does not exist.");
+    const notWaiting = () => new HttpError(409, "not_waiting", "Only the version waiting for approval takes this.");
+    const [req] = await tx.select({ proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending"))).limit(1);
+    if (!req || Number((req.proposal as { version?: number }).version) !== pv.version || pv.status !== "proposed") throw notWaiting();
+    if (pv.packet.compensation.benefitsSummary?.trim()) throw new HttpError(409, "already_described", "This version already describes the benefits. Change them with Edit.");
+    const packet = structuredClone(pv.packet);
+    packet.compensation.benefitsSummary = body.text;
+    // Still undecided is checked again in the write itself, as approving does: a yes landing at this moment is never given words nobody saw.
+    const [wrote] = await tx.update(rolePackets).set({ packet }).where(and(eq(rolePackets.id, pv.id), isNull(rolePackets.approvedAt))).returning({ id: rolePackets.id });
+    if (!wrote) throw notWaiting();
+    await emit(tx, { type: "role_packet.edited", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${pv.version}` }, payload: { roleId: role.id, version: pv.version, changeSummary: "Benefits written on the approval card", takesEffect: "after_approval", openFlags: unresolvedFlags(packet).length } });
+    return { version: pv.version };
   });
   return c.json(out);
 });

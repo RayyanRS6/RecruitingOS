@@ -34,7 +34,7 @@ export function mayDecideApproval(req: DeciderRequest, viewer: { userId: string;
     const dm = decisionMakerOf(req);
     return { ok: false, code: "named_decider", message: `This decision is reserved for ${dm?.name ?? dm?.email ?? "the named decision maker"}; an owner can also decide it.` };
   }
-  if (!req.requiredRoles.includes(viewer.role)) return { ok: false, code: "wrong_role", message: `This decision needs one of: ${req.requiredRoles.join(", ")}.` };
+  if (!req.requiredRoles.includes(viewer.role)) return { ok: false, code: "wrong_role", message: `This decision needs one of: ${req.requiredRoles.map((r) => r.replace(/_/g, " ")).join(", ")}.` };
   return { ok: true };
 }
 

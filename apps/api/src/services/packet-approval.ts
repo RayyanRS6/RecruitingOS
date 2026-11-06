@@ -1,12 +1,12 @@
 import { and, desc, eq } from "drizzle-orm";
-import type { LegalCheck, LegalCheckItem, PacketFlag, RolePacket } from "@ros/contracts";
+import { TRIAL_ENDED_LINE, type LegalCheck, type LegalCheckItem, type PacketFlag, type RolePacket } from "@ros/contracts";
 import { can, closingDateRequired, companyToday, decisionMakerOf, defaultClosingDate, isSoleOwner, mayDecideApproval, openFlagsMessage, postingLegalCheck, requiredUserIdsOf, resolveDecisionMaker, selfApprovalCheck, unresolvedFlags, type DecisionMaker } from "@ros/core";
 import { approvalRequests, companies, memberships, rolePackets, users, type Tx } from "@ros/db";
 import { decidersInWords } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
 import { currentVersionOf, type PacketRow, type RoleRow } from "./packet-versions";
-import { assertNoNewWork } from "./trial";
+import { assertNoNewWork, companyTrialStanding } from "./trial";
 
 /**
  * The legal check of a version before it goes public (plan D5): what the law of the job's places asks of the ad, with
@@ -107,11 +107,18 @@ export async function assertMayApprovePacket(tx: Tx, input: { tenant: Tenant; re
   }
 }
 
+/**
+ * What holds Approve for this person, in the order the approve route refuses. `flags` and `legal` are dealt with on the
+ * card itself, and Approve wakes; the others wait on someone or something else, and `reason` says who or what.
+ */
+export type ApprovalBlock = "role" | "reserved" | "trial_ended" | "self_approval" | "kept_own_flag" | "flags" | "legal";
+
 export type PacketApprovalView = {
   /**
    * The packet approval waiting on this role, with what the signed-in person may do about it. `flags` are the wording
    * checks on the version waiting (open ones block approving until a person changes the words or keeps them with a
    * reason; kept ones show who kept them and why). Sending back is never blocked by flags or by the self-approval rule.
+   * `viewer` only says so for the card: the approve routes decide for themselves (`assertMayApprovePacket`).
    */
   pending: {
     id: string;
@@ -127,7 +134,7 @@ export type PacketApprovalView = {
     flags: PacketFlag[];
     /** What the law of the job's places asks of the ad (plan D5); the card shows a line only for what is missing. */
     legalCheck: LegalCheck | null;
-    viewer: { mayDecide: boolean; maySendBack: boolean; reason: string | null };
+    viewer: { mayDecide: boolean; maySendBack: boolean; reason: string | null; blockedBy: ApprovalBlock | null };
   } | null;
   /** The most recent decided request: how a sent-back role got there, with the note. */
   latest: { id: string; status: string; version: number; decisionNote: string | null; decidedAt: string | null; decidedBy: { id: string; name: string } | null } | null;
@@ -142,21 +149,25 @@ export async function packetApprovalView(tx: Tx, input: { tenant: Tenant; role: 
   if (pendingReq) {
     const version = Number((pendingReq.proposal as { version?: number }).version);
     const pv = packets.find((p) => p.version === version) ?? null;
-    const legalCheck = pv ? await legalCheckFor(tx, { role, packet: pv.packet, now: input.now ?? new Date() }) : null;
-    const viewer = { mayDecide: false, maySendBack: false, reason: null as string | null };
-    if (!can(t.role, "role.approve")) viewer.reason = "Your role cannot approve jobs; an owner, admin or hiring manager does.";
+    const now = input.now ?? new Date();
+    const legalCheck = pv ? await legalCheckFor(tx, { role, packet: pv.packet, now }) : null;
+    const viewer: NonNullable<PacketApprovalView["pending"]>["viewer"] = { mayDecide: false, maySendBack: false, reason: null, blockedBy: null };
+    const held = (blockedBy: ApprovalBlock, reason: string) => { viewer.blockedBy = blockedBy; viewer.reason = reason; };
+    if (!can(t.role, "role.approve")) held("role", "Your role cannot approve jobs; an owner, admin or hiring manager does.");
     else {
       const decide = mayDecideApproval(pendingReq, { userId: t.userId, role: t.role });
-      if (!decide.ok) viewer.reason = decide.message;
+      if (!decide.ok) held(decide.code === "named_decider" ? "reserved" : "role", decide.message);
       else {
-        // Sending back follows the decide route: reserved like approving, but never held up by flags or self-approval.
+        // Sending back follows the decide route: reserved like approving, but never held up by flags, self-approval or an ended trial.
         viewer.maySendBack = true;
         const self = await selfApprovalCheck(tx, { companyId: t.companyId, userId: t.userId, roleCreatedBy: role.createdBy, versionCreatedBy: pv?.createdBy ?? role.createdBy });
         const open = unresolvedFlags(pv?.packet).length;
-        if (!self.ok) viewer.reason = self.message;
-        else if (await keptTheirOwnFlag(tx, { tenant: t, req: pendingReq, role, version: pv })) viewer.reason = keptOwnFlagMessage(pendingReq.requiredRoles);
-        else if (open) viewer.reason = openFlagsMessage(open);
-        else if (legalCheck?.missing.length) viewer.reason = legalCheckMessage(legalCheck.missing);
+        // In the order the approve route refuses (assertMayApprovePacket).
+        if (!["open", "paused"].includes(role.status) && (await companyTrialStanding(tx, t.companyId, now))?.ended) held("trial_ended", TRIAL_ENDED_LINE);
+        else if (!self.ok) held("self_approval", self.message);
+        else if (await keptTheirOwnFlag(tx, { tenant: t, req: pendingReq, role, version: pv })) held("kept_own_flag", keptOwnFlagMessage(pendingReq.requiredRoles));
+        else if (open) held("flags", openFlagsMessage(open));
+        else if (legalCheck?.missing.length) held("legal", legalCheckMessage(legalCheck.missing));
         else viewer.mayDecide = true;
       }
     }

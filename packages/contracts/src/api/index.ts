@@ -171,6 +171,9 @@ export type IntakeAnswersRequest = z.infer<typeof IntakeAnswersRequest>;
 /** Keep a flagged phrase in a draft, with the reason (C1); the approver sees who kept it and why. */
 export const KeepPacketFlag = z.object({ flagId: z.string().min(1).max(300), reason: z.string().trim().min(5).max(500) });
 export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
+/** The benefits, written on the approval card onto the version waiting. The same limit as the company's text. */
+export const DescribeBenefits = z.object({ text: z.string().trim().min(2).max(2000) }).strict();
+export type DescribeBenefits = z.infer<typeof DescribeBenefits>;
 
 // Roles
 export const CreatePacketVersion = z.object({ packet: RolePacket, changeSummary: z.string().min(1).max(500) });
