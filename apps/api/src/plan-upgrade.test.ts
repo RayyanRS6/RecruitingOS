@@ -131,8 +131,9 @@ describe("asking for a bigger plan, and who does the work", () => {
       expect((await rowOf(first.id)).question).toBe("We would like to move to the Pro plan.");
       expect((await read<PublicPlans>(await json(co.cookie, "GET", "/api/v1/plans"))).requested).toBe(true);
       // Home says it is with ITS, not that a recruiter will pick up their hiring
-      const brief = await read<{ cards: Array<{ kind: string; title: string; body: string }> }>(await json(co.cookie, "GET", "/api/v1/brief"));
+      const brief = await read<{ summary: string; cards: Array<{ kind: string; title: string; body: string }> }>(await json(co.cookie, "GET", "/api/v1/brief"));
       expect(brief.cards.filter((c) => c.kind === "escalation").map((c) => [c.title, c.body])).toEqual([[PLAN_REQUEST_OPEN_LINE, "We would like to move to the Pro plan."]]);
+      expect(brief.summary).toContain("· 0 at risk ·");
       // anyone who may ask gets the same soft answer; an interviewer may not ask
       const hm = await signInAs(container, app, { companyId: co.id, role: "hiring_manager" });
       expect(await read(await askPlan(hm))).toMatchObject({ id: first.id, message: PLAN_REQUEST_OPEN_LINE });
@@ -203,6 +204,19 @@ describe("asking for a bigger plan, and who does the work", () => {
       expect(await rowOf(id)).toMatchObject({ status: "open", assignedToUserId: null });
       expect(await container.db.select().from(staffAccessGrants).where(eq(staffAccessGrants.escalationId, id))).toEqual([]);
       expect(await container.db.select().from(notifications).where(and(eq(notifications.companyId, co.id), eq(notifications.kind, "recruiter.access_granted")))).toEqual([]);
+    });
+  });
+
+  describe("given back to the queue", () => {
+    it("stays open and still asked for, the next person can take it, and it grants nothing either time", async () => {
+      const co = await newCompany();
+      const { id } = await read<{ id: string }>(await askPlan(co.cookie));
+      expect((await json(recruiter, "POST", `/api/v1/escalations/${id}/claim`)).status).toBe(200);
+      expect((await json(recruiter, "POST", `/api/v1/escalations/${id}/release`)).status).toBe(200);
+      expect(await rowOf(id)).toMatchObject({ status: "open", assignedToUserId: null });
+      expect((await read<PublicPlans>(await json(co.cookie, "GET", "/api/v1/plans"))).requested).toBe(true);
+      expect((await json(admin, "POST", `/api/v1/escalations/${id}/claim`)).status).toBe(200);
+      expect(await container.db.select().from(staffAccessGrants).where(eq(staffAccessGrants.escalationId, id))).toEqual([]);
     });
   });
 

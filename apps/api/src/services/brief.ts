@@ -367,7 +367,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const companyMarks = await activeMarksFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
   const companyFollowUps = await activeFollowUpsFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
   const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && groupFor(a, companyMarks.get(a.id), now, companyFollowUps.get(a.id)) === "waiting_on_you").length;
-  const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.length;
+  // A request to upgrade puts no hire at risk.
+  const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.filter((e) => !isPlanRequest(e)).length;
   const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);
   const recent = await withoutLockedEvents(tx, { companyId, reader: null }, await tx.select({ id: events.id, type: events.type, actor: events.actor, subjectType: events.subjectType, subjectId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since))));
   // Under a scoped grant, only what was done about the role or the candidate in scope is counted.

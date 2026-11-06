@@ -13,6 +13,11 @@ import { followApply, signInAdmin, signInStaff, usePlan } from "./test-helpers";
 
 const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
 const DAY = 86_400_000;
+/**
+ * Far enough on that five working days have passed, whatever day a suite runs: nine days hold five only with no holiday among
+ * them (from Friday 6 November 2026, Veterans Day left four).
+ */
+const FIVE_WORKING_DAYS_ON = 14 * DAY;
 /** Every locked person in these suites has this surname, so a team notice that names one is easy to find. */
 const LOCKED = "Lockwood";
 
@@ -356,7 +361,7 @@ describe("locked candidates", () => {
     const noraMailsBefore = mailsTo(nora.email).length;
 
     // Five working days on, the daily check tells them by itself: the closing wording with no line about keeping them.
-    moveClock(Date.now() + 9 * DAY);
+    moveClock(Date.now() + FIVE_WORKING_DAYS_ON);
     try {
       await container.drain();
       const closingOf = (email: string) => mailsTo(email).filter((m) => m.subject === `Your application to ${job.name}`);
@@ -367,7 +372,7 @@ describe("locked candidates", () => {
       expect(note.text).not.toMatch(/\b(plan|upgrade|locked)\b/i);
       expect(mailsTo(nora.email).length).toBe(noraMailsBefore + 1);
       // Exactly once, however often the check looks again.
-      moveClock(Date.now() + 11 * DAY);
+      moveClock(Date.now() + FIVE_WORKING_DAYS_ON + 2 * DAY);
       await container.drain();
       for (const p of [nora, omar, pia]) expect(closingOf(p.email)).toHaveLength(1);
       expect(closingOf(wes.email)).toEqual([]);
@@ -482,10 +487,10 @@ describe("locked candidates", () => {
       await noTeamNoticeNames(job.id);
 
       const oneOf = (x: { applicationId: string }) => x.applicationId === ann.id || x.applicationId === bo.id;
-      expect((await safetyNet(job.id, new Date(Date.now() + 9 * DAY))).filter(oneOf).map((x) => x.action)).toEqual(["sent", "sent"]);
+      expect((await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON))).filter(oneOf).map((x) => x.action)).toEqual(["sent", "sent"]);
       await container.drain();
       expect(mailsTo("bo.lockwood@people.test").map((m) => m.subject)).toEqual([`Your application to ${job.name}`]);
-      expect((await safetyNet(job.id, new Date(Date.now() + 10 * DAY))).filter(oneOf)).toEqual([]);
+      expect((await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON + DAY))).filter(oneOf)).toEqual([]);
       expect(mailsTo("bo.lockwood@people.test")).toHaveLength(1);
     });
 
@@ -843,7 +848,7 @@ describe("locked candidates", () => {
       const [toVisible] = (await commsOf(visible.id)).filter((c) => c.idempotencyKey === `role_closed:${visible.id}`);
       expect(toVisible.bodyText).toContain("keep your information");
       // The daily check finds nobody left to tell.
-      expect(await safetyNet(job.id, new Date(Date.now() + 10 * DAY))).toEqual([]);
+      expect(await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON))).toEqual([]);
       expect(closing()).toHaveLength(1);
       await noTeamNoticeNames(job.id);
       expect((await applicationOf(row.id)).lockedAt).not.toBeNull();
@@ -881,7 +886,7 @@ describe("locked candidates", () => {
       const row = await apply(job, p);
       await close(job);
       expect(await safetyNet(job.id, new Date(Date.now() + 2 * DAY))).toEqual([]);
-      const net = await safetyNet(job.id, new Date(Date.now() + 9 * DAY));
+      const net = await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON));
       expect(net.filter((x) => x.applicationId === row.id)).toEqual([{ applicationId: row.id, action: "sent" }]);
       await container.drain();
       expect(mailsTo(p.email).filter((m) => m.subject === `Your application to ${job.name}`)).toHaveLength(1);
@@ -889,7 +894,7 @@ describe("locked candidates", () => {
       const raised = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.companyId, job.id));
       expect(raised.filter((e) => e.question.includes(LOCKED))).toEqual([]);
       // Nobody is reminded about them either.
-      const detected = await withTenant(container.db, job.id, (tx) => detectStuckRoles(tx, job.id, new Date(Date.now() + 9 * DAY)));
+      const detected = await withTenant(container.db, job.id, (tx) => detectStuckRoles(tx, job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON)));
       expect(detected.flatMap((d) => d.applicationIds ?? [])).not.toContain(row.id);
     });
 
@@ -899,9 +904,9 @@ describe("locked candidates", () => {
       const row = await apply(job, person("Rey"));
       await container.db.update(candidates).set({ email: null }).where(eq(candidates.id, row.candidateId));
       await close(job);
-      expect((await safetyNet(job.id, new Date(Date.now() + 9 * DAY))).filter((x) => x.applicationId === row.id)).toEqual([]);
+      expect((await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON))).filter((x) => x.applicationId === row.id)).toEqual([]);
       expect(await eventsOf(row.id, "application.untold_fallback")).toHaveLength(1);
-      expect((await safetyNet(job.id, new Date(Date.now() + 10 * DAY))).filter((x) => x.applicationId === row.id)).toEqual([]);
+      expect((await safetyNet(job.id, new Date(Date.now() + FIVE_WORKING_DAYS_ON + DAY))).filter((x) => x.applicationId === row.id)).toEqual([]);
       expect(await eventsOf(row.id, "application.untold_fallback")).toHaveLength(1);
       const raised = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.companyId, job.id));
       expect(raised.filter((e) => e.applicationId === row.id || e.question.includes(LOCKED))).toEqual([]);
