@@ -119,6 +119,14 @@ jobs:
         env:
           E2E_REPORT_DIR: report/3
 
+      # The sign-up mode is the server's, so the journey that asks for approval has a server of its own.
+      - name: First sign-in asks for approval (a server in SIGNUP_MODE=approval)
+        if: ${{ !cancelled() && steps.e2e_first.outcome != 'skipped' }}
+        run: pnpm --filter @ros/e2e exec playwright test specs/access-approval.spec.ts
+        env:
+          E2E_REPORT_DIR: report/4
+          SIGNUP_MODE: approval
+
       - name: Playwright report (synthetic data only)
         if: always()
         uses: actions/upload-artifact@v7

@@ -11,7 +11,7 @@ import { Link } from "../../nav";
 import { firstName } from "../../today";
 import { adminKeys, adminReason, type AlertRow, type CustomerRow, type DataRequest } from "./admin-api";
 import { activityWords, money, planWords, severityWords } from "./admin-words";
-import { AccessButtons, type AccessFact, AccessFacts, accessFacts, accessRequests, aiCreditDollars, customerOrder, realCustomers, waitingCustomers, waitingForCheck } from "./customers";
+import { AccessButtons, accessFacts, accessRequests, aiCreditDollars, customerOrder, FactsLine, type LineFact, realCustomers, waitingCustomers, waitingForCheck } from "./customers";
 import { PRIVACY_DUE_SOON_DAYS } from "./privacy";
 import { needsAPerson } from "./problems";
 import { costsSinceKey, monthStartIn } from "./system";
@@ -42,7 +42,7 @@ export type OverviewSources = { customers?: CustomerRow[]; alerts?: AlertRow[]; 
  * `access`: a request for access, whose row draws its facts and Accept and Decline instead. `things`: how many things it
  * stands for, when that is more than one (the row for the rest of the requests).
  */
-export type AttentionRow = { key: string; urgent: boolean; text: string; sub?: string; action: { label: string; href: string }; access?: { company: CustomerRow; facts: AccessFact[] }; things?: number };
+export type AttentionRow = { key: string; urgent: boolean; text: string; sub?: string; action: { label: string; href: string }; access?: { company: CustomerRow; facts: LineFact[] }; things?: number };
 
 /** Up to this many requests for access get a row each, the longest waiting first; the rest share one row linking to them. */
 export const ACCESS_ROWS_EACH = 5;
@@ -354,7 +354,7 @@ export function Overview() {
                   <span className="list-row-lead"><IconChip icon="alert" tone="peach" size="sm" /></span>
                   <span className="list-row-main sm:basis-80">
                     <span className="list-row-title wrap">{r.text}</span>
-                    <span className="list-row-meta"><span className="min-w-0 wrap-anywhere"><AccessFacts facts={r.access.facts} /></span></span>
+                    <span className="list-row-meta"><span className="min-w-0 wrap-anywhere"><FactsLine facts={r.access.facts} /></span></span>
                   </span>
                   <span className="list-row-end max-w-full">
                     <AccessButtons company={r.access.company} onDecided={afterDecided} />
@@ -481,7 +481,7 @@ function CustomersCard({ rows, error, retry }: { rows: CustomerRow[] | undefined
             ))}
             {!rows.length ? <li className="px-4 py-5 text-sm text-ink-3">No customers yet.</li> : !matches.length ? <li className="px-4 py-5 text-sm text-ink-3">{`No customer matches “${typed.trim()}”.`}</li> : null}
           </ul>
-          {rows.length ? <MoreLink to={seeAll}>{typed.trim() ? "See every match in Customers" : `See all ${rows.length} customers`}</MoreLink> : null}
+          {rows.length ? <MoreLink to={seeAll}>{typed.trim() ? "See every match in Customers" : `See all ${count(rows.length, "customer", "customers")}`}</MoreLink> : null}
         </>
       )}
     </Card>

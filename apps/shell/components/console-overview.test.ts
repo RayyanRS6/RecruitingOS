@@ -346,6 +346,7 @@ describe("first sign-in asks for approval, on the Overview", () => {
     expect(card).not.toContain("Asking Dental");
     expect(card).not.toContain("Declined Dental");
     expect(card).toContain("See all 2 customers");
+    expect(render(client(withRequests([customers[0], asker("co-a", "Asking Dental", 2)])))).toContain("See all 1 customer<");
     const onlyAsking = render(client(withRequests([asker("co-a", "Asking Dental", 2), declined("co-d", "Declined Dental", 7)])));
     expect(onlyAsking).toContain("No customers yet.");
     expect(onlyAsking).toContain('<span class="stat-cell-label">Customers</span><span class="stat-cell-value">0</span>');

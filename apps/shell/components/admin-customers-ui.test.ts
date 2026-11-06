@@ -372,7 +372,8 @@ describe("the customer drawer", () => {
 describe("first sign-in asks for approval, on the Customers page", () => {
   const person = { name: "Sam Asker", email: "sam@stranger.test" };
   const asking = (id: string, name: string, over: Record<string, unknown> = {}) => company(id, name, { verifiedAt: null, createdAt: daysAgo(2), planKey: "free", roles: 0, whoPosts: "self", locations: [{ city: "Austin", region: "TX", country: "US" }], settings: { website: "https://asker.example" }, accessRequest: { status: "requested", person, declined: null }, ...over });
-  const refused = (id: string, name: string, over: Record<string, unknown> = {}) => asking(id, name, { createdAt: daysAgo(9), accessRequest: { status: "declined", person, declined: { at: "2026-11-05T15:10:00.000Z", by: "Ada Admin" } }, ...over });
+  // 3:10 PM on 5 November on the reader's own clock, which is how the console shows a time, wherever the test runs
+  const refused = (id: string, name: string, over: Record<string, unknown> = {}) => asking(id, name, { createdAt: daysAgo(9), accessRequest: { status: "declined", person, declined: { at: new Date(2026, 10, 5, 15, 10).toISOString(), by: "Ada Admin" } }, ...over });
   const rows = () => [...three(), asking("co8", "Harbor Dental"), refused("co9", "Gone Dental")];
   const data = (list: unknown[] = rows()): Array<[unknown[], unknown]> => [[["admin", "customers"], list], [["admin", "alerts"], [lowAlert]]];
   const page = (search = "", list?: unknown[]) => render(client(data(list), admin), Customers(search));
@@ -452,10 +453,12 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     expect(html).toMatch(/id="customer-drawer-tab-check" class="tab" aria-selected="true"/);
     const words = text(html);
     expect(words).toContain("Asking for access");
-    expect(words).toContain("Sam Asker · sam@stranger.test · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example (opens in a new tab) · Waiting 2 days");
+    // who is asking, where, and how long; a fact is said once, so the kind, the size and the website stay in the header
+    expect(words).toContain("Sam Asker · sam@stranger.test · Austin, TX · Waiting 2 days");
+    expect(words).toContain("dental · 20-49 employees · https://asker.example (opens in a new tab) · signed up");
+    expect(html.split("https://asker.example<")).toHaveLength(2);
     expect(html).toContain('<button type="button" class="btn primary sm" aria-label="Accept Harbor Dental">Accept</button>');
     expect(html).toContain('<button type="button" class="btn quiet sm" aria-label="Decline Harbor Dental">Decline</button>');
-    expect(html).toContain('rel="noopener noreferrer nofollow"');
     expect(html).toMatch(/<summary>How this works<\/summary><p[^>]*>Accept lets them in on the Free plan and counts as the ITS check\. Decline keeps them out, and you can still accept later\.<\/p>/);
     for (const gone of ["Confirm the company", "How you checked the company", "Job-board access", "It can draft and approve roles", "Take back the confirmation", "The owners are told", "The owners were told"]) expect(words, gone).not.toContain(gone);
     expect(html).not.toContain('id="co-check-why"');
@@ -534,6 +537,16 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     expect(accessPressRefused(new ApiError(403, "mfa_required", "Confirm it's you."))).toEqual({ title: "Confirm it's you.", tone: "critical" });
     expect(accessPressRefused(new TypeError("Failed to fetch"))).toEqual({ title: "Could not record that. Try again.", tone: "critical" });
     expect(accessPressRefused(new SyntaxError("Unexpected token <"))).toEqual({ title: "Could not record that. Try again.", tone: "critical" });
+  });
+
+  it("makes the website in the drawer's header a link only for http and https, for any company, with the same rel and target", () => {
+    const header = (website: string) => from(page("open=co3", [company("co3", "Avon Dental", { settings: { website } })]), '<p class="drawer-sub">');
+    expect(header("https://avon.example/about")).toContain('<a href="https://avon.example/about" target="_blank" rel="noopener noreferrer nofollow">https://avon.example/about<span class="sr-only"> (opens in a new tab)</span></a>');
+    for (const typed of ["avon.example", "javascript:alert(1)", "https://good.example@evil.example"]) {
+      const html = header(typed);
+      expect(html.slice(0, html.indexOf("</p>")), typed).not.toContain("<a ");
+      expect(text(html), typed).toContain(`20-49 employees · ${typed} · signed up`);
+    }
   });
 
   it("shows a typed name safely on the list and in the drawer, and a very long one breaks anywhere", () => {

@@ -57,6 +57,9 @@ export default defineConfig({
       // New companies are confirmed at sign-up so the journeys have public pages; company-check.spec.ts takes a
       // confirmation back and gives it again through the admin console (founder decision B7).
       COMPANY_CHECK: "auto",
+      // Sign-up is open for the journeys. access-approval.spec.ts runs on a server of its own, with SIGNUP_MODE=approval in
+      // the environment (the last end-to-end step of .github/workflows/ci.yml), and is skipped in any other run.
+      ...(process.env.SIGNUP_MODE ? { SIGNUP_MODE: process.env.SIGNUP_MODE } : {}),
     },
   },
 });

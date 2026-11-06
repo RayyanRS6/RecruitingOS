@@ -242,32 +242,44 @@ function PlanFacts({ c }: { c: Pick<CustomerRow, "aiCredit" | "lockedApplicants"
 /** The chip on a request for access, wherever the list or the drawer names one. */
 export const ASKING_FOR_ACCESS_CHIP = "Asking for access";
 
-/** One fact about a request: words, and the address they may link to (only a typed website has one, and only when `websiteHref` lets it). */
-export type AccessFact = { text: string; href?: string };
+/** One fact in a line of them: words, and the address they may link to (only a typed website has one, and only when `websiteHref` lets it). */
+export type LineFact = { text: string; href?: string };
 
-/**
- * Who is asking and for what: the person's name and email, the kind of business, the size, the city and state, the website,
- * and how long they have waited. All of it was typed by a stranger, so it is only ever drawn as text and the checked link.
- */
-export function accessFacts(c: Pick<CustomerRow, "accessRequest" | "vertical" | "sizeBand" | "locations" | "settings" | "createdAt">, now: number = Date.now()): AccessFact[] {
+const websiteFact = (website: string): LineFact => ({ text: website, href: websiteHref(website) ?? undefined });
+
+type AccessFactsOf = Pick<CustomerRow, "accessRequest" | "vertical" | "sizeBand" | "locations" | "settings" | "createdAt">;
+
+/** What a request says, in the parts its two places choose from. */
+function accessFactParts(c: AccessFactsOf, now: number) {
   const person = c.accessRequest?.person;
   const where = c.locations?.[0];
   const website = c.settings.website?.trim();
-  const href = websiteHref(website) ?? undefined;
-  const facts: Array<AccessFact | null> = [
-    person?.name ? { text: person.name } : null,
-    person?.email ? { text: person.email } : null,
-    { text: verticalWords(c.vertical) },
-    { text: `${c.sizeBand} employees` },
-    where?.city || where?.region ? { text: [where.city, where.region].filter(Boolean).join(", ") } : null,
-    website ? { text: website, href } : null,
-    c.accessRequest?.status === "requested" ? { text: waitingWords(c.createdAt, now) } : null,
-  ];
-  return facts.filter((f): f is AccessFact => f !== null);
+  const place = [where?.city, where?.region].filter(Boolean).join(", ");
+  return {
+    who: [person?.name, person?.email].filter((v): v is string => !!v).map((text) => ({ text })),
+    place: place ? [{ text: place }] : [],
+    website: website ? [websiteFact(website)] : [],
+    waited: c.accessRequest?.status === "requested" ? [{ text: waitingWords(c.createdAt, now) }] : [],
+  };
 }
 
-/** Those facts in one line that wraps like a sentence, the website a link that opens apart and tells search engines nothing. */
-export function AccessFacts({ facts }: { facts: readonly AccessFact[] }) {
+/**
+ * The Overview's row: the person's name and email, the kind of business, the size, the city and state, the website, and how
+ * long they have waited. All of it was typed by a stranger, so it is only ever drawn as text and the checked link.
+ */
+export function accessFacts(c: AccessFactsOf, now: number = Date.now()): LineFact[] {
+  const { who, place, website, waited } = accessFactParts(c, now);
+  return [...who, { text: verticalWords(c.vertical) }, { text: `${c.sizeBand} employees` }, ...place, ...website, ...waited];
+}
+
+/** The drawer's check tab: what its header does not say already. */
+export function accessPanelFacts(c: AccessFactsOf, now: number = Date.now()): LineFact[] {
+  const { who, place, waited } = accessFactParts(c, now);
+  return [...who, ...place, ...waited];
+}
+
+/** Facts in one line that wraps like a sentence; a website is a link that opens apart and tells search engines nothing. */
+export function FactsLine({ facts }: { facts: readonly LineFact[] }) {
   return (
     <>
       {facts.map((f, i) => (
@@ -323,8 +335,9 @@ export function AccessChoice(props: { company: Pick<CustomerRow, "name" | "acces
  * The press on a request for access, from the Overview's row and the drawer alike (POST /admin/customers/:id/access): the
  * question, then a toast in the API's own words, and the list read again, so the row leaves. A second administrator who got
  * there first reads the API's calm answer and the row refreshes the same way. An error is a toast and the row stays.
- * `onDecided` runs once the new list is drawn, for the place around it to look after focus. Swapping the buttons removes
- * the one that had focus: it goes to Yes, and after No back to the button that asked.
+ * `onDecided` runs once the new list is drawn, either way, for the place around it to look after focus should the row have
+ * left with it. Swapping the buttons removes the one that had focus: it goes to Yes, and after No back to the button that
+ * asked.
  */
 export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRow, "id" | "name" | "accessRequest">; onDecided?: () => void }) {
   const qc = useQueryClient();
@@ -348,11 +361,12 @@ export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRo
       setAsking(null);
       onDecided?.();
     },
-    onError: (e) => {
+    onError: async (e) => {
       const refused = accessPressRefused(e);
       toast(refused.title, refused.tone ? { tone: refused.tone } : undefined);
       ask(null);
-      void qc.invalidateQueries({ queryKey: adminKeys.customers });
+      await qc.invalidateQueries({ queryKey: adminKeys.customers });
+      onDecided?.();
     },
   });
   return (
@@ -562,11 +576,12 @@ const ACCESS_REQUEST_TABS: ReadonlySet<CustomerTab> = new Set(["overview", "chec
  * Overview, then the bodies of the four sheets the console had before (ITS check, Plan, How people apply, Report), with
  * the same actions; their words follow the fewer-words rule (23 Oct 2026). Every "Change" on the Overview switches to
  * its tab. The header is the one place the company's facts are said, so a missing website is said there too ("no
- * website given"): the ITS check asks staff to look at the website. Everything but the Report's tables breaks a very long
- * name or address anywhere rather than pushing the drawer sideways.
+ * website given"): the ITS check asks staff to look at the website, so a real one is a link. Everything but the Report's
+ * tables breaks a very long name or address anywhere rather than pushing the drawer sideways.
  */
 function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: CustomerRow; low: AllowanceAlert | undefined; tab: CustomerTab; onTab: (tab: CustomerTab) => void; onClose: () => void }) {
-  const sub = [company.vertical, `${company.sizeBand} employees`, company.settings.website || "no website given", `signed up ${whenWords(company.createdAt)}`].filter(Boolean).join(" · ");
+  const website = company.settings.website?.trim();
+  const sub = <FactsLine facts={[{ text: company.vertical }, { text: `${company.sizeBand} employees` }, website ? websiteFact(website) : { text: "no website given" }, { text: `signed up ${whenWords(company.createdAt)}` }]} />;
   const tabs = company.accessRequest ? CUSTOMER_TABS.filter((t) => ACCESS_REQUEST_TABS.has(t.id)) : CUSTOMER_TABS;
   const shown = tabs.some((t) => t.id === tab) ? tab : "check";
   // The button pressed on the Overview goes with it: focus moves to the tab it opened.
@@ -607,7 +622,7 @@ function AccessRequestPanel({ company, request }: { company: CustomerRow; reques
     <Card title={declined ? "Declined" : ASKING_FOR_ACCESS_CHIP}>
       <div className="grid gap-1.5">
         {declined && request.declined ? <p className="text-sm text-ink">{declinedWhen(request.declined)}</p> : null}
-        <p className="text-sm text-ink-2"><AccessFacts facts={accessFacts(company)} /></p>
+        <p className="text-sm text-ink-2"><FactsLine facts={accessPanelFacts(company)} /></p>
       </div>
       <div className="mt-4">
         <AccessButtons company={company} onDecided={() => requestAnimationFrame(() => { if (focusLost(document.activeElement, document.body)) document.getElementById("customer-drawer-tab-check")?.focus(); })} />
