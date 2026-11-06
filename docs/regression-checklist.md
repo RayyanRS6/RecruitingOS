@@ -893,7 +893,7 @@ Who: the ITS platform admin.
 - [ ] **Do:** in Customers, open a company's drawer and its Report, ITS check (job boards) and How people apply tabs. **Expect:** a reason is required.
 - [ ] **Do:** in System and settings › AI runs, find a conversation nobody sent. **Expect:** its output is withheld.
 - [ ] **Do:** in System and settings › Administrators, grant a role. **Expect:** a reason of at least 5 characters is required. Granting yourself is refused. Revoking the last admin is refused. The other admins are told.
-- [ ] **Do:** in Customers › Hiring outcomes, correct an outcome. **Expect:** the original row is kept.
+- [ ] **Do:** in Customers › Hiring outcomes, correct an outcome. **Expect:** the original row is kept. **Do:** void the outcome of a closed job on a company with every place in use. **Expect:** refused, saying to change the plan first, and the job stays closed.
 - [ ] Automated: see the table in 2.7. `e2e/routes.spec.ts` opens every section and every part, with axe and the no-sideways-scroll check.
 - [ ] Known issues, do not make worse:
   - the plan change has no screen (KB #1);

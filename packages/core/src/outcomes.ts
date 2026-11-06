@@ -1,8 +1,9 @@
 import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from "drizzle-orm";
 import { RejectReason, type Actor, type ApplicationStage } from "@ros/contracts";
-import { applications, approvalRequests, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
+import { applications, approvalRequests, entitlements, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { lockApplicants } from "./candidate-lock";
+import { ACTIVE_ROLES, roleRoom } from "./entitlements";
 import { emit } from "./events";
 import { POSTING_TASK_KINDS } from "./posting-tasks";
 import { BOARD_UP_STATES, isBoardChannel, transitionPosting, type PostingState } from "./postings";
@@ -34,7 +35,7 @@ export const OUTCOME_STAGE: Record<ApplicationOutcome, ApplicationStage> = {
 export const OUTCOME_STATEMENT = "Recorded by a person. Any offer, acceptance or decline happened outside Recruiting OS; the platform did not generate, approve or send it.";
 
 export class OutcomeError extends Error {
-  constructor(public readonly code: "hire_date_required" | "reason_required" | "not_found" | "already_closed" | "already_corrected" | "already_recorded" | "not_active" | "bad_outcome", message: string) {
+  constructor(public readonly code: "hire_date_required" | "reason_required" | "not_found" | "already_closed" | "already_corrected" | "already_recorded" | "not_active" | "bad_outcome" | "no_room_on_plan", message: string) {
     super(message);
   }
 }
@@ -143,7 +144,8 @@ export async function recordRoleOutcome(
  * original's when left out). A role outcome voided reopens the role, and its closing message waiting for approval (Q30)
  * is withdrawn: the closing message is only for a closed role. Someone the team can read stays where the close left them, for
  * the team to move. Someone locked it moved and nobody has told has nobody who could (Rule 2): they go back to waiting, so the
- * date they were promised, the close-out note and an upgrade all work as if the job had not closed.
+ * date they were promised, the close-out note and an upgrade all work as if the job had not closed. A voided role takes a
+ * place on the plan again, so it needs one free, read as a new role's is, behind the same row: the plan's limit holds for ITS too.
  */
 export async function correctOutcome(
   q: Queryable,
@@ -158,6 +160,11 @@ export async function correctOutcome(
   const allowed = applicationLevel ? [...Object.keys(OUTCOME_STAGE), "voided"] : ["filled", "filled_outside_platform", "role_cancelled", "no_hire", "voided"];
   if (!allowed.includes(newOutcome)) throw new OutcomeError("bad_outcome", `"${newOutcome}" is not a ${applicationLevel ? "candidate" : "role"} outcome.`);
   if (newOutcome === "hired_externally" && !input.hireDate && !original.hireDate) throw new OutcomeError("hire_date_required", "A corrected hire needs the hire date.");
+  if (!applicationLevel && original.roleId && newOutcome === "voided") {
+    await q.select({ id: entitlements.id }).from(entitlements).where(and(eq(entitlements.companyId, original.companyId), eq(entitlements.key, ACTIVE_ROLES))).for("update");
+    const room = await roleRoom(q, original.companyId, { except: original.roleId });
+    if (!room.ok) throw new OutcomeError("no_room_on_plan", "Reopening this job needs a place on the company's plan, and none is free. Change the plan first, then void this outcome.");
+  }
   await q.update(hiringOutcomes).set({ correctedAt: now.toISOString(), correctedBy: input.actor, correctionReason: input.reason }).where(eq(hiringOutcomes.id, original.id));
   const [correction] = await q.insert(hiringOutcomes).values({
     companyId: original.companyId, applicationId: original.applicationId, roleId: original.roleId, milestone: original.milestone, outcome: newOutcome,

@@ -428,6 +428,67 @@ describe("the Free plan's one job", () => {
       expect((await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." })).status).toBe(200);
       expect((await roleOf(roleId)).status).toBe("open");
     });
+
+    const voidOutcomeOf = async (roleId: string) => {
+      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, roleId));
+      return { outcome, answer: await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." }) };
+    };
+
+    it("on Free, a void that would make a second job is refused until the plan has room: nothing moves, and ITS is told to change the plan first", async () => {
+      const { cookie, id } = await newCompany();
+      const never = await jobWaiting(cookie);
+      await closeOk(cookie, never);
+      const live = await jobWaiting(cookie);
+      await approve(cookie, live);
+      expect((await roleOf(live)).status).toBe("open");
+
+      const { outcome, answer } = await voidOutcomeOf(never);
+      expect(answer.status).toBe(409);
+      expect(await errorOf(answer)).toMatchObject({ code: "no_room_on_plan", message: "Reopening this job needs a place on the company's plan, and none is free. Change the plan first, then void this outcome." });
+      expect((await roleOf(never)).status).toBe("closed");
+      expect((await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.id, outcome.id)))[0].correctedAt).toBeNull();
+      expect(await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.correctionOf, outcome.id))).toEqual([]);
+
+      // Basic has room, so the same void goes, and the job is a draft to ask for approval again
+      const moved = await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey: "basic", reason: "They asked to upgrade." });
+      expect(moved.status).toBe(200);
+      expect((await voidOutcomeOf(never)).answer.status).toBe(200);
+      expect((await roleOf(never)).status).toBe("draft");
+    });
+
+    it("on any plan: Basic with all 3 places in use cannot void a closed job into a 4th, and can once one closes", async () => {
+      const { cookie, id } = await newCompany();
+      const moved = await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey: "basic", reason: "They asked to upgrade." });
+      expect(moved.status).toBe(200);
+      const first = await jobWaiting(cookie);
+      await approve(cookie, first);
+      await closeOk(cookie, first);
+      const inUse: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const role = await jobWaiting(cookie);
+        await approve(cookie, role);
+        inUse.push(role);
+      }
+      expect((await room(cookie)).used).toBe(3);
+      expect((await voidOutcomeOf(first)).answer.status).toBe(409);
+      expect((await roleOf(first)).status).toBe("closed");
+      await closeOk(cookie, inUse[0]);
+      expect((await voidOutcomeOf(first)).answer.status).toBe(200);
+      expect((await roleOf(first)).status).toBe("open");
+      expect((await room(cookie)).used).toBe(3);
+    });
+
+    it("a correction that does not reopen the job needs no room: a closed job's reason can be put right with every place in use", async () => {
+      const { cookie } = await newCompany();
+      const never = await jobWaiting(cookie);
+      await closeOk(cookie, never);
+      const live = await jobWaiting(cookie);
+      await approve(cookie, live);
+      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, never));
+      const corrected = await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "It was filled, not cancelled.", outcome: "filled_outside_platform" });
+      expect(corrected.status, await corrected.clone().text()).toBe(200);
+      expect((await roleOf(never)).status).toBe("closed");
+    });
   });
 
   describe("a change of plan", () => {
