@@ -129,7 +129,7 @@ When ITS posts, you do not have to do anything on the boards yourself. If a boar
 
 **Other links.** Under **Other links** you can make an application link for a referral, a direct approach or anything else. Applications through it carry the name you gave it.
 
-**Applications by source (last 14 days).** How many people applied each day, and through which board or link, in your time zone. If more than 100 people apply in a day, owners and admins are told the next day. Nobody is ever turned away because of the number.
+**Applications by source (last 14 days).** How many people applied each day, and through which board or link, in your time zone. Anyone locked is in the totals and on a line of their own, never under a source. If more than 100 people apply in a day, owners and admins are told the next day. Nobody is ever turned away because of the number.
 
 **Pause** in the job page's **More** menu stops new applications without declining anyone: the job page says the position is not accepting applications and the role disappears from your careers page. **Resume** puts it back. If you have enough applicants and want the job to stay listed but closed, use **Stop accepting applications** in the job page's **More** menu instead: the page stays up and says applications are closed, a banner under the title says since when, nobody who applied is affected, and nobody is declined. **Accept applications again** reopens it. Either way, the board postings stay up until they are paused or removed there; tell your ITS contact.
 
@@ -354,7 +354,7 @@ The product never makes or sends an offer, and it asks for no pay, tax, identity
 
 **The hire sheet.** **Hire**, **They accepted**, **Hired** after an interview, or **Hired** on the stage button all open it. Enter the start date (and the day they accepted, if you know it), press **Continue**, then **Yes, record the hire**: it is recorded under your name, and nothing is sent to anyone. The sheet then lists the other people still in the running for the role and offers two choices:
 
-- **Close it now** (the role, as filled): everyone still in process moves to your talent pool, privately, unless they asked not to be kept; anyone with an interview booked or times offered gets a short note straight away saying only that the interview is off; and you see the closing message before it goes (below). Under the list of people the sheet says "and N more you cannot see yet" when anyone is locked.
+- **Close it now** (the role, as filled): everyone still in process moves to your talent pool, privately, unless they asked not to be kept; anyone with an interview booked or times offered gets a short note straight away saying only that the interview is off; and you see the closing message before it goes (below). Under the list of people the sheet says "and N more you cannot see yet" when anyone locked is still in process.
 - **Keep the role open**: nobody is told anything, and **Home** shows a "Keep your backups warm" card until the start date, in case the start falls through. If the start date you entered has already passed, there is no card to show, so the sheet offers **Leave it open** instead and says so: close the role from its page when you are ready.
 
 **Record an outcome** (in the candidate page's menu) opens **Record what happened** for the other outcomes. **Open the hire sheet** is at the top; otherwise choose:
