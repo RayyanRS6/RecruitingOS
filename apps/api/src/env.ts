@@ -122,7 +122,8 @@ export type Env = {
    * The one-time ITS check of a company that signs itself up (founder decision B7): "its" (the default, and the only
    * value production accepts) keeps the careers page, job pages, Google listing and first candidate emails waiting until
    * ITS confirms the company in the admin console; "auto" confirms every new company at once (the default under
-   * NODE_ENV=test, and for local journeys that need a public page straight away). Recorded either way.
+   * NODE_ENV=test, and for local journeys that need a public page straight away). Recorded either way. A request for access
+   * (SIGNUP_MODE=approval) is never confirmed by "auto": Accept confirms it.
    */
   COMPANY_CHECK: "its" | "auto";
   /**
