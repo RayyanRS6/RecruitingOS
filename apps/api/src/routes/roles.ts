@@ -728,7 +728,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, followUp, interviewPreparing: (await interviewsBeingPrepared(tx, [app.id])).has(app.id), aiInterview, ...(await undoFacts(tx, app)) });
     const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
     // What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent.
-    const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId });
+    const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId, lockedAt: app.lockedAt });
     // A scorecard only for a complete conversation: one closed without being sent has none to show.
     const shownScorecard = (s: { status: string; assessmentId: string | null }) => s.status === "completed" && !(s.assessmentId && hiddenReadings.has(s.assessmentId));
     const scorecards = await screenScorecards(tx, scr.map((s) => (shownScorecard(s) ? s : { ...s, assessmentId: null })));

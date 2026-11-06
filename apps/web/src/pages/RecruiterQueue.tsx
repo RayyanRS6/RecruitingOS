@@ -7,7 +7,7 @@ import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, Ico
 import type { EscalationThreadEntry } from "@ros/contracts";
 import { api, ApiError, type Me, type PostingTaskDetail } from "../api/client";
 import { POSTING_TASK_BEFORE_ACCEPT, isPostingTaskKind, queueKindLabel } from "../publishing";
-import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
+import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, LOCKED_CALL_NOTES_HINT, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
 import { toast } from "../toast";
 import { BoardSnapshotCard } from "./board/BoardSnapshot";
 import { snapshotOf } from "./board/board-model";
@@ -509,7 +509,7 @@ function EscalationDetail({ id }: { id: string }) {
           {/* A candidate who chose a person over the assistant (plan E3, Q16): the call, then the notes on their AI interview tab. */}
           {e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId && e.status !== "resolved" ? (
             <Card needsYou title="After you talk with them">
-              <p className="small text-ink-2">{CALL_NOTES_HINT}</p>
+              <p className="small text-ink-2">{e.lockedForCompany ? LOCKED_CALL_NOTES_HINT : CALL_NOTES_HINT}</p>
               {e.grant ? <div className="row mt-4"><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open the candidate's AI interview tab</Button></div> : null}
             </Card>
           ) : null}

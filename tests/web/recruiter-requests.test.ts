@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RecruiterRequestView } from "../../packages/contracts/src/api";
 import { hasChoice, loosens, looseningQuestion, splitRules } from "../../apps/web/src/ai-rules";
 import { presetOf } from "../../apps/web/src/recruiter-access";
-import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
+import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, LOCKED_CALL_NOTES_HINT, RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
 import { canAskRecruiter } from "../../apps/web/src/roles";
 
 /**
@@ -208,6 +208,15 @@ describe("the recruiter queue shows the draft a request is about (plan C12)", ()
     expect(CALL_NOTES_HINT).toMatch(/never as the candidate's own words/);
     const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
     expect(queue).toContain("e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId");
+  });
+
+  it("has its own hint for a request about someone the company cannot read: they never had the assistant, and nothing is scored", () => {
+    expect(LOCKED_CALL_NOTES_HINT).toMatch(/add your notes from the call on the AI interview tab/);
+    expect(LOCKED_CALL_NOTES_HINT).toMatch(/never as the candidate's own words/);
+    expect(LOCKED_CALL_NOTES_HINT).toMatch(/no AI interview or interview starts/);
+    expect(LOCKED_CALL_NOTES_HINT).not.toMatch(/instead of the assistant|scorecard is written|finish the AI interview/i);
+    const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
+    expect(queue).toContain("e.lockedForCompany ? LOCKED_CALL_NOTES_HINT : CALL_NOTES_HINT");
   });
 
   it("reads what the draft knows, one plain line each, saying the pay may not be confirmed", () => {

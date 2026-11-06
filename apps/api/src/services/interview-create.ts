@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import type { Actor, MembershipRole } from "@ros/contracts";
+import { NO_WORK_WHILE_LOCKED, type Actor, type MembershipRole } from "@ros/contracts";
 import { CANCEL_STAGES, STAGE_LABEL, defaultSchedulingWindow, emit, endMarkOnMove, followUpParked, notify, openFollowUpOf, setAutoState, setCurrentInterview, transition } from "@ros/core";
 import type { InvitationNote } from "@ros/agents";
 import { applications, approvalRequests, candidates, companies, interviewParticipants, interviews, memberships, rolePackets, roles, type Tx } from "@ros/db";
@@ -54,6 +54,8 @@ export async function createApprovedInterview(tx: Tx, container: Container, inpu
   const read = tx.select().from(applications).where(and(eq(applications.id, input.applicationId), eq(applications.companyId, companyId))).limit(1);
   const [app] = input.locked ? await read : await read.for("update");
   if (!app) throw new HttpError(404, "not_found", "Application not found.");
+  // Under a grant naming someone locked too: the interviewers would get their name by email and calendar, and could not open them.
+  if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
   if (!INTERVIEW_FROM.includes(app.stage)) throw new HttpError(409, "interview_not_schedulable", `A candidate at "${STAGE_LABEL[app.stage]}" cannot be moved to an interview from here.`);
   // A line that came from the assistant's suggestion says so even if it was changed or the page left the flag out (Q28).
   let invitationNote = input.invitationNote ?? null;

@@ -136,6 +136,9 @@ export const CANDIDATE_ASKED_FOR_PERSON = "candidate_issue";
 /** Said on such a request once accepted: what to do after the call, and that the notes are never the candidate's words. */
 export const CALL_NOTES_HINT = "The candidate asked to talk to a person instead of the assistant. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the AI interview tab. Your notes finish the AI interview so the scorecard is written; they are kept as yours, never as the candidate's own words.";
 
+/** The same, about someone the company cannot read: they never had the assistant, and nothing is scored or started while locked. */
+export const LOCKED_CALL_NOTES_HINT = "This candidate wrote to us or asked for a person, and the company cannot read them. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the AI interview tab. Your notes are kept on their Notes tab as yours, never as the candidate's own words. Nothing scores them, and no AI interview or interview starts, while they are locked.";
+
 const PAY_PER: Record<string, string> = { hourly: "an hour", salary: "a year" };
 const money = (n: unknown) => (typeof n === "number" ? `$${n.toLocaleString("en-US")}` : null);
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);

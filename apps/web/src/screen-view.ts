@@ -309,7 +309,8 @@ export function callNotesBody(byQuestion: Record<string, string>, other: string,
 }
 
 /** What adding the notes did, in two short lines. */
-export function callNotesToast(r: { completed: boolean }, firstName: string): { title: string; detail: string } {
+export function callNotesToast(r: { completed: boolean; keptAsNote?: boolean }, firstName: string): { title: string; detail: string } {
+  if (r.keptAsNote) return { title: "Notes kept.", detail: `They are on the Notes tab. ${firstName} is locked, so no AI review is written.` };
   return r.completed
     ? { title: "Notes added. The conversation is complete.", detail: `${firstName}'s scorecard is written from them, marked as your notes and never as their own words.` }
     : { title: "Notes added.", detail: `The conversation stays open for ${firstName}.` };

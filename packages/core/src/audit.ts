@@ -110,6 +110,8 @@ export type AuditAction =
   /** A person wrote to a candidate from the sheet (F11): who, which application, whether it went at once or waited for an approval, and who approved it. Never the text. */
   | "message.sent"
   | "message.approval_requested"
+  /** ITS staff wrote to someone locked, past the company's approval rule, because nobody at the company may read them (the plans of 5 November 2026, Rule 2). Which rule, never the text. */
+  | "message.approval_skipped"
   /** Undo (plan G9): a person took back a message while it waited in the outbox. Which message, never the text. */
   | "message.undone"
   /** The one closing message of a closed role (Q30): sent to everyone untold, or put to one approval, by whom, how many. */

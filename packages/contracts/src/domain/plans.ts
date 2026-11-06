@@ -165,6 +165,12 @@ export const MORE_CANDIDATES_UPGRADE_QUESTION = "We would like to view more cand
 /** A recruiter request about someone locked, as the team's own list shows it: their words, and ITS's, stay with ITS. */
 export const LOCKED_REQUEST_LINE = "An ITS recruiter is helping a candidate you cannot see yet.";
 
+/**
+ * Why nothing starts for someone locked: on the button, and in the route's refusal. Only ITS staff who may read them see it
+ * (a grant naming them, or break glass); the team is refused at the door and never reads it.
+ */
+export const NO_WORK_WHILE_LOCKED = "Locked on the company's plan: no AI help, no AI interview and no interview until an upgrade opens them.";
+
 /** One locked person on a job's list: where they came in, and when. Nothing else about them. */
 export type LockedCard = { position: number; appliedAt: string };
 /** The locked people of one job, beside the people the team can read (GET /roles/:id/applications?counts=1). */

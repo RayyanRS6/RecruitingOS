@@ -302,7 +302,8 @@ describe("the team cannot read a locked person", () => {
     expect(JSON.stringify(await read(await json(named, "GET", `/api/v1/events?subjectId=${ids.locked}`)))).toContain("application.received");
     // Their call notes go through (409: there is no interview to keep open, not 402).
     const notes = await json(named, "POST", `/api/v1/applications/${ids.locked}/screen/recruiter-notes`, { notes: [{ text: "We talked." }], complete: false });
-    expect(notes.status).toBe(409);
+    expect(notes.status).toBe(200);
+    expect(await read(notes)).toMatchObject({ completed: false, keptAsNote: true });
     // In the queue, with the warning: words cannot be checked by a machine.
     const queue = await read<{ accessGranted: boolean; lockedForCompany: boolean; contextSnapshot: { candidate: { name: string } }; question: string }>(await json(named, "GET", `/api/v1/escalations/${ids.lockedRequest}`));
     expect(queue).toMatchObject({ accessGranted: true, lockedForCompany: true });

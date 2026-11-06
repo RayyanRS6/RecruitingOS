@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, like } from "drizzle-orm";
-import type { ApplicationStage, MembershipRole } from "@ros/contracts";
+import { NO_WORK_WHILE_LOCKED, type ApplicationStage, type MembershipRole } from "@ros/contracts";
 import { entitlements, openFollowUp, type FollowUpStrip } from "@ros/core";
 import { SCORECARD_READINGS, newTimesDayWords } from "@ros/agents";
 import { applications, candidates, communications, companies, events, interviewFollowups, interviews, policies, randomToken, recruiterEscalations, screens, users, withTenant, workflowRuns } from "@ros/db";
@@ -21,6 +21,22 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
   const facts = (over: Partial<ApplicationFacts> = {}): ApplicationFacts => ({ stage: "triaged", rejectReason: null, hasOpenScreen: false, hasActiveInterview: false, hasUndecidedInterview: false, role: "owner", openUnknowns: 0, ...over });
 
   describe("the rule itself", () => {
+    it("offers nothing that spends AI on someone locked or starts an interview, whatever their step, and says why", () => {
+      const open = applicationActionState(facts({ openUnknowns: 2 }));
+      expect(open.allowed).toEqual(expect.arrayContaining(["invite_screen", "ask_in_screen", "interview", "advance_to_interview"]));
+      const locked = applicationActionState(facts({ openUnknowns: 2, lockedAt: "2026-11-01T00:00:00.000Z", role: "recruiter" }));
+      for (const cap of ["invite_screen", "ask_in_screen", "interview", "advance_to_interview"] as const) {
+        expect(locked.allowed).not.toContain(cap);
+        expect(locked.blockedReasons[cap]).toBe(NO_WORK_WHILE_LOCKED);
+      }
+      // The reason holds over any other a state would give, and everything else stays as it was.
+      expect(applicationActionState(facts({ lockedAt: "2026-11-01T00:00:00.000Z", hasOpenScreen: true })).blockedReasons.invite_screen).toBe(NO_WORK_WHILE_LOCKED);
+      expect(locked.allowed).toEqual(expect.arrayContaining(["hold", "move_to_talent_pool", "reject", "set_mark"]));
+      const moves = Object.fromEntries(stageMoves(facts({ lockedAt: "2026-11-01T00:00:00.000Z" })).map((m) => [m.to, m]));
+      expect(moves.interviewing).toMatchObject({ allowed: false, blockedReason: NO_WORK_WHILE_LOCKED });
+      expect(moves.longlist).toMatchObject({ allowed: true });
+    });
+
     it("gives each tenant role only the choices its permissions allow, and names who can do the rest", () => {
       const owner = applicationActionState(facts());
       expect(owner.allowed).toEqual(["invite_screen", "interview", "advance_to_interview", "hold", "move_to_talent_pool", "reject", "record_outcome", "set_mark"]);

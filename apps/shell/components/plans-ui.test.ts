@@ -36,6 +36,9 @@ const { NewRole } = await import("@ros/web/src/pages/NewRole");
 const { ReportFigures } = await import("@ros/web/src/pages/RoleReport");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 const { ScorecardWaitingCard } = await import("@ros/web/src/pages/candidate-panel/assessment");
+const { CallNotesCard } = await import("@ros/web/src/pages/candidate-panel/call-notes");
+const { MessagesTab } = await import("@ros/web/src/pages/candidate-panel/sections");
+const { CloseRoleCard } = await import("@ros/web/src/components/ClosingMessage");
 const { RecruiterRequests } = await import("@ros/web/src/components/RecruiterRequests");
 const { RecruiterQueue } = await import("@ros/web/src/pages/RecruiterQueue");
 const { CustomersSection, aiCreditDollars, planChangedToast, planLimitsLine, planPriceLine } = await import("@ros/web/src/pages/admin/customers");
@@ -346,6 +349,42 @@ describe("a person past the plan's candidates per job", () => {
     const words = text(render(client(), createElement(ReportFigures, { report: report as never })));
     expect(words).toContain("people are locked");
     expect(text(render(client(), createElement(ReportFigures, { report: { ...report, applicants: { ...report.applicants, locked: 0 } } as never })))).not.toContain("locked");
+  });
+});
+
+describe("someone locked, as ITS reads them under a grant naming them", () => {
+  const person = (over: Record<string, unknown> = {}) => ({ id: "a9", roleId: "r1", stage: "received", lockedAt: daysAgo(3), allowedActions: ["reject"], blockedReasons: {}, screens: [], communications: [], packetLabels: { mustHaves: [], competencies: [], questions: [{ key: "q1", question: "Can you work Saturdays?" }], written: [] }, candidate: { firstName: "Sam", lastName: "Lockwood", email: "sam@people.test" }, ...over }) as never;
+
+  it("the notes from a call say what they do: on the Notes tab, with no AI review and no AI interview to finish", () => {
+    const words = text(render(client(), createElement(CallNotesCard, { a: person(), roleId: "r1", prominent: true })));
+    expect(words).toContain("Sam is locked, so these notes go on the Notes tab and no AI review is written from them.");
+    expect(words).not.toContain("Finish the AI interview");
+    expect(words).not.toContain("these notes are their AI interview");
+    // someone the team can read keeps what they had
+    const open = text(render(client(), createElement(CallNotesCard, { a: person({ lockedAt: null }), roleId: "r1", prominent: true })));
+    expect(open).toContain("these notes are their AI interview");
+    expect(open).not.toContain("is locked");
+  });
+
+  it("writing to them stays, with no suggested line on the company's credit", () => {
+    const tab = (a: never) => text(render(client([[["message-preview", "a9"], { to: "sam@people.test", fromName: "Bright Dental hiring team", footer: "Rae Recruiter", needsApproval: false, repliesComeBack: true, undoSeconds: 0 }]]), createElement(MessagesTab, { a, roleId: "r1", compose: { open: true, subject: "", text: "" }, setCompose: () => undefined })));
+    const words = tab(person());
+    expect(words).toContain("Write to Sam");
+    expect(words).toContain("Send");
+    expect(words).not.toContain("Suggest an opening line");
+    expect(tab(person({ lockedAt: null }))).toContain("Suggest an opening line");
+  });
+
+  it("the queue's request gives its own hint, never that the notes finish an AI interview", () => {
+    nav.path = "/recruiter/queue/e1";
+    nav.params = { id: "e1" };
+    const taken = { id: "e1", status: "claimed", kind: "candidate_issue", urgency: "normal", requiredExpertise: "candidate follow-up", summary: "A candidate asked for a person.", companyName: "Bright Dental", roleTitle: "Dental Hygienist", slaDueAt: null, slaRemainingMinutes: null, businessMinutesRemaining: null, overdue: false, createdAt: daysAgo(0), claimedByMe: true, claimed: true, accessGranted: true, why: null, companyId: "co1", roleId: "r1", applicationId: "a9", question: "Sam replied HUMAN.", contextSnapshot: { capturedAt: daysAgo(0) }, thread: [], reopenedCount: 0, grant: { id: "g1", purpose: "A candidate", expiresAt: daysAgo(-7), scope: { roleId: "r1", applicationId: "a9" } } };
+    const hint = (detail: unknown) => text(render(client([[["escalations"], [taken]], [["escalation", "e1"], detail]], recruiter), createElement(RecruiterQueue)));
+    const locked = hint({ ...taken, lockedForCompany: true });
+    expect(locked).toContain("the company cannot read them");
+    expect(locked).toContain("no AI interview or interview starts, while they are locked");
+    expect(locked).not.toContain("Your notes finish the AI interview");
+    expect(hint({ ...taken, lockedForCompany: false })).toContain("Your notes finish the AI interview so the scorecard is written");
   });
 });
 

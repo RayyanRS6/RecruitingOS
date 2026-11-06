@@ -203,6 +203,8 @@ describe("a recruiter's notes from a call (plan E3)", () => {
     expect(callNotesBody({}, "Left a voicemail.", false)).toEqual({ notes: [{ text: "Left a voicemail." }], complete: false });
     expect(callNotesToast({ completed: true }, "Sofia").detail).toContain("never as their own words");
     expect(callNotesToast({ completed: false }, "Sofia")).toEqual({ title: "Notes added.", detail: "The conversation stays open for Sofia." });
+    // About someone locked there is no conversation to keep open and no scorecard to write.
+    expect(callNotesToast({ completed: false, keptAsNote: true }, "Sofia")).toEqual({ title: "Notes kept.", detail: "They are on the Notes tab. Sofia is locked, so no AI review is written." });
   });
 
   it("lists the questions the conversation asks, so each note keeps its question (Wave S8: the written ones on a conversation created since)", () => {

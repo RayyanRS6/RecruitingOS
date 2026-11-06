@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
-import type { ClosingMessagePreview } from "@ros/contracts";
+import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
 import { CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
-import { aiRuns, applications, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, notifications, plans, policies, postings, recruiterEscalations, roles, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, interviews, notifications, plans, policies, postings, recruiterEscalations, roles, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { UNLOCK_INTERVIEW_DAYS, startInterviewAgain } from "@ros/workflows";
 import { createApp } from "./app";
@@ -762,6 +762,155 @@ describe("locked candidates", () => {
       expect(noted).not.toContain(row.id);
       expect((await commsOf(row.id)).filter((c) => c.templateKey === "still_reviewing")).toEqual([]);
     });
+  });
+
+  describe("ITS under a grant naming someone locked", () => {
+    /** Someone locked who asked for a person, and the recruiter who took their request, inside the company. */
+    const underGrant = async (name: string) => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const p = person(name);
+      const row = await apply(job, p);
+      expect((await reply(row, p.email, "HUMAN", `msg-${name}`)).status).toBe(200);
+      await container.drain();
+      const [ask] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, row.id));
+      const recruiter = await signInStaff(app, container, `${name.toLowerCase()}.recruiter@identifiedtalent.com`, "its_recruiter", `${name} Recruiter`);
+      expect((await json(recruiter, "POST", `/api/v1/escalations/${ask.id}/claim`)).status).toBe(200);
+      expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId: job.id })).status).toBe(200);
+      return { job, p, row, recruiter, ask };
+    };
+
+    it("nothing spends AI on them and no interview starts: refused by the route and not offered, with the reason on the button, and they read as having no AI interview coming", async () => {
+      const { job, row, recruiter } = await underGrant("Noa");
+      const aiBefore = (await runsOf(job.id)).length;
+      const open = await json(recruiter, "GET", `/api/v1/applications/${row.id}`);
+      expect(open.status).toBe(200);
+      const detail = await read<{ lockedAt: string | null; allowedActions: string[]; blockedReasons: Record<string, string>; stageMoves: Array<{ to: string; allowed: boolean; blockedReason?: string }>; aiInterview: unknown; ownerStageLabel: string; interviewPlan: Array<{ key: string }> }>(open);
+      expect(detail.lockedAt).not.toBeNull();
+      for (const cap of ["invite_screen", "ask_in_screen", "interview", "advance_to_interview"]) {
+        expect(detail.allowedActions, cap).not.toContain(cap);
+        expect(detail.blockedReasons[cap], cap).toBe(NO_WORK_WHILE_LOCKED);
+      }
+      expect(detail.stageMoves.find((m) => m.to === "interviewing")).toMatchObject({ allowed: false, blockedReason: NO_WORK_WHILE_LOCKED });
+      // Their application is not being read for an interview that is coming: nothing may say so.
+      expect(detail.aiInterview).toBeNull();
+      expect(detail.ownerStageLabel).toBe("No AI interview yet");
+      // What is left to do for them stays: deciding, and writing to them.
+      expect(detail.allowedActions).toEqual(expect.arrayContaining(["reject", "hold"]));
+
+      for (const action of ["invite_screen", "ask_in_screen", "advance_to_interview"]) {
+        const refused = await json(recruiter, "POST", `/api/v1/applications/${row.id}/actions`, { action });
+        expect(refused.status, action).toBe(409);
+        expect((await read<{ error: { code: string; message: string } }>(refused)).error, action).toMatchObject({ code: "not_while_locked", message: NO_WORK_WHILE_LOCKED });
+      }
+      const owner = await read<{ user: { id: string } }>(await json(job.cookie, "GET", "/api/v1/auth/me"));
+      const approved = await json(recruiter, "POST", `/api/v1/applications/${row.id}/interviews`, { roundKey: detail.interviewPlan[0].key, interviewerUserIds: [owner.user.id], linkSource: "calendar" });
+      expect(approved.status, await approved.clone().text()).toBe(409);
+      expect((await read<{ error: { code: string } }>(approved)).error.code).toBe("not_while_locked");
+      expect((await read<{ error: { code: string } }>(await json(recruiter, "GET", `/api/v1/applications/${row.id}/interview-draft`))).error.code).toBe("not_while_locked");
+      const suggested = await json(recruiter, "POST", `/api/v1/applications/${row.id}/messages/suggest`, { purpose: "update" });
+      expect(suggested.status, await suggested.clone().text()).toBe(409);
+
+      // A suggestion left waiting about them, from however it got there, starts nothing either; "Not now" still goes through.
+      const [waiting] = await container.db.insert(approvalRequests).values({ companyId: job.id, roleId: job.roleId, applicationId: row.id, actionType: "application.invite_screen", subject: { type: "application", id: row.id }, proposal: {}, requestedBy: { kind: "system", id: "test" }, requiredRoles: ["recruiter"] }).returning();
+      const yes = await json(recruiter, "POST", `/api/v1/approvals/${waiting.id}/decide`, { decision: "approve" });
+      expect(yes.status, await yes.clone().text()).toBe(409);
+      expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.id, waiting.id)))[0].status).toBe("pending");
+      expect((await json(recruiter, "POST", `/api/v1/approvals/${waiting.id}/decide`, { decision: "reject" })).status).toBe(200);
+
+      await container.drain();
+      expect(await screenRunsOf(row.id)).toEqual([]);
+      expect(await container.db.select().from(screens).where(eq(screens.applicationId, row.id))).toEqual([]);
+      expect(await container.db.select().from(interviews).where(eq(interviews.applicationId, row.id))).toEqual([]);
+      expect((await runsOf(job.id)).length).toBe(aiBefore);
+      expect((await applicationOf(row.id)).stage).toBe(row.stage);
+    }, 120_000);
+
+    it("a recruiter's notes from a call are kept as their own note with no screen, no scorecard and no AI, whatever the form says; the team reads them after an upgrade, which still starts the interview by itself", async () => {
+      const { job, p, row, recruiter } = await underGrant("Ona");
+      const aiBefore = (await runsOf(job.id)).length;
+      const notesUrl = `/api/v1/applications/${row.id}/screen/recruiter-notes`;
+      for (const [complete, text] of [[true, "Called her; she can start in two weeks."], [false, "Left a voicemail on Friday."]] as const) {
+        const added = await json(recruiter, "POST", notesUrl, { notes: [{ text }], complete });
+        expect(added.status, await added.clone().text()).toBe(200);
+        expect(await read(added)).toEqual({ ok: true, screenId: null, completed: false, keptAsNote: true });
+      }
+      await container.drain();
+      expect(await container.db.select().from(screens).where(eq(screens.applicationId, row.id))).toEqual([]);
+      expect(await screenRunsOf(row.id)).toEqual([]);
+      expect((await runsOf(job.id)).length).toBe(aiBefore);
+      expect((await applicationOf(row.id)).stage).toBe(row.stage);
+      // On the record, with no words; the words are the recruiter's own note, each sitting after the last.
+      expect(await auditsOf(row.id, "screen.recruiter_notes_added")).toHaveLength(2);
+      const kept = await read<{ notes: Array<{ body: string; mine: boolean }> }>(await json(recruiter, "GET", `/api/v1/applications/${row.id}/notes`));
+      expect(kept.notes).toHaveLength(1);
+      expect(kept.notes[0].mine).toBe(true);
+      expect(kept.notes[0].body).toMatch(/Called her; she can start in two weeks\.[\s\S]*Left a voicemail on Friday\./);
+      // A note has its limit, and one too long leaves the earlier words as they were.
+      const tooLong = await json(recruiter, "POST", notesUrl, { notes: [{ text: "x".repeat(4000) }, { text: "y".repeat(4000) }], complete: false });
+      expect(tooLong.status).toBe(400);
+      expect((await read<{ error: { code: string } }>(tooLong)).error.code).toBe("message_too_long");
+      // Nobody at the company reads them while locked.
+      expect((await json(job.cookie, "GET", `/api/v1/applications/${row.id}/notes`)).status).toBe(402);
+
+      expect((await changePlan(job.id, "pro")).unlocked).toBe(1);
+      const opened = await applicationOf(row.id);
+      expect(opened.stage).toBe("screen_invited");
+      expect(await container.db.select().from(screens).where(eq(screens.applicationId, row.id))).toHaveLength(1);
+      expect(mailsTo(p.email).some((m) => /Thanks again for applying/.test(m.text))).toBe(true);
+      const read2 = await read<{ notes: Array<{ body: string; author: { name: string } }> }>(await json(job.cookie, "GET", `/api/v1/applications/${row.id}/notes`));
+      expect(read2.notes[0]).toMatchObject({ author: { name: "ITS recruiter" } });
+      expect(read2.notes[0].body).toContain("Left a voicemail on Friday.");
+    }, 120_000);
+
+    for (const level of ["approval", "human_only"] as const) {
+      it(`what they write goes under the company's "${level}" rule, on the record, because nobody there may read it or approve it`, async () => {
+        const { job, p, row, recruiter } = await underGrant(level === "approval" ? "Uma" : "Una");
+        await setPolicy(job.id, "message.send_freeform", level);
+        await setPolicy(job.id, "disposition.send", level);
+        const before = mailsTo(p.email).length;
+        // The screen says it goes, before anything is pressed: not "an owner or admin reads it".
+        expect(await read(await json(recruiter, "GET", `/api/v1/applications/${row.id}/messages/preview`))).toMatchObject({ needsApproval: false });
+        const sent = await json(recruiter, "POST", `/api/v1/applications/${row.id}/messages`, { text: "This is a person at ITS: how can I help?" });
+        expect(sent.status, await sent.clone().text()).toBe(201);
+        expect(await read(sent)).toMatchObject({ ok: true, status: "queued" });
+        await container.drain();
+        expect(mailsTo(p.email).length).toBe(before + 1);
+        expect(mailsTo(p.email).at(-1)?.text).toContain("This is a person at ITS");
+
+        // So does the decision message, which the same rule would hold for an approver the company does not have.
+        const declined = await json(recruiter, "POST", `/api/v1/applications/${row.id}/actions`, { action: "reject", reason: "position_filled" });
+        expect(declined.status, await declined.clone().text()).toBe(200);
+        expect((await read<{ decisionMessage: { policy: string } }>(declined)).decisionMessage.policy).toBe("sends");
+        expect((await read<{ declineMessage: string }>(await json(recruiter, "GET", `/api/v1/applications/${row.id}`))).declineMessage).toBe("sends");
+        const told = await json(recruiter, "POST", `/api/v1/applications/${row.id}/actions`, { action: "send_decision" });
+        expect(told.status, await told.clone().text()).toBe(200);
+        expect(await read(told)).toMatchObject({ candidateNotice: "queued" });
+        await container.drain();
+        expect(mailsTo(p.email).length).toBe(before + 2);
+
+        expect(await container.db.select().from(approvalRequests).where(eq(approvalRequests.applicationId, row.id))).toEqual([]);
+        const lines = await auditsOf(row.id, "message.approval_skipped");
+        expect(lines.map((l) => (l.details as { actionType: string }).actionType).sort()).toEqual(["disposition.send", "message.send_freeform"]);
+        expect(lines[0].reason).toBe("Nobody at the company may read someone locked, so nobody there can approve a message to them.");
+        await noTeamNoticeNames(job.id);
+      }, 120_000);
+    }
+
+    it("the rule still holds for someone the company can read, under the same kind of grant", async () => {
+      const job = await openJob(1);
+      const [seen] = await fill(job, 1);
+      await setPolicy(job.id, "message.send_freeform", "approval");
+      const asked = await json(job.cookie, "POST", "/api/v1/escalations", { kind: "review", applicationId: seen.id, question: "Please look at this person." });
+      expect(asked.status, await asked.clone().text()).toBe(201);
+      const recruiter = await signInStaff(app, container, "visa.recruiter@identifiedtalent.com", "its_recruiter", "Visa Recruiter");
+      expect((await json(recruiter, "POST", `/api/v1/escalations/${(await read<{ id: string }>(asked)).id}/claim`)).status).toBe(200);
+      expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId: job.id })).status).toBe(200);
+      expect(await read(await json(recruiter, "GET", `/api/v1/applications/${seen.id}/messages/preview`))).toMatchObject({ needsApproval: true });
+      const held = await json(recruiter, "POST", `/api/v1/applications/${seen.id}/messages`, { text: "A question for you." });
+      expect(held.status, await held.clone().text()).toBe(202);
+      expect(await auditsOf(seen.id, "message.approval_skipped")).toEqual([]);
+    }, 120_000);
   });
 
   describe("the close-out note", () => {
