@@ -1,4 +1,4 @@
-import { MARK_LABEL, type MarkKind } from "@ros/contracts";
+import { MARK_LABEL, sureBeside, type MarkKind, type MatchFit } from "@ros/contracts";
 import type { ApplicationDetail, Screen, TimelineEvent } from "../../api/client";
 import { notSentReasonText } from "../../cancelled";
 import { DECLINED_WORDS, isRecruiterNote, transcriptBubble, type TranscriptBubble } from "../../screen-view";
@@ -360,6 +360,16 @@ export function offersNewInterviewLink(a: Pick<ApplicationDetail, "screens">): b
 export const REC_LABEL: Record<string, string> = { screen: "Worth an AI interview", hold: "Thin evidence: your call", review_manually: "Needs a closer look", strong_interview: "Strong: interview", interview: "Interview", decline_recommended: "Concern raised" };
 /** The same suggestion as a chip near the person's one verdict word (6 November 2026): what it suggests doing, never a second verdict. */
 export const REC_CHIP: Record<string, string> = { ...REC_LABEL, hold: "Your call", strong_interview: "Suggests an interview", interview: "Suggests an interview" };
+
+/**
+ * The assistant's lean as a chip, never beside a word it disagrees with: "Suggests an interview" only beside Strong or
+ * Potential (or an older answer without the word), like "Check" and the confidence chip. Beside anything else the board's next
+ * step says in a sentence that the two differ. Null when it does not show.
+ */
+export function recChip(recommendation: string, fit: MatchFit | null | undefined): string | null {
+  if ((recommendation === "strong_interview" || recommendation === "interview") && !sureBeside(fit)) return null;
+  return REC_CHIP[recommendation] ?? recommendation.replace(/_/g, " ");
+}
 
 /** Owner Mode never shows raw stage names (docs/07); mirrors STAGE_LABEL in packages/core, in the staff glossary's words (screening chat). */
 export const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview", screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Interview to set up", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };

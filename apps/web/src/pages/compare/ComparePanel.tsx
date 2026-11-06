@@ -8,7 +8,7 @@ import { api, type NoteView } from "../../api/client";
 import { Link } from "../../nav";
 import { noteExcerpt } from "../../notes";
 import { resumeOnlyChip } from "../../talent-list";
-import { REC_CHIP } from "../candidate-panel/helpers";
+import { recChip } from "../candidate-panel/helpers";
 import { COMPARE_MAX, COMPARE_ORDERS, cellFigures, criterionCell, hasTeamNotes, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView, type CompareOrder, type CompareView } from "./compare-view";
 
 /** A cell's small figures (% met, points it cost, what the score rests on). */
@@ -131,7 +131,7 @@ export function CompareTable({ data }: { data: CompareView }) {
           const tag = skillTag(cands, x.key);
           return <tr key={`sk:${x.key}`}><th scope="row" className="small" title={x.definition}>{tag ? <><span className="sbar-tag">{tag}</span> </> : null}{x.name}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={x.key} mustHave={false} /></td>)}</tr>;
         })}
-        <tr><th scope="row" className="small muted">AI interview</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_CHIP[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no AI interview yet</span>}</td>)}</tr>
+        <tr><th scope="row" className="small muted">AI interview</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? recChip(c.screen.recommendation, c.score?.fit) ?? "Done" : <span className="muted">no AI interview yet</span>}</td>)}</tr>
         <tr><th scope="row" className="small muted">Still unknown</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
         {/* The team's private notes (plan H3), for those who read notes; never the candidate's, never the AI's. */}
         {withNotes ? <tr><th scope="row" className="small muted">Team notes <span className="sr-only">(private)</span></th>{cands.map((c) => <td key={c.applicationId}><NotesCell notes={c.notes ?? []} /></td>)}</tr> : null}

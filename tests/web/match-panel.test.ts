@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment, RolePacket } from "@ros/contracts";
 import type { ApplicationDetail } from "../../apps/web/src/api/client";
 import { MATCH_PROMISE, basisLine, cappedLine, competencyChip, confidenceChip, coverageLine, criterionTag, fitWord, importanceTag, leftOut, matchBars, matchCardState, missingMustHaves, mustHaveLineOf, nextStepAction, orderCompetencyFindings, orderRequirementFindings, quoteSummary, requirementChip, suggestedStepOf, verdictLine, versionNote } from "../../apps/web/src/pages/candidate-panel/match-view";
-import { firstSentence } from "../../apps/web/src/pages/candidate-panel/helpers";
+import { firstSentence, recChip } from "../../apps/web/src/pages/candidate-panel/helpers";
 import { MATCH_SCORE_PROMISE, matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -215,8 +215,19 @@ describe("the one verdict word on the panel (the owner, 6 November 2026)", () =>
     expect(card).toContain("const verdict = !fit ?");
     expect(card).toContain("detail.assessments[0]?.id === assessmentId ? fitWord({ fit }) : null");
     expect(card).toContain("{sure ? <Chip>{confidence} confidence</Chip> : null}");
-    expect(card).toContain("{REC_CHIP[result.recommendation] ?? result.recommendation}");
+    expect(card).toContain("const rec = recChip(result.recommendation, fit);");
     expect(card).not.toContain("{REC_LABEL[");
+  });
+
+  it("shows the assistant's lean as a suggestion, and 'Suggests an interview' only where it cannot disagree with the word beside the number", () => {
+    expect(recChip("strong_interview", "strong")).toBe("Suggests an interview");
+    expect(recChip("interview", "potential")).toBe("Suggests an interview");
+    expect(recChip("interview", null)).toBe("Suggests an interview");
+    for (const fit of ["weak", "insufficient", "missing_must_have"] as const) expect(recChip("interview", fit), fit).toBeNull();
+    // the others say something new whatever the word: a person decides, or a concern was raised
+    expect(recChip("hold", "weak")).toBe("Your call");
+    expect(recChip("decline_recommended", "strong")).toBe("Concern raised");
+    expect(recChip("something_new", "strong")).toBe("something new");
   });
 });
 

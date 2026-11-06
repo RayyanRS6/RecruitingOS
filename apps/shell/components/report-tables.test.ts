@@ -218,6 +218,14 @@ describe("tables elsewhere on a role", () => {
     expect(html).toContain("Potential match");
     expect(html).not.toContain("Strong match");
     expect(html).not.toContain("Medium");
+    // the AI interview's row: the assistant's lean beside Potential; beside a word it disagrees with, only that it was done
+    const scorecard = { overall: "strong", recommendation: "strong_interview", summary: "s", confidence: "high" };
+    const interviewed = (fit: string) => ({ ...data, candidates: [{ ...person, screen: scorecard, score: { ...score, fit } }] });
+    expect(render(client(), createElement(CompareTable, { data: interviewed("potential") as never }))).toContain("Suggests an interview");
+    const weak = render(client(), createElement(CompareTable, { data: interviewed("weak") as never }));
+    expect(weak).toContain("Weak match");
+    expect(weak).not.toContain("Suggests an interview");
+    expect(weak).toMatch(/<td class="small">Done<\/td>/);
   });
 
   it("right-aligns the visits of each tracked link and the counts of applications by source", () => {

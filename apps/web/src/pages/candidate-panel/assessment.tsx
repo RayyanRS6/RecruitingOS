@@ -12,7 +12,7 @@ import { Upgrade } from "../../components/Upgrade";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, SCORECARD_WAITING_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, scorecardWaiting, screenQuestionText } from "../../evidence";
 import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, hiddenAnswersLine, isRecruiterNote, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
 import { actionToast } from "../../talent-actions";
-import { ASSISTANT_NOTE_LABEL, REC_CHIP, chatGapLines, writeupLines, writeupSummary, type PanelQuestion, type WriteupLine } from "./helpers";
+import { ASSISTANT_NOTE_LABEL, chatGapLines, recChip, writeupLines, writeupSummary, type PanelQuestion, type WriteupLine } from "./helpers";
 import { competencyChip, fitWord, importanceTag, matchOf, orderCompetencyFindings, orderRequirementFindings, requirementChip, skillLabels } from "./match-view";
 import { CARD, QUOTE, STEP, Why } from "./why";
 
@@ -231,9 +231,10 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
   const fit = matchOf(detail)?.fit ?? null;
   const verdict = !fit ? { label: overallLabel(overall), tone: overall === "strong" ? ("good" as const) : overall === "weak" ? ("caution" as const) : ("accent" as const) } : detail.assessments[0]?.id === assessmentId ? fitWord({ fit }) : null;
   const sure = sureBeside(fit);
+  const rec = recChip(result.recommendation, fit);
   return (
     <Card title={title ?? (kind === "screen" ? "AI review of the AI interview" : "AI review of the résumé")} className={marked ? STEP : CARD} needsYou={marked} aside={<span className="row"><span className="small muted">{new Date(createdAt).toLocaleDateString()}</span><FlagAssessment applicationId={detail.id} assessmentId={assessmentId} /></span>}>
-      <div className="row">{verdict ? <Chip tone={verdict.tone}>{verdict.label}</Chip> : null}<Chip tone={result.recommendation === "decline_recommended" ? "caution" : "neutral"}>{REC_CHIP[result.recommendation] ?? result.recommendation}</Chip>{sure ? <Chip>{confidence} confidence</Chip> : null}{marked ? <Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip> : null}</div>
+      <div className="row">{verdict ? <Chip tone={verdict.tone}>{verdict.label}</Chip> : null}{rec ? <Chip tone={result.recommendation === "decline_recommended" ? "caution" : "neutral"}>{rec}</Chip> : null}{sure ? <Chip>{confidence} confidence</Chip> : null}{marked ? <Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip> : null}</div>
       {marked && look.inconsistent && look.reason ? <Alert tone="caution">{look.reason}</Alert> : null}
       <p>{result.summary}</p>
       {sure && reasons.length ? <p className="small muted">Confidence is {confidence} because {reasons.join("; ")}.</p> : null}
