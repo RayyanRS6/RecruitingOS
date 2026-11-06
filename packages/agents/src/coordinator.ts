@@ -333,7 +333,7 @@ Thanks again for applying for the ${packet.identity.title} position at ${company
 
 Start your AI interview: ${url}
 ${input.screen.channel === "sms" && candidate.phone ? "\nYou can also answer by text; we sent the first question to your phone.\n" : ""}
-You can skip any question, and if you stop part-way your answers are saved. Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email. Not doing the interview never stops your application.
+You can skip any question, and if you stop part-way your answers are saved. Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email. If you need an adjustment, such as more time or another format, reply and tell us. Not doing the interview never stops your application.
 
 ${packet.communication.humanAlternativeText}
 
