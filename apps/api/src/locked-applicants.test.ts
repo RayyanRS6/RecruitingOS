@@ -885,6 +885,8 @@ describe("locked candidates", () => {
       const { job, p, row, recruiter } = await underGrant("Ona");
       const aiBefore = (await runsOf(job.id)).length;
       const notesUrl = `/api/v1/applications/${row.id}/screen/recruiter-notes`;
+      // What the recruiter had already written stays, and so does its starter.
+      expect((await json(recruiter, "PUT", `/api/v1/applications/${row.id}/notes/mine`, { starter: "for_and_against", body: "Sounds organised." })).status).toBe(201);
       for (const [complete, text] of [[true, "Called her; she can start in two weeks."], [false, "Left a voicemail on Friday."]] as const) {
         const added = await json(recruiter, "POST", notesUrl, { notes: [{ text }], complete });
         expect(added.status, await added.clone().text()).toBe(200);
@@ -897,10 +899,11 @@ describe("locked candidates", () => {
       expect((await applicationOf(row.id)).stage).toBe(row.stage);
       // On the record, with no words; the words are the recruiter's own note, each sitting after the last.
       expect(await auditsOf(row.id, "screen.recruiter_notes_added")).toHaveLength(2);
-      const kept = await read<{ notes: Array<{ body: string; mine: boolean }> }>(await json(recruiter, "GET", `/api/v1/applications/${row.id}/notes`));
+      const kept = await read<{ notes: Array<{ body: string; mine: boolean; starter: string | null }> }>(await json(recruiter, "GET", `/api/v1/applications/${row.id}/notes`));
       expect(kept.notes).toHaveLength(1);
       expect(kept.notes[0].mine).toBe(true);
-      expect(kept.notes[0].body).toMatch(/Called her; she can start in two weeks\.[\s\S]*Left a voicemail on Friday\./);
+      expect(kept.notes[0].starter).toBe("for_and_against");
+      expect(kept.notes[0].body).toMatch(/^Sounds organised\.[\s\S]*Called her; she can start in two weeks\.[\s\S]*Left a voicemail on Friday\./);
       // A note has its limit, and one too long leaves the earlier words as they were.
       const tooLong = await json(recruiter, "POST", notesUrl, { notes: [{ text: "x".repeat(4000) }, { text: "y".repeat(4000) }], complete: false });
       expect(tooLong.status).toBe(400);

@@ -123,10 +123,10 @@ async function keepCallNotesAsNote(tx: Tx, container: Container, input: { app: A
   const [pv] = await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
   const asked = new Map((pv ? [...pv.packet.screening.questions, ...writtenQuestionsOf(pv.packet)] : []).map((q) => [q.key, q.question]));
   const words = input.notes.map((n) => (n.questionKey && asked.has(n.questionKey) ? `${asked.get(n.questionKey)}\n${n.text}` : n.text)).join("\n\n");
-  const [mine] = await tx.select({ body: applicationNotes.body }).from(applicationNotes).where(and(eq(applicationNotes.applicationId, app.id), eq(applicationNotes.authorUserId, tenant.userId), isNull(applicationNotes.deletedAt))).limit(1);
+  const [mine] = await tx.select({ body: applicationNotes.body, starter: applicationNotes.starter }).from(applicationNotes).where(and(eq(applicationNotes.applicationId, app.id), eq(applicationNotes.authorUserId, tenant.userId), isNull(applicationNotes.deletedAt))).limit(1).for("update");
   const body = `${mine ? `${mine.body}\n\n` : ""}Notes from a call, ${now.toISOString().slice(0, 10)}:\n${words}`;
   if (body.length > NOTE_BODY_MAX) throw messageTooLong(NOTE_BODY_MAX);
-  await writeOwnNote(tx, { companyId: app.companyId, applicationId: app.id, tenant, actor, note: { body }, now });
+  await writeOwnNote(tx, { companyId: app.companyId, applicationId: app.id, tenant, actor, note: { starter: mine?.starter ?? null, body }, now });
   await audit(tx, { companyId: app.companyId, actor, action: "screen.recruiter_notes_added", target: { type: "application", id: app.id }, reason: "notes from a call with the candidate", details: { screenId: null, notes: input.notes.length, complete: false, keptAsNote: true } });
   return { screenId: null, completed: false, keptAsNote: true };
 }

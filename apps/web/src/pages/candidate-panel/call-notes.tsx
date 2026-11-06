@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button, Card, Field } from "@ros/ui";
 import { api, ApiError, type ApplicationDetail } from "../../api/client";
 import { toast } from "../../toast";
 import { callNotesBody, callNotesMayStayOpen, callNotesQuestions, callNotesToast } from "../../screen-view";
 import { useDraft, useRefreshCandidate } from "./hooks";
+import { notesKey } from "./notes";
 import { CARD, LEAD, STEP, Why } from "./why";
 
 /**
@@ -25,6 +26,7 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
   const [complete, setComplete] = useState(true);
   useDraft("call-notes", [...Object.values(byQuestion), other].join("").trim());
   const refresh = useRefreshCandidate(a.id, roleId);
+  const qc = useQueryClient();
   // Someone locked has no AI interview to finish and nothing is scored: the API keeps the notes on the Notes tab.
   const locked = !!a.lockedAt;
   // With no conversation yet, the notes are the screening and always finish it.
@@ -40,6 +42,8 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
       setByQuestion({});
       setOther("");
       setOpen(false);
+      // They went on the Notes tab: what it read before would have the next save write over them.
+      if (r.keptAsNote) await qc.invalidateQueries({ queryKey: notesKey(a.id) });
       await refresh();
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not add the notes. Try again."),
