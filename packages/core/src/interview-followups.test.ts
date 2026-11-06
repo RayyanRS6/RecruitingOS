@@ -435,6 +435,7 @@ describe("interview follow-ups (the Cancelled column)", () => {
       expect(autoReasonText("switched_off", { state: "not_sent" })).toBe("Automatic new times were switched off in Settings.");
       expect(autoReasonText("was_on_hold")).toBe("You had put them on hold, so nothing goes automatically.");
       expect(autoReasonText("candidate_replied")).toBe("They replied to us, so nothing went automatically: read their reply first.");
+      expect(autoReasonText("no_hours")).toBe("Nobody on the interview has hours to offer, so nothing goes automatically: set a date and time from their page.");
       expect(autoReasonText("left_process")).toBe("Nothing went automatically while a decision was in place.");
       for (const r of ["not_asked", "no_show", "details_deleted", null]) expect(autoReasonText(r)).toBeNull();
       expect(autoReasonText("left_process", { resolved: true })).toBeNull();

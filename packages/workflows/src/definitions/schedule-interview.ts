@@ -32,8 +32,16 @@ import type { StepContext, WorkflowDefinition } from "../types";
  * - `noCommonTimesKey`: the key (core `noCommonTimesNoticeKey`) the last "No common times" notice went out under; the
  *   notice goes again only when the key changes (audit 06-interviews, bug 105).
  * - `heldForCheck`: the times email waits for the ITS company check; its link is kept when the run resumes.
+ *
+ * A person set the date and time (the owner's words, 6 November 2026: "nadine sets date and time"):
+ * - `setByPerson`: the route already wrote the booking, because the worker may not run for a while and the sheet must be
+ *   right at once. This run only puts it on calendars (only the worker may read a connection's credential), emails the
+ *   candidate, reminds and closes. It never reaches `propose_slots` or `book`, so no calendar or declared hours are needed.
+ * - `moved`: it replaces a time the candidate was told; the one email says so, with the team's reason when they gave one.
+ * - `bookedAt`: when the person pressed. Reminder moments already past by then are skipped, so a time set for this
+ *   afternoon never gets "Your interview is tomorrow".
  */
-type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; availabilityWaits?: number; availabilityEscalated?: boolean; noNewTimesTold?: boolean; noCommonTimesKey?: string; heldForCheck?: boolean };
+type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; availabilityWaits?: number; availabilityEscalated?: boolean; noNewTimesTold?: boolean; noCommonTimesKey?: string; heldForCheck?: boolean; setByPerson?: boolean; moved?: { reason: string | null }; bookedAt?: string };
 
 const OFFER_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 48;
@@ -163,6 +171,16 @@ async function settleMissedByUs(ctx: StepContext<State>, b: Bundle): Promise<voi
   }
 }
 
+/**
+ * Where a booked interview takes place, for the people running it. Never the candidate's number: an interviewer does not
+ * get their contact details (docs/spec/21 F8), and these notices and emails reach interviewers.
+ */
+function placeForTheTeam(b: Bundle): string | null {
+  if (b.iv.meetingUrl) return `Join: ${b.iv.meetingUrl}`;
+  if (b.iv.selectedSlot?.address) return `Where: ${b.iv.selectedSlot.address}`;
+  return b.iv.selectedSlot?.source === "person" && b.iv.format === "phone" ? "By phone" : null;
+}
+
 /** The sentence the team's notices gain while the times being worked out are new times for someone under Cancelled. */
 function newTimesSentence(b: Bundle, ctx: StepContext<State>): string {
   if (ctx.state.offerKind === "new_times_asked") return ` ${b.candidate.firstName} cancelled and asked for new times; they go out as soon as there are times to offer.`;
@@ -181,6 +199,8 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       const b = await load(ctx);
       if (!b) return { kind: "fail", error: "interview not found", retryable: false };
       if (stale(b, ctx)) return { kind: "complete" };
+      // A person set the date and time, and the route booked it: nothing here is worked out or offered.
+      if (ctx.state.setByPerson) return b.iv.status === "scheduled" ? { kind: "next", step: "place_on_calendars" } : { kind: "complete" };
       if (!["proposed", "scheduling"].includes(b.iv.status)) return { kind: "fail", error: `interview is ${b.iv.status}; nothing to schedule`, retryable: false };
       if (!b.packet || !b.round) return { kind: "fail", error: "the interview round is not in the approved packet", retryable: false };
       if (!b.participants.length) return { kind: "fail", error: "no interviewers on the interview", retryable: false };
@@ -401,21 +421,40 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       return { kind: "next", step: "confirm" };
     },
 
+    /**
+     * A person set the date and time, and the route already booked it. What only the worker may do is left: a calendar
+     * event for whoever has a live calendar (none is needed; an event from an earlier time is removed first), then
+     * `confirm`. Also the place that settles an interview our interviewer missed, as `prepare` does for an offer.
+     */
+    async place_on_calendars(ctx) {
+      const b = await load(ctx);
+      if (!b || stale(b, ctx) || b.iv.status !== "scheduled") return { kind: "complete" };
+      if (!(await stillOursAfterLock(ctx, b))) return { kind: "complete" };
+      await settleMissedByUs(ctx, b);
+      const { refs, meetingUrl } = await createInterviewEvents(ctx.q, ctx.services.integrations, { interview: b.iv, participants: b.participants, candidate: b.candidate, roleTitle: b.role.title, companyName: b.company.name, companyTimezone: b.company.timezone, actor: ctx.actor, appBaseUrl: ctx.services.env.appBaseUrl });
+      await ctx.q.update(interviews).set({ calendarRefs: refs, meetingUrl: meetingUrl ?? b.iv.meetingUrl }).where(eq(interviews.id, b.iv.id));
+      return { kind: "next", step: "confirm" };
+    },
+
     async confirm(ctx) {
       const b = await load(ctx);
       if (!b || stale(b, ctx) || b.iv.status !== "scheduled") return { kind: "complete" };
-      const sent = await sendInterviewConfirmation(ctx.q, ctx.services.integrations, { ...messageInput(b, ctx), roundPurpose: b.round?.purpose ?? "Come ready to talk about your experience." });
+      const byPerson = ctx.state.setByPerson ? { setByPerson: true, moved: ctx.state.moved ?? null, newTimeAfterCancel: !!ctx.state.offerKind, missedByUs: await missedByUsBefore(ctx, b), note: ctx.state.invitationNote ?? null } : {};
+      const sent = await sendInterviewConfirmation(ctx.q, ctx.services.integrations, { ...messageInput(b, ctx), roundPurpose: b.round?.purpose ?? "Come ready to talk about your experience.", ...byPerson });
       if (sent.status === "failed" && sent.retryable) return { kind: "fail", error: `confirmation failed: ${sent.error}`, retryable: true };
       if (!(await ctx.alreadyDone("confirm"))) {
-        await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${b.company.timezone}).${b.iv.meetingUrl ? ` Join: ${b.iv.meetingUrl}` : ""}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
-        await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} with ${b.participants.map((p) => p.firstName).join(", ")}.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+        const word = ctx.state.moved ? "Interview moved" : "Interview booked";
+        const when = new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+        const place = placeForTheTeam(b);
+        await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `${word}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${when} (${b.company.timezone}).${place ? ` ${place}` : ""}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
+        await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `${word}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${when} with ${b.participants.map((p) => p.firstName).join(", ")}.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
         // The interviewer's brief (F7, F8) rides with the confirmation: the round, what it covers, what the evidence says so far. Pay only for roles that may see it.
         const brief = b.packet ? await composeInterviewerBrief(ctx.q, { applicationId: b.app.id, candidateFirstName: b.candidate.firstName, packet: b.packet, roundKey: b.iv.roundKey }) : null;
         const memberRoles = new Map((await ctx.q.select({ userId: memberships.userId, role: memberships.role }).from(memberships).where(and(eq(memberships.companyId, ctx.companyId), inArray(memberships.userId, b.participants.map((p) => p.userId))))).map((m) => [m.userId, m.role as MembershipRole]));
         for (const p of b.participants) {
           const mine = brief ? (can(memberRoles.get(p.userId) ?? null, "compensation.read") ? brief : redactBriefPay(brief)) : null;
           // Team mail leaves through the outbox too: recorded here, sent after this step commits, never twice per attempt.
-          await queueCommunication(ctx.q, ctx.services.integrations, { channel: "email", companyId: ctx.companyId, to: p.email, from: mailbox(ctx.services.integrations.env.productName, ctx.services.integrations.env.fromAddress), subject: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName} for ${b.role.title}`, text: `${b.iv.title} on ${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${b.company.timezone}).${b.iv.meetingUrl ? `\nJoin: ${b.iv.meetingUrl}` : ""}\n\nOpen: ${ctx.services.env.appBaseUrl}/interviews/${b.iv.id}${mine ? `\n\n${renderInterviewerBriefText(mine)}` : ""}`, templateKey: "interview_confirmed_interviewer", idempotencyKey: `iv_confirm_int:${b.iv.id}:${b.iv.attempt}:${p.userId}`, tags: { template: "interview_confirmed_interviewer" }, actor: ctx.actor, correlationId: ctx.run.id }, ctx.now);
+          await queueCommunication(ctx.q, ctx.services.integrations, { channel: "email", companyId: ctx.companyId, to: p.email, from: mailbox(ctx.services.integrations.env.productName, ctx.services.integrations.env.fromAddress), subject: `${word}: ${b.candidate.firstName} ${b.candidate.lastName} for ${b.role.title}`, text: `${b.iv.title} on ${when} (${b.company.timezone}).${place ? `\n${place}` : ""}\n\nOpen: ${ctx.services.env.appBaseUrl}/interviews/${b.iv.id}${mine ? `\n\n${renderInterviewerBriefText(mine)}` : ""}`, templateKey: "interview_confirmed_interviewer", idempotencyKey: `iv_confirm_int:${b.iv.id}:${b.iv.attempt}:${p.userId}`, tags: { template: "interview_confirmed_interviewer" }, actor: ctx.actor, correlationId: ctx.run.id }, ctx.now);
         }
       }
       await emit(ctx.q, { type: "interview.confirmed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { startsAt: b.iv.startsAt, attempt: ctx.state.attempt }, correlationId: ctx.run.id });
@@ -439,15 +478,20 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       for (const cp of checkpoints) {
         if (cp.at > ctx.now.getTime() || reminders[cp.key]) continue;
         if (cp.key === "close") return { kind: "next", step: "close" };
+        // A moment already past when a person set the time is not a reminder that is late: "Your interview is tomorrow" must
+        // never reach someone booked for this afternoon, and they were just told the time. Offers never meet this: they are
+        // at least a day ahead.
+        if (ctx.state.bookedAt && cp.at < Date.parse(ctx.state.bookedAt)) { reminders[cp.key] = "skipped"; continue; }
         // a reminder inside the last hour before the start is noise; skip it
         if (start - ctx.now.getTime() < 45 * 60_000) { reminders[cp.key] = "skipped"; continue; }
         const sent = await sendInterviewReminder(ctx.q, ctx.services.integrations, { ...messageInput(b, ctx), which: cp.key });
         if (sent.status === "failed" && sent.retryable) return { kind: "fail", error: `reminder failed: ${sent.error}`, retryable: true };
         reminders[cp.key] = ctx.now.toISOString();
-        await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.reminder", title: `${cp.key === "before24h" ? "Tomorrow" : "In two hours"}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: b.iv.meetingUrl ? `Join: ${b.iv.meetingUrl}` : "See the interview page for details.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
+        await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.reminder", title: `${cp.key === "before24h" ? "Tomorrow" : "In two hours"}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: placeForTheTeam(b) ?? "See the interview page for details.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
         await emit(ctx.q, { type: "interview.reminder_sent", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { which: cp.key }, correlationId: ctx.run.id });
       }
-      await ctx.q.update(interviews).set({ reminders }).where(eq(interviews.id, b.iv.id));
+      // Only on this attempt: a person moving the time meanwhile started its reminders again.
+      await ctx.q.update(interviews).set({ reminders }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, ctx.state.attempt)));
       const next = checkpoints.filter((cp) => !reminders[cp.key] && cp.at > ctx.now.getTime()).sort((a, c) => a.at - c.at)[0];
       if (!next) return { kind: "next", step: "close" };
       return { kind: "wait", wait: { kind: "timer", until: new Date(next.at).toISOString(), reason: `next: ${next.key}` }, resumeStep: "on_timer" };

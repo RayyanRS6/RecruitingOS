@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Actor, CancelledView, MembershipRole, SendNewTimesBatch, SendNewTimesBatchResult, SendNewTimesResult } from "@ros/contracts";
 import { CANCEL_STAGES, PermissionError, activeFollowUpsFor, assertCan, cancelledView, emit, followUpParked, hiddenAmong, openFollowUpOf, setAutoState, type FollowUpRow } from "@ros/core";
-import { companyConfirmed } from "@ros/agents";
+import { companyConfirmed, interviewHasNoHours } from "@ros/agents";
 import { applications, candidates, companies, interviews, roles, withTenant, type Tx } from "@ros/db";
 import { activeInterviewersOf, cancelNewTimesRuns, reopenForNewTimes } from "@ros/workflows";
 import type { Container } from "../container";
@@ -26,6 +26,7 @@ const NO_INTERVIEWERS = "Nobody who ran that interview is still on your team. Ap
 const CHANGED = "Something changed a moment ago. Refresh to see where they are now.";
 const NOTHING_DUE = "Nothing is due to go to them automatically.";
 const STAFF_SCOPE = "Your access covers one candidate, so you can send new times to them only.";
+const NO_HOURS = "Nobody on this interview has hours to offer. Set a date and time instead.";
 
 type SendInput = { companyId: string; applicationId: string; actor: Actor; role: MembershipRole; approvedBy: string; via: "person" | "batch"; now: Date; /** the batch's role: an application of another role is refused */ roleId?: string };
 
@@ -59,8 +60,9 @@ async function stopPendingSet(tx: Tx, container: Container, input: { companyId: 
 
 /**
  * "Send new times" for one person, inside the caller's tenant transaction. Refused, with a plain reason, for someone no
- * longer under Cancelled, someone whose new times are already being prepared or out, someone with no email address, and
- * before ITS has confirmed the company (every email to its candidates waits then, and the times would lapse unseen).
+ * longer under Cancelled, someone whose new times are already being prepared or out, someone with no email address,
+ * before ITS has confirmed the company (every email to its candidates waits then, and the times would lapse unseen), and
+ * when someone on the interview has no hours to offer: times could never be worked out, and a person sets the time instead.
  */
 export async function sendNewTimes(tx: Tx, container: Container, input: SendInput): Promise<SendNewTimesResult> {
   const { companyId, actor, now } = input;
@@ -71,6 +73,7 @@ export async function sendNewTimes(tx: Tx, container: Container, input: SendInpu
   const [cand] = await tx.select({ email: candidates.email, anonymizedAt: candidates.anonymizedAt }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   if (!cand?.email || cand.anonymizedAt) throw new HttpError(400, "no_email", NO_EMAIL);
   if (!(await companyConfirmed(tx, companyId))) throw new HttpError(409, "company_not_checked", COMPANY_NOT_CHECKED);
+  if (await interviewHasNoHours(tx, { companyId, interviewId: followUp.currentInterviewId ?? followUp.interviewId })) throw new HttpError(409, "no_hours", NO_HOURS);
 
   let interviewId: string;
   let via: SendNewTimesResult["via"] = "reopened";

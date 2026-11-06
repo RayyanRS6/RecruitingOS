@@ -207,6 +207,24 @@ export function computeSlots(input: SlotComputationInput): { slots: OfferedSlot[
   return { slots, unconstrained };
 }
 
+/**
+ * The date and time a person set, read on the company's clock (never the browser's): the slot to book, or why it cannot
+ * be. `no_such_time`: the clocks change at that moment, so the wall-clock time never happens that day (reading the
+ * instant back gives another time). `time_passed`: it is not ahead of now. Nothing else is refused: a person may set a time
+ * this afternoon, on a weekend or a holiday, outside business hours, with no calendar and no declared hours behind it.
+ */
+export function personSetSlot(input: { date: string; time: string; durationMinutes: number; companyTimezone: string; interviewerUserIds: string[]; address?: string | null; now: Date }): { ok: true; slot: OfferedSlot } | { ok: false; code: "time_passed" | "no_such_time" } {
+  const [year, month, day] = input.date.split("-").map(Number);
+  const [hour, minute] = input.time.split(":").map(Number);
+  const start = zonedToUtc(year, month, day, hour, minute, input.companyTimezone);
+  const back = zonedParts(start, input.companyTimezone);
+  if (back.year !== year || back.month !== month || back.day !== day || back.hour !== hour || back.minute !== minute) return { ok: false, code: "no_such_time" };
+  if (start.getTime() <= input.now.getTime()) return { ok: false, code: "time_passed" };
+  const startsAt = start.toISOString();
+  const endsAt = new Date(start.getTime() + input.durationMinutes * 60_000).toISOString();
+  return { ok: true, slot: { id: slotId(startsAt, input.interviewerUserIds), startsAt, endsAt, interviewerUserIds: input.interviewerUserIds, source: "person", ...(input.address ? { address: input.address } : {}) } };
+}
+
 /** The least time between a pick and the interview: a time that starts sooner than this is never booked. */
 export const PICK_LEAD_MS = 3600_000;
 

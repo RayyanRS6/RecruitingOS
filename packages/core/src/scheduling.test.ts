@@ -1,10 +1,66 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_BUSINESS_CALENDAR } from "./business-hours";
 import { buildIcs, escapeIcsText, quoteIcsParam } from "./ics";
-import { computeSlots, defaultSchedulingWindow, freeRangesForDay, freshSchedulingWindow, groupSlotsByDay, holidaysBetween, missingAvailability, slotStillFree, subtractRanges, type ParticipantConstraints } from "./scheduling";
+import { computeSlots, defaultSchedulingWindow, freeRangesForDay, freshSchedulingWindow, groupSlotsByDay, holidaysBetween, missingAvailability, personSetSlot, slotId, slotStillFree, subtractRanges, type ParticipantConstraints } from "./scheduling";
 
 const declared = (userId: string, over: Partial<ParticipantConstraints> = {}): ParticipantConstraints => ({ userId, source: "declared", timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3, busy: [], ...over });
 const now = new Date("2026-09-18T20:00:00Z"); // Friday 13:00 Pacific
+
+describe("a time a person set (the owner's words: \"nadine sets date and time\")", () => {
+  const set = (date: string, time: string, over: { zone?: string; at?: Date; address?: string | null; minutes?: number } = {}) => personSetSlot({ date, time, durationMinutes: over.minutes ?? 45, companyTimezone: over.zone ?? "America/Los_Angeles", interviewerUserIds: ["a", "b"], address: over.address, now: over.at ?? now });
+
+  it("is read on the company's clock, in that company's zone, and says a person set it", () => {
+    expect(set("2026-09-22", "14:00")).toEqual({ ok: true, slot: { id: slotId("2026-09-22T21:00:00.000Z", ["a", "b"]), startsAt: "2026-09-22T21:00:00.000Z", endsAt: "2026-09-22T21:45:00.000Z", interviewerUserIds: ["a", "b"], source: "person" } });
+    const chicago = set("2026-09-22", "14:00", { zone: "America/Chicago" });
+    expect(chicago.ok && chicago.slot.startsAt).toBe("2026-09-22T19:00:00.000Z");
+  });
+
+  it("carries an address when one was given, and no empty one when not", () => {
+    const there = set("2026-09-22", "14:00", { address: "12 Main St, Irvine" });
+    expect(there.ok && there.slot.address).toBe("12 Main St, Irvine");
+    const none = set("2026-09-22", "14:00", { address: null });
+    expect(none.ok && "address" in none.slot).toBe(false);
+  });
+
+  it("allows this afternoon, in a few minutes, a weekend, a holiday and the middle of the night: nothing is said about any of them", () => {
+    expect(set("2026-09-18", "13:05").ok).toBe(true); // five minutes from now
+    expect(set("2026-09-19", "07:00").ok).toBe(true); // a Saturday, before anyone's hours
+    expect(set("2026-11-26", "23:30").ok).toBe(true); // Thanksgiving, at night
+  });
+
+  it("refuses a time that has passed, on the company's clock: the start itself counts as passed", () => {
+    expect(set("2026-09-18", "12:59")).toEqual({ ok: false, code: "time_passed" });
+    expect(set("2026-09-18", "13:00")).toEqual({ ok: false, code: "time_passed" });
+    expect(set("2020-01-01", "09:00")).toEqual({ ok: false, code: "time_passed" });
+    // the same instant is still ahead on a clock further west, and already gone on one further east
+    const twelveThirtyInHonolulu = new Date("2026-09-18T22:30:00Z");
+    expect(set("2026-09-18", "13:00", { zone: "Pacific/Honolulu", at: twelveThirtyInHonolulu }).ok).toBe(true);
+    expect(set("2026-09-18", "13:00", { zone: "America/New_York", at: twelveThirtyInHonolulu })).toEqual({ ok: false, code: "time_passed" });
+  });
+
+  it("refuses a wall-clock time the clocks skip, and only that one", () => {
+    const before = new Date("2027-03-01T00:00:00Z");
+    // Sunday 14 March 2027: 02:00 to 03:00 does not happen in Los Angeles
+    expect(set("2027-03-14", "02:00", { at: before })).toEqual({ ok: false, code: "no_such_time" });
+    expect(set("2027-03-14", "02:30", { at: before })).toEqual({ ok: false, code: "no_such_time" });
+    expect(set("2027-03-14", "02:59", { at: before })).toEqual({ ok: false, code: "no_such_time" });
+    const justBefore = set("2027-03-14", "01:59", { at: before });
+    const justAfter = set("2027-03-14", "03:00", { at: before });
+    expect(justBefore.ok && justBefore.slot.startsAt).toBe("2027-03-14T09:59:00.000Z");
+    expect(justAfter.ok && justAfter.slot.startsAt).toBe("2027-03-14T10:00:00.000Z");
+    // Arizona keeps its clock, so the same time exists there
+    expect(set("2027-03-14", "02:30", { zone: "America/Phoenix", at: before }).ok).toBe(true);
+  });
+
+  it("takes the hour the clocks repeat, and the times either side of it", () => {
+    const before = new Date("2026-10-01T00:00:00Z");
+    for (const time of ["00:30", "01:30", "02:30"]) {
+      const r = set("2026-11-01", time, { at: before });
+      expect(r.ok, time).toBe(true);
+      expect(r.ok && new Date(r.slot.startsAt).toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false }), time).toBe(time);
+    }
+  });
+});
 
 describe("slot computation (docs/06 propose_slots)", () => {
   it("offers spread-out weekday times inside everyone's hours, never sooner than a day out", () => {

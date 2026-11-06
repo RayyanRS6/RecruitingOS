@@ -477,6 +477,7 @@ const REASON_TEXT: Partial<Record<AutoNewTimesReason, string>> = {
   no_interviewers: "Nobody who ran the interview is still on your team.",
   no_email: "We have no email address for them, or the email did not reach them.",
   interview_changed: "The interview changed in the meantime.",
+  no_hours: "Nobody on the interview has hours to offer, so nothing goes automatically: set a date and time from their page.",
 };
 
 /**

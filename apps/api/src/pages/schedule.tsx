@@ -21,6 +21,11 @@ import { Layout } from "./layout";
  * Cancelling asks what they would like next (founder decision 2A): new times later, or no longer interested. Either way
  * they go under Cancelled on the team's side (1A). Someone who asks for new times gets one set automatically after the
  * company's working days (3A) when nothing stops it; the page says so only when it is true for them, with the day.
+ *
+ * A time a person set (`selectedSlot.source` "person", the owner's words of 6 November 2026: "nadine sets date and time"):
+ * the candidate never sees the page that picks a time, so the confirmed page carries what that page did (the accommodation
+ * field, the time zone, the HUMAN notice), says "booked" rather than "confirmed" (they confirmed nothing), and asking for a
+ * different time tells the team and leaves the time standing: nothing is reopened that no hours could fill.
  */
 export const schedulePages = new Hono<Vars>();
 
@@ -170,6 +175,17 @@ const TimesBeingReady = (props: { b: Bundle }) => (
     <p>We will email you as soon as there are times to pick from. If you have a question, reply to any email from {props.b.company.name}'s hiring team.</p>
   </Layout>
 );
+
+/** A person set this time themselves, so the candidate never picked it (the file's own note). */
+const setByAPerson = (b: Bundle) => b.iv.selectedSlot?.source === "person";
+
+/** Where it takes place, on the confirmed page: the link, what a person set (an address, or by phone), or the format. */
+const PlaceRow = ({ b }: { b: Bundle }) => {
+  if (b.iv.meetingUrl && /^https?:\/\//i.test(b.iv.meetingUrl)) return <div><span>Join</span><a href={b.iv.meetingUrl} rel="noopener">{b.iv.meetingUrl}</a></div>;
+  if (b.iv.selectedSlot?.address) return <div><span>Where</span><span>{b.iv.selectedSlot.address}</span></div>;
+  if (setByAPerson(b) && b.iv.format === "phone") return <div><span>Where</span><span>{b.candidate.phone ? `By phone: ${b.company.name} will call you at ${b.candidate.phone}` : `By phone: ${b.company.name} will call you. Reply to any of our emails with the best number to reach you.`}</span></div>;
+  return <div><span>Format</span><span>{b.iv.format.replace("_", " ")}</span></div>;
+};
 
 /** The sentence under "Send me new times later": what will happen for this candidate now, with the day when there is one. */
 function newTimesHint(plan: AutoPlan, b: Bundle): string {
@@ -344,32 +360,62 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
   const now = container.engine.clock();
   // Once the interview has started it can no longer be moved or cancelled from here (audit 06, bug 96).
   const ahead = Date.parse(start) > now.getTime();
-  const plan = !b.closed && ahead ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now })) : null;
+  const plan = !b.closed && ahead ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, interviewId: b.iv.id })) : null;
   const missing = c.req.query("error") === "cancel";
+  const setByPerson = setByAPerson(b);
   return c.html(
-    <Layout title={`Confirmed: ${b.iv.title} at ${b.company.name}`} extraCss={SCHEDULE_CSS}>
+    <Layout title={`${setByPerson ? "Your interview" : "Confirmed"}: ${b.iv.title} at ${b.company.name}`} extraCss={SCHEDULE_CSS}>
       {/* The employer and job, said nowhere else on the page (kept, as on the page that picks the time). */}
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
-      <h1>You're confirmed</h1>
+      {/* They confirmed nothing when a person booked it, so it does not say they did. */}
+      <h1>{setByPerson ? "Your interview is booked" : "You're confirmed"}</h1>
+      {c.req.query("asked") === "1" ? <div class="card" role="status"><strong>We told the team.</strong><p>This time stands until you hear from them.</p></div> : null}
+      {c.req.query("noted") === "1" ? <div class="card" role="status"><strong>We told the team.</strong><p>They have what you asked for. If you want to add anything, reply to any of our emails.</p></div> : null}
       <div class="card status">
         <div><span>When</span><strong>{formatInZone(start, tz)}</strong></div>
         {tz !== b.company.timezone ? <div><span>For the team</span><span>{formatInZone(start, b.company.timezone)}</span></div> : null}
         <div><span>How long</span><span>{b.iv.durationMinutes} minutes</span></div>
         <div><span>Who</span><span>{b.participants.map((p) => p.firstName).join(", ") || "the hiring team"}</span></div>
-        {b.iv.meetingUrl && /^https?:\/\//i.test(b.iv.meetingUrl) ? <div><span>Join</span><a href={b.iv.meetingUrl} rel="noopener">{b.iv.meetingUrl}</a></div> : <div><span>Format</span><span>{b.iv.format.replace("_", " ")}</span></div>}
+        <PlaceRow b={b} />
       </div>
       <a class="btn" href={`/c/schedule/${b.iv.scheduleToken}/ics`}><Icon name="calendar" />Add to my calendar</a>
+      {/* Later reminders use the zone saved here (one click away, as on the page that picks the time). The line above names the one shown. */}
+      {b.closed || !ahead ? null : (
+        <details class="more">
+          <summary>Change the time zone</summary>
+          <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/timezone`} class="card">
+            <label for="tz" class="flush">Show times in</label>
+            <select id="tz" name="timezone">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
+            <button class="btn secondary" type="submit">Save</button>
+          </form>
+        </details>
+      )}
+      {/* The accommodation field (counsel register item 12): someone a person booked never sees the page that picks a time, where it first lived. */}
+      {b.closed || !ahead ? null : (
+        <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/accommodation`} class="card">
+          <label for="access" class="flush">Anything that would make the interview easier for you? (optional)</label>
+          <input type="text" id="access" name="accessibilityNote" maxlength={500} value={b.iv.candidateAvailability?.accessibilityNote ?? ""} placeholder="For example: captions on, or a phone call instead of video" />
+          <button class="btn secondary" type="submit">Tell the team</button>
+        </form>
+      )}
       {/* The time stays on record for someone no longer in the process (it had already started); it can no longer be moved. */}
-      {b.closed ? null : <h2>Need to change it?</h2>}
+      {b.closed ? null : <h2>{setByPerson ? "Need a different time?" : "Need to change it?"}</h2>}
       {b.closed ? null : !ahead ? (
         <div class="card"><p>This interview has started, so it can no longer be moved here. If something went wrong, reply to any of our emails.</p></div>
-      ) : b.iv.rescheduleCountCandidate < MAX_CANDIDATE_RESCHEDULES ? (
+      ) : b.iv.rescheduleCountCandidate >= MAX_CANDIDATE_RESCHEDULES ? (
+        <div class="card"><p>You have {setByPerson ? "asked for a different time" : "rescheduled"} twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
+      ) : setByPerson ? (
+        <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/reschedule`} class="card">
+          <label for="suits" class="flush">What suits you better? (optional)</label>
+          <input type="text" id="suits" name="note" maxlength={1000} placeholder="For example: mornings next week" />
+          <p>We will tell the team. This time stands until you hear from them.</p>
+          <button class="btn secondary" type="submit">Ask for a different time</button>
+        </form>
+      ) : (
         <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/reschedule`} class="card">
           <p>We will send new times. You can do this {MAX_CANDIDATE_RESCHEDULES - b.iv.rescheduleCountCandidate === 1 ? "one more time" : "twice"}.</p>
           <button class="btn secondary" type="submit">Ask for a different time</button>
         </form>
-      ) : (
-        <div class="card"><p>You have rescheduled twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
       )}
       {/* Cancelling, with what they would like next (founder decision 2A), only while the interview is still ahead. One
           click away (founder brief, 14 October 2026), and open when a send came back incomplete (?error=cancel#cancel). */}
@@ -392,8 +438,61 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
           </form>
         </details>
       ) : null}
+      <p class="notice">Reply to any of our emails with HUMAN to reach a person. Nothing here is decided by software.</p>
     </Layout>,
   );
+});
+
+/** Whether a zone is one this runtime knows: what a form sends is never trusted to be. */
+function knownZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return zone.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** The candidate saves their time zone from the confirmed page: this page and every later reminder use it. The email already sent named the company's. */
+schedulePages.post("/c/schedule/:token/timezone", rateLimit(POLICIES.schedule), async (c) => {
+  const container = c.get("container");
+  const b = await loadByToken(container.db, c.req.param("token") ?? "");
+  if (!b) return c.notFound();
+  const form = await c.req.parseBody();
+  const zone = typeof form.timezone === "string" ? form.timezone : "";
+  if (knownZone(zone) && b.iv.status === "scheduled" && !b.closed) {
+    await withTenant(container.db, b.company.id, async (tx) => {
+      await lockApplication(tx, b.app.id);
+      const [current] = await tx.select({ schedulingWindow: interviews.schedulingWindow }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1).for("update");
+      if (current) await tx.update(interviews).set({ schedulingWindow: { ...current.schedulingWindow, candidateTimezone: zone } }).where(eq(interviews.id, b.iv.id));
+    });
+  }
+  return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
+});
+
+/**
+ * The accommodation field on the confirmed page (counsel register item 12, the same words and the same stored shape as the
+ * page that picks a time): the team is told at once. Empty, or sent again unchanged, says nothing new.
+ */
+schedulePages.post("/c/schedule/:token/accommodation", rateLimit(POLICIES.schedule), async (c) => {
+  const container = c.get("container");
+  const b = await loadByToken(container.db, c.req.param("token") ?? "");
+  if (!b) return c.notFound();
+  const confirmed = `/c/schedule/${b.iv.scheduleToken}/confirmed`;
+  const form = await c.req.parseBody();
+  // A long note is cut, never refused.
+  const note = typeof form.accessibilityNote === "string" ? form.accessibilityNote.trim().slice(0, 500) : "";
+  if (!note || b.closed || b.iv.status !== "scheduled") return c.redirect(confirmed);
+  await withTenant(container.db, b.company.id, async (tx) => {
+    await lockApplication(tx, b.app.id);
+    const [current] = await tx.select({ status: interviews.status, candidateAvailability: interviews.candidateAvailability }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1).for("update");
+    if (current?.status !== "scheduled" || current.candidateAvailability?.accessibilityNote === note) return;
+    await tx.update(interviews).set({ candidateAvailability: { ...(current.candidateAvailability ?? {}), timezone: tzOf(b), preferred: current.candidateAvailability?.preferred ?? [], at: new Date().toISOString(), accessibilityNote: note } }).where(eq(interviews.id, b.iv.id));
+    await emit(tx, { type: "interview.candidate_availability", companyId: b.company.id, actor: { kind: "candidate", id: b.candidate.id }, subject: { type: "interview", id: b.iv.id }, payload: { hasNote: false, accessibilityNote: true } });
+    await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.accessibility", title: `${b.candidate.firstName} asked for an accommodation`, body: note, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+  });
+  await container.kick();
+  return c.redirect(`${confirmed}?noted=1`);
 });
 
 schedulePages.get("/c/schedule/:token/ics", async (c) => {
@@ -418,6 +517,21 @@ schedulePages.post("/c/schedule/:token/reschedule", rateLimit(POLICIES.reschedul
     return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
   }
   const actor = { kind: "candidate" as const, id: b.candidate.id };
+  // A time a person set: the team is told and the time stands. Nothing is reopened, since no hours may be there to fill it.
+  if (setByAPerson(b)) {
+    const form = await c.req.parseBody();
+    const note = typeof form.note === "string" ? form.note.trim().slice(0, 1000) : "";
+    await withTenant(container.db, b.company.id, async (tx) => {
+      await lockApplication(tx, b.app.id);
+      const [current] = await tx.select({ status: interviews.status, attempt: interviews.attempt, count: interviews.rescheduleCountCandidate, availability: interviews.candidateAvailability }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1).for("update");
+      if (current?.status !== "scheduled" || current.attempt !== b.iv.attempt) return;
+      await tx.update(interviews).set({ rescheduleCountCandidate: current.count + 1, candidateAvailability: { ...(current.availability ?? {}), timezone: tzOf(b), preferred: current.availability?.preferred ?? [], at: new Date().toISOString(), ...(note ? { note } : {}) } }).where(eq(interviews.id, b.iv.id));
+      await emit(tx, { type: "interview.candidate_availability", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { hasNote: !!note, askedForAnotherTime: true } });
+      await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.rescheduled", title: `${b.candidate.firstName} ${b.candidate.lastName} asked for a different time`, body: note || "The time stands until you set a new one.", action: { label: "Set a new time", href: `/interviews/${b.iv.id}` } });
+    });
+    await container.kick();
+    return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed?asked=1`);
+  }
   const now = container.engine.clock();
   const hadEvents = Object.keys((b.iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
   await withTenant(container.db, b.company.id, async (tx) => {
@@ -451,6 +565,8 @@ function teamCancelNote(next: CancelNext, plan: AutoPlan | { arm: false; reason:
       return "They asked for new times. You had put them on hold; that hold has ended and nothing goes automatically: send new times or decide.";
     case "company_not_checked":
       return "They asked for new times. ITS has not confirmed your company yet, so nothing can go to them automatically. Once ITS confirms it, send new times from their page.";
+    case "no_hours":
+      return "They asked for new times. Set a new date and time from their page.";
     default:
       return "They asked for new times. Nothing goes to them automatically: send new times or decide.";
   }
@@ -494,7 +610,7 @@ schedulePages.post("/c/schedule/:token/cancel", rateLimit(POLICIES.cancelIntervi
     const underCancelled = !!app && CANCEL_STAGES.includes(app.stage);
     // Read before the row is written, so it says what was true when they chose (a hold still counts).
     // Under a share lock on the company row: switching automatic times off waits for this cancel, or this cancel reads it off.
-    const plan: AutoPlan | { arm: false; reason: "not_asked" } = next === "new_times" && underCancelled ? await autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, lock: true }) : { arm: false, reason: "not_asked" };
+    const plan: AutoPlan | { arm: false; reason: "not_asked" } = next === "new_times" && underCancelled ? await autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, lock: true, interviewId: b.iv.id }) : { arm: false, reason: "not_asked" };
     if (underCancelled) {
       const { row } = await openFollowUp(tx, { companyId: b.company.id, applicationId: b.app.id, interviewId: b.iv.id, interviewAttempt: b.iv.attempt + 1, kind: "candidate_cancelled", choice: next, auto: plan.arm ? { state: "waiting", dueAt: plan.dueAt, workingDays: plan.workingDays, day: plan.day } : { state: "none", reason: plan.reason }, actor, now });
       if (plan.arm) await armNewTimes(tx, container.engine, { companyId: b.company.id, followUpId: row.id, applicationId: b.app.id, roleId: b.app.roleId, interviewId: b.iv.id, actor });

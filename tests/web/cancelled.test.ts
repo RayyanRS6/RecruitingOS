@@ -173,7 +173,7 @@ describe("the candidate panel's card", () => {
   });
 
   it("gives the History tab the same reasons the API gives the team", () => {
-    for (const reason of ["switched_off", "already_used", "reschedules_used", "takeover", "was_on_hold", "stopped_by_team", "team_acted", "candidate_replied", "company_not_checked", "no_interviewers", "no_email", "interview_changed"]) {
+    for (const reason of ["switched_off", "already_used", "reschedules_used", "takeover", "was_on_hold", "stopped_by_team", "team_acted", "candidate_replied", "company_not_checked", "no_interviewers", "no_email", "interview_changed", "no_hours"]) {
       expect(notSentReasonText(reason), reason).toBe(autoReasonText(reason, { state: "not_sent", resolved: true }));
     }
     for (const reason of ["left_process", "details_deleted", "not_asked", "no_show", undefined]) expect(notSentReasonText(reason)).toBeNull();

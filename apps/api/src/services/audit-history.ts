@@ -62,7 +62,7 @@ export function describeAuditRecord(r: Pick<AuditRow, "action" | "actor" | "reas
     case "plan.changed": return `ITS moved your company to the ${str(d.toName) ?? str(d.to) ?? "new"} plan${str(d.fromName) ?? str(d.from) ? ` from ${str(d.fromName) ?? str(d.from)}` : ""}${r.reason ? `: ${r.reason}` : ""}.${num(d.unlocked) ? ` ${num(d.unlocked) === 1 ? "1 candidate who was locked is open now" : `${num(d.unlocked)} candidates who were locked are open now`}.` : ""}`;
     case "candidate.viewed": return `${who} opened a candidate's record${r.reason ? ` (${r.reason})` : ""}.`;
     case "candidate.exported": return `${who} exported a candidate's information.`;
-    case "interview.booked_on_behalf": return `${who} booked an interview time on the candidate's behalf${r.reason ? ` (${r.reason.replace(/^booked on the candidate's behalf:\s*/, "")})` : ""}.`;
+    case "interview.booked_on_behalf": return r.reason === "a person set the date and time" ? `${who} set an interview's date and time${d.moved === true ? ", moving a booked time" : ""}.` : `${who} booked an interview time on the candidate's behalf${r.reason ? ` (${r.reason.replace(/^booked on the candidate's behalf:\s*/, "")})` : ""}.`;
     case "outcome.recorded": return `${who} recorded an outcome: ${OUTCOME_WORDS[str(d.outcome) ?? ""] ?? str(d.outcome) ?? "recorded"}.`;
     case "outcome.corrected": return `${who} corrected a recorded outcome${r.reason ? `: ${r.reason}` : ""}.`;
     case "role.outcome_recorded": return `${who} closed a role: ${OUTCOME_WORDS[str(d.outcome) ?? ""] ?? str(d.outcome) ?? "closed"}.`;
