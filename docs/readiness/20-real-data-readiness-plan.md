@@ -55,7 +55,7 @@ None of it is staging evidence: every row still needs its proof on staging.
 ## C. Pilot scope (founder's configuration)
 
 One design partner · one role · US candidates only · one customer administrator · one hiring manager · Nadine as
-platform owner and ITS escalation contact · the role's full applicant volume may be accepted (founder amendment of 22 September, `docs/spec/20`; volume monitoring and a stop-accepting switch were built on 30 September: the "Applications by source" card and the daily `volume.high` alert above 100 a day, and "Stop accepting applications" on the role page) · 60 to 90 days · no software charge initially ·
+platform owner and ITS escalation contact · the role's full applicant volume may be accepted (founder amendment of 22 September, `docs/spec/20`; volume monitoring and a stop-accepting switch were built on 30 September: the "Applications by source" card and the daily `volume.high` alert above 100 a day, and "Stop accepting applications" on the role page; on Design Partner, which has no limit of candidates: since 5 November 2026 a plan with one locks people past it, `docs/workflow-decisions.md`, so this pilot stays on Design Partner) · 60 to 90 days · no software charge initially ·
 daily oversight by Nadine during the first week · weekly design-partner meeting · human approval before consequential
 candidate actions · a human decision for every decline · no automatic rejection · no SMS · no interview recording · no
 automated offers · no background-check data · no onboarding · no passive sourcing · no job-board automation · manual
@@ -110,3 +110,10 @@ unknown fields).
 
 Before any of: a paid customer; a candidate or role outside the United States; SMS; interview recording; automated
 rejection; a second design partner; broader release. Each is a stop point that names the risk again.
+
+**Raised again on 5 November 2026 (plans for testers).** The plans let more than one invited company use the product, put
+a price on all but one plan, and hide some applicants from the employer by a plan limit. That is past this plan's scope
+(section C) and has its own open questions (`docs/spec/11` items 27 to 34; `docs/workflow-decisions.md`, PQ-1 to PQ-18).
+Testers use made-up applicants only. No real company goes on one of these plans, and no real candidate applies to one,
+until the founder accepts the risk again in writing, dated in `docs/spec/00` section Q, or counsel has answered, and
+every blocker in section B still holds for them. Email must also be live: "we email you either way" depends on it.

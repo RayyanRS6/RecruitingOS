@@ -21,6 +21,8 @@ changing anything: some plans and settings differ from step 1, to stay inside th
 - **Not run yet:** a Microsoft sign-in from outside ITS (check first that the app registration in use takes outside
   accounts, see step 1), a second administrator (step 7, item 6), branch protection (step 4), the uptime monitor (step 9),
   go-live (step 10) and locking down staging (step 11).
+- **Not released yet:** the plans of 5 November 2026 ("The plans" below). They add migration 0036, the 37th, so production
+  is one behind until that release, and this file's counts already say 37.
 
 ## Before you start
 
@@ -317,7 +319,7 @@ optional); basic auth with any user name and the password `POSTMARK_WEBHOOK_SECR
 | `AUTH_SIGNIN_PROVIDERS` | `azure,google`; `azure` while Google is not published | not set | no |
 | `ITS_STAFF_EMAIL_DOMAINS` | `identifiedtalent.com` | not set | no |
 | `SIGNUP_MODE` | `invite` (the app refuses to start without it) | not set | no |
-| `SIGNUP_ALLOWED_EMAILS` | not set at first; the partner's owner address or `@<partner domain>` at go-live (step 10) | not set | no |
+| `SIGNUP_ALLOWED_EMAILS` | not set at first; the partner's owner address or `@<partner domain>` at go-live (step 10); each tester's address ("Letting a tester in") | not set | no |
 | `BOOTSTRAP_ADMIN_EMAILS` | the first administrator's `@identifiedtalent.com` address, removed in step 7 | not set | no |
 | `DATABASE_URL` | 1Password "Recruiting OS production database", field `DATABASE_URL` (`ros_app`) | never | yes |
 | `WORKER_DATABASE_URL` | never | the same item, field `WORKER_DATABASE_URL` (`ros_worker`) | yes |
@@ -433,8 +435,8 @@ Test data in production follows these rules:
   production.
 - One ITS test company, **ITS Internal Test - not hiring**, opened once by the first administrator at
   `https://<host>/setup/company` (an administrator may open a company while sign-up is by invitation). Then **Console,
-  Customers**, the company, **Change plan**: Design Partner, reason "ITS test company", so no trial clock pauses its
-  applications after 30 days.
+  Customers**, the company, **Change plan**: Design Partner, reason "ITS test company". Since the plans, a new company
+  starts on Free, so this is what keeps its one job and its test applicants from running into Free's limits.
 - Opening it sends the queue mailbox one notice about the new company. Until email is live that send fails and
   **Console, Problems, Alerts** shows "A new company is waiting for the ITS check" instead: **Resolve** it. The notice
   never goes again for this company, so once email is live something else proves the queue mailbox: the email about an
@@ -550,6 +552,103 @@ production is live:
 Stronger, optional: staging Supabase, **Authentication, Sign In / Providers**, **Allow new users to sign up** off.
 Existing test accounts keep working; a new tester is added in the dashboard first.
 
+## The plans
+
+Status: written 6 November 2026 from the code on branch `plans`, not yet run on production. Decisions:
+`docs/workflow-decisions.md`, "5 November 2026". A new company starts on Free. Every number is one edit in
+`packages/db/src/seed.ts`, written by the first boot after a deploy; a company takes a new number only the next time its
+plan is applied. The repository is public, so what a real tester or customer is called goes in the private launch
+to-do document, never here.
+
+**Before a real company or a real applicant.** Made-up applicants only until risk R-LEGAL-1 is accepted again in writing,
+or the lawyer has answered (`docs/workflow-decisions.md`, PQ-3; `docs/spec/00` section Q), and email is live (PQ-18). Step
+10's list still holds for any real data.
+
+### The release (migration 0036)
+
+Migration `0036_application_locked_at.sql` adds one empty column, `applications.locked_at`, with no default and no backfill:
+every application that exists stays visible. The older code keeps running on the new schema and ignores it. Order, as in
+"Every later release":
+
+1. GitHub, **Settings**, **Environments**: `production-database` exists with its two secrets, its variable and its branches
+   (step 4, item 4). Check this first: production's 36 migrations went on through the setup script, so this may be the first
+   run of the workflow against production. Never use `scripts\db-setup.ps1` for this release: a full run sets new passwords,
+   and the strings already in Vercel and Railway would stop working.
+2. The latest commit on `main` has a green `verify`, and nothing else merges into it until the release is live.
+3. **Actions**, **migrate**, **Run workflow**: **Use workflow from** `main`, environment **production-database**. The log says
+   `status: migrations applied: 36 (last: 0035_interview_followups.sql)` and
+   `status: migrations pending: 1 (next: 0036_application_locked_at.sql)`, then `applied: 0036_application_locked_at.sql`, and
+   **Confirm no migration is pending** is green. Until this has run, a new build refuses to start (step 6's table).
+4. The release pull request, merged with a merge commit (step 6, item 3). The worker, then the app (step 6, items 4 and 5).
+   The first boot of either writes the plans: there is no SQL to run and nothing to press. Trial, Core, Growth and Company
+   stop being offered, and their rows stay.
+5. **Console, Customers**, the test company, **Plan**: the list reads Free, Basic, Pro, Ultra and Design Partner, each with its
+   price and limits. The test company stays on Design Partner. Every existing company keeps what it had until someone changes
+   its plan.
+6. The short smoke test (step 8, items 3, 4 and 9), then the plans check below.
+
+**The plans check**, with made-up data and the rules of step 8:
+
+1. Add one account from outside ITS as a tester ("Letting a tester in"). It opens a company named
+   **ITS Plans Test - not hiring**. **Settings**, **Company** reads Free, with no word about a trial, and **Upgrade** beside it.
+2. **Console, Customers**, that company, **Confirm the company**, reason "plans check". Draft and approve one job,
+   **TEST - not a real job**. **Start a hire** then says "Your Free plan includes one job. Upgrade to post more."
+3. Apply six times from a private window, each with a new name at `blackhole.postmarkapp.com`. The job's **Candidates** lists
+   five people and one card that says **Locked**, with no name. The sixth's receipt says the application is on file, with no
+   word about a plan.
+4. As the owner, **Upgrade**, **Ask ITS to upgrade**. The sheet says "ITS has your request." if pressed again. **Console,
+   Customers** shows **Asked to upgrade**.
+5. **Change plan** to Basic with a reason. The toast says "1 locked candidate opens now."; the card becomes the person; the
+   request closes with "Your company is on the Basic plan now."; and **Settings**, **Audit history** shows the change with
+   the reason.
+6. **Take back the confirmation**, reason "plans check done". Take the account off `SIGNUP_ALLOWED_EMAILS` and redeploy.
+
+### Letting a tester in
+
+Sign-up stays by invitation (`SIGNUP_MODE=invite`). A new company costs real AI money up to its credit, so full addresses are
+better than `@domain`: `@domain` admits everyone at that domain, each with a new company and a new credit.
+
+1. Vercel, **Environment Variables**, Production, `SIGNUP_ALLOWED_EMAILS`: add the tester's address. Full addresses and
+   `@domain` entries (that domain only, not its subdomains), comma-separated, any case. An entry that is neither stops the app
+   from starting, and the log says which.
+2. **Deployments**, the latest Production deployment, the three-dot menu, **Redeploy**. The list is read at start.
+3. The tester signs in at `https://<host>/login` with the address. Check first which sign-in works for someone outside ITS:
+   `AUTH_SIGNIN_PROVIDERS` and step 1 (a Microsoft sign-in from outside ITS has not been run on production).
+4. They fill in the company form and land on Home on Free, with no clock. They can draft and approve at once. Their careers
+   page, job pages and candidate emails wait for the ITS check.
+5. **Console, Customers**, their company, **Confirm the company**, with a reason. Nothing in the code refuses a job in NYC,
+   Illinois, California or Colorado, or a remote one (`docs/workflow-decisions.md`, PQ-16), so ask what they will post.
+
+To end a tester's access: **Take back the confirmation**, then take the address off the list and redeploy. Their company and
+its records stay.
+
+### How ITS changes a plan
+
+A company asks with **Upgrade**, which reaches the **Queue** as "A customer asked about their plan." and shows **Asked to upgrade**
+on its row. Accepting it opens what the customer wrote and gives no access to their hiring. Only a platform administrator changes
+a plan; the queue says so to anyone else, with a link to the console's Plan tab for an administrator.
+
+1. **Console, Customers**, the company, **Plan**. Pick a plan. A retired plan stays shown while a company is on it, and cannot be
+   chosen again once left.
+2. **Why (required, kept with the change)**: five characters or more. The customer reads it in their activity history, so write
+   it for them.
+3. **Change plan**, then **Yes, change it**. No card is charged and nothing is invoiced by the app: money is settled outside it.
+
+It applies at once. The new limits hold, what was used this month stays used and the reset date does not move (the one
+exception: a monthly AI credit that had no limit starts its first month now, so what was spent on Free's credit is not charged
+to it). People locked on its jobs open, oldest first, up to the new limit, and the toast says how many; someone under 60 days old
+on an open job gets the interview's link by itself. AI work waiting for credit looks again. ITS's posting tasks follow the plan.
+Owners and admins are told, in no dollars, and the open plan request closes with its answer. A move down locks nobody, and a
+company moved down to Free gets no second credit.
+
+### While testers are on
+
+Email is not live, so the queue mailbox hears nothing: every failed send raises an alert instead, and a tester's team invitations
+reach nobody. Read the console every business day: **Overview**, **Customers** (filter **Waiting for the ITS check** and
+**Running low**, the chip **Asked to upgrade**), **Queue** and **Problems**. An AI credit at 80% or used up is a line in dollars
+on the company's row, and **Running low** counts it; it is never critical and pages nobody. The Anthropic workspace's monthly limit
+(step 1) stays the guard over the whole account.
+
 ## Every later release
 
 1. `main` is green; nothing else merges into it until the release is live.
@@ -573,6 +672,9 @@ Existing test accounts keep working; a new tester is added in the dashboard firs
   the newer schema. A wrong migration is corrected by the next numbered one, in a normal release.
 - **One company**: **Console, Customers**, the company, **Take back the confirmation**: its pages, feeds and candidate
   emails stop at once.
+- **Back past the plans.** A build from before them does not read `locked_at` and has no AI credit: anyone locked becomes
+  readable by their team, a company's AI spend has no limit, and new companies start on Trial again. With testers on, take back
+  each one's confirmation first, and release the fix soon. The plan rows stay; the older build rewrites only the five it knows.
 
 ## Hotfix
 

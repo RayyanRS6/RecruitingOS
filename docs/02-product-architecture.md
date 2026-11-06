@@ -77,7 +77,7 @@ A playbook is one versioned JSON document per vertical (`packages/playbooks/`): 
 
 ## Billing and entitlements
 
-Pricing is data, not code. `plans` define named limits (active roles, text screens, voice minutes, sourcing credits, recruiter asks, seats) and prices; `entitlements` per company are computed from the plan plus add-ons and credits; the product checks an entitlement (`can(company, 'voice_minutes', 10)`), never a plan name. Usage is metered as events. Stripe (or equivalent) is an integration; trials, upgrades, downgrades, credits, and limits are entitlement operations. Recruiter services are line items attached to escalations and takeovers.
+Pricing is data, not code. `plans` define named limits (active roles, text screens, voice minutes, sourcing credits, recruiter asks, seats) and prices; `entitlements` per company are computed from the plan plus add-ons and credits; the product checks an entitlement (`can(company, 'voice_minutes', 10)`), never a plan name. Usage is metered as events. Stripe (or equivalent) is an integration; trials, upgrades, downgrades, credits, and limits are entitlement operations. Recruiter services are line items attached to escalations and takeovers. Since 5 November 2026 the public plans are Free, Basic, Pro and Ultra, and the limits include jobs ever, candidates per job, an AI credit and ITS staff time, with no payment system yet (`docs/workflow-decisions.md`, PL-1 to PL-13).
 
 ## Learning and data governance
 

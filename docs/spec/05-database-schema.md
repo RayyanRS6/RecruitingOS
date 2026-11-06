@@ -76,13 +76,15 @@ ALTER TABLE interview_participants
 ALTER TABLE candidates ADD COLUMN timezone text;   -- IANA, set when the candidate picks a slot; used for reminders and quiet hours
 ```
 
-### applications (existing, no change)
+### applications (existing; `locked_at` added 5 November 2026)
+
+Migration 0036: `locked_at timestamptz null`, no default and no backfill. Null means the team can read the application; set once, at insert, when the job is past the plan's `candidates_per_job`; only a change of plan clears it.
 
 Stages used in release 1: applied, received, ineligible, eligible, triaged, screen_invited, screening, screen_complete, interview_recommended, interview_scheduled, interview_complete, finalist, hired, withdrawn, rejected, talent_pool. The rest of the enum stays for later releases.
 
 ### plans (seed change)
 
-Add `{ key: "pilot", name: "Design partner pilot", prices: { monthlyUsd: 0 }, limits: { active_roles: 5, text_screens: 500, voice_minutes: 0, sourcing_contacts: 0, recruiter_asks: 10, seats: null } }` (D9).
+Add `{ key: "pilot", name: "Design partner pilot", prices: { monthlyUsd: 0 }, limits: { active_roles: 5, text_screens: 500, voice_minutes: 0, sourcing_contacts: 0, recruiter_asks: 10, seats: null } }` (D9). Since built as `design_partner`; since 5 November 2026 the rows in `packages/db/src/seed.ts` are the record (Free, Basic, Pro, Ultra, Design Partner, and the retired Trial, Core, Growth and Company), each naming every limit key.
 
 ## 3. New tables
 

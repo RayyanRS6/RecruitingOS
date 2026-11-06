@@ -62,7 +62,7 @@ Managed Postgres point-in-time recovery (RPO 15 minutes, RTO 4 hours); object st
 
 ## 9. Privacy by design
 
-Data inventory (release 1): see `05` §6. Data minimization: no SSN, bank, government ID, health, biometric, or demographic data; resumes stored as file and text only. Purpose limitation: candidate data is used to consider the candidate for the role applied to and, unless opted out, future roles at the same company; never pooled across tenants; never used to train foundation models.
+Data inventory (release 1): see `05` §6. Data minimization: no SSN, bank, government ID, health, biometric, or demographic data; resumes stored as file and text only. Purpose limitation: candidate data is used to consider the candidate for the role applied to and, unless opted out, future roles at the same company; never pooled across tenants; never used to train foundation models. Since 5 November 2026 a plan's limit can keep an application from the employer and from the AI while it is locked, which bears on this purpose: counsel register item 27.
 
 Notices and consent (all versioned, display recorded): AI-use notice on the job page, the apply page, the first screening message, and the privacy page; SMS consent separate and unchecked, shown only when SMS is enabled; privacy notice with retention and rights; pay-transparency line where required; Colorado adverse-decision line (from January 2027).
 

@@ -67,11 +67,11 @@ Channel order: careers_page, google_jobs, email_in; then linkedin_basic, indeed,
 
 ### application_intake (existing, changed)
 
-acknowledge (stage received; starts the `screen` run for every applicant, key `screen:<id>`; an emailed-in applicant's interview and one email are made here, 20 Oct 2026) → validate → ai_notice → extract (moved fully into the worker; S6) → eligibility → ineligible_review (hold: notify, review timer, reminders every 24 h, escalation to a recruiter after 72 h; never a decline) | ready (assess; every way out signals `<id>:reading.settled`; the stage is the interview run's to move) → after_triage (completes; since 20 Oct 2026 no gate) → after_triage_decision (kept so old "Invite to a screen?" approvals lapse).
+acknowledge (stage received; starts the `screen` run for every applicant, key `screen:<id>`; an emailed-in applicant's interview and one email are made here, 20 Oct 2026) → validate → ai_notice → extract (moved fully into the worker; S6) → eligibility → ineligible_review (hold: notify, review timer, reminders every 24 h, escalation to a recruiter after 72 h; never a decline) | ready (assess; every way out signals `<id>:reading.settled`; the stage is the interview run's to move) → after_triage (completes; since 20 Oct 2026 no gate) → after_triage_decision (kept so old "Invite to a screen?" approvals lapse). Locked (5 Nov 2026: the application is past the plan's `candidates_per_job`): acknowledge in the on-file form → validate (the scan) → complete, with no reading, no eligibility step, no `screen` run and no timer. A change of plan opens them with `unlockApplicants`: under 60 days on an open job, a new run (`application_intake:<id>:unlocked`) from the reading; otherwise settled in code. A reading refused for no AI credit waits on `ai.credit_available` with a long timer, never a failure.
 
 ### screen (existing, changed 20 Oct 2026)
 
-await_reading (every applicant's run: waits for `<id>:reading.settled`, ten minutes at most) → invite (the interview and the one email; held on a must-have answer → after_hold, which waits for "Keep them in"; used up → waits for more interviews) → after_invite → remind → after_remind → expire; started/completed → assess → recommend (gate `application.recommend_interview`) → on_decision.
+await_reading (every applicant's run: waits for `<id>:reading.settled`, ten minutes at most) → invite (the interview and the one email; held on a must-have answer → after_hold, which waits for "Keep them in"; used up → waits for more interviews) → after_invite → remind → after_remind → expire; started/completed → assess → recommend (gate `application.recommend_interview`) → on_decision. No `screen` run starts for someone locked. With no AI credit (5 Nov 2026) the chat goes on in code, and assess waits on `ai.credit_available`, marked `progress.scoreWaitsForCredit`, never failing and never raising a request.
 
 ### schedule_interview (new)
 
@@ -98,7 +98,7 @@ The Cancelled column (founder decisions 1A to 4A, 10 Oct 2026). The candidate's 
 
 Adds detectors: `slots_unanswered` (offer open ≥ 3 days), `decision_pending_after_interview` (interview_complete with no decision ≥ 2 days), `no_availability` (an approved interview waiting on availability ≥ 1 day). Same ladder and cooldown policy. As built (30 Sep 2026, audit F3): the existing `candidates_waiting` rule counts `interview_complete` among the decisions pending, at its 3-day threshold, and its message says "decide after an interview"; a separate 2-day `decision_pending_after_interview` detector is not built.
 
-Email alerts (8 Oct 2026, plan B3): the ladder's `message` and `offer_recruiter` rungs email only the owners, admins and hiring managers who want "Roles that need attention" as it happens; everyone else's copy of the update follows their own setting (the morning or Monday summary, or the app only). While ITS has not confirmed the company (founder decision B7), `no_applicants` and `screens_unanswered` are not raised: nothing of the company is public and its invitations wait in the outbox.
+Email alerts (8 Oct 2026, plan B3): the ladder's `message` and `offer_recruiter` rungs email only the owners, admins and hiring managers who want "Roles that need attention" as it happens; everyone else's copy of the update follows their own setting (the morning or Monday summary, or the app only). While ITS has not confirmed the company (founder decision B7), `no_applicants` and `screens_unanswered` are not raised: nothing of the company is public and its invitations wait in the outbox. The plans of 5 November 2026: on a plan with no ITS staff time the ladder stops at the `message` rung; nobody locked counts toward any detector, what someone opened waits for counts from the unlock, and the daily run also sends the close-out note, from day 29, to someone still locked on a job still open.
 
 ### calendar_health (new, platform-level per company)
 
@@ -110,6 +110,8 @@ create (counted against the plan's recruiter requests when the team asked, never
 
 The ITS queue lists urgent requests first, then by the soonest reply-by time (founder decision Q32, option A). Urgency never changes the reply-by time.
 
+A request about the plan (`topic: "plan"`, 5 Nov 2026): create (never counted; one open at a time per company, a second answers softly) → claim, which grants nothing → Change plan closes it with a template answer. Reopened, it goes back to the queue, never to the earlier recruiter. A request about someone locked is raised only by the candidate or the product; the team's list keeps only that it exists, and the answer and the thread stay with ITS.
+
 ## 4. Timers and SLAs
 
 | Timer | Value | Configurable |
@@ -120,6 +122,10 @@ The ITS queue lists urgent requests first, then by the soonest reply-by time (fo
 | Screen: reminder / expiry | 48 h / +72 h | no |
 | Slots: reminder / expiry | 48 h / +48 h | no |
 | Automatic new times after a candidate's cancel (founder decision 3A) | 3 working days (company time zone, Monday to Friday contact days, ITS holidays), sent at 09:00 or the start of contact hours; waits for the ITS check up to 10 days past that | company setting: 1 to 10 working days, or off (Setup, "When a candidate cancels") |
+| A locked applicant's close-out note (5 Nov 2026) | from day 29 after applying, on the daily check, so "at the latest 30 days" holds | no |
+| A locked applicant's closing message (5 Nov 2026) | when a person sends it for the others, or at 5 working days | no: whatever `disposition.send` says |
+| Upgrade opens someone with the interview to follow (5 Nov 2026) | under 60 d since applying | no |
+| Wait for AI credit (5 Nov 2026) | the period's end on a monthly plan, else 30 d, armed again on each wake; `ai.credit_available` ends it early | no |
 | Schedule token | 14 d | no |
 | Interview reminders | −24 h, −2 h | no |
 | Interview close | end +1 h | no |

@@ -26,6 +26,18 @@ Status: built with synthetic data on 18 September 2026 (admin console → Privac
 6. **Confirm completion** to the requester from `privacy@`, stating what was done and what was retained and why (in plain language).
 7. **Close the record** with the completion date, the handler, and a link to the confirmation.
 
+## Someone locked (the plans of 5 November 2026)
+
+An application past a plan's candidates per job is locked: the hiring team cannot read it, and no AI has. Every step above works the same for them, from the same console. Decided defaults, for counsel to confirm (register items 30, 31 and 33; `docs/workflow-decisions.md`, PQ-6, PQ-13, PQ-15):
+
+- **Nothing goes to the team while they are locked.** No notice names them, and their request does not show on the company's pages. Do not write to the company about them.
+- **Access.** The export runs on the platform side, so it holds everything they gave. Each application that was ever locked carries `hiringTeamCanSeeThis` (`false`, or `true` with `hiringTeamCanSeeThisSince`), in no plan's words.
+- **Correction.** Change the field as usual. The rule above sends a correction that changes an eligibility outcome to the hiring team, which cannot happen while they are locked: keep it as a note on the request. The team sees the corrected answer if a change of plan opens them, and it is read as any other answer then.
+- **Deletion.** The same anonymizing. A deletion frees no place, so it never reveals the next person, and the company's locked card for them stays a card with no name. The code refuses every deletion without a recorded counsel decision, and no counsel is engaged, so **a real deletion request cannot be finished today**: escalate it to the founder on the day it comes in, because the 45 days are running.
+- **A person's review.** It opens an ITS request whose record holds their name, email, résumé and answers, and a recruiter reads them only under a grant naming that application. ITS cannot unlock one card in this release, so say plainly what the review can and cannot do.
+- **What ITS may say.** If they ask why: "The employer did not review your application." Never name the plan, the limit or the money, on any channel. Do not say or hint how many applied or where they came in. Do not tell the employer who asked. If someone keeps asking for the reason, or the candidate is in Colorado, escalate to the founder and counsel before answering (register item 30).
+- **An employer's legal need.** If an agency or a lawsuit asks an employer for applicant records, it is never told "upgrade first": ITS produces locked records for a recorded legal reason, and a litigation hold stops deletion as above. Record the reason and who asked in the request's notes, and tell the founder.
+
 ## Restrictions
 
 - Only the privacy handler and the platform administrators see privacy requests. Customer users see only that a request was fulfilled on a candidate's record ("data request fulfilled"), never its content.

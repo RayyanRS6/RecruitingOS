@@ -55,6 +55,14 @@ The founder's answers to the small choices (docs/workflow-decisions.md). No migr
 
 - **Row 41**: fixed. A browser sign-in now counts as the provider it started with (the PKCE cookie), not the account's first provider, and is refused when the account does not hold that provider (`provider_mismatch`). An ITS staff account must hold Microsoft only: one that also has another sign-in linked is refused (`staff_provider_linked`) until ITS removes the link at the identity service (packages/core/src/identity.ts, `identityForSignIn` and `evaluateSignIn`). Built and tested against fake providers only.
 
+## The plans (branch plans, 5 and 6 November 2026)
+
+Decisions: docs/workflow-decisions.md, PL-1 to PL-13. Built and tested against fake providers only.
+
+- **Row 60** (its plan part, which S2 and S10 fixed): a new company is now on Free with no clock, and the console's Change plan shows each plan's price and limits.
+- **Found and fixed on the way:** a closed job could still be approved open beside another, past any plan's limit, and its 14 days could turn it back into a draft (closing a role now cancels its approval, and approve, decide and the workflow's steps refuse a closed role, on every plan). `plan.changed` was not in the customer's activity history, though the console said it was. A plan request granted ITS all of the company's hiring on claim. The console's plan picker had no option for a retired current plan. Settings printed `voice_minutes` and `sourcing_contacts`, never built.
+- **New and left open for a decision:** no cap on locked applicants per job, one draft at a time per session, and a page button to close a job waiting for approval (docs/workflow-decisions.md, "Also left open by the build").
+
 ## Waves S6 to S8 (15 October 2026)
 
 - **S6** (PR #43, merged, `92f7253`): the AI run detail is now on the console's System page (part of row 1).

@@ -30,6 +30,14 @@ points at Postmark's inbound server (the same setup the per-role intake addresse
   it first (from Today or the sheet); their own messages go at once. Under the default (auto with a notice) a message
   goes out at once and the owners are told afterwards.
 
+## When the application is locked (the plans of 5 November 2026)
+
+While an application is past its plan's candidates per job, nobody on the team may read this person, so a reply never reaches them. It is recorded on the application's thread and `message.received` is written, with no notice to the team. Any reply opens one `candidate_issue` request at a time in the ITS queue, with its usual response time, its question naming the role and saying the hiring team cannot read this application, and their words left on the thread. HUMAN works the same way, with the one short email saying a person will follow up. A reply about future roles ("no thanks") is honoured with no request. The team's list shows only "An ITS recruiter is helping a candidate you cannot see yet.", with no name and no answer.
+
+The recruiter accepts it, reads it under a grant naming exactly that application, and sees "Locked for the company. Do not name them in your reply." They answer the candidate from that application, and nothing about the person goes to the company: `docs/runbooks/privacy-requests.md`, "What ITS may say". An accommodation request is answered the same way, and is never limited. Once a change of plan opens them, replies go to the team again.
+
+Without the inbound domain these replies land in the mailbox like any other, and the product cannot tell the person reading it. **Console, Customers** shows how many a company has locked: if it has any, find out whether this person is one of them before writing anything to the team, and if they are, answer them and tell the team nothing.
+
 ## When the inbound domain is not configured (development, staging without the DNS record)
 
 Reply-To stays `EMAIL_REPLY_TO` (by default the ITS queue mailbox, `ITS_QUEUE_EMAIL`). Replies land in that mailbox
