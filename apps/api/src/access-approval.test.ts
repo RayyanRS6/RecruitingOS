@@ -2,8 +2,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
-import { FREE_PLAN_KEY, oneLine, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
-import { createInvitation } from "@ros/core";
+import { CreateCompany, FREE_PLAN_KEY, oneLine, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
+import { createApplicationLink, createInvitation } from "@ros/core";
 import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
@@ -12,7 +12,7 @@ import { loadEnv, signupModeOf } from "./env";
 import { runHourlyChecks, runMaintenance } from "./maintenance";
 import { POLICIES } from "./middleware/rate-limit";
 import { resetPublicFeedCache } from "./pages/public-feeds";
-import { companyRequestDetails } from "./services/access-requests";
+import { companyRequestDetails, sendAccessRequest } from "./services/access-requests";
 import { emailReallyLeft } from "./services/company-trust";
 import { signupDoor } from "./services/companies";
 import { backfillPublishing } from "./services/publishing-backfill";
@@ -226,6 +226,12 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.aiRunsOf(asker.id)).toEqual([]);
     expect(await w.noticesOf(asker.id)).toEqual([]);
     expect(await w.container.db.select().from(jobs).where(sql`${jobs.payload}->>'companyId' = ${asker.id}`)).toEqual([]);
+    // signing in again opens no company either, so the browser lands on the same step
+    const signIn = async () => {
+      const accessToken = (w.container.integrations.identity as FakeIdentityProvider).mint({ email: "sam@stranger.test", provider: "google" });
+      return w.read<{ activeCompanyId: string | null }>(await w.app.request("/api/v1/auth/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accessToken }) }));
+    };
+    expect((await signIn()).activeCompanyId).toBeNull();
     // the configuration says the state of their request, with the same date
     expect(await w.signupOf(asker.cookie)).toEqual({ mode: "approval", allowed: false, contact: "recruiting@its.example", door: "request", request: { status: "requested", companyName: "Harbor Dental", email: "sam@stranger.test", emailedAt: asker.accessRequest.emailedAt } });
     // the person's email and ITS's, and no other
@@ -288,6 +294,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const open = await w.meOf(asker.cookie);
     expect(open.activeCompanyId).toBe(asker.id);
     expect(open.memberships).toEqual([expect.objectContaining({ companyId: asker.id, role: "owner" })]);
+    expect((await signIn()).activeCompanyId).toBe(asker.id);
     const current = await w.json(asker.cookie, "GET", "/api/v1/companies/current");
     expect(current.status).toBe(200);
     expect(await w.read<{ planKey: string; id: string }>(current)).toMatchObject({ id: asker.id, planKey: FREE_PLAN_KEY });
@@ -502,7 +509,15 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     // the Overview row is what tells Nadine
     expect((await w.customers(adminCookie)).find((c) => c.id === failed.id)?.accessRequest?.status).toBe("requested");
 
+    // only the person's copy fails: ITS still hears, and the screen still makes no claim
+    w.mail().failNext(1);
+    const half = await w.ask("half@stranger.test", "Half Mail Dental");
+    expect(half.accessRequest.emailedAt).toBeNull();
+    expect(w.mailTo("half@stranger.test")).toEqual([]);
+    expect(w.mailTo("queue@its.example").map((m) => m.subject)).toContain("[access request] Half Mail Dental is asking for access");
+
     // a send that throws, a provider that is not set up, and a reply that was cut off: none of them is "it left"
+    const quietLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const realSend = vi.spyOn(w.mail(), "send");
     for (const [i, answer] of ([() => Promise.reject(new Error("boom")), () => Promise.resolve({ status: "pending", reason: "Postmark server token not configured" }), () => Promise.resolve({ status: "failed", error: "cut off", retryable: false, uncertain: true })] as const).entries()) {
       realSend.mockImplementation(answer as never);
@@ -516,6 +531,8 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
       expect(await w.alertsOf(asker.id)).toEqual([]);
     }
     realSend.mockRestore();
+    expect(quietLog).toHaveBeenCalledWith(expect.stringContaining("could not be sent: boom"));
+    quietLog.mockRestore();
 
     // Accept while the provider is down: everything happens, and the notice's email, tried until it gives up, raises nothing
     w.mail().failNext(1_000);
@@ -560,6 +577,21 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(made.status).toBe(201);
     const listed = await w.read<{ id: string }>(made);
     expect((await w.alertsOf(listed.id)).map((a) => a.kind)).toEqual(["company.check_notice_failed"]);
+  });
+
+  it("on a hosted deployment still on the fake adapter, which reports every email sent, no claim about email is kept", async () => {
+    const [user] = await w.container.db.insert(users).values({ email: "staging.person@stranger.test", name: "Staging Person" }).returning();
+    const real = w.container.env.NODE_ENV;
+    w.container.env.NODE_ENV = "production";
+    try {
+      const answer = await sendAccessRequest(w.container, { body: CreateCompany.parse(w.form("Staging Dental")), user: { id: user.id, email: user.email, name: user.name }, actor: { kind: "user", id: user.id, name: "Staging Person" } });
+      expect(answer.accessRequest).toMatchObject({ status: "requested", emailedAt: null });
+      expect((await w.rowOf(answer.id)).settings.accessRequestEmailedAt).toBeUndefined();
+      // the fake did keep it, as it keeps everything: it did not leave
+      expect(w.mailTo("staging.person@stranger.test").map((m) => m.subject)).toEqual(["Your request has been sent"]);
+    } finally {
+      w.container.env.NODE_ENV = real;
+    }
   });
 
   it("a person's words cannot break an email: a line break and a very long value in the name, the website and their own name", async () => {
@@ -785,10 +817,7 @@ describe.each(["its", "auto"] as const)("a request or a declined company shows n
       expect(row.settings.verifiedAt).toBeUndefined();
       expect(await w.eventsOf(person.id, "company.verified")).toEqual([]);
       const roleId = await w.plantRole(source.roleId, person.id, `Zqpublicrole ${check}`);
-      const [link] = await withPlatform(w.container.db, async (tx) => {
-        const { createApplicationLink } = await import("@ros/core");
-        return [await createApplicationLink(tx, { companyId: person.id, roleId, source: "referral", label: "A friend", actor: { kind: "system", id: "test" } })];
-      });
+      const link = await withPlatform(w.container.db, (tx) => createApplicationLink(tx, { companyId: person.id, roleId, source: "referral", label: "A friend", actor: { kind: "system", id: "test" } }));
       for (const path of [`/careers/${person.slug}`, `/careers/${person.slug}/logo/x.png`, `/careers/${person.slug}/jobs/${roleId}`, `/careers/${person.slug}/jobs/${roleId}/apply`, `/careers/${person.slug}/jobs/${roleId}/applied`, `/careers/${person.slug}/jobs/${roleId}/apply/reuse`]) expect((await w.app.request(path)).status, path).toBe(404);
       expect((await w.app.request(`/careers/${person.slug}/jobs/${roleId}/apply`, { method: "POST", body: new FormData() })).status).toBe(404);
       expect((await w.app.request(`/a/${link.token}`)).status).toBe(404);
