@@ -344,6 +344,7 @@ export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRo
   const [asking, setAsking] = useState<AccessDecision | null>(null);
   const box = useRef<HTMLSpanElement>(null);
   const focusButton = useRef<number | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asking` is what swaps the buttons, and this runs once they are drawn
   useEffect(() => {
     if (focusButton.current === null) return;
     box.current?.querySelectorAll("button")[focusButton.current]?.focus();
@@ -484,7 +485,7 @@ export function Customers() {
       ) : null}
       {filter === "low" && lowCompanies.length ? (
         <Card needsYou title="AI interviews running low">
-          <ul className="grid list-disc gap-1 pl-5 text-[15px] marker:text-ink-3">
+          <ul className="grid list-disc gap-1 pl-5 text-[15px] wrap-anywhere marker:text-ink-3">
             {lowCompanies.map((c) => {
               const a = low.get(c.id);
               return a ? <li key={c.id}><strong>{c.name}</strong>: {allowanceChip(a)}, since {new Date(a.since).toLocaleDateString()}</li> : null;
@@ -539,7 +540,7 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
       </td>
       <td>
         <div className={CELL}>
-          {declined ? <Pill tone="neutral" size="sm" title={declinedWhen(c.accessRequest?.declined ?? null)}>Declined</Pill> : verified ? <Pill tone="good" size="sm">Confirmed</Pill> : <Pill tone="caution" size="sm" title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt, now)}</Pill>}
+          {declined ? <Pill tone="neutral" size="sm" title={declinedWhen(c.accessRequest?.declined ?? null) || undefined}>Declined</Pill> : verified ?<Pill tone="good" size="sm">Confirmed</Pill> : <Pill tone="caution" size="sm" title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt, now)}</Pill>}
           {access === "requested" ? <Chip tone="accent">{ASKING_FOR_ACCESS_CHIP}</Chip> : null}
           {c.heldMessages ? <div className="small muted">{plural(c.heldMessages, "message", "messages")} held</div> : null}
         </div>

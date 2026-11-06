@@ -25,6 +25,9 @@ import { costsSinceKey, monthStartIn } from "./system";
  * Fewer words (founder, 23 Oct 2026): the counts live in the stat strip, so the card titles under it carry none (the
  * greeting keeps "N things need you.", the state to act on), and "Nothing needs you right now." is the list's own row,
  * not a second line under the title.
+ * First sign-in asks for approval (6 November 2026): a request for access is a row of its own at the very top, with who is
+ * asking, and Accept and Decline in the row instead of one button. It waits for the ITS check in the stat strip, as
+ * accepting it is the check; it is no customer yet, in the strip or on the Customers card, and a declined one is neither.
  */
 
 type FailuresDto = { failedRuns: Array<{ id: string }>; failedJobs: Array<{ id: number; createdAt?: string }>; failedAi: Array<{ id: string; createdAt?: string }>; alerts: AlertRow[]; pendingDeletions: Array<{ id: string }> };
