@@ -274,16 +274,18 @@ export async function usageOf(q: Queryable, companyId: string, opts: { now?: Dat
  * plan takes effect at once and keeps the current period: what was used this month stays used, against the new limit,
  * and the reset date does not move. A period that has already ended starts again from zero; a row without dates (or a
  * new one) starts its first period now. So does a monthly AI credit that had no limit until now: an upgrade's first month
- * starts with the upgrade, and what was spent on the free credit is not charged to it.
+ * starts with the upgrade, and what was spent on the free credit is not charged to it. `aiCreditMonthStarted` says this happened.
  */
-export async function applyPlan(q: Queryable, companyId: string, planKey: string, source: "plan" | "trial" = "plan", opts: { now?: Date } = {}): Promise<void> {
+export async function applyPlan(q: Queryable, companyId: string, planKey: string, source: "plan" | "trial" = "plan", opts: { now?: Date } = {}): Promise<{ aiCreditMonthStarted: boolean }> {
   const [plan] = await q.select().from(plans).where(eq(plans.key, planKey)).limit(1);
   if (!plan) throw new Error(`unknown plan ${planKey}`);
   const now = opts.now ?? new Date();
   const periodStart = now.toISOString();
   const periodEnd = new Date(now.getTime() + PERIOD_MS).toISOString();
+  let aiCreditMonthStarted = false;
   for (const [key, limit] of Object.entries(plan.limits)) {
     const [existing] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
+    if (key === AI_CREDIT_MONTHLY_CENTS && limit !== null && (!existing?.periodEnd || existing.limit === null)) aiCreditMonthStarted = true;
     if (existing) {
       const p = currentPeriod(existing, now);
       const creditStarts = key === AI_CREDIT_MONTHLY_CENTS && existing.limit === null && limit !== null;
@@ -294,6 +296,7 @@ export async function applyPlan(q: Queryable, companyId: string, planKey: string
     }
   }
   await q.update(companies).set({ planKey }).where(eq(companies.id, companyId));
+  return { aiCreditMonthStarted };
 }
 
 /** Requests for a person instead of the screening conversation (Q16): counted, never limited; ITS covers them. */

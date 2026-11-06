@@ -333,7 +333,7 @@ You should never see the words "Development mode" or "fake provider" on your liv
 Email support@identifiedtalent.com for any of these.
 
 - Correcting a recorded outcome. An ITS administrator makes the correction and the original is kept.
-- Changing your plan, your program dates or your allowances: press **Upgrade** (section 5), or email. An ITS administrator changes the plan in the ITS console with a written reason, which is recorded and which you see in your audit history; what you used this month and the reset date are kept, and the new limits apply at once. Nothing is charged by the product.
+- Changing your plan, your program dates or your allowances: press **Upgrade** (section 5), or email. An ITS administrator changes the plan in the ITS console with a written reason, which is recorded and which you see in your audit history; what you used this month and the reset date are kept, and the new limits apply at once. The one exception is AI help on a move up from Free, which starts a new month that day. Nothing is charged by the product.
 - Connecting incoming mail, so candidate replies and emailed applications come into the product.
 - Connecting Google Calendar for your workspace.
 - Turning off (or back on) **Applicants' match score**: whether candidates see their match score and its breakdown on their application record after they send their application. It is on unless you ask. An ITS administrator changes it in the ITS console with a written reason; the change shows in your activity history. Before real candidates in New York City, Illinois, California or Colorado, ITS's lawyer reviews the wording.

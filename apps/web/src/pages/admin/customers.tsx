@@ -761,10 +761,14 @@ export function planPriceLine(prices: Record<string, number> | undefined): strin
   return typeof prices?.monthlyUsd === "number" ? `$${prices.monthlyUsd.toLocaleString("en-US")} a month` : null;
 }
 
-/** The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B); `opened` how many locked candidates the new plan opened. */
-export function planChangedToast(company: string, plan: string, endedTrial = false, opened = 0): { title: string; detail: string } {
+/**
+ * The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B);
+ * `opened` how many locked candidates the new plan opened; `aiMonthStarted` when the move started a monthly AI credit's first
+ * month, the one thing a change of plan does start again.
+ */
+export function planChangedToast(company: string, plan: string, endedTrial = false, opened = 0, aiMonthStarted = false): { title: string; detail: string } {
   const people = opened ? ` ${opened === 1 ? "1 locked candidate opens" : `${opened} locked candidates open`} now.` : "";
-  const limits = `The new limits apply at once. This month's usage stays; the reset date does not move.${people}`;
+  const limits = `The new limits apply at once. ${aiMonthStarted ? "AI help starts a new month today; other allowances keep their dates." : "This month's usage stays; the reset date does not move."}${people}`;
   return { title: `${company} is on ${plan} now.`, detail: endedTrial ? `The trial has ended; new applications are open again. ${limits}` : limits };
 }
 
@@ -825,9 +829,9 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
   const price = planPriceLine(chosen?.prices);
   const includes = chosen ? [price, planLimitsLine(chosen.limits)].filter(Boolean).join(" · ") : "";
   const save = useMutation({
-    mutationFn: () => api.post<{ trialEnded?: boolean; unlocked?: number }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
+    mutationFn: () => api.post<{ trialEnded?: boolean; unlocked?: number; aiCreditMonthStarted?: boolean }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
     onSuccess: (r) => {
-      const t = planChangedToast(company.name, chosen?.name ?? pick, !!r?.trialEnded, r?.unlocked ?? 0);
+      const t = planChangedToast(company.name, chosen?.name ?? pick, !!r?.trialEnded, r?.unlocked ?? 0, !!r?.aiCreditMonthStarted);
       toast(t.title, t.detail);
       setWhy("");
       setConfirming(false);

@@ -1526,6 +1526,20 @@ describe("the AI credit", () => {
       expect(await creditNotes(quiet.id)).toEqual([]);
     });
 
+    it("Change plan says whether the AI credit started a month: Free to Basic does, Basic to Pro keeps its month, and a plan with no monthly credit has none to start", async () => {
+      const { id } = await newCompany();
+      const move = async (planKey: string) => read<{ aiCreditMonthStarted: boolean }>(await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey, reason: "They asked to upgrade." }));
+      const monthOf = async () => (await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, id), eq(entitlements.key, "ai_credit_monthly_cents"))))[0];
+      expect(await move("basic")).toMatchObject({ aiCreditMonthStarted: true });
+      const started = await monthOf();
+      expect(Date.parse(started.periodEnd!) - Date.now()).toBeGreaterThan(29 * DAY);
+      expect(await move("pro")).toMatchObject({ aiCreditMonthStarted: false });
+      expect(await monthOf()).toMatchObject({ limit: 6000, periodStart: started.periodStart, periodEnd: started.periodEnd });
+      expect(await move("free")).toMatchObject({ aiCreditMonthStarted: false });
+      // back up from Free: its month starts again, and the toast says so
+      expect(await move("basic")).toMatchObject({ aiCreditMonthStarted: true });
+    });
+
     it("a new month resolves last month's alerts on the console's next look", async () => {
       const { id } = await newCompany();
       await usePlan(container, id, "basic");

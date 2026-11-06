@@ -570,6 +570,12 @@ describe("the console", () => {
     expect(planChangedToast("Bright Dental", "Pro").detail).toBe("The new limits apply at once. This month's usage stays; the reset date does not move.");
   });
 
+  it("the toast after a move up from Free says AI help starts a new month today, the part ITS may be asked about; other allowances keep their dates", () => {
+    expect(planChangedToast("Bright Dental", "Basic", false, 0, true).detail).toBe("The new limits apply at once. AI help starts a new month today; other allowances keep their dates.");
+    expect(planChangedToast("Bright Dental", "Basic", false, 2, true).detail).toBe("The new limits apply at once. AI help starts a new month today; other allowances keep their dates. 2 locked candidates open now.");
+    expect(planChangedToast("Bright Dental", "Basic", false, 0, true).detail).not.toContain("the reset date does not move");
+  });
+
   it("Overview names a customer low on AI credit and one who asked to upgrade; those notices do not count as alerts waiting for a person", () => {
     const rows = attentionRows({ customers: [customer({ aiCredit: { monthly: false, spentUsd: 10, limitUsd: 10, percent: 100, level: "used_up", resetsAt: null } })] as never });
     expect(rows.map((r) => r.text)).toEqual(["Bright Dental has used all its AI credit", "1 customer asked to upgrade"]);

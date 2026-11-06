@@ -606,7 +606,8 @@ adminRoutes.get("/plans", async (c) => {
 
 /**
  * Founder decision F8: a platform admin puts a customer on the Design Partner plan (or another plan). Pilot term 90 days,
- * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move.
+ * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move, except
+ * that a monthly AI credit that had no limit starts its first month now (`aiCreditMonthStarted` in the answer).
  * Allowance alerts the new limits clear are resolved. Any plan other than Trial and Design Partner reads as "active".
  *
  * The Trial plan (founder decision L-02 B): moving a customer to Trial sets its status to "trial" and starts a new 30
@@ -649,7 +650,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     // rows: until they are written its calls go on under the old plan, and they wait only for the short rest of this transaction.
     const limit = entitlements.CANDIDATES_PER_JOB in plan.limits ? plan.limits[entitlements.CANDIDATES_PER_JOB] : await entitlements.limitOf(tx, companyId, entitlements.CANDIDATES_PER_JOB);
     const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, limit, actor, reason, now: clock });
-    await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
+    const { aiCreditMonthStarted } = await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
     await entitlements.settleAllowanceAlerts(tx, { companyId });
     const pilot = body.planKey === "design_partner"
       ? { startedAt: co.settings.pilot?.startedAt ?? now.toISOString(), endsAt: co.settings.pilot?.endsAt ?? new Date(now.getTime() + (body.pilotDays ?? 90) * 86_400_000).toISOString(), ...(body.extendUntil ? { extendedUntil: body.extendUntil } : {}) }
@@ -675,7 +676,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     if (term) await emit(tx, { type: "trial.started", companyId, actor, subject: { type: "company", id: companyId }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
     // The boards' work follows the plan, the open plan request is answered and the owners and admins are told.
     await afterPlanChange(tx, container, { companyId, planName: plan.name, opened: opened.unlocked, postedBy, postsNow: await whoPostsBoards(tx, companyId, settings), actor, now: clock });
-    return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked };
+    return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked, aiCreditMonthStarted };
   });
   if (result.wasPaused) {
     // Paused no more: the jobs go back on the feeds, and the emails that arrived meanwhile are added to their jobs.
@@ -683,7 +684,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     await replayHeldEmailsForCompany(container, companyId);
   }
   await container.kick();
-  return c.json({ ...result.updated, trialEnded: result.leavingTrial, unlocked: result.unlocked });
+  return c.json({ ...result.updated, trialEnded: result.leavingTrial, unlocked: result.unlocked, aiCreditMonthStarted: result.aiCreditMonthStarted });
 });
 
 /**
