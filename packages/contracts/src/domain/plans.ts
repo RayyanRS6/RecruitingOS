@@ -222,9 +222,12 @@ export const AI_HELP_BUSY_LINE = {
 /** Where the AI credit stands for the owner: at the 80% line, used up, or neither. */
 export type AiCreditLevel = "warning" | "used_up";
 
-/** What the owner's notices and the Home row say at each level. `resetsOn`: the day a monthly credit starts again, in words. */
-export function aiCreditNoticeWords(level: AiCreditLevel, opts: { resetsOn?: string | null } = {}): { title: string; body: string } {
-  if (level === "warning") return { title: "80% of your plan's AI help used", body: "Nothing has stopped. Upgrade before it runs out." };
+/**
+ * What the owner's notices and the Home row say at each level. `resetsOn`: the day a monthly credit starts again, in words.
+ * `newJobsStopped`: past the 80% line a draft may no longer fit (`aiCreditRoomForJob`), and then something has stopped.
+ */
+export function aiCreditNoticeWords(level: AiCreditLevel, opts: { resetsOn?: string | null; newJobsStopped?: boolean } = {}): { title: string; body: string } {
+  if (level === "warning") return { title: "80% of your plan's AI help used", body: opts.newJobsStopped ? "New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out." : "Nothing has stopped. Upgrade before it runs out." };
   return { title: "Your plan's AI help is used up", body: `Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade${opts.resetsOn ? ` or it starts again on ${opts.resetsOn}` : ""}.` };
 }
 

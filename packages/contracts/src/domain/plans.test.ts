@@ -94,4 +94,10 @@ describe("what a customer may read about a plan", () => {
     expect(aiCreditNoticeWords("used_up", { resetsOn: "Friday, December 4" }).body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade or it starts again on Friday, December 4.");
     expect(aiCreditNoticeWords("warning")).toEqual({ title: "80% of your plan's AI help used", body: "Nothing has stopped. Upgrade before it runs out." });
   });
+
+  it("does not say nothing has stopped once a new job has", () => {
+    expect(aiCreditNoticeWords("warning", { newJobsStopped: true })).toEqual({ title: "80% of your plan's AI help used", body: "New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out." });
+    expect(aiCreditNoticeWords("warning", { newJobsStopped: false }).body).toContain("Nothing has stopped.");
+    expect(aiCreditNoticeWords("used_up", { newJobsStopped: true }).body).not.toContain("Nothing has stopped");
+  });
 });

@@ -149,8 +149,11 @@ export async function aiCreditRoomForJob(q: Queryable, companyId: string, opts: 
   const s = await aiCreditStanding(q, companyId, { now: opts.now, settled: true });
   if (!s) return "ok";
   if (s.usedUp) return "used_up";
-  return s.spentMicros + toMicros(AI_CREDIT_DRAFT_HOLD_USD) > s.limitMicros - SLACK ? "too_low" : "ok";
+  return draftNoLongerFits(s) ? "too_low" : "ok";
 }
+
+/** Whether a job's draft, the dearest call, no longer fits in what is left: from here a new job stops, though the credit is not all gone. */
+const draftNoLongerFits = (s: AiCreditStanding): boolean => s.spentMicros + toMicros(AI_CREDIT_DRAFT_HOLD_USD) > s.limitMicros - SLACK;
 
 /** The day a monthly credit starts again, in words, on the company's own calendar. */
 const dayWords = (iso: string | null, timeZone: string | null | undefined): string | null => (iso ? closingDayWords(companyToday(new Date(iso), timeZone)) : null);
@@ -162,7 +165,7 @@ const dayWords = (iso: string | null, timeZone: string | null | undefined): stri
 export async function aiCreditView(q: Queryable, companyId: string, opts: { now?: Date; timeZone?: string | null } = {}): Promise<AiCreditView | null> {
   const s = await aiCreditStanding(q, companyId, { now: opts.now, settled: true });
   if (!s) return null;
-  return { level: s.level, percent: s.percent, resetsAt: s.resetsAt, notice: s.level ? aiCreditNoticeWords(s.level, { resetsOn: dayWords(s.resetsAt, opts.timeZone) }) : null };
+  return { level: s.level, percent: s.percent, resetsAt: s.resetsAt, notice: s.level ? aiCreditNoticeWords(s.level, { resetsOn: dayWords(s.resetsAt, opts.timeZone), newJobsStopped: draftNoLongerFits(s) }) : null };
 }
 
 /** What ITS's alert says, in dollars. */
@@ -211,7 +214,7 @@ async function tellOwner(db: Db, input: { companyId: string; now: Date; refusedH
     if (!company) return null;
     const usedUp = level === "used_up";
     await emit(q, { type: usedUp ? "entitlement.exceeded" : "entitlement.warning", companyId: input.companyId, actor: { kind: "system", id: "allowance" }, subject: { type: "company", id: input.companyId }, payload: { key: standing.key, percent: standing.percent } });
-    const { title, body } = aiCreditNoticeWords(level, { resetsOn: dayWords(standing.resetsAt, company.timezone) });
+    const { title, body } = aiCreditNoticeWords(level, { resetsOn: dayWords(standing.resetsAt, company.timezone), newJobsStopped: draftNoLongerFits(standing) });
     await notify(q, { companyId: input.companyId, kind: "entitlement.ai_credit", title, body, action: { label: "See usage", href: "/setup" }, roles: ["owner", "admin"] });
     return { level, companyId: input.companyId, companyName: company.name, standing };
   });
@@ -236,7 +239,7 @@ async function flagIts(q: Queryable, note: CreditNote, now: Date): Promise<void>
     title: usedUp ? `${companyName} has used up its AI credit` : `${companyName} has used 80% of its AI credit`,
     body: usedUp
       ? `${spent} Applications still come in and candidates finish their chats in the job's own words; new applicants are not read by AI and AI reviews wait until the plan changes${standing.monthly ? " or the month starts again" : ""}. Talk with the customer about upgrading.`
-      : `${spent} Nothing has stopped. Talk with the customer about upgrading before it runs out.`,
+      : `${spent}${draftNoLongerFits(standing) ? " New jobs have stopped, because a draft needs more than is left." : ""} Talk with the customer about upgrading before it runs out.`,
     details: { key: standing.key, spentUsd: standing.spentMicros / MICROS, limitUsd: standing.limitMicros / MICROS },
   }, { now });
 }

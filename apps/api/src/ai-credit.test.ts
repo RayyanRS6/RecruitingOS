@@ -1392,6 +1392,37 @@ describe("the AI credit", () => {
       expect(await figures()).toEqual([29, 29]);
     });
 
+    it("Home and ITS never say nothing has stopped while a new job is refused: Basic above $19.10, Pro above $59.10", async () => {
+      const homeAt = async (settled: string, planKey = "basic") => {
+        const { id, cookie } = await newCompany();
+        await usePlan(container, id, planKey);
+        await spend(id, settled);
+        // a real call settles, and the owner and ITS hear about the line
+        await runPromptDetached(container.db, runtime(new PricedProvider()), chatPrompt, INPUT, { companyId: id });
+        const current = await read<{ aiCredit: { level: string; percent: number; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+        return { id, cookie, aiCredit: current.aiCredit, room: await read<{ ok: boolean; message: string }>(await json(cookie, "GET", "/api/v1/intake/room")) };
+      };
+      // $19.09: the draft's $0.80 still fits under $19.90, so nothing has stopped
+      const fits = await homeAt("19.090000");
+      expect(fits.aiCredit).toMatchObject({ level: "warning", percent: 95 });
+      expect(fits.aiCredit.notice.body).toBe("Nothing has stopped. Upgrade before it runs out.");
+      expect(fits.room.ok).toBe(true);
+      expect((await creditNotes(fits.id))[0].body).toBe("Nothing has stopped. Upgrade before it runs out.");
+      expect((await creditAlerts(fits.id))[0].body).not.toContain("Nothing has stopped");
+      // $19.20, 96%: the Start box is refused on the same page, and the row says what stopped
+      const stopped = await homeAt("19.200000");
+      expect(stopped.aiCredit).toMatchObject({ level: "warning", percent: 96 });
+      expect(stopped.aiCredit.notice.body).toBe("New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out.");
+      expect(stopped.room).toMatchObject({ ok: false, message: AI_HELP_LINE.newJobTooBig });
+      expect((await creditNotes(stopped.id))[0].body).toBe("New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out.");
+      expect((await creditAlerts(stopped.id))[0].body).toContain("New jobs have stopped");
+      expect((await creditAlerts(stopped.id))[0].body).not.toContain("Nothing has stopped");
+      // the same on Pro: $59.20 of $60
+      const pro = await homeAt("59.200000", "pro");
+      expect(pro.aiCredit.notice.body).toContain("New jobs have stopped");
+      expect(pro.room.ok).toBe(false);
+    });
+
     it("a big draft refused is not the credit used up, and a hold that comes back cries no wolf", async () => {
       const { id } = await newCompany();
       const provider = new PricedProvider();
