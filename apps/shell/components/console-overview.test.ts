@@ -20,7 +20,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { Overview, attentionRows, costSummary, customerLine, customerMatches, dueWords, monthStart, waitedWords } = await import("@ros/web/src/pages/admin/Overview");
+const { ACCESS_ROWS_EACH, Overview, attentionCount, attentionRows, costSummary, customerLine, customerMatches, dueWords, monthStart, waitedWords } = await import("@ros/web/src/pages/admin/Overview");
 const { Console, viewSearch } = await import("@ros/web/src/pages/admin/Console");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
@@ -270,6 +270,128 @@ describe("Overview's rules", () => {
     expect(customerMatches(customers as never, "  BRIGHT ").map((c) => c.id)).toEqual(["co-bright"]);
     expect(customerMatches(customers as never, "nobody")).toEqual([]);
     expect(customerLine({ ...customers[0], lastActivityAt: null } as never)).toBe("Core · No activity yet");
+  });
+});
+
+describe("first sign-in asks for approval, on the Overview", () => {
+  const now = Date.parse("2026-11-06T12:00:00Z");
+  const asker = (id: string, called: string, days: number, over: Record<string, unknown> = {}) => customer(id, called, { verifiedAt: null, verifiedBy: null, createdAt: new Date(now - days * DAY).toISOString(), locations: [{ city: "Austin", region: "TX", country: "US" }], settings: { website: "https://asker.example" }, accessRequest: { status: "requested", person: { name: "Sam Asker", email: "sam@stranger.test" }, declined: null }, ...over });
+  const declined = (id: string, called: string, days: number) => asker(id, called, days, { accessRequest: { status: "declined", person: { name: "Dee Clined", email: "dee@stranger.test" }, declined: { at: new Date(now - DAY).toISOString(), by: "Ada Admin" } } });
+  const ordinary = (id: string, called: string, days: number) => customer(id, called, { verifiedAt: null, verifiedBy: null, createdAt: new Date(now - days * DAY).toISOString() });
+  const confirmed = customer("co-ok", "Open Dental");
+
+  it("gives each request its own row at the very top, the longest waiting first, naming the company", () => {
+    const rows = attentionRows({ customers: [confirmed, ordinary("co-w", "Wren Dental", 9), asker("co-new", "New Dental", 1), asker("co-old", "Old Dental", 4)] as never, alerts: [alertRow("al1", "credential.delete_failed", "critical", "Credential delete failed")] as never }, now);
+    expect(rows.map((r) => r.text)).toEqual(["Old Dental is asking for access", "New Dental is asking for access", "1 company waits for the ITS check", "1 alert needs a person: “Credential delete failed”"]);
+    expect(rows.slice(0, 2).map((r) => r.urgent)).toEqual([true, true]);
+    expect(rows[0].access?.company.id).toBe("co-old");
+    // the row's facts: the person's name and email, kind of business, size, city and state, website, how long
+    expect(rows[0].sub).toBe("Sam Asker · sam@stranger.test · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example · Waiting 4 days");
+    expect(rows[1].sub).toContain("Waiting 1 day");
+    expect(rows[0].access?.facts.filter((f) => f.href)).toEqual([{ text: "https://asker.example", href: "https://asker.example/" }]);
+  });
+
+  it("leaves out what a request does not have: no name, no place, no website", () => {
+    const [row] = attentionRows({ customers: [asker("co-a", "Bare Dental", 0, { locations: [], settings: {}, accessRequest: { status: "requested", person: { name: null, email: "bare@stranger.test" }, declined: null } })] as never }, now);
+    expect(row.sub).toBe("bare@stranger.test · Dental practice or group · 20-49 employees · Waiting since today");
+  });
+
+  it("shows up to five rows, then one row linking to the rest, and counts each request as one thing", () => {
+    const asking = ["A", "B", "C", "D", "E", "F", "G", "H"].map((l, i) => asker(`co-${l}`, `${l} Dental`, 20 - i));
+    expect(ACCESS_ROWS_EACH).toBe(5);
+    const rows = attentionRows({ customers: asking as never }, now);
+    expect(rows.map((r) => r.text)).toEqual(["A Dental is asking for access", "B Dental is asking for access", "C Dental is asking for access", "D Dental is asking for access", "E Dental is asking for access", "3 more companies are asking for access"]);
+    expect(rows[5].access).toBeUndefined();
+    expect(rows[5].sub).toBe("F Dental, G Dental, H Dental");
+    expect(rows[5].action).toEqual({ label: "Open", href: "/admin/customers?show=waiting" });
+    expect(attentionCount(rows)).toBe(8);
+    const six = attentionRows({ customers: asking.slice(0, 6) as never }, now);
+    expect(six[5].text).toBe("1 more company is asking for access");
+    expect(attentionCount(six)).toBe(6);
+    // five is exactly five rows: no row for a rest that is not there
+    expect(attentionRows({ customers: asking.slice(0, 5) as never }, now).map((r) => r.key)).not.toContain("access-more");
+  });
+
+  it("leaves requests and declined companies out of the waiting companies' row, and a declined company out of everything", () => {
+    const rows = attentionRows({ customers: [asker("co-a", "Asking Dental", 2), declined("co-d", "Declined Dental", 7), ordinary("co-w", "Wren Dental", 3), ordinary("co-x", "Xen Dental", 5)] as never }, now);
+    expect(rows.map((r) => r.text)).toEqual(["Asking Dental is asking for access", "2 companies wait for the ITS check"]);
+    expect(rows[1].sub).toBe("Xen Dental (5 days), Wren Dental (3 days)");
+    expect(rows[1].action.href).toBe("/admin/customers?open=co-x&tab=check");
+    // only requests or only declined companies: no row about the ITS check at all, and nothing at all for a declined one
+    expect(attentionRows({ customers: [asker("co-a", "Asking Dental", 2)] as never }, now).map((r) => r.key)).toEqual(["access-co-a"]);
+    expect(attentionRows({ customers: [declined("co-d", "Declined Dental", 7)] as never }, now)).toEqual([]);
+    expect(attentionCount(attentionRows({ customers: [declined("co-d", "Declined Dental", 7)] as never }, now))).toBe(0);
+  });
+
+  const withRequests = (rows: unknown[]): Array<[unknown[], unknown]> => NOTHING.map(([key, value]) => (key[1] === "customers" ? [key, rows] : [key, value]));
+
+  it("the stat cells: Waiting counts requests and ordinary waiting alike and never a declined one; Customers leaves both out; Needs attention counts each request", () => {
+    const html = render(client(withRequests([customers[0], asker("co-a", "Asking Dental", 2), asker("co-b", "Bay Dental", 1), ordinary("co-w", "Wren Dental", 3), declined("co-d", "Declined Dental", 7)])));
+    expect(html).toContain('<span class="stat-cell-label">Waiting for the ITS check</span><span class="stat-cell-value">3</span>');
+    expect(html).toContain('<span class="stat-cell-label">Customers</span><span class="stat-cell-value">2</span>');
+    expect(html).toContain('<span class="stat-cell-label">Needs attention</span><span class="stat-cell-value">3</span>');
+    expect(html).toContain("3 things need you.");
+    // past five rows the count still counts the rest
+    const many = render(client(withRequests(["A", "B", "C", "D", "E", "F", "G"].map((l, i) => asker(`co-${l}`, `${l} Dental`, 20 - i)))));
+    expect(many).toContain('<span class="stat-cell-label">Needs attention</span><span class="stat-cell-value">7</span>');
+    expect(many).toContain("7 things need you.");
+    expect(many).toContain('<a href="/admin/customers?show=waiting" class="btn secondary sm" aria-label="Open: 2 more companies are asking for access">Open</a>');
+  });
+
+  it("the Customers card leaves requests and declined companies out, and says none yet when they are all there is", () => {
+    const html = render(client(withRequests([customers[0], asker("co-a", "Asking Dental", 2), declined("co-d", "Declined Dental", 7), ordinary("co-w", "Wren Dental", 3)])));
+    const card = html.slice(html.indexOf("<h2>Customers</h2>"), html.indexOf("<h2>Costs this month</h2>"));
+    expect(card).toContain("Bright Dental");
+    expect(card).toContain("Wren Dental");
+    expect(card).not.toContain("Asking Dental");
+    expect(card).not.toContain("Declined Dental");
+    expect(card).toContain("See all 2 customers");
+    const onlyAsking = render(client(withRequests([asker("co-a", "Asking Dental", 2), declined("co-d", "Declined Dental", 7)])));
+    expect(onlyAsking).toContain("No customers yet.");
+    expect(onlyAsking).toContain('<span class="stat-cell-label">Customers</span><span class="stat-cell-value">0</span>');
+  });
+
+  it("draws the row: Accept the primary button and Decline a quiet one, the facts in one wrapping line, and no button to open it elsewhere", () => {
+    const html = render(client(withRequests([asker("co-a", "Harbor Dental", 2)])));
+    const row = html.slice(html.indexOf("<h2>Needs attention</h2>"), html.indexOf("<h2>Customers</h2>"));
+    expect(text(row)).toContain("Harbor Dental is asking for access");
+    expect(text(row)).toContain("Sam Asker · sam@stranger.test · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example (opens in a new tab) · Waiting 2 days");
+    expect(row).toContain('<button type="button" class="btn primary sm" aria-label="Accept Harbor Dental">Accept</button>');
+    expect(row).toContain('<button type="button" class="btn quiet sm" aria-label="Decline Harbor Dental">Decline</button>');
+    expect(row).not.toContain("Review");
+    // the row wraps on a phone, and from a tablet up the buttons take a line of their own rather than crush the facts
+    expect(row).toMatch(/<li class="list-row motion-safe:animate-enter flex-wrap"/);
+    expect(row).toContain('<span class="list-row-main sm:basis-80">');
+    expect(row).toContain('<span class="list-row-end max-w-full">');
+  });
+
+  it("makes the website a link only for http and https, with the brief's rel and target; anything else is plain text", () => {
+    const rowOf = (website: unknown) => render(client(withRequests([asker("co-a", "Harbor Dental", 2, { settings: { website } })])));
+    expect(rowOf("https://asker.example")).toContain('<a href="https://asker.example/" target="_blank" rel="noopener noreferrer nofollow">https://asker.example<span class="sr-only"> (opens in a new tab)</span></a>');
+    expect(rowOf("HTTP://Asker.Example/a")).toContain('<a href="http://asker.example/a" target="_blank" rel="noopener noreferrer nofollow">');
+    for (const typed of ["javascript:alert(1)", "asker.example", "data:text/html,x", "https://good.example@evil.example"]) {
+      const html = rowOf(typed);
+      expect(html, typed).not.toContain("noopener noreferrer nofollow");
+      expect(html, typed).not.toMatch(/href="(?:javascript|data):/);
+      expect(text(html), typed).toContain(`20-49 employees · Austin, TX · ${typed} · Waiting 2 days`);
+    }
+    // no website: nothing in its place
+    expect(text(rowOf(undefined))).toContain("Austin, TX · Waiting 2 days");
+  });
+
+  it("shows a company name, a website and a person's name safely, and a very long one breaks anywhere", () => {
+    const evil = "<img src=x onerror=alert(1)>";
+    const html = render(client(withRequests([asker("co-a", evil, 2, { accessRequest: { status: "requested", person: { name: `<b>${evil}</b>`, email: "x@stranger.test" }, declined: null }, settings: { website: evil } })])));
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<b>");
+    expect(text(html)).toContain("&lt;img src=x onerror=alert(1)&gt; is asking for access");
+    const long = "L".repeat(120);
+    const longRow = render(client(withRequests([asker("co-a", long, 2, { accessRequest: { status: "requested", person: { name: long, email: `${long}@stranger.test` }, declined: null }, settings: { website: `https://${long.toLowerCase()}.example/${long}` } })])));
+    // the title is the kit's whole sentence; the facts' one line, and the row's end, cannot hold a word wider than the row
+    expect(longRow).toContain(`<span class="list-row-title wrap">${long} is asking for access</span>`);
+    expect(longRow).toMatch(new RegExp(`<span class="list-row-meta"><span class="min-w-0 wrap-anywhere">${long}`));
+    // the waiting companies' names on their row too
+    expect(render(client(withRequests([ordinary("co-w", long, 3)])))).toMatch(new RegExp(`<span class="list-row-meta wrap-anywhere">${long}`));
   });
 });
 

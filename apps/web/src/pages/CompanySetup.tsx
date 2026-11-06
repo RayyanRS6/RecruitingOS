@@ -1,27 +1,41 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { SignupConfig, SignupRequest } from "@ros/contracts";
 import { useNavigate } from "../nav";
 import { Alert, Button, Field } from "@ros/ui";
 import { api, ApiError } from "../api/client";
-import { VERTICALS, ZONE_CHOICES, browserTimeZone, snapTimeZone, verticalHint } from "../company-setup";
+import { ACCESS_LOOK_MS, VERTICALS, ZONE_CHOICES, browserTimeZone, lookAtAccess, snapTimeZone, verticalHint } from "../company-setup";
+import { focusLost } from "../focus-after";
 import { browserStorage } from "../start-hire";
 import { clearAllQuickStarts } from "./new-role/quick-start";
 
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 
-/** Who may create a company (GATE-V2): the `signup` part of GET /api/v1/auth/config, as the page's server asked it. */
-export type SignupAnswer = { allowed: boolean; contact: string | null };
+/**
+ * Who may create a company (GATE-V2) and this person's own request if they sent one: the `signup` part of
+ * GET /api/v1/auth/config, as the page's server asked it.
+ */
+export type SignupAnswer = Pick<SignupConfig, "allowed" | "door" | "request"> & { contact: string | null };
+
+const WAITING_TITLE = "Your request has been sent";
+const DECLINED_TITLE = "We can't offer access right now";
 
 /**
  * Sign-up's one short form. Nothing is guessed for the owner: the state and the size start empty, and the time zone
  * starts from their own computer (it sets interview times and the hours candidates may be texted, so a wrong one is a
  * compliance problem). Someone who signed in with the wrong account can sign out from here.
  *
- * By invitation (SIGNUP_MODE=invite, GATE-V2), someone the API will not let open a company (`signup.allowed` false)
- * gets one line where the form was: ask ITS for an invitation, at the inbox job pages already print. Without an answer
- * the form shows as before, and the API still refuses whoever it should.
+ * By invitation (SIGNUP_MODE=invite, GATE-V2), someone the API will not let open a company (`signup.allowed` false) gets
+ * one line where the form was: ask ITS for an invitation, at the inbox job pages already print. Without an answer the form
+ * shows as before, and the API still refuses whoever it should.
+ *
+ * By approval (SIGNUP_MODE=approval), the same form sends a request (`signup.door` "request"), and the API's answer, not
+ * the door, decides what follows: nothing opens until ITS accepts, so the page stays and says so. A person with a request
+ * always lands here whatever address they open (the shell's layouts send anyone with no active company here), and reads
+ * the same screen: waiting or declined, in the same card, with Sign out. While they read it the page looks again every 30
+ * seconds, and goes Home by itself once there is an active company. A look that fails changes nothing (`lookAtAccess`).
  */
 export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
   const nav = useNavigate();
@@ -30,6 +44,9 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  // This person's own request: as the server read it for the page, then as the form's answer and each look found it.
+  const [request, setRequest] = useState<SignupRequest | null>(signup?.request ?? null);
+  const [contact, setContact] = useState(signup?.contact ?? null);
   // The zone taken from the computer, so the field can say it is a guess to check while it is still the one chosen.
   const [guessedZone, setGuessedZone] = useState("");
   // The computer's own zone is read after the first render: the server that renders the page first has its own clock.
@@ -40,16 +57,52 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
       setForm((f) => (f.timezone ? f : { ...f, timezone: zone }));
     }
   }, []);
+  const look = async () => {
+    const standing = await lookAtAccess((path) => api.get(path));
+    if (standing?.home) {
+      await qc.invalidateQueries({ queryKey: ["me"] });
+      nav("/", { replace: true });
+    } else if (standing) {
+      setRequest(standing.request);
+      setContact(standing.contact);
+    }
+    return standing;
+  };
+  const hasRequest = !!request;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one timer for as long as there is a request; `look` only reads what never changes
+  useEffect(() => {
+    if (!hasRequest) return;
+    const timer = setInterval(() => void look().catch(() => undefined), ACCESS_LOOK_MS);
+    return () => clearInterval(timer);
+  }, [hasRequest]);
+  // The screen changed under the person: when that dropped their focus (the form's button went) the new title takes it,
+  // which a screen reader says; when it did not (Sign out has it), the title is said from the status line instead.
+  const heading = useRef<HTMLHeadingElement>(null);
+  const standingDrawn = useRef(request?.status);
+  const [said, setSaid] = useState("");
+  const title = request ? (request.status === "declined" ? DECLINED_TITLE : WAITING_TITLE) : signup && !signup.allowed ? "Recruiting OS is by invitation for now" : "Tell us about your company";
+  useEffect(() => {
+    if (request?.status === standingDrawn.current) return;
+    standingDrawn.current = request?.status;
+    if (focusLost(document.activeElement, document.body)) heading.current?.focus({ preventScroll: true });
+    else setSaid(title);
+  }, [request?.status, title]);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await api.post("/api/v1/companies", { name: form.name, ownerName: form.ownerName || undefined, vertical: form.vertical, sizeBand: form.sizeBand, timezone: form.timezone, website: form.website || undefined, locations: [{ city: form.city, region: form.region.toUpperCase(), country: "US" }] });
+      const answer = await api.post<{ accessRequest?: SignupRequest } | null>("/api/v1/companies", { name: form.name, ownerName: form.ownerName || undefined, vertical: form.vertical, sizeBand: form.sizeBand, timezone: form.timezone, website: form.website || undefined, locations: [{ city: form.city, region: form.region.toUpperCase(), country: "US" }] });
+      if (answer?.accessRequest) {
+        setRequest(answer.accessRequest);
+        return;
+      }
       await qc.invalidateQueries({ queryKey: ["me"] });
       nav("/", { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not create the company.");
+      // Sent already (from another tab, say): where that request stands is the answer, not an error.
+      if (err instanceof ApiError && err.code === "another_company_needs_its" && (await look())) return;
+      setError(err instanceof ApiError ? err.message : signup?.door === "request" ? "Could not send your request." : "Could not create the company.");
     } finally {
       setBusy(false);
     }
@@ -65,16 +118,29 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
     qc.clear();
     nav("/login", { replace: true });
   };
-  const byInvitation = signup && !signup.allowed ? signup : null;
+  const byInvitation = signup && !signup.allowed && !request ? signup : null;
   return (
     // The application card of screenshot 5, alone on the page's glow: the title with Sign out beside it, then the form.
     <main className="mx-auto w-full max-w-[620px] px-4 py-10 sm:py-16">
       <div className="rounded-[20px] border border-line bg-surface px-5 py-7 shadow-sm motion-safe:animate-enter sm:px-9 sm:py-9">
         <div className="flex items-start justify-between gap-4">
-          <h1 className="min-w-0 text-[30px] sm:text-[34px]">{byInvitation ? "Recruiting OS is by invitation for now" : "Tell us about your company"}</h1>
+          <h1 ref={heading} className="min-w-0 text-[30px] focus:outline-none sm:text-[34px]" tabIndex={request ? -1 : undefined}>{title}</h1>
           <Button variant="quiet" size="sm" loading={leaving} onClick={signOut} className="shrink-0">Sign out</Button>
         </div>
-        {byInvitation ? (
+        <span className="sr-only" role="status">{said}</span>
+        {request?.status === "requested" ? (
+          // a long name or address breaks anywhere rather than pushing the card wider than a phone
+          <div className="stack mt-7 gap-3 border-t border-line pt-7 wrap-anywhere">
+            <p>Please wait for approval.</p>
+            <p className="font-semibold">{request.companyName}</p>
+            {/* no claim about email unless it really left: `emailedAt` is set only then, and email may not be live yet */}
+            <p>{request.emailedAt ? `We sent a copy to ${request.email}, and we will email you when it is decided.` : "Keep this page open, or sign in again later to check."}</p>
+          </div>
+        ) : request ? (
+          <p className="mt-7 border-t border-line pt-7 wrap-anywhere">
+            Questions?{" "}{contact ? <a href={`mailto:${contact}`}>{contact}</a> : "Ask ITS."}
+          </p>
+        ) : byInvitation ? (
           // a long address breaks anywhere rather than pushing the card wider than a phone
           <p className="mt-7 border-t border-line pt-7 wrap-anywhere">
             Ask ITS for an invitation{byInvitation.contact ? <>: <a href={`mailto:${byInvitation.contact}`}>{byInvitation.contact}</a></> : null}.
@@ -110,7 +176,7 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
             {error ? <Alert tone="critical">{error}</Alert> : null}
             {/* the one main action, at the end of the form: a pill on the right, the full width on a phone */}
             <div className="flex justify-end pt-1">
-              <Button type="submit" variant="primary" loading={busy} iconEnd="arrow-right" className="max-sm:w-full">Create my hiring workspace</Button>
+              <Button type="submit" variant="primary" loading={busy} iconEnd="arrow-right" className="max-sm:w-full">{signup?.door === "request" ? "Send my request" : "Create my hiring workspace"}</Button>
             </div>
           </form>
         )}

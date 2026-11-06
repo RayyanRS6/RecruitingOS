@@ -1,16 +1,17 @@
 "use client";
 
-import { type CSSProperties, useState } from "react";
+import { type CSSProperties, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, Button, Card, ErrorState, Icon, IconChip, PageHeader, Skeleton, StatCell, StatStrip } from "@ros/ui";
 import { api, type Me } from "../../api/client";
 import { allowanceAlerts, allowanceChip } from "../../allowance";
 import { useIsClient } from "../../components/use-is-client";
+import { focusLost } from "../../focus-after";
 import { Link } from "../../nav";
 import { firstName } from "../../today";
 import { adminKeys, adminReason, type AlertRow, type CustomerRow, type DataRequest } from "./admin-api";
 import { activityWords, money, planWords, severityWords } from "./admin-words";
-import { aiCreditDollars, customerOrder, waitingCustomers } from "./customers";
+import { AccessButtons, type AccessFact, AccessFacts, accessFacts, accessRequests, aiCreditDollars, customerOrder, realCustomers, waitingCustomers, waitingForCheck } from "./customers";
 import { PRIVACY_DUE_SOON_DAYS } from "./privacy";
 import { needsAPerson } from "./problems";
 import { costsSinceKey, monthStartIn } from "./system";
@@ -36,8 +37,15 @@ type CalendarDto = { version: number | null; current: { timeZone: string } };
 /** What Overview reads to build "Needs attention"; a source not (yet) read is left out. */
 export type OverviewSources = { customers?: CustomerRow[]; alerts?: AlertRow[]; failures?: FailuresDto; privacy?: DataRequest[]; failedEmail?: Array<{ id: string }>; csp?: CspDto; escalations?: EscalationPreview[] };
 
-/** One row of "Needs attention": one sentence, an optional quieter line, and the one button that opens the exact place. */
-export type AttentionRow = { key: string; urgent: boolean; text: string; sub?: string; action: { label: string; href: string } };
+/**
+ * One row of "Needs attention": one sentence, an optional quieter line, and the one button that opens the exact place.
+ * `access`: a request for access, whose row draws its facts and Accept and Decline instead. `things`: how many things it
+ * stands for, when that is more than one (the row for the rest of the requests).
+ */
+export type AttentionRow = { key: string; urgent: boolean; text: string; sub?: string; action: { label: string; href: string }; access?: { company: CustomerRow; facts: AccessFact[] }; things?: number };
+
+/** Up to this many requests for access get a row each, the longest waiting first; the rest share one row linking to them. */
+export const ACCESS_ROWS_EACH = 5;
 
 const DAY = 86_400_000;
 // A privacy request shows on Overview once it is due within PRIVACY_DUE_SOON_DAYS (privacy.tsx's own rule), or overdue.
@@ -71,16 +79,27 @@ export function dueWords(slaDueAt: string, now: number = Date.now()): string {
 }
 
 /**
- * "Needs attention", most urgent first (redesign spec 3.2): companies waiting for the ITS check (the longest waiting
- * first, B7); alerts that need a person (urgent first); privacy requests overdue or due within 5 days; failed work;
- * security reports not reviewed; email applications that could not be imported; credentials still stored after a
- * disconnect; recruiter requests past their reply-by time; customers at 80% or more of their screening chats.
+ * "Needs attention", most urgent first (redesign spec 3.2): requests for access (one row each, the longest waiting first,
+ * up to five, then one row linking to the rest); companies waiting for the ITS check (the longest waiting first, B7); alerts
+ * that need a person (urgent first); privacy requests overdue or due within 5 days; failed work; security reports not
+ * reviewed; email applications that could not be imported; credentials still stored after a disconnect; recruiter requests
+ * past their reply-by time; customers at 80% or more of their screening chats.
  */
 export function attentionRows(s: OverviewSources, now: number = Date.now()): AttentionRow[] {
   const rows: AttentionRow[] = [];
   const names = new Map((s.customers ?? []).map((c) => [c.id, c.name]));
 
-  const waiting = waitingCustomers(s.customers ?? []);
+  const requests = accessRequests(s.customers ?? []);
+  for (const c of requests.slice(0, ACCESS_ROWS_EACH)) {
+    const facts = accessFacts(c, now);
+    rows.push({ key: `access-${c.id}`, urgent: true, text: `${c.name} is asking for access`, sub: facts.map((f) => f.text).join(" · "), action: { label: "Review", href: `/admin/customers?open=${encodeURIComponent(c.id)}&tab=check` }, access: { company: c, facts } });
+  }
+  const moreRequests = requests.slice(ACCESS_ROWS_EACH);
+  if (moreRequests.length) {
+    rows.push({ key: "access-more", urgent: true, text: `${count(moreRequests.length, "more company is", "more companies are")} asking for access`, sub: someNames(moreRequests.map((c) => c.name)), action: { label: "Open", href: "/admin/customers?show=waiting" }, things: moreRequests.length });
+  }
+
+  const waiting = waitingForCheck(s.customers ?? []);
   if (waiting.length) {
     rows.push({
       key: "waiting",
@@ -204,6 +223,11 @@ export function attentionRows(s: OverviewSources, now: number = Date.now()): Att
   return rows;
 }
 
+/** How many things need a person: each request for access is one thing, also among the rest that share a row. */
+export function attentionCount(rows: readonly AttentionRow[]): number {
+  return rows.reduce((n, r) => n + (r.things ?? 1), 0);
+}
+
 /** The first day of this month in the business calendar's time zone ("2026-10-01"); the reader's own month without one. */
 export function monthStart(timeZone: string | null | undefined, now: Date = new Date()): string {
   // the same date System › Costs asks for, so both read one cached answer
@@ -276,16 +300,22 @@ export function Overview() {
     { key: "escalations", thing: "recruiter requests", q: escalations },
   ].map(({ key, thing, q }) => ({ key, thing, loading: q.data === undefined && !q.error, failed: q.data === undefined && !!q.error, retry: () => void q.refetch() }));
   const rows = attentionRows({ customers: customers.data, alerts: alerts.data, failures: failures.data, privacy: privacy.data, failedEmail: failedEmail.data, csp: csp.data, escalations: escalations.data });
+  const things = attentionCount(rows);
   const loading = sources.filter((s) => s.loading);
   const failed = sources.filter((s) => s.failed);
   const settled = loading.length === 0;
   const first = firstName(me.data?.user.name);
+  // A row that was decided leaves with the button that had focus: it goes to the next thing in the list, not to the page.
+  const list = useRef<HTMLUListElement>(null);
+  const afterDecided = () => requestAnimationFrame(() => {
+    if (focusLost(document.activeElement, document.body)) (list.current?.querySelector<HTMLElement>("button:not(:disabled), a[href]") ?? list.current)?.focus();
+  });
 
   return (
     <div className="min-w-0">
       <PageHeader
         title={`Good ${partOfDay(isClient)}${first ? `, ${first}` : ""}.`}
-        sub={settled && rows.length ? `${count(rows.length, "thing needs", "things need")} you.` : undefined}
+        sub={settled && things ? `${count(things, "thing needs", "things need")} you.` : undefined}
         actions={<Link to="/recruiter/queue" className="btn secondary">Open the recruiter queue</Link>}
       />
 
@@ -296,10 +326,11 @@ export function Overview() {
           be read is left out. The last, tinted cell is the console's rule staff must know, said once.
         */}
         <StatStrip label="At a glance">
-          <StatCell icon="alert" tone={settled && !rows.length ? "lavender" : "peach"} label="Needs attention" value={settled ? rows.length : PENDING} />
+          <StatCell icon="alert" tone={settled && !things ? "lavender" : "peach"} label="Needs attention" value={settled ? things : PENDING} />
           {customers.data || !customers.error ? (
             <>
-              <StatCell icon="building" label="Customers" value={customers.data ? customers.data.length : PENDING} />
+              {/* a request for access, waiting or declined, is no customer yet; one waiting does wait for the check, as accepting it is the check */}
+              <StatCell icon="building" label="Customers" value={customers.data ? realCustomers(customers.data).length : PENDING} />
               <StatCell icon="clock" label="Waiting for the ITS check" value={customers.data ? waitingCustomers(customers.data).length : PENDING} />
             </>
           ) : null}
@@ -315,19 +346,32 @@ export function Overview() {
               <Skeleton lines={3} />
             </div>
           ) : (
-            <ul>
-              {rows.map((r, i) => (
+            <ul ref={list} tabIndex={-1} className="focus:outline-none">
+              {rows.map((r, i) => (r.access ? (
+                // Its facts run on as one line that wraps, and from a tablet up the buttons (or the question, however long a
+                // name it holds) sit beside at least 20rem of them, or on a line of their own.
+                <li key={r.key} className={`${ROW} flex-wrap`} style={enterDelay(i)}>
+                  <span className="list-row-lead"><IconChip icon="alert" tone="peach" size="sm" /></span>
+                  <span className="list-row-main sm:basis-80">
+                    <span className="list-row-title wrap">{r.text}</span>
+                    <span className="list-row-meta"><span className="min-w-0 wrap-anywhere"><AccessFacts facts={r.access.facts} /></span></span>
+                  </span>
+                  <span className="list-row-end max-w-full">
+                    <AccessButtons company={r.access.company} onDecided={afterDecided} />
+                  </span>
+                </li>
+              ) : (
                 <li key={r.key} className={ROW} style={enterDelay(i)}>
                   <span className="list-row-lead"><IconChip icon={r.urgent ? "alert" : "info"} tone={r.urgent ? "peach" : "lavender"} size="sm" /></span>
                   <span className="list-row-main">
                     <span className="list-row-title wrap">{r.text}</span>
-                    {r.sub ? <span className="list-row-meta">{r.sub}</span> : null}
+                    {r.sub ? <span className="list-row-meta wrap-anywhere">{r.sub}</span> : null}
                   </span>
                   <span className="list-row-end">
                     <Link to={r.action.href} className="btn secondary sm" aria-label={`${r.action.label}: ${r.text}`}>{r.action.label}</Link>
                   </span>
                 </li>
-              ))}
+              )))}
               {failed.map((s, i) => (
                 <li key={`failed-${s.key}`} className={ROW} style={enterDelay(rows.length + i)}>
                   <span className="list-row-lead"><IconChip icon="alert" tone="peach" size="sm" /></span>
@@ -361,7 +405,7 @@ export function Overview() {
 
         {/* Customers beside this month's costs (the "at a glance" side card); one column on a phone or a tablet. */}
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
-          <CustomersCard rows={customers.data} error={!!customers.error} retry={() => void customers.refetch()} />
+          <CustomersCard rows={customers.data ? realCustomers(customers.data) : undefined} error={!!customers.error} retry={() => void customers.refetch()} />
           <CostsCard rows={costs.data} error={!!costs.error && !costs.data} retry={() => void costs.refetch()} since={since} names={new Map((customers.data ?? []).map((c) => [c.id, c.name]))} />
         </div>
 

@@ -22,7 +22,8 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { CUSTOMER_SORT, CUSTOMER_SORT_CHOICES, CustomersSection, customerAnnouncement, customerFilterFrom, customerInFilter, customerMatches, customerOrder, customersSearch, customerTabFrom, nextCustomerSort, planChangedToast, planLimitsLine, screeningLine, sortedCustomers, waitingCustomers, waitingWords } = await import("@ros/web/src/pages/admin/customers");
+const { AccessChoice, CUSTOMER_FILTERS, CUSTOMER_SORT, CUSTOMER_SORT_CHOICES, CustomersSection, accessPressRefused, accessQuestion, accessRequests, customerAnnouncement, customerFilterFrom, customerInFilter, customerMatches, customerOrder, customersSearch, customerTabFrom, nextCustomerSort, planChangedToast, planLimitsLine, realCustomers, screeningLine, sortedCustomers, waitingCustomers, waitingForCheck, waitingWords } = await import("@ros/web/src/pages/admin/customers");
+const { ApiError } = await import("@ros/web/src/api/client");
 const { extensionDaysOk, extensionLines, seatsWords, trialExtendedTo, trialExtendedToast, trialExtensionQuestion } = await import("@ros/web/src/pages/admin/customers");
 const { Outcomes, outcomeWords } = await import("@ros/web/src/pages/admin/outcomes");
 const { sortRows } = await import("@ros/ui");
@@ -365,6 +366,189 @@ describe("the customer drawer", () => {
   it("opens nothing for a customer it does not know", () => {
     const html = render(client(data(), admin), Customers("open=nobody"));
     expect(html).not.toContain('role="dialog"');
+  });
+});
+
+describe("first sign-in asks for approval, on the Customers page", () => {
+  const person = { name: "Sam Asker", email: "sam@stranger.test" };
+  const asking = (id: string, name: string, over: Record<string, unknown> = {}) => company(id, name, { verifiedAt: null, createdAt: daysAgo(2), planKey: "free", roles: 0, whoPosts: "self", locations: [{ city: "Austin", region: "TX", country: "US" }], settings: { website: "https://asker.example" }, accessRequest: { status: "requested", person, declined: null }, ...over });
+  const refused = (id: string, name: string, over: Record<string, unknown> = {}) => asking(id, name, { createdAt: daysAgo(9), accessRequest: { status: "declined", person, declined: { at: "2026-11-05T15:10:00.000Z", by: "Ada Admin" } }, ...over });
+  const rows = () => [...three(), asking("co8", "Harbor Dental"), refused("co9", "Gone Dental")];
+  const data = (list: unknown[] = rows()): Array<[unknown[], unknown]> => [[["admin", "customers"], list], [["admin", "alerts"], [lowAlert]]];
+  const page = (search = "", list?: unknown[]) => render(client(data(list), admin), Customers(search));
+  const asRows = (list: unknown[]) => list as unknown as Row[];
+
+  it("sorts a request among the waiting and a declined company among the rest, so nobody falls off the list", () => {
+    const all = asRows(rows());
+    const names = (list: Row[]) => list.map((c) => c.name);
+    // the longest waiting first; the request (2 days) after Cara Dental (3 days), never a declined one
+    expect(names(waitingCustomers(all))).toEqual(["Cara Dental", "Harbor Dental"]);
+    expect(names(accessRequests(all))).toEqual(["Harbor Dental"]);
+    expect(names(waitingForCheck(all))).toEqual(["Cara Dental"]);
+    expect(names(realCustomers(all))).toEqual(["Bright Dental", "Cara Dental", "Avon Dental"]);
+    // a declined company has no confirmation either: it stays in the order, with the rest
+    expect(names(sortedCustomers(all, null))).toEqual(["Cara Dental", "Harbor Dental", "Bright Dental", "Avon Dental", "Gone Dental"]);
+    expect(names(customerOrder(all, (rest) => [...rest].reverse()))).toEqual(["Cara Dental", "Harbor Dental", "Gone Dental", "Avon Dental", "Bright Dental"]);
+  });
+
+  it("puts a request under All and Waiting only, a declined company only under its own pill, and each pill counts them that way", () => {
+    expect(CUSTOMER_FILTERS.map((f) => f.label)).toEqual(["All", "Waiting for the ITS check", "Running low", "Quiet", "Declined"]);
+    expect(customerFilterFrom("declined")).toBe("declined");
+    const [, , , harbor, gone] = asRows(rows());
+    const everywhere = new Map([[harbor.id, {}], [gone.id, {}]]);
+    // however long ago they signed up and whatever else is true of them
+    const quiet = Date.now() + 60 * 86_400_000;
+    for (const filter of ["all", "waiting"] as const) expect(customerInFilter(harbor, filter, everywhere, quiet), filter).toBe(true);
+    for (const filter of ["low", "quiet", "declined"] as const) expect(customerInFilter(harbor, filter, everywhere, quiet), filter).toBe(false);
+    expect(customerInFilter(gone, "declined", everywhere, quiet)).toBe(true);
+    for (const filter of ["all", "waiting", "low", "quiet"] as const) expect(customerInFilter(gone, filter, everywhere, quiet), filter).toBe(false);
+    const [bright] = asRows(three());
+    expect(customerInFilter(bright, "declined", new Map())).toBe(false);
+
+    const html = page();
+    expect(html).toContain('<button type="button" class="toggle-chip" aria-pressed="true">All <span class="count">4</span></button>');
+    expect(html).toContain('aria-pressed="false">Waiting for the ITS check <span class="count">2</span></button>');
+    expect(html).toContain('aria-pressed="false">Declined <span class="count">1</span></button>');
+    // the count of what is under All is what the list shows: the declined company waits under its pill
+    const table = from(html, '<section class="table-wrap"');
+    expect(table).toContain("Harbor Dental");
+    expect(table).not.toContain("Gone Dental");
+  });
+
+  it("marks a request with its chip under the Waiting pill, and its one button reviews it", () => {
+    const table = from(page("show=waiting"), '<section class="table-wrap"');
+    expect(table).toContain("Cara Dental");
+    expect(text(table)).toContain("Harbor Dental dental · 20-49 Waiting 2 days Asking for access");
+    expect(table).toContain('<span class="chip accent">Asking for access</span>');
+    expect(table).toContain('<button type="button" class="btn primary sm" aria-label="Review Harbor Dental">Review</button>');
+    expect(table).toContain('aria-label="Confirm Cara Dental"');
+    expect(table).not.toContain("Gone Dental");
+  });
+
+  it("the Declined pill holds the declined ones, with the word and when as its tooltip, one click from the drawer", () => {
+    const table = from(page("show=declined"), '<section class="table-wrap"');
+    expect(table).toContain("Gone Dental");
+    expect(table).not.toContain("Harbor Dental");
+    expect(table).not.toContain("Bright Dental");
+    expect(table).toMatch(/<span class="pill neutral sm" title="Nov 5, 2026, [^"]* by Ada Admin"><span class="dot" aria-hidden="true"><\/span>Declined<\/span>/);
+    expect(table).toContain('<button type="button" class="btn secondary sm" aria-label="Open Gone Dental">Open</button>');
+  });
+
+  it("keeps the sentence about the ITS check to the companies it is about", () => {
+    const words = text(page());
+    expect(words).toContain("1 company is waiting for the ITS check: Cara Dental. Until you confirm a company");
+    expect(text(page("", [asking("co8", "Harbor Dental"), refused("co9", "Gone Dental")]))).not.toContain("waiting for the ITS check:");
+  });
+
+  it("finds a request by who is asking", () => {
+    const [, , , harbor] = asRows(rows());
+    expect(customerMatches(harbor, "sam@stranger")).toBe(true);
+    expect(customerMatches(harbor, "sam asker")).toBe(true);
+    expect(customerMatches(asRows(three())[0], "sam@stranger")).toBe(false);
+  });
+
+  it("the drawer's check tab has Accept and Decline in place of Confirm the company, with who is asking and no reason to type", () => {
+    const html = page("open=co8&tab=check");
+    expect(html).toMatch(/id="customer-drawer-tab-check" class="tab" aria-selected="true"/);
+    const words = text(html);
+    expect(words).toContain("Asking for access");
+    expect(words).toContain("Sam Asker · sam@stranger.test · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example (opens in a new tab) · Waiting 2 days");
+    expect(html).toContain('<button type="button" class="btn primary sm" aria-label="Accept Harbor Dental">Accept</button>');
+    expect(html).toContain('<button type="button" class="btn quiet sm" aria-label="Decline Harbor Dental">Decline</button>');
+    expect(html).toContain('rel="noopener noreferrer nofollow"');
+    expect(html).toMatch(/<summary>How this works<\/summary><p[^>]*>Accept lets them in on the Free plan and counts as the ITS check\. Decline keeps them out, and you can still accept later\.<\/p>/);
+    for (const gone of ["Confirm the company", "How you checked the company", "Job-board access", "It can draft and approve roles", "Take back the confirmation", "The owners are told", "The owners were told"]) expect(words, gone).not.toContain(gone);
+    expect(html).not.toContain('id="co-check-why"');
+  });
+
+  it("for a declined one: when and by whom, and Accept alone, which is the undo", () => {
+    const html = page("open=co9&tab=check");
+    const words = text(html);
+    expect(words).toContain("Declined");
+    expect(words).toMatch(/Nov 5, 2026, [^·]* by Ada Admin/);
+    expect(words).toContain("Sam Asker · sam@stranger.test");
+    // no time waited: it waits for nothing
+    expect(words).not.toContain("Waiting 9 days");
+    expect(html).toContain('aria-label="Accept Gone Dental">Accept</button>');
+    expect(html).not.toContain('aria-label="Decline Gone Dental"');
+    expect(words).not.toContain("Decline keeps them out");
+    expect(words).not.toContain("Confirm the company");
+    // a declined company with no record of the decision still reads, with no empty line
+    expect(text(page("open=co9&tab=check", [refused("co9", "Gone Dental", { accessRequest: { status: "declined", person, declined: null } })]))).toContain("Declined Sam Asker");
+  });
+
+  it("every control the API refuses gives way until a request is accepted: only the Overview and the check, whatever the address asks for", () => {
+    for (const id of ["co8", "co9"]) {
+      const overview = page(`open=${id}`);
+      expect(overview).toMatch(/id="customer-drawer-tab-overview" class="tab" aria-selected="true"/);
+      expect(overview).toContain('data-label="ITS check"');
+      for (const tab of ["Plan", "How people apply", "Report"]) expect(overview, tab).not.toContain(`data-label="${tab}"`);
+      for (const control of ["Change plan", "Change whether applicants see their match score", "See the report", "Change the ITS check"]) expect(overview, control).not.toContain(control);
+      expect(text(overview)).toContain("Review");
+      expect(text(overview)).toContain("Plan Free");
+      // a link to a tab it does not have lands on the check, not on a form the API refuses
+      for (const tab of ["plan", "apply", "report"]) {
+        const html = page(`open=${id}&tab=${tab}`);
+        expect(html, tab).toMatch(/id="customer-drawer-tab-check" class="tab" aria-selected="true"/);
+        expect(html, tab).toContain("Accept</button>");
+        expect(html, tab).not.toContain('id="plan-pick"');
+      }
+    }
+    // the Overview says where it stands
+    expect(text(page("open=co8"))).toContain("ITS check Waiting 2 days Asking for access Review");
+    expect(text(page("open=co9"))).toMatch(/ITS check Declined Nov 5, 2026, [^·]* by Ada Admin Review/);
+  });
+
+  it("a company once accepted is an ordinary customer again: every tab, the check as ever", () => {
+    const accepted = company("co8", "Harbor Dental", { accessRequest: null });
+    const html = page("open=co8&tab=check", [accepted]);
+    for (const tab of ["Overview", "ITS check", "Plan", "How people apply", "Report"]) expect(html).toContain(`data-label="${tab}"`);
+    expect(text(html)).toContain("Take back the confirmation");
+    expect(html).not.toContain("Accept</button>");
+  });
+
+  it("the second press swaps the buttons for the question, Yes and No, each saying which company", () => {
+    const draw = (asked: "accept" | "decline" | null, pending = false, status = "requested") => renderToStaticMarkup(createElement(AccessChoice, { company: { name: "Harbor Dental", accessRequest: { status, person, declined: null } as never }, asking: asked, pending, onPress: () => undefined, onYes: () => undefined, onNo: () => undefined }));
+    expect(accessQuestion("accept", "Harbor Dental")).toBe("Accept Harbor Dental?");
+    expect(accessQuestion("decline", "Harbor Dental")).toBe("Decline Harbor Dental?");
+    const accept = draw("accept");
+    expect(text(accept).trim()).toBe("Accept Harbor Dental? Yes No");
+    expect(accept).toContain('<button type="button" class="btn primary sm" aria-label="Yes, accept Harbor Dental" aria-busy="false">Yes</button>');
+    expect(accept).toContain('<button type="button" class="btn quiet sm" aria-label="No, do not accept Harbor Dental">No</button>');
+    expect(accept).not.toContain(">Decline<");
+    expect(text(draw("decline")).trim()).toBe("Decline Harbor Dental? Yes No");
+    // on its way: one press only, and the question stays until the answer
+    const going = draw("accept", true);
+    expect(going).toContain('aria-busy="true"');
+    expect(going).toMatch(/aria-label="Yes, accept Harbor Dental"/);
+    expect(going).toMatch(/<button type="button" class="btn quiet sm" disabled=""[^>]*>No<\/button>/);
+    // no question yet: Accept and Decline, Accept alone for a declined company
+    expect(text(draw(null)).trim()).toBe("Accept Decline");
+    expect(text(draw(null, false, "declined")).trim()).toBe("Accept");
+    // a very long name cannot push the row sideways
+    expect(renderToStaticMarkup(createElement(AccessChoice, { company: { name: "L".repeat(120), accessRequest: null }, asking: "accept", pending: false, onPress: () => undefined, onYes: () => undefined, onNo: () => undefined }))).toMatch(/<span class="min-w-0 text-sm font-semibold text-ink wrap-anywhere">Accept L{120}\?<\/span>/);
+  });
+
+  it("says a press that was refused plainly: someone got there first is calm, an error is an error", () => {
+    expect(accessPressRefused(new ApiError(409, "already_accepted", "Harbor Dental already has access, so it cannot be declined now."))).toEqual({ title: "Harbor Dental already has access, so it cannot be declined now." });
+    expect(accessPressRefused(new ApiError(403, "mfa_required", "Confirm it's you."))).toEqual({ title: "Confirm it's you.", tone: "critical" });
+    expect(accessPressRefused(new TypeError("Failed to fetch"))).toEqual({ title: "Could not record that. Try again.", tone: "critical" });
+    expect(accessPressRefused(new SyntaxError("Unexpected token <"))).toEqual({ title: "Could not record that. Try again.", tone: "critical" });
+  });
+
+  it("shows a typed name safely on the list and in the drawer, and a very long one breaks anywhere", () => {
+    const evil = "<img src=x onerror=alert(1)>";
+    const html = page("open=co8&tab=check", [asking("co8", evil, { accessRequest: { status: "requested", person: { name: evil, email: "x@stranger.test" }, declined: null }, settings: { website: evil } })]);
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).not.toContain("noopener noreferrer nofollow");
+    const long = "L".repeat(120);
+    const list = from(page("", [asking("co8", long, { vertical: long })]), '<section class="table-wrap"');
+    // the list's name and its second line break anywhere, in a column that keeps room for an ordinary name on a phone
+    expect(list).toMatch(new RegExp(`<div class="grid min-w-36 justify-items-start gap-0\\.5 wrap-anywhere"><button type="button" class="[^"]*\\bwrap-anywhere\\b[^"]*">${long}</button>`));
+    // the drawer's tabs, the Report's tables apart, break anywhere too
+    expect(page("open=co8", [asking("co8", long)])).toMatch(/<div class="wrap-anywhere"><div class="stack gap-5">/);
+    expect(page("open=co8&tab=check", [asking("co8", long)])).toMatch(/<div class="wrap-anywhere"><section class="card">/);
   });
 });
 

@@ -942,7 +942,7 @@
   .drawer-head-row { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 16px; }
   .drawer-title { flex: 1; min-width: 0; }
   .drawer-title h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; overflow-wrap: anywhere; }
-  .drawer-sub { margin-top: 2px; color: var(--ink-2); font-size: 14px; }
+  .drawer-sub { margin-top: 2px; color: var(--ink-2); font-size: 14px; overflow-wrap: anywhere; }
   .drawer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
   .drawer-close { margin: -2px -6px 0 0; }
   .drawer-banner { padding-bottom: 14px; }
@@ -991,7 +991,7 @@
      box and stays in the page while empty, so a new message is announced; a bare .toast places itself. */
   .toast-region { position: fixed; right: 16px; bottom: 16px; left: 16px; z-index: 80; display: flex; justify-content: center; pointer-events: none; }
   .toast-region .toast { position: static; margin: 0; pointer-events: auto; animation: none; }
-  .toast { position: fixed; right: 16px; bottom: 16px; left: 16px; z-index: 80; display: flex; align-items: flex-start; gap: 10px; width: fit-content; max-width: min(480px, calc(100vw - 32px)); margin: 0 auto; padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 14px; line-height: 1.45; box-shadow: var(--sh-inset), var(--sh-pop); animation: toast-in 200ms var(--ease); }
+  .toast { position: fixed; right: 16px; bottom: 16px; left: 16px; z-index: 80; display: flex; align-items: flex-start; gap: 10px; width: fit-content; max-width: min(480px, calc(100vw - 32px)); margin: 0 auto; padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; box-shadow: var(--sh-inset), var(--sh-pop); animation: toast-in 200ms var(--ease); }
   .toast .icon { width: 16px; height: 16px; margin-top: 2px; }
   .toast.good .icon { color: var(--good); }
   .toast.critical { border-color: color-mix(in srgb, var(--critical-dot) 45%, transparent); }
