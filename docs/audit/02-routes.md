@@ -262,6 +262,7 @@ Applies to every route below: a change under `/api` is refused if the browser sa
 | GET /:id/packets/diff | members | role.read; pay only with compensation.read | version diff (API only) |
 | GET /:id/requirements-check; POST /:id/requirements-check/apply | read: members; apply: packet.edit | role.read / packet.edit | requirements check (RoleRefine) |
 | POST /:id/packets/:version/flags/keep | packet editors | packet.edit | keep a flagged phrase (RolePlan) |
+| POST /:id/packets/:version/benefits | packet editors | packet.edit | write the benefits on the version waiting (RolePlan) |
 | GET /:id/report; GET /:id/report.csv; GET /:id/report/summary.csv | not interviewer | role.read + application.read; CSV audited | Report tab |
 | GET /:id/compare | not interviewer | application.read | ComparePanel |
 | GET /:id/interviews | members | role.read only (see bug 1) | API only |

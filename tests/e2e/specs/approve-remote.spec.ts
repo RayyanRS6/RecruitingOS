@@ -271,8 +271,9 @@ test("a change that makes a live job remote: Approve this version, the first pre
   await approve.click({ force: true });
   const field = card.getByLabel("A short description of the benefits");
   await expect(field).toBeFocused();
+  // Enter saves, as in any form
   await field.fill(WORDS);
-  await card.getByRole("button", { name: "Save", exact: true }).click();
+  await field.press("Enter");
   await expect(saved(page)).toBeVisible({ timeout: 30_000 });
   await expect(approve).not.toHaveAttribute("aria-disabled", "true");
   await approve.click();

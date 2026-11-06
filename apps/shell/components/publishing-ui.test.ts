@@ -204,7 +204,7 @@ describe("the approval card (D1, D5, D6, D9)", () => {
   });
 
   it("'Use for every job' is a small link, only for those who may change the company", () => {
-    expect(html).toMatch(/<a class="link-btn small [^"]*" href="\/setup#setup-company">Use for every job<\/a>/);
+    expect(html).toMatch(/<a href="\/setup#setup-company" class="link-btn small [^"]*">Use for every job<\/a>/);
     for (const canChangeCompany of [false, undefined]) {
       const manager = cardOf(role, { canChangeCompany });
       expect(manager).not.toContain("Use for every job");
@@ -221,6 +221,10 @@ describe("the approval card (D1, D5, D6, D9)", () => {
     expect(out).not.toContain("Describe the benefits");
     expect(out).not.toContain("Send back with a note");
     expect(out).not.toContain("Edit");
+    // an interviewer has none of the buttons, so no empty row is left under the words
+    const none = cardOf(withPending(viewer({ maySendBack: false, reason: "Your role cannot approve jobs; an owner, admin or hiring manager does.", blockedBy: "role" })), { canEdit: false, canManage: false, canChangeCompany: false, canSeePay: false });
+    expect(none).not.toContain('<div class="row mt-5"></div>');
+    expect(text(none)).not.toContain("Preview the job page");
   });
 
   it("Approve is drawn at the top in every state: greyed, focusable and pressable, whatever holds it", () => {

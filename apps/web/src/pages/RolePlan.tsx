@@ -267,7 +267,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canChange
             <Button variant="quiet" onClick={() => setSendingBack(false)}>Keep reviewing</Button>
           </div>
         </div>
-      ) : (
+      ) : canSeePay || pending.viewer.maySendBack || canEdit ? (
         <div className="row mt-5">
           {canSeePay ? (
             // what the preview is, as the link's tooltip
@@ -276,7 +276,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canChange
           {pending.viewer.maySendBack ? <Button onClick={() => setSendingBack(true)}>Send back with a note</Button> : null}
           {canEdit ? <Button onClick={() => onEdit()}>{pending.viewer.mayDecide ? "Edit first" : "Edit"}</Button> : null}
         </div>
-      )}
+      ) : null}
       {assumptions.length || hasFolded ? (
         <div className="stack mt-4 gap-2">
           {assumptions.length ? (
