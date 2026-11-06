@@ -7,6 +7,7 @@ import type { FakeEmailAdapter, FakeGoogleCalendarProvider } from "@ros/integrat
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { unverifyCompany, verifyCompany } from "./services/company-trust";
+import { placeOnInterview } from "./services/interview-create";
 import { signInAs } from "./test-helpers";
 
 /**
@@ -274,6 +275,32 @@ describe("a person sets the date and time", () => {
       expect(mine[0].idempotencyKey).toBe(`interview:${onCalendar.booked.id}:2:${calId}`);
     });
 
+    it("what a place writes on the interview: a round that is a working session stays one at an address, and only a link left empty asks a calendar for one", () => {
+      expect(placeOnInterview({ kind: "address", text: "12 Main St" }, "working_session")).toEqual({ format: "working_session", linkSource: "pasted", meetingUrl: null, address: "12 Main St" });
+      expect(placeOnInterview({ kind: "address", text: "12 Main St" }, "video")).toEqual({ format: "onsite", linkSource: "pasted", meetingUrl: null, address: "12 Main St" });
+      expect(placeOnInterview({ kind: "phone" }, "onsite")).toEqual({ format: "phone", linkSource: "pasted", meetingUrl: null, address: null });
+      expect(placeOnInterview({ kind: "link" }, "onsite")).toEqual({ format: "video", linkSource: "calendar", meetingUrl: null, address: null });
+      expect(placeOnInterview({ kind: "link", url: "https://meet.example/x" }, "onsite")).toEqual({ format: "video", linkSource: "pasted", meetingUrl: "https://meet.example/x", address: null });
+    });
+
+    it("the owner's path: someone on the Shortlist is booked, and the mark gives way to Interviewing; a time for someone on hold ends the hold", async () => {
+      const cand = await apply("Lia", "Short");
+      expect((await json(owner, "POST", `/api/v1/applications/${cand.id}/actions`, { action: "set_mark", mark: "shortlist" })).status).toBe(200);
+      const before = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { ownerStage: string; allowedActions: string[] };
+      expect(before.ownerStage).toBe("shortlist");
+      expect(before.allowedActions).toContain("interview");
+      expect((await routeA(cand.id)).status).toBe(201);
+      const after = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { ownerStage: string; mark: unknown; allowedActions: string[] };
+      expect(after).toMatchObject({ ownerStage: "interviewing", mark: null });
+      expect(after.allowedActions).not.toContain("interview");
+
+      const { cand: held, id } = await approveOnly("Mo", "Short");
+      expect((await json(owner, "POST", `/api/v1/applications/${held.id}/actions`, { action: "hold", note: "Waiting on a licence renewal" })).status).toBe(200);
+      expect(((await (await json(owner, "GET", `/api/v1/applications/${held.id}`)).json()) as { ownerStage: string }).ownerStage).toBe("on_hold");
+      expect((await routeB(id)).status).toBe(200);
+      expect(((await (await json(owner, "GET", `/api/v1/applications/${held.id}`)).json()) as { ownerStage: string; mark: unknown })).toMatchObject({ ownerStage: "interviewing", mark: null });
+    });
+
     it("the same round twice is refused while one is open; an unknown round or interviewer is refused; the personal line goes in the email", async () => {
       const cand = await apply("Ida", "Lane");
       const first = await routeA(cand.id, {}, { invitationLine: { text: "Looking forward to meeting you.", aiHelped: false } });
@@ -433,6 +460,13 @@ describe("a person sets the date and time", () => {
       expect(open.status).toBe(409);
       expect((await errorOf(open)).code).toBe("interview_open");
       expect((await interview(lapsed.id)).status).toBe("offer_expired");
+
+      // an interview nobody is on: refused in words that say what to do, with no booking nobody attends
+      const { id: empty } = await approveOnly("Rex", "Stone");
+      await container.db.delete(interviewParticipants).where(eq(interviewParticipants.interviewId, empty));
+      const nobody = await routeB(empty);
+      expect(nobody.status).toBe(409);
+      expect(await errorOf(nobody)).toMatchObject({ code: "no_interviewers", message: "Nobody is on this interview. Cancel it and set up a new one." });
     });
   });
 
@@ -539,7 +573,9 @@ describe("a person sets the date and time", () => {
       try {
         for (const status of ["closed", "filled"]) {
           await container.db.update(roles).set({ status }).where(eq(roles.id, roleId));
-          for (const r of [await routeA(cand.id), await routeB(id)]) {
+          // the folded path too: its run would end the same way, and leave "Preparing times" for ever
+          const oldPath = await json(owner, "POST", `/api/v1/applications/${cand.id}/interviews`, { roundKey, interviewerUserIds: [ownerId], linkSource: "calendar" });
+          for (const r of [await routeA(cand.id), await routeB(id), oldPath]) {
             expect(r.status, status).toBe(409);
             expect(await errorOf(r), status).toMatchObject({ code: "role_closed", message: "This job is closed, so no interview can be booked for it." });
           }

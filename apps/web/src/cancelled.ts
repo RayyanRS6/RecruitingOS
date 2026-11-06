@@ -90,6 +90,8 @@ export function cancelledBody(input: { firstName: string; round: string; c: Pick
     const decide = input.decideBelow ? "decide below" : "choose their next stage at the top";
     return `The ${round} was booked and they did not come. Nothing goes to them automatically. ${unconfirmed ? `You can send new times for the same round once ITS confirms your company, or ${decide}.` : `Send new times for the same round, or ${decide}.`}`;
   }
+  // Nobody has hours to offer times from, so the team's send is refused: it never invites one. A person sets the time.
+  if (c.auto.reason === "no_hours") return `${c.auto.reasonText} Or decide.`;
   if (unconfirmed) return c.auto.reasonText ? `${c.auto.reasonText} ${AFTER_CHECK}` : "Nothing goes to them automatically until ITS confirms your company. You can send new times after that, or decide.";
   return [c.auto.reasonText, "Send new times when you are ready, or decide."].filter(Boolean).join(" ");
 }

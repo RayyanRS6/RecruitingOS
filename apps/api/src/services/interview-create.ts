@@ -77,7 +77,7 @@ export async function candidateNoticeOfBooking(tx: Tx, input: { companyId: strin
  * needs saying. Only for an interview still booked, read off the current attempt's own email.
  */
 export type CandidateEmailState = "held" | "failed" | "no_email" | null;
-const NOT_DELIVERED = new Set(["failed", "bounced", "complained", "unknown"]);
+const NOT_DELIVERED = new Set(["failed", "bounced", "unknown"]);
 export async function candidateEmailStates(tx: Tx, input: { interviews: ReadonlyArray<{ id: string; attempt: number; status: string }>; hasEmail: boolean }): Promise<Map<string, CandidateEmailState>> {
   const booked = input.interviews.filter((i) => i.status === "scheduled");
   const out = new Map<string, CandidateEmailState>(input.interviews.map((i) => [i.id, null]));
@@ -183,7 +183,7 @@ export async function createApprovedInterview(tx: Tx, container: Container, inpu
   // (or any other private mark) ends here, as it would with the move (founder decision B3).
   else await endMarkOnMove(tx, { applicationId: app.id, companyId, actor, to: app.stage });
   // The fact says whether the invitation carries a personal line and whether the assistant helped; the words are in the invitation itself.
-  await emit(tx, { type: "interview.requested", companyId, actor, subject: { type: "interview", id: iv.id }, payload: { applicationId: app.id, roundKey: round.key, interviewers: input.interviewerUserIds, linkSource: input.linkSource, window, approvedBy: input.approvedBy, invitationLine: invitationNote ? { aiHelped: invitationNote.aiHelped, suggestionRunId: input.suggestionRunId ?? null } : null } });
+  await emit(tx, { type: "interview.requested", companyId, actor, subject: { type: "interview", id: iv.id }, payload: { applicationId: app.id, roundKey: round.key, interviewers: input.interviewerUserIds, linkSource: iv.linkSource, window, approvedBy: input.approvedBy, invitationLine: invitationNote ? { aiHelped: invitationNote.aiHelped, suggestionRunId: input.suggestionRunId ?? null } : null } });
   await emit(tx, { type: "human.override", companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.request", roundKey: round.key, note: input.note ?? null } });
 
   // Someone under Cancelled (founder decisions 1A to 4A): this interview carries their new times.
