@@ -262,6 +262,31 @@ describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
     expect(usageLines({ ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" } })).toEqual(["AI help: 18% used"]);
   });
 
+  it("says used up when everything else does, where the percentage still reads 98: Free at $9.89, past what one small call needs", () => {
+    const usedUp = { level: "used_up", percent: 98, resetsAt: null, notice: { title: "Your plan's AI help is used up", body: "Applications still come in and candidates can still finish." } };
+    const words = text(page({ company: onFree({ aiCredit: usedUp, usage: { jobs_total: { used: 1, limit: 1 }, ai_credit_total_cents: { used: 98, limit: 100, unit: "percent" } } }) }));
+    expect(words).toContain("AI help: used up");
+    expect(words).not.toContain("98% used");
+    // a monthly one says when it starts again too
+    expect(usageLines({ ai_credit_monthly_cents: { used: 99, limit: 100, unit: "percent", resetsAt: "2026-12-05T18:00:00.000Z" } }, "America/Los_Angeles", "used_up")).toEqual(["AI help this month: used up, starts again December 5"]);
+    // at the 80% line, and below it, the figure stands
+    expect(usageLines({ ai_credit_total_cents: { used: 83, limit: 100, unit: "percent" } }, null, "warning")).toEqual(["AI help: 83% used"]);
+    expect(usageLines({ ai_credit_total_cents: { used: 12, limit: 100, unit: "percent" } }, null, null)).toEqual(["AI help: 12% used"]);
+    // and nothing else on the row reads the level
+    expect(usageLines({ recruiter_asks: { used: 1, limit: 1 } }, null, "used_up")).toEqual(["recruiter requests: 1 of 1"]);
+  });
+
+  it("promises a pilot only while the company is on one: its dates stay on record after a move to Pro or Free, and the line goes", () => {
+    const pilot = { startedAt: "2026-08-01T00:00:00.000Z", endsAt: "2026-10-30T00:00:00.000Z" };
+    const on = text(page({ company: onFree({ planKey: "design_partner", status: "design_partner", plan: { key: "design_partner", name: "Design Partner", limits: {} }, settings: { ...company.settings, pilot } }) }));
+    expect(on).toContain("pilot until");
+    expect(on).toContain("jobs in progress are never cut off");
+    const moved = text(page({ company: onFree({ planKey: "pro", status: "active", plan: { key: "pro", name: "Pro", limits: {} }, settings: { ...company.settings, pilot } }) }));
+    expect(moved).toContain("Plan Pro");
+    expect(moved).not.toContain("pilot until");
+    expect(moved).not.toContain("never cut off");
+  });
+
   it("the Team tab's invite form says the plan's words, on the plan's two people", () => {
     const html = page({ search: "?tab=team", company: onFree({}, { used: 2, limit: 2 }) });
     expect(text(html)).toContain("Your plan includes 2 people: 2 in use, counting invitations not yet answered.");

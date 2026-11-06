@@ -1423,6 +1423,14 @@ describe("the AI credit", () => {
       expect(pro.room.ok).toBe(false);
     });
 
+    it("at $9.89 on Free the percentage says 98 while Home's level says used up, because the two cents a small call needs pass the $9.90: Settings reads the level", async () => {
+      const { id, cookie } = await newCompany();
+      await spend(id, "9.890000");
+      const current = await read<{ usage: { ai_credit_total_cents: { used: number } }; aiCredit: { level: string; percent: number } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      expect(current.usage.ai_credit_total_cents.used).toBe(98);
+      expect(current.aiCredit).toMatchObject({ level: "used_up", percent: 98 });
+    });
+
     it("a big draft refused is not the credit used up, and a hold that comes back cries no wolf", async () => {
       const { id } = await newCompany();
       const provider = new PricedProvider();
