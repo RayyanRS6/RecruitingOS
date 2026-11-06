@@ -1314,6 +1314,19 @@ describe("locked candidates", () => {
       expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/applications?counts=1`))).toMatchObject({ locked: { count: 0, cards: [] }, lockedInProcess: 0 });
     }, 120_000);
 
+    it("someone deleted after a decision has no card and uses no room either, whatever step they were left at", async () => {
+      const job = await openJob(1);
+      await fill(job, 1);
+      const row = await apply(job, person("Eda"));
+      await container.db.update(applications).set({ stage: "talent_pool" }).where(eq(applications.id, row.id));
+      await withTenant(container.db, job.id, (tx) => anonymizeCandidate(tx, { companyId: job.id, candidateId: row.candidateId, actor: { kind: "system", id: "locked-applicants.test" }, deleteFile: async () => undefined }));
+      // A decided step is not one a deletion moves them from: here it is the deletion that counts, not the stage.
+      expect((await applicationOf(row.id)).stage).toBe("talent_pool");
+      expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/applications?counts=1`))).toMatchObject({ locked: { count: 0, cards: [] } });
+      expect((await changePlan(job.id, "test_two")).unlocked).toBe(0);
+      expect((await applicationOf(row.id)).lockedAt).toBe(row.lockedAt);
+    }, 60_000);
+
     it("'and N more you cannot see yet' is who is still in the running: not someone who withdrew, was deleted, or was already decided", async () => {
       const job = await openJob(2);
       const [hired, backup] = await fill(job, 2);
