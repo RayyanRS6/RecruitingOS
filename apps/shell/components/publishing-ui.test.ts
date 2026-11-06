@@ -307,6 +307,17 @@ describe("the approval card (D1, D5, D6, D9)", () => {
     expect(text(cardOf(withPending(viewer({ reason: "You started this role.", blockedBy: "self_approval" }))))).not.toContain("Ask ITS to choose a plan");
   });
 
+  it("a company ITS has not confirmed reads the founder's line under the title, word for word, and the field is still right there", () => {
+    const qc = client();
+    qc.setQueryData(["company"], { settings: {} });
+    const out = cardOf(role, {}, qc);
+    const line = "ITS has not confirmed your company yet. Approving opens the job now; it goes public on its own as soon as ITS confirms.";
+    expect(text(out)).toContain(line);
+    expect(out.indexOf(line)).toBeLessThan(out.indexOf("Before this job can go live"));
+    expect(out).toContain('id="legal-benefits-r1"');
+    expect(text(html)).not.toContain(line);
+  });
+
   it("folds what only describes, and keeps what must be acted on or was promised", () => {
     const rich = withPending({ ...lawMet, ...viewer({ mayDecide: true }), rationale: "The job builder wrote the job details. Approve them to open the job and start posting.", expiresAt: "2026-11-20T10:00:00.000Z", decisionMaker: { userId: "u9", name: "Hank Manager", email: "hank@bright.test" } }, { currentPacket: { ...role.currentPacket, packet: { provenance: { assumptions: ["The job is remote.", "You did not name any deal-breakers, so none are listed."] }, requirements: { mustHaves: [{ key: "m1", text: "Active RDH license", rationale: "Required by the state", evidencedBy: ["resume"] }], niceToHaves: [], eligibility: [] } } } });
     const out = cardOf(rich);

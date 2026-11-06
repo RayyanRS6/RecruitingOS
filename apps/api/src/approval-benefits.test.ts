@@ -280,6 +280,20 @@ describe("the benefits, written on the approval card", () => {
       expect((await errorOf(await benefits(owner, own.roleId, 1))).code).toBe("already_described");
     });
 
+    it("a yes landing at this very moment: the write checks again that the version is undecided, so it is never given words nobody saw", async () => {
+      const { roleId } = await waiting();
+      // what an approval in another transaction has written by the time this write runs: the version is stamped, the request not read as decided yet
+      const row = await versionOf(roleId);
+      await container.db.update(rolePackets).set({ approvedAt: new Date().toISOString() }).where(eq(rolePackets.id, row.id));
+      const r = await benefits(owner, roleId, 1);
+      expect(r.status).toBe(409);
+      expect((await errorOf(r)).code).toBe("not_waiting");
+      expect((await versionOf(roleId)).packet.compensation.benefitsSummary).toBeUndefined();
+      // and nothing about it went on the record
+      const timeline = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/timeline`)).json()) as Array<{ type: string }>;
+      expect(timeline.map((e) => e.type)).not.toContain("role_packet.edited");
+    });
+
     it("a closed job, even with its request left waiting", async () => {
       const { roleId } = await waiting();
       await withPlatform(container.db, (tx) => tx.update(roles).set({ status: "closed", closedAt: new Date().toISOString(), closeReason: "role_cancelled" }).where(eq(roles.id, roleId)));
