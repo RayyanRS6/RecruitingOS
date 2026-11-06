@@ -168,6 +168,16 @@ describe("the public welcome page by invitation", () => {
     vi.stubEnv("SIGNUP_MODE", "closed");
     expect(draw).toThrow(/^SIGNUP_MODE must be "open" or "invite"/);
   });
+
+  it("by approval the page reads exactly as by invitation: nothing invites a stranger to start", () => {
+    vi.stubEnv("SIGNUP_MODE", "invite");
+    const invited = draw();
+    vi.stubEnv("SIGNUP_MODE", "approval");
+    const byApproval = draw();
+    expect(hrefsOf(byApproval, "Get help with your next hire")).toEqual([]);
+    expect(linksIn(byApproval)).toEqual(linksIn(invited));
+    expect(text(byApproval)).toBe(text(invited));
+  });
 });
 
 describe("the address of Home for someone without a session (middleware.ts)", () => {

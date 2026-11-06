@@ -1,18 +1,18 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { sendQueuedCommunication, SEND_MAX_ATTEMPTS } from "@ros/agents";
+import { SEND_MAX_ATTEMPTS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
 import { FREE_PLAN_KEY, oneLine, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
 import { createInvitation } from "@ros/core";
-import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns } from "@ros/db";
-import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
+import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns } from "@ros/db";
+import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { loadEnv, signupModeOf } from "./env";
 import { runHourlyChecks, runMaintenance } from "./maintenance";
 import { POLICIES } from "./middleware/rate-limit";
 import { resetPublicFeedCache } from "./pages/public-feeds";
-import { companyRequestDetails, sendAccessRequest } from "./services/access-requests";
+import { companyRequestDetails } from "./services/access-requests";
 import { emailReallyLeft } from "./services/company-trust";
 import { signupDoor } from "./services/companies";
 import { backfillPublishing } from "./services/publishing-backfill";
@@ -61,7 +61,7 @@ function worldOf(container: Container, app: ReturnType<typeof createApp>) {
   const noticesOf = (companyId: string) => container.db.select().from(notifications).where(eq(notifications.companyId, companyId));
   const eventsOf = (companyId: string, ...types: string[]) => container.db.select().from(events).where(and(eq(events.companyId, companyId), inArray(events.type, types)));
   const alertsOf = (companyId: string) => container.db.select().from(adminAlerts).where(eq(adminAlerts.companyId, companyId));
-  const customers = (cookie: string) => json(cookie, "GET", "/api/v1/admin/customers").then((r) => read<Array<{ id: string; name: string; accessRequest: CustomerAccessRequest | null; seats: { used: number; limit: number | null }; roles: number; verifiedAt: string | null }>>(r));
+  const customers = (cookie: string) => json(cookie, "GET", "/api/v1/admin/customers").then((r) => read<Array<{ id: string; name: string; accessRequest: CustomerAccessRequest | null; seats: { used: number; limit: number | null }; roles: number; verifiedAt: string | null; vertical: string; sizeBand: string; locations: Array<{ city?: string; region?: string }>; settings: { website?: string; accessRequestEmailedAt?: string }; createdAt: string }>>(r));
   const mailTo = (to: string) => mail().sent.filter((m) => m.to === to);
   /** A real role of `from`, copied into `companyId` under `title`, open and taking applications: as if the company had one. */
   const plantRole = async (from: string, companyId: string, title: string) => {
@@ -246,6 +246,8 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     // Nadine's list: the person, and what the row needs
     const listed = (await w.customers(adminCookie)).find((c) => c.id === asker.id)!;
     expect(listed.accessRequest).toEqual({ status: "requested", person: { name: "Sam Asker", email: "sam@stranger.test" }, declined: null });
+    expect(listed).toMatchObject({ name: "Harbor Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Austin", region: "TX" }], settings: { website: "https://asker.example", accessRequestEmailedAt: asker.accessRequest.emailedAt } });
+    expect(listed.createdAt).toEqual(expect.any(String));
     expect(listed.seats.used).toBe(0);
     expect(listed.verifiedAt).toBeNull();
     expect((await w.customers(adminCookie)).filter((c) => c.id !== asker.id).every((c) => c.accessRequest === null)).toBe(true);
@@ -525,12 +527,31 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
       expect((await w.noticesOf(failed.id)).map((n) => n.kind)).toEqual(["company.access_accepted"]);
       const [row] = await w.container.db.select().from(communications).where(and(eq(communications.companyId, failed.id), eq(communications.templateKey, "notification_alert")));
       expect(row.tags).toMatchObject({ quietOnFailure: "true" });
-      expect(await sendQueuedCommunication(w.container.db, w.container.integrations, { communicationId: row.id, companyId: failed.id }, { attempt: SEND_MAX_ATTEMPTS, maxAttempts: SEND_MAX_ATTEMPTS, now: w.container.engine.clock() }).catch(() => "threw")).toBeOneOf(["failed", "skipped"]);
+      expect(row.status).toBe("queued");
+      expect(await sendQueuedCommunication(w.container.db, w.container.integrations, { communicationId: row.id, companyId: failed.id }, { attempt: SEND_MAX_ATTEMPTS, maxAttempts: SEND_MAX_ATTEMPTS, now: w.container.engine.clock() })).toBe("failed");
       expect(await w.alertsOf(failed.id)).toEqual([]);
+      // a send interrupted by a crash reads as unknown for the record, and raises nothing either
+      const crashed = await w.ask("crashed@stranger.test", "Crashed Dental");
+      expect((await w.decide(adminCookie, crashed.id, "accept")).status).toBe(200);
+      await w.container.drain();
+      const old = new Date(w.container.engine.clock().getTime() - 3_600_000).toISOString();
+      await withPlatform(w.container.db, (tx) => tx.update(communications).set({ status: "sending", sendingAt: old }).where(eq(communications.companyId, crashed.id)));
+      expect(await sweepStaleSending(w.container.db, w.container.engine.clock())).toBeGreaterThanOrEqual(1);
+      expect((await w.container.db.select().from(communications).where(eq(communications.companyId, crashed.id)))[0].status).toBe("unknown");
+      expect(await w.alertsOf(crashed.id)).toEqual([]);
       expect(await w.container.db.select().from(adminAlerts).where(inArray(adminAlerts.kind, ["message.delivery_failed", "message.delivery_unknown", "company.check_notice_failed"]))).toEqual([]);
     } finally {
       w.mail().failNext(0);
     }
+
+    // a reply that was cut off: never sent again on a guess, and the same
+    const cutOff = await w.ask("cutoff@stranger.test", "Cut Off Dental");
+    const cut = vi.spyOn(w.mail(), "send").mockResolvedValue({ status: "failed", error: "cut off", retryable: false, uncertain: true });
+    expect((await w.decide(adminCookie, cutOff.id, "accept")).status).toBe(200);
+    await w.container.drain();
+    cut.mockRestore();
+    expect((await w.container.db.select().from(communications).where(eq(communications.companyId, cutOff.id)))[0].status).toBe("unknown");
+    expect(await w.alertsOf(cutOff.id)).toEqual([]);
 
     // the door that goes in directly keeps its alert: a company waiting for the ITS check must not wait unseen
     w.mail().failNext(1);
@@ -715,11 +736,24 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.code(refused)).toBe("not_yours_to_change");
   });
 
-  it("sending a request is the door's own work: asked directly it still takes the session's person and nobody else", async () => {
-    const [user] = await w.container.db.insert(users).values({ email: "direct.call@stranger.test", name: "Direct Call" }).returning();
-    const answer = await sendAccessRequest(w.container, { body: { ...w.form("Direct Call Dental"), sizeBand: "1-19", timezone: "America/Chicago" } as never, user: { id: user.id, email: user.email, name: user.name }, actor: { kind: "user", id: user.id, name: "Direct Call" } });
-    expect(answer.accessRequest).toMatchObject({ status: "requested", email: "direct.call@stranger.test" });
-    expect(await w.statusOf(answer.id)).toBe("requested");
+  it("a bounce of these emails stops the address as ever and raises nothing about a team member: they are on nobody's team yet", async () => {
+    const asker = await w.ask("bounced@stranger.test", "Bounced Dental");
+    const [copy] = w.mailTo("bounced@stranger.test");
+    const bounce = async (id: number, providerMessageId: string) => w.app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakePostmarkEvent({ providerMessageId, email: "bounced@stranger.test", type: "HardBounce", id })) });
+    const unreachable = () => w.container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "email.person_unreachable"), sql`${adminAlerts.title} like '%bounced@stranger.test%'`));
+    expect((await bounce(910_001, copy.providerMessageId)).status).toBe(200);
+    expect(await unreachable()).toEqual([]);
+    const [stopped] = await w.container.db.select().from(emailSuppressions).where(eq(emailSuppressions.address, "bounced@stranger.test"));
+    expect(stopped.active).toBe(true);
+    // Accept still goes through with the address stopped, and the email that cannot go raises nothing
+    expect((await w.decide(adminCookie, asker.id, "accept")).status).toBe(200);
+    await w.container.drain();
+    expect(await w.statusOf(asker.id)).toBe("active");
+    expect((await w.container.db.select().from(communications).where(eq(communications.companyId, asker.id)))[0].status).toBe("failed");
+    expect(await w.alertsOf(asker.id)).toEqual([]);
+    // on a team now, so a bounce is told as for anyone on a team
+    expect((await bounce(910_002, copy.providerMessageId)).status).toBe(200);
+    expect(await unreachable()).toHaveLength(1);
   });
 });
 

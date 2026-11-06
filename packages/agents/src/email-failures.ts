@@ -1,10 +1,10 @@
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
+import { ACCESS_REQUEST_STATUSES, type Actor } from "@ros/contracts";
 import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, nextContactWindow, notify, onlyLockedApplications, raiseAlert, suppressAddress } from "@ros/core";
-import { applications, candidates, communications, companies, events, jobs, rolePackets, roles, users, type Queryable } from "@ros/db";
+import { applications, candidates, communications, companies, events, jobs, memberships, rolePackets, roles, users, type Queryable } from "@ros/db";
 import { mailbox, type EmailEvent, type Integrations } from "@ros/integrations";
 import { deliverSms } from "./coordinator";
-import { queueCommunication } from "./outbox";
+import { QUIET_ON_FAILURE_TAG, queueCommunication } from "./outbox";
 
 /**
  * What happens when an email fails after we sent it (founder instruction of 18 September 2026, item 5).
@@ -52,7 +52,7 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
       const fallback = event.complaint ? null : await smsFallback(q, integrations, { candidateId: cand.id, companyId: cid, communication: comm ?? null, appBaseUrl: input.appBaseUrl, now });
       if (!(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId: cid, about: comm?.applicationId, kind: "candidate.unreachable", title: event.complaint ? `${cand.firstName} ${cand.lastName} marked our email as spam` : `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: event.complaint ? "We will not email them again. If you still want to talk with them, call them; nothing further goes out automatically." : `Their address bounced (${event.description}). ${fallback === "sent" ? "We texted them a link to their status page." : fallback === "scheduled" ? "A text with their status link goes out when contact hours open." : cand.phone ? "They did not agree to texts; please call them." : "There is no phone number on file; please reach them another way."}`, action: { label: "Open the candidate", href: comm?.applicationId ? `/roles/${(await roleOf(q, comm.applicationId)) ?? ""}/talent` : "/talent" } });
     }
-    if (user) {
+    if (user && !(await onlyAskedForAccess(q, user.id))) {
       await raiseAlert(q, { kind: "email.person_unreachable", severity: event.complaint ? "critical" : "high", title: event.complaint ? `A team member's address complained: ${address}` : `A team member's address bounces: ${address}`, body: `${event.description} Sign-in links and notifications to this address will not be delivered until an administrator releases the suppression after confirming the address.`, companyId, details: { userId: user.id, type: event.type } });
     }
     if (event.complaint) await raiseAlert(q, { kind: "email.spam_complaint", severity: "critical", title: `Spam complaint from ${address}`, body: `Message: ${comm?.subject ?? "unknown"} (${comm?.templateKey ?? "unknown template"}). The address is suppressed. Review the message and the sending pattern before anything else goes to similar recipients.`, companyId, target: comm ? { type: "communication", id: comm.id } : null, details: { type: event.type, description: event.description } });
@@ -77,6 +77,16 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
   // no retries left: a decision message among them never reached them
   if (comm) await untellDecision(q, comm);
   return { handled: true, communicationId: comm?.id ?? null, action: "recorded" };
+}
+
+/**
+ * Whether the person behind an address has only asked for access, waiting or declined (SIGNUP_MODE=approval). They are on
+ * nobody's team yet and nothing waits on their mailbox: the address stops as any other, and no alert about a team member is
+ * raised, because a failed email in that path never raises one. Once they are on a team this says no.
+ */
+async function onlyAskedForAccess(q: Queryable, userId: string): Promise<boolean> {
+  const rows = await q.select({ status: memberships.status }).from(memberships).where(and(eq(memberships.userId, userId), inArray(memberships.status, ["active", ...ACCESS_REQUEST_STATUSES])));
+  return rows.length > 0 && rows.every((r) => r.status !== "active");
 }
 
 /**
@@ -185,7 +195,7 @@ export async function retryCommunication(q: Queryable, integrations: Integration
     html: orig.bodyHtml,
     templateKey: orig.templateKey ?? "retry",
     idempotencyKey: `${orig.id}:retry:${input.attempt}`,
-    tags: { template: orig.templateKey ?? "retry", retryOf: orig.id },
+    tags: { template: orig.templateKey ?? "retry", retryOf: orig.id, ...(orig.tags?.[QUIET_ON_FAILURE_TAG] ? { [QUIET_ON_FAILURE_TAG]: orig.tags[QUIET_ON_FAILURE_TAG] } : {}) },
     attachments: orig.attachments,
     actor,
     disclosureIncluded: orig.disclosureIncluded,
