@@ -100,6 +100,9 @@ export type AuditAction =
   /** The one-time ITS check of a self-serve company (founder decision B7): confirmed, or taken back, by whom and why. */
   | "company.verified"
   | "company.unverified"
+  /** First sign-in asks for approval (6 November 2026): an administrator accepted or declined a person's request. */
+  | "company.access_accepted"
+  | "company.access_declined"
   /** The customer's own audit history left as a file (audit finding A9): who, how many rows, which filters. */
   | "audit.exported"
   /** The holder of a session confirmed with their sign-in provider again before a sensitive change (audit finding A12). */

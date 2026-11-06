@@ -26,7 +26,7 @@ export const companySettingsRoutes = new Hono<Vars>();
 const ADMIN_ONLY_COMPANY_KEYS: Record<string, string> = {
   planKey: "the plan", plan: "the plan", status: "the account status", slug: "the careers page address", vertical: "the kind of business", id: "the company id", entitlements: "the allowances", usage: "the allowances",
 };
-const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan", verifiedAt: "the ITS company check", verifiedBy: "the ITS company check", onboarding: "the getting-started checklist", candidateScoreShown: "whether candidates see their match score", candidateScoreSetBy: "whether candidates see their match score", trial: "the trial dates" };
+const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan", verifiedAt: "the ITS company check", verifiedBy: "the ITS company check", onboarding: "the getting-started checklist", candidateScoreShown: "whether candidates see their match score", candidateScoreSetBy: "whether candidates see their match score", trial: "the trial dates", accessRequestEmailedAt: "the record of your request for access" };
 
 /** The way on when a plan with no ITS staff time asks ITS to post: the request about the plan, as every Upgrade is. */
 const askForItsPosting = { label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: ITS_POSTING_UPGRADE_QUESTION } };

@@ -8,7 +8,7 @@ import { mfaRoutes } from "./auth-mfa";
 import { REAUTH_STATE_SUFFIX, completeReauth, readReauthMarker } from "./auth-sessions";
 import { renderSignInLinkPage } from "../pages/signin-link";
 import { renderInvitePage, type InvitePageProps } from "../pages/invite";
-import { maySignUp } from "../services/companies";
+import { signupConfigFor } from "../services/access-requests";
 import { clearInviteCookie, clearPkceCookie, clearSessionCookie, needsSecondFactor, openSession, readInviteCookie, readPkceCookie, setInviteCookie, setMfaCookie, setPkceCookie, setSessionCookie, signInPolicy } from "./auth-shared";
 import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url, mailbox } from "@ros/integrations";
 import { clientIp, isPlatformStaff, readSessionCookie, type Vars } from "../middleware/session";
@@ -30,14 +30,14 @@ export function consumeLink(container: Container, token: string): string {
 
 /**
  * What the sign-in page offers: delegated providers always; the email link only where it is enabled. `signup` (GATE-V2):
- * whether company sign-up is open or by invitation (SIGNUP_MODE), whether the person asking may create a company (by
- * invitation, nobody before signing in; the list itself is never sent), and whom to ask for an invitation: the ITS
- * inbox job pages already print (EMAIL_REPLY_TO).
+ * whether company sign-up is open, by invitation or by approval (SIGNUP_MODE), whether the person asking may send the
+ * company form (by invitation or approval, nobody before signing in; the list itself is never sent), whom to ask: the ITS
+ * inbox job pages already print (EMAIL_REPLY_TO), and, under approval, which door they have and their own request
+ * (SignupConfig in @ros/contracts).
  */
 authRoutes.get("/config", async (c) => {
   const container = c.get("container");
-  const user = c.get("session")?.user;
-  const signup = { mode: container.env.SIGNUP_MODE, allowed: user ? maySignUp(container.env, user) : container.env.SIGNUP_MODE === "open", contact: container.env.EMAIL_REPLY_TO };
+  const signup = await signupConfigFor(container, c.get("session")?.user);
   return c.json({ mode: container.integrations.identity.id, providers: container.integrations.identity.providers(), magicLink: container.env.MAGIC_LINK_ENABLED, staffDomains: container.env.ITS_STAFF_EMAIL_DOMAINS, signup });
 });
 

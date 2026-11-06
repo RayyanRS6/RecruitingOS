@@ -1,9 +1,9 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { companyVerifiedAt, newTrialTerm, onTrialPlan, trialTermOf, type Actor } from "@ros/contracts";
-import { BOARD_UP_STATES, audit, closingDateRequired, defaultClosingDate, emit, isBoardChannel, notify, raiseAlert, transitionPosting, type PostingState } from "@ros/core";
+import { companyVerifiedAt, newTrialTerm, onTrialPlan, oneLine, trialTermOf, type Actor } from "@ros/contracts";
+import { BOARD_UP_STATES, audit, closingDateRequired, defaultClosingDate, emit, errorForLog, isBoardChannel, notify, raiseAlert, transitionPosting, type PostingState } from "@ros/core";
 import { releaseHeldCommunications } from "@ros/agents";
 import { companies, postings, rolePackets, roles, type Queryable } from "@ros/db";
-import { mailbox } from "@ros/integrations";
+import { mailbox, type OutboundEmail, type SendResult } from "@ros/integrations";
 import { armClosingDate, companyVerifiedSignal } from "@ros/workflows";
 import type { Container } from "../container";
 import { trialDateWords, trialPatch } from "./trial";
@@ -30,8 +30,9 @@ export type VerificationResult = { companyId: string; name: string; changed: boo
  * The owners and admins are told; the confirmation is audited (the customer sees it in their history) and emitted.
  * Confirming a confirmed company changes nothing, except that any message to a candidate still held goes into the queue
  * (confirming again is the way to repair one that slipped past the first release). Null when there is no such company.
+ * `quiet`: the caller tells the owner itself, in one notice (Accept, services/access-requests.ts: one approval, not two).
  */
-export async function verifyCompany(tx: Queryable, container: Container, input: { companyId: string; actor: Actor; reason: string; now: Date }): Promise<VerificationResult | null> {
+export async function verifyCompany(tx: Queryable, container: Container, input: { companyId: string; actor: Actor; reason: string; now: Date; quiet?: boolean }): Promise<VerificationResult | null> {
   const [co] = await tx.select({ id: companies.id, name: companies.name, settings: companies.settings, planKey: companies.planKey, timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1).for("update");
   if (!co) return null;
   const already = companyVerifiedAt(co.settings);
@@ -54,6 +55,7 @@ export async function verifyCompany(tx: Queryable, container: Container, input: 
   // Publish runs of roles approved while the company waited resume now (packages/workflows publish-role.ts).
   await container.engine.signal(tx, { companyId: co.id, key: companyVerifiedSignal(co.id) });
   await giveDefaultClosingDates(tx, container, { companyId: co.id, actor: input.actor, now: input.now });
+  if (input.quiet) return { companyId: co.id, name: co.name, changed: true, verifiedAt: at, released };
   await notify(tx, {
     companyId: co.id,
     kind: "company.verified",
@@ -154,19 +156,57 @@ export async function setJobBoardAccess(tx: Queryable, input: { companyId: strin
 }
 
 /**
+ * Whether an email really left: the provider took it. The fake adapter on a hosted deployment reports every email sent
+ * and keeps it in memory (email-gate.ts), and a provider that is not set up, or a reply that was cut off, says nothing
+ * about delivery, so none of them may be told to a person as sent.
+ */
+export function emailReallyLeft(sent: SendResult, adapter: { status: string }, nodeEnv: string): boolean {
+  return sent.status === "sent" && !(adapter.status === "fake" && nodeEnv === "production");
+}
+
+/**
+ * One email outside any transaction, where a failure stops nothing and raises no alert (first sign-in asks for approval:
+ * email is not live on production yet, and the Overview row is what tells Nadine). True only when it really left.
+ */
+export async function sendWithoutAlert(container: Container, message: OutboundEmail): Promise<boolean> {
+  try {
+    return emailReallyLeft(await container.integrations.email.send(message), container.integrations.email, container.env.NODE_ENV);
+  } catch (err) {
+    console.warn(`[email] ${message.tags?.template ?? "a message"} could not be sent: ${errorForLog(err)}`);
+    return false;
+  }
+}
+
+/**
  * Tells the ITS queue mailbox that a company signed itself up and waits for the check, with the company's own details
  * and the owner's address (no candidate data exists yet). Sent outside any transaction; a failed send is raised as an
- * operator alert so the company never waits unseen.
+ * operator alert so the company never waits unseen. What the person typed goes in one line each (`oneLine`).
+ *
+ * `request` (SIGNUP_MODE=approval): the words of a request for access, and a failed send raises no alert, because the
+ * Overview row is what tells Nadine and a second row that outlives the decision would only be noise.
  */
-export async function tellItsAboutNewCompany(container: Container, input: { company: { id: string; name: string; vertical: string; sizeBand: string; website: string | null }; owner: { name: string | null; email: string } }): Promise<void> {
+export async function tellItsAboutNewCompany(container: Container, input: { company: { id: string; name: string; vertical: string; sizeBand: string; website: string | null; place?: string | null }; owner: { name: string | null; email: string }; request?: boolean }): Promise<void> {
   const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
+  const name = oneLine(input.company.name, 120);
+  const vertical = oneLine(input.company.vertical, 60);
+  const website = oneLine(input.company.website, 200) || "not given";
+  const owner = input.owner.name ? `${oneLine(input.owner.name, 120)} <${input.owner.email}>` : input.owner.email;
+  if (input.request) {
+    const text = [
+      "Someone is asking for access. Nothing works for them until an administrator accepts: no AI runs, and nothing of theirs is public.",
+      `Company: ${name}\nPerson: ${owner}\nKind of business: ${vertical}\nSize: ${input.company.sizeBand} employees\nCity and state: ${oneLine(input.company.place, 120) || "not given"}\nWebsite: ${website}`,
+      `Accept or decline it in the admin console, on the Overview: ${container.env.APP_BASE_URL}/admin`,
+    ].join("\n\n");
+    await sendWithoutAlert(container, { to: container.env.ITS_QUEUE_EMAIL, from, subject: `[access request] ${name} is asking for access`, text, idempotencyKey: `access_request_its:${input.company.id}`, tags: { template: "access_request_its" } });
+    return;
+  }
   const text = [
     "A company signed itself up. Its careers page, job pages, Google listing and first emails to candidates wait for the one-time ITS check; it can draft and approve roles meanwhile.",
-    `Company: ${input.company.name}\nKind of business: ${input.company.vertical}\nSize: ${input.company.sizeBand} employees\nWebsite: ${input.company.website || "not given"}\nOwner: ${input.owner.name ? `${input.owner.name} <${input.owner.email}>` : input.owner.email}`,
+    `Company: ${name}\nKind of business: ${vertical}\nSize: ${input.company.sizeBand} employees\nWebsite: ${website}\nOwner: ${owner}`,
     `Confirm it, or ask the owner first, in the admin console under Customers: ${container.env.APP_BASE_URL}/admin`,
   ].join("\n\n");
-  const sent = await container.integrations.email.send({ to: container.env.ITS_QUEUE_EMAIL, from, subject: `[company check] ${input.company.name} is waiting for the ITS check`, text, idempotencyKey: `company_check:${input.company.id}`, tags: { template: "company_check" } });
+  const sent = await container.integrations.email.send({ to: container.env.ITS_QUEUE_EMAIL, from, subject: `[company check] ${name} is waiting for the ITS check`, text, idempotencyKey: `company_check:${input.company.id}`, tags: { template: "company_check" } });
   if (sent.status === "failed") {
-    await raiseAlert(container.db, { kind: "company.check_notice_failed", severity: "high", title: "A new company is waiting for the ITS check", body: `${input.company.name} signed itself up, but the email to the ITS queue failed (${sent.error}). Confirm the company in the admin console under Customers.`, companyId: input.company.id, target: { type: "company", id: input.company.id } });
+    await raiseAlert(container.db, { kind: "company.check_notice_failed", severity: "high", title: "A new company is waiting for the ITS check", body: `${name} signed itself up, but the email to the ITS queue failed (${sent.error}). Confirm the company in the admin console under Customers.`, companyId: input.company.id, target: { type: "company", id: input.company.id } });
   }
 }

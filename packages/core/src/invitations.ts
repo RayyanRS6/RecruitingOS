@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, gt } from "drizzle-orm";
-import { seatsFullAtSignInLine, type Actor } from "@ros/contracts";
+import { isAccessRequestStatus, seatsFullAtSignInLine, type Actor } from "@ros/contracts";
 import { invitations, memberships, randomToken, users, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { seatRoom } from "./entitlements";
@@ -170,6 +170,9 @@ export async function acceptPendingInvitations(
   const accepted: AcceptedInvitation[] = [];
   for (const inv of open) {
     const [member] = await q.select({ status: memberships.status }).from(memberships).where(and(eq(memberships.companyId, inv.companyId), eq(memberships.userId, input.user.id))).limit(1);
+    // A person's own request for access, waiting or declined, is answered only by an administrator's Accept: no invitation
+    // to that same company opens it by a side door, though one to any other company works as ever. It stays pending.
+    if (isAccessRequestStatus(member?.status)) continue;
     if (member?.status !== "active") {
       // This invitation already holds a place among the open ones, so it is left out of the count and asks for one place.
       const room = await seatRoom(q, inv.companyId, { now, exceptEmail: email });

@@ -76,6 +76,17 @@ export type QueueSmsInput = QueueBase & { channel: "sms"; to: string; from: stri
 
 export type QueueResult = SendResult & { communicationId: string };
 
+/**
+ * A tag on a message whose delivery failure raises no operator alert (`NOTIFY_QUIET_ON_FAILURE` in @ros/core). It is still
+ * marked failed or unknown, recorded and reported as any other message is; only the alert stays away.
+ */
+export const QUIET_ON_FAILURE_TAG = "quietOnFailure";
+
+/** Whether this message's tags ask for no alert. */
+function quietOnFailure(row: { tags?: Record<string, string> | null }): boolean {
+  return row.tags?.[QUIET_ON_FAILURE_TAG] === "true";
+}
+
 /** The status of a message to a candidate waiting for the ITS company check. */
 export const HELD_STATUS = "held";
 /** What a caller hears about such a message. */
@@ -427,11 +438,11 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
     }
     return "failed";
   });
-  if (outcome === "failed" && (result.status !== "failed" || result.retryable)) {
+  if (outcome === "failed" && (result.status !== "failed" || result.retryable) && !quietOnFailure(claimed)) {
     // The provider itself failed for good (an outage that outlasted every retry, or an adapter that is not configured): an operator must see it.
     await raiseAlert(db, { kind: "message.delivery_failed", severity: "high", title: `A ${claimed.channel} could not be delivered after ${ctx.attempt} attempt${ctx.attempt === 1 ? "" : "s"}`, body: `${claimed.templateKey ?? "message"} to a recipient in this company failed: ${describeFailure(result)}. Check the provider's status and credentials; the message is marked failed and was not sent.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey, attempts: ctx.attempt } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${errorForLog(err)}`));
   }
-  if (outcome === "unknown") {
+  if (outcome === "unknown" && !quietOnFailure(claimed)) {
     await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${claimed.channel} may or may not have been delivered`, body: `The provider's reply to sending ${claimed.templateKey ?? "a message"} was cut off (${describeFailure(result).slice(0, 200)}). Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${errorForLog(err)}`));
   }
   if (outcome === "retry") throw new Error(`delivery failed (attempt ${ctx.attempt} of ${ctx.maxAttempts}): ${describeFailure(result)}`);
@@ -474,12 +485,13 @@ function describeFailure(result: SendResult): string {
 export async function sweepStaleSending(db: Db, now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - SENDING_STALE_MS).toISOString();
   const rows = await withPlatform(db, async (tx) => {
-    const stale = await tx.update(communications).set({ status: "unknown", error: "interrupted while sending; delivery could not be confirmed", sendingAt: null }).where(and(eq(communications.status, "sending"), lt(communications.sendingAt, cutoff))).returning({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, applicationId: communications.applicationId, sentBy: communications.sentBy, retryOf: communications.retryOf });
+    const stale = await tx.update(communications).set({ status: "unknown", error: "interrupted while sending; delivery could not be confirmed", sendingAt: null }).where(and(eq(communications.status, "sending"), lt(communications.sendingAt, cutoff))).returning({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, applicationId: communications.applicationId, sentBy: communications.sentBy, retryOf: communications.retryOf, tags: communications.tags });
     // A decision message among them: the decision goes back to not told, and the team is asked to check (founder decision B6).
     for (const r of stale) await settleDecisionTold(tx, r, "unknown", now);
     return stale;
   });
   for (const r of rows) {
+    if (quietOnFailure(r)) continue;
     await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${r.channel} may or may not have been delivered`, body: `The process was interrupted while sending ${r.templateKey ?? "a message"}. Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: r.companyId, target: { type: "communication", id: r.id }, details: { channel: r.channel, template: r.templateKey } });
   }
   return rows.length;

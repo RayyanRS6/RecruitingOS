@@ -5,7 +5,8 @@ import { aiCreditView, assertCan, audit, entitlements, planIncludesItsPosting, r
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
-import { INVITE_ONLY_MESSAGE, createCompany, maySignUp } from "../services/companies";
+import { sendAccessRequest } from "../services/access-requests";
+import { INVITE_ONLY_MESSAGE, createCompany, signupDoor } from "../services/companies";
 import { tellItsAboutNewCompany } from "../services/company-trust";
 import { sendToIts } from "../services/escalation-queue";
 import { inviteMember, leaveCompany, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
@@ -24,12 +25,18 @@ export const companyRoutes = new Hono<Vars>();
  * By invitation (GATE-V2, SIGNUP_MODE=invite) only a platform admin or an address on SIGNUP_ALLOWED_EMAILS may create a
  * company: anyone else is refused with 403 `signup_invite_only` before the body is read. Signing in and joining a
  * company by invitation are untouched.
+ *
+ * By approval (SIGNUP_MODE=approval) those two still go in directly; anyone else signed in sends a request
+ * (services/access-requests.ts): no active company, no workflow and no public side until a platform administrator
+ * accepts. The answer is the company with `accessRequest`, and a body that is bad, or a second request, answers as above.
  */
 companyRoutes.post("/", requireUser, async (c) => {
   const s = c.get("session")!;
   const container = c.get("container");
-  if (!maySignUp(container.env, s.user)) throw new HttpError(403, "signup_invite_only", INVITE_ONLY_MESSAGE);
+  const door = signupDoor(container.env, s.user);
+  if (door === "none") throw new HttpError(403, "signup_invite_only", INVITE_ONLY_MESSAGE);
   const body = CreateCompany.parse(await c.req.json());
+  if (door === "request") return c.json(await sendAccessRequest(container, { body, user: s.user, actor: actorOf(c) }), 201);
   const autoVerify = container.env.COMPANY_CHECK === "auto";
   const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock(), mayOpenAnother: s.user.platformRole === "platform_admin" });
   await setActiveCompany(container.db, s.sessionId, company.id);

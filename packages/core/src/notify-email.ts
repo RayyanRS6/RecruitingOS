@@ -1,4 +1,4 @@
-import { NOTIFY_GROUPS, type NotifyGroup } from "@ros/contracts";
+import { NOTIFY_GROUPS, oneLine, type NotifyGroup } from "@ros/contracts";
 import { NOTIFY_ALWAYS, NOTIFY_GROUP_INFO, notifyGroupOf } from "./notify-groups";
 
 /**
@@ -74,6 +74,8 @@ const HEADLINES: Record<string, string> = {
   "candidate.unreachable": "A message to a candidate could not be delivered",
   "company.verified": "ITS confirmed your company",
   "company.unverified": "Your careers page is offline while ITS checks your company again",
+  // First sign-in asks for approval (6 November 2026).
+  "company.access_accepted": "Your request was approved",
   // The Trial plan's 30 days (founder decision L-02 B).
   "company.trial_started": "Your 30-day trial has started",
   "company.trial_ending": "Your trial ends soon",
@@ -158,7 +160,7 @@ export function renderAlertEmail(input: AlertEmailInput): { subject: string; tex
     "",
     `${headline}.`,
     "",
-    `Company: ${input.companyName}`,
+    `Company: ${oneLine(input.companyName, 120)}`,
     ...(input.roleTitle ? [`Role: ${input.roleTitle}`] : []),
     `Open it: ${input.link}`,
     "",

@@ -69,3 +69,62 @@ export type CompanyVerificationChange = z.infer<typeof CompanyVerificationChange
 /** POST /api/v1/admin/customers/:id/job-boards: ITS confirms it can sign in to the company's job-board accounts (or not any more). */
 export const JobBoardAccessChange = z.object({ confirmed: z.boolean(), note: z.string().trim().max(500).optional() }).strict();
 export type JobBoardAccessChange = z.infer<typeof JobBoardAccessChange>;
+
+/**
+ * First sign-in asks for approval (the owner's request of 6 November 2026, SIGNUP_MODE=approval). A request is a company
+ * whose owner's membership is `requested`, and `declined` once an administrator declined it. Both are memberships that
+ * are not `active`, so someone waiting has no tenant, and that is the wall. The membership's status is the one source of
+ * truth: it is never copied into `companies.settings`.
+ */
+export const ACCESS_REQUEST_STATUSES = ["requested", "declined"] as const;
+export type AccessRequestStatus = (typeof ACCESS_REQUEST_STATUSES)[number];
+
+/** Whether a membership's status means a request for access, waiting or declined, rather than someone on a team. */
+export function isAccessRequestStatus(status: string | null | undefined): status is AccessRequestStatus {
+  return status === "requested" || status === "declined";
+}
+
+/** POST /api/v1/admin/customers/:id/access: an administrator accepts or declines a request. No reason is typed. */
+export const CustomerAccessChange = z.object({
+  decision: z.enum(["accept", "decline"]),
+  confirm: z.literal(true, { message: "Confirm the decision." }),
+}).strict();
+export type CustomerAccessChange = z.infer<typeof CustomerAccessChange>;
+
+/**
+ * What that route answers. `status`: where the person stands now, `active` once they are in. `changed`: false when this
+ * press changed nothing (another administrator got there first, or a second press), and `message` says so in plain words.
+ */
+export type CustomerAccessAnswer = { ok: true; companyId: string; decision: CustomerAccessChange["decision"]; status: "active" | "declined"; changed: boolean; message: string };
+
+/**
+ * `accessRequest` on a row of GET /api/v1/admin/customers, null for any other company: the status, the person who asked,
+ * and for a declined one when and by whom, read from its `company.access_declined` event.
+ */
+export type CustomerAccessRequest = { status: AccessRequestStatus; person: { name: string | null; email: string }; declined: { at: string; by: string | null } | null };
+
+/**
+ * A person's own request, as `signup.request` on GET /api/v1/auth/config and `accessRequest` on POST /api/v1/companies say
+ * it. `emailedAt`: when the copy really left (`accessRequestEmailedAt` in the company's settings); null means no claim about
+ * email may be made on the screen.
+ */
+export type SignupRequest = { status: AccessRequestStatus; companyName: string; email: string; emailedAt: string | null };
+
+/**
+ * The `signup` part of GET /api/v1/auth/config. `mode`: SIGNUP_MODE. `allowed`: whether this person may send the company
+ * form now. `contact`: the ITS inbox to ask. `door`, only under `approval`: `direct` for a platform administrator or an
+ * address on the allow-list, `request` for anyone else signed in (the form sends a request), `none` signed out. `request`,
+ * in any mode: this person's own request, waiting or declined; with one, `allowed` is false.
+ */
+export type SignupConfig = { mode: "open" | "invite" | "approval"; allowed: boolean; contact: string; door?: "direct" | "request" | "none"; request?: SignupRequest };
+
+/**
+ * What a person typed, for one line of an email (a subject, or one "Label: value" of a body) or a request's details: as a
+ * display name in `mailbox` (packages/integrations) can never start a header of its own, this can never start a line of
+ * its own. Line breaks and other control characters become one space, runs of spaces close up, and a very long value
+ * stops at `max` characters.
+ */
+export function oneLine(value: string | null | undefined, max = 200): string {
+  const line = (value ?? "").replace(/[\s\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim();
+  return line.length > max ? line.slice(0, max).trimEnd() : line;
+}

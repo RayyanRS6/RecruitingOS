@@ -39,6 +39,11 @@ export type CompanySettings = {
   /** The one-time ITS check (founder decision B7): set and cleared from the admin console only (apps/api services/company-trust.ts). */
   verifiedAt?: string;
   verifiedBy?: Actor;
+  /**
+   * When the email saying a request for access was sent really left (apps/api services/access-requests.ts), so the waiting
+   * screen claims it only when true. Never who is waiting: that is the owner's membership status.
+   */
+  accessRequestEmailedAt?: string;
   /** Getting started (plan B2): who hid the card, the AI rules reviewed, job-board access confirmed by ITS. */
   onboarding?: CompanyOnboarding;
   /**
@@ -115,7 +120,7 @@ export const memberships = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     userId: uuid("user_id").notNull().references(() => users.id),
     role: text("role").notNull(), // owner | admin | hiring_manager | interviewer | hr | recruiter
-    status: text("status").notNull().default("active"), // invited | active | removed
+    status: text("status").notNull().default("active"), // invited | active | removed | requested | declined (a request for access: ACCESS_REQUEST_STATUSES in @ros/contracts)
     invitedBy: uuid("invited_by"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
