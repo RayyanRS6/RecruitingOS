@@ -1,13 +1,13 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, isNotNull, or, sql } from "drizzle-orm";
-import { AI_HELP_LINE, ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, MORE_JOBS_UPGRADE_QUESTION, StartIntake, TRIAL_ENDED_LINE, jobsTotalLine, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
+import { AI_HELP_BUSY_LINE, AI_HELP_LINE, ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, MORE_JOBS_UPGRADE_QUESTION, StartIntake, TRIAL_ENDED_LINE, jobsTotalLine, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeEdit, draftIntake, keepDraftFlag, requestIntakeApproval, runIntakeTurn, sessionView, startIntakeSession, type IntakeDeps, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
 import { IntakeEditError, aiCreditRoomForJob, aiCreditStanding, assertCan, can, emit, entitlements, looksLikePastedAd, normalizeFacts, notify, packetToFacts } from "@ros/core";
 import { entitlements as entitlementRows, events, intakeSessions, recruiterEscalations, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { HttpError, messageTooLong } from "../middleware/errors";
 import { POLICIES, checkRateLimits } from "../middleware/rate-limit";
-import { aiCreditRefusal, askForMoreAiHelp } from "../services/ai-credit";
+import { aiCreditRefusal, aiHelpBusy, askForMoreAiHelp, refusedForNow } from "../services/ai-credit";
 import { briefViewerOf, composeBrief } from "../services/brief";
 import { IntakeSuggestRequest, suggestForQuickStart } from "../services/intake-suggest";
 import { TRIAL_PLAN_QUESTION, companyTrialStanding } from "../services/trial";
@@ -107,9 +107,13 @@ function sessionErrors(err: unknown): never {
   throw err;
 }
 
-async function turn(container: Container, input: Parameters<typeof runIntakeTurn>[2]): Promise<IntakeTurnOutcome> {
+/** A turn as the routes read it. `busy`: refused only for money held by work still running, so nothing is used up. */
+type TurnOutcome = Exclude<IntakeTurnOutcome, { error: string }> | (Extract<IntakeTurnOutcome, { error: string }> & { busy?: boolean });
+
+async function turn(container: Container, input: Parameters<typeof runIntakeTurn>[2]): Promise<TurnOutcome> {
   try {
-    return await runIntakeTurn(container.db, deps(container), input);
+    const r = await runIntakeTurn(container.db, deps(container), input);
+    return "error" in r && r.noCredit ? { ...r, busy: await refusedForNow(container, input.companyId, r.refusedHoldUsd ?? 0) } : r;
   } catch (err) {
     return sessionErrors(err);
   }
@@ -122,9 +126,11 @@ const askRecruiterAction = (sessionId: string) => ({ kind: "ask_recruiter", labe
 /**
  * The turn as the page reads it; a failed turn says what to do next and offers a recruiter. A turn with no AI credit left
  * failed at nothing: the owner's words are saved, and the way on is to upgrade (`upgrade`), with no "try again" and no recruiter.
+ * Refused only for money held by work still running, nothing is used up: the way on is to try again in a few minutes.
  */
-function turnReply(r: IntakeTurnOutcome, sessionId: string) {
+function turnReply(r: TurnOutcome, sessionId: string) {
   if ("error" in r) {
+    if (r.busy) return { error: r.error, recovery: AI_HELP_BUSY_LINE.turn, proposedActions: [] };
     if (r.noCredit) return { error: r.error, recovery: AI_HELP_LINE.turn, proposedActions: [askForMoreAiHelp], upgrade: true };
     return { error: r.error, recovery: "Try again, or bring in a recruiter to finish it with you.", proposedActions: [askRecruiterAction(sessionId)] };
   }
@@ -352,7 +358,7 @@ intakeRoutes.post("/sessions/:id/draft", requireTenant, async (c) => {
     return sessionErrors(err);
   }
   if ("error" in out) {
-    if (out.noCredit) throw await creditRefusedDraft(c);
+    if (out.noCredit) throw await creditRefusedDraft(c, out.refusedHoldUsd ?? 0);
     throw new HttpError(502, "ai_failed", "The assistant could not write the draft. Everything you confirmed is kept. Try again, or bring in a recruiter.", { aiRunId: out.aiRunId, actions: [askRecruiterAction(row.id)] });
   }
   return c.json({ session: sessionView(await reload(container, t.companyId, row.id), t.userId), draft: out.draft });
@@ -360,12 +366,14 @@ intakeRoutes.post("/sessions/:id/draft", requireTenant, async (c) => {
 
 /**
  * The draft refused for want of AI credit. It holds more than any other call, so it stops while a little is left: then
- * saying "used up" would be false beside the percentage in Settings, and the line says what is true.
+ * saying "used up" would be false beside the percentage in Settings, and the line says what is true. Read from money actually
+ * spent, and refused only for the holds of work still running, it says to try again in a few minutes.
  */
-async function creditRefusedDraft(c: Context<Vars>): Promise<HttpError> {
+async function creditRefusedDraft(c: Context<Vars>, holdUsd: number): Promise<HttpError> {
   const t = c.get("tenant")!;
   const container = c.get("container");
-  const standing = await withTenant(container.db, t.companyId, (tx) => aiCreditStanding(tx, t.companyId, { now: container.engine.clock() }));
+  if (await refusedForNow(container, t.companyId, holdUsd)) return aiHelpBusy(AI_HELP_BUSY_LINE.draft);
+  const standing = await withTenant(container.db, t.companyId, (tx) => aiCreditStanding(tx, t.companyId, { now: container.engine.clock(), settled: true }));
   return aiCreditRefusal(t, standing && !standing.usedUp ? AI_HELP_LINE.draftTooBig : AI_HELP_LINE.draft);
 }
 
@@ -426,7 +434,7 @@ async function askForApproval(c: Context<Vars>, draftFirst: boolean) {
   }
   await container.kick();
   if ("notReady" in result) throw new HttpError(409, "not_ready", `Not ready to ask for approval yet. ${result.notReady.join(" ")}`, { blockers: result.notReady });
-  if ("error" in result && result.noCredit) throw await creditRefusedDraft(c);
+  if ("error" in result && result.noCredit) throw await creditRefusedDraft(c, result.refusedHoldUsd ?? 0);
   if ("error" in result) return c.json({ error: { code: "ai_failed", message: "The assistant could not write the draft. Everything you confirmed is kept. A recruiter can finish it with you.", details: { aiRunId: result.aiRunId, actions: [askRecruiterAction(row.id)] } } }, 502);
   return c.json({ roleId: result.roleId, version: result.version, packet: result.packet, workflowRunId }, 201);
 }
@@ -499,6 +507,7 @@ intakeRoutes.post("/conversation/messages", requireTenant, async (c) => {
   });
   if (routed.continuing && body.message.length > INTAKE_MESSAGE_MAX) throw messageTooLong(INTAKE_MESSAGE_MAX, { afterFirst: true });
   const r = await turn(container, { companyId: t.companyId, sessionId: routed.sessionId, actor, ...(routed.continuing ? { message: { content: body.message, kind: "text" as const } } : {}) });
+  if ("error" in r && r.busy) return c.json({ reply: AI_HELP_BUSY_LINE.turn, intakeSessionId: routed.sessionId, proposedActions: [] });
   if ("error" in r && r.noCredit) return c.json({ reply: AI_HELP_LINE.turn, intakeSessionId: routed.sessionId, proposedActions: [askForMoreAiHelp], upgrade: true });
   if ("error" in r) return c.json({ reply: "I hit a problem drafting that. Try again, or tap Bring in a recruiter and a person will finish it with you.", intakeSessionId: routed.sessionId, proposedActions: [askRecruiterAction(routed.sessionId)] });
   if (r.notARole) return c.json({ reply: r.turn.assistantMessage, notARole: true, proposedActions: [] });

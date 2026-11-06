@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
-import { AI_HELP_LINE, GettingStartedRequest, ITS_POSTING_UPGRADE_LINE, ITS_POSTING_UPGRADE_QUESTION, UpdateCompany, isCompanyVerified, type Actor, type NewTimesSettingView } from "@ros/contracts";
+import { AI_HELP_BUSY_LINE, AI_HELP_LINE, GettingStartedRequest, ITS_POSTING_UPGRADE_LINE, ITS_POSTING_UPGRADE_QUESTION, UpdateCompany, isCompanyVerified, type Actor, type NewTimesSettingView } from "@ros/contracts";
 import { outOfCredit } from "@ros/ai";
 import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, boardPostingOf, can, emit, newTimesSettingOf, pendingNewTimesRows, planIncludesItsPosting, revokeSessionsForCompany, setAutoState, withdrawPostingTasks, zipRecruiterOffered } from "@ros/core";
 import { auditRecords, companies, memberships, uuidv7, withPlatform, withTenant, type Tx } from "@ros/db";
@@ -9,7 +9,7 @@ import { cancelNewTimesRuns } from "@ros/workflows";
 import { actorOf, clientIp, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { assertRecentAuth } from "../middleware/reauth";
-import { aiCreditRefusal } from "../services/ai-credit";
+import { aiCreditAnswer } from "../services/ai-credit";
 import { CUSTOMER_AUDIT_ACTIONS, auditCsv, customerAuditRow, isoTime } from "../services/audit-history";
 import { AboutApproval, AboutDraftRequest, HiringContactInput, aboutWordingProblem, draftAbout, logoMemberPath, logoResponse, profileOf, publicProfileView, type SettingsWithProfile } from "../services/company-settings-profile";
 import { dismissGettingStarted, markPoliciesReviewed } from "../services/company-trust";
@@ -267,7 +267,7 @@ companySettingsRoutes.post("/current/about/draft", requireTenant, async (c) => {
   const container = c.get("container");
   const actor = actorOf(c);
   const out = await draftAbout(container, { companyId: t.companyId, actor, notes: body.notes || null });
-  if (outOfCredit(out)) throw aiCreditRefusal(t, AI_HELP_LINE.about);
+  if (outOfCredit(out)) throw await aiCreditAnswer(container, t, out.refusedHoldUsd, { usedUp: AI_HELP_LINE.about, busy: AI_HELP_BUSY_LINE.about });
   if (!out.ok) throw new HttpError(502, "about_draft_failed", "The assistant could not write a draft just now. Try again in a minute, or write the text yourself.");
   const row = await withTenant(container.db, t.companyId, (tx) => changeProfile(c, tx, t.companyId, "the assistant drafted the text about the company", (settings, { now }) => {
     settings.aboutDraft = { text: out.output.text, draftedAt: now, draftedBy: actor, aiRunId: out.runId, basedOn: out.output.basedOn };

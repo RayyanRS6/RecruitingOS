@@ -34,16 +34,18 @@ export type AiRuntime = {
  * `no_credit`: the company's AI credit has no room for this call, so the model was not asked and no run was written (its
  * `runId` names no row). Never an outage, never a failure, never retried: each caller has its own way on. The text must
  * never start with "provider", which is how the engine knows an outage (packages/workflows/src/engine.ts, `providerProblem`).
+ * `refusedHoldUsd`: what was asked for and refused, side-by-side calls together: with what is actually spent, it says whether
+ * the credit is really gone or only held for calls still running (`aiCreditRoomSoon` in packages/core/src/ai-credit.ts).
  */
 export type RunOutcome<T> =
   | { ok: true; output: T; runId: string; model: string }
-  | { ok: false; runId: string; model: string; reason: "refused" | "invalid" | "error" | "no_credit"; error: string };
+  | { ok: false; runId: string; model: string; reason: "refused" | "invalid" | "error" | "no_credit"; error: string; refusedHoldUsd?: number };
 
 /** Why a call was not made when the company's AI credit has no room for it (`RunOutcome`). */
 export const AI_CREDIT_USED_UP = "AI credit used up";
 
 /** Whether the model was not asked because the company's AI credit has no room: not a failure of any kind. */
-export function outOfCredit<T>(out: RunOutcome<T>): out is Extract<RunOutcome<T>, { ok: false }> & { reason: "no_credit" } {
+export function outOfCredit<T>(out: RunOutcome<T>): out is Extract<RunOutcome<T>, { ok: false }> & { reason: "no_credit"; refusedHoldUsd: number } {
   return !out.ok && out.reason === "no_credit";
 }
 
@@ -190,13 +192,14 @@ export async function runPromptsDetached<TInput, TOutput>(db: Db, rt: AiRuntime,
   const holds = metas.map((meta) => creditHoldUsd(model, { promptChars, maxTokens: meta.maxTokens }));
   const runIds = metas.map(() => uuidv7());
   const hash = promptHash(system);
+  const holdUsd = holds.reduce((sum, hold) => sum + hold, 0);
   const verdict = await gate.hold(db, {
     companyId,
-    holdUsd: holds.reduce((sum, hold) => sum + hold, 0),
+    holdUsd,
     runs: metas.map((meta, i) => ({ id: runIds[i], ...runIdentity(rt, prompt, meta, model, hash), inputRef: meta.inputRef ?? {}, costUsd: String(holds[i]), status: "running" })),
   });
   if (verdict === "unmetered") return Promise.all(metas.map((meta) => callThenRecord(db, rt, prompt, input, meta)));
-  if (verdict === "refused") return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "no_credit", error: AI_CREDIT_USED_UP }));
+  if (verdict === "refused") return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "no_credit", error: AI_CREDIT_USED_UP, refusedHoldUsd: holdUsd }));
   return Promise.all(
     metas.map(async (meta, i) => {
       const call = await callPrompt(rt, prompt, input, meta);

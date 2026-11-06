@@ -189,6 +189,8 @@ export const AI_HELP_UPGRADE_QUESTION = "We would like more AI help.";
 const USED_UP = "Your plan's AI help is used up.";
 /** A call too big for what is left: the credit is not all gone, so it does not say so. */
 const NEARLY_USED_UP = "Your plan's AI help is nearly used up";
+/** A call refused only for money held by work still running: nothing is used up, and it comes back within minutes. */
+const BUSY = "Your plan's AI help is finishing other work.";
 
 /**
  * What the owner reads when the AI help stops something they asked for: words only, never dollars
@@ -207,6 +209,14 @@ export const AI_HELP_LINE = {
   /** A new job, before anyone types. */
   newJob: `${USED_UP} Upgrade to keep going.`,
   newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. Upgrade to keep going.`,
+} as const;
+
+/** The same calls refused only for money held by work still running: here, and only here, what is true is to try again. */
+export const AI_HELP_BUSY_LINE = {
+  turn: `${BUSY} Your draft is saved. Try again in a few minutes.`,
+  draft: `${BUSY} Everything you confirmed is kept. Try again in a few minutes.`,
+  revise: `${BUSY} Nothing was changed. Try again in a few minutes, or make the change in the editor.`,
+  about: `${BUSY} Try again in a few minutes, or write this text yourself; it shows the same way.`,
 } as const;
 
 /** Where the AI credit stands for the owner: at the 80% line, used up, or neither. */

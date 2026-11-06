@@ -114,11 +114,39 @@ export async function aiCreditResetsAt(q: Queryable, companyId: string, opts: { 
 }
 
 /**
+ * A call the credit refused, read again from money actually spent: true when it fits without the holds of calls still running,
+ * so it will fit once they settle (a draft holds about $0.80 for two minutes and comes back at about $0.10), or it fits now, on
+ * a new plan or in a new month. False is a credit really gone for this call: what is spent refuses it by itself, and money
+ * spent never comes back within a period. The rule `tellOwner` reads for a refusal, row by row as the gate reads them.
+ */
+export async function aiCreditRoomSoon(q: Queryable, input: { companyId: string; holdUsd: number; now: Date }): Promise<boolean> {
+  const rows = await q.select().from(entitlements).where(and(eq(entitlements.companyId, input.companyId), limitedRows())).orderBy(asc(entitlements.key));
+  const hold = toMicros(input.holdUsd);
+  for (const row of rows) {
+    const spent = await aiCreditSpentMicros(q, input.companyId, { since: sinceOf(row, input.now), settled: true });
+    if (spent + hold > roomMicros(row)) return false;
+  }
+  return true;
+}
+
+/**
+ * Holds the company's credit rows until the caller's transaction ends, for a step about to wait for credit. A refusal and the
+ * wait that follows are two moments, and a change of plan's signal between them finds nobody waiting. Behind this the two
+ * take turns: a change of plan in progress has finished by the next statement, so that statement reads the new plan; or it
+ * waits for this commit before it writes, and its signal then finds the run waiting. Shared, because such steps need not wait
+ * for each other, and one row is locked (a plan limits one credit), so no order of locks can meet another's.
+ */
+export async function holdAiCreditRows(q: Queryable, companyId: string): Promise<void> {
+  await q.select({ id: entitlements.id }).from(entitlements).where(and(eq(entitlements.companyId, companyId), limitedRows())).orderBy(asc(entitlements.key)).for("share");
+}
+
+/**
  * Whether a new job could be written with what is left (the draft is the dearest call, so it is the first to stop): `ok`,
  * `too_low` for a draft, or `used_up`. Asked before anyone types (`planRoom`), so nobody fills in a job the AI cannot write.
+ * From money actually spent, as Home's row is: the hold of a draft still running comes back long before anyone has typed.
  */
 export async function aiCreditRoomForJob(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<"ok" | "too_low" | "used_up"> {
-  const s = await aiCreditStanding(q, companyId, opts);
+  const s = await aiCreditStanding(q, companyId, { now: opts.now, settled: true });
   if (!s) return "ok";
   if (s.usedUp) return "used_up";
   return s.spentMicros + toMicros(AI_CREDIT_DRAFT_HOLD_USD) > s.limitMicros - SLACK ? "too_low" : "ok";

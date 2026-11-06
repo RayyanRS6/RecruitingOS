@@ -369,12 +369,14 @@ export const applicationIntake: WorkflowDefinition<State> = {
         // person: the owner's one notice is about the company. The run waits, and comes back through `extract` after an
         // upgrade or at the next month, where a late reading is stored beside whatever happened since and moves nothing.
         if (outOfCredit(out)) {
+          const { roomSoon, wait } = await waitForCredit(ctx, "extract", out.refusedHoldUsd, { creditWaitSince: ctx.state.creditWaitSince ?? ctx.now.toISOString() });
           if (!ctx.state.creditWaitSince && !beside) {
-            if (!withInterview && !(await interviewNow(ctx))) await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "not read by AI: the plan's AI help is used up; manual review", correlationId: ctx.run.id });
-            await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { assessmentId: null, recommendation: "review_manually", reason: "the plan's AI help is used up" }, correlationId: ctx.run.id });
+            const why = roomSoon ? "the plan's AI help is finishing other work" : "the plan's AI help is used up";
+            if (!withInterview && !(await interviewNow(ctx))) await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: `not read by AI: ${why}; manual review`, correlationId: ctx.run.id });
+            await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { assessmentId: null, recommendation: "review_manually", reason: why }, correlationId: ctx.run.id });
           }
           await settleReading(ctx, null);
-          return waitForCredit(ctx, "extract", { creditWaitSince: ctx.state.creditWaitSince ?? ctx.now.toISOString() });
+          return wait;
         }
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };

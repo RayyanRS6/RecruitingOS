@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_LINE, FREE_PLAN_KEY, MORE_CANDIDATES_UPGRADE_QUESTION, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, mayOfferUpgrade, planChangedWords, planRequestQuestion, publicPlanView } from "./plans";
+import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_BUSY_LINE, AI_HELP_LINE, FREE_PLAN_KEY, MORE_CANDIDATES_UPGRADE_QUESTION, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, mayOfferUpgrade, planChangedWords, planRequestQuestion, publicPlanView } from "./plans";
 
 describe("asking for a bigger plan", () => {
   it("offers an upgrade on every plan but the last public one and the private pilot, read from the list", () => {
@@ -79,6 +79,14 @@ describe("what a customer may read about a plan", () => {
     expect(AI_HELP_LINE.draft).toBe("Your plan's AI help is used up. Everything you confirmed is kept. Upgrade to write the draft.");
     expect(AI_HELP_LINE.revise).toBe("Your plan's AI help is used up. Nothing was changed. You can still make the change in the editor.");
     expect(AI_HELP_LINE.about).toBe("Your plan's AI help is used up. You can write this text yourself; it shows the same way.");
+  });
+
+  it("refused only for money held by work still running, it says to try again, and neither that anything is used up nor to upgrade", () => {
+    for (const line of Object.values(AI_HELP_BUSY_LINE)) {
+      expect(line).toMatch(/^Your plan's AI help is finishing other work\. /);
+      expect(line).toMatch(/try again in a few minutes/i);
+      expect(line).not.toMatch(/\$|\bdollars?\b|\bcents?\b|\bcredit\b|used up|upgrade|recruiter/i);
+    }
   });
 
   it("says when a monthly credit starts again, and only then", () => {

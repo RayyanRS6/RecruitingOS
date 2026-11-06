@@ -424,7 +424,7 @@ export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number;
 export type IntakeTurnInput = { companyId: string; sessionId: string; actor: Actor; message?: { content: string; kind?: IntakeMessage["kind"] } };
 export type IntakeTurnOk = { turn: IntakeTurn; aiRunId: string; notARole: boolean; benchmark: PayBenchmark | null; benchmarkGap: "basis_unknown" | "no_market_figure" | null };
 /** `noCredit`: the company's AI credit has no room, so the model was not asked: no failure, and the owner's way on is to upgrade. */
-export type IntakeTurnOutcome = IntakeTurnOk | { error: string; aiRunId: string; noCredit?: boolean };
+export type IntakeTurnOutcome = IntakeTurnOk | { error: string; aiRunId: string; noCredit?: boolean; refusedHoldUsd?: number };
 
 /**
  * The cheap first read of a pasted ad (C5), once per draft, before the market check: the title, the place, the basis
@@ -515,7 +515,7 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
   const turnNo = inputs.session.messages.filter((m) => m.role === "owner").length;
   const out = await runPromptDetached(db, deps.ai, intakeTurnPrompt, contextFrom(inputs, bench), { companyId: input.companyId, inputRef: { sessionId: input.sessionId, turn: inputs.session.messages.length }, deadlineAt });
   // The owner's words are saved above, and nothing failed: the route offers an upgrade.
-  if (outOfCredit(out)) return { error: out.error, aiRunId: out.runId, noCredit: true };
+  if (outOfCredit(out)) return { error: out.error, aiRunId: out.runId, noCredit: true, refusedHoldUsd: out.refusedHoldUsd };
   const agent: Actor = { kind: "agent", id: "intake", runId: out.runId };
   return withTenant(db, input.companyId, async (q) => {
     const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
@@ -648,7 +648,7 @@ export async function applyIntakeEdit(db: Db, input: { companyId: string; sessio
 }
 
 /** `noCredit`: the company's AI credit has no room for the draft, so the model was not asked: no failure, and the way on is to upgrade. */
-export type DraftOutcome = { draft: DraftRolePacket; aiRunId: string } | { error: string; aiRunId: string; noCredit?: boolean };
+export type DraftOutcome = { draft: DraftRolePacket; aiRunId: string } | { error: string; aiRunId: string; noCredit?: boolean; refusedHoldUsd?: number };
 
 async function setProgress(db: Db, companyId: string, sessionId: string, stage: NonNullable<IntakeServerState["progress"]>["stage"]): Promise<void> {
   await withTenant(db, companyId, async (q) => {
@@ -698,7 +698,7 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
   const out = await runPromptDetached(db, deps.ai, intakeCompilePrompt, ctx, { companyId: input.companyId, inputRef: { sessionId: input.sessionId }, maxTokens: INTAKE_COMPILE_MAX_TOKENS, deadlineAt });
   if (outOfCredit(out)) {
     await putProgressBack(db, input.companyId, input.sessionId, progressBefore);
-    return { error: out.error, aiRunId: out.runId, noCredit: true };
+    return { error: out.error, aiRunId: out.runId, noCredit: true, refusedHoldUsd: out.refusedHoldUsd };
   }
   const agent: Actor = { kind: "agent", id: "intake", runId: out.runId };
   if (!out.ok) {
@@ -827,7 +827,7 @@ function benchmarkOf(b: NonNullable<IntakeContext["benchmark"]>): PayBenchmark {
 }
 
 export type CompiledIntake = { roleId: string; packet: RolePacket; version: number; aiRunId: string };
-export type ApprovalAsk = CompiledIntake | { error: string; aiRunId: string; noCredit?: boolean } | { notReady: string[] };
+export type ApprovalAsk = CompiledIntake | { error: string; aiRunId: string; noCredit?: boolean; refusedHoldUsd?: number } | { notReady: string[] };
 
 /**
  * "Ask for approval" (C7): creates the role and packet version 1 and hands the transaction to `finalize` (the caller
