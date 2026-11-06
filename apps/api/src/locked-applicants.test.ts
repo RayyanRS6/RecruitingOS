@@ -3,9 +3,9 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
 import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
 import { CANDIDATE_WROTE_BACK, CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileNoDateLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
-import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, interviews, jobs, notifications, plans, policies, postings, recruiterEscalations, roles, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, interviews, jobs, lowercaseToken, notifications, plans, policies, postings, randomToken, recruiterEscalations, roles, rowsOf, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider, type MemoryStorageAdapter } from "@ros/integrations";
-import { DISCARD_OBJECT_JOB_KIND, UNLOCK_INTERVIEW_DAYS, discardUnusedObject, startInterviewAgain } from "@ros/workflows";
+import { DISCARD_OBJECT_JOB_KIND, UNLOCK_INTERVIEW_DAYS, discardUnusedObject, startInterviewAgain, unlockApplicants } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { RESUME_READ_NOTICE } from "./pages/apply-form";
@@ -1430,6 +1430,49 @@ describe("locked candidates", () => {
   });
 
   describe("a change of plan", () => {
+    it("takes the lock of every job, also one with nobody locked yet, so the first person past the limit never stays locked under a plan with room", async () => {
+      // A Free job with exactly its 5, and a second job nobody applied to. Number 6 is being decided at this very moment, on Free's old limit.
+      const company = await newCompany();
+      await usePlan(container, company.id, "basic");
+      const job = await openRole(company);
+      const empty = await openRole(company);
+      await usePlan(container, company.id, "free");
+      const five = await fill(job, 5);
+      expect(five.every((r) => r.lockedAt === null)).toBe(true);
+      const numberSix = person("Six");
+      await usePlan(container, company.id, "basic");
+      let six = "";
+      const out = await withPlatform(container.db, async (tx) => {
+        // PGlite has one connection, so the applicant's transaction cannot really run beside this one. What it can show is the
+        // order: by the time Change plan holds the job's lock, number 6 has committed, on the old limit, and nothing was locked when the jobs were listed.
+        const watched = new Proxy(tx, {
+          get(target, prop) {
+            if (prop !== "execute") return Reflect.get(target, prop);
+            return async (statement: Parameters<typeof tx.execute>[0]) => {
+              if (!six) {
+                const [cand] = await target.insert(candidates).values({ companyId: company.id, firstName: numberSix.first, lastName: numberSix.last, email: numberSix.email, dedupeKey: `email:${numberSix.email}`, firstSource: "careers_page", consent: {} }).returning({ id: candidates.id });
+                const [row] = await target.insert(applications).values({ companyId: company.id, roleId: job.roleId, candidateId: cand.id, packetVersion: five[0].packetVersion, source: "careers_page", stage: "received", answers: {}, statusToken: randomToken(24), replyToken: lowercaseToken(16), lockedAt: new Date().toISOString() }).returning({ id: applications.id });
+                six = row.id;
+              }
+              return target.execute(statement);
+            };
+          },
+        });
+        const opened = await unlockApplicants(watched, container.engine, { companyId: company.id, planKey: "basic", actor: { kind: "system", id: "test" }, reason: "They asked to upgrade.", now: new Date() });
+        // Behind each job's lock, in the same transaction: both jobs' locks are held until it commits, so an applicant can only wait and read the new limit.
+        const keys = rowsOf<{ a: string; b: string }>(await tx.execute(sql`select (hashtext(${`applicants:${job.roleId}`})::bigint & 4294967295)::text as a, (hashtext(${`applicants:${empty.roleId}`})::bigint & 4294967295)::text as b`))[0];
+        const held = rowsOf<{ objid: string }>(await tx.execute(sql`select objid::text as objid from pg_locks where locktype = 'advisory' and granted`)).map((r) => r.objid);        return { opened, keys, held };
+      });
+      expect(out.opened.unlocked).toBe(1);
+      expect((await applicationOf(six)).lockedAt).toBeNull();
+      expect(out.held).toContain(out.keys.a);
+      expect(out.held).toContain(out.keys.b);
+      // and nobody overtakes: 6 of Basic's 25 are visible, and the next to apply is number 7, visible too
+      await container.drain();
+      const seven = await apply(job, person("Sev"));
+      expect(seven.lockedAt).toBeNull();
+    });
+
     it("a move down locks nobody who could be read, and new arrivals follow the new limit", async () => {
       const company = await newCompany();
       await usePlan(container, company.id, "pro");

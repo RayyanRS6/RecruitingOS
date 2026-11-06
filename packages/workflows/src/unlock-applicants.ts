@@ -1,4 +1,4 @@
-import { and, asc, count, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import { CLOSE_OUT_TEMPLATE } from "@ros/agents";
 import type { Actor } from "@ros/contracts";
 import { audit, emit, entitlements, evaluateEligibility, lockApplicants, lockedAndWaiting, transition } from "@ros/core";
@@ -26,13 +26,15 @@ const CLOSE_OUT_LEFT = ["sending", "sent", "delivered", "opened", "clicked", "un
  * they are.
  *
  * Runs in the transaction that changed the plan, behind each job's lock, so an application being decided at this moment takes
- * its place before this or under the new limit after it. Returns how many were opened, and how many of them go on to the
- * interview by themselves.
+ * its place before this or under the new limit after it. Every job of the company, in id order, also one with nobody locked
+ * yet: the first person past the limit may be being decided right now, on the old limit, in a transaction nothing here can
+ * see. Behind the lock they have either committed, and are read and opened, or they wait, and read the new limit. Returns how
+ * many were opened, and how many of them go on to the interview by themselves.
  */
 export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; planKey: string; actor: Actor; reason: string; now: Date }): Promise<{ unlocked: number; interviews: number }> {
   const { companyId, planKey, actor, now } = input;
   const limit = await entitlements.limitOf(q, companyId, entitlements.CANDIDATES_PER_JOB);
-  const jobs = await q.selectDistinct({ roleId: applications.roleId }).from(applications).where(and(eq(applications.companyId, companyId), isNotNull(applications.lockedAt))).orderBy(asc(applications.roleId));
+  const jobs = await q.select({ roleId: roles.id }).from(roles).where(eq(roles.companyId, companyId)).orderBy(asc(roles.id));
   let unlocked = 0;
   let interviews = 0;
   for (const { roleId } of jobs) {
