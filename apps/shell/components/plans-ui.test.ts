@@ -114,6 +114,13 @@ describe("the one Upgrade and its sheet", () => {
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Ask ITS to upgrade/);
   });
 
+  it("on a plan not in the list (the pilot, Trial, a retired one) Free is not chosen for them: they pick one, or ask with none picked", () => {
+    const html = sheet({ requested: false, plans: plans.plans.map((p) => ({ ...p, current: false })) });
+    expect(html.match(/type="radio"/g)).toHaveLength(4);
+    expect(html).not.toContain('checked=""');
+    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS to upgrade<\/button>/);
+  });
+
   it("says softly that ITS has the request, and asks nothing more", () => {
     const words = text(sheet({ ...plans, requested: true }));
     expect(words).toContain("ITS has your request.");

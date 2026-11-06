@@ -22,9 +22,14 @@ export function planFacts(plan: PublicPlan): Array<{ label: string; value: strin
   ];
 }
 
-/** The plan already chosen when the sheet opens: the next one above the company's, or the first when it is on none of them. On the last, none: a plan below is never chosen for anyone. */
+/**
+ * The plan already chosen when the sheet opens: the next one above the company's. None on the last plan, and none on a plan
+ * that is not in the list (the private pilot, Trial, a retired one), where the first of the list would be Free: a plan below is
+ * never chosen for anyone. They can still pick one, or ask with none picked.
+ */
 export function firstChoice(plans: readonly PublicPlan[]): PublicPlan | null {
-  return plans[plans.findIndex((p) => p.current) + 1] ?? null;
+  const at = plans.findIndex((p) => p.current);
+  return at < 0 ? null : plans[at + 1] ?? null;
 }
 
 /** An action the API offers (a card's, a refusal's) that is a request about the plan: it opens the upgrade sheet, never sends in one click. */

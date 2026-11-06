@@ -20,6 +20,14 @@ export function requestState(status: string): RequestState {
 
 export const STATE_WORDS: Record<RequestState, string> = { waiting: "Waiting for a recruiter", working: "A recruiter is on it", answered: "Answered", cancelled: "Cancelled" };
 
+/** A request's state on the team's list. A talk about the plan is with ITS: no recruiter is working on their hiring. */
+export function requestStateWords(r: Pick<RecruiterRequestView, "status"> & Partial<Pick<RecruiterRequestView, "topic">>): string {
+  const state = requestState(r.status);
+  if (r.topic === "plan" && state === "waiting") return "Waiting for ITS";
+  if (r.topic === "plan" && state === "working") return "ITS is on it";
+  return STATE_WORDS[state];
+}
+
 const closedAt = (r: RecruiterRequestView) => Date.parse(r.resolvedAt ?? r.createdAt);
 const dueAt = (r: RecruiterRequestView) => (r.slaDueAt ? Date.parse(r.slaDueAt) : Number.POSITIVE_INFINITY);
 

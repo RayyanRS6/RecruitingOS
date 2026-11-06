@@ -1,7 +1,7 @@
 import {
   formatPayRange, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, PACKET_VISIBILITY_LABEL, packetVisibility,
   type DraftRolePacket, type IntakeAnswer, type IntakeFacts, type IntakePayCard, type IntakeProgressStage, type IntakeQuestion, type IntakeQuestionField,
-  type IntakeReadiness, type IntakeSessionView, type PacketVisibility,
+  type IntakeReadiness, type IntakeSessionView, type PacketVisibility, type PlanRoom,
 } from "@ros/contracts";
 import type { StepState } from "@ros/ui";
 import { START_HIRE_HREF } from "../../start-hire";
@@ -629,6 +629,15 @@ export function turnProblem(reply: { error?: string; recovery?: string; proposed
  */
 export function problemAsk(err: { details?: unknown } | null | undefined, recruiter: RecruiterAction): RecruiterAction | null {
   return askFromDetails(err?.details) ?? ((err?.details as { upgrade?: unknown } | null | undefined)?.upgrade ? null : recruiter);
+}
+
+/**
+ * What the builder says as a draft opens: the plan has no room for another job, whatever is closed, so nobody spends time on
+ * it (the routes that write it refuse too). A draft already written needs no more AI help to go for approval, so that one
+ * reason stays quiet there.
+ */
+export function draftNoRoom(room: PlanRoom | null | undefined, hasDraft: boolean): PlanRoom | null {
+  return room && !room.ok && room.upgrade && !(room.aiHelp && hasDraft) ? room : null;
 }
 
 /**

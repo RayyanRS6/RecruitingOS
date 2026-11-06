@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { AI_HELP_LINE, type PublicPlan } from "../../packages/contracts/src";
 import { boardLockedWords, cannotSeeYetWords, firstChoice, isPlanAsk, moreLockedWords, planFacts, priceWords, reasonOf, reportLockedLabel } from "../../apps/web/src/upgrade";
-import { problemAsk, turnProblem } from "../../apps/web/src/pages/new-role/rules";
-import { aboutWords, reopenHint } from "../../apps/web/src/recruiter-requests";
+import { draftNoRoom, problemAsk, turnProblem } from "../../apps/web/src/pages/new-role/rules";
+import { aboutWords, reopenHint, requestStateWords } from "../../apps/web/src/recruiter-requests";
 import { presetOf } from "../../apps/web/src/recruiter-access";
 
 /**
@@ -32,13 +32,13 @@ describe("what the sheet says of each plan", () => {
     for (const p of [free, basic, pro, ultra]) expect(JSON.stringify(planFacts(p))).not.toMatch(/\$|cents/);
   });
 
-  it("chooses the next plan up to start with; a company on no public plan starts on the first, and on the top none is chosen for it", () => {
+  it("chooses the next plan up to start with; on the top, or on a plan not in the list, none is chosen, so nobody is moved down by default", () => {
     const all = (current: string) => [free, basic, pro, ultra].map((p) => ({ ...p, current: p.key === current }));
     expect(firstChoice(all("free"))?.key).toBe("basic");
     expect(firstChoice(all("basic"))?.key).toBe("pro");
     expect(firstChoice(all("pro"))?.key).toBe("ultra");
-    expect(firstChoice(all("growth"))?.key).toBe("free");
     expect(firstChoice(all("ultra"))).toBeNull();
+    for (const elsewhere of ["growth", "trial", "design_partner"]) expect(firstChoice(all(elsewhere)), elsewhere).toBeNull();
     expect(firstChoice([])).toBeNull();
   });
 });
@@ -61,6 +61,14 @@ describe("what a request about the plan is", () => {
     expect(reopenHint("Kai", null, 14)).toBe("Reopening sets a new reply-by time, and it goes back to ITS.");
     expect(reopenHint("Kai", "this role and its candidates", 14)).toContain("this role and its candidates");
   });
+
+  it("while it is open it is with ITS, and no recruiter is working on their hiring; any other request reads as it always did", () => {
+    expect(requestStateWords({ status: "open", topic: "plan" })).toBe("Waiting for ITS");
+    expect(requestStateWords({ status: "claimed", topic: "plan" })).toBe("ITS is on it");
+    expect(requestStateWords({ status: "resolved", topic: "plan" })).toBe("Answered");
+    expect(requestStateWords({ status: "open" })).toBe("Waiting for a recruiter");
+    expect(requestStateWords({ status: "in_progress" })).toBe("A recruiter is on it");
+  });
 });
 
 describe("out of AI help, or out of jobs, in the job builder", () => {
@@ -82,6 +90,24 @@ describe("out of AI help, or out of jobs, in the job builder", () => {
     expect(problemAsk({ details: { upgrade: true, actions: [] } }, recruiter)).toBeNull();
     expect(problemAsk({ details: {} }, recruiter)).toBe(recruiter);
     expect(problemAsk(null, recruiter)).toBe(recruiter);
+  });
+});
+
+describe("what the builder says as a draft opens", () => {
+  const oneJob = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", upgrade: true };
+  const noHelp = { ...oneJob, used: 0, message: "Your plan's AI help is used up. Upgrade to keep going.", aiHelp: true };
+
+  it("no room for another job, written or not; no AI help only before it is written, since sending a draft for approval uses none", () => {
+    expect(draftNoRoom(oneJob, false)).toBe(oneJob);
+    expect(draftNoRoom(oneJob, true)).toBe(oneJob);
+    expect(draftNoRoom(noHelp, false)).toBe(noHelp);
+    expect(draftNoRoom(noHelp, true)).toBeNull();
+  });
+
+  it("nothing while there is room, or when closing a role could still free one", () => {
+    expect(draftNoRoom({ ok: true, limit: 1, used: 0, holding: [], message: null }, false)).toBeNull();
+    expect(draftNoRoom({ ok: false, limit: 2, used: 2, holding: [], message: "Your plan includes 2 roles at a time." }, false)).toBeNull();
+    expect(draftNoRoom(undefined, false)).toBeNull();
   });
 });
 

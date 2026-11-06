@@ -7,7 +7,7 @@ import { Alert, Button, Card, Chip, cn, Field, Pill, type Tone } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { useSearchParams } from "../nav";
 import { ACCESS_DAYS, accessWords } from "../recruiter-access";
-import { REOPEN_MIN, STATE_WORDS, aboutWords, askedByWords, latestAnswer, pickedUpWords, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, type RequestState } from "../recruiter-requests";
+import { REOPEN_MIN, aboutWords, askedByWords, latestAnswer, pickedUpWords, reopenHint, replyByWords, requestActions, requestState, requestStateWords, splitRequests, threadHeading, type RequestState } from "../recruiter-requests";
 import { TODAY_REFRESH } from "../today";
 import { toast } from "../toast";
 import { useAskRole } from "./use-ask-role";
@@ -116,7 +116,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
         <span className="row gap-1.5">
           {r.urgency === "high" || r.urgency === "critical" ? <Chip tone="caution">Urgent</Chip> : null}
           {r.reopenedCount ? <Chip>Reopened</Chip> : null}
-          <Pill size="sm" tone={STATE_TONE[state]}>{STATE_WORDS[state]}</Pill>
+          <Pill size="sm" tone={STATE_TONE[state]}>{requestStateWords(r)}</Pill>
         </span>
       </div>
       <p className="small muted mt-0.5">{[askedByWords(r.askedBy), replyByWords(r, now), picked].filter(Boolean).join(" · ")}</p>

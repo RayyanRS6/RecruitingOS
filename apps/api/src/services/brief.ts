@@ -1,10 +1,10 @@
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPlanRequest, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, type FollowUpView } from "@ros/core";
 import { withoutLockedApprovals, withoutLockedEvents } from "./locked-visibility";
 import { askToViewMore } from "../middleware/candidate-lock";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
-import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, MORE_CANDIDATES_LINE, companyOnboarding, companyVerifiedAt, moreAppliedTitle, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
+import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, MORE_CANDIDATES_LINE, PLAN_REQUEST_OPEN_LINE, companyOnboarding, companyVerifiedAt, moreAppliedTitle, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
 import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
@@ -343,8 +343,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const readsRequests = !viewer || can(viewer.role, "escalation.create");
   for (const e of escalations) {
     // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
-    // request from before 13 October 2026 in plain words, never the technical error (before it is cut to length).
-    cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: withoutSentimentWords(plainRequestText(e.question, e.requestedBy.kind)).slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
+    // request from before 13 October 2026 in plain words, never the technical error (before it is cut to length). A talk about
+    // the plan is with ITS, as the upgrade sheet said: no recruiter is working on their hiring.
+    cards.push({ kind: "escalation", title: isPlanRequest(e) ? PLAN_REQUEST_OPEN_LINE : e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: withoutSentimentWords(plainRequestText(e.question, e.requestedBy.kind)).slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
   }
   // Getting started leads Today until the company is set up; its steps step aside once real decisions are waiting. Its
   // "Start your first role" makes the empty card's "Start a hire" redundant, so that card is left out while it shows.

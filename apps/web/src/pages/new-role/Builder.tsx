@@ -26,7 +26,7 @@ import { quickStartDraftKey } from "./quick-start";
 import { RoomAlert } from "./StartView";
 import {
   NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersFirst, answersPayload, approvalHelp, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
-  blockersHeading, draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, problemAsk, refusedLines, turnProblem, typeInstead, typedWithCards,
+  blockersHeading, draftNoRoom, draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, problemAsk, refusedLines, turnProblem, typeInstead, typedWithCards,
   type Deck, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
 } from "./rules";
 import { CHANGE_REQUEST_MAX, asksBack, checkSignature, proposalSections, refinePaths } from "./refine-api";
@@ -61,10 +61,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Member[]>("/api/v1/companies/current/members") });
   const team: TeamPick[] = (members.data ?? []).filter((m) => m.status === "active").map((m) => ({ userId: m.userId, name: m.name ?? m.email, role: m.role }));
   const view = session.data?.session ?? null;
-  // A plan with no room for another job, whatever is closed: said as the draft opens, before anyone spends time on it (the
-  // routes that write it refuse too).
   const mine = useQuery({ queryKey: ["intake", "mine"], queryFn: () => api.get<{ sessions: IntakeSessionSummary[]; room: PlanRoom }>("/api/v1/intake/sessions?mine=1") });
-  const noRoom = mine.data?.room && !mine.data.room.ok && mine.data.room.upgrade ? mine.data.room : null;
+  const noRoom = draftNoRoom(mine.data?.room, !!view?.readiness.hasDraft);
 
   const [problem, setProblem] = useState<Problem | null>(() => {
     const p = turnProblem(qc.getQueryData<IntakeTurnReply>(["intake", "first-reply", sessionId]) ?? null);

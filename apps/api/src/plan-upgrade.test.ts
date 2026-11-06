@@ -130,6 +130,9 @@ describe("asking for a bigger plan, and who does the work", () => {
       expect((await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.companyId, co.id))).filter((e) => e.kind === "ask")).toHaveLength(1);
       expect((await rowOf(first.id)).question).toBe("We would like to move to the Pro plan.");
       expect((await read<PublicPlans>(await json(co.cookie, "GET", "/api/v1/plans"))).requested).toBe(true);
+      // Home says it is with ITS, not that a recruiter will pick up their hiring
+      const brief = await read<{ cards: Array<{ kind: string; title: string; body: string }> }>(await json(co.cookie, "GET", "/api/v1/brief"));
+      expect(brief.cards.filter((c) => c.kind === "escalation").map((c) => [c.title, c.body])).toEqual([[PLAN_REQUEST_OPEN_LINE, "We would like to move to the Pro plan."]]);
       // anyone who may ask gets the same soft answer; an interviewer may not ask
       const hm = await signInAs(container, app, { companyId: co.id, role: "hiring_manager" });
       expect(await read(await askPlan(hm))).toMatchObject({ id: first.id, message: PLAN_REQUEST_OPEN_LINE });
@@ -138,6 +141,8 @@ describe("asking for a bigger plan, and who does the work", () => {
       // an ordinary request still says what it gives
       const other = await json(co.cookie, "POST", "/api/v1/escalations", { kind: "ask", scope: "company", question: "Help with our pay bands?" });
       expect((await read<{ message: string }>(other)).message).toContain("all of your hiring: every role and every candidate");
+      const titles = (await read<{ cards: Array<{ kind: string; title: string }> }>(await json(co.cookie, "GET", "/api/v1/brief"))).cards.filter((c) => c.kind === "escalation").map((c) => c.title);
+      expect(titles.sort()).toEqual(["A recruiter will pick this up", PLAN_REQUEST_OPEN_LINE]);
     });
 
     it("two asked at once raise one request", async () => {
