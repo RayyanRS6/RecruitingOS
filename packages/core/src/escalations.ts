@@ -253,6 +253,17 @@ export async function settleRetriedRunRequest(q: Queryable, input: { escalationI
   return "resolved";
 }
 
+/** What a request's thread says when the candidate it is about writes back: never their words, which stay on the application's own thread. */
+export const CANDIDATE_WROTE_BACK = "Their message is on the Messages tab of their page.";
+
+/**
+ * Someone the team cannot read wrote back while a recruiter holds the request about them (the plans of 5 November 2026, Rule 2):
+ * one wordless line on its thread, which nobody at the company reads while they are locked. The caller tells the holder too.
+ */
+export async function noteCandidateWroteBack(q: Queryable, input: { escalation: Pick<EscalationRow, "id" | "companyId">; candidateId: string; now?: Date }): Promise<EscalationMessageRow> {
+  return insertMessage(q, { escalation: input.escalation, side: "customer", kind: "reply", author: { kind: "candidate", id: input.candidateId }, body: CANDIDATE_WROTE_BACK, now: input.now });
+}
+
 /** The recruiter's answer, kept on the thread as well as on the request, so a reopened request keeps every answer it was given. */
 export async function recordEscalationAnswer(q: Queryable, input: { escalation: Pick<EscalationRow, "id" | "companyId">; author: Actor; body: string; now?: Date }): Promise<EscalationMessageRow> {
   return insertMessage(q, { ...input, side: "recruiter", kind: "answer" });
@@ -335,7 +346,7 @@ export function escalationThread(
   if (origin === "system" || origin === "candidate") question.raisedBy = origin;
   const out: EscalationThreadEntry[] = [question];
   const ordered = [...messages].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt });
+  for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt, ...(m.author.kind === "candidate" ? { raisedBy: "candidate" as const } : {}) });
   if (e.resolution && !ordered.some((m) => m.kind === "answer")) out.push({ id: `${e.id}:answer`, side: "recruiter", kind: "answer", body: e.resolution, by: recruiterName, at: e.resolvedAt ?? e.createdAt });
   return out;
 }

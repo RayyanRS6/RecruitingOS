@@ -659,7 +659,8 @@ escalationRoutes.post("/:id/resolve", requireRecruiterOrAdmin, async (c) => {
       await notify(tx, { companyId: e.companyId, kind: "recruiter.posting_not_done", title: `${task.roleTitle}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${actor.name} at ITS wrote: "${body.resolution}" ${POSTING_NOT_DONE_NEXT[e.kind](task.board)}`, action: { label: "Open the Share tab", href: `/roles/${task.roleId}?tab=posting` }, roles: ["owner", "admin"] });
     }
     await container.engine.signal(tx, { companyId: e.companyId, key: `escalation:${e.id}`, payload: { resolved: true } });
-    return u;
+    // The queue's words say who read it from this, and not from what the page was showing: it may have been open a while.
+    return { ...u, lockedForCompany: await aboutLockedApplicant(tx, e) };
   });
   await container.kick();
   return c.json(row);
@@ -687,8 +688,9 @@ escalationRoutes.post("/:id/messages", requireRecruiterOrAdmin, async (c) => {
     if (grant) await recordStaffAccess(tx, { grant, userName: actor.name, method: "POST", path: `/api/v1/escalations/${e.id}/messages`, ip: clientIp(c) });
     const message = await addEscalationReply(tx, { escalation: e, side: "recruiter", author: actor, body: body.body, now });
     if (e.status === "claimed") await tx.update(recruiterEscalations).set({ status: "in_progress" }).where(eq(recruiterEscalations.id, e.id));
-    const told = (await aboutLockedApplicant(tx, e)) ? 0 : await notify(tx, { companyId: e.companyId, kind: "recruiter.replied", title: `${actor.name} (ITS recruiter) wrote to you about ${await aboutWords(tx, e)}`, body: body.body, action: { label: "Open the request", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
-    return { id: message.id, told };
+    const lockedForCompany = await aboutLockedApplicant(tx, e);
+    const told = lockedForCompany ? 0 : await notify(tx, { companyId: e.companyId, kind: "recruiter.replied", title: `${actor.name} (ITS recruiter) wrote to you about ${await aboutWords(tx, e)}`, body: body.body, action: { label: "Open the request", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
+    return { id: message.id, told, lockedForCompany };
   });
   return c.json(out, 201);
 });

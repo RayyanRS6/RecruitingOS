@@ -6,7 +6,7 @@ import { parseTwilioInbound, smsKeyword, verifyTwilioSignature } from "@ros/inte
 import { runScreenTurn } from "@ros/agents";
 import type { Vars } from "../middleware/session";
 import { learnFromSentChat } from "../services/profile-facts";
-import { textWithNoConversation } from "../services/replies";
+import { tellHolders, textWithNoConversation } from "../services/replies";
 import { screenDeps } from "../services/screens";
 
 /**
@@ -81,11 +81,12 @@ twilioWebhook.post("/inbound", async (c) => {
     }
     if (app) {
       const at = app;
-      await withTenant(container.db, p.companyId, async (tx) => {
+      const held = await withTenant(container.db, p.companyId, async (tx) => {
         const [row] = await tx.insert(communications).values({ companyId: p.companyId, candidateId: p.id, applicationId: at.id, direction: "inbound", channel: "sms", fromAddress: phone, bodyText: sms.body, provider: "twilio", providerMessageId: sms.messageSid ?? null, status: "received", disclosureIncluded: false, sentBy: { kind: "candidate", id: p.id } }).returning({ id: communications.id });
         await emit(tx, { type: "message.received", companyId: p.companyId, actor: { kind: "candidate", id: p.id }, subject: { type: "communication", id: row.id }, payload: { channel: "sms", applicationId: at.id, unmatched: true } });
-        await textWithNoConversation(tx, container, { app: at, candidate: p, text: sms.body });
+        return textWithNoConversation(tx, container, { app: at, candidate: p, text: sms.body });
       });
+      await tellHolders(container, held);
       await container.kick();
     }
     return c.body(EMPTY_TWIML, 200, { "Content-Type": "text/xml" });
