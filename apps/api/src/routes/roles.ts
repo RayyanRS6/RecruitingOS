@@ -82,7 +82,9 @@ roleRoutes.get("/", requireTenant, async (c) => {
       .groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt, interviewFollowups.kind, interviewFollowups.choice, interviewFollowups.autoState, interviewOpen);
     const hidden = hiddenFrom(t);
     const lockedCounts = hidden ? await tx.select({ roleId: applications.roleId, n: count() }).from(applications).where(and(inArray(applications.roleId, roleIds), hidden)).groupBy(applications.roleId) : [];
-    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).leftJoin(applications, eq(applications.id, approvalRequests.applicationId)).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), or(isNull(approvalRequests.applicationId), visibleTo(t)))).groupBy(approvalRequests.roleId);
+    // Break glass reads everyone, so it has no filter, and `or` with nothing beside it would leave only the requests about no one.
+    const readable = visibleTo(t);
+    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).leftJoin(applications, eq(applications.id, approvalRequests.applicationId)).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), readable ? or(isNull(approvalRequests.applicationId), readable) : undefined)).groupBy(approvalRequests.roleId);
     // The newest application per role, for `lastActivityAt` (the Jobs page's "Recent activity" order).
     const newest = await tx.select({ roleId: applications.roleId, at: sql<string | null>`max(${applications.createdAt})` }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId);
     const now = c.get("container").engine.clock();

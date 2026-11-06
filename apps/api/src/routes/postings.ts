@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateApplicationLink, CreateShareLink, PostingReason, RecordPostingUrl, SetAcceptingApplications, SetPublishChannels, VerifyPosting, companyOnboarding, type PostingTaskKind, type PostingTaskView } from "@ros/contracts";
-import { BOARD_CHANNELS, BOARD_UP_STATES, CHANNEL_NAME, CLOSING_DATE_REASON, POSTING_CHANNELS, POSTING_STATE_LABEL, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, PostingNotFoundError, PostingTransitionError, SHARE_PLACES, SOURCES, SOURCE_LABEL, assertCan, audit, whoPostsBoards, can, chosenBoards, closingMoment, confirmBoardRemoved, confirmBoardUpdated, createApplicationLink, disableApplicationLink, emit, isBoardChannel, isPostingState, isSource, listApplicationLinks, notify, openPostingTask, postingPackage, postingTaskLabel, postingTaskNeeded, postingTasksForRole, showsOldVersion, transitionPosting, zipRecruiterOffered, type ApplicationLinkRow, type BoardChannel, type PostingChannel, type PostingPatch, type PostingRow, type PostingState } from "@ros/core";
+import { BOARD_CHANNELS, BOARD_UP_STATES, CHANNEL_NAME, CLOSING_DATE_REASON, POSTING_CHANNELS, POSTING_STATE_LABEL, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, PostingNotFoundError, PostingTransitionError, SHARE_PLACES, SOURCES, SOURCE_LABEL, assertCan, audit, whoPostsBoards, can, chosenBoards, closingMoment, confirmBoardRemoved, confirmBoardUpdated, createApplicationLink, disableApplicationLink, emit, isBoardChannel, isPostingState, isSource, listApplicationLinks, notify, openPostingTask, postingPackage, postingTaskLabel, postingTaskNeeded, postingTasksForRole, showsOldVersion, transitionPosting, visibleTo, zipRecruiterOffered, type ApplicationLinkRow, type BoardChannel, type PostingChannel, type PostingPatch, type PostingRow, type PostingState } from "@ros/core";
 import { applicationLinks, applications, companies, postings, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { intakeAddress } from "@ros/integrations";
 import { DEFAULT_VOLUME_ALERT_PER_DAY, localDays } from "@ros/workflows";
@@ -705,6 +705,8 @@ export type VolumeDay = { day: string; total: number; bySource: Record<string, n
  * the same way the daily volume alert cuts them. Counting only: nothing here touches an application. The counts follow
  * the role page's (GET /roles/:id): none for those who do not read applications (an interviewer), and a grant about one
  * candidate counts that candidate alone. The switch's state and the alert threshold are the role's own, for everyone.
+ * Someone past the plan's candidates per job (Rule 3) counts in a day's total, which shows demand and names nobody, and never
+ * by source: a locked card says when they applied, so a day's sources would say how, and a link sent to one person who.
  */
 postingRoutes.get("/:id/volume", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -718,7 +720,7 @@ postingRoutes.get("/:id/volume", requireTenant, async (c) => {
     const local = localDays(container.engine.clock(), company?.timezone);
     const windowStart = local.start(-(VOLUME_WINDOW_DAYS - 1));
     const inWindow = and(eq(applications.roleId, role.id), gte(applications.createdAt, windowStart.toISOString()));
-    const rows = !readsApplications ? [] : await tx.select({ createdAt: applications.createdAt, source: applications.source }).from(applications).where(onlyApplicationId ? and(inWindow, eq(applications.id, onlyApplicationId)) : inWindow);
+    const rows = !readsApplications ? [] : await tx.select({ createdAt: applications.createdAt, source: applications.source, readable: sql<boolean>`${visibleTo(t) ?? sql`true`}` }).from(applications).where(onlyApplicationId ? and(inWindow, eq(applications.id, onlyApplicationId)) : inWindow);
     const days: VolumeDay[] = Array.from({ length: VOLUME_WINDOW_DAYS }, (_, i) => ({ day: local.key(local.start(i - (VOLUME_WINDOW_DAYS - 1))), total: 0, bySource: {} }));
     const byDay = new Map(days.map((d) => [d.day, d]));
     const totals: Record<string, number> = {};
@@ -727,9 +729,10 @@ postingRoutes.get("/:id/volume", requireTenant, async (c) => {
       const d = byDay.get(local.key(new Date(r.createdAt)));
       if (!d) continue; // a row stamped after "now" on a moved clock, or before the window
       d.total += 1;
+      total += 1;
+      if (!r.readable) continue;
       d.bySource[r.source] = (d.bySource[r.source] ?? 0) + 1;
       totals[r.source] = (totals[r.source] ?? 0) + 1;
-      total += 1;
     }
     const order = (s: string) => { const i = (SOURCES as readonly string[]).indexOf(s); return i === -1 ? SOURCES.length : i; };
     const sources = Object.keys(totals).sort((a, b) => order(a) - order(b) || a.localeCompare(b)).map((source) => ({ source, label: isSource(source) ? SOURCE_LABEL[source] : source, total: totals[source] }));

@@ -299,8 +299,10 @@ describe("the team cannot read a locked person", () => {
     expect(list.applications.map((a) => a.id)).toEqual([ids.locked]);
     expect(list.locked).toEqual({ count: 0, cards: [] });
     expect(list.counts.total).toBe(1);
+    // The volume says that one person, by source too: the grant may read them.
+    expect(await read(await json(named, "GET", `/api/v1/roles/${ids.role}/volume`))).toMatchObject({ totals: { total: 1, bySource: { [lockedRow.source]: 1 } } });
     expect(JSON.stringify(await read(await json(named, "GET", `/api/v1/events?subjectId=${ids.locked}`)))).toContain("application.received");
-    // Their call notes go through (409: there is no interview to keep open, not 402).
+    // Their call notes go through, as the recruiter's own note: nothing is scored while they are locked.
     const notes = await json(named, "POST", `/api/v1/applications/${ids.locked}/screen/recruiter-notes`, { notes: [{ text: "We talked." }], complete: false });
     expect(notes.status).toBe(200);
     expect(await read(notes)).toMatchObject({ completed: false, keptAsNote: true });
@@ -507,9 +509,19 @@ describe("the team cannot read a locked person", () => {
     const applicantsCsv = await (await json(owner, "GET", `/api/v1/roles/${ids.role}/report.csv`)).text();
     expect(applicantsCsv).toContain("Vera Visible");
     expect(applicantsCsv.trim().split("\r\n")).toHaveLength(2);
-    // The share tab's volume keeps everyone in it: a count by day and source names nobody, and it shows demand.
-    const volume = await read<{ totals: { total: number } }>(await json(owner, "GET", `/api/v1/roles/${ids.role}/volume`));
+    // The share tab's volume keeps everyone in each day's total: a count names nobody, and it shows demand. Where they came
+    // from is only for people the team can read: a locked card says when, so a day's sources would say how.
+    type Volume = { totals: { total: number; bySource: Record<string, number> }; days: Array<{ total: number; bySource: Record<string, number> }>; sources: Array<{ total: number }>; today: { total: number } };
+    const sum = (bySource: Record<string, number>) => Object.values(bySource).reduce((a, b) => a + b, 0);
+    const volume = await read<Volume>(await json(owner, "GET", `/api/v1/roles/${ids.role}/volume`));
     expect(volume.totals.total).toBe(1 + lockedCount);
+    expect(volume.today.total).toBe(1 + lockedCount);
+    expect(volume.days.at(-1)?.total).toBe(1 + lockedCount);
+    expect(sum(volume.totals.bySource)).toBe(1);
+    expect(sum(volume.days.at(-1)!.bySource)).toBe(1);
+    expect(volume.sources.reduce((n, s) => n + s.total, 0)).toBe(1);
+    // None of them came by email as far as this reader can tell, though one did: the only source left is the visible person's.
+    expect(volume.totals.bySource.email_in).toBeUndefined();
   }, 120_000);
 
   it("ids in a body or a query answer like an id that is not in the role, and nothing happens to the person", async () => {
@@ -707,6 +719,14 @@ describe("the team cannot read a locked person", () => {
     expect(JSON.stringify(await read(await json(admin, "GET", `/api/v1/events?subjectId=${ids.locked}`)))).toContain("application.received");
     const logged = (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "admin.break_glass"))).filter((r) => r.actor.id === ada.id);
     expect(logged.length).toBeGreaterThan(0);
+    // The volume by source covers everyone it can read, which here is everyone.
+    const volume = await read<{ totals: { total: number; bySource: Record<string, number> } }>(await json(admin, "GET", `/api/v1/roles/${ids.role}/volume`));
+    expect(Object.values(volume.totals.bySource).reduce((a, b) => a + b, 0)).toBe(volume.totals.total);
+    // The jobs list counts what waits on a person: all of it, not only what is about nobody.
+    const [waiting] = await container.db.insert(approvalRequests).values({ companyId: ids.company, roleId: ids.role, applicationId: ids.locked, actionType: "message.send_freeform", subject: { type: "application", id: ids.locked }, proposal: { text: "A message." }, requestedBy: { kind: "system", id: "test" }, requiredRoles: ["owner"] }).returning();
+    const jobs = await read<Array<{ id: string; needsYou: number }>>(await json(admin, "GET", "/api/v1/roles"));
+    expect(jobs.find((j) => j.id === ids.role)?.needsYou).toBeGreaterThanOrEqual(1);
+    await container.db.delete(approvalRequests).where(eq(approvalRequests.id, waiting.id));
   }, 120_000);
 
   describe("one neutral notice per job per day", () => {
