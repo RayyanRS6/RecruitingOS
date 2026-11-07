@@ -1392,6 +1392,22 @@ describe("the AI credit", () => {
       expect(await figures()).toEqual([29, 29]);
     });
 
+    it("ITS's line reads money actually spent too: a draft's $0.80 held at $19.20 is not $20 of $20 and used up, and $0.95 held at $9 on Free is not $9.95", async () => {
+      const line = async (id: string) => (await read<Array<{ id: string; aiCredit: { spentUsd: number; limitUsd: number; percent: number; monthly: boolean; level: string | null } | null }>>(await json(admin, "GET", "/api/v1/admin/customers"))).find((c) => c.id === id)!.aiCredit;
+      const basic = await newCompany();
+      await usePlan(container, basic.id, "basic");
+      await spend(basic.id, "19.200000");
+      await spend(basic.id, "0.800000", { status: "running" });
+      expect(await line(basic.id)).toEqual({ monthly: true, spentUsd: 19.2, limitUsd: 20, percent: 96, level: "warning", resetsAt: expect.any(String) });
+      // it settles at about $0.10, and only then is that money spent
+      await withPlatform(container.db, (tx) => tx.update(aiRuns).set({ status: "ok", costUsd: "0.100000" }).where(and(eq(aiRuns.companyId, basic.id), eq(aiRuns.status, "running"))));
+      expect(await line(basic.id)).toMatchObject({ spentUsd: 19.3, percent: 96, level: "warning" });
+      const free = await newCompany();
+      await spend(free.id, "9.000000");
+      await spend(free.id, "0.950000", { status: "running" });
+      expect(await line(free.id)).toEqual({ monthly: false, spentUsd: 9, limitUsd: 10, percent: 90, level: "warning", resetsAt: null });
+    });
+
     it("Home and ITS never say nothing has stopped while a new job is refused: Basic above $19.10, Pro above $59.10", async () => {
       const homeAt = async (settled: string, planKey = "basic") => {
         const { id, cookie } = await newCompany();
@@ -1409,6 +1425,7 @@ describe("the AI credit", () => {
       expect(fits.room.ok).toBe(true);
       expect((await creditNotes(fits.id))[0].body).toBe("Nothing has stopped. Upgrade before it runs out.");
       expect((await creditAlerts(fits.id))[0].body).not.toContain("Nothing has stopped");
+      expect((await creditAlerts(fits.id))[0].body).toContain("Talk with the customer about upgrading before it runs out.");
       // $19.20, 96%: the Start box is refused on the same page, and the row says what stopped
       const stopped = await homeAt("19.200000");
       expect(stopped.aiCredit).toMatchObject({ level: "warning", percent: 96 });
@@ -1447,6 +1464,13 @@ describe("the AI credit", () => {
       const notes = await creditNotes(id);
       expect(notes.map((n) => n.title).sort()).toEqual(["80% of your plan's AI help used", "Your plan's AI help is used up"]);
       for (const n of notes) expect(`${n.title} ${n.body}`).not.toMatch(/upgrade/i);
+      // and ITS is not sent to talk about one that is not there
+      const alerts = await creditAlerts(id);
+      expect(alerts.map((a) => a.kind).sort()).toEqual(["billing.ai_credit_used_up", "billing.ai_credit_warning"]);
+      for (const a of alerts) {
+        expect(a.body).not.toMatch(/upgrad/i);
+        expect(a.body).toContain("Talk with the customer about their plan");
+      }
     });
 
     it("a big draft refused is not the credit used up, and a hold that comes back cries no wolf", async () => {

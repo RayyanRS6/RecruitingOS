@@ -99,7 +99,8 @@ test.describe("a Free company past its five candidates", () => {
     await expectAccessible(admin, "change plan in the console");
     await drawer.getByRole("button", { name: "Change plan" }).click();
     await drawer.getByRole("button", { name: "Yes, change it" }).click();
-    await expect(admin.getByRole("status").filter({ hasText: /1 locked candidate opens now\./ })).toBeVisible({ timeout: 30_000 });
+    // A move up from Free starts the AI help's month: the one thing a change of plan does start again
+    await expect(admin.getByRole("status").filter({ hasText: /AI help starts a new month today; other allowances keep their dates\. 1 locked candidate opens now\./ })).toBeVisible({ timeout: 30_000 });
     await staff.close();
 
     // The card opens: six to read, nobody locked, and the sixth has a name and a panel
@@ -121,5 +122,7 @@ test.describe("a Free company past its five candidates", () => {
     await expect(page.getByText("Your plan is now Pro")).toBeVisible();
     await page.goto("/setup#setup-company");
     await expect(page.locator("#setup-company").getByText("Pro", { exact: true })).toBeVisible({ timeout: 30_000 });
+    // That month is the AI help's own, so it says its own day
+    await expect(page.locator("#setup-company").getByText(/AI help this month: \d+% used, starts again \w+ \d+/)).toBeVisible();
   });
 });

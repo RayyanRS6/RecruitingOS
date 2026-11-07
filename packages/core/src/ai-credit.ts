@@ -1,5 +1,5 @@
-import { and, asc, eq, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
-import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, aiCreditNoticeWords, type AiCreditLevel, type AiCreditView } from "@ros/contracts";
+import { and, asc, eq, gte, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, aiCreditNoticeWords, mayOfferUpgrade, type AiCreditLevel, type AiCreditView } from "@ros/contracts";
 import { adminAlerts, aiRuns, companies, entitlements, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
 import { audit } from "./audit";
@@ -169,7 +169,7 @@ export async function aiCreditView(q: Queryable, companyId: string, opts: { now?
 }
 
 /** What ITS's alert says, in dollars. */
-type CreditNote = { level: AiCreditLevel; companyId: string; companyName: string; standing: AiCreditStanding };
+type CreditNote = { level: AiCreditLevel; companyId: string; companyName: string; planKey: string; standing: AiCreditStanding };
 
 /** The line the owner has not been told yet, if the company has reached one. */
 async function lineDue(q: Queryable, input: { companyId: string; now: Date; refusedHoldUsd?: number }): Promise<{ standing: AiCreditStanding; level: AiCreditLevel } | null> {
@@ -216,7 +216,7 @@ async function tellOwner(db: Db, input: { companyId: string; now: Date; refusedH
     await emit(q, { type: usedUp ? "entitlement.exceeded" : "entitlement.warning", companyId: input.companyId, actor: { kind: "system", id: "allowance" }, subject: { type: "company", id: input.companyId }, payload: { key: standing.key, percent: standing.percent } });
     const { title, body } = aiCreditNoticeWords(level, { resetsOn: dayWords(standing.resetsAt, company.timezone), newJobsStopped: draftNoLongerFits(standing), planKey: company.planKey });
     await notify(q, { companyId: input.companyId, kind: "entitlement.ai_credit", title, body, action: { label: "See usage", href: "/setup" }, roles: ["owner", "admin"] });
-    return { level, companyId: input.companyId, companyName: company.name, standing };
+    return { level, companyId: input.companyId, companyName: company.name, planKey: company.planKey, standing };
   });
 }
 
@@ -231,6 +231,8 @@ async function flagIts(q: Queryable, note: CreditNote, now: Date): Promise<void>
   await settleAiCreditAlerts(q, { companyId, now });
   const usedUp = note.level === "used_up";
   const spent = `${usd(standing.spentMicros)} of ${usd(standing.limitMicros)} used${standing.monthly ? " this month" : ""}.`;
+  // On the last plan nothing is above theirs, so there is no upgrade to talk about.
+  const talkAbout = mayOfferUpgrade(note.planKey) ? "upgrading" : "their plan";
   await raiseAlertOnce(q, {
     kind: usedUp ? "billing.ai_credit_used_up" : "billing.ai_credit_warning",
     severity: usedUp ? "high" : "info",
@@ -238,8 +240,8 @@ async function flagIts(q: Queryable, note: CreditNote, now: Date): Promise<void>
     target: { type: "company", id: companyId },
     title: usedUp ? `${companyName} has used up its AI credit` : `${companyName} has used 80% of its AI credit`,
     body: usedUp
-      ? `${spent} Applications still come in and candidates finish their chats in the job's own words; new applicants are not read by AI and AI reviews wait until the plan changes${standing.monthly ? " or the month starts again" : ""}. Talk with the customer about upgrading.`
-      : `${spent}${draftNoLongerFits(standing) ? " New jobs have stopped, because a draft needs more than is left." : ""} Talk with the customer about upgrading before it runs out.`,
+      ? `${spent} Applications still come in and candidates finish their chats in the job's own words; new applicants are not read by AI and AI reviews wait until the plan changes${standing.monthly ? " or the month starts again" : ""}. Talk with the customer about ${talkAbout}.`
+      : `${spent}${draftNoLongerFits(standing) ? " New jobs have stopped, because a draft needs more than is left." : ""} Talk with the customer about ${talkAbout} before it runs out.`,
     details: { key: standing.key, spentUsd: standing.spentMicros / MICROS, limitUsd: standing.limitMicros / MICROS },
   }, { now });
 }
@@ -304,7 +306,10 @@ export function createAiCreditGate(deps: { now?: () => Date } = {}) {
 /** A company's AI credit on ITS's customer row, in dollars. Never sent to a customer. */
 export type AiCreditLine = { monthly: boolean; spentUsd: number; limitUsd: number; percent: number; level: AiCreditLevel | null; resetsAt: string | null };
 
-/** Every limited company's line, in a fixed handful of queries (the console's customer list). Platform side only. */
+/**
+ * Every limited company's line, in a fixed handful of queries (the console's customer list). Platform side only. From money
+ * actually spent, as ITS's alerts and the owner's row are, so a draft's hold does not read as used up for two minutes.
+ */
 export async function aiCreditLines(q: Queryable, opts: { now?: Date } = {}): Promise<Map<string, AiCreditLine>> {
   const now = opts.now ?? new Date();
   const rows = await q.select().from(entitlements).where(limitedRows()).orderBy(asc(entitlements.key));
@@ -312,9 +317,10 @@ export async function aiCreditLines(q: Queryable, opts: { now?: Date } = {}): Pr
   const companyIds = [...new Set(rows.map((r) => r.companyId))];
   const told = new Map((await q.select({ id: companies.id, settings: companies.settings }).from(companies).where(inArray(companies.id, companyIds))).map((c) => [c.id, c.settings?.aiCreditTold ?? {}]));
   const micros = sql<string>`coalesce(sum(${aiRuns.costUsd}), 0) * 1000000`;
-  const lifetime = new Map((await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(inArray(aiRuns.companyId, companyIds)).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]));
+  const settled = ne(aiRuns.status, "running");
+  const lifetime = new Map((await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(and(inArray(aiRuns.companyId, companyIds), settled)).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]));
   const months = rows.flatMap((r) => { const since = sinceOf(r, now); return since ? [{ companyId: r.companyId, since }] : []; });
-  const thisMonth = new Map(months.length ? (await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(or(...months.map((m) => and(eq(aiRuns.companyId, m.companyId), gte(aiRuns.createdAt, m.since))))).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]) : []);
+  const thisMonth = new Map(months.length ? (await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(and(settled, or(...months.map((m) => and(eq(aiRuns.companyId, m.companyId), gte(aiRuns.createdAt, m.since)))))).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]) : []);
   const out = new Map<string, AiCreditLine>();
   for (const row of rows) {
     const spent = (isMonthly(row.key) && sinceOf(row, now) ? thisMonth : lifetime).get(row.companyId) ?? 0;
