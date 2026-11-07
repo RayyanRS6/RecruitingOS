@@ -12,7 +12,7 @@ import { readAppCookie, setAppCookie } from "../cookies";
 import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware/rate-limit";
-import { createApplication, markUploadUsed, uploadAlreadyUsed, type ResumeInput as ResumeUpload } from "../services/applications";
+import { createApplication, markUploadUsed, uploadAlreadyUsed, withNewApplication, type ResumeInput as ResumeUpload } from "../services/applications";
 import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, queueUnsentFileDiscard, readingAskedAt, readingFor, readingGaveUp, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
 import { applyVisitNext, interviewWaitFor, type InterviewWait } from "../services/apply-conversation";
 import { formOpenedBefore, lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
@@ -1314,7 +1314,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   // nothing on their record. A first application waits on the page for its own AI interview (20 Oct 2026, R20-12); a
   // repeat or an address the company already had gets the same waiting room, which opens a detached AI interview whose
   // answers join only when the address owner confirms them by email (Q14, founder 21 Oct; `applyVisitNext`).
-  const next = await withTenant(container.db, company.id, async (tx) => {
+  const next = await withNewApplication(container, company.id, async (tx, files) => {
     if (usedUploadId) await markUploadUsed(tx, { companyId: company.id, roleId: role.id, uploadId: usedUploadId });
     const created = await createApplication(tx, container, {
       companyId: company.id,
@@ -1339,7 +1339,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
       formReading,
       resume,
       ip,
-    }, { kind: "candidate", id: "applicant" }, { closingGrace: admitted.late, trialGrace: admitted.trialGrace });
+    }, { kind: "candidate", id: "applicant" }, { closingGrace: admitted.late, trialGrace: admitted.trialGrace, files });
     // Kept only on a new application of the very person the link is for (a repeat submission changes nothing on file):
     // this application's own answers, which its chat reads as the candidate's own words and does not ask again.
     const kept = keeping && !created.duplicate && created.candidate.id === keeping.candidateId ? keptFactsOf(keeping.facts, container.engine.clock().toISOString()) : [];

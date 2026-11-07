@@ -3,7 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
 import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
 import { CANDIDATE_WROTE_BACK, CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileNoDateLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
-import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, interviews, jobs, lowercaseToken, notifications, plans, policies, postings, randomToken, recruiterEscalations, roles, rowsOf, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
+import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, inboundEmails, interviews, jobs, lowercaseToken, notifications, plans, policies, postings, randomToken, recruiterEscalations, roles, rowsOf, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider, type MemoryStorageAdapter } from "@ros/integrations";
 import { DISCARD_OBJECT_JOB_KIND, UNLOCK_INTERVIEW_DAYS, discardUnusedObject, startInterviewAgain, unlockApplicants } from "@ros/workflows";
 import { createApp } from "./app";
@@ -12,6 +12,7 @@ import { RESUME_READ_NOTICE } from "./pages/apply-form";
 import { createApplication } from "./services/applications";
 import { RESUME_READING_KEEP_MS } from "./services/apply-details";
 import { followApply, signInAdmin, signInStaff, usePlan } from "./test-helpers";
+import { retryFailedEmail } from "./webhooks/postmark";
 
 const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
 const DAY = 86_400_000;
@@ -93,14 +94,17 @@ describe("locked candidates", () => {
   type Person = ReturnType<typeof person>;
 
   /** The public form, as a browser posts it; `extra` sets or overrides fields. */
-  const postApplication = async (job: Job, p: Person, extra: Record<string, string> = {}) => {
+  const sendForm = async (job: Job, p: Person, extra: Record<string, string> = {}) => {
     const fd = new FormData();
     fd.set("firstName", p.first); fd.set("lastName", p.last); fd.set("email", p.email); fd.set("locationText", "Irvine, CA");
     fd.set("resume", new File([`${p.first} ${p.last}\nRegistered Dental Hygienist at Coastal Dental 2019 - present\nRDH license active\nPerio maintenance, Dentrix`], `${p.first.toLowerCase()}.txt`, { type: "text/plain" }));
     for (const rule of job.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("acknowledged", "yes");
     for (const [k, v] of Object.entries(extra)) fd.set(k, v);
-    const res = await app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": `198.51.100.${applicants % 250}` } });
+    return app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": `198.51.100.${applicants % 250}` } });
+  };
+  const postApplication = async (job: Job, p: Person, extra: Record<string, string> = {}) => {
+    const res = await sendForm(job, p, extra);
     expect(res.status, await res.clone().text()).toBe(302);
     return res;
   };
@@ -1508,6 +1512,92 @@ describe("locked candidates", () => {
       expect(seen.removed).toEqual(seen.stored);
       expect(await container.db.select().from(documents).where(eq(documents.applicationId, application.id))).toEqual([]);
     });
+
+    /** The transaction that stored the file gets as far as its commit, which fails, once; the rest of the request goes on as it would. */
+    const whenItsCommitFails = async <T>(run: () => T | Promise<T>) => {
+      const db = container.db as unknown as { transaction: (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown> };
+      const real = db.transaction;
+      const storage = container.integrations.storage;
+      const { put, delete: del } = storage;
+      const stored: string[] = [];
+      const removed: string[] = [];
+      let failed = false;
+      storage.put = async (...args: Parameters<typeof put>) => { stored.push(args[0]); return put.apply(storage, args); };
+      storage.delete = async (...args: Parameters<typeof del>) => { removed.push(args[0]); return del.apply(storage, args); };
+      db.transaction = (fn) => real.call(db, async (tx: unknown) => {
+        const before = stored.length;
+        const out = await fn(tx);
+        if (!failed && stored.length > before) {
+          failed = true;
+          throw new Error("the commit failed");
+        }
+        return out;
+      });
+      try {
+        const result = await run();
+        expect(failed).toBe(true);
+        return { result, quarantined: stored.filter((k) => k.startsWith("quarantine/")), parked: stored.filter((k) => k.startsWith("inbound/")), removed };
+      } finally {
+        db.transaction = real;
+        storage.put = put;
+        storage.delete = del;
+      }
+    };
+    const emailedTo = async (job: Job, first: string) => {
+      const [emailIn] = await container.db.select().from(postings).where(and(eq(postings.roleId, job.roleId), eq(postings.channel, "email_in")));
+      const cv = `${first} ${LOCKED}, registered dental hygienist since 2018, active CA RDH license.`;
+      return { From: "noreply@indeed.com", FromName: "Indeed", To: `apply-${emailIn.intakeToken}@${container.integrations.env.intakeDomain}`, Subject: `New applicant: ${first} ${LOCKED}`, TextBody: `${first} ${LOCKED} applied via Indeed.\nEmail: ${first.toLowerCase()}.lockwood@people.test`, Attachments: [{ Name: "resume.txt", ContentType: "text/plain", Content: Buffer.from(cv).toString("base64"), ContentLength: cv.length }] };
+    };
+    const inboundRowOf = async (subject: string) => (await container.db.select().from(inboundEmails).where(eq(inboundEmails.subject, subject)))[0];
+
+    it("is removed when the form's transaction does not commit after the application was made: nothing is left, and they can send it again", async () => {
+      const job = await openJob();
+      const p = person("Ria");
+      const seen = await whenItsCommitFails(() => sendForm(job, p));
+      expect(seen.result.status).toBe(500);
+      expect(seen.quarantined).toHaveLength(1);
+      expect(seen.removed).toEqual(seen.quarantined);
+      expect(await container.db.select().from(candidates).where(and(eq(candidates.companyId, job.id), eq(candidates.email, p.email)))).toEqual([]);
+      const row = await apply(job, p);
+      expect(await container.db.select().from(documents).where(eq(documents.applicationId, row.id))).toHaveLength(1);
+    });
+
+    it("is removed when an email's transaction does not commit, on arrival and when a person tries it again: only the email's own parked copy stays, until it goes through", async () => {
+      const job = await openJob();
+      const mail = await emailedTo(job, "Sol");
+      const arrived = await whenItsCommitFails(() => inbound(mail));
+      expect(arrived.result.status).toBe(202);
+      expect(arrived.quarantined).toHaveLength(1);
+      expect(arrived.removed).toEqual(arrived.quarantined);
+      expect(arrived.parked).toHaveLength(1);
+      const row = await inboundRowOf(mail.Subject);
+      expect(row).toMatchObject({ status: "error", rawStorageKey: arrived.parked[0] });
+
+      const retried = await whenItsCommitFails(() => retryFailedEmail(container, row.id));
+      expect(retried.result).toMatchObject({ ok: false });
+      expect(retried.quarantined).toHaveLength(1);
+      expect(retried.removed).toEqual(retried.quarantined);
+      expect(await inboundRowOf(mail.Subject)).toMatchObject({ status: "error", rawStorageKey: arrived.parked[0] });
+
+      expect(await retryFailedEmail(container, row.id)).toMatchObject({ ok: true, duplicate: false });
+      expect(await inboundRowOf(mail.Subject)).toMatchObject({ status: "matched", rawStorageKey: null });
+      await container.drain();
+    });
+
+    it("is removed when a held email's transaction does not commit as applications open again: its parked copy stays for a person", async () => {
+      const job = await openJob();
+      expect((await json(job.cookie, "POST", `/api/v1/roles/${job.roleId}/applications/accepting`, { accepting: false, reason: "Enough for now" })).status).toBe(200);
+      const mail = await emailedTo(job, "Tao");
+      expect(await (await inbound(mail)).json()).toMatchObject({ held: true });
+      const parked = (await inboundRowOf(mail.Subject)).rawStorageKey;
+      expect(parked).toBeTruthy();
+      const opened = await whenItsCommitFails(() => json(job.cookie, "POST", `/api/v1/roles/${job.roleId}/applications/accepting`, { accepting: true }));
+      expect(opened.result.status).toBe(200);
+      expect(opened.quarantined).toHaveLength(1);
+      expect(opened.removed).toEqual(opened.quarantined);
+      expect(await inboundRowOf(mail.Subject)).toMatchObject({ status: "error", rawStorageKey: parked });
+      await container.drain();
+    });
   });
 
   describe("a change of plan", () => {
@@ -1542,7 +1632,8 @@ describe("locked candidates", () => {
         const opened = await unlockApplicants(watched, container.engine, { companyId: company.id, planKey: "basic", limit: 25, actor: { kind: "system", id: "test" }, reason: "They asked to upgrade.", now: new Date() });
         // Behind each job's lock, in the same transaction: both jobs' locks are held until it commits, so an applicant can only wait and read the new limit.
         const keys = rowsOf<{ a: string; b: string }>(await tx.execute(sql`select (hashtext(${`applicants:${job.roleId}`})::bigint & 4294967295)::text as a, (hashtext(${`applicants:${empty.roleId}`})::bigint & 4294967295)::text as b`))[0];
-        const held = rowsOf<{ objid: string }>(await tx.execute(sql`select objid::text as objid from pg_locks where locktype = 'advisory' and granted`)).map((r) => r.objid);        return { opened, keys, held };
+        const held = rowsOf<{ objid: string }>(await tx.execute(sql`select objid::text as objid from pg_locks where locktype = 'advisory' and granted`)).map((r) => r.objid);
+        return { opened, keys, held };
       });
       expect(out.opened.unlocked).toBe(1);
       expect((await applicationOf(six)).lockedAt).toBeNull();

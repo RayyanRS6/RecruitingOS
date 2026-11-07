@@ -85,7 +85,7 @@ export type ResumeInput =
  * has. `onFile`: what the page says next, from the job and never from the address typed (Q14), so a repeat on a job past
  * its limit reads as a new address does.
  */
-export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean; closingGrace?: boolean; trialGrace?: boolean } = {}) {
+export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean; closingGrace?: boolean; trialGrace?: boolean; files?: KeptBytes[] } = {}) {
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) throw new Error("role not found");
   // `closingGrace`: a form opened before the role's closing date passed may still be sent (plan D7; services/closing-date.ts).
@@ -124,12 +124,30 @@ export async function createApplication(tx: Tx, container: Container, input: New
     return { application: existing, candidate, duplicate: true, knownPerson: true, onFile: await jobPastItsLimit(tx, { companyId: input.companyId, roleId: role.id }) };
   }
   // A file the application received itself is stored before the job's lock, never behind it: a slow write would hold up everyone
-  // applying to the job until they time out. Nothing keeps the file if what follows fails (`dropKept`), a lock timeout included.
+  // applying to the job until they time out. Nothing keeps the file if what follows fails (`dropKept`), a lock timeout included,
+  // or if the caller's transaction then does not commit (`opts.files`, from `withNewApplication`).
   const kept = input.resume?.kind === "bytes" ? await keepResumeBytes(container, input.companyId, role.id, input.resume) : null;
   try {
-    return await placeApplication(tx, container, { input, actor, opts, role, packetVersion: role.currentPacketVersion, candidate, knownPerson, kept });
+    const placed = await placeApplication(tx, container, { input, actor, opts, role, packetVersion: role.currentPacketVersion, candidate, knownPerson, kept });
+    if (kept && !placed.duplicate) opts.files?.push(kept);
+    return placed;
   } catch (err) {
     await dropKept(container, kept);
+    throw err;
+  }
+}
+
+/**
+ * The transaction an application is born in. Storage is no part of a transaction, so a file it received itself and stored goes
+ * if this one does not commit, whatever stopped it after the application was made: nothing would ever point at that file, and
+ * no privacy request could find it.
+ */
+export async function withNewApplication<T>(container: Container, companyId: string, run: (tx: Tx, files: KeptBytes[]) => Promise<T>): Promise<T> {
+  const files: KeptBytes[] = [];
+  try {
+    return await withTenant(container.db, companyId, (tx) => run(tx, files));
+  } catch (err) {
+    for (const kept of files) await dropKept(container, kept);
     throw err;
   }
 }

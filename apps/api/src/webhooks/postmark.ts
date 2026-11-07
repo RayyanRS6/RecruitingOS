@@ -7,7 +7,7 @@ import { companies, inboundEmails, notifications, postings, roles, withPlatform,
 import { extractApplicantFromInbound, extractIntakeToken, extractReplyToken, parsePostmarkEvent, parsePostmarkInbound, verifyPostmarkWebhookAuth, type InboundEmail } from "@ros/integrations";
 import type { Container } from "../container";
 import type { Vars } from "../middleware/session";
-import { createApplication, type NewApplication, type ResumeInput } from "../services/applications";
+import { createApplication, withNewApplication, type NewApplication, type ResumeInput } from "../services/applications";
 import { handleSubscriptionChange } from "../services/email-subscriptions";
 import { receiveCandidateReply } from "../services/replies";
 
@@ -72,7 +72,7 @@ postmarkWebhook.post("/inbound", async (c) => {
   const attachment = resumeAttachment(mail);
   const resume: ResumeInput | null = attachment ? { kind: "bytes", filename: attachment.filename, mime: attachment.contentType, bytes: new Uint8Array(Buffer.from(attachment.contentBase64, "base64")), via: "email" } : null;
   try {
-    const result = await withTenant(container.db, posting.companyId, (tx) => createApplication(tx, container, applicationFromEmail({ companyId: posting.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR));
+    const result = await withNewApplication(container, posting.companyId, (tx, files) => createApplication(tx, container, applicationFromEmail({ companyId: posting.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR, { files }));
     await container.db.update(inboundEmails).set({ status: "matched", companyId: posting.companyId, applicationId: result.application.id }).where(eq(inboundEmails.id, inbound.id));
     await container.kick();
     return c.json({ ok: true, matched: true, applicationId: result.application.id, duplicate: result.duplicate });
@@ -167,8 +167,8 @@ export async function retryFailedEmail(container: Container, inboundId: string):
   const bytes = row.rawStorageKey ? await container.integrations.storage.get(row.rawStorageKey) : null;
   const resume: ResumeInput | null = bytes && parsed.resume ? { kind: "bytes", filename: parsed.resume.filename, mime: parsed.resume.contentType, bytes, via: "email" } : null;
   try {
-    const result = await withTenant(container.db, role.companyId, async (tx) => {
-      const created = await createApplication(tx, container, applicationFromEmail({ companyId: role.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR);
+    const result = await withNewApplication(container, role.companyId, async (tx, files) => {
+      const created = await createApplication(tx, container, applicationFromEmail({ companyId: role.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR, { files });
       await tx.update(inboundEmails).set({ status: "matched", applicationId: created.application.id, rawStorageKey: null, error: null }).where(eq(inboundEmails.id, row.id));
       return created;
     });
@@ -313,8 +313,8 @@ async function admitHeldEmails(container: Container, input: { companyId: string;
     const bytes = row.rawStorageKey ? await container.integrations.storage.get(row.rawStorageKey) : null;
     const resume: ResumeInput | null = bytes && parsed.resume ? { kind: "bytes", filename: parsed.resume.filename, mime: parsed.resume.contentType, bytes, via: "email" } : null;
     try {
-      await withTenant(container.db, companyId, async (tx) => {
-        const result = await createApplication(tx, container, applicationFromEmail({ companyId, roleId, mail, resume }), EMAIL_IN_ACTOR, { intoTalentPool: input.intoTalentPool });
+      await withNewApplication(container, companyId, async (tx, files) => {
+        const result = await createApplication(tx, container, applicationFromEmail({ companyId, roleId, mail, resume }), EMAIL_IN_ACTOR, { intoTalentPool: input.intoTalentPool, files });
         await tx.update(inboundEmails).set({ status: "matched", applicationId: result.application.id, rawStorageKey: null }).where(eq(inboundEmails.id, row.id));
         if (result.application.lockedAt) locked += 1;
       });
