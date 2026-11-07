@@ -258,6 +258,8 @@ describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
     expect(words).toContain("AI help this month: 18% used, starts again December 5 · recruiter requests: 0 of 1 Monthly allowances reset on November 30.");
     // on the company's calendar, as Home says it, whichever server draws it: 2 a.m. in UTC on the 5th is still the 4th in Los Angeles
     expect(usageLines({ ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent", resetsAt: "2026-12-05T02:00:00.000Z" } }, "America/Los_Angeles")).toEqual(["AI help this month: 18% used, starts again December 4"]);
+    // and the page reads the company's own zone: 6 p.m. in UTC on the 5th is already the 6th in Tokyo
+    expect(text(page({ company: onFree({ timezone: "Asia/Tokyo", usage: { ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent", resetsAt: "2026-12-05T18:00:00.000Z" } } }) }))).toContain("AI help this month: 18% used, starts again December 6");
     // the AI help on Free never starts again, so it names no day
     expect(usageLines({ ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" } })).toEqual(["AI help: 18% used"]);
   });

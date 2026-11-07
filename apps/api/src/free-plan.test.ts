@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, inArray } from "drizzle-orm";
-import { entitlements as allowance } from "@ros/core";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { entitlements as allowance, correctOutcome } from "@ros/core";
 import type { PlanRoom } from "@ros/contracts";
-import { aiRuns, approvalRequests, auditRecords, companies, entitlements, events, hiringOutcomes, intakeSessions, invitations, memberships, notifications, recruiterEscalations, roles, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { aiRuns, approvalRequests, auditRecords, companies, entitlements, events, hiringOutcomes, intakeSessions, invitations, memberships, notifications, recruiterEscalations, roles, rowsOf, users, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -488,6 +488,46 @@ describe("the Free plan's one job", () => {
       const corrected = await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "It was filled, not cancelled.", outcome: "filled_outside_platform" });
       expect(corrected.status, await corrected.clone().text()).toBe(200);
       expect((await roleOf(never)).status).toBe("closed");
+    });
+
+    it("on Free, the one job that went live and was closed by mistake comes back: the place it needs is its own, which it never gave up", async () => {
+      const { cookie } = await newCompany();
+      const job = await jobWaiting(cookie);
+      await approve(cookie, job);
+      await closeOk(cookie, job);
+      // it counts for good, so nothing new can start: 1 of Free's 1 job, and it is this one
+      expect(await room(cookie)).toMatchObject({ ok: false, upgrade: true });
+      expect((await voidOutcomeOf(job)).answer.status).toBe(200);
+      expect((await roleOf(job)).status).toBe("open");
+    });
+
+    it("a void takes the job's lock before the plan's row, in the order a change of plan takes them, and holds the row until it commits, so nothing can take that place meanwhile", async () => {
+      const { cookie, id } = await newCompany();
+      const job = await jobWaiting(cookie);
+      await closeOk(cookie, job);
+      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, job));
+      /** Whether this transaction holds the row a new job's room is read behind (POST /intake/sessions/:id/compile). */
+      const holdsThePlansRow = async (tx: Tx) => {
+        const [row] = rowsOf<{ xmax: string; me: string }>(await tx.execute(sql`select xmax::text as xmax, pg_current_xact_id()::text as me from entitlements where company_id = ${id} and key = 'active_roles'`));
+        return row.xmax === row.me;
+      };
+      const isJobLock = (statement: unknown) => (statement as { queryChunks?: Array<{ value?: unknown }> }).queryChunks?.some((c) => Array.isArray(c.value) && c.value.join("").includes("pg_advisory_xact_lock")) ?? false;
+      await withPlatform(container.db, async (tx) => {
+        const atEachJobLock: boolean[] = [];
+        const watched = new Proxy(tx, {
+          get(target, prop) {
+            if (prop !== "execute") return Reflect.get(target, prop);
+            return async (statement: Parameters<Tx["execute"]>[0]) => {
+              if (isJobLock(statement)) atEachJobLock.push(await holdsThePlansRow(target));
+              return target.execute(statement);
+            };
+          },
+        });
+        await correctOutcome(watched, { outcomeId: outcome.id, actor: { kind: "system", id: "test" }, reason: "Closed by mistake, the owner says." });
+        expect(atEachJobLock[0]).toBe(false);
+        expect(await holdsThePlansRow(tx)).toBe(true);
+      });
+      expect((await roleOf(job)).status).toBe("draft");
     });
   });
 
