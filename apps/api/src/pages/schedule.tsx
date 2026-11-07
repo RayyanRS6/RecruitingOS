@@ -407,9 +407,9 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
         <div class="card"><p>You have {setByPerson ? "asked for a different time" : "rescheduled"} twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
       ) : setByPerson ? (
         <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/reschedule`} class="card">
-          <label for="suits" class="flush">What suits you better? (optional)</label>
-          <input type="text" id="suits" name="note" maxlength={1000} placeholder="For example: mornings next week" />
           <p>We will tell the team. This time stands until you hear from them.</p>
+          <label for="suits">What suits you better? (optional)</label>
+          <input type="text" id="suits" name="note" maxlength={1000} placeholder="For example: mornings next week" />
           <button class="btn secondary" type="submit">Ask for a different time</button>
         </form>
       ) : (

@@ -572,6 +572,8 @@ applicationInterviewRoutes.get("/:id/interview-draft", requireTenant, async (c) 
   const draft = await withTenant(container.db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(and(eq(applications.id, c.req.param("id")), eq(applications.companyId, t.companyId))).limit(1);
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
+    // A notice's old link, once someone is booked: the same words as the booking itself.
+    if (app.stage === "interview_scheduled") throw new HttpError(409, "interview_open", INTERVIEW_ALREADY_OPEN);
     if (!INTERVIEW_FROM.includes(app.stage)) throw new HttpError(409, "interview_not_schedulable", `A candidate at "${STAGE_LABEL[app.stage]}" cannot be moved to an interview from here.`);
     if ((await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, OPEN_INTERVIEW))).limit(1)).length) throw new HttpError(409, "interview_open", INTERVIEW_ALREADY_OPEN);
     return interviewDraftFor(tx, { app, now: container.engine.clock() });

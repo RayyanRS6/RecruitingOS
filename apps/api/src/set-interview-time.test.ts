@@ -352,6 +352,10 @@ describe("a person sets the date and time", () => {
       const again = await routeA(cand.id);
       expect(again.status).toBe(409);
       expect((await errorOf(again)).code).toBe("interview_open");
+      // a notice's old link to the form says the same, in the same words
+      const form_ = await json(owner, "GET", `/api/v1/applications/${cand.id}/interview-draft`);
+      expect(form_.status).toBe(409);
+      expect(await errorOf(form_)).toMatchObject({ code: "interview_open", message: "This candidate already has an interview set up. Open it to move or cancel it." });
       await container.drain();
       expect(mailTo(cand.email).find((m) => m.subject.startsWith("Your interview:"))!.text).toContain("A note from Dana Whitfield: Looking forward to meeting you.");
 
@@ -801,6 +805,34 @@ describe("a person sets the date and time", () => {
       }
     });
 
+    it("a time a person set, cancelled with hours known: the one automatic set still comes on its day (founder decision 3A), and a pick from it is the candidate's own again", async () => {
+      const wes = await signInAs(container, app, { companyId, role: "hiring_manager", email: "wes@settime.test", name: "Wes Park" });
+      const wesId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "wes@settime.test")))[0].id;
+      expect((await json(wes, "PUT", "/api/v1/me/availability", { timezone: TZ, windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 12 })).status).toBe(200);
+      const { cand, booked, token } = await book("Kes", "Reed", {}, { interviewerUserIds: [wesId] });
+      expect(await confirmedPage(token)).toMatch(/We will email you new times on /);
+      expect((await form(`/c/schedule/${token}/cancel`, { confirm: "yes", next: "new_times" })).status).toBe(302);
+      await container.drain();
+      const armed = await followUpOf(cand.id);
+      expect(armed).toMatchObject({ autoState: "waiting", resolvedAt: null });
+      try {
+        setClock(Date.parse(armed.autoDueAt!) + H);
+        await container.drain();
+        const reopened = await interview(booked.id);
+        expect(reopened).toMatchObject({ status: "scheduling", selectedSlot: null, scheduleToken: token });
+        expect(reopened.offeredSlots.length).toBeGreaterThan(0);
+        expect(mailTo(cand.email).filter((m) => m.subject.startsWith("New times for your interview")).map((m) => m.text).join()).toContain("As you asked when you cancelled, here are new times for your");
+        expect((await form(`/c/schedule/${token}`, { slotId: reopened.offeredSlots[0].id, timezone: TZ })).status).toBe(302);
+        await container.drain();
+        expect(await interview(booked.id)).toMatchObject({ status: "scheduled", selectedSlot: { source: reopened.offeredSlots[0].source } });
+        expect(await confirmedPage(token)).toMatch(/<h1>You(&#39;|')re confirmed<\/h1>/);
+        expect(mailTo(cand.email).filter((m) => m.subject.startsWith("Confirmed: "))).toHaveLength(1);
+        expect(await followUpOf(cand.id)).toMatchObject({ resolvedHow: "rebooked", autoState: "sent" });
+      } finally {
+        setClock(BASE);
+      }
+    });
+
     it("a candidate who did not come: the missed interview is settled, the new one says a new time was set; our interviewer missed it: it says sorry", async () => {
       const noShow = await book("Ira", "Reed");
       expect((await json(owner, "POST", `/api/v1/interviews/${noShow.booked.id}/outcome`, { outcome: "no_show_candidate" })).status).toBe(200);
@@ -1115,7 +1147,7 @@ describe("a person sets the date and time", () => {
       expect(html).toContain('name="accessibilityNote"');
       expect(html).toContain('<p class="notice">Reply to any of our emails with HUMAN to reach a person. Nothing here is decided by software.</p>');
       expect(html).toContain("<h2>Need a different time?</h2>");
-      expect(html).toContain('<label for="suits" class="flush">What suits you better? (optional)</label>');
+      expect(html).toContain('<label for="suits">What suits you better? (optional)</label>');
       expect(html).toContain("We will tell the team. This time stands until you hear from them.");
       expect(html).not.toContain("We will send new times");
       expect(html).toContain("I need to cancel");
