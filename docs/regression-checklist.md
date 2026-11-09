@@ -169,27 +169,27 @@ Run it with `.\node_modules\.bin\tsc.cmd -p <scratch>\tsconfig.json --noEmit`. F
 
 ### 1.4 Playwright on this machine (local, Microsoft Edge)
 
-Playwright **does** run here, using Microsoft Edge and an **untracked** local config, `tests/e2e/playwright.local.config.ts`. **Never commit this file.** It imports the repository config. It turns retries off, prints one line per test and switches off traces. It uses Edge for both the desktop and the phone (iPhone 13) projects. It starts `next dev` with Turbopack on port 3010, with a 3 GB memory limit. With Turbopack the whole suite took about **18 minutes** (11 Oct 2026). With webpack it took about 1.4 hours, and the server restarted part-way.
+Playwright **does** run here, using Microsoft Edge and an **untracked** local config, `tests/e2e/playwright.local.config.ts`. **Never commit this file.** It imports the repository config. It turns retries off, prints one line per test and switches off traces (screenshots of a failure when `E2E_SHOTS` is set). It runs every project of the repository config on Edge, the phone (iPhone 13) ones included. It starts `next dev` with Turbopack on port 3010, or on `E2E_PORT`, with a 3 GB memory limit. With Turbopack the whole suite took about **18 minutes** (11 Oct 2026), before the whole flows. With webpack it took about 1.4 hours, and the server restarted part-way.
 
 If the file is missing, recreate it exactly as follows:
 
 ```ts
 // TEMPORARY local runner (not committed): the repo config, Microsoft Edge, and next dev with Turbopack.
-import { defineConfig, devices } from "@playwright/test";
+// E2E_PORT picks the port (3010 when unset), so two checkouts on this machine never share a server.
+import { defineConfig } from "@playwright/test";
 import base from "./playwright.config";
 
+const port = Number(process.env.E2E_PORT ?? 3010);
 const web = base.webServer as { env: Record<string, string>; url: string; cwd: string };
 export default defineConfig({
   ...base,
   retries: 0,
   reporter: [["line"]],
-  use: { ...base.use, trace: "off", screenshot: "off" },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"], channel: "msedge" }, testIgnore: /candidate-phone\.spec\.ts/ },
-    { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium", channel: "msedge" }, testMatch: /routes\.spec\.ts|candidate-phone\.spec\.ts/ },
-  ],
+  use: { ...base.use, trace: "off", screenshot: process.env.E2E_SHOTS ? "only-on-failure" : "off" },
+  // the repo config's projects, each on Edge
+  projects: (base.projects ?? []).map((p) => ({ ...p, use: { ...p.use, channel: "msedge" } })),
   webServer: {
-    command: "node apps/shell/node_modules/next/dist/bin/next dev apps/shell -p 3010 --turbopack --disable-source-maps",
+    command: `node apps/shell/node_modules/next/dist/bin/next dev apps/shell -p ${port} --turbopack --disable-source-maps`,
     cwd: web.cwd,
     url: web.url,
     reuseExistingServer: true,
@@ -202,33 +202,38 @@ export default defineConfig({
 ```powershell
 Set-Location tests\e2e
 node node_modules\@playwright\test\cli.js test -c playwright.local.config.ts specs\routes.spec.ts specs\publishing.spec.ts   # chosen specs
-node node_modules\@playwright\test\cli.js test -c playwright.local.config.ts                                             # all 18 specs
+node node_modules\@playwright\test\cli.js test -c playwright.local.config.ts --project=chromium --project=phone            # the journeys
+node node_modules\@playwright\test\cli.js test -c playwright.local.config.ts --project=flows --project=flows-phone         # the whole flows (an hour or more)
 ```
 
-- [ ] Nothing else is listening on port 3010. The local config reuses any server it finds, and an old server holds an old in-memory database.
+- [ ] The whole flows (`specs/flow-*.spec.ts`) need three servers: most run on the default one; `flow-whole-hire` and `flow-owner-signup-approval` with `$env:SIGNUP_MODE = "approval"`; `flow-email-down` with `$env:E2E_EMAIL_PROVIDER = "postmark"` (and no Postmark token, so every send fails). Each skips itself on the wrong server, with the reason on the report. Run them one server at a time, and stop the server between modes.
+- [ ] Nothing else is listening on the port. The local config reuses any server it finds, and an old server holds an old in-memory database.
 - [ ] Keep the laptop awake for the whole run (the network once dropped mid-run), and do not edit app source while it runs, because `next dev` reloads.
 - [ ] The test server always uses fakes: sign-in, email, AI, calendar and storage are fake, with `COMPANY_CHECK=auto` and `BOOTSTRAP_ADMIN_EMAILS=admin-e2e@identifiedtalent.com` (`tests/e2e/playwright.config.ts:47-60`).
 - [ ] `specs/access-approval.spec.ts` is skipped unless the server is in `SIGNUP_MODE=approval`. Stop any server on port 3010, because a reused server in another mode fails it, then from `tests\e2e`: `$env:SIGNUP_MODE = "approval"; node node_modules\@playwright\test\cli.js test -c playwright.local.config.ts --project=chromium specs/access-approval.spec.ts` (about 5 minutes).
 
 ### 1.5 CI (GitHub Actions)
 
-The required check on `main` is the job named **`verify`** (`.github/workflows/ci.yml`). It runs on every pull request and every push to `main`, uses only fakes, and needs no secrets. Its steps, in order:
+The required check on `main` is the job named **`verify`** (`.github/workflows/ci.yml`). It runs on every pull request and every push to `main`, uses only fakes, and needs no secrets. Since 9 November 2026 it is the last of three jobs that run side by side, and it is green only when both others are:
 
-1. Install from the lockfile.
-2. gitleaks (history and tree), then the repository secret scan.
-3. `pnpm audit --audit-level high`.
-4. Typecheck of the 15 packages.
-5. Biome lint.
-6. Migration validation.
-7. vitest.
-8. AI evals on the fake provider.
-9. The Next.js production build.
-10. The browser journeys with accessibility (axe) checks, in **four passes, each with its own dev server**: shard 1/2 and shard 2/2 (without the route inventory), then `specs/routes.spec.ts` alone, then `specs/access-approval.spec.ts` alone with `SIGNUP_MODE=approval`.
+- **`checks`** (90-minute limit), in order:
+  1. Install from the lockfile.
+  2. gitleaks (history and tree), then the repository secret scan.
+  3. `pnpm audit --audit-level high`.
+  4. Typecheck of the 15 packages.
+  5. Biome lint.
+  6. Migration validation.
+  7. vitest.
+  8. AI evals on the fake provider.
+  9. The Next.js production build.
+  10. The browser journeys with accessibility (axe) checks (the Playwright projects `chromium` and `phone`), in **four passes, each with its own dev server**: shard 1/2 and shard 2/2 (without the route inventory), then `specs/routes.spec.ts` alone, then `specs/access-approval.spec.ts` alone with `SIGNUP_MODE=approval`.
+- **`flows`** (60-minute limit for each part): the whole flows, `tests/e2e/specs/flow-*.spec.ts` (the projects `flows` and `flows-phone`), the owner's "please test it thoroughly ... test both these flows" of 6 November 2026. Five parts, each a job with its own dev server: the whole hire and sign-up by approval (`SIGNUP_MODE=approval`), the rest in three shards, and email that never arrives (`E2E_EMAIL_PROVIDER=postmark`, with no token). A spec that needs another server's mode skips itself in the others, with the reason on the report.
+- **`verify`**: waits for both, and fails unless both passed. It runs when either failed, so the check reads failed and never skipped.
 
-The browser passes take about 50 minutes, after about 20 minutes of other checks, inside a 90-minute limit. CI allows **one retry per test**, so a flaky journey can pass. The HTML report is kept 7 days.
+In `checks`, the browser passes take about 50 minutes, after about 20 minutes of other checks. CI allows **one retry per test**, so a flaky journey can pass. Each job uploads its own HTML report (`playwright-report`, `playwright-report-flows-<n>`), kept 7 days.
 
-- [ ] `verify` is green on the pull request.
-- [ ] Open the Playwright report and look for tests marked **flaky** (they passed only on the retry). A flaky test in a journey the change touched counts as a failure until it is explained.
+- [ ] `verify` is green on the pull request (which means `checks` and every part of `flows` are).
+- [ ] Open the Playwright reports and look for tests marked **flaky** (they passed only on the retry). A flaky test in a journey the change touched counts as a failure until it is explained.
 - [ ] Two more workflows are started by hand. Neither runs on a pull request: `migrate.yml` (Section 5) and `fairness.yml` (Section 7).
 
 ### 1.6 Other CI steps you can repeat here
