@@ -22,7 +22,7 @@ Release 1 is judged a success when each design partner has taken at least one re
 8. Screening invitation (policy-gated, "do it and tell me")
 9. Candidate screening (web chat; SMS when enabled, D6) with a scorecard
 10. Human interview approval (owner or hiring manager approves the round and the interviewers)
-11. Calendar scheduling (interviewer availability from Google or Microsoft calendars or declared windows, candidate self-scheduling, confirmations, reminders, reschedule, cancel, completion)
+11. Calendar scheduling (since 6 November 2026 a person sets the date and time, with no calendar or declared hours needed; interviewer availability from Google or Microsoft calendars or declared windows and candidate self-scheduling on the folded pick-a-time path; confirmations, reminders, reschedule, cancel, completion)
 12. Audit history (timeline per application and per role; audit records for privileged reads; AI run records)
 13. ITS recruiter escalation ("Bring in a recruiter" everywhere; the ITS queue; claim and resolve; full context snapshot)
 
@@ -194,7 +194,7 @@ Numbered so tests and pull requests can cite them.
 - FR-7 Review: FR-7.1 Talent groups; FR-7.2 detail; FR-7.3 actions; FR-7.4 flags; FR-7.5 audit of views.
 - FR-8 Screening: FR-8.1 invite under policy; FR-8.2 web chat; FR-8.3 SMS when enabled; FR-8.4 reminders and expiry; FR-8.5 scorecard; FR-8.6 recommendation under policy; FR-8.7 HUMAN, WITHDRAW, STOP.
 - FR-9 Interview approval: FR-9.1 approval sheet; FR-9.2 interviewer selection; FR-9.3 policy gate.
-- FR-10 Scheduling: FR-10.1 calendar connections (Google, Microsoft); FR-10.2 declared availability; FR-10.3 slot proposal; FR-10.4 candidate self-scheduling page; FR-10.5 booking with links; FR-10.6 confirmations and reminders; FR-10.7 reschedule and cancel; FR-10.8 completion and no-show; FR-10.9 decision recording (D10); FR-10.10 Interviews view.
+- FR-10 Scheduling: FR-10.1 calendar connections (Google, Microsoft); FR-10.2 declared availability; FR-10.3 slot proposal; FR-10.4 candidate self-scheduling page (folded since 6 Nov 2026; FR-10.11 a person sets the date and time and books it, with no calendar or declared hours); FR-10.5 booking with links; FR-10.6 confirmations and reminders; FR-10.7 reschedule and cancel; FR-10.8 completion and no-show; FR-10.9 decision recording (D10); FR-10.10 Interviews view.
 - FR-11 Audit: FR-11.1 application timeline; FR-11.2 role timeline; FR-11.3 admin AI run view; FR-11.4 audit records.
 - FR-12 Escalation: FR-12.1 create from every surface; FR-12.2 queue with SLA; FR-12.3 claim and resolve; FR-12.4 scoped access (D11).
 - FR-13 Today and notifications: FR-13.1 four-question summary; FR-13.2 decision cards; FR-13.3 "what the assistant did" feed; FR-13.4 stuck-role ladder with interview detectors.

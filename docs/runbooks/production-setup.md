@@ -487,8 +487,8 @@ The check:
    application goes on without a file through the four questions. Build the file inside the browser page: saved to disk,
    Windows Defender removes it.
 7. Postmark, the webhook, **Send test**: the app answers 200.
-8. Optional, with `<test mailbox>`: invite the test candidate to an interview and pick a time from the email; the
-   confirmation carries a calendar file.
+8. Optional, with `<test mailbox>`: press **Shortlist**, then **Set a date and time** on the test candidate, and book
+   a time; the one email ("Your interview: …") carries a calendar file, and its page says "Your interview is booked".
 9. Right afterwards: the role's **More** menu, **Stop accepting applications**; **Console, Customers**, the test
    company, **Take back the confirmation**, reason "smoke test done". Feeds may list the role for up to 5 more minutes.
 10. Write the result, without addresses, in the private launch to-do document, not on a pull request: the repository is
