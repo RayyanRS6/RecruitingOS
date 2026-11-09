@@ -302,12 +302,22 @@ export function accessQuestion(decision: AccessDecision, company: string): strin
 
 /**
  * What a press that was refused says, as a toast. A 409 means someone else got there first (declining a company another
- * administrator has just accepted), said as plainly as the API says it; anything else is an error, in the API's words when
- * there are any. Never a claim about what the person was told.
+ * administrator has just accepted, or accepting from a row that still showed a request just declined, which says who and
+ * when), said as plainly as the API says it; anything else is an error, in the API's words when there are any. Never a
+ * claim about what the person was told.
  */
 export function accessPressRefused(e: unknown): { title: string; tone?: "critical" } {
   if (!(e instanceof ApiError)) return { title: "Could not record that. Try again.", tone: "critical" };
   return e.status === 409 ? { title: e.message } : { title: e.message, tone: "critical" };
+}
+
+/**
+ * What a press sends: the decision, and where the request stood on this row (`from`), so a press on a row someone else has
+ * just decided changes nothing and is told who decided (the first press wins). Only a declined company's Accept, the undo,
+ * says `declined`.
+ */
+export function accessPress(company: Pick<CustomerRow, "accessRequest">, decision: AccessDecision): CustomerAccessChange {
+  return { decision, from: company.accessRequest?.status ?? "requested", confirm: true };
 }
 
 /** Accept and Decline, or the second press in their place: "Accept Harbor Dental?" with Yes and No. Accept alone for a declined company. */
@@ -356,7 +366,7 @@ export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRo
     setAsking(decision);
   };
   const decide = useMutation({
-    mutationFn: (decision: AccessDecision) => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, { decision, confirm: true }, adminReason("access request")),
+    mutationFn: (decision: AccessDecision) => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, accessPress(company, decision), adminReason("access request")),
     onSuccess: async (answer) => {
       toast(answer.message);
       await qc.invalidateQueries({ queryKey: adminKeys.customers });

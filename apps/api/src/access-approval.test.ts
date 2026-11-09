@@ -45,7 +45,11 @@ function worldOf(container: Container, app: ReturnType<typeof createApp>) {
   const signupOf = async (cookie = "") => (await read<{ signup: SignupConfig }>(await json(cookie, "GET", "/api/v1/auth/config"))).signup;
   const meOf = (cookie: string) => json(cookie, "GET", "/api/v1/auth/me").then((r) => read<{ user: { id: string; email: string }; activeCompanyId: string | null; memberships: Array<{ companyId: string; role: string }> }>(r));
   const admin = () => signInAdmin(app, container, "ada@identifiedtalent.com", "Ada Admin");
-  const decide = (cookie: string, companyId: string, decision: string, extra: Record<string, unknown> = { confirm: true }) => json(cookie, "POST", `/api/v1/admin/customers/${companyId}/access`, { decision, ...extra });
+  /** A press from a console row that shows where the request stands now (`from`), unless `extra` says what the row showed. */
+  const decide = async (cookie: string, companyId: string, decision: string, extra: Record<string, unknown> = { confirm: true }) => {
+    const from = (await statusOf(companyId)) === "declined" ? "declined" : "requested";
+    return json(cookie, "POST", `/api/v1/admin/customers/${companyId}/access`, { decision, from, ...extra });
+  };
   /** Someone new sends the form; the company's id and slug, and their session. */
   const ask = async (email: string, name: string, extra: Record<string, unknown> = {}) => {
     const cookie = await google(email, "Sam Asker");
@@ -408,14 +412,61 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.eventsOf(twice.id, "company.access_declined")).toHaveLength(1);
     expect(w.mailTo("twice@stranger.test").filter((m) => m.subject === "We can't offer access right now")).toHaveLength(1);
 
-    // an Accept and a Decline at once: whichever came first, the person ends up accepted, once
+    // an Accept and a Decline at once, from two rows that both showed the request: the first press wins, once, and the
+    // second changes nothing and is told so (the review of 6 November 2026; it used to be that Accept always won)
     const race = await w.ask("race@stranger.test", "Race Dental");
-    const raced = await Promise.all([w.decide(adminCookie, race.id, "accept"), w.decide(adminCookie, race.id, "decline")]);
-    expect(raced.map((r) => r.status).every((s) => s === 200 || s === 409)).toBe(true);
+    const shown = { from: "requested", confirm: true };
+    const raced = await Promise.all([w.decide(adminCookie, race.id, "accept", shown), w.decide(adminCookie, race.id, "decline", shown)]);
+    expect(raced.map((r) => r.status).sort()).toEqual([200, 409]);
+    const second = raced.find((r) => r.status === 409)!;
+    expect(["already_accepted", "access_decided"]).toContain(await w.code(second));
     await w.container.drain();
-    expect(await w.statusOf(race.id)).toBe("active");
-    expect(await w.eventsOf(race.id, "company.access_accepted")).toHaveLength(1);
-    expect(await w.noticesOf(race.id)).toHaveLength(1);
+    const won = await w.statusOf(race.id);
+    expect(["active", "declined"]).toContain(won);
+    expect(await w.eventsOf(race.id, "company.access_accepted")).toHaveLength(won === "active" ? 1 : 0);
+    expect(await w.eventsOf(race.id, "company.access_declined")).toHaveLength(won === "declined" ? 1 : 0);
+    expect(await w.noticesOf(race.id)).toHaveLength(won === "active" ? 1 : 0);
+    // the person hears the decision that stands, and only that one
+    expect(w.mailTo("race@stranger.test").map((m) => m.subject).filter((s) => s !== "Your request has been sent")).toEqual([won === "active" ? "Your request was approved" : "We can't offer access right now"]);
+  });
+
+  it("the first press wins: an Accept from a row that still showed the request, once it was declined, changes nothing and says who declined it and when", async () => {
+    const asker = await w.ask("stale@stranger.test", "Stale Dental");
+    const shown = { from: "requested", confirm: true };
+    // one console declines; another, not looked at again, still shows the request with Accept
+    expect((await w.decide(adminCookie, asker.id, "decline", shown)).status).toBe(200);
+    const stale = await w.decide(adminCookie, asker.id, "accept", shown);
+    expect(stale.status).toBe(409);
+    const error = ((await stale.json()) as { error: { code: string; message: string; details: unknown } }).error;
+    expect(error.code).toBe("access_decided");
+    expect(error.message).toBe("Stale Dental was declined a moment ago by Ada Admin. Nothing changed. To let them in, accept it under Declined.");
+    expect(error.details).toEqual({ status: "declined", decidedAt: expect.any(String), decidedBy: "Ada Admin" });
+    await w.container.drain();
+    // nothing moved: still declined and unconfirmed, no Accept, no notice, no workflow, and one email, the Decline's
+    expect(await w.statusOf(asker.id)).toBe("declined");
+    expect((await w.rowOf(asker.id)).settings.verifiedAt).toBeUndefined();
+    expect(await w.eventsOf(asker.id, "company.access_accepted")).toEqual([]);
+    expect(await w.noticesOf(asker.id)).toEqual([]);
+    expect(await w.runsOf(asker.id)).toEqual([]);
+    expect(w.mailTo("stale@stranger.test").map((m) => m.subject)).toEqual(["Your request has been sent", "We can't offer access right now"]);
+    // a row left open for hours says how long ago, in words that need no time zone
+    const hoursAgo = new Date(w.container.engine.clock().getTime() - 3 * 3_600_000 - 60_000).toISOString();
+    await withPlatform(w.container.db, (tx) => tx.update(events).set({ occurredAt: hoursAgo }).where(and(eq(events.companyId, asker.id), eq(events.type, "company.access_declined"))));
+    expect(((await (await w.decide(adminCookie, asker.id, "accept", shown)).json()) as { error: { message: string } }).error.message).toBe("Stale Dental was declined 3 hours ago by Ada Admin. Nothing changed. To let them in, accept it under Declined.");
+    // a second Decline from the same stale row stays a calm "nothing changed"
+    expect(await w.read<CustomerAccessAnswer>(await w.decide(adminCookie, asker.id, "decline", shown))).toMatchObject({ status: "declined", changed: false });
+    // the declined company's own Accept, under Declined, is still the undo
+    const undone = await w.decide(adminCookie, asker.id, "accept", { from: "declined", confirm: true });
+    expect(undone.status).toBe(200);
+    expect(await w.read<CustomerAccessAnswer>(undone)).toMatchObject({ status: "active", changed: true });
+    await w.container.drain();
+    expect(w.mailTo("stale@stranger.test").filter((m) => m.subject === "Your request was approved")).toHaveLength(1);
+    // and a declined row's Accept on a request still waiting (no console draws one) is refused the same way
+    const waiting = await w.ask("still.waiting@stranger.test", "Still Waiting Dental");
+    const odd = await w.decide(adminCookie, waiting.id, "accept", { from: "declined", confirm: true });
+    expect(odd.status).toBe(409);
+    expect(await w.code(odd)).toBe("access_decided");
+    expect(await w.statusOf(waiting.id)).toBe("requested");
   });
 
   it("a decision holds the company's row until it commits, which is what makes the second press wait and then read the first", async () => {
@@ -429,7 +480,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
         return ((Array.isArray(result) ? result : (result as { rows: unknown[] }).rows) as Array<{ xmax: string; me: string }>)[0];
       };
       expect((await lock()).xmax).toBe("0");
-      await decideAccess(tx, w.container, { companyId: asker.id, decision: "decline", actor, now: w.container.engine.clock() });
+      await decideAccess(tx, w.container, { companyId: asker.id, decision: "decline", from: "requested", actor, now: w.container.engine.clock() });
       const held = await lock();
       expect(held.xmax).toBe(held.me);
     });
@@ -438,7 +489,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
 
   it("only a platform administrator with a second factor, a confirmation, and a real company", async () => {
     const asker = await w.ask("guarded@stranger.test", "Guarded Dental");
-    const body = { decision: "accept", confirm: true };
+    const body = { decision: "accept", from: "requested", confirm: true };
     expect((await w.json("", "POST", `/api/v1/admin/customers/${asker.id}/access`, body)).status).toBe(401);
     // the person themselves, another customer, an ITS recruiter
     expect(await w.code(await w.json(asker.cookie, "POST", `/api/v1/admin/customers/${asker.id}/access`, body))).toBe("forbidden");
@@ -452,7 +503,8 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(noFactor.status).toBe(403);
     expect(await w.code(noFactor)).toBe("mfa_required");
     // a bad body changes nothing
-    for (const bad of [{ decision: "accept" }, { decision: "accept", confirm: false }, { decision: "maybe", confirm: true }, { decision: "accept", confirm: true, reason: "no reason is typed" }, {}]) {
+    // what the row showed is part of the press: without it, or with anything but a request's two states, nothing happens
+    for (const bad of [{ decision: "accept", from: "requested" }, { decision: "accept", from: "requested", confirm: false }, { decision: "maybe", from: "requested", confirm: true }, { decision: "accept", from: "requested", confirm: true, reason: "no reason is typed" }, { decision: "accept", confirm: true }, { decision: "accept", from: "active", confirm: true }, {}]) {
       const r = await w.json(adminCookie, "POST", `/api/v1/admin/customers/${asker.id}/access`, bad);
       expect(r.status, JSON.stringify(bad)).toBe(400);
       expect(await w.code(r)).toBe("invalid_request");

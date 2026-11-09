@@ -120,7 +120,9 @@ function recruiterAsksOf(row: { used: number; limit: number | null } | undefined
  * or declines a person's request, with a second press and no reason typed (services/access-requests.ts). Accept lets them
  * in, on the Free plan, and counts as the one-time ITS check too: one approval, not two. Decline stops there, and accepting
  * later is the undo. Two presses at once make one change, and the second reads `changed: false` with what happened.
- * Accepting a company with nobody waiting changes nothing and says so; declining one answers 409 `already_accepted`.
+ * Accepting a company with nobody waiting changes nothing and says so; declining one answers 409 `already_accepted`. The
+ * first press wins: an Accept from a row that still showed the request, once it was declined, answers 409 `access_decided`
+ * with who declined it and when, and only the declined company's own Accept (`from: "declined"`) undoes a Decline.
  */
 adminRoutes.post("/customers/:id/access", async (c) => {
   const s = c.get("session")!;
@@ -129,7 +131,7 @@ adminRoutes.post("/customers/:id/access", async (c) => {
   if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
   const body = CustomerAccessChange.parse(await c.req.json().catch(() => ({})));
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const result = await withPlatform(container.db, (tx) => decideAccess(tx, container, { companyId, decision: body.decision, actor, now: container.engine.clock() }));
+  const result = await withPlatform(container.db, (tx) => decideAccess(tx, container, { companyId, decision: body.decision, from: body.from, actor, now: container.engine.clock() }));
   // As the verification route does: the feeds and the sitemap are rebuilt at once.
   resetPublicFeedCache(container);
   if (result.declined) await tellPersonDeclined(container, result.declined);

@@ -22,7 +22,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { AccessChoice, CUSTOMER_FILTERS, CUSTOMER_SORT, CUSTOMER_SORT_CHOICES, CustomersSection, accessPressRefused, accessQuestion, accessRequests, customerAnnouncement, customerFilterFrom, customerInFilter, customerMatches, customerOrder, customersSearch, customerTabFrom, nextCustomerSort, planChangedToast, planLimitsLine, realCustomers, screeningLine, sortedCustomers, waitingCustomers, waitingForCheck, waitingWords } = await import("@ros/web/src/pages/admin/customers");
+const { AccessChoice, CUSTOMER_FILTERS, CUSTOMER_SORT, CUSTOMER_SORT_CHOICES, CustomersSection, accessPress, accessPressRefused, accessQuestion, accessRequests, customerAnnouncement, customerFilterFrom, customerInFilter, customerMatches, customerOrder, customersSearch, customerTabFrom, nextCustomerSort, planChangedToast, planLimitsLine, realCustomers, screeningLine, sortedCustomers, waitingCustomers, waitingForCheck, waitingWords } = await import("@ros/web/src/pages/admin/customers");
 const { ApiError } = await import("@ros/web/src/api/client");
 const { extensionDaysOk, extensionLines, seatsWords, trialExtendedTo, trialExtendedToast, trialExtensionQuestion } = await import("@ros/web/src/pages/admin/customers");
 const { Outcomes, outcomeWords } = await import("@ros/web/src/pages/admin/outcomes");
@@ -540,8 +540,15 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     expect(renderToStaticMarkup(createElement(AccessChoice, { company: { name: "L".repeat(120), accessRequest: null }, asking: "accept", pending: false, onPress: () => undefined, onYes: () => undefined, onNo: () => undefined }))).toMatch(/<span class="min-w-0 text-sm font-semibold text-ink wrap-anywhere">Accept L{120}\?<\/span>/);
   });
 
+  it("each press says what its row showed, so the first press wins: a request's row says requested, and only a declined company's Accept, the undo, says declined", () => {
+    expect(accessPress({ accessRequest: { status: "requested", person, declined: null } }, "accept")).toEqual({ decision: "accept", from: "requested", confirm: true });
+    expect(accessPress({ accessRequest: { status: "requested", person, declined: null } }, "decline")).toEqual({ decision: "decline", from: "requested", confirm: true });
+    expect(accessPress({ accessRequest: { status: "declined", person, declined: { at: daysAgo(1), by: "Ada Admin" } } }, "accept")).toEqual({ decision: "accept", from: "declined", confirm: true });
+  });
+
   it("says a press that was refused plainly: someone got there first is calm, an error is an error", () => {
     expect(accessPressRefused(new ApiError(409, "already_accepted", "Harbor Dental already has access, so it cannot be declined now."))).toEqual({ title: "Harbor Dental already has access, so it cannot be declined now." });
+    expect(accessPressRefused(new ApiError(409, "access_decided", "Harbor Dental was declined a moment ago by Ada Admin. Nothing changed. To let them in, accept it under Declined."))).toEqual({ title: "Harbor Dental was declined a moment ago by Ada Admin. Nothing changed. To let them in, accept it under Declined." });
     expect(accessPressRefused(new ApiError(403, "mfa_required", "Confirm it's you."))).toEqual({ title: "Confirm it's you.", tone: "critical" });
     expect(accessPressRefused(new TypeError("Failed to fetch"))).toEqual({ title: "Could not record that. Try again.", tone: "critical" });
     expect(accessPressRefused(new SyntaxError("Unexpected token <"))).toEqual({ title: "Could not record that. Try again.", tone: "critical" });

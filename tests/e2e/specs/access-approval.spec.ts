@@ -266,7 +266,7 @@ test.describe("first sign-in asks for approval", () => {
 
     // accepted meanwhile, and the next look that gets through goes Home by itself
     const { context: staff, page: admin } = await anAdministrator(browser);
-    const accepted = await admin.request.post(`${baseURL}/api/v1/admin/customers/${id}/access`, { data: { decision: "accept", confirm: true }, headers: { "x-admin-reason": "e2e: accepted" } });
+    const accepted = await admin.request.post(`${baseURL}/api/v1/admin/customers/${id}/access`, { data: { decision: "accept", from: "requested", confirm: true }, headers: { "x-admin-reason": "e2e: accepted" } });
     expect(accepted.ok(), await accepted.text()).toBeTruthy();
     await staff.close();
     await page.clock.fastForward(31_000);

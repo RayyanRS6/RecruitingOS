@@ -135,8 +135,12 @@ type DeclinedNotice = { companyId: string; companyName: string; email: string };
  *   goes once this has committed (`tellPersonDeclined`).
  * - Accept of a company with nobody waiting changes nothing and says so; Decline of one answers 409. A second Decline
  *   changes nothing and says so.
+ * - The first press wins (the review of 6 November 2026): `from` is where the request stood on the row that was pressed. An
+ *   Accept from a row that still showed the request, once someone declined it, answers 409 `access_decided` with who and
+ *   when, and changes nothing; only the declined company's own Accept (`from: "declined"`) is the undo. A press from a
+ *   declined row on a request still waiting is refused the same way. Two presses for the same outcome stay as above.
  */
-export async function decideAccess(tx: Queryable, container: Container, input: { companyId: string; decision: CustomerAccessChange["decision"]; actor: Actor; now: Date }): Promise<{ answer: CustomerAccessAnswer; declined: DeclinedNotice | null }> {
+export async function decideAccess(tx: Queryable, container: Container, input: { companyId: string; decision: CustomerAccessChange["decision"]; from: CustomerAccessChange["from"]; actor: Actor; now: Date }): Promise<{ answer: CustomerAccessAnswer; declined: DeclinedNotice | null }> {
   const { companyId, decision, actor, now } = input;
   const [co] = await tx.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
   if (!co) throw new HttpError(404, "not_found", "Company not found.");
@@ -152,6 +156,7 @@ export async function decideAccess(tx: Queryable, container: Container, input: {
     if (decision === "decline") throw new HttpError(409, "already_accepted", `${co.name} already has access, so it cannot be declined now.`);
     return { answer: answer("active", false, `${co.name} already has access. Nothing changed.`), declined: null };
   }
+  if (input.from !== owner.status && !(decision === "decline" && owner.status === "declined")) throw await decidedFirst(tx, co, owner.status, now);
   const person = { type: "user" as const, id: owner.userId };
   if (decision === "decline") {
     if (owner.status === "declined") return { answer: answer("declined", false, `${co.name} was already declined. Nothing changed.`), declined: null };
@@ -169,6 +174,25 @@ export async function decideAccess(tx: Queryable, container: Container, input: {
   await container.engine.start(tx, { workflowKey: "stuck_role_detector", companyId: co.id, subject: company, state: { companyId: co.id }, idempotencyKey: `stuck_role_detector:${co.id}`, actor });
   await notify(tx, { companyId: co.id, kind: "company.access_accepted", title: "Your request was approved", body: "You can start now.", action: { label: "Open Home", href: "/" }, userIds: [owner.userId] });
   return { answer: answer("active", true, `${co.name} was accepted.`), declined: null };
+}
+
+/**
+ * The calm refusal of a press that came second and would undo what was decided first: who declined it and how long ago (the
+ * console shows the API's words as they are, in any time zone), and the way to accept it still.
+ */
+async function decidedFirst(tx: Queryable, co: { id: string; name: string }, status: string, now: Date): Promise<HttpError> {
+  if (status !== "declined") return new HttpError(409, "access_decided", `${co.name} is still waiting for a decision. Nothing changed.`, { status });
+  const [last] = await tx.select({ at: events.occurredAt, actor: events.actor }).from(events).where(and(eq(events.companyId, co.id), eq(events.type, "company.access_declined"))).orderBy(desc(events.occurredAt)).limit(1);
+  const by = last?.actor.name ?? null;
+  return new HttpError(409, "access_decided", `${co.name} was declined${last ? ` ${agoWords(last.at, now)}` : ""}${by ? ` by ${by}` : ""}. Nothing changed. To let them in, accept it under Declined.`, { status, decidedAt: last?.at ?? null, decidedBy: by });
+}
+
+/** "a moment ago", "5 minutes ago", "3 hours ago", "2 days ago". */
+function agoWords(at: string, now: Date): string {
+  const minutes = Math.floor((now.getTime() - Date.parse(at)) / 60_000);
+  if (!(minutes >= 1)) return "a moment ago";
+  const [n, unit]: [number, string] = minutes < 60 ? [minutes, "minute"] : minutes < 1_440 ? [Math.floor(minutes / 60), "hour"] : [Math.floor(minutes / 1_440), "day"];
+  return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
 }
 
 /** The email a Decline sends, once it has committed. A failure changes nothing and raises nothing. */

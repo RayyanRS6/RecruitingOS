@@ -84,9 +84,15 @@ export function isAccessRequestStatus(status: string | null | undefined): status
   return status === "requested" || status === "declined";
 }
 
-/** POST /api/v1/admin/customers/:id/access: an administrator accepts or declines a request. No reason is typed. */
+/**
+ * POST /api/v1/admin/customers/:id/access: an administrator accepts or declines a request. No reason is typed. `from`: where
+ * the request stood on the row that was pressed, so the first press wins (the review of 6 November 2026): a press from a row
+ * that no longer says what is true changes nothing, and is told who decided and when. Only a declined company's Accept, the
+ * undo, sends `declined`.
+ */
 export const CustomerAccessChange = z.object({
   decision: z.enum(["accept", "decline"]),
+  from: z.enum(ACCESS_REQUEST_STATUSES),
   confirm: z.literal(true, { message: "Confirm the decision." }),
 }).strict();
 export type CustomerAccessChange = z.infer<typeof CustomerAccessChange>;
