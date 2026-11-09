@@ -1646,6 +1646,21 @@ describe("locked candidates", () => {
       // nothing was stored, and sent again it goes
       expect(await container.db.select().from(candidates).where(and(eq(candidates.companyId, job.id), eq(candidates.email, p.email)))).toEqual([]);
       expect((await apply(job, p)).lockedAt).toBeNull();
+
+      // the same through "Read my resume" pressed with nothing to read, which sends the form: nothing was attached, so it asks for nothing again
+      const q = person("Rhi");
+      const fd = new FormData();
+      fd.set("firstName", q.first); fd.set("lastName", q.last); fd.set("email", q.email); fd.set("locationText", "Irvine, CA");
+      fd.set("nr_recentWork", "Registered dental hygienist at Coastal Dental for six years.");
+      for (const rule of job.eligibility) fd.set(`elig_${rule.key}`, "yes");
+      fd.set("acknowledged", "yes");
+      const byRead = await whenTheJobLockTimesOut(async () => app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply/read`, { method: "POST", body: fd, headers: { "x-forwarded-for": "198.51.100.252" } }));
+      expect(byRead.timedOut).toBe(1);
+      expect(byRead.result.status).toBe(500);
+      const readForm = decode(await byRead.result.text());
+      expect(readForm).toContain(`${NOT_SENT_LINE} ${keptSentence(false)}`);
+      expect(readForm).toContain(`value="${q.email}"`);
+      expect(await container.db.select().from(candidates).where(and(eq(candidates.companyId, job.id), eq(candidates.email, q.email)))).toEqual([]);
     });
 
     it("a post the form could not even read says it was not sent, on a page of its own, never the API's JSON", async () => {

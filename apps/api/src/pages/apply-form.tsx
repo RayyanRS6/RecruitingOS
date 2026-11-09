@@ -1099,9 +1099,10 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   }
   if (!upload && !file && !posted.grant) {
     // Nothing to read: Enter pressed in a field (the first button of a fresh form is this one), or the form filled in by
-    // hand. It is sent exactly as "Send my application" sends it, under the same checks and the same limit.
+    // hand. It is sent exactly as "Send my application" sends it, under the same checks and the same limit, and under the
+    // same `formPost`: from here the send says how the form is drawn again, and when it was stored.
     const refused = await checkRateLimits(c, [POLICIES.apply]);
-    return refused ?? formPost(c, (drawn) => sendApplication(c, drawn));
+    return refused ?? sendApplication(c, drawn);
   }
   if (!upload) return show("Choose your resume file first, then press Read my resume. Or fill in the form below yourself and press Send my application.", !!posted.grant);
   if (flow === "on_file") {
