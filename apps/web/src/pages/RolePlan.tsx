@@ -195,7 +195,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canChange
       </Card>
     );
   }
-  if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} />;
+  if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} roleId={role.id} />;
   if (!pending) return null;
   const packet = pending.editWhileOpen ? role.proposedPacket?.packet ?? null : role.currentPacket?.packet ?? null;
   const assumptions = packet?.provenance.assumptions ?? [];
@@ -309,12 +309,35 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canChange
   );
 }
 
+/** What the approval card says once the role page has waited on the worker as long as it reads the role again (`CATCH_UP_FOR_MS`). */
+export const TAKING_LONGER = { title: "This is taking longer than it should", words: "It usually takes a few seconds. Reload the page in a minute; if it still shows this, bring in a recruiter." } as const;
+
 /**
  * The approval card while the worker catches up (the role page reads the role again meanwhile), so the page says what is
  * happening rather than show nothing: just after "Ask for approval", just after approving, and just after this page sent
  * the role back (`sentBackHere`), when the API still says the role waits for approval until the worker makes it a draft.
+ * The page reads the role again for two minutes at most; then the card stops its spinner and says so plainly, with Reload
+ * and Bring in a recruiter (6 November 2026: a worker that is down left the page spinning for ever). `stalled` draws that
+ * state at once, for tests and for a page opened long after the wait began.
  */
-export function CatchingUpCard({ latest, sentBackHere }: { latest: RoleDetail["packetApproval"]["latest"]; sentBackHere: boolean }) {
+export function CatchingUpCard({ latest, sentBackHere, roleId, stalled: stalledAtFirst = false }: { latest: RoleDetail["packetApproval"]["latest"]; sentBackHere: boolean; roleId?: string; stalled?: boolean }) {
+  const [stalled, setStalled] = useState(stalledAtFirst);
+  useEffect(() => {
+    if (stalled) return;
+    const t = window.setTimeout(() => setStalled(true), CATCH_UP_FOR_MS);
+    return () => window.clearTimeout(t);
+  }, [stalled]);
+  if (stalled) {
+    return (
+      <Card needsYou hero title={TAKING_LONGER.title}>
+        <p className="small text-ink-2" role="status">{TAKING_LONGER.words}</p>
+        <div className="row mt-4">
+          <Button size="sm" variant="secondary" icon="refresh" onClick={() => window.location.reload()}>Reload the page</Button>
+          <AskRecruiter roleId={roleId} size="sm" />
+        </div>
+      </Card>
+    );
+  }
   const [title, words] = sentBackHere
     ? ["Sent back", "The role goes back to a draft in a few seconds. This page updates on its own; if it does not, reload it."]
     : latest?.status === "approved"

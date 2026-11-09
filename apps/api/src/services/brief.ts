@@ -13,6 +13,7 @@ import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffS
 import { boardView, fitsOf, loadPool } from "./pool";
 import { aiInterviewsFor } from "./screens";
 import { backupsWarmCards } from "./hire-sheet";
+import { emailsOf, unreachedCandidates, type UnreachedPerson } from "./email-health";
 
 /**
  * What a decision card says for an approval that has no card of its own: a question in plain words (never an action
@@ -43,10 +44,12 @@ const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page"
  * `closing_date`: a role's closing date stopped applications, or stops them tonight or tomorrow night (plan D7), with
  * "Extend by two weeks" (a POST), another date, or closing the role. `share`: the day a job opens, the moment to share it (D8).
  * `pool_ready`: a role's pool is sorted on the board and waiting for Review and apply (plan F7), with the summary.
- * `hire`: a recorded hire whose start date has not passed, with the people still in the running to keep warm (plan H1).
+ * `hire`: a recorded hire whose start date has not passed, with the people still in the running to keep warm (plan H1),
+ * and once it has, a job still live asks to be closed. `unreached`: emails to candidates that did not arrive, with each
+ * person and their address and phone to hand (6 November 2026).
  */
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready" | "hire";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready" | "hire" | "unreached";
   title: string;
   body: string;
   roleId?: string;
@@ -57,7 +60,34 @@ export type BriefCard = {
   gettingStarted?: GettingStarted;
   /** Only on the pool_ready card: the board's summary, the same as above the board. */
   pool?: PoolSummary;
+  /** Only on the unreached card: who did not get an email, each with the way to open them and reach them another way. */
+  unreached?: UnreachedPerson[];
 };
+
+/** At most this many people are named on the unreached card; the rest are counted. */
+export const UNREACHED_NAMED = 8;
+
+/**
+ * "N emails to candidates did not arrive" (6 November 2026): every candidate step after the first page lives in an email,
+ * so a failed one is a person waiting on nothing. One card for the company, for those who read applications, naming each
+ * person with their address and phone, each opening their page. Never someone the team may not read (`unreachedCandidates`).
+ */
+async function unreachedCard(tx: Tx, companyId: string, now: Date, scope: StaffScope | null): Promise<BriefCard | null> {
+  const people = await unreachedCandidates(tx, { companyId, now, inScope: (x) => inStaffScope(scope, x) });
+  if (!people.length) return null;
+  const n = emailsOf(people);
+  const named = people.slice(0, UNREACHED_NAMED);
+  const lines = named.map((p) => `${p.name} (${p.roleTitle}): ${p.email ?? "no email address on file"}${p.phone ? `, ${p.phone}` : ""}`);
+  const more = people.length > named.length ? [`And ${people.length - named.length} more.`] : [];
+  return {
+    kind: "unreached",
+    title: `${n} ${n === 1 ? "email" : "emails"} to candidates did not arrive`,
+    body: [`Phone ${people.length === 1 ? "them" : "each of them"}, or write to them yourself.`, ...lines, ...more].join("\n"),
+    ...(people.length === 1 ? { roleId: people[0].roleId, applicationId: people[0].applicationId } : {}),
+    actions: named.length === 1 ? [{ label: `Open ${named[0].name}`, method: "GET", path: `/roles/${named[0].roleId}/talent?open=${named[0].applicationId}` }] : [],
+    unreached: named,
+  };
+}
 
 /** A pool is ready to review once at least this many people wait to be sorted on the board. */
 export const POOL_READY_MIN = 2;
@@ -175,6 +205,12 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       const words = approvalCardWords(p.actionType, { who: n ? `${n.firstName} ${n.lastName}`.trim() || "the candidate" : "the candidate", roleTitle: role?.title ?? closedRole?.title ?? null, rationale: closing ? null : p.rationale, requestedBy: p.requestedBy.kind === "user" || p.requestedBy.kind === "recruiter" ? p.requestedBy.name ?? null : null, closing, proposal: p.proposal as Record<string, unknown> });
       cards.push({ kind: "decision", title: words.title, body: words.body, roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: words.approve, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: words.reject, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "reject" } }, ...(where ? [{ label: "Review first", method: "GET" as const, path: where }] : [])] });
     }
+  }
+
+  // Emails to candidates that did not arrive (6 November 2026): for those who read applications, before the work of each job.
+  if (!viewer || can(viewer.role, "application.read")) {
+    const unreached = await unreachedCard(tx, companyId, now, scope);
+    if (unreached) cards.push(unreached);
   }
 
   // Telling candidates a private decision (founder decision B6) is offered to those who may decline.
@@ -360,7 +396,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : startsHires ? "Tell me who you need to hire" : "No jobs are open yet", body: openRoles.length ? "Applicants are being acknowledged and reviewed. I will tell you when someone is worth your time." : startsHires ? "Describe the job in a sentence or two and I will ask what I need to know." : "When someone on your team opens a job, its applicants and decisions show up here.", actions });
   }
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
-  const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review").length;
+  const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review" || c.kind === "unreached").length;
   // Strong in the same word the list shows beside their number (`fit`, 6 November 2026): worked out from both readings, never
   // from one reading's stored word. A reading of a conversation the candidate never sent is never counted (9 October 2026).
   const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage, packetVersion: applications.packetVersion, latestAssessmentId: applications.latestAssessmentId }).from(applications).where(and(eq(applications.companyId, companyId), notLocked()))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));

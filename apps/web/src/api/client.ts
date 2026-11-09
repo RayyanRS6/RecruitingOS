@@ -1,4 +1,5 @@
 import type { ActiveMark, AiInterviewGroup, AiInterviewView, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CancelledView, CandidateNotice, ChatPlan, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, InterviewFollowUpRef, InterviewInScore, LegalCheck, LockedApplicants, MatchBand, MatchFit, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ScreenWriteup, ShareTarget, ShareView, StageMove, ToldState, WrittenQuestionView } from "@ros/contracts";
+import type { UnreachedPerson } from "../email-health";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
 // The Cancelled column (founder decisions 1A to 4A): who is there and why, where their new times stand, the team's
@@ -53,7 +54,8 @@ export type Me = MeResponse;
  * `gettingStarted`: only on the getting_started card, the ITS company check and the steps this person can do (plan B1, B2).
  * `pool`: only on the pool_ready card, the pool board's summary for the role, the same as above the board (plan F7).
  */
-export type BriefCard = { kind: string; title: string; body: string; roleId?: string; applicationId?: string; approvalRequestId?: string; actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }>; gettingStarted?: GettingStarted; pool?: PoolSummary };
+/** `unreached`: only on the card about emails to candidates that did not arrive, each person with how to reach them. */
+export type BriefCard = { kind: string; title: string; body: string; roleId?: string; applicationId?: string; approvalRequestId?: string; actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }>; gettingStarted?: GettingStarted; pool?: PoolSummary; unreached?: UnreachedPerson[] };
 export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
 
 /**

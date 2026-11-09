@@ -83,7 +83,7 @@ export async function createInvitation(
 /** A fresh token and another seven days for an invitation that is still open (or lapsed unanswered); the old link stops working. */
 export async function resendInvitation(
   q: Queryable,
-  input: { invitationId: string; companyId: string; actor: Actor; now?: Date; ttlMs?: number },
+  input: { invitationId: string; companyId: string; actor: Actor; now?: Date; ttlMs?: number; /** what the record says, when the new link goes some other way than an email (it is copied to be sent by hand) */ reason?: string },
 ): Promise<{ row: InvitationRow; token: string } | null> {
   const now = input.now ?? new Date();
   const [existing] = await q.select().from(invitations).where(and(eq(invitations.id, input.invitationId), eq(invitations.companyId, input.companyId))).limit(1);
@@ -96,7 +96,7 @@ export async function resendInvitation(
     .set({ tokenHash: sha256(token), status: "pending", expiresAt: new Date(now.getTime() + (input.ttlMs ?? INVITATION_TTL_MS)).toISOString() })
     .where(eq(invitations.id, existing.id))
     .returning();
-  await audit(q, { companyId: input.companyId, actor: input.actor, action: "invitation.resent", target: { type: "invitation", id: row.id }, reason: `sent again to ${row.email}`, details: { email: row.email, role: row.role, wasExpired: state === "expired" } });
+  await audit(q, { companyId: input.companyId, actor: input.actor, action: "invitation.resent", target: { type: "invitation", id: row.id }, reason: input.reason ?? `sent again to ${row.email}`, details: { email: row.email, role: row.role, wasExpired: state === "expired" } });
   return { row, token };
 }
 

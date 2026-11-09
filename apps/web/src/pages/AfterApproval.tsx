@@ -1,9 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Dialog, Eyebrow, Icon, IconChip, Pill, Skeleton } from "@ros/ui";
 import { api, type PostingsResponse } from "../api/client";
+import { CATCH_UP_FOR_MS } from "./RolePlan";
 import { ShareJob } from "../components/ShareJob";
 import { scrollBehavior } from "../motion";
 import { destinationsOf, interviewersNote, noBoardsLine, outdatedBoardsLine, pollInterval, type Destination, type StatusChip } from "../publishing";
@@ -11,6 +12,9 @@ import { toast } from "../toast";
 
 /** How long the screen keeps asking after an approved change to a live job (see AfterApproval). */
 const EDIT_SETTLE_MS = 30_000;
+
+/** What the screen says once getting the job ready has taken as long as the job page waits for the worker (`CATCH_UP_FOR_MS`). */
+export const OPENING_TAKES_LONGER = "This is taking longer than it should. The Share tab shows where it stands; if the job is not live in a few minutes, bring in a recruiter.";
 
 function copy(text: string, what: string) {
   navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}.`), () => toast("Could not copy. Select the text and copy it by hand."));
@@ -78,9 +82,16 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
   };
   // An answer read before the approval, kept from the Share tab, says "not_open" with the role still pending: this screen opens after the approval.
   const preparing = !d || d.publishing.state === "preparing" || (d.publishing.state === "not_open" && d.role.status === "pending_approval");
+  // Two minutes of "getting it ready" means something is stuck (6 November 2026): the words stop promising a moment.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!props.open || !preparing) { setSlow(false); return; }
+    const t = window.setTimeout(() => setSlow(true), CATCH_UP_FOR_MS);
+    return () => window.clearTimeout(t);
+  }, [props.open, preparing]);
   const sub = props.editWhileOpen
     ? "Your careers page shows the new version now; Google picks it up the next time it reads the page."
-    : (!preparing ? d?.publishing.message : null) ?? "Getting the job ready on its channels. This takes a moment.";
+    : (!preparing ? d?.publishing.message : null) ?? (slow ? OPENING_TAKES_LONGER : "Getting the job ready on its channels. This takes a moment.");
   const note = d ? interviewersNote(d.interviewers) : null;
   // Not while it is being got ready: until the worker opens the role the server has no boards to name, and the line would be wrong for a moment.
   const noBoards = d && !preparing && !props.editWhileOpen ? noBoardsLine(d.boards) : null;

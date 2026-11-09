@@ -73,6 +73,20 @@ describe("the approval card while the worker catches up", () => {
     expect(text(render(client(), createElement(CatchingUpCard, { latest: rejected, sentBackHere: false })))).toContain("Getting the approval ready");
   });
 
+  it("once the page has waited as long as it reads the role again, it stops the spinner and says so, with Reload and Bring in a recruiter (6 November 2026)", () => {
+    const html = render(client(), createElement(CatchingUpCard, { latest: null, sentBackHere: false, roleId: "r1", stalled: true }));
+    const words = text(html);
+    expect(words).toContain("This is taking longer than it should");
+    expect(words).toContain("It usually takes a few seconds. Reload the page in a minute; if it still shows this, bring in a recruiter.");
+    expect(words).not.toContain("updates on its own");
+    expect(html).not.toContain('class="spinner"');
+    expect(html).toContain('role="status"');
+    expect(html).toMatch(/<button type="button" class="btn secondary sm"[^>]*>.*Reload the page<\/button>/);
+    expect(words).toContain("Bring in a recruiter");
+    // before the two minutes the card still says the approval is on its way, with its spinner
+    expect(render(client(), createElement(CatchingUpCard, { latest: null, sentBackHere: false, roleId: "r1" }))).toContain('<span class="spinner" aria-hidden="true"></span>');
+  });
+
   it("a job closed while it waited, and reopened by ITS, can ask for approval again: closing withdrew the request", () => {
     const words = text(card(role("draft", { id: "ap1", status: "cancelled", version: 1, decisionNote: "the job was closed", decidedAt: daysAgo(1), decidedBy: null })));
     expect(words).toContain("The approval was withdrawn");

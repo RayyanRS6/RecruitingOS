@@ -50,7 +50,7 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
     if (cand) {
       const cid = companyId ?? cand.companyId;
       const fallback = event.complaint ? null : await smsFallback(q, integrations, { candidateId: cand.id, companyId: cid, communication: comm ?? null, appBaseUrl: input.appBaseUrl, now });
-      if (!(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId: cid, about: comm?.applicationId, kind: "candidate.unreachable", title: event.complaint ? `${cand.firstName} ${cand.lastName} marked our email as spam` : `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: event.complaint ? "We will not email them again. If you still want to talk with them, call them; nothing further goes out automatically." : `Their address bounced (${event.description}). ${fallback === "sent" ? "We texted them a link to their status page." : fallback === "scheduled" ? "A text with their status link goes out when contact hours open." : cand.phone ? "They did not agree to texts; please call them." : "There is no phone number on file; please reach them another way."}`, action: { label: "Open the candidate", href: comm?.applicationId ? `/roles/${(await roleOf(q, comm.applicationId)) ?? ""}/talent` : "/talent" } });
+      if (!(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId: cid, about: comm?.applicationId, kind: "candidate.unreachable", title: event.complaint ? `${cand.firstName} ${cand.lastName} marked our email as spam` : `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: event.complaint ? "We will not email them again. If you still want to talk with them, call them; nothing further goes out automatically." : `Their address bounced (${event.description}). ${fallback === "sent" ? "We texted them a link to their status page." : fallback === "scheduled" ? "A text with their status link goes out when contact hours open." : cand.phone ? "They did not agree to texts; please call them." : "There is no phone number on file; please reach them another way."}`, action: { label: "Open the candidate", href: await candidateHref(q, comm?.applicationId) } });
     }
     if (user && !(await onlyAskedForAccess(q, user.id))) {
       await raiseAlert(q, { kind: "email.person_unreachable", severity: event.complaint ? "critical" : "high", title: event.complaint ? `A team member's address complained: ${address}` : `A team member's address bounces: ${address}`, body: `${event.description} Sign-in links and notifications to this address will not be delivered until an administrator releases the suppression after confirming the address.`, companyId, details: { userId: user.id, type: event.type } });
@@ -67,7 +67,7 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
     if (comm) await emit(q, { type: "message.suppressed", companyId: comm.companyId, actor, subject: { type: "communication", id: comm.id }, payload: { reason: "soft_bounce_repeated", address } });
     // a decision message that will not be tried again, since the address is now stopped, never reached them
     if (comm) await untellDecision(q, comm);
-    if (cand && companyId && !(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId, about: comm?.applicationId, kind: "candidate.unreachable", title: `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: "Their mailbox keeps rejecting messages. Please call them or reach them another way.", action: { label: "Open talent", href: "/talent" } });
+    if (cand && companyId && !(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId, about: comm?.applicationId, kind: "candidate.unreachable", title: `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: "Their mailbox keeps rejecting messages. Please call them or reach them another way.", action: { label: "Open the candidate", href: await candidateHref(q, comm?.applicationId) } });
     return { handled: true, communicationId: comm?.id ?? null, action: "suppressed", suppressionReason: "soft_bounce_repeated" };
   }
   if (comm && comm.retryAttempt < RETRY_DELAYS_MS.length) {
@@ -133,9 +133,11 @@ async function decisionGoneSince(q: Queryable, orig: Pick<typeof communications.
 /** Why a retry of a decision message was not sent. */
 export const DECISION_NO_LONGER_APPLIES = "the decision no longer applies";
 
-async function roleOf(q: Queryable, applicationId: string): Promise<string | null> {
+/** Where a notice about one application leads (6 November 2026): that candidate's page on their job, or the Candidates list when no application is known. */
+async function candidateHref(q: Queryable, applicationId: string | null | undefined): Promise<string> {
+  if (!applicationId) return "/talent";
   const [a] = await q.select({ roleId: applications.roleId }).from(applications).where(eq(applications.id, applicationId)).limit(1);
-  return a?.roleId ?? null;
+  return a ? `/roles/${a.roleId}/talent?open=${applicationId}` : "/talent";
 }
 
 /** A text with the status link when the candidate agreed to texts; outside contact hours it is queued for the next window. */

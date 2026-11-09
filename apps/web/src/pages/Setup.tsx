@@ -9,6 +9,7 @@ import { STILL_REVIEWING_LABEL, STILL_REVIEWING_NOTE, hasChoice, loosens, loosen
 import { NEW_TIMES_SETUP, newTimesReadOnlyText, newTimesSavedNotice, newTimesSettingFrom, newTimesSettingText, pendingQuestion, workingDaysFrom, type NewTimesSaved } from "../cancelled";
 import { CAREERS_PAGE_WAITS, companyCheckOf } from "../company-check";
 import { VERTICALS } from "../company-setup";
+import { candidateEmailRow, type CandidateEmailHealth } from "../email-health";
 import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoProblem, logoUrlOf } from "../publishing";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
 import { ACCESS_DAYS, accessChip } from "../recruiter-access";
@@ -36,9 +37,10 @@ type UsageRow = { used: number; limit: number | null; resetsAt?: string | null; 
 /**
  * `trial`: where the Trial plan's 30 days stand (founder decision L-02 B), null on another plan; `usage.seats` counts
  * people live. `production`: the app runs in production (staging too), where a service without a provider is there on
- * purpose rather than a development stand-in (Connected services).
+ * purpose rather than a development stand-in (Connected services). `candidateEmail`: the last week's emails to candidates,
+ * left and not arrived, which the email row reads (6 November 2026); older answers leave it out.
  */
-type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, UsageRow>; trial?: TrialStanding | null; /** Who really posts on the boards, and whether the plan leaves that to the company (the plans of 5 November 2026, Rule 6); older answers leave them out. */ whoPosts?: "its" | "self"; itsPosting?: boolean; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean };
+type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, UsageRow>; trial?: TrialStanding | null; /** Who really posts on the boards, and whether the plan leaves that to the company (the plans of 5 November 2026, Rule 6); older answers leave them out. */ whoPosts?: "its" | "self"; itsPosting?: boolean; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean; candidateEmail?: CandidateEmailHealth | null };
 /** Who posts on the boards as the API reads it, plan first; an older answer has only the company's own setting. */
 const whoPostsOf = (c: Pick<Company, "whoPosts" | "settings">): "its" | "self" => c.whoPosts ?? (c.settings.boardPosting === "self" ? "self" : "its");
 /**
@@ -242,14 +244,14 @@ export function Setup() {
             <Card title="Connected services">
               <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
                 {c.integrations.map((i) => {
-                  const cells = serviceCells(i, c.production === true);
+                  const cells = serviceCells(i, c.production === true, c.candidateEmail);
                   return (
                     <tr key={`${i.kind}-${i.provider}`}>
                       <td className="font-semibold">{SERVICE_KIND_LABEL[i.kind] ?? i.kind.replace(/_/g, " ")}</td>
                       <td>{cells.provider}</td>
                       {/* a long state wraps inside its pill, so the explanations keep room and the table never scrolls sideways */}
                       <td><Pill size="sm" tone={cells.tone} className="wrap">{cells.state}</Pill></td>
-                      <td className="small muted">{explainStatus(i, whoPostsOf(c), c.production === true)}</td>
+                      <td className="small muted">{explainStatus(i, whoPostsOf(c), c.production === true, c.candidateEmail)}</td>
                     </tr>
                   );
                 })}
@@ -329,10 +331,15 @@ const WITHOUT_PROVIDER: Record<string, string> = { sms: "Off", calendar: "Manual
 const SERVICE_KIND_LABEL: Record<string, string> = { email: "Email", sms: "Text messages", jobboard: "Job board", link_verifier: "Link checker", comp: "Pay data", storage: "File storage", scanner: "File scanner", secrets: "Key vault", identity: "Sign-in", calendar: "Calendar", analytics: "Analytics" };
 const SERVICE_PROVIDER_LABEL: Record<string, string> = { careers_page: "Careers page", google_jobs: "Google for Jobs", indeed: "Indeed", ziprecruiter: "ZipRecruiter", linkedin_basic: "LinkedIn", email_in: "Email in", postmark: "Postmark", twilio: "Twilio", google: "Google" };
 
-/** A service's provider and state cells: in production a service without a provider names none and says what happens instead. */
-function serviceCells(i: { kind: string; provider: string; status: string }, production: boolean): { provider: string; state: string; tone: Tone } {
+/**
+ * A service's provider and state cells: in production a service without a provider names none and says what happens
+ * instead. Connected email reads its state from the last week's sends to candidates (`candidateEmailRow`), never from a key.
+ */
+function serviceCells(i: { kind: string; provider: string; status: string }, production: boolean, email?: CandidateEmailHealth | null): { provider: string; state: string; tone: Tone } {
   if (i.status === "fake" && production) return { provider: "None", state: WITHOUT_PROVIDER[i.kind] ?? SERVICE_STATE_LABEL.not_connected, tone: "neutral" };
-  return { provider: SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " "), state: SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " "), tone: SERVICE_STATE_TONE[i.status] ?? "neutral" };
+  const provider = SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " ");
+  if (i.provider === "postmark" && i.status === "live") { const row = candidateEmailRow(email); return { provider, state: row.state, tone: row.tone }; }
+  return { provider, state: SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " "), tone: SERVICE_STATE_TONE[i.status] ?? "neutral" };
 }
 
 /**
@@ -341,7 +348,7 @@ function serviceCells(i: { kind: string; provider: string; status: string }, pro
  * whichever provider is loaded, the stand-in included. Another stand-in says in development that nothing leaves the
  * app; in production only email has more to say than its state.
  */
-function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its", production = false): string {
+function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its", production = false, email?: CandidateEmailHealth | null): string {
   if (i.provider === "twilio" || i.provider === "fake-sms") return "Text messaging is off until carrier registration and counsel review are complete. The AI interview runs on the web from an email link.";
   if (i.status === "fake") return production ? (i.kind === "email" ? "Candidate email is not being sent." : "") : "Nothing leaves the app.";
   if (i.provider === "careers_page") return "Served by the product; every open job has a public page and apply form.";
@@ -351,7 +358,7 @@ function explainStatus(i: { kind: string; provider: string; status: string }, wh
   if (i.provider === "indeed") return "Not connected to Indeed. Post from your own Indeed account with the apply link, or forward applications to the intake address once email-in is connected.";
   if (i.provider === "ziprecruiter") return "Not connected to ZipRecruiter. Post from your own account with the apply link.";
   if (i.provider === "linkedin_basic") return "Not connected to LinkedIn. Post a free listing from your company page with the apply link.";
-  if (i.provider === "postmark") return i.status === "live" ? "Candidate email is sent from the dedicated ITS domain." : "The sending domain is not configured; candidate email is not being sent.";
+  if (i.provider === "postmark") return i.status === "live" ? candidateEmailRow(email).line : "The sending domain is not configured; candidate email is not being sent.";
   if (i.kind === "secrets") return i.status === "live" ? "Connected credentials are kept in the managed key vault." : "Development stand-in; production uses the managed key vault.";
   if (i.kind === "comp") return i.status === "live" ? "Public wage data from the Bureau of Labor Statistics." : "Wage benchmarks unavailable; playbook ranges are used and cited.";
   return "";

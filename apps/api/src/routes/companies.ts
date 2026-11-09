@@ -7,6 +7,7 @@ import { mailbox } from "@ros/integrations";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { sendAccessRequest } from "../services/access-requests";
 import { INVITE_ONLY_MESSAGE, createCompany, signupDoor } from "../services/companies";
+import { candidateEmailHealth } from "../services/email-health";
 import { tellItsAboutNewCompany } from "../services/company-trust";
 import { sendToIts } from "../services/escalation-queue";
 import { inviteMember, leaveCompany, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
@@ -63,8 +64,11 @@ companyRoutes.get("/current", requireTenant, async (c) => {
     // Who really posts on the boards (Rule 6), and whether the plan leaves that choice to the company at all.
     const itsPosting = await planIncludesItsPosting(tx, t.companyId);
     const whoPosts = await whoPostsBoards(tx, t.companyId, co.settings);
+    // Whether email to candidates is really arriving, from the last week's sends (6 November 2026): what Settings says beside
+    // the email service, instead of "connected" because a key exists. Counts only, never anyone the team may not read.
+    const candidateEmail = await candidateEmailHealth(tx, { companyId: t.companyId, now });
     // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
-    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, aiCredit, itsPosting, whoPosts, trial: trialStanding(co, now) };
+    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, aiCredit, itsPosting, whoPosts, trial: trialStanding(co, now), candidateEmail };
   });
   // `production`: NODE_ENV is production (staging too), where a service running without a provider ("fake") is a
   // deliberate default rather than a development stand-in, and Settings says what it does instead (audit MAIL-18).
@@ -115,10 +119,15 @@ async function invite(c: Context<Vars>) {
 companyRoutes.post("/current/members/invite", requireTenant, invite);
 companyRoutes.post("/current/invites", requireTenant, invite);
 
+/**
+ * A fresh link and the email again; with `{ email: false }` the fresh link alone (6 November 2026), answered for the person
+ * to copy and send themselves, because the email did not arrive. Either way the old link stops working.
+ */
 companyRoutes.post("/current/invitations/:id/resend", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "members.manage");
-  return c.json(await resendMemberInvitation(teamOf(c), { invitationId: idParam(c, "id", "No open invitation with that id."), inviterName: inviterNameOf(c) }));
+  const body = (await c.req.json().catch(() => ({}))) as { email?: unknown };
+  return c.json(await resendMemberInvitation(teamOf(c), { invitationId: idParam(c, "id", "No open invitation with that id."), inviterName: inviterNameOf(c), email: body.email !== false }));
 });
 
 companyRoutes.post("/current/invitations/:id/revoke", requireTenant, async (c) => {

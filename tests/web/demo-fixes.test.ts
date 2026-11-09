@@ -5,6 +5,7 @@ import { eligibilityAnswerWords, notReadYetWords } from "../../apps/web/src/page
 import { ACK_FOR_ANOTHER, ackIsForAnother, retryDeletionToast } from "../../apps/web/src/pages/admin/problems";
 import { meetingLinkFor } from "../../apps/web/src/pages/candidate-panel/needs-you";
 import { CATCH_UP_EVERY_MS, CATCH_UP_FOR_MS, catchUpInterval, waitingOnWorker } from "../../apps/web/src/pages/RolePlan";
+import { OPENING_TAKES_LONGER } from "../../apps/web/src/pages/AfterApproval";
 import { CALENDAR_OFF_LINE, calendarConnectOffered } from "../../apps/web/src/pages/Setup";
 
 /**
@@ -53,11 +54,20 @@ describe("the role page while the worker catches up", () => {
     // once caught up, the rail's dot and the Posting tab follow
     expect(page).toContain('qc.invalidateQueries({ queryKey: ["roles"] });');
     const plan = read("../../apps/web/src/pages/RolePlan.tsx");
-    expect(plan).toContain('if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} />;');
+    expect(plan).toContain('if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} roleId={role.id} />;');
     expect(plan).toContain("Getting the approval ready");
+    // the card's own wait ends where the page stops reading the role again (6 November 2026): no spinner for ever
+    expect(plan).toContain("const t = window.setTimeout(() => setStalled(true), CATCH_UP_FOR_MS);");
     // sent back from the card: "Sent back" until the worker has made the role a draft, not "Getting the approval ready"
     expect(plan).toContain("setSentBackHere(true);");
     expect(plan).toContain('if (role.status !== "pending_approval") setSentBackHere(false);');
+  });
+
+  it("the screen after approval stops promising a moment after the same two minutes (6 November 2026)", () => {
+    const after = read("../../apps/web/src/pages/AfterApproval.tsx");
+    expect(after).toContain("const t = window.setTimeout(() => setSlow(true), CATCH_UP_FOR_MS);");
+    expect(after).toContain('(slow ? OPENING_TAKES_LONGER : "Getting the job ready on its channels. This takes a moment.")');
+    expect(OPENING_TAKES_LONGER).toBe("This is taking longer than it should. The Share tab shows where it stands; if the job is not live in a few minutes, bring in a recruiter.");
   });
 });
 

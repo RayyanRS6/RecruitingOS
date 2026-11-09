@@ -42,6 +42,8 @@ const CANDIDATE_READERS: Record<string, number> = {
   "apps/api/src/routes/interviews.ts": 4,
   "apps/api/src/routes/roles.ts": 2,
   "apps/api/src/services/brief.ts": 8,
+  // Home's "emails to candidates did not arrive": `notLocked` in the query that names them.
+  "apps/api/src/services/email-health.ts": 1,
   "apps/api/src/services/hire-sheet.ts": 2,
   "apps/api/src/services/new-times.ts": 2,
   "apps/api/src/services/pool.ts": 1,
@@ -63,7 +65,8 @@ const CANDIDATE_READERS: Record<string, number> = {
   "apps/api/src/services/replies.ts": 3,
   "apps/api/src/services/talent-pool.ts": 3,
   "apps/api/src/webhooks/twilio.ts": 1,
-  "packages/agents/src/outbox.ts": 1,
+  // Its consent check reads them to write to them; the notice that an email did not arrive names them through `notify`'s `about`.
+  "packages/agents/src/outbox.ts": 2,
   // What a test does for itself.
   "apps/api/src/test-helpers.ts": 1,
   // Workflows and the daily job: they read a person to write to them. What they say to the team goes through `notify`'s `about`, or names only `notLocked` people.

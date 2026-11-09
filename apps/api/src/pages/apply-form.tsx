@@ -1446,7 +1446,7 @@ const WAIT_CSS = `.wait{display:flex;gap:16px;align-items:flex-start}.loader{fle
  * The waiting room (20 Oct 2026, R20-12): after Send the page waits for this application's AI interview (the résumé read
  * and the fit check done, usually about a minute) and opens it by itself; the one email carries the same link, for
  * later. With script it asks `…/applied/status` every two seconds, then every five, and stops after about twelve
- * minutes with "check your email", its loader stopped. Without script there is no loader and no promise that the page
+ * minutes saying it is taking longer than it should, its loader stopped. Without script there is no loader and no promise that the page
  * moves: "Start my interview" opens it when it is ready, or shows this page again. The grant names this application
  * only (`WaitGrant`), or for a repeat or a known address a detached interview (Q14), or for a bot nothing; the page is
  * the same, byte for byte apart from the grant, and so is what follows (a detached interview opens the same way).
@@ -1479,12 +1479,22 @@ function WaitingRoom(props: { company: { slug: string; name: string }; role: { i
 }
 
 /**
+ * What the waiting room says once it stops asking (6 November 2026): that it is taking longer than it should, and the two
+ * ways in. Never that the link is already in their email: the email may be waiting, or may not arrive. The same words for
+ * everyone, whatever address they typed (Q14).
+ */
+export const WAIT_GAVE_UP_LINE = "This is taking longer than it should.";
+export const WAIT_GAVE_UP_MORE = "Press Start my interview again in a few minutes. The link we email you opens it too.";
+
+/**
  * Asks whether the AI interview is ready (ES5, no inline handlers): every two seconds for two minutes, then every five,
  * about twelve minutes in all (180 tries). It shows the loader and says the page opens the interview by itself; giving
- * up, it hides the loader again. `ready` presses Start my interview (which opens it); anything other than `preparing`
- * loads the receipt again, which then says plainly what happens next; a busy answer or none at all is asked again.
+ * up, it hides the loader again and says so (`WAIT_GAVE_UP_LINE`). `ready` presses Start my interview (which opens it);
+ * anything other than `preparing` loads the receipt again, which then says plainly what happens next; a busy answer or
+ * none at all is asked again.
  */
 export const APPLY_WAIT_JS = `(function(){
+var WAIT_GAVE_UP_LINE=${JSON.stringify(WAIT_GAVE_UP_LINE)};var WAIT_GAVE_UP_MORE=${JSON.stringify(WAIT_GAVE_UP_MORE)};
 var form=document.querySelector('form[data-wait-status]');if(!form||!window.fetch){return;}
 var url=form.getAttribute('data-wait-status');var done=form.getAttribute('data-wait-done');var grant=form.querySelector('input[name=grant]');
 var line=document.getElementById('wait-line');var more=document.getElementById('wait-more');var loader=document.querySelector('.wait .loader');
@@ -1492,7 +1502,7 @@ if(loader){loader.hidden=false;}
 if(more){more.textContent='We are reading your application so the questions fit your experience. It usually takes about a minute, and this page opens your interview by itself.';}
 var tries=0;var stopped=false;
 form.addEventListener('submit',function(){stopped=true;});
-function again(){if(stopped){return;}tries++;if(tries>=180){stopped=true;if(loader){loader.hidden=true;}if(line){line.textContent='Your AI interview link is in your email.';}if(more){more.textContent='It is taking longer than usual. Use the link in our email whenever you are ready, or press Start my interview.';}return;}window.setTimeout(tick,tries<60?2000:5000);}
+function again(){if(stopped){return;}tries++;if(tries>=180){stopped=true;if(loader){loader.hidden=true;}if(line){line.textContent=WAIT_GAVE_UP_LINE;}if(more){more.textContent=WAIT_GAVE_UP_MORE;}return;}window.setTimeout(tick,tries<60?2000:5000);}
 function tick(){if(stopped){return;}
 fetch(url,{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({grant:grant?grant.value:''})})
 .then(function(r){if(r.status===404){return {state:'gone'};}if(!r.ok){throw new Error('busy');}return r.json();})

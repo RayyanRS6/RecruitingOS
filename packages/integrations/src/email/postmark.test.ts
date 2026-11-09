@@ -26,7 +26,18 @@ describe("Postmark email adapter", () => {
   it("a 422 (an invalid message or an inactive recipient) is final: no retry", async () => {
     const adapter = new PostmarkEmailAdapter("server-token-for-tests-000000", fetchWith(422, { ErrorCode: 406, Message: "You tried to send to a recipient that has been marked as inactive." }));
     const result = await adapter.send(message);
-    expect(result).toEqual({ status: "failed", error: "postmark 422: You tried to send to a recipient that has been marked as inactive.", retryable: false });
+    // an inactive recipient is about this one address: other emails still go (6 November 2026)
+    expect(result).toEqual({ status: "failed", error: "postmark 422: You tried to send to a recipient that has been marked as inactive.", retryable: false, aboutAddress: true });
+  });
+
+  it("a final refusal says whether it is about the one address, so ITS hears only of the ones that stop every email", async () => {
+    const send = (body: { ErrorCode: number; Message: string }) => new PostmarkEmailAdapter("server-token-for-tests-000000", fetchWith(422, body)).send(message);
+    expect(await send({ ErrorCode: 300, Message: "Invalid 'To' address: 'person@'." })).toMatchObject({ status: "failed", retryable: false, aboutAddress: true });
+    for (const body of [{ ErrorCode: 412, Message: "Your account is pending approval." }, { ErrorCode: 400, Message: "The 'From' address you supplied is not a Sender Signature on your account." }, { ErrorCode: 300, Message: "Invalid email request: the Subject is too long." }]) {
+      const result = await send(body);
+      expect(result, body.Message).toMatchObject({ status: "failed", retryable: false });
+      expect("aboutAddress" in result, body.Message).toBe(false);
+    }
   });
 
   it("a 500 and a 429 are the provider's problem: retryable", async () => {

@@ -117,6 +117,35 @@ describe("Team card: pending invitations", () => {
   });
 });
 
+describe("Team card: an invitation whose email did not arrive (6 November 2026)", () => {
+  const failedOne = (myRole: string, myUserId: string) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+    qc.setQueryData(["members"], members);
+    qc.setQueryData(["invitations"], [{ ...invitation("i-hm", "hiring_manager", "hal@bright.test"), emailState: "failed" }, { ...invitation("i-admin", "admin", "ann@bright.test"), emailState: "sent" }]);
+    return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(TeamCard, { myRole, myUserId })));
+  };
+
+  it("says Email failed on its row and offers the link to copy and send by hand; a sent one says nothing", () => {
+    const html = failedOne("owner", "u-owner");
+    const halRow = html.slice(html.indexOf("hal@bright.test"), html.indexOf("ann@bright.test"));
+    expect(halRow).toMatch(/<span class="chip caution[^"]*">Email failed<\/span>/);
+    expect(halRow).toContain(">Copy invitation link</button>");
+    expect(halRow).toContain(">Send again</button>");
+    const annRow = html.slice(html.indexOf("ann@bright.test"));
+    expect(annRow).not.toContain("Email failed");
+    expect(annRow).not.toContain("Copy invitation link");
+    expect(html.match(/>Copy invitation link</g)).toHaveLength(1);
+  });
+
+  it("only someone who may give that invitation gets the buttons; the words are there for anyone who manages the team", () => {
+    const html = failedOne("hr", "u-hr");
+    const halRow = html.slice(html.indexOf("hal@bright.test"), html.indexOf("ann@bright.test"));
+    expect(halRow).toContain("Email failed");
+    expect(halRow).toContain(">Copy invitation link</button>");
+    expect(html.slice(html.indexOf("ann@bright.test"))).not.toContain(">Send again</button>");
+  });
+});
+
 describe("Team card: the Trial plan's people (founder decision L-02 B)", () => {
   const INVITE_OPEN = /<button type="submit" class="btn primary"(?! disabled)[^>]*>Invite<\/button>/;
   const INVITE_WAITS = /<button type="submit" class="btn primary" disabled=""[^>]*>Invite<\/button>/;

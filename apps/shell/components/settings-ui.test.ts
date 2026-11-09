@@ -275,7 +275,9 @@ describe("Settings: Connected services, for a service without a provider (audit 
   it("in production (staging too) each says what really happens, names no provider and is not a warning", () => {
     const html = card({ integrations: services, production: true, ai: { provider: "anthropic" } });
     const words = text(html);
-    expect(words).toContain("Email Postmark Connected and working Candidate email is sent from the dedicated ITS domain.");
+    // a key alone proves nothing about arriving mail (6 November 2026): with no email to a candidate yet, it says so
+    expect(words).toContain("Email Postmark Connected No email to a candidate in the last 7 days.");
+    expect(words).not.toContain("dedicated ITS domain");
     // texting is off on purpose (decision M2), and the line that says so shows
     expect(words).toContain("Text messages None Off Text messaging is off until carrier registration and counsel review are complete. The AI interview runs on the web from an email link.");
     expect(words).toContain("File scanner None Checked by the background worker");
@@ -284,6 +286,20 @@ describe("Settings: Connected services, for a service without a provider (audit 
     expect(words).not.toMatch(/development|stand-in|fake|never used in production|nothing leaves/i);
     expect(html).toMatch(/class="pill neutral[^"]*"><span class="dot" aria-hidden="true"><\/span>Manual times and calendar files<\/span>/);
     expect(html).not.toContain("pill caution");
+  });
+
+  it("connected email reads the last week's sends to candidates, never the key: working, some did not arrive, or not working", () => {
+    const email = [{ kind: "email", provider: "postmark", status: "live" }];
+    const at = (candidateEmail: Record<string, unknown>) => card({ integrations: email, production: true, ai: { provider: "anthropic" }, candidateEmail: { days: 7, lastLeftAt: null, lastFailedAt: null, ...candidateEmail } });
+    const working = at({ left: 12, failed: 0, lastLeftAt: "2026-11-08T15:00:00.000Z" });
+    expect(text(working)).toContain("Email Postmark Connected and working The last email to a candidate went out on Nov 8.");
+    const some = at({ left: 9, failed: 3, lastLeftAt: "2026-11-08T15:00:00.000Z", lastFailedAt: "2026-11-08T16:00:00.000Z" });
+    expect(text(some)).toContain("Email Postmark Some did not arrive 3 of the last 12 emails to candidates did not arrive. Home lists who to phone.");
+    expect(some).toMatch(/class="pill caution[^"]*"><span class="dot" aria-hidden="true"><\/span>Some did not arrive<\/span>/);
+    const none = at({ left: 0, failed: 5, lastFailedAt: "2026-11-08T16:00:00.000Z" });
+    expect(text(none)).toContain("Email Postmark Not working None of the last 5 emails to candidates arrived. Home lists who to phone.");
+    expect(none).toMatch(/class="pill critical[^"]*"><span class="dot" aria-hidden="true"><\/span>Not working<\/span>/);
+    for (const html of [working, some, none]) expect(text(html)).not.toContain("dedicated ITS domain");
   });
 
   it("in production, email without Postmark shows as not connected and says candidate email is not being sent", () => {

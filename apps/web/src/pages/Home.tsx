@@ -13,6 +13,7 @@ import { RecruiterRequests } from "../components/RecruiterRequests";
 import { Upgrade } from "../components/Upgrade";
 import { useIsClient } from "../components/use-is-client";
 import { interviewDraftPath } from "../hiring";
+import { NO_EMAIL_ON_FILE, openPersonPath, telHref } from "../email-health";
 import { closingDateToast, isClosingDateAction } from "../publishing";
 import { railListsRoles } from "../rail";
 import { roleStatus } from "../role-status";
@@ -91,7 +92,7 @@ export function Home() {
       ...(trial ? [{ key: "trial", node: <TrialRow row={trial} onSentToRecruiter={setSentToRecruiter} /> }] : []),
       ...(aiCredit ? [{ key: "ai-credit", node: <AiCreditRow credit={aiCredit} planKey={company.data?.planKey} onSentToRecruiter={setSentToRecruiter} /> }] : []),
       ...(allowance ? [{ key: "allowance", node: <AllowanceRow warning={allowance} onSentToRecruiter={setSentToRecruiter} /> }] : []),
-      ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
+      ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : card.kind === "unreached" && card.unreached?.length ? <UnreachedRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
     ]} />
   ) : empty ? (
     <Card><CardRow card={empty} level={2} onSentToRecruiter={setSentToRecruiter} /></Card>
@@ -339,9 +340,34 @@ function cardTone(kind: string, needsYou: boolean): Tone {
   return kind === "escalation" ? "accent" : kind === "empty" || kind === "share" || kind === "hire" ? "good" : "neutral";
 }
 
-/** `hire`: "keep your backups warm" until a new hire starts (plan H1). */
+/** `hire`: "keep your backups warm" until a new hire starts (plan H1). `unreached`: emails to candidates that did not arrive. */
 function label(kind: string): string {
-  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "AI interview", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort", hire: "New hire" }[kind] ?? kind;
+  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "AI interview", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort", hire: "New hire", unreached: "Email failed" }[kind] ?? kind;
+}
+
+/**
+ * Emails to candidates that did not arrive (6 November 2026): the card's one line, then each person in view, never behind
+ * a fold: their name opens their page, and their address and phone are right there to reach them another way. Never
+ * anyone the team may not read; the server leaves them out.
+ */
+function UnreachedRow({ card }: { card: BriefCard }) {
+  const { line } = cardLine(card.body);
+  const people = card.unreached ?? [];
+  const more = card.body.split("\n").find((l) => l.startsWith("And ") && l.endsWith(" more."));
+  return (
+    <Row title={card.title} pill={<Pill size="sm" tone="caution">{label(card.kind)}</Pill>} line={line}>
+      <ul className="grid w-full gap-2" aria-label="Who did not get an email">
+        {people.map((p) => (
+          <li key={p.applicationId} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <Link to={openPersonPath(p)} className="font-semibold">{p.name}</Link>
+            <span className="small min-w-0 text-ink-2 [overflow-wrap:anywhere]">{p.email ?? NO_EMAIL_ON_FILE}{p.phone ? <>{" · "}<a href={telHref(p.phone)}>{p.phone}</a></> : null}</span>
+            <span className="small muted">{p.roleTitle}</span>
+          </li>
+        ))}
+        {more ? <li className="small muted">{more}</li> : null}
+      </ul>
+    </Row>
+  );
 }
 
 /**

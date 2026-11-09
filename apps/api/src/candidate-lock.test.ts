@@ -183,6 +183,9 @@ describe("the team cannot read a locked person", () => {
     const hard = await app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakePostmarkEvent({ providerMessageId: ack.providerMessageId!, email: M.bouncedAddress, type: "HardBounce" })) });
     expect(hard.status).toBe(200);
     await container.drain();
+    // And the locked person's own email failed for good: Home's "emails to candidates did not arrive" and Settings' email
+    // row read the failed sends (6 November 2026), so the sweep reads them with someone locked among them.
+    await container.db.update(communications).set({ status: "failed", error: "postmark 422: refused" }).where(eq(communications.applicationId, lockedRow.id));
 
     // What a locked person cannot have by the rules, but a route must not trust: an interview, and an approval naming them.
     const [iv] = await container.db.insert(interviews).values({ companyId: job.id, applicationId: lockedRow.id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "scheduled", startsAt: new Date(Date.now() + 86_400_000).toISOString(), endsAt: new Date(Date.now() + 90_000_000).toISOString(), timezone: "America/Los_Angeles" }).returning();

@@ -11,7 +11,20 @@ import { toast } from "../toast";
 import { seatLine, seatsAllUsed, seatsFullWords, type SeatUsage } from "../trial";
 
 type Member = { userId: string; role: string; status: string; email: string; name: string | null; calendar: { provider: string; status: string; email: string | null } | null; availability: { timezone: string; windows: number } | null; schedulable: boolean };
-type Invitation = { id: string; email: string; role: string; name: string | null; expiresAt: string; invitedBy: { name: string | null }; createdAt: string };
+/** `emailState`: where the invitation's email stands (6 November 2026): on its way, sent, or failed; older answers leave it out. */
+type Invitation = { id: string; email: string; role: string; name: string | null; expiresAt: string; invitedBy: { name: string | null }; createdAt: string; emailState?: "on_its_way" | "sent" | "failed" | null };
+
+/** What the invite and resend routes answer: the link itself, for the person who sent it to copy and send themselves. */
+type InviteAnswer = { ok: boolean; link?: string; devLink?: string; replaced?: number; emailed?: boolean };
+
+/**
+ * Copies an invitation's link (6 November 2026): the email may not arrive, so the person who invited can send the link
+ * themselves. Where the browser will not copy, the link stays on screen to copy by hand.
+ */
+function copyInvitationLink(link: string): void {
+  if (!navigator.clipboard?.writeText) { toast("Select the link and copy it by hand."); return; }
+  navigator.clipboard.writeText(link).then(() => toast("Link copied.", "Send it to them yourself. It works for seven days, only for the address it was made for."), () => toast("Could not copy. Select the link and copy it by hand."));
+}
 
 /** The roles a person on the team can hold, in the words the team page uses. Recruiters are ITS staff under a grant, never assigned here. */
 const ROLES: Array<{ value: string; label: string; help: string }> = [
@@ -89,14 +102,23 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats, planKey }:
   /** A refusal over rank says what it is about (signing out, withdrawing); the API's own words fit better than the role-change ones. */
   const rankAware = (e: unknown, fallback: string) => (e instanceof ApiError && (e.code === "owner_only" || e.code === "admin_only") ? e.message : explain(e, fallback));
 
+  // The email is queued, not yet sent, when the answer comes: the toast never claims it left (6 November 2026), and the link
+  // stays on screen to copy, so the person can send it themselves if the email does not arrive.
   const sendInvite = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; devLink?: string; replaced: number }>("/api/v1/companies/current/members/invite", { email: invite.email, role: invite.role, ...(invite.name.trim() ? { name: invite.name.trim() } : {}) }),
-    onSuccess: async (r) => { toast(r.replaced ? "Invitation sent again with a new link; the old one no longer works." : "Invitation sent. It works for seven days."); setInviteLink(r.devLink ?? null); setError(null); setInvite({ email: "", role: "hiring_manager", name: "" }); await refresh(); },
+    mutationFn: () => api.post<InviteAnswer>("/api/v1/companies/current/members/invite", { email: invite.email, role: invite.role, ...(invite.name.trim() ? { name: invite.name.trim() } : {}) }),
+    onSuccess: async (r) => { toast(r.replaced ? "Invited again with a new link; the old one no longer works." : "Invited.", `The email to ${invite.email} is on its way. You can also copy the link below and send it yourself.`); setInviteLink(r.link ?? r.devLink ?? null); setError(null); setInvite({ email: "", role: "hiring_manager", name: "" }); await refresh(); },
     onError: (e) => failed(e, "Could not send the invitation."),
   });
   const resend = useMutation({
-    mutationFn: (id: string) => api.post<{ ok: boolean; devLink?: string }>(`/api/v1/companies/current/invitations/${id}/resend`),
-    onSuccess: async (r) => { toast("Invitation sent again with a new link."); setInviteLink(r.devLink ?? null); setError(null); await refresh(); },
+    mutationFn: (input: { id: string; email: boolean }) => api.post<InviteAnswer>(`/api/v1/companies/current/invitations/${input.id}/resend`, { email: input.email }),
+    onSuccess: async (r, input) => {
+      const link = r.link ?? r.devLink ?? null;
+      setInviteLink(link);
+      if (input.email) toast("Sent again with a new link.", "The old link no longer works.");
+      else if (link) copyInvitationLink(link);
+      setError(null);
+      await refresh();
+    },
     onError: (e) => failed(e, "Could not send the invitation again."),
   });
   const revoke = useMutation({
@@ -162,7 +184,13 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats, planKey }:
             </div>
           </form>
         ) : null}
-        {inviteLink ? <p className="small muted">Development mode: <a href={inviteLink}>invitation link</a></p> : null}
+        {/* the invitation's link, to send by hand when the email does not arrive (6 November 2026) */}
+        {inviteLink ? (
+          <div className="grid items-end gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <Field label="Invitation link" htmlFor="invite-link"><input id="invite-link" className="input" readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} /></Field>
+            <Button size="sm" variant="secondary" icon="copy" onClick={() => copyInvitationLink(inviteLink)}>Copy link</Button>
+          </div>
+        ) : null}
 
         {/* The people with access, as a table once the card is wide enough (screenshot 6): who, their role, whether
             interviews can be booked with them, and the round Remove button. "Sign out everywhere" and "Leave this
@@ -284,9 +312,16 @@ export function TeamCard({ myRole, myUserId, onReauthRequired, seats, planKey }:
                 <div key={inv.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
                   <span className="flex min-w-0 items-center gap-3">
                     <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-full border border-dashed border-line-strong text-ink-3"><Icon name="mail" size={16} /></span>
-                    <span className="min-w-0 text-[14px] text-ink">{inv.name ? <>{inv.name} <span className="muted small">{inv.email}</span></> : inv.email} <span className="muted small">· {roleLabel(inv.role)} · invited by {inv.invitedBy.name ?? "a teammate"} · link works until {new Date(inv.expiresAt).toLocaleDateString()}</span></span>
+                    <span className="min-w-0 text-[14px] text-ink">{inv.name ? <>{inv.name} <span className="muted small">{inv.email}</span></> : inv.email} <span className="muted small">· {roleLabel(inv.role)} · invited by {inv.invitedBy.name ?? "a teammate"} · link works until {new Date(inv.expiresAt).toLocaleDateString()}</span>{inv.emailState === "failed" ? <>{" "}<Chip tone="caution">Email failed</Chip></> : null}</span>
                   </span>
-                  {mayHandleInvitation(myRole, inv.role) ? <span className="row gap-2"><Button size="sm" variant="secondary" loading={resend.isPending && resend.variables === inv.id} onClick={() => resend.mutate(inv.id)}>Send again</Button><Button size="sm" variant="quiet" loading={revoke.isPending && revoke.variables === inv.id} onClick={() => revoke.mutate(inv.id)}>Withdraw</Button></span> : null}
+                  {mayHandleInvitation(myRole, inv.role) ? (
+                    <span className="row gap-2">
+                      {/* the email did not arrive: a new link to send by hand, with no email (the old one stops working) */}
+                      {inv.emailState === "failed" ? <Button size="sm" variant="secondary" loading={resend.isPending && resend.variables?.id === inv.id && !resend.variables.email} onClick={() => resend.mutate({ id: inv.id, email: false })}>Copy invitation link</Button> : null}
+                      <Button size="sm" variant={inv.emailState === "failed" ? "quiet" : "secondary"} loading={resend.isPending && resend.variables?.id === inv.id && resend.variables.email} onClick={() => resend.mutate({ id: inv.id, email: true })}>Send again</Button>
+                      <Button size="sm" variant="quiet" loading={revoke.isPending && revoke.variables === inv.id} onClick={() => revoke.mutate(inv.id)}>Withdraw</Button>
+                    </span>
+                  ) : null}
                 </div>
               ))}
             </div>

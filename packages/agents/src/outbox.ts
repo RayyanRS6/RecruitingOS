@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, isCompanyVerified, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, lockedAmong, nextContactWindow, notify, raiseAlert, zonedParts } from "@ros/core";
+import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, lockedAmong, nextContactWindow, notify, raiseAlert, raiseAlertOnce, zonedParts } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviews, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 
@@ -429,6 +429,22 @@ async function cancelIfUnwanted(tx: Queryable, input: { communicationId: string;
 /** `unknown`: the provider may have taken it but its reply was cut off; marked unknown, alerted, never re-sent. */
 export type SendOutcome = "sent" | "failed" | "skipped" | "retry" | "held" | "cancelled" | "unknown";
 
+/** The alert ITS gets when the email provider refuses an email for good for a reason that is not one address. */
+export const PROVIDER_REFUSED_ALERT = "message.provider_refused";
+
+/**
+ * The team's notice that an email to a candidate did not arrive (6 November 2026): who it was for, which email, in plain
+ * words (never the provider's own error), and the way to their page, where their address and phone are. Through `notify`'s
+ * `about`, so nothing is written for someone the team may not read.
+ */
+async function tellTeamItDidNotArrive(tx: Queryable, claimed: CommunicationRow): Promise<void> {
+  if (!claimed.applicationId) return;
+  const [who] = await tx.select({ roleId: applications.roleId, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(applications.id, claimed.applicationId)).limit(1);
+  const name = who ? `${who.firstName} ${who.lastName}`.trim() || "a candidate" : "a candidate";
+  const which = claimed.subject ? `"${claimed.subject}"` : "An email";
+  await notify(tx, { companyId: claimed.companyId, about: claimed.applicationId, kind: "candidate.unreachable", title: `An email to ${name} did not arrive`, body: `${which} could not be delivered. Phone them, or write to them another way.`, action: who ? { label: `Open ${name}`, href: `/roles/${who.roleId}/talent?open=${claimed.applicationId}` } : { label: "Open the candidates", href: "/talent" } });
+}
+
 /**
  * The worker's half: claim the queued row, call the provider outside any transaction, record what happened. A
  * retryable provider failure puts the row back in the queue and throws so the job runs again with backoff; the last
@@ -506,14 +522,16 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
     await emit(tx, { type: "message.failed", companyId: claimed.companyId, actor, subject: { type: "communication", id: claimed.id }, payload: { ...payload, error }, correlationId: claimed.correlationId });
     await settleDecisionTold(tx, claimed, "failed", ctx.now);
     // Not about someone locked (Rule 2): it would lead the team to a person they cannot read. ITS's own alert below still goes.
-    if (claimed.candidateId && claimed.applicationId) {
-      await notify(tx, { companyId: claimed.companyId, about: claimed.applicationId, kind: "candidate.unreachable", title: `A message to a candidate could not be sent`, body: `${claimed.subject ?? claimed.templateKey ?? "A message"}: ${error}. Please reach them another way.`, action: { label: "Open the candidate", href: "/talent" } });
-    }
+    if (claimed.candidateId && claimed.applicationId) await tellTeamItDidNotArrive(tx, claimed);
     return "failed";
   });
   if (outcome === "failed" && (result.status !== "failed" || result.retryable) && !quietOnFailure(claimed)) {
     // The provider itself failed for good (an outage that outlasted every retry, or an adapter that is not configured): an operator must see it.
     await raiseAlert(db, { kind: "message.delivery_failed", severity: "high", title: `A ${claimed.channel} could not be delivered after ${ctx.attempt} attempt${ctx.attempt === 1 ? "" : "s"}`, body: `${claimed.templateKey ?? "message"} to a recipient in this company failed: ${describeFailure(result)}. Check the provider's status and credentials; the message is marked failed and was not sent.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey, attempts: ctx.attempt } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${errorForLog(err)}`));
+  } else if (outcome === "failed" && claimed.channel === "email" && result.status === "failed" && !result.aboutAddress && !quietOnFailure(claimed)) {
+    // The provider refused it for good, and not because of this one address (a sender signature, the account, the token):
+    // every other email is refused the same way, so ITS hears at once (6 November 2026). One alert while it lasts, not one per email.
+    await raiseAlertOnce(db, { kind: PROVIDER_REFUSED_ALERT, severity: "high", title: "The email provider is refusing emails", body: `${claimed.templateKey ?? "An email"} to a recipient in this company was refused: ${describeFailure(result)}. The refusal is not about one address, so other emails are likely refused too. Check the provider's account, sender signature and domain.`, companyId: claimed.companyId, target: { type: "integration", id: integrations.email.id }, details: { template: claimed.templateKey, communicationId: claimed.id } }, { withinMs: 3600_000, now: ctx.now }).catch((err) => console.warn(`[outbox] could not raise the refusal alert: ${errorForLog(err)}`));
   }
   if (outcome === "unknown" && !quietOnFailure(claimed)) {
     await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${claimed.channel} may or may not have been delivered`, body: `The provider's reply to sending ${claimed.templateKey ?? "a message"} was cut off (${describeFailure(result).slice(0, 200)}). Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${errorForLog(err)}`));

@@ -280,3 +280,37 @@ describe("the rest of Home", () => {
     expect(html).toContain(">Needs you</h2>");
   });
 });
+
+describe("emails to candidates that did not arrive (6 November 2026)", () => {
+  const unreached = {
+    kind: "unreached",
+    title: "3 emails to candidates did not arrive",
+    body: "Phone each of them, or write to them yourself.\nAna Reyes (Dental Hygienist): ana@people.test, +17145550101\nBen Ortiz (Dental Hygienist): no email address on file",
+    actions: [],
+    unreached: [
+      { applicationId: "a1", roleId: "r1", roleTitle: "Dental Hygienist", name: "Ana Reyes", email: "ana@people.test", phone: "+17145550101", emails: 2 },
+      { applicationId: "a2", roleId: "r1", roleTitle: "Dental Hygienist", name: "Ben Ortiz", email: null, phone: null, emails: 1 },
+    ],
+  };
+
+  it("is a row that needs you, with each person in view: their name opens their page, their address and phone are right there", () => {
+    const html = render({ cards: [unreached] });
+    const words = text(html);
+    expect(html).toContain('<p class="page-header-sub">1 thing needs you</p>');
+    expect(words).toContain("3 emails to candidates did not arrive Email failed Phone each of them, or write to them yourself.");
+    expect(html).toMatch(/<span class="pill caution sm"><span class="dot" aria-hidden="true"><\/span>Email failed<\/span>/);
+    expect(html).toContain('<ul class="grid w-full gap-2" aria-label="Who did not get an email">');
+    expect(html).toContain('<a href="/roles/r1/talent?open=a1" class="font-semibold">Ana Reyes</a>');
+    expect(html).toContain('<a href="tel:+17145550101">+17145550101</a>');
+    expect(words).toContain("ana@people.test");
+    expect(html).toContain('<a href="/roles/r1/talent?open=a2" class="font-semibold">Ben Ortiz</a>');
+    expect(words).toContain("No email address on file");
+    // the people are never behind a fold
+    expect(html).not.toContain('aria-label="Why: 3 emails to candidates did not arrive"');
+  });
+
+  it("counts the rest when more did not get one than the card names", () => {
+    const html = render({ cards: [{ ...unreached, body: `${unreached.body}\nAnd 4 more.` }] });
+    expect(text(html)).toContain("And 4 more.");
+  });
+});

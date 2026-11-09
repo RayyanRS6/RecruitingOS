@@ -9,6 +9,16 @@ import type { EmailAdapter, OutboundEmail, SendResult } from "../types";
 export const POSTMARK_TIMEOUT_MS = 30_000;
 
 /**
+ * Whether Postmark refused a message because of its one recipient, so other messages still go: 406, the address is
+ * inactive (it bounced or complained before), or 300, an invalid request whose words name the To address. Every other
+ * refusal (a sender signature, the account, the server token) stops every message, and ITS must hear of it.
+ */
+export function refusesTheAddress(body: { ErrorCode?: number; Message?: string }): boolean {
+  if (body.ErrorCode === 406) return true;
+  return body.ErrorCode === 300 && /'?To'? address|recipient/i.test(body.Message ?? "");
+}
+
+/**
  * Postmark transactional email. Live when POSTMARK_SERVER_TOKEN is set and the sending domain
  * has SPF, DKIM, and DMARC configured at Postmark. Otherwise reports not_connected and
  * records nothing as sent.
@@ -48,7 +58,7 @@ export class PostmarkEmailAdapter implements EmailAdapter {
       // the outbox marks it unknown for a person to check (`uncertain`).
       if (res.ok && deadline.signal.aborted) return { status: "failed", error: `postmark took the message but its reply did not finish within ${Math.round(this.timeoutMs / 1000)} seconds; it may have been delivered`, retryable: false, uncertain: true };
       const retryable = res.status >= 500 || res.status === 429;
-      return { status: "failed", error: `postmark ${res.status}: ${body.Message ?? "unknown"}`, retryable };
+      return { status: "failed", error: `postmark ${res.status}: ${body.Message ?? "unknown"}`, retryable, ...(refusesTheAddress(body) ? { aboutAddress: true } : {}) };
     } catch (err) {
       // Postmark has no idempotency key: only a failure to connect is tried again (`thrownSendFailure`).
       return thrownSendFailure("postmark", err, deadline.signal.aborted, this.timeoutMs);

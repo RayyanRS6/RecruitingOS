@@ -109,7 +109,7 @@ export function fakePostmarkEvent(input: { providerMessageId: string; email: str
 export function guardEmailAdapter<T extends EmailAdapter>(inner: T, lookup: (address: string) => Promise<{ reason: string } | null>): T {
   const guardedSend = async (msg: OutboundEmail): Promise<SendResult> => {
     const hit = await lookup(msg.to);
-    if (hit) return { status: "failed", error: `address suppressed (${hit.reason.replace(/_/g, " ")}); no email is sent to it until an administrator releases it`, retryable: false };
+    if (hit) return { status: "failed", error: `address suppressed (${hit.reason.replace(/_/g, " ")}); no email is sent to it until an administrator releases it`, retryable: false, aboutAddress: true };
     return inner.send(msg);
   };
   return new Proxy(inner, { get(target, prop, receiver) { return prop === "send" ? guardedSend : Reflect.get(target, prop, receiver); } });
@@ -122,7 +122,7 @@ export class SuppressingEmailAdapter implements EmailAdapter {
   get status() { return this.inner.status; }
   async send(msg: OutboundEmail): Promise<SendResult> {
     const hit = await this.lookup(msg.to);
-    if (hit) return { status: "failed", error: `address suppressed (${hit.reason.replace(/_/g, " ")}); no email is sent to it until an administrator releases it`, retryable: false };
+    if (hit) return { status: "failed", error: `address suppressed (${hit.reason.replace(/_/g, " ")}); no email is sent to it until an administrator releases it`, retryable: false, aboutAddress: true };
     return this.inner.send(msg);
   }
   /** The wrapped adapter, for tests and development tooling. */
