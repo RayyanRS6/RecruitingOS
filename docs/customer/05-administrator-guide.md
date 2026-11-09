@@ -13,6 +13,8 @@ Screen names and button labels in **bold** are the ones you will see in the prod
 3. Your Google or Microsoft account handles the sign-in, including any two-step verification you have turned on there. ITS never sees or keeps a password.
 4. The first time, you land on **Tell us about your company** (section 2). Once ITS has let you in, you land on **Home**.
 
+If Microsoft says an administrator must approve the app, ask your company's IT administrator to approve it once, or use **Continue with Google**.
+
 Your session lasts up to thirty days of inactivity. Press **Sign out** at the bottom of the left rail (at the end of the top bar on a phone or tablet) to end it sooner. **Your sessions** in **Settings** (on the **Security** tab) lists every place you are signed in (section 5).
 
 If you see "Email me a sign-in link" on the sign-in page, ignore it. It is only offered in some setups, and your workspace uses Google or Microsoft.
