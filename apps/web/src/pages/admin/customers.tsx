@@ -11,6 +11,7 @@ import { focusLost } from "../../focus-after";
 import { useNavigate, useSearchParams } from "../../nav";
 import { RECRUITER_ASKS_OVER_CHIP } from "../../recruiter-requests";
 import { toast } from "../../toast";
+import { TODAY_REFRESH } from "../../today";
 import { trialDate } from "../../trial";
 import { CustomerReportPanel } from "../AdminCustomerReport";
 import { adminKeys, adminReason, type AiCreditLine, type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
@@ -249,14 +250,17 @@ const websiteFact = (website: string): LineFact => ({ text: website, href: websi
 
 type AccessFactsOf = Pick<CustomerRow, "accessRequest" | "vertical" | "sizeBand" | "locations" | "settings" | "createdAt">;
 
-/** What a request says, in the parts its two places choose from. */
+/**
+ * What a request says, in the parts its two places choose from. The address their sign-in proved comes first, then the name
+ * they typed, so a name cannot pass for someone else's address (the review of 6 November 2026).
+ */
 function accessFactParts(c: AccessFactsOf, now: number) {
   const person = c.accessRequest?.person;
   const where = c.locations?.[0];
   const website = c.settings.website?.trim();
   const place = [where?.city, where?.region].filter(Boolean).join(", ");
   return {
-    who: [person?.name, person?.email].filter((v): v is string => !!v).map((text) => ({ text })),
+    who: [person?.email, person?.name].filter((v): v is string => !!v).map((text) => ({ text })),
     place: place ? [{ text: place }] : [],
     website: website ? [websiteFact(website)] : [],
     waited: c.accessRequest?.status === "requested" ? [{ text: waitingWords(c.createdAt, now) }] : [],
@@ -264,8 +268,8 @@ function accessFactParts(c: AccessFactsOf, now: number) {
 }
 
 /**
- * The Overview's row: the person's name and email, the kind of business, the size, the city and state, the website, and how
- * long they have waited. All of it was typed by a stranger, so it is only ever drawn as text and the checked link.
+ * The Overview's row: the person's email and name, the kind of business, the size, the city and state, the website, and how
+ * long they have waited. All of it but the email was typed by a stranger, so it is only ever drawn as text and the checked link.
  */
 export function accessFacts(c: AccessFactsOf, now: number = Date.now()): LineFact[] {
   const { who, place, website, waited } = accessFactParts(c, now);
@@ -301,12 +305,22 @@ export function accessQuestion(decision: AccessDecision, company: string): strin
 
 /**
  * What a press that was refused says, as a toast. A 409 means someone else got there first (declining a company another
- * administrator has just accepted), said as plainly as the API says it; anything else is an error, in the API's words when
- * there are any. Never a claim about what the person was told.
+ * administrator has just accepted, or accepting from a row that still showed a request just declined, which says who and
+ * when), said as plainly as the API says it; anything else is an error, in the API's words when there are any. Never a
+ * claim about what the person was told.
  */
 export function accessPressRefused(e: unknown): { title: string; tone?: "critical" } {
   if (!(e instanceof ApiError)) return { title: "Could not record that. Try again.", tone: "critical" };
   return e.status === 409 ? { title: e.message } : { title: e.message, tone: "critical" };
+}
+
+/**
+ * What a press sends: the decision, and where the request stood on this row (`from`) at its first press, the one that asked
+ * the question, so a press on a row someone else has just decided changes nothing and is told who decided (the first press
+ * wins). Only a declined company's Accept, the undo, says `declined`.
+ */
+export function accessPress(company: Pick<CustomerRow, "accessRequest">, decision: AccessDecision): CustomerAccessChange {
+  return { decision, from: company.accessRequest?.status ?? "requested", confirm: true };
 }
 
 /** Accept and Decline, or the second press in their place: "Accept Harbor Dental?" with Yes and No. Accept alone for a declined company. */
@@ -338,10 +352,15 @@ export function AccessChoice(props: { company: Pick<CustomerRow, "name" | "acces
  * `onDecided` runs once the new list is drawn, either way, for the place around it to look after focus should the row have
  * left with it. Swapping the buttons removes the one that had focus: it goes to Yes, and after No back to the button that
  * asked.
+ *
+ * The question keeps what its first press sends, `from` included: where the request stood then (the review of 9 November
+ * 2026). It stands only while the request still stands there, so the list read again under it with another
+ * administrator's decision takes it away, and its Yes never sends where this row stands now (a Decline undone by mistake).
  */
 export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRow, "id" | "name" | "accessRequest">; onDecided?: () => void }) {
   const qc = useQueryClient();
-  const [asking, setAsking] = useState<AccessDecision | null>(null);
+  const [asking, setAsking] = useState<CustomerAccessChange | null>(null);
+  if (asking && asking.from !== company.accessRequest?.status) setAsking(null);
   const box = useRef<HTMLSpanElement>(null);
   const focusButton = useRef<number | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `asking` is what swaps the buttons, and this runs once they are drawn
@@ -351,11 +370,11 @@ export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRo
     focusButton.current = null;
   }, [asking]);
   const ask = (decision: AccessDecision | null) => {
-    focusButton.current = !decision && asking === "decline" ? 1 : 0;
-    setAsking(decision);
+    focusButton.current = !decision && asking?.decision === "decline" ? 1 : 0;
+    setAsking(decision ? accessPress(company, decision) : null);
   };
   const decide = useMutation({
-    mutationFn: (decision: AccessDecision) => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, { decision, confirm: true }, adminReason("access request")),
+    mutationFn: (press: CustomerAccessChange) => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, press, adminReason("access request")),
     onSuccess: async (answer) => {
       toast(answer.message);
       await qc.invalidateQueries({ queryKey: adminKeys.customers });
@@ -372,7 +391,7 @@ export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRo
   });
   return (
     <span ref={box} className="flex max-w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-      <AccessChoice company={company} asking={asking} pending={decide.isPending} onPress={ask} onYes={() => asking && decide.mutate(asking)} onNo={() => ask(null)} />
+      <AccessChoice company={company} asking={asking?.decision ?? null} pending={decide.isPending} onPress={ask} onYes={() => asking && decide.mutate(asking)} onNo={() => ask(null)} />
     </span>
   );
 }
@@ -404,9 +423,11 @@ const TINTED = "border-line-tint bg-tint shadow-none";
 export function Customers() {
   const [search] = useSearchParams();
   const nav = useNavigate();
-  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason) });
+  // A tab left open stays true, as the Overview's does (the review of 6 November 2026): on focus, and every minute while it
+  // is visible, never in a hidden tab, because each read is recorded. A form in the drawer keeps what was typed.
+  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason), ...TODAY_REFRESH });
   // Companies at 80% of their screening conversations, or past them (Q17): from the alerts ITS was sent.
-  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason) });
+  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason), ...TODAY_REFRESH });
   const low = allowanceAlerts(alerts.data ?? []);
   const [filter, setFilter] = useState<CustomerFilter>(() => customerFilterFrom(search.get("show")));
   const [query, setQuery] = useState(() => search.get("q") ?? "");
@@ -764,10 +785,14 @@ export function planPriceLine(prices: Record<string, number> | undefined): strin
   return typeof prices?.monthlyUsd === "number" ? `$${prices.monthlyUsd.toLocaleString("en-US")} a month` : null;
 }
 
-/** The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B); `opened` how many locked candidates the new plan opened. */
-export function planChangedToast(company: string, plan: string, endedTrial = false, opened = 0): { title: string; detail: string } {
+/**
+ * The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B);
+ * `opened` how many locked candidates the new plan opened; `aiMonthStarted` when the move started a monthly AI credit's first
+ * month, the one thing a change of plan does start again.
+ */
+export function planChangedToast(company: string, plan: string, endedTrial = false, opened = 0, aiMonthStarted = false): { title: string; detail: string } {
   const people = opened ? ` ${opened === 1 ? "1 locked candidate opens" : `${opened} locked candidates open`} now.` : "";
-  const limits = `The new limits apply at once. This month's usage stays; the reset date does not move.${people}`;
+  const limits = `The new limits apply at once. ${aiMonthStarted ? "AI help starts a new month today; other allowances keep their dates." : "This month's usage stays; the reset date does not move."}${people}`;
   return { title: `${company} is on ${plan} now.`, detail: endedTrial ? `The trial has ended; new applications are open again. ${limits}` : limits };
 }
 
@@ -813,13 +838,23 @@ export function trialExtendedToast(to: string, timeZone?: string | null): string
  * The Plan control (Wave S2 F1; founder decision F8), platform admins only: pick a plan, say why, confirm. The new limits
  * apply at once (POST /admin/customers/:id/plan); the change is audited with the reason and the customer sees it in
  * their history. Design Partner starts the 90-day pilot. Once changed, the drawer goes back to its Overview.
+ *
+ * The pick starts from the plan the company is on, and starts again from it when the list read again brings another
+ * administrator's change of plan (the review of 9 November 2026), so the panel never offers to undo that change unasked;
+ * the reason typed stays.
  */
-function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => void }) {
+export function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => void }) {
   const qc = useQueryClient();
   const plans = useQuery({ queryKey: ["admin", "plans"], queryFn: () => api.get<PlanOption[]>("/api/v1/admin/plans", reason) });
   const [pick, setPick] = useState(company.planKey);
   const [why, setWhy] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [pickedOn, setPickedOn] = useState(company.planKey);
+  if (pickedOn !== company.planKey) {
+    setPickedOn(company.planKey);
+    setPick(company.planKey);
+    setConfirming(false);
+  }
   // A retired plan the company is still on stays in the list, or the list would draw its first option as if chosen and
   // offer no change to it. The API offers nothing else, so it can only be left as it is.
   const offered = plans.data ?? [];
@@ -828,9 +863,9 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
   const price = planPriceLine(chosen?.prices);
   const includes = chosen ? [price, planLimitsLine(chosen.limits)].filter(Boolean).join(" · ") : "";
   const save = useMutation({
-    mutationFn: () => api.post<{ trialEnded?: boolean; unlocked?: number }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
-    onSuccess: (r) => {
-      const t = planChangedToast(company.name, chosen?.name ?? pick, !!r?.trialEnded, r?.unlocked ?? 0);
+    mutationFn: (planKey: string) => api.post<{ trialEnded?: boolean; unlocked?: number; aiCreditMonthStarted?: boolean }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey, reason: why.trim() }, reason),
+    onSuccess: (r, planKey) => {
+      const t = planChangedToast(company.name, options.find((p) => p.key === planKey)?.name ?? planKey, !!r?.trialEnded, r?.unlocked ?? 0, !!r?.aiCreditMonthStarted);
       toast(t.title, t.detail);
       setWhy("");
       setConfirming(false);
@@ -856,7 +891,7 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
               <>
                 <Field label="Why (required, kept with the change)" htmlFor="plan-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="plan-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
                 {confirming ? (
-                  <Alert tone="caution"><div className={CONFIRM}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+                  <Alert tone="caution"><div className={CONFIRM}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate(pick)}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
                 ) : <div className="row"><Button variant="primary" disabled={!reasonReady(why)} onClick={() => setConfirming(true)}>Change plan</Button><Button variant="quiet" onClick={() => { setPick(company.planKey); setWhy(""); }}>Cancel</Button></div>}
               </>
             ) : null}
@@ -873,12 +908,21 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
  * started: a number of days (1 to 90) and a reason, then a second press to confirm. The new end counts from the later of
  * the old end and today (POST /admin/customers/:id/trial); the extension is audited with the reason, the owners are told,
  * the "trial ended" alert is resolved and a paused company takes applications again.
+ *
+ * The question stands on the end it was asked on (the review of 9 November 2026): another administrator's extension read in
+ * under it takes it away, so its date never moves under a pending Yes that would add the days a second time; the days and
+ * the reason typed stay.
  */
-function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: TrialStanding }) {
+export function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: TrialStanding }) {
   const qc = useQueryClient();
   const [days, setDays] = useState("14");
   const [why, setWhy] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [askedOn, setAskedOn] = useState(trial.endsAt);
+  if (askedOn !== trial.endsAt) {
+    setAskedOn(trial.endsAt);
+    setConfirming(false);
+  }
   const count = Number(days);
   const ready = extensionDaysOk(count) && reasonReady(why);
   const to = trialExtendedTo(trial, extensionDaysOk(count) ? count : 0);
@@ -950,12 +994,20 @@ type ScoreChoice = "shown" | "hidden";
  * company. Every change needs a reason, which is audited and kept with who made it (POST
  * /admin/customers/:id/candidate-score). Counsel items 1 and 21: a lawyer reviews it before real candidates in NYC, IL,
  * CA or CO.
+ *
+ * The choice starts from the switch as it is, and starts again from it when another administrator's change is read in
+ * (the review of 9 November 2026), so the panel never shows the old setting with a Save that would turn it back.
  */
-function CandidateScorePanel({ company }: { company: CustomerRow }) {
+export function CandidateScorePanel({ company }: { company: CustomerRow }) {
   const qc = useQueryClient();
   const current: ScoreChoice = candidateScoreOn(company) ? "shown" : "hidden";
   const [choice, setChoice] = useState<ScoreChoice>(current);
   const [why, setWhy] = useState("");
+  const [chosenOn, setChosenOn] = useState(current);
+  if (chosenOn !== current) {
+    setChosenOn(current);
+    setChoice(current);
+  }
   const setBy = company.settings.candidateScoreSetBy;
   const save = useMutation({
     mutationFn: () => api.post<{ shown: boolean; changed: boolean }>(`/api/v1/admin/customers/${company.id}/candidate-score`, { shown: choice === "shown", reason: why.trim() }, reason),
@@ -990,21 +1042,41 @@ function CandidateScorePanel({ company }: { company: CustomerRow }) {
 }
 
 /**
+ * The toast after the ITS check was pressed, from what the press asked for (`verified`) and whether it changed anything: a
+ * press another administrator got to first changes nothing and says so (the review of 9 November 2026).
+ */
+export function companyCheckToast(company: string, verified: boolean, r: { changed: boolean; releasedMessages: number }): { title: string; detail: string } {
+  const n = r.releasedMessages;
+  const released = n ? `${n} held ${n === 1 ? "message is" : "messages are"} on ${n === 1 ? "its" : "their"} way` : "";
+  if (!r.changed) return verified ? { title: `${company} was already confirmed.`, detail: released ? `${released}.` : "Nothing changed." } : { title: `${company}'s confirmation was already taken back.`, detail: "Nothing changed." };
+  return verified
+    ? { title: `${company} is confirmed.`, detail: `Its pages are public now${released ? ` and ${released}` : ""}. The owners were told.` }
+    : { title: `${company} is no longer confirmed.`, detail: "Its public pages are offline and its messages to candidates wait. The owners were told." };
+}
+
+/**
  * The one-time ITS check of a company (founder decision B7): confirm it after checking it is real, or take a confirmation
  * back; both need a reason, which the customer sees in their own history, and a second press to confirm. Below, whether
  * ITS can sign in to the company's job boards, which ticks the owner's getting-started step.
+ *
+ * The question keeps what its first press asked for (`to`) and the confirmation it was asked on (`at`), the review of 9
+ * November 2026: the list read again under it with another administrator's confirmation, or its taking back, takes the
+ * question away and keeps the reason typed, so its Yes never sends the opposite of what was asked.
  */
-function CompanyCheckPanel({ company }: { company: CustomerRow }) {
+export function CompanyCheckPanel({ company }: { company: CustomerRow }) {
   const qc = useQueryClient();
   const [why, setWhy] = useState("");
-  const [confirming, setConfirming] = useState(false);
+  const [asked, setAsked] = useState<{ to: boolean; at: string | null } | null>(null);
   const verified = !!company.verifiedAt;
+  const at = company.verifiedAt ?? null;
+  if (asked && asked.at !== at) setAsked(null);
   const change = useMutation({
-    mutationFn: () => api.post<{ changed: boolean; releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: !verified, reason: why.trim(), confirm: true }, reason),
-    onSuccess: (r) => {
-      toast(verified ? `${company.name} is no longer confirmed.` : `${company.name} is confirmed.`, verified ? "Its public pages are offline and its messages to candidates wait. The owners were told." : `Its pages are public now${r.releasedMessages ? ` and ${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way` : ""}. The owners were told.`);
+    mutationFn: (to: boolean) => api.post<{ changed: boolean; releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: to, reason: why.trim(), confirm: true }, reason),
+    onSuccess: (r, to) => {
+      const t = companyCheckToast(company.name, to, r);
+      toast(t.title, t.detail);
       setWhy("");
-      setConfirming(false);
+      setAsked(null);
       qc.invalidateQueries({ queryKey: ["admin", "customers"] });
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the check."),
@@ -1015,10 +1087,12 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record it."),
   });
   // A confirmed company with messages still held (one held while the confirmation was being made): confirming again sends them.
+  // Only that (`heldOnly`, the review of 9 November 2026): once someone took the confirmation back, the API confirms nothing
+  // and says so, and the card is read again.
   const release = useMutation({
-    mutationFn: () => api.post<{ releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: true, reason: "Held messages sent after the company was confirmed.", confirm: true }, reason),
+    mutationFn: () => api.post<{ releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: true, heldOnly: true, reason: "Held messages sent after the company was confirmed.", confirm: true }, reason),
     onSuccess: (r) => { toast(r.releasedMessages ? `${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way.` : "Nothing was held any more."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the held messages."),
+    onError: (e) => { toast(e instanceof ApiError ? e.message : "Could not send the held messages."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
   });
   return (
     <div className="stack gap-4">
@@ -1042,9 +1116,9 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
         <p className="small muted">{verified ? "Its careers page, job pages and feeds go offline at once and its messages to candidates wait again. Roles, candidates and decisions are kept." : "Confirm only after checking the company is real: the kick-off call, its website, a phone number. Its pages go public, approved roles are published and held messages go out."} The owners are told, and they see your reason in their activity history.</p>
         <div className={FORM}>
           <Field label={verified ? "Why you are taking it back" : "How you checked the company"} htmlFor="co-check-why"><input id="co-check-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
-          {confirming ? (
-            <Alert tone="caution"><div className={CONFIRM}><span>{verified ? `Take back the confirmation of ${company.name}?` : `Confirm ${company.name} and make its pages public?`}</span><span className="row"><Button size="sm" variant={verified ? "destructive" : "primary"} loading={change.isPending} onClick={() => change.mutate()}>{verified ? "Yes, take it back" : "Yes, confirm it"}</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
-          ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setConfirming(true)}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
+          {asked ? (
+            <Alert tone="caution"><div className={CONFIRM}><span>{asked.to ? `Confirm ${company.name} and make its pages public?` : `Take back the confirmation of ${company.name}?`}</span><span className="row"><Button size="sm" variant={asked.to ? "primary" : "destructive"} loading={change.isPending} onClick={() => change.mutate(asked.to)}>{asked.to ? "Yes, confirm it" : "Yes, take it back"}</Button><Button size="sm" variant="quiet" onClick={() => setAsked(null)}>No</Button></span></div></Alert>
+          ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setAsked({ to: !verified, at })}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
         </div>
       </Card>
       {/* no ITS staff time on the company's plan: its team posts, so there is nothing for ITS to sign in to */}

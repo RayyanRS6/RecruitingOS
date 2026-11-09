@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, isNotNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, ITS_WORK, JOBS_TOTAL, RECRUITER_ASKS, SEATS, TEXT_SCREENS, isAiCreditKey } from "@ros/contracts";
 import { adminAlerts, aiRuns, companies, entitlements, invitations, memberships, plans, roles, usageEvents, users, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
@@ -165,15 +165,28 @@ async function rollIfEnded(q: Queryable, row: EntitlementRow, now: Date): Promis
 }
 
 /**
+ * How long an AI call can still be running after its hold: the /api route is stopped at 5 minutes and a call's own budget
+ * ends at 4.5, on the web and in the worker alike (packages/ai/src/runner.ts, providers/anthropic.ts). A row still `running`
+ * past this was left by a process that went away, so its hold is no money in flight but money spent (the check of 9 November).
+ */
+export const AI_RUN_IN_FLIGHT_MS = 10 * 60_000;
+
+/** The runs whose cost is money spent at `now`: all but a call that can still be running (`AI_RUN_IN_FLIGHT_MS`). */
+export function settledRun(now: Date): SQL {
+  return or(ne(aiRuns.status, "running"), lt(aiRuns.createdAt, new Date(now.getTime() - AI_RUN_IN_FLIGHT_MS).toISOString())) as SQL;
+}
+
+/**
  * What a company's AI has cost, in millionths of a dollar (the column's own precision), summed live from the runs
  * themselves (nothing deletes a run, and a privacy scrub keeps its cost): since a date for the monthly credit, or over the
- * company's whole life. A call still running counts at its hold, so money in flight is in the sum; `settled` leaves those
- * out, for what the owner is told. For the server's own checks and for ITS; a customer reads a percentage (`usageOf`), never this.
+ * company's whole life. A call still running counts at its hold, so money in flight is in the sum; `settled` leaves out the
+ * calls that can still be running (`settledRun`, at `now`), for what the owner and ITS read, so a hold whose process went
+ * away counts as the gate counts it. For the server's own checks and for ITS; a customer reads a percentage (`usageOf`), never this.
  */
-export async function aiCreditSpentMicros(q: Queryable, companyId: string, opts: { since?: string | null; settled?: boolean } = {}): Promise<number> {
+export async function aiCreditSpentMicros(q: Queryable, companyId: string, opts: { since?: string | null; settled?: boolean; now?: Date } = {}): Promise<number> {
   const where = [eq(aiRuns.companyId, companyId)];
   if (opts.since) where.push(gte(aiRuns.createdAt, opts.since));
-  if (opts.settled) where.push(ne(aiRuns.status, "running"));
+  if (opts.settled) where.push(settledRun(opts.now ?? new Date()));
   const [row] = await q.select({ micros: sql<string>`coalesce(sum(${aiRuns.costUsd}), 0) * 1000000` }).from(aiRuns).where(and(...where));
   return Math.round(Number(row?.micros ?? 0));
 }
@@ -238,14 +251,17 @@ export type UsageLine = { used: number; limit: number | null; resetsAt?: string 
 /** Limits that are not a count of anything used, so they have no "used of limit" line: read them with `limitOf`. */
 const NOT_A_COUNT: readonly string[] = [CANDIDATES_PER_JOB, ITS_WORK];
 
-/** A share of the credit in whole percent, never past 100; short of all never reads as all. */
-export const creditPercent = (spentCents: number, limitCents: number): number => (limitCents <= 0 ? 100 : Math.min(100, Math.floor((spentCents * 100) / limitCents)));
+const MICROS_PER_CENT = 10_000;
+
+/** A share of the credit in whole percent, never past 100; short of all never reads as all. Spent and limit in one unit. */
+export const creditPercent = (spent: number, limit: number): number => (limit <= 0 ? 100 : Math.min(100, Math.floor((spent * 100) / limit)));
 
 /**
  * The plan's usage as the company's settings show it: roles counted from the roles using a place now, people from the
  * members and open invitations now (known bug 128: the stored count never moved), jobs ever from the roles (only with a
  * limit: without one there is nothing to say), the AI credit as a percentage (only with a limit), the rest within their
- * period.
+ * period. The credit's percentage is money actually spent, worked out as Home's is (`aiCreditView`), so a draft's hold does
+ * not move it up and back down, and the two pages read one figure. `check` and the gate go on counting holds.
  */
 export async function usageOf(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<Record<string, UsageLine>> {
   const rows = await q.select().from(entitlements).where(eq(entitlements.companyId, companyId));
@@ -255,9 +271,13 @@ export async function usageOf(q: Queryable, companyId: string, opts: { now?: Dat
     if (NOT_A_COUNT.includes(e.key)) continue;
     const credit = isAiCreditKey(e.key);
     if ((credit || e.key === JOBS_TOTAL) && e.limit === null) continue;
-    const used = await usedNow(q, companyId, e, now);
     const resets = isMonthly(e.key) ? { resetsAt: currentPeriod(e, now).periodEnd } : {};
-    out[e.key] = credit ? { used: creditPercent(used, e.limit ?? 0), limit: 100, unit: "percent", ...resets } : { used, limit: e.limit, ...resets };
+    if (credit) {
+      const spent = await aiCreditSpentMicros(q, companyId, { since: isMonthly(e.key) ? currentPeriod(e, now).periodStart : null, settled: true, now });
+      out[e.key] = { used: creditPercent(spent, (e.limit ?? 0) * MICROS_PER_CENT), limit: 100, unit: "percent", ...resets };
+    } else {
+      out[e.key] = { used: await usedNow(q, companyId, e, now), limit: e.limit, ...resets };
+    }
   }
   return out;
 }
@@ -267,16 +287,18 @@ export async function usageOf(q: Queryable, companyId: string, opts: { now?: Dat
  * plan takes effect at once and keeps the current period: what was used this month stays used, against the new limit,
  * and the reset date does not move. A period that has already ended starts again from zero; a row without dates (or a
  * new one) starts its first period now. So does a monthly AI credit that had no limit until now: an upgrade's first month
- * starts with the upgrade, and what was spent on the free credit is not charged to it.
+ * starts with the upgrade, and what was spent on the free credit is not charged to it. `aiCreditMonthStarted` says this happened.
  */
-export async function applyPlan(q: Queryable, companyId: string, planKey: string, source: "plan" | "trial" = "plan", opts: { now?: Date } = {}): Promise<void> {
+export async function applyPlan(q: Queryable, companyId: string, planKey: string, source: "plan" | "trial" = "plan", opts: { now?: Date } = {}): Promise<{ aiCreditMonthStarted: boolean }> {
   const [plan] = await q.select().from(plans).where(eq(plans.key, planKey)).limit(1);
   if (!plan) throw new Error(`unknown plan ${planKey}`);
   const now = opts.now ?? new Date();
   const periodStart = now.toISOString();
   const periodEnd = new Date(now.getTime() + PERIOD_MS).toISOString();
+  let aiCreditMonthStarted = false;
   for (const [key, limit] of Object.entries(plan.limits)) {
     const [existing] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
+    if (key === AI_CREDIT_MONTHLY_CENTS && limit !== null && (!existing?.periodEnd || existing.limit === null)) aiCreditMonthStarted = true;
     if (existing) {
       const p = currentPeriod(existing, now);
       const creditStarts = key === AI_CREDIT_MONTHLY_CENTS && existing.limit === null && limit !== null;
@@ -287,6 +309,7 @@ export async function applyPlan(q: Queryable, companyId: string, planKey: string
     }
   }
   await q.update(companies).set({ planKey }).where(eq(companies.id, companyId));
+  return { aiCreditMonthStarted };
 }
 
 /** Requests for a person instead of the screening conversation (Q16): counted, never limited; ITS covers them. */

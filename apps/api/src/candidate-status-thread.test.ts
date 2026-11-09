@@ -52,6 +52,11 @@ describe("the words a page uses: email lines on the web, quoted replies, the wor
     expect(line({ ...base, step: "decision" })).toBe("Applied > Review > [Decision]");
     expect(line({ ...base, step: "decision", hasChat: true, hadInterview: true })).toBe("Applied > AI interview > Review > Interview > [Decision]");
     expect(line({ ...base, step: "interview" })).toBe("Applied > Review > [Interview] > Decision");
+    // someone nobody at the company could read: Review is never where they are, and at a decision it is not there to read as done
+    const unreviewed = { ...base, unreviewed: true };
+    expect(line({ ...unreviewed, step: "received" })).toBe("[Applied] > Review > Interview > Decision");
+    expect(line({ ...unreviewed, step: "under_review" })).toBe("[Applied] > Review > Interview > Decision");
+    expect(line({ ...unreviewed, step: "decision" })).toBe("Applied > [Decision]");
   });
 
   it("ticks the screening chat only when it really happened: never for one skipped, expired unanswered, cancelled before it started, or handed to a person", () => {

@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { SEND_MAX_ATTEMPTS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
-import { CreateCompany, FREE_PLAN_KEY, oneLine, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
+import { SEND_MAX_ATTEMPTS, SPAM_ALERT_WINDOW_MS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
+import { CreateCompany, FREE_PLAN_KEY, oneLine, typedName, visibleLength, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
 import { createApplicationLink, createInvitation, renderAlertEmail } from "@ros/core";
-import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns } from "@ros/db";
+import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns, type Tx } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -12,9 +12,9 @@ import { loadEnv, signupModeOf } from "./env";
 import { runHourlyChecks, runMaintenance } from "./maintenance";
 import { POLICIES } from "./middleware/rate-limit";
 import { resetPublicFeedCache } from "./pages/public-feeds";
-import { companyRequestDetails, decideAccess, sendAccessRequest } from "./services/access-requests";
+import { OPEN_REQUESTS_EMAILED, companyRequestDetails, decideAccess, sendAccessRequest } from "./services/access-requests";
 import { emailReallyLeft } from "./services/company-trust";
-import { signupDoor } from "./services/companies";
+import { createCompany, signupDoor } from "./services/companies";
 import { backfillPublishing } from "./services/publishing-backfill";
 import { signInAdmin, signInStaff, signInWithIdentity, testContainerOptions } from "./test-helpers";
 
@@ -45,7 +45,11 @@ function worldOf(container: Container, app: ReturnType<typeof createApp>) {
   const signupOf = async (cookie = "") => (await read<{ signup: SignupConfig }>(await json(cookie, "GET", "/api/v1/auth/config"))).signup;
   const meOf = (cookie: string) => json(cookie, "GET", "/api/v1/auth/me").then((r) => read<{ user: { id: string; email: string }; activeCompanyId: string | null; memberships: Array<{ companyId: string; role: string }> }>(r));
   const admin = () => signInAdmin(app, container, "ada@identifiedtalent.com", "Ada Admin");
-  const decide = (cookie: string, companyId: string, decision: string, extra: Record<string, unknown> = { confirm: true }) => json(cookie, "POST", `/api/v1/admin/customers/${companyId}/access`, { decision, ...extra });
+  /** A press from a console row that shows where the request stands now (`from`), unless `extra` says what the row showed. */
+  const decide = async (cookie: string, companyId: string, decision: string, extra: Record<string, unknown> = { confirm: true }) => {
+    const from = (await statusOf(companyId)) === "declined" ? "declined" : "requested";
+    return json(cookie, "POST", `/api/v1/admin/customers/${companyId}/access`, { decision, from, ...extra });
+  };
   /** Someone new sends the form; the company's id and slug, and their session. */
   const ask = async (email: string, name: string, extra: Record<string, unknown> = {}) => {
     const cookie = await google(email, "Sam Asker");
@@ -173,11 +177,47 @@ describe("a person's words are data", () => {
     expect(hand.ownerName).toBe("Sam Asker");
     expect(hand.website).toHaveLength(200);
     expect(hand.website).not.toMatch(/\s/);
-    expect(hand.locations).toHaveLength(20);
+    // the one place the form sends, and no more: a hand-made body cannot store fifty (the review of 6 November 2026)
+    expect(hand.locations).toHaveLength(1);
     expect(hand.locations[0].city).toHaveLength(120);
     expect(hand.locations[0].region).toBe("T X");
     // what is left of a name that was only line breaks is no name
     expect(() => companyRequestDetails({ ...body, name: " \r\n\t " })).toThrow(/missing or invalid/);
+  });
+
+  it("what turns text around or takes no room goes, two of those are no name, and a typed name cannot pass for an address (the review of 6 November 2026)", () => {
+    const ch = (...codes: number[]) => String.fromCharCode(...codes);
+    const [zwsp, wordJoiner, rlo, lri, pdi, lrm, zwnj] = [ch(0x200b), ch(0x2060), ch(0x202e), ch(0x2066), ch(0x2069), ch(0x200e), ch(0x200c)];
+    expect(oneLine(`Harbor Dental${rlo} is asking`)).toBe("Harbor Dental is asking");
+    expect(oneLine(`${lri}Harbor${pdi}${lrm} ${zwsp}Dental${wordJoiner}`)).toBe("Harbor Dental");
+    expect(oneLine(zwsp + zwsp)).toBe("");
+    // the joiners stay: some names and emoji need them
+    const family = String.fromCodePoint(0x1f468, 0x200d, 0x1f469);
+    expect(oneLine(`Ni${zwnj}na ${family}`)).toBe(`Ni${zwnj}na ${family}`);
+    expect(visibleLength("Al")).toBe(2);
+    expect(visibleLength(`A${zwnj}`)).toBe(1);
+    expect(visibleLength(ch(0x3164, 0x3164))).toBe(0);
+    expect(visibleLength(String.fromCodePoint(0x1f600))).toBe(1);
+    expect(typedName("Pat Example <pat@its.example>")).toBe("Pat Example pat@its.example");
+    expect(typedName(" Sam\nAsker ")).toBe("Sam Asker");
+    for (const none of [zwsp + zwsp, "A", ch(0x3164, 0x3164), "", null, undefined]) expect(typedName(none)).toBeNull();
+    // a request's name needs two characters a reader can see; the person's name too, or it is left out
+    const body = { name: "Harbor Dental", ownerName: "Sam Asker", vertical: "dental", sizeBand: "1-19" as const, timezone: "America/Chicago", locations: [{ city: "Austin", region: "TX", country: "US" }] };
+    for (const blank of [zwsp + zwsp, ch(0x3164, 0x3164), `${rlo}A`]) expect(() => companyRequestDetails({ ...body, name: blank })).toThrow(/missing or invalid/);
+    expect(companyRequestDetails({ ...body, name: `Harbor Dental${rlo}` }).name).toBe("Harbor Dental");
+    expect(companyRequestDetails({ ...body, ownerName: "Pat Example <pat@its.example>" }).ownerName).toBe("Pat Example pat@its.example");
+    expect(companyRequestDetails({ ...body, ownerName: zwsp + zwsp }).ownerName).toBeUndefined();
+  });
+
+  it("half a character never stays: the cut at the limit keeps an emoji whole or leaves it out, and a lone half from a hand-made body goes", () => {
+    const smile = String.fromCodePoint(0x1f600);
+    const [high, low] = [String.fromCharCode(0xd83d), String.fromCharCode(0xde00)];
+    expect(oneLine(`${"w".repeat(199)}${smile}`, 200)).toBe("w".repeat(199));
+    expect(oneLine(`${"w".repeat(198)}${smile}`, 200)).toBe(`${"w".repeat(198)}${smile}`);
+    expect(oneLine(`Harbor${high} Dental${low}`)).toBe("Harbor Dental");
+    expect(oneLine(`${low}${high}`)).toBe("");
+    expect(oneLine(`Smile ${smile}`)).toBe(`Smile ${smile}`);
+    expect(/\p{Cs}/u.test(oneLine(`${"c".repeat(119)}${smile}`, 120))).toBe(false);
   });
 
   it("the accepted email says the company's name in one line, whatever is in the row", () => {
@@ -229,6 +269,8 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
   it("the full journey: the form sends a request, nothing starts, Accept opens everything", async () => {
     const before = w.mail().sent.length;
     const asker = await w.ask("sam@stranger.test", "Harbor Dental");
+    // no careers address of its name until it is accepted: a neutral one (the review of 6 November 2026)
+    expect(asker.slug).toBe(`request-${asker.id.slice(0, 8)}`);
     // the answer says where they stand, and the email really left
     expect(asker.accessRequest).toMatchObject({ status: "requested", companyName: "Harbor Dental", email: "sam@stranger.test" });
     expect(asker.accessRequest.emailedAt).toEqual(expect.any(String));
@@ -270,7 +312,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(copy.text).toContain("we will email you when it is decided");
     const toIts = sent.find((m) => m.to === "queue@its.example")!;
     expect(toIts.subject).toBe("[access request] Harbor Dental is asking for access");
-    for (const line of ["Company: Harbor Dental", "Person: Sam Asker <sam@stranger.test>", "Kind of business: dental", "Size: 1-19 employees", "City and state: Austin, TX", "Website: https://asker.example", `${w.container.env.APP_BASE_URL}/admin`]) expect(toIts.text, line).toContain(line);
+    for (const line of ["Company: Harbor Dental", "Person: sam@stranger.test (Sam Asker)", "Kind of business: dental", "Size: 1-19 employees", "City and state: Austin, TX", "Website: https://asker.example", `${w.container.env.APP_BASE_URL}/admin`]) expect(toIts.text, line).toContain(line);
     expect(sent.some((m) => m.subject.includes("[company check]"))).toBe(false);
 
     // Nadine's list: the person, and what the row needs
@@ -324,8 +366,10 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.read<{ planKey: string; id: string }>(current)).toMatchObject({ id: asker.id, planKey: FREE_PLAN_KEY });
     expect((await w.json(asker.cookie, "GET", "/api/v1/brief")).status).toBe(200);
     expect((await w.json(asker.cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE })).status).toBe(201);
-    // and it is confirmed, so its public side is up
-    expect((await w.app.request(`/careers/${asker.slug}`)).status).toBe(200);
+    // and it is confirmed, so its public side is up, at the careers address of its name, given at Accept
+    expect(after.slug).toBe("harbor-dental");
+    expect((await w.app.request("/careers/harbor-dental")).status).toBe(200);
+    expect((await w.app.request(`/careers/${asker.slug}`)).status).toBe(404);
     // the configuration has moved on too
     expect((await w.signupOf(asker.cookie)).request).toBeUndefined();
     expect((await w.customers(adminCookie)).find((c) => c.id === asker.id)).toMatchObject({ accessRequest: null, seats: { used: 1 } });
@@ -422,14 +466,61 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.eventsOf(twice.id, "company.access_declined")).toHaveLength(1);
     expect(w.mailTo("twice@stranger.test").filter((m) => m.subject === "We can't offer access right now")).toHaveLength(1);
 
-    // an Accept and a Decline at once: whichever came first, the person ends up accepted, once
+    // an Accept and a Decline at once, from two rows that both showed the request: the first press wins, once, and the
+    // second changes nothing and is told so (the review of 6 November 2026; it used to be that Accept always won)
     const race = await w.ask("race@stranger.test", "Race Dental");
-    const raced = await Promise.all([w.decide(adminCookie, race.id, "accept"), w.decide(adminCookie, race.id, "decline")]);
-    expect(raced.map((r) => r.status).every((s) => s === 200 || s === 409)).toBe(true);
+    const shown = { from: "requested", confirm: true };
+    const raced = await Promise.all([w.decide(adminCookie, race.id, "accept", shown), w.decide(adminCookie, race.id, "decline", shown)]);
+    expect(raced.map((r) => r.status).sort()).toEqual([200, 409]);
+    const second = raced.find((r) => r.status === 409)!;
+    expect(["already_accepted", "access_decided"]).toContain(await w.code(second));
     await w.container.drain();
-    expect(await w.statusOf(race.id)).toBe("active");
-    expect(await w.eventsOf(race.id, "company.access_accepted")).toHaveLength(1);
-    expect(await w.noticesOf(race.id)).toHaveLength(1);
+    const won = await w.statusOf(race.id);
+    expect(["active", "declined"]).toContain(won);
+    expect(await w.eventsOf(race.id, "company.access_accepted")).toHaveLength(won === "active" ? 1 : 0);
+    expect(await w.eventsOf(race.id, "company.access_declined")).toHaveLength(won === "declined" ? 1 : 0);
+    expect(await w.noticesOf(race.id)).toHaveLength(won === "active" ? 1 : 0);
+    // the person hears the decision that stands, and only that one
+    expect(w.mailTo("race@stranger.test").map((m) => m.subject).filter((s) => s !== "Your request has been sent")).toEqual([won === "active" ? "Your request was approved" : "We can't offer access right now"]);
+  });
+
+  it("the first press wins: an Accept from a row that still showed the request, once it was declined, changes nothing and says who declined it and when", async () => {
+    const asker = await w.ask("stale@stranger.test", "Stale Dental");
+    const shown = { from: "requested", confirm: true };
+    // one console declines; another, not looked at again, still shows the request with Accept
+    expect((await w.decide(adminCookie, asker.id, "decline", shown)).status).toBe(200);
+    const stale = await w.decide(adminCookie, asker.id, "accept", shown);
+    expect(stale.status).toBe(409);
+    const error = ((await stale.json()) as { error: { code: string; message: string; details: unknown } }).error;
+    expect(error.code).toBe("access_decided");
+    expect(error.message).toBe("Stale Dental was declined a moment ago by Ada Admin. Nothing changed. To let them in, accept it under Declined.");
+    expect(error.details).toEqual({ status: "declined", decidedAt: expect.any(String), decidedBy: "Ada Admin" });
+    await w.container.drain();
+    // nothing moved: still declined and unconfirmed, no Accept, no notice, no workflow, and one email, the Decline's
+    expect(await w.statusOf(asker.id)).toBe("declined");
+    expect((await w.rowOf(asker.id)).settings.verifiedAt).toBeUndefined();
+    expect(await w.eventsOf(asker.id, "company.access_accepted")).toEqual([]);
+    expect(await w.noticesOf(asker.id)).toEqual([]);
+    expect(await w.runsOf(asker.id)).toEqual([]);
+    expect(w.mailTo("stale@stranger.test").map((m) => m.subject)).toEqual(["Your request has been sent", "We can't offer access right now"]);
+    // a row left open for hours says how long ago, in words that need no time zone
+    const hoursAgo = new Date(w.container.engine.clock().getTime() - 3 * 3_600_000 - 60_000).toISOString();
+    await withPlatform(w.container.db, (tx) => tx.update(events).set({ occurredAt: hoursAgo }).where(and(eq(events.companyId, asker.id), eq(events.type, "company.access_declined"))));
+    expect(((await (await w.decide(adminCookie, asker.id, "accept", shown)).json()) as { error: { message: string } }).error.message).toBe("Stale Dental was declined 3 hours ago by Ada Admin. Nothing changed. To let them in, accept it under Declined.");
+    // a second Decline from the same stale row stays a calm "nothing changed"
+    expect(await w.read<CustomerAccessAnswer>(await w.decide(adminCookie, asker.id, "decline", shown))).toMatchObject({ status: "declined", changed: false });
+    // the declined company's own Accept, under Declined, is still the undo
+    const undone = await w.decide(adminCookie, asker.id, "accept", { from: "declined", confirm: true });
+    expect(undone.status).toBe(200);
+    expect(await w.read<CustomerAccessAnswer>(undone)).toMatchObject({ status: "active", changed: true });
+    await w.container.drain();
+    expect(w.mailTo("stale@stranger.test").filter((m) => m.subject === "Your request was approved")).toHaveLength(1);
+    // and a declined row's Accept on a request still waiting (no console draws one) is refused the same way
+    const waiting = await w.ask("still.waiting@stranger.test", "Still Waiting Dental");
+    const odd = await w.decide(adminCookie, waiting.id, "accept", { from: "declined", confirm: true });
+    expect(odd.status).toBe(409);
+    expect(await w.code(odd)).toBe("access_decided");
+    expect(await w.statusOf(waiting.id)).toBe("requested");
   });
 
   it("a decision holds the company's row until it commits, which is what makes the second press wait and then read the first", async () => {
@@ -443,7 +534,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
         return ((Array.isArray(result) ? result : (result as { rows: unknown[] }).rows) as Array<{ xmax: string; me: string }>)[0];
       };
       expect((await lock()).xmax).toBe("0");
-      await decideAccess(tx, w.container, { companyId: asker.id, decision: "decline", actor, now: w.container.engine.clock() });
+      await decideAccess(tx, w.container, { companyId: asker.id, decision: "decline", from: "requested", actor, now: w.container.engine.clock() });
       const held = await lock();
       expect(held.xmax).toBe(held.me);
     });
@@ -452,7 +543,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
 
   it("only a platform administrator with a second factor, a confirmation, and a real company", async () => {
     const asker = await w.ask("guarded@stranger.test", "Guarded Dental");
-    const body = { decision: "accept", confirm: true };
+    const body = { decision: "accept", from: "requested", confirm: true };
     expect((await w.json("", "POST", `/api/v1/admin/customers/${asker.id}/access`, body)).status).toBe(401);
     // the person themselves, another customer, an ITS recruiter
     expect(await w.code(await w.json(asker.cookie, "POST", `/api/v1/admin/customers/${asker.id}/access`, body))).toBe("forbidden");
@@ -466,7 +557,8 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(noFactor.status).toBe(403);
     expect(await w.code(noFactor)).toBe("mfa_required");
     // a bad body changes nothing
-    for (const bad of [{ decision: "accept" }, { decision: "accept", confirm: false }, { decision: "maybe", confirm: true }, { decision: "accept", confirm: true, reason: "no reason is typed" }, {}]) {
+    // what the row showed is part of the press: without it, or with anything but a request's two states, nothing happens
+    for (const bad of [{ decision: "accept", from: "requested" }, { decision: "accept", from: "requested", confirm: false }, { decision: "maybe", from: "requested", confirm: true }, { decision: "accept", from: "requested", confirm: true, reason: "no reason is typed" }, { decision: "accept", confirm: true }, { decision: "accept", from: "active", confirm: true }, {}]) {
       const r = await w.json(adminCookie, "POST", `/api/v1/admin/customers/${asker.id}/access`, bad);
       expect(r.status, JSON.stringify(bad)).toBe(400);
       expect(await w.code(r)).toBe("invalid_request");
@@ -542,6 +634,28 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.eventsOf(asker.id, "company.verified")).toEqual([]);
     expect((await w.noticesOf(asker.id)).map((n) => n.kind)).toEqual(["company.access_accepted"]);
     expect(w.mailTo("confirmed@stranger.test").filter((m) => m.subject === "Your request was approved")).toHaveLength(1);
+  });
+
+  it("a request holds no careers address of its name: a stranger cannot take a real company's, and Accept gives the name's address, or the next free one", async () => {
+    const squatter = await w.ask("squatter@stranger.test", "Bright Smile Dental");
+    expect(squatter.slug).toBe(`request-${squatter.id.slice(0, 8)}`);
+    expect((await w.decide(adminCookie, squatter.id, "decline")).status).toBe(200);
+    // the real company, through the direct door, gets the address of its name
+    const real = await w.google("bright.smile@listed-domain.test", "Real Owner");
+    const made = await w.read<{ id: string; slug: string }>(await w.json(real, "POST", "/api/v1/companies", w.form("Bright Smile Dental")));
+    expect(made.slug).toBe("bright-smile-dental");
+    // the declined one kept its neutral address; accepted after all, it gets the next free one, and the real one keeps its own
+    expect((await w.rowOf(squatter.id)).slug).toBe(squatter.slug);
+    expect((await w.decide(adminCookie, squatter.id, "accept")).status).toBe(200);
+    expect((await w.rowOf(squatter.id)).slug).toMatch(/^bright-smile-dental-[a-z0-9]{1,4}$/);
+    expect((await w.rowOf(made.id)).slug).toBe("bright-smile-dental");
+    // a request whose name's address is free gets exactly that, and answers there once it is public
+    const free = await w.ask("free.name@stranger.test", "Quiet Harbor Dental");
+    expect((await w.app.request("/careers/quiet-harbor-dental")).status).toBe(404);
+    expect((await w.decide(adminCookie, free.id, "accept")).status).toBe(200);
+    expect((await w.rowOf(free.id)).slug).toBe("quiet-harbor-dental");
+    expect((await w.app.request("/careers/quiet-harbor-dental")).status).toBe(200);
+    expect((await w.app.request(`/careers/${free.slug}`)).status).toBe(404);
   });
 
   it("a failed email changes nothing and raises no alert; accessRequestEmailedAt is set only when the send really left", async () => {
@@ -659,7 +773,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     }
     const toIts = sent.find((m) => m.to === "queue@its.example")!;
     expect(toIts.subject).toBe("[access request] Acme Bcc: evil@example.test is asking for access");
-    expect(toIts.text).toContain("Person: Sam Asker <typed@stranger.test>");
+    expect(toIts.text).toContain("Person: typed@stranger.test (Sam Asker)");
     expect(toIts.text).toContain("City and state: Aus tin, T X");
     expect(toIts.text.split("\n").find((l) => l.startsWith("Website: "))!.length).toBeLessThanOrEqual(209);
     // the door that goes in directly keeps what was typed, as in every mode, and its email to ITS is one line each all the same
@@ -682,6 +796,49 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const accepted = w.mailTo("typed@stranger.test").find((m) => m.subject === "Your request was approved")!;
     expect(accepted.text).toContain("Company: Acme Bcc: evil@example.test\n");
     expect(accepted.text.split("\n").filter((l) => l.startsWith("Bcc:"))).toEqual([]);
+  });
+
+  it("half a character never fails a request: an emoji at the cut of a long website or place, and a lone half in a hand-made body (the review of 6 November 2026)", async () => {
+    const smile = String.fromCodePoint(0x1f600);
+    const half = String.fromCharCode(0xd83d);
+    // 199 characters and then an emoji: the cut at 200 would keep half of it, which the database refuses in a jsonb value
+    const cut = await w.ask("emoji.cut@stranger.test", "Emoji Cut Dental", { website: `https://${"w".repeat(191)}${smile}`, locations: [{ city: `${"c".repeat(119)}${smile}`, region: "TX", country: "US" }] });
+    const row = await w.rowOf(cut.id);
+    expect(row.settings.website).toBe(`https://${"w".repeat(191)}`);
+    expect(row.locations[0]?.city).toBe("c".repeat(119));
+    expect(w.mailTo("queue@its.example").some((m) => m.subject === "[access request] Emoji Cut Dental is asking for access")).toBe(true);
+    // a hand-made body with half an emoji and nothing to cut: the half goes, and the request is sent
+    const hand = await w.ask("half.char@stranger.test", `Half${half} Dental`, { website: `https://half${half}.example`, ownerName: `Sam${half} Asker` });
+    expect((await w.rowOf(hand.id)).name).toBe("Half Dental");
+    expect((await w.rowOf(hand.id)).settings.website).toBe("https://half.example");
+    expect((await w.customers(adminCookie)).find((c) => c.id === hand.id)?.accessRequest?.person.name).toBe("Sam Asker");
+    // a whole one stays
+    const whole = await w.ask("whole.emoji@stranger.test", `Smile ${smile} Dental`);
+    expect((await w.rowOf(whole.id)).name).toBe(`Smile ${smile} Dental`);
+  });
+
+  it("a typed name cannot pass for someone else, blank the row or turn it around: the proved address first, no angle brackets, two characters to see", async () => {
+    const rlo = String.fromCharCode(0x202e);
+    const zwsp = String.fromCharCode(0x200b);
+    // two zero-width spaces are no company name, so nothing is made
+    const blank = await w.google("blank.name@stranger.test");
+    expect((await w.json(blank, "POST", "/api/v1/companies", w.form(zwsp + zwsp))).status).toBe(400);
+    expect((await w.signupOf(blank)).request).toBeUndefined();
+    const posing = await w.ask("real.person@gmail.test", `Harbor Dental${rlo} Group`, { ownerName: "Pat Example <pat@its.example>" });
+    expect((await w.rowOf(posing.id)).name).toBe("Harbor Dental Group");
+    const toIts = w.mailTo("queue@its.example").find((m) => m.subject === "[access request] Harbor Dental Group is asking for access")!;
+    expect(toIts.text).toContain("Person: real.person@gmail.test (Pat Example pat@its.example)\n");
+    expect(toIts.text).toContain("Only the email address is proved; the rest is what they typed.");
+    expect(toIts.text).not.toMatch(/[<>]/);
+    // the console's row, from what was kept
+    expect((await w.customers(adminCookie)).find((c) => c.id === posing.id)?.accessRequest?.person).toEqual({ name: "Pat Example pat@its.example", email: "real.person@gmail.test" });
+    // a name from the sign-in provider, when they typed none, is read the same way
+    const provider = await w.google("provider.name@stranger.test", `Ada <ada@identifiedtalent.com>${rlo}`);
+    const made = await w.json(provider, "POST", "/api/v1/companies", w.form("Provider Dental", { ownerName: undefined }));
+    expect(made.status, await made.clone().text()).toBe(201);
+    const { id } = await w.read<{ id: string }>(made);
+    expect((await w.customers(adminCookie)).find((c) => c.id === id)?.accessRequest?.person.name).toBe("Ada ada@identifiedtalent.com");
+    expect(w.mailTo("queue@its.example").find((m) => m.subject === "[access request] Provider Dental is asking for access")!.text).toContain("Person: provider.name@stranger.test (Ada ada@identifiedtalent.com)\n");
   });
 
   it("the request's email goes only to an address its holder proved: no session for an unverified one, and a body cannot name another", async () => {
@@ -828,10 +985,15 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const [copy] = w.mailTo("bounced@stranger.test");
     const bounce = async (id: number, providerMessageId: string) => w.app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakePostmarkEvent({ providerMessageId, email: "bounced@stranger.test", type: "HardBounce", id })) });
     const unreachable = () => w.container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "email.person_unreachable"), sql`${adminAlerts.title} like '%bounced@stranger.test%'`));
+    expect((await w.signupOf(asker.cookie)).request?.emailedAt).toEqual(expect.any(String));
     expect((await bounce(910_001, copy.providerMessageId)).status).toBe(200);
     expect(await unreachable()).toEqual([]);
     const [stopped] = await w.container.db.select().from(emailSuppressions).where(eq(emailSuppressions.address, "bounced@stranger.test"));
     expect(stopped.active).toBe(true);
+    // the copy did leave, but nothing more can reach that address: the screen stops promising an email (the review of
+    // 6 November 2026), and says to keep the page open instead; the record of the copy stays as it was
+    expect((await w.signupOf(asker.cookie)).request).toMatchObject({ status: "requested", emailedAt: null });
+    expect((await w.rowOf(asker.id)).settings.accessRequestEmailedAt).toEqual(expect.any(String));
     // Accept still goes through with the address stopped, and the email that cannot go raises nothing
     expect((await w.decide(adminCookie, asker.id, "accept")).status).toBe(200);
     await w.container.drain();
@@ -841,6 +1003,152 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     // on a team now, so a bounce is told as for anyone on a team
     expect((await bounce(910_002, copy.providerMessageId)).status).toBe(200);
     expect(await unreachable()).toHaveLength(1);
+  });
+
+  it("two companies of one name accepted or made at the same moment do not both take its address: each waits on the name's lock, then reads the other's (the review of 9 November 2026)", async () => {
+    // PGlite runs one connection, so it cannot show a second transaction waiting; this shows the order of the statements
+    // only. The lock on the name's address is asked before the address is read as free: at that moment a company of the
+    // same name takes it, as one committed by the transaction the lock waited for, and the address read after the lock is
+    // the next free one. Read before the lock, it would have been taken twice and failed on the unique index.
+    const seen: string[] = [];
+    const rival = (slug: string) => async (tx: Tx) => {
+      await tx.insert(companies).values({ name: "A company of the same name", slug, vertical: "dental", sizeBand: "1-19", planKey: FREE_PLAN_KEY, status: "active" });
+    };
+    const watched = (tx: Tx, atLock: (tx: Tx) => Promise<void>) => new Proxy(tx, {
+      get(target, prop) {
+        if (prop !== "execute") return Reflect.get(target, prop);
+        return async (statement: Parameters<Tx["execute"]>[0]) => {
+          const key = slugLockOf(statement);
+          if (key) {
+            seen.push(key);
+            await atLock(target);
+          }
+          return target.execute(statement);
+        };
+      },
+    });
+    // Accept of a request, while another Twin Harbor Dental takes the name's address
+    const asker = await w.ask("twin.request@stranger.test", "Twin Harbor Dental");
+    const actor = { kind: "user" as const, id: "ada", name: "Ada Admin" };
+    await withPlatform(w.container.db, (tx) => decideAccess(watched(tx, rival("twin-harbor-dental")), w.container, { companyId: asker.id, decision: "accept", from: "requested", actor, now: w.container.engine.clock() }));
+    expect(seen).toEqual(["company_slug:twin-harbor-dental"]);
+    expect((await w.rowOf(asker.id)).slug).toMatch(/^twin-harbor-dental-[a-z0-9]{1,4}$/);
+    expect(await w.statusOf(asker.id)).toBe("active");
+    // the direct door, while another Twin Direct Dental takes it
+    seen.length = 0;
+    const owner = (await w.meOf(await w.google("twin.direct@listed-domain.test", "Twin Owner"))).user;
+    const db = new Proxy(w.container.db, {
+      get(target, prop) {
+        if (prop !== "transaction") return Reflect.get(target, prop);
+        return (fn: (tx: Tx) => Promise<unknown>) => target.transaction((tx) => fn(watched(tx as unknown as Tx, rival("twin-direct-dental"))));
+      },
+    });
+    const made = await createCompany(db, CreateCompany.parse(w.form("Twin Direct Dental")), owner.id, { kind: "user", id: owner.id, name: "Twin Owner" });
+    expect(seen).toEqual(["company_slug:twin-direct-dental"]);
+    expect(made.slug).toMatch(/^twin-direct-dental-[a-z0-9]{1,4}$/);
+  });
+});
+
+/** The key of a lock on a careers address (`freeSlug`), when the statement is one; null for any other statement. */
+function slugLockOf(statement: unknown): string | null {
+  const chunks = (statement as { queryChunks?: unknown[] }).queryChunks ?? [];
+  const text = chunks.map((c) => (c && typeof c === "object" && Array.isArray((c as { value?: unknown }).value) ? (c as { value: unknown[] }).value.join("") : "")).join("");
+  const key = chunks.find((c): c is string => typeof c === "string" && c.startsWith("company_slug:"));
+  return text.includes("pg_advisory_xact_lock") && key ? key : null;
+}
+
+/**
+ * The public door's own bounds (the review of 6 November 2026): one address sends five requests an hour, past 25 waiting at
+ * once a request is still taken but sends no email, and spam complaints about those emails raise one alert, not one each.
+ * A container of its own, with every other limit out of the way and this one at its real value.
+ */
+describe("the door's own bounds under SIGNUP_MODE=approval", () => {
+  let w: World;
+  let adminCookie = "";
+  const OTHERS_UNLIMITED = JSON.stringify(Object.fromEntries(Object.values(POLICIES).filter((p) => p.name !== POLICIES.accessRequest.name).map((p) => [p.name, 1_000_000])));
+  /** The form sent by a new account from one address, as a browser behind the proxy sends it. */
+  const askFrom = async (address: string, email: string, name: string, body: unknown = undefined) => {
+    const cookie = await w.google(email, "Sam Asker");
+    return w.app.request("/api/v1/companies", { method: "POST", headers: { "content-type": "application/json", cookie, "x-forwarded-for": address }, body: JSON.stringify(body ?? w.form(name)) });
+  };
+
+  beforeAll(async () => {
+    w = await boot("its", { RATE_LIMIT_OVERRIDES: OTHERS_UNLIMITED });
+    adminCookie = await w.admin();
+  });
+  afterAll(async () => {
+    await w.container.close();
+  });
+
+  it("one address sends five requests an hour, whichever accounts it signs in with; the sixth makes nothing; a bad body, another address and the direct door are not counted", async () => {
+    expect(POLICIES.accessRequest).toEqual({ name: "access.request", rules: [{ by: "ip", windowMs: 3_600_000, limit: 5 }] });
+    for (let i = 1; i <= 5; i++) expect((await askFrom("203.0.113.7", `flood${i}@stranger.test`, `Flood Dental ${i}`)).status, `request ${i}`).toBe(201);
+    const mails = w.mail().sent.length;
+    const sixth = await askFrom("203.0.113.7", "flood6@stranger.test", "Flood Dental 6");
+    expect(sixth.status).toBe(429);
+    expect(await w.code(sixth)).toBe("rate_limited");
+    expect(await w.container.db.select().from(companies).where(eq(companies.name, "Flood Dental 6"))).toEqual([]);
+    expect(w.mail().sent.length).toBe(mails);
+    // a body the form would never send is refused before anything counts
+    for (let i = 1; i <= 6; i++) expect((await askFrom("192.0.2.9", `typo${i}@stranger.test`, "", { name: "" })).status).toBe(400);
+    expect((await askFrom("192.0.2.9", "typo7@stranger.test", "Typo Dental")).status).toBe(201);
+    // another address still asks, and the allow-list's door is not this door
+    expect((await askFrom("198.51.100.20", "elsewhere@stranger.test", "Elsewhere Dental")).status).toBe(201);
+    const pat = await w.google("pat@listed.test", "Pat Partner");
+    expect((await w.app.request("/api/v1/companies", { method: "POST", headers: { "content-type": "application/json", cookie: pat, "x-forwarded-for": "203.0.113.7" }, body: JSON.stringify(w.form("Listed Flood Dental")) })).status).toBe(201);
+  });
+
+  it("past 25 waiting at once, a request is still taken and on the Overview, but neither email goes and the screen claims none; with fewer waiting they go again", async () => {
+    expect(OPEN_REQUESTS_EMAILED).toBe(25);
+    const open = async () => Number((await w.container.db.select({ n: sql<number>`count(*)` }).from(memberships).where(eq(memberships.status, "requested")))[0].n);
+    // up to the bound straight through the service: the route's own limit is the case above
+    for (let i = 1; (await open()) < OPEN_REQUESTS_EMAILED; i++) {
+      const [user] = await w.container.db.insert(users).values({ email: `many${i}@stranger.test`, name: "Many Asker" }).returning();
+      await sendAccessRequest(w.container, { body: CreateCompany.parse(w.form(`Many Dental ${i}`)), user: { id: user.id, email: user.email, name: user.name }, actor: { kind: "user", id: user.id, name: "Many Asker" } });
+    }
+    const before = w.mail().sent.length;
+    const quiet = await askFrom("192.0.2.50", "one.too.many@stranger.test", "One Too Many Dental");
+    expect(quiet.status).toBe(201);
+    const made = await w.read<{ id: string; accessRequest: { status: string; emailedAt: string | null } }>(quiet);
+    expect(made.accessRequest).toMatchObject({ status: "requested", emailedAt: null });
+    expect(w.mail().sent.length).toBe(before);
+    expect(await w.statusOf(made.id)).toBe("requested");
+    expect((await w.rowOf(made.id)).settings.accessRequestEmailedAt).toBeUndefined();
+    expect((await w.signupOf(await w.google("one.too.many@stranger.test"))).request).toMatchObject({ status: "requested", emailedAt: null });
+    expect((await w.customers(adminCookie)).find((c) => c.id === made.id)?.accessRequest?.status).toBe("requested");
+    // an administrator works through the list: with fewer waiting, the next request is emailed again
+    for (const c of (await w.customers(adminCookie)).filter((c) => c.accessRequest?.status === "requested").slice(0, 2)) expect((await w.decide(adminCookie, c.id, "decline")).status).toBe(200);
+    const after = await askFrom("192.0.2.51", "next.one@stranger.test", "Next One Dental");
+    expect((await w.read<{ accessRequest: { emailedAt: string | null } }>(after)).accessRequest.emailedAt).toEqual(expect.any(String));
+    expect(w.mailTo("next.one@stranger.test").map((m) => m.subject)).toEqual(["Your request has been sent"]);
+    expect(w.mailTo("queue@its.example").map((m) => m.subject)).toContain("[access request] Next One Dental is asking for access");
+  });
+
+  it("spam complaints about these emails raise one alert while it stands, and at most one an hour, however many accounts complain; every address is stopped", async () => {
+    const complain = (email: string, id: number) => w.app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakePostmarkEvent({ providerMessageId: w.mailTo(email)[0].providerMessageId, email, type: "SpamComplaint", id })) });
+    const spam = () => w.container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "email.spam_complaint"));
+    const stopped = async (email: string) => (await w.container.db.select().from(emailSuppressions).where(and(eq(emailSuppressions.address, email), eq(emailSuppressions.active, true)))).length;
+    for (const [i, email] of ["flood1@stranger.test", "flood2@stranger.test", "flood3@stranger.test"].entries()) {
+      expect((await complain(email, 920_001 + i)).status).toBe(200);
+      expect(await stopped(email), email).toBe(1);
+    }
+    const [one] = await spam();
+    expect(await spam()).toHaveLength(1);
+    expect(one.severity).toBe("critical");
+    // resolved, a complaint within the hour raises nothing; one after the hour does
+    await withPlatform(w.container.db, (tx) => tx.update(adminAlerts).set({ status: "resolved", resolvedAt: new Date().toISOString() }).where(eq(adminAlerts.id, one.id)));
+    expect((await complain("flood4@stranger.test", 920_010)).status).toBe(200);
+    expect(await spam()).toHaveLength(1);
+    expect(await stopped("flood4@stranger.test")).toBe(1);
+    const clock = w.container.engine as unknown as { now: () => Date };
+    const real = clock.now;
+    clock.now = () => new Date(Date.now() + SPAM_ALERT_WINDOW_MS + 60_000);
+    try {
+      expect((await complain("flood5@stranger.test", 920_011)).status).toBe(200);
+    } finally {
+      clock.now = real;
+    }
+    expect(await spam()).toHaveLength(2);
   });
 });
 
@@ -895,10 +1203,14 @@ describe.each(["its", "auto"] as const)("a request or a declined company shows n
     expect((await w.decide(adminCookie, waiting.id, "accept")).status).toBe(200);
     await w.container.drain();
     expect((await w.rowOf(waiting.id)).settings.verifiedBy).toMatchObject({ kind: "user", name: "Ada Admin" });
-    expect((await w.app.request(`/careers/${waiting.slug}`)).status).toBe(200);
-    expect(await (await w.app.request(`/careers/${waiting.slug}`)).text()).toContain("Zqpublicrole");
+    // at the careers address of its name, given at Accept: the neutral one it held answers nothing
+    const { slug } = await w.rowOf(waiting.id);
+    expect(slug).toBe(`zqpublicwaitingname-${check}`);
+    expect((await w.app.request(`/careers/${slug}`)).status).toBe(200);
+    expect(await (await w.app.request(`/careers/${slug}`)).text()).toContain("Zqpublicrole");
+    expect((await w.app.request(`/careers/${waiting.slug}`)).status).toBe(404);
     // no reset here: the route rebuilds the feeds itself, as the verification route does
-    expect(await (await w.app.request("/feeds/jobs.json")).text()).toContain(waiting.slug);
+    expect(await (await w.app.request("/feeds/jobs.json")).text()).toContain(slug);
     // one notice under either value
     expect((await w.noticesOf(waiting.id)).map((n) => n.kind)).toEqual(["company.access_accepted"]);
     // the declined one stays dark

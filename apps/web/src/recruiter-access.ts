@@ -51,9 +51,9 @@ export function presetOf(body: Record<string, unknown> | undefined): AskPreset {
 /** Said in the request form when a draft goes with the request. */
 export const DRAFT_HANDED_OVER = "The recruiter also sees this draft and your conversation with the assistant, so you do not have to explain it again.";
 
-/** The chip on Setup's recruiter access list. */
-export function accessChip(grant: { roleId: string | null; roleTitle: string | null; applicationId: string | null }): string {
-  if (grant.applicationId) return "one candidate";
+/** The chip on Setup's recruiter access list. `oneCandidate`: the grant names someone whose id the reader is not sent. */
+export function accessChip(grant: { roleId: string | null; roleTitle: string | null; applicationId: string | null; oneCandidate?: boolean }): string {
+  if (grant.applicationId || grant.oneCandidate) return "one candidate";
   if (grant.roleId) return grant.roleTitle ? `role: ${grant.roleTitle}` : "one role";
   return "all of your hiring";
 }

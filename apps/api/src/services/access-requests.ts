@@ -1,11 +1,11 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { ACCESS_REQUEST_STATUSES, oneLine, type Actor, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
-import { audit, emit, errorForLog, notify, revokeInvitation, revokeSessionsForCompany } from "@ros/core";
+import { ACCESS_REQUEST_STATUSES, oneLine, typedName, visibleLength, type Actor, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
+import { activeSuppression, audit, emit, errorForLog, notify, revokeInvitation, revokeSessionsForCompany } from "@ros/core";
 import { companies, events, invitations, memberships, users, withPlatform, type Db, type Queryable } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
-import { createCompany, signupDoor } from "./companies";
+import { createCompany, freeSlug, signupDoor, slugify } from "./companies";
 import { sendWithoutAlert, tellItsAboutNewCompany, unverifyCompany, verifyCompany } from "./company-trust";
 
 /**
@@ -38,19 +38,22 @@ export const DECLINED_REASON = "Declined from the console";
  * A request's details as they are kept: what a stranger typed is data, so each value is one line and no longer than the
  * same field may be once it is theirs to change (UpdateCompany and the like). The form cannot send a line break, so this
  * only ever changes what a hand-made request sent. Nothing is refused for being long, except by CreateCompany's own limits.
+ * Only the one place the form sends is kept (the review of 6 November 2026): a hand-made body cannot store twenty. A name
+ * needs two characters a reader can see, and the person's own name has no angle brackets (`typedName`), so neither can be
+ * blank on the console's row or pass for someone else's address in the ITS email.
  */
 export function companyRequestDetails(input: CreateCompany): CreateCompany {
   const name = oneLine(input.name, 120);
   const vertical = oneLine(input.vertical, 60);
-  if (name.length < 2 || vertical.length < 2) throw new HttpError(400, "invalid_request", "Some fields are missing or invalid.");
+  if (visibleLength(name) < 2 || vertical.length < 2) throw new HttpError(400, "invalid_request", "Some fields are missing or invalid.");
   const place = (value: string | undefined) => (value === undefined ? undefined : oneLine(value, 120));
   return {
     ...input,
     name,
     vertical,
-    ownerName: oneLine(input.ownerName, 120) || undefined,
+    ownerName: typedName(input.ownerName) ?? undefined,
     website: oneLine(input.website, 200) || undefined,
-    locations: input.locations.slice(0, 20).map((l) => ({ ...l, label: place(l.label), address1: place(l.address1), city: place(l.city), region: place(l.region), postalCode: place(l.postalCode), country: oneLine(l.country, 120) || "US", timezone: place(l.timezone) })),
+    locations: input.locations.slice(0, 1).map((l) => ({ ...l, label: place(l.label), address1: place(l.address1), city: place(l.city), region: place(l.region), postalCode: place(l.postalCode), country: oneLine(l.country, 120) || "US", timezone: place(l.timezone) })),
   };
 }
 
@@ -61,14 +64,26 @@ function placeOf(locations: ReadonlyArray<{ city?: string; region?: string }>): 
 }
 
 /**
+ * Past this many requests waiting at once, a new one is still taken, with its row on the Overview, but neither of its emails
+ * goes (the review of 6 November 2026): many accounts could otherwise fill the ITS mailbox and send our mail, from our domain,
+ * to addresses of their own. The Overview's row is what tells an administrator, and the person's screen claims no email.
+ */
+export const OPEN_REQUESTS_EMAILED = 25;
+
+/**
  * Sends the request (`POST /companies` for someone whose door is `request`): the company and the `requested` membership in
  * one transaction, with no active company, no workflow and no AI, then the emails outside it, to the person and to ITS.
- * `accessRequestEmailedAt` is written only when the person's copy really left, in one statement on the settings.
+ * `accessRequestEmailedAt` is written only when the person's copy really left, in one statement on the settings. With more
+ * than OPEN_REQUESTS_EMAILED waiting, this one counted, no email goes.
  */
 export async function sendAccessRequest(container: Container, input: { body: CreateCompany; user: { id: string; email: string; name: string | null }; actor: Actor }) {
   const details = companyRequestDetails(input.body);
   const company = await createCompany(container.db, details, input.user.id, input.actor, { request: true, now: container.engine.clock() });
   const person = { name: details.ownerName ?? input.user.name ?? null, email: input.user.email };
+  if ((await openRequests(container)) > OPEN_REQUESTS_EMAILED) {
+    const quiet: SignupRequest = { status: "requested", companyName: company.name, email: person.email, emailedAt: null };
+    return { ...company, accessRequest: quiet };
+  }
   const left = await sendWithoutAlert(container, {
     to: person.email,
     from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
@@ -85,6 +100,12 @@ export async function sendAccessRequest(container: Container, input: { body: Cre
   await tellItsAboutNewCompany(container, { company: { id: company.id, name: company.name, vertical: company.vertical, sizeBand: company.sizeBand, website: details.website ?? null, place: placeOf(details.locations) }, owner: person, request: true });
   const accessRequest: SignupRequest = { status: "requested", companyName: company.name, email: person.email, emailedAt };
   return { ...company, settings: emailedAt ? { ...company.settings, accessRequestEmailedAt: emailedAt } : company.settings, accessRequest };
+}
+
+/** How many requests are waiting for a decision now, across every company. */
+async function openRequests(container: Container): Promise<number> {
+  const [row] = await withPlatform(container.db, (tx) => tx.select({ n: sql<number>`count(*)` }).from(memberships).where(eq(memberships.status, "requested")));
+  return Number(row?.n ?? 0);
 }
 
 /** The one thing kept in settings. A failure to write it costs only the line on the screen, so it stops nothing. */
@@ -119,7 +140,11 @@ export async function signupConfigFor(container: Container, user: { id: string; 
       .limit(1),
   );
   if (!row) return base;
-  return { ...base, allowed: false, request: { status: row.status as SignupRequest["status"], companyName: row.companyName, email: user.email, emailedAt: row.settings.accessRequestEmailedAt ?? null } };
+  // "We will email you when it is decided" holds only while we still may: once the address is stopped (a hard bounce, a
+  // complaint), no email goes to it, so the screen claims none and says to keep the page open (the review of 6 November 2026)
+  const emailed = row.settings.accessRequestEmailedAt ?? null;
+  const emailedAt = emailed && !(await withPlatform(container.db, (tx) => activeSuppression(tx, user.email))) ? emailed : null;
+  return { ...base, allowed: false, request: { status: row.status as SignupRequest["status"], companyName: row.companyName, email: user.email, emailedAt } };
 }
 
 /** What is left to do once a Decline has committed: the direct email, because a declined person is not an active member. */
@@ -136,9 +161,11 @@ type RemovedPeople = { companyId: string; companyName: string; userIds: string[]
  * at once make one change and the second is told so. What it finds under the lock decides:
  *
  * - Accept of a request or a declined company (the undo): every membership waiting or declined becomes active (one for a
- *   request; everyone a removal took away), `verifyCompany` runs (quiet, and already a no-op if the company was
- *   confirmed), `company.access_accepted` is emitted and audited, `stuck_role_detector` starts (idempotent), and each of
- *   them gets one notice, written after the membership is active or it would reach nobody.
+ *   request; everyone a removal took away), a request gets the careers address of its name in place of its neutral one
+ *   (`requestSlug`; the undo of a removal keeps the address the company had, as its links are out there), `verifyCompany`
+ *   runs (quiet, and already a no-op if the company was confirmed), `company.access_accepted` is emitted and audited,
+ *   `stuck_role_detector` starts (idempotent), and each of them gets one notice, written after the membership is active or
+ *   it would reach nobody.
  * - Decline of a request: the membership becomes `declined`, `company.access_declined` is emitted and audited; the email
  *   goes once this has committed (`tellPersonDeclined`).
  * - Take away access (`remove`, 6 November 2026) of a company with access: every active membership becomes `declined`,
@@ -150,8 +177,13 @@ type RemovedPeople = { companyId: string; companyName: string; userIds: string[]
  * - Accept of a company with nobody waiting changes nothing and says so; Decline of one answers 409. A second Decline
  *   changes nothing and says so. Take away access of a company with none (a request, a declined company, nobody active)
  *   answers a calm 409.
+ * - The first press wins (the review of 6 November 2026): `from` is where the request stood on the row that was pressed. An
+ *   Accept from a row that still showed the request, once someone declined it, answers 409 `access_decided` with who and
+ *   when, and changes nothing; only the declined company's own Accept (`from: "declined"`) is the undo. A press from a
+ *   declined row on a request still waiting is refused the same way. Two presses for the same outcome stay as above. Take
+ *   away access reads no `from`: it acts only on a company with access, and a second press is the calm 409 above.
  */
-export async function decideAccess(tx: Queryable, container: Container, input: { companyId: string; decision: CustomerAccessChange["decision"]; actor: Actor; now: Date }): Promise<{ answer: CustomerAccessAnswer; declined: DeclinedNotice | null; removed?: RemovedPeople | null }> {
+export async function decideAccess(tx: Queryable, container: Container, input: { companyId: string; decision: CustomerAccessChange["decision"]; from?: CustomerAccessChange["from"]; actor: Actor; now: Date }): Promise<{ answer: CustomerAccessAnswer; declined: DeclinedNotice | null; removed?: RemovedPeople | null }> {
   const { companyId, decision, actor, now } = input;
   const [co] = await tx.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
   if (!co) throw new HttpError(404, "not_found", "Company not found.");
@@ -173,6 +205,7 @@ export async function decideAccess(tx: Queryable, container: Container, input: {
     if (decision === "decline") throw new HttpError(409, "already_accepted", `${co.name} already has access, so it cannot be declined now.`);
     return { answer: answer("active", false, `${co.name} already has access. Nothing changed.`), declined: null };
   }
+  if (input.from !== owner.status && !(decision === "decline" && owner.status === "declined")) throw await decidedFirst(tx, co, owner.status, now);
   const person = { type: "user" as const, id: owner.userId };
   if (decision === "decline") {
     if (owner.status === "declined") return { answer: answer("declined", false, `${co.name} was already declined. Nothing changed.`), declined: null };
@@ -185,6 +218,11 @@ export async function decideAccess(tx: Queryable, container: Container, input: {
   // Was this the undo of a removal? Then everyone it took away comes back, and the notice says their access is back.
   const restoring = await accessWasTakenAway(tx, co.id);
   await tx.update(memberships).set({ status: "active" }).where(inArray(memberships.id, waiting.map((m) => m.id)));
+  // The careers address of its name, given now, under the row lock, before anything of it can go public: a request held a
+  // neutral one, so nobody took a real company's address by asking (the review of 6 November 2026). Taken meanwhile, it
+  // gets four characters more, as any new company does. The undo of a removal keeps the address the company had: its
+  // links are out there, and a name changed since, or one that needed four characters more, would move it.
+  if (!restoring) await tx.update(companies).set({ slug: await freeSlug(tx, slugify(co.name), co.id) }).where(eq(companies.id, co.id));
   await verifyCompany(tx, container, { companyId: co.id, actor, reason: ACCEPTED_REASON, now, quiet: true });
   await emit(tx, { type: "company.access_accepted", companyId: co.id, actor, subject: company, payload: { from: owner.status, ...(restoring ? { restored: waiting.length } : {}) } });
   for (const m of waiting) await emit(tx, { type: "membership.changed", companyId: co.id, actor, subject: { type: "user", id: m.userId }, payload: { role: m.role, status: "active" } });
@@ -222,6 +260,25 @@ async function takeAccessAway(tx: Queryable, input: { company: { id: string; nam
   await unverifyCompany(tx, { companyId: co.id, actor, reason: REMOVED_REASON, now });
   for (const m of active) await revokeSessionsForCompany(tx, m.userId, co.id, { now });
   return { companyId: co.id, companyName: co.name, userIds: active.map((m) => m.userId), owners: [...new Set(active.filter((m) => m.role === "owner").map((m) => m.email))], at: now.toISOString() };
+}
+
+/**
+ * The calm refusal of a press that came second and would undo what was decided first: who declined it and how long ago (the
+ * console shows the API's words as they are, in any time zone), and the way to accept it still.
+ */
+async function decidedFirst(tx: Queryable, co: { id: string; name: string }, status: string, now: Date): Promise<HttpError> {
+  if (status !== "declined") return new HttpError(409, "access_decided", `${co.name} is still waiting for a decision. Nothing changed.`, { status });
+  const [last] = await tx.select({ at: events.occurredAt, actor: events.actor }).from(events).where(and(eq(events.companyId, co.id), eq(events.type, "company.access_declined"))).orderBy(desc(events.occurredAt)).limit(1);
+  const by = last?.actor.name ?? null;
+  return new HttpError(409, "access_decided", `${co.name} was declined${last ? ` ${agoWords(last.at, now)}` : ""}${by ? ` by ${by}` : ""}. Nothing changed. To let them in, accept it under Declined.`, { status, decidedAt: last?.at ?? null, decidedBy: by });
+}
+
+/** "a moment ago", "5 minutes ago", "3 hours ago", "2 days ago". */
+function agoWords(at: string, now: Date): string {
+  const minutes = Math.floor((now.getTime() - Date.parse(at)) / 60_000);
+  if (!(minutes >= 1)) return "a moment ago";
+  const [n, unit]: [number, string] = minutes < 60 ? [minutes, "minute"] : minutes < 1_440 ? [Math.floor(minutes / 60), "hour"] : [Math.floor(minutes / 1_440), "day"];
+  return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
 }
 
 /** The email a Decline sends, once it has committed. A failure changes nothing and raises nothing. True only when it really left. */
@@ -272,7 +329,8 @@ export async function isAccessRequestCompany(q: Queryable, companyId: string): P
 
 /**
  * `accessRequest` for GET /admin/customers: every request and declined company with the person who asked, and who declined
- * it and when (its newest `company.access_declined` event). Two queries, however many customers there are.
+ * it and when (its newest `company.access_declined` event). Two queries, however many customers there are. The person's name
+ * is what they typed, or what their sign-in provider holds, so it reads as `typedName` does: one line, no angle brackets.
  */
 export async function customerAccessRequests(db: Db): Promise<Map<string, CustomerAccessRequest>> {
   const rows = await db
@@ -295,6 +353,6 @@ export async function customerAccessRequests(db: Db): Promise<Map<string, Custom
   for (const r of rows) { const known = byCompany.get(r.companyId); if (!known || (known.role !== "owner" && r.role === "owner")) byCompany.set(r.companyId, r); }
   return new Map([...byCompany.values()].map((r): [string, CustomerAccessRequest] => {
     const by = decidedBy.get(r.companyId);
-    return [r.companyId, { status: r.status as CustomerAccessRequest["status"], person: { name: r.name, email: r.email }, declined: r.status === "declined" && by ? { at: by.at, by: by.actor.name ?? null } : null, ...(r.status === "declined" && by?.type === "company.access_removed" ? { removed: true } : {}) }];
+    return [r.companyId, { status: r.status as CustomerAccessRequest["status"], person: { name: typedName(r.name), email: r.email }, declined: r.status === "declined" && by ? { at: by.at, by: by.actor.name ?? null } : null, ...(r.status === "declined" && by?.type === "company.access_removed" ? { removed: true } : {}) }];
   }));
 }

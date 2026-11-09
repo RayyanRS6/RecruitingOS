@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { ApplicationStage as ApplicationStageEnum, CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
-import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, interviewsInMotionFor, isSource, notLocked, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
+import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, interviewsInMotionFor, isSource, lockedAndWaiting, notLocked, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
 import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
 import { localDays } from "@ros/workflows";
 import { boardView, loadPool, shownLatestReadings } from "./pool";
@@ -131,7 +131,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     .orderBy(asc(applications.createdAt))) as AppRow[];
   const ids = apps.map((a) => a.id);
   const idSet = new Set(ids);
-  const [lockedRow] = leavesOutLocked ? await tx.select({ n: sql<string>`count(*)` }).from(applications).where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds), isNotNull(applications.lockedAt))) : [];
+  const [lockedRow] = leavesOutLocked ? await tx.select({ n: sql<string>`count(*)` }).from(applications).where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds), lockedAndWaiting())) : [];
   const lockedCount = Number(lockedRow?.n ?? 0);
   const eventsOf = (type: string) => ids.length
     ? tx.select({ subjectId: events.subjectId, occurredAt: events.occurredAt, payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), eq(events.type, type), eq(events.subjectType, "application"), inArray(events.subjectId, ids))).orderBy(asc(events.occurredAt), asc(events.id))

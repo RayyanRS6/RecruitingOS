@@ -197,12 +197,24 @@ describe("a recruiter's notes from a call (plan E3)", () => {
     expect(callNotesState(detail("human_requested", "rejected"), "recruiter").show).toBe(false);
   });
 
+  it("about someone locked it is there at any stage, as a quiet choice: the API keeps the notes on the Notes tab whatever the stage (the check of 9 November 2026, C4)", () => {
+    const locked = (stage: string) => ({ ...detail(null, stage), lockedAt: "2026-10-01T17:00:00.000Z" });
+    // a closed job moved them to its talent pool, they withdrew, or ITS declined them, and then they wrote back
+    for (const stage of ["talent_pool", "withdrawn", "rejected", "received"]) expect(callNotesState(locked(stage), "recruiter"), stage).toEqual({ show: true, prominent: false });
+    // still for recruiters only
+    for (const role of ["owner", "admin", "hiring_manager", "hr", "interviewer", null]) expect(callNotesState(locked("talent_pool"), role).show, String(role)).toBe(false);
+    // someone the team can read keeps the screening's stages
+    expect(callNotesState(detail(null, "talent_pool"), "recruiter").show).toBe(false);
+  });
+
   it("sends only what was written, per question where it fits, and says what it did", () => {
     expect(callNotesBody({ q_saturdays: "  Yes, mornings.  ", q_pay: "   " }, " Warm. ", true)).toEqual({ notes: [{ questionKey: "q_saturdays", text: "Yes, mornings." }, { text: "Warm." }], complete: true });
     expect(callNotesBody({ q_pay: "" }, "", true)).toBeNull();
     expect(callNotesBody({}, "Left a voicemail.", false)).toEqual({ notes: [{ text: "Left a voicemail." }], complete: false });
     expect(callNotesToast({ completed: true }, "Sofia").detail).toContain("never as their own words");
     expect(callNotesToast({ completed: false }, "Sofia")).toEqual({ title: "Notes added.", detail: "The conversation stays open for Sofia." });
+    // About someone locked there is no conversation to keep open and no scorecard to write.
+    expect(callNotesToast({ completed: false, keptAsNote: true }, "Sofia")).toEqual({ title: "Notes kept.", detail: "They are on the Notes tab. Sofia is locked, so no AI review is written." });
   });
 
   it("lists the questions the conversation asks, so each note keeps its question (Wave S8: the written ones on a conversation created since)", () => {

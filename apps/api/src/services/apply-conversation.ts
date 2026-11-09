@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ChatCounter, type ReviewItem, type RolePacket, type ScreenProgress, type ScreenStatus, type ScreenTranscriptEntry, type ScreenTurn, type ScreenWriteup, type TapAnswer, type TapFormat, type UnconfirmedIntent, type WrittenQuestionView } from "@ros/contracts";
+import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, candidateScoreShown, type Actor, type ChatCounter, type ReviewItem, type RolePacket, type ScreenProgress, type ScreenStatus, type ScreenTranscriptEntry, type ScreenTurn, type ScreenWriteup, type TapAnswer, type TapFormat, type UnconfirmedIntent, type WrittenQuestionView } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
 import {
   CHAT_CAP_CLOSING, EMPTY_SCREEN_PROGRESS, MOVED_ON_MESSAGE, REVIEW_MESSAGE, SCREEN_COMPLETE_MESSAGE, SKIPPED_MESSAGE, TURN_CAP_REVIEW_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, cvLinesOf, visitChatFacts, chatOpening, chatPacket, enforceChatTurn, withChatPlan, modelTurnCap, modelTurnsUsed, answerWithdrawPrompt, answersOf, countConversation, createScreen, currentQuestion, declineConversation, editScreenAnswer, enforceTurnRules, flagAllowance,
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
   sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, turnWithoutModel, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
-import { addBusinessHours, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, errorForLog, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
+import { addBusinessHours, aiCreditStanding, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, errorForLog, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, type WorkflowEngine } from "@ros/workflows";
 import type { Container } from "../container";
+import { recordScoreFor, screensOf } from "./application-record";
 import { recordWithdrawal } from "./applications";
 import { learnFromSentChat } from "./profile-facts";
 import { screenDeps } from "./screens";
@@ -718,9 +719,14 @@ export type ConversationView = {
    * application's own. Review & send lists them read only.
    */
   formAnswers: string[];
+  /**
+   * Once it is sent: whether a match score can come for them, as their record says (`recordScoreFor`), so the closing page promises
+   * one only then. A detached copy reads it from the company alone, so a first application and a repeat one read the same.
+   */
+  scoreComes: boolean;
 };
 
-function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; rolePacket: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"]; formAnswers: string[] }): ConversationView {
+function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; rolePacket: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"]; formAnswers: string[]; scoreComes: boolean }): ConversationView {
   const { progress, packet } = input;
   const status = input.status as ScreenStatus;
   const oneVisit = progress.flow === "one_visit";
@@ -754,6 +760,7 @@ function viewOf(input: { token: string; status: string; channel: string; progres
     counter: chatCounter(progress.chat),
     writeup: progress.writeup ?? null,
     formAnswers: input.formAnswers,
+    scoreComes: input.scoreComes,
   };
 }
 
@@ -777,13 +784,15 @@ export async function conversationView(db: Db, ref: ConversationRef, now: Date =
     if (ref.kind === "screen") {
       const b = await loadScreenBundle(tx, ref.id);
       if (!b) return null;
-      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, rolePacket: b.rolePacket, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null, formAnswers: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia)?.formAnswers ?? [] });
+      const scoreComes = b.screen.status === "completed" && (await recordScoreFor(tx, { app: b.app, companySettings: b.company.settings, screens: await screensOf(tx, b.app.id), hiddenDecision: false, now })).state !== "off";
+      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, rolePacket: b.rolePacket, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null, formAnswers: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia)?.formAnswers ?? [], scoreComes });
     }
     const d = await loadDetached(tx, ref.id);
     if (!d) return null;
     // A wiped conversation reads as an expired link, like a screen nobody answered.
     const status = d.row.discardedAt ? "expired" : d.row.status;
-    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, rolePacket: d.rolePacket, firstName: d.row.firstName || "there", expectation, personAsked: status === "human_requested" ? asked(d.row.finishedAt) : null, formAnswers: d.row.discardedAt ? [] : chatFactsFor(null, d.row.progress, "apply")?.formAnswers ?? [] });
+    const scoreComes = status === "completed" && candidateScoreShown(d.company.settings) && !(await aiCreditStanding(tx, d.company.id, { now, settled: true }))?.usedUp;
+    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, rolePacket: d.rolePacket, firstName: d.row.firstName || "there", expectation, personAsked: status === "human_requested" ? asked(d.row.finishedAt) : null, formAnswers: d.row.discardedAt ? [] : chatFactsFor(null, d.row.progress, "apply")?.formAnswers ?? [], scoreComes });
   });
 }
 

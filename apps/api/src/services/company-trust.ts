@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { companyVerifiedAt, newTrialTerm, onTrialPlan, oneLine, trialTermOf, type Actor } from "@ros/contracts";
+import { companyVerifiedAt, newTrialTerm, onTrialPlan, oneLine, trialTermOf, typedName, type Actor } from "@ros/contracts";
 import { BOARD_UP_STATES, audit, closingDateRequired, defaultClosingDate, emit, errorForLog, isBoardChannel, notify, raiseAlert, transitionPosting, type PostingState } from "@ros/core";
 import { releaseHeldCommunications } from "@ros/agents";
 import { companies, postings, rolePackets, roles, type Queryable } from "@ros/db";
@@ -179,8 +179,9 @@ export async function sendWithoutAlert(container: Container, message: OutboundEm
 
 /**
  * Tells the ITS queue mailbox that a company signed itself up and waits for the check, with the company's own details
- * and the owner's address (no candidate data exists yet). Sent outside any transaction; a failed send is raised as an
- * operator alert so the company never waits unseen. What the person typed goes in one line each (`oneLine`).
+ * and the owner's address, then the name they typed (no candidate data exists yet). Sent outside any transaction; a failed
+ * send is raised as an operator alert so the company never waits unseen. What the person typed goes in one line each
+ * (`oneLine`), and the email says only the address is proved.
  *
  * `request` (SIGNUP_MODE=approval): the words of a request for access, and a failed send raises no alert, because the
  * Overview row is what tells Nadine and a second row that outlives the decision would only be noise.
@@ -190,10 +191,14 @@ export async function tellItsAboutNewCompany(container: Container, input: { comp
   const name = oneLine(input.company.name, 120);
   const vertical = oneLine(input.company.vertical, 60);
   const website = oneLine(input.company.website, 200) || "not given";
-  const owner = input.owner.name ? `${oneLine(input.owner.name, 120)} <${input.owner.email}>` : input.owner.email;
+  // The address their sign-in proved comes first, and the name they typed after it with no angle brackets, so a name such
+  // as "Pat Example <pat@its.example>" cannot pass for an address of ours (the review of 6 November 2026). In
+  // every mode: under SIGNUP_MODE=open anyone signed in has the direct door (the review of 9 November 2026).
+  const typed = typedName(input.owner.name);
+  const owner = typed ? `${input.owner.email} (${typed})` : input.owner.email;
   if (input.request) {
     const text = [
-      "Someone is asking for access. Nothing works for them until an administrator accepts: no AI runs, and nothing of theirs is public.",
+      "Someone is asking for access. Nothing works for them until an administrator accepts: no AI runs, and nothing of theirs is public. Only the email address is proved; the rest is what they typed.",
       `Company: ${name}\nPerson: ${owner}\nKind of business: ${vertical}\nSize: ${input.company.sizeBand} employees\nCity and state: ${oneLine(input.company.place, 120) || "not given"}\nWebsite: ${website}`,
       `Accept or decline it in the admin console, on the Overview: ${container.env.APP_BASE_URL}/admin`,
     ].join("\n\n");
@@ -201,7 +206,7 @@ export async function tellItsAboutNewCompany(container: Container, input: { comp
     return;
   }
   const text = [
-    "A company signed itself up. Its careers page, job pages, Google listing and first emails to candidates wait for the one-time ITS check; it can draft and approve roles meanwhile.",
+    "A company signed itself up. Its careers page, job pages, Google listing and first emails to candidates wait for the one-time ITS check; it can draft and approve roles meanwhile. Only the email address is proved; the rest is what they typed.",
     `Company: ${name}\nKind of business: ${vertical}\nSize: ${input.company.sizeBand} employees\nWebsite: ${website}\nOwner: ${owner}`,
     `Confirm it, or ask the owner first, in the admin console under Customers: ${container.env.APP_BASE_URL}/admin`,
   ].join("\n\n");

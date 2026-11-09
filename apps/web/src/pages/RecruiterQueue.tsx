@@ -7,7 +7,7 @@ import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, Ico
 import type { EscalationThreadEntry } from "@ros/contracts";
 import { api, ApiError, type Me, type PostingTaskDetail } from "../api/client";
 import { POSTING_TASK_BEFORE_ACCEPT, isPostingTaskKind, queueKindLabel } from "../publishing";
-import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
+import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, LOCKED_ANSWER_LABEL, LOCKED_CALL_NOTES_HINT, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
 import { toast } from "../toast";
 import { BoardSnapshotCard } from "./board/BoardSnapshot";
 import { snapshotOf } from "./board/board-model";
@@ -428,12 +428,13 @@ function EscalationDetail({ id }: { id: string }) {
   // Platform administrators can also open the customer in the console (Wave S6); ITS recruiters cannot open the console.
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const isAdmin = me.data?.user.platformRole === "platform_admin";
-  const resolve = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/resolve`, { resolution, minutesSpent: minutes ? Number(minutes) : undefined }), onSuccess: () => { toast(task ? "Task closed with your note. The customer sees it on the job's Share tab." : q.data?.planRequest ? "Resolved. The customer has your answer in full." : "Resolved. The customer has your answer in full; your access ends in 24 hours."); setResolution(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve.") });
+  // Who reads an answer is the API's to say (`lockedForCompany`), so a page open for a while never says the customer has it.
+  const resolve = useMutation({ mutationFn: () => api.post<{ lockedForCompany?: boolean }>(`/api/v1/escalations/${id}/resolve`, { resolution, minutesSpent: minutes ? Number(minutes) : undefined }), onSuccess: (r) => { toast(task ? "Task closed with your note. The customer sees it on the job's Share tab." : q.data?.planRequest ? "Resolved. The customer has your answer in full." : r?.lockedForCompany ? LOCKED_RESOLVED_TOAST : "Resolved. The customer has your answer in full; your access ends in 24 hours."); setResolution(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve.") });
   // A message without resolving (plan B5): a question back, or progress. The person who asked and the owners read it in full.
-  const write = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/messages`, { body: reply.trim() }), onSuccess: () => { toast("Sent to the customer."); setReply(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send.") });
+  const write = useMutation({ mutationFn: () => api.post<{ lockedForCompany?: boolean }>(`/api/v1/escalations/${id}/messages`, { body: reply.trim() }), onSuccess: (r) => { toast(r?.lockedForCompany ? LOCKED_NOTE_TOAST : "Sent to the customer."); setReply(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send.") });
   const refreshFrame = useRefresh();
   const enter = useMutation({
-    mutationFn: async (e: Detail) => { await api.post("/api/v1/auth/switch", { companyId: e.companyId }); return e; },
+    mutationFn: async (e: Detail & { message?: boolean }) => { await api.post("/api/v1/auth/switch", { companyId: e.companyId }); return e; },
     // Another company now: nothing read for the previous one may show (the cache is emptied), and the frame around the
     // page (the access notice, the company chip) is drawn again from the new session. A request about a draft opens that
     // draft in the job builder (C12); one about a role opens its candidates.
@@ -459,7 +460,7 @@ function EscalationDetail({ id }: { id: string }) {
       <Card title={`${queueKindLabel(e.kind)} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row justify-end gap-1.5"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{URGENCY_WORD[e.urgency]}</Pill><Pill size="sm" tone={st.tone}>{st.label}</Pill></div>}>
         {e.accessGranted && ctx.candidate?.name ? <p className="mb-2"><strong>About:</strong> {ctx.candidate.name}{aboutRole ? ` · ${aboutRole}` : ""}</p> : null}
         {/* Rule 3 of the plans: words cannot be checked by a machine, so the person writing them is told. */}
-        {e.accessGranted && e.lockedForCompany ? <div className="mb-4"><Alert tone="caution">Locked for the company. Do not name them in your reply.</Alert></div> : null}
+        {e.accessGranted && e.lockedForCompany ? <div className="mb-4"><Alert tone="caution">Locked for the company. Do not name them to the company.</Alert></div> : null}
         {hasActions ? (
           <div className="row mb-4">
             {e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>{isPostingTaskKind(e.kind) ? "Accept this task" : "Accept this request"}</Button> : null}
@@ -509,7 +510,7 @@ function EscalationDetail({ id }: { id: string }) {
           {/* A candidate who chose a person over the assistant (plan E3, Q16): the call, then the notes on their AI interview tab. */}
           {e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId && e.status !== "resolved" ? (
             <Card needsYou title="After you talk with them">
-              <p className="small text-ink-2">{CALL_NOTES_HINT}</p>
+              <p className="small text-ink-2">{e.lockedForCompany ? LOCKED_CALL_NOTES_HINT : CALL_NOTES_HINT}</p>
               {e.grant ? <div className="row mt-4"><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open the candidate's AI interview tab</Button></div> : null}
             </Card>
           ) : null}
@@ -550,7 +551,9 @@ function EscalationDetail({ id }: { id: string }) {
           {e.status !== "resolved" ? (
             <Card title="Your answer">
               <div className="stack gap-6">
-                {stillOpen ? (
+                {/* Someone the company cannot read: nobody there can answer a question or read this, so the way to help is to write to them. */}
+                {stillOpen && e.lockedForCompany ? <div><Button variant="secondary" icon="mail" loading={enter.isPending} onClick={() => enter.mutate({ ...e, message: true })}>Write to the candidate</Button></div> : null}
+                {stillOpen && !e.lockedForCompany ? (
                   <section aria-labelledby="answer-write" className="stack gap-3">
                     {/* who reads it: an eye with the words as its name and tooltip, beside the heading */}
                     <div className="flex items-center gap-2">
@@ -563,7 +566,7 @@ function EscalationDetail({ id }: { id: string }) {
                 ) : null}
                 <section aria-labelledby="answer-resolve" className={cn("stack gap-3", stillOpen && "border-t border-line pt-6")}>
                   <h3 id="answer-resolve" className="text-[15px]">Resolve</h3>
-                  <Field label="What you did or advised (the customer reads this in full)" htmlFor="res"><textarea id="res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} /></Field>
+                  <Field label={e.lockedForCompany ? LOCKED_ANSWER_LABEL : "What you did or advised (the customer reads this in full)"} htmlFor="res"><textarea id="res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} /></Field>
                   <Field label="Minutes spent" htmlFor="mins"><input id="mins" className="input max-w-[160px]" type="number" min={0} max={1440} value={minutes} onChange={(ev) => setMinutes(ev.target.value)} /></Field>
                   <div><Button variant="primary" loading={resolve.isPending} disabled={!resolution.trim()} onClick={() => resolve.mutate()}>Mark resolved</Button></div>
                 </section>

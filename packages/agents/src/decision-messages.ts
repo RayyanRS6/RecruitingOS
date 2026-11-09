@@ -1,4 +1,4 @@
-import { and, count, eq, gt, gte, inArray, isNotNull, isNull, like, lte, sql } from "drizzle-orm";
+import { and, count, eq, gt, gte, inArray, isNotNull, isNull, like, lte, or, sql } from "drizzle-orm";
 import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type Actor, type ApplicationStage, type CandidateNotice, type DecisionWording, type DecisionWordingOption, type ToldState } from "@ros/contracts";
 import { CANDIDATE_LOCK_ACTOR, CLOSE_OUT_SENDS_FROM_DAYS, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, adverseDecisionLineApplies, createEscalation, emit, gate, inCancelled, notLocked, notify, resolvePolicy, unlockedAtFor, waitingSince } from "@ros/core";
 import { applications, approvalRequests, candidates, communications, companies, events, interviews, rolePackets, roles, type Queryable } from "@ros/db";
@@ -242,10 +242,11 @@ export async function queueClosingMessages(q: Queryable, integrations: Integrati
  * The closing message for one person past the plan's candidates per job (the plans of 5 November 2026, Rule 2): the role_closed
  * wording, with no word about keeping them, whatever the company's settings say, because the team cannot tell them. Its key is
  * one per application, so nobody gets it twice, and the fact on the record means nobody tries again if it could not go. Nothing
- * goes to the team and nobody is brought in. Sent by itself at five working days (`runUntoldSafetyNet`), or when a person sends
- * the closing message for the others (`tellLockedOfClose`). True when it is on its way.
+ * goes to the team and nobody is brought in. Sent by itself at five working days (`runUntoldSafetyNet`), when a person sends
+ * the closing message for the others (`tellLockedOfClose`), or by a change of plan about to open them, so they are opened as
+ * told (`unlockApplicants`). True when it is on its way.
  */
-async function tellOneLockedOfClose(q: Queryable, integrations: Integrations, input: { app: App; statusBaseUrl: string; now: Date }): Promise<boolean> {
+export async function tellOneLockedOfClose(q: Queryable, integrations: Integrations, input: { app: App; statusBaseUrl: string; now: Date }): Promise<boolean> {
   const { app } = input;
   const decisionAt = new Date(app.rejectedAt ?? app.stageChangedAt).toISOString();
   const r = await queueDecisionMessage(q, integrations, { app, actor: CANDIDATE_LOCK_ACTOR, wording: "role_closed", statusBaseUrl: input.statusBaseUrl, now: input.now }).catch((e: unknown) => {
@@ -285,7 +286,9 @@ export type SafetyNetResult = { applicationId: string; action: "sent" | "recruit
  * plan just opened counts from then: until then the team could not tell them.
  *
  * Someone locked (the plans of 5 November 2026, Rule 2) can only be here because their job closed: the closing message goes
- * by itself whatever the settings say, because the team cannot tell them, with no name to the team and no recruiter.
+ * by itself whatever the settings say, because the team cannot tell them, with no name to the team and no recruiter. They were
+ * promised a date when they applied, and a job closing does not move it, so they are due by then too: from the last day before
+ * it, as the close-out note would have gone, or at five working days if that comes first.
  */
 export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, companyId: string): Promise<SafetyNetResult[]> {
   const untold = (await q.select({ app: applications }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.companyId, companyId), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt)))).map((r) => r.app);
@@ -293,7 +296,8 @@ export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, comp
   const rules = await workingDayRulesFor(q, companyId, deps.now);
   const decidedAt = (a: App) => new Date(a.rejectedAt ?? a.stageChangedAt).toISOString();
   const unlocks = await unlockedAtFor(q, untold.map((a) => a.id));
-  const due = untold.filter((a) => workingDaysSince(new Date(waitingSince(decidedAt(a), unlocks.get(a.id))), deps.now, 60, rules) >= UNTOLD_SEND_WORKING_DAYS);
+  const promiseFallsDue = (a: App) => !!a.lockedAt && deps.now.getTime() - Date.parse(a.createdAt) >= CLOSE_OUT_SENDS_FROM_DAYS * 86_400_000;
+  const due = untold.filter((a) => promiseFallsDue(a) || workingDaysSince(new Date(waitingSince(decidedAt(a), unlocks.get(a.id))), deps.now, 60, rules) >= UNTOLD_SEND_WORKING_DAYS);
   if (!due.length) return [];
   const waiting = await decisionsWaitingApproval(q, due.map((a) => a.id));
   const handled = new Set((await q.select({ subjectId: events.subjectId, at: sql<string>`${events.payload}->>'decisionAt'` }).from(events).where(and(eq(events.type, "application.untold_fallback"), inArray(events.subjectId, due.map((a) => a.id))))).map((e) => `${e.subjectId}|${e.at}`));
@@ -380,7 +384,7 @@ export const STILL_REVIEWING_CATCH_UP_DAYS = 7;
  * to someone set aside as not a fit for now, nor without an address. Only within a week of the wait reaching `afterDays`
  * (`STILL_REVIEWING_CATCH_UP_DAYS`): someone who crossed it longer ago is never noted, months after the fact. Returns the
  * applications noted. Never to someone locked, because nobody is reviewing them (they get the close-out note instead); and
- * someone a change of plan opened has waited from then.
+ * someone a change of plan opened has waited from then, however long before it they applied.
  */
 export async function sendStillReviewingNotes(q: Queryable, deps: { integrations: Integrations; statusBaseUrl: string; now: Date; actor: Actor }, companyId: string): Promise<string[]> {
   const open = await q.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused"])));
@@ -391,9 +395,15 @@ export async function sendStillReviewingNotes(q: Queryable, deps: { integrations
     const afterDays = Math.max(7, Number(policy.params.afterDays ?? 30) || 30);
     const cutoff = new Date(deps.now.getTime() - afterDays * 86_400_000);
     const windowStart = new Date(cutoff.getTime() - STILL_REVIEWING_CATCH_UP_DAYS * 86_400_000);
-    const waiting = await q.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.stage, WAITING_STAGES), gt(applications.createdAt, windowStart.toISOString()), lte(applications.createdAt, cutoff.toISOString()), notLocked()));
+    const everOpened = sql`exists (select 1 from ${events} where ${events.type} = 'application.unlocked' and ${events.subjectType} = 'application' and ${events.subjectId} = ${applications.id}::text)`;
+    const found = await q.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.stage, WAITING_STAGES), or(gt(applications.createdAt, windowStart.toISOString()), everOpened), lte(applications.createdAt, cutoff.toISOString()), notLocked()));
+    if (!found.length) continue;
+    const unlocks = await unlockedAtFor(q, found.map((a) => a.id));
+    const waiting = found.filter((a) => {
+      const since = waitingSince(a.createdAt, unlocks.get(a.id));
+      return since > windowStart.getTime() && since <= cutoff.getTime();
+    });
     if (!waiting.length) continue;
-    const unlocks = await unlockedAtFor(q, waiting.map((a) => a.id));
     const already = new Set((await q.select({ applicationId: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, waiting.map((a) => a.id)), eq(communications.templateKey, "still_reviewing")))).map((r) => r.applicationId ?? ""));
     const marks = await activeMarksFor(q, waiting.map((a) => a.id));
     // Not to someone under Cancelled: they cancelled an interview and chose what comes next, or did not come to it, and
@@ -401,8 +411,6 @@ export async function sendStillReviewingNotes(q: Queryable, deps: { integrations
     const followUps = await activeFollowUpsFor(q, waiting.map((a) => a.id));
     for (const app of waiting) {
       if (already.has(app.id) || marks.get(app.id)?.mark === "not_a_fit_for_now" || inCancelled(app.stage, followUps.get(app.id))) continue;
-      const unlockedAt = unlocks.get(app.id);
-      if (unlockedAt && Date.parse(unlockedAt) > cutoff.getTime()) continue;
       const parts = await loadDecisionParts(q, app);
       if (!parts?.cand.email) continue;
       const g = await gate(q, { companyId, roleId: role.id, applicationId: app.id, actionType: "message.still_reviewing", subject: { type: "application", id: app.id }, proposal: { afterDays }, requestedBy: deps.actor });

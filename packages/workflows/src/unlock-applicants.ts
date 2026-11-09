@@ -1,8 +1,9 @@
-import { and, asc, count, eq, inArray, isNotNull, isNull } from "drizzle-orm";
-import { CLOSE_OUT_TEMPLATE } from "@ros/agents";
+import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
+import { CLOSE_OUT_TEMPLATE, tellOneLockedOfClose } from "@ros/agents";
 import type { Actor } from "@ros/contracts";
-import { audit, emit, entitlements, evaluateEligibility, lockApplicants, transition } from "@ros/core";
-import { applications, candidates, communications, rolePackets, roles, workflowRuns, type Tx } from "@ros/db";
+import { audit, emit, evaluateEligibility, lockApplicants, lockedAndWaiting, transition } from "@ros/core";
+import { applications, communications, rolePackets, roles, workflowRuns, type Tx } from "@ros/db";
+import type { Integrations } from "@ros/integrations";
 import type { WorkflowEngine } from "./engine";
 import { intakeOn } from "./with-application";
 
@@ -15,7 +16,7 @@ const CLOSE_OUT_LEFT = ["sending", "sent", "delivered", "opened", "clicked", "un
  * A change of plan (the plans of 5 November 2026, Rule 2) opens the people locked on each job, oldest first, up to the new
  * limit (the limit less everyone the team can already read; no limit means everyone), each with one event and one audit line
  * saying why, and never a name. A move down opens nobody and locks nobody: `locked_at` is only ever set when an application
- * is created.
+ * is created. Someone who withdrew or was deleted while locked is not opened, uses no room and stays as they are (`lockedAndWaiting`).
  *
  * Someone opened while the job is open, who applied under `UNLOCK_INTERVIEW_DAYS` ago and was not told it was not reviewed,
  * goes on as if they had just applied: an intake starts, comes through its scan and its AI notice again, reads the résumé on
@@ -23,32 +24,46 @@ const CLOSE_OUT_LEFT = ["sending", "sent", "delivered", "opened", "clicked", "un
  * one email went already). The worker takes runs one at a time, so a large upgrade reaches the AI and the mail one by one.
  * Anyone else is simply visible, with no email: the answers on their form are read in code, so a must-have "No" is held for a
  * person as it always is, and the rest wait for the team's review. Someone who left, or whom a closed job moved, stays where
- * they are.
+ * they are. Someone a closed job moved whom nobody has told hears that it closed first, in this transaction and in the words
+ * someone locked gets (no line about keeping them, and no word about a plan): they are opened as told, by the date they were
+ * promised (`tellOneLockedOfClose`).
  *
  * Runs in the transaction that changed the plan, behind each job's lock, so an application being decided at this moment takes
- * its place before this or under the new limit after it. Returns how many were opened, and how many of them go on to the
- * interview by themselves.
+ * its place before this or under the new limit after it. Every job of the company, also one with nobody locked yet: the first
+ * person past the limit may be being decided right now, on the old limit, in a transaction nothing here can see. Behind the
+ * lock they have either committed, and are read and opened, or they wait, and read the new limit. First the jobs that had
+ * someone locked when they were listed, in id order, because opening people takes a while and those jobs' applicants wait for
+ * it anyway; then the others, in id order, so a job with nobody to open is held only for the short rest of the transaction
+ * and its applicants never wait for the opening (the check of 9 November, C8). `limit` is the new plan's own: the caller
+ * writes the plan's rows after this (POST /admin/customers/:id/plan). Returns how many were opened, and how many of them go
+ * on to the interview by themselves.
  */
-export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; planKey: string; actor: Actor; reason: string; now: Date }): Promise<{ unlocked: number; interviews: number }> {
-  const { companyId, planKey, actor, now } = input;
-  const limit = await entitlements.limitOf(q, companyId, entitlements.CANDIDATES_PER_JOB);
-  const jobs = await q.selectDistinct({ roleId: applications.roleId }).from(applications).where(and(eq(applications.companyId, companyId), isNotNull(applications.lockedAt))).orderBy(asc(applications.roleId));
+export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; planKey: string; limit: number | null; actor: Actor; reason: string; now: Date; integrations: Integrations; statusBaseUrl: string }): Promise<{ unlocked: number; interviews: number }> {
+  const { companyId, planKey, limit, actor, now } = input;
+  const jobs = await q.select({ roleId: roles.id }).from(roles).where(eq(roles.companyId, companyId)).orderBy(asc(roles.id));
+  const lockedOn = new Set((await q.selectDistinct({ roleId: applications.roleId }).from(applications).where(and(eq(applications.companyId, companyId), lockedAndWaiting()))).map((r) => r.roleId));
   let unlocked = 0;
   let interviews = 0;
-  for (const { roleId } of jobs) {
+  for (const { roleId } of [...jobs.filter((j) => lockedOn.has(j.roleId)), ...jobs.filter((j) => !lockedOn.has(j.roleId))]) {
     await lockApplicants(q, roleId);
     const [visible] = await q.select({ n: count() }).from(applications).where(and(eq(applications.roleId, roleId), isNull(applications.lockedAt)));
     const room = limit === null ? null : limit - Number(visible?.n ?? 0);
     if (room !== null && room <= 0) continue;
-    const waiting = q.select({ id: applications.id, stage: applications.stage, createdAt: applications.createdAt, packetVersion: applications.packetVersion, answers: applications.answers, anonymizedAt: candidates.anonymizedAt }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, roleId), isNotNull(applications.lockedAt))).orderBy(asc(applications.lockedAt), asc(applications.createdAt), asc(applications.id));
+    const waiting = q.select({ id: applications.id, stage: applications.stage, createdAt: applications.createdAt, packetVersion: applications.packetVersion, answers: applications.answers }).from(applications).where(and(eq(applications.roleId, roleId), lockedAndWaiting())).orderBy(asc(applications.lockedAt), asc(applications.createdAt), asc(applications.id));
     const opening = room === null ? await waiting : await waiting.limit(room);
     if (!opening.length) continue;
     const [role] = await q.select({ status: roles.status }).from(roles).where(eq(roles.id, roleId)).limit(1);
     const noted = new Set((await q.select({ id: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, opening.map((a) => a.id)), eq(communications.templateKey, CLOSE_OUT_TEMPLATE), inArray(communications.status, CLOSE_OUT_LEFT)))).map((r) => r.id));
     for (const app of opening) {
+      // Their job closed while they were locked and nobody has told them: they hear it first, while still locked, so the message
+      // is the one someone locked gets, and they are opened as told.
+      if (role?.status === "closed" && app.stage === "talent_pool") {
+        const [row] = await q.select().from(applications).where(eq(applications.id, app.id)).limit(1);
+        if (row?.toldState === "not_told") await tellOneLockedOfClose(q, input.integrations, { app: row, statusBaseUrl: input.statusBaseUrl, now });
+      }
       await q.update(applications).set({ lockedAt: null }).where(eq(applications.id, app.id));
       unlocked += 1;
-      const inProcess = !app.anonymizedAt && (app.stage === "applied" || app.stage === "received");
+      const inProcess = app.stage === "applied" || app.stage === "received";
       const interview = inProcess && role?.status === "open" && !noted.has(app.id) && now.getTime() - Date.parse(app.createdAt) < UNLOCK_INTERVIEW_DAYS * 86_400_000;
       if (interview) interviews += 1;
       const why = { cause: "plan_changed", plan: planKey, limit, interview, at: now.toISOString() };

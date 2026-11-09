@@ -1,4 +1,4 @@
-import { aiRuns, uuidv7, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
+import { aiRuns, isLockTimeout, uuidv7, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { creditHoldUsd, estimateCostUsd } from "./pricing";
 import { promptHash, type PromptDef } from "./prompts/registry";
 import { ALLOWED_MODELS, TASK_TIER, effortForTask, effortsFromEnv, isAllowedModel, modelForTask, modelTableFromEnv, type Effort, type ModelTable } from "./routing";
@@ -34,16 +34,20 @@ export type AiRuntime = {
  * `no_credit`: the company's AI credit has no room for this call, so the model was not asked and no run was written (its
  * `runId` names no row). Never an outage, never a failure, never retried: each caller has its own way on. The text must
  * never start with "provider", which is how the engine knows an outage (packages/workflows/src/engine.ts, `providerProblem`).
+ * `refusedHoldUsd`: what was asked for and refused, side-by-side calls together: with what is actually spent, it says whether
+ * the credit is really gone or only held for calls still running (`aiCreditRoomSoon` in packages/core/src/ai-credit.ts).
  */
 export type RunOutcome<T> =
   | { ok: true; output: T; runId: string; model: string }
-  | { ok: false; runId: string; model: string; reason: "refused" | "invalid" | "error" | "no_credit"; error: string };
+  | { ok: false; runId: string; model: string; reason: "refused" | "invalid" | "error" | "no_credit"; error: string; refusedHoldUsd?: number };
 
 /** Why a call was not made when the company's AI credit has no room for it (`RunOutcome`). */
 export const AI_CREDIT_USED_UP = "AI credit used up";
+/** Why a call was not made when the credit's row could not be read in time. Never starts with "provider": this is no outage. */
+export const AI_CREDIT_BUSY = "the AI credit could not be read in time, so the model was not asked";
 
 /** Whether the model was not asked because the company's AI credit has no room: not a failure of any kind. */
-export function outOfCredit<T>(out: RunOutcome<T>): out is Extract<RunOutcome<T>, { ok: false }> & { reason: "no_credit" } {
+export function outOfCredit<T>(out: RunOutcome<T>): out is Extract<RunOutcome<T>, { ok: false }> & { reason: "no_credit"; refusedHoldUsd: number } {
   return !out.ok && out.reason === "no_credit";
 }
 
@@ -159,13 +163,15 @@ export async function recordRun<TInput, TOutput>(q: Queryable, rt: AiRuntime, pr
 }
 
 /**
- * Whether a call that failed may have cost more than the usage it recorded, so its hold stays as its cost: the stream was
- * stopped at the deadline or dropped part-way (usage is added only once a reply has ended, providers/anthropic.ts), or a
- * provider threw. An answer that carries an HTTP status wrote nothing, and a call never sent cost nothing: those are exact.
+ * Whether a call that failed may have cost more than the usage it recorded, so its hold stays as its cost: the provider says so
+ * (a reply that had begun was stopped at the deadline or dropped part-way, `usageUnknown`, providers/anthropic.ts), or a provider
+ * threw. Everything else is exact: a connection that never opened, a provider that had not answered by the deadline and an answer
+ * with an HTTP status wrote nothing, a call never sent cost nothing, and a local error never reached anyone, so an hour's outage
+ * costs the company nothing.
  */
 function usageUnknown<TOutput>(result: StructuredResult<TOutput>): boolean {
   if (result.kind !== "invalid" || !result.error.startsWith("provider")) return false;
-  return !/^provider refused:|^provider (?:error|threw): \d{3}\b|so it was not asked$/.test(result.error);
+  return !!result.usageUnknown || /^provider threw: (?!\d{3}\b)/.test(result.error);
 }
 
 /** The call as it was before the AI credit: the model first, then its row, in its own short transaction. */
@@ -189,13 +195,22 @@ export async function runPromptsDetached<TInput, TOutput>(db: Db, rt: AiRuntime,
   const holds = metas.map((meta) => creditHoldUsd(model, { promptChars, maxTokens: meta.maxTokens }));
   const runIds = metas.map(() => uuidv7());
   const hash = promptHash(system);
-  const verdict = await gate.hold(db, {
-    companyId,
-    holdUsd: holds.reduce((sum, hold) => sum + hold, 0),
-    runs: metas.map((meta, i) => ({ id: runIds[i], ...runIdentity(rt, prompt, meta, model, hash), inputRef: meta.inputRef ?? {}, costUsd: String(holds[i]), status: "running" })),
-  });
+  const holdUsd = holds.reduce((sum, hold) => sum + hold, 0);
+  let verdict: Awaited<ReturnType<AiCreditGate["hold"]>>;
+  try {
+    verdict = await gate.hold(db, {
+      companyId,
+      holdUsd,
+      runs: metas.map((meta, i) => ({ id: runIds[i], ...runIdentity(rt, prompt, meta, model, hash), inputRef: meta.inputRef ?? {}, costUsd: String(holds[i]), status: "running" })),
+    });
+  } catch (err) {
+    // The credit's row stayed locked past the lock timeout: the model was not asked, and nothing was written. An ordinary failed
+    // call, so each caller has its own way on (a chat's "send that again"), and not a word that any credit is gone.
+    if (!isLockTimeout(err)) throw err;
+    return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "error", error: AI_CREDIT_BUSY }));
+  }
   if (verdict === "unmetered") return Promise.all(metas.map((meta) => callThenRecord(db, rt, prompt, input, meta)));
-  if (verdict === "refused") return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "no_credit", error: AI_CREDIT_USED_UP }));
+  if (verdict === "refused") return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "no_credit", error: AI_CREDIT_USED_UP, refusedHoldUsd: holdUsd }));
   return Promise.all(
     metas.map(async (meta, i) => {
       const call = await callPrompt(rt, prompt, input, meta);

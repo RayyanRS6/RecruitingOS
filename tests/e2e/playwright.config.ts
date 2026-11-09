@@ -71,6 +71,9 @@ export default defineConfig({
       // Sign-up is open for the journeys. access-approval.spec.ts runs on a server of its own, with SIGNUP_MODE=approval in
       // the environment (the last end-to-end step of .github/workflows/ci.yml), and is skipped in any other run.
       ...(process.env.SIGNUP_MODE ? { SIGNUP_MODE: process.env.SIGNUP_MODE } : {}),
+      // Every person in these journeys asks for access from this one machine, a retry and a reused server included: the
+      // request door's five an hour per address is for the public, and apps/api/src/access-approval.test.ts proves it.
+      RATE_LIMIT_OVERRIDES: JSON.stringify({ "access.request": 1000 }),
     },
   },
 });

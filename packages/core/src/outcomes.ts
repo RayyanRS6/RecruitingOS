@@ -1,8 +1,9 @@
-import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from "drizzle-orm";
 import { RejectReason, type Actor, type ApplicationStage } from "@ros/contracts";
-import { applications, approvalRequests, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
+import { applications, approvalRequests, entitlements, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { lockApplicants } from "./candidate-lock";
+import { ACTIVE_ROLES, roleRoom } from "./entitlements";
 import { emit } from "./events";
 import { POSTING_TASK_KINDS } from "./posting-tasks";
 import { BOARD_UP_STATES, isBoardChannel, transitionPosting, type PostingState } from "./postings";
@@ -34,7 +35,7 @@ export const OUTCOME_STAGE: Record<ApplicationOutcome, ApplicationStage> = {
 export const OUTCOME_STATEMENT = "Recorded by a person. Any offer, acceptance or decline happened outside Recruiting OS; the platform did not generate, approve or send it.";
 
 export class OutcomeError extends Error {
-  constructor(public readonly code: "hire_date_required" | "reason_required" | "not_found" | "already_closed" | "already_corrected" | "already_recorded" | "not_active" | "bad_outcome", message: string) {
+  constructor(public readonly code: "hire_date_required" | "reason_required" | "not_found" | "already_closed" | "already_corrected" | "already_recorded" | "not_active" | "bad_outcome" | "no_room_on_plan", message: string) {
     super(message);
   }
 }
@@ -110,11 +111,14 @@ export async function recordRoleOutcome(
   const open = await q.select({ id: applications.id, stage: applications.stage, candidateId: applications.candidateId, lockedAt: applications.lockedAt }).from(applications).where(eq(applications.roleId, role.id));
   const movedApplicationIds: string[] = [];
   const movedCandidateIds: string[] = [];
+  // The locked people this close moved, kept on its record: a void moves back exactly these (`correctOutcome`).
+  const lockedMoved: string[] = [];
   for (const a of open) {
     if (!ACTIVE_STAGES.has(a.stage)) continue;
     await transition(q, { applicationId: a.id, companyId: input.companyId, to: "talent_pool", by: input.by, actor: input.actor, reason: `role closed: ${input.outcome}` });
     movedApplicationIds.push(a.id);
     if (!a.lockedAt) movedCandidateIds.push(a.candidateId);
+    else lockedMoved.push(a.id);
   }
   const movedToTalentPool = movedCandidateIds.length;
   // every posting closes with the role; a board that is up on the outside is named for manual removal
@@ -129,7 +133,7 @@ export async function recordRoleOutcome(
       await emit(q, { type: "posting.closure_required", companyId: input.companyId, actor: input.actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: role.id, url: p.externalUrl } });
     }
   }
-  const [row] = await q.insert(hiringOutcomes).values({ companyId: input.companyId, applicationId: null, roleId: role.id, milestone: "role", outcome: input.outcome, notes: input.reason ?? null, details: { reason: input.reason ?? null, previousStatus: role.status, recordedOutsidePlatform: true, closureRequired: closureRequired.map((c) => c.channel) }, recordedBy: input.actor, recordedAt: now.toISOString() }).returning();
+  const [row] = await q.insert(hiringOutcomes).values({ companyId: input.companyId, applicationId: null, roleId: role.id, milestone: "role", outcome: input.outcome, notes: input.reason ?? null, details: { reason: input.reason ?? null, previousStatus: role.status, recordedOutsidePlatform: true, closureRequired: closureRequired.map((c) => c.channel), lockedMoved }, recordedBy: input.actor, recordedAt: now.toISOString() }).returning();
   await audit(q, { companyId: input.companyId, actor: input.actor, action: "role.outcome_recorded", target: { type: "role", id: role.id }, reason: input.reason ?? input.outcome, details: { outcomeId: row.id, outcome: input.outcome, previousStatus: role.status, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "role.closed", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { reason: input.outcome, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "outcome.recorded", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { outcome: input.outcome, level: "role", outcomeId: row.id, roleId: role.id, movedToTalentPool } });
@@ -141,7 +145,10 @@ export async function recordRoleOutcome(
  * the application returns to the stage the corrected outcome implies (or the stage it had before, when the outcome is voided).
  * A correction to "we declined the candidate" is filed under one of the fixed reasons (`declineReason`, plan G2; the
  * original's when left out). A role outcome voided reopens the role, and its closing message waiting for approval (Q30)
- * is withdrawn: the closing message is only for a closed role.
+ * is withdrawn: the closing message is only for a closed role. Someone the team can read stays where the close left them, for
+ * the team to move. Someone locked it moved and nobody has told has nobody who could (Rule 2): they go back to waiting, so the
+ * date they were promised, the close-out note and an upgrade all work as if the job had not closed. A voided role takes a
+ * place on the plan again, so it needs one free, read as a new role's is, behind the same row: the plan's limit holds for ITS too.
  */
 export async function correctOutcome(
   q: Queryable,
@@ -156,6 +163,13 @@ export async function correctOutcome(
   const allowed = applicationLevel ? [...Object.keys(OUTCOME_STAGE), "voided"] : ["filled", "filled_outside_platform", "role_cancelled", "no_hire", "voided"];
   if (!allowed.includes(newOutcome)) throw new OutcomeError("bad_outcome", `"${newOutcome}" is not a ${applicationLevel ? "candidate" : "role"} outcome.`);
   if (newOutcome === "hired_externally" && !input.hireDate && !original.hireDate) throw new OutcomeError("hire_date_required", "A corrected hire needs the hire date.");
+  if (!applicationLevel && original.roleId && newOutcome === "voided") {
+    // The job's lock first, then the plan's row, in the order a change of plan takes them, so the two never wait for each other.
+    await lockApplicants(q, original.roleId);
+    await q.select({ id: entitlements.id }).from(entitlements).where(and(eq(entitlements.companyId, original.companyId), eq(entitlements.key, ACTIVE_ROLES))).for("update");
+    const room = await roleRoom(q, original.companyId, { except: original.roleId });
+    if (!room.ok) throw new OutcomeError("no_room_on_plan", "Reopening this job needs a place on the company's plan, and none is free. Change the plan first, then void this outcome.");
+  }
   await q.update(hiringOutcomes).set({ correctedAt: now.toISOString(), correctedBy: input.actor, correctionReason: input.reason }).where(eq(hiringOutcomes.id, original.id));
   const [correction] = await q.insert(hiringOutcomes).values({
     companyId: original.companyId, applicationId: original.applicationId, roleId: original.roleId, milestone: original.milestone, outcome: newOutcome,
@@ -188,7 +202,15 @@ export async function correctOutcome(
       const before = (original.details as { previousStatus?: string }).previousStatus ?? "open";
       const previous = before === "pending_approval" ? "draft" : before;
       await q.update(roles).set({ status: previous, closedAt: null, closeReason: null }).where(eq(roles.id, original.roleId));
-      const closing = (await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, original.roleId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")))).filter((r) => (r.proposal as { kind?: unknown }).kind === "role_closed");
+      await lockApplicants(q, original.roleId);
+      // Exactly the people locked the close moved: someone ITS moved to the talent pool under a grant before it is a decision
+      // of its own, which a void does not undo. A close recorded before that list was kept moves back, as it did, everyone locked
+      // and untold in the talent pool.
+      const kept = (original.details as { lockedMoved?: unknown }).lockedMoved;
+      const only = Array.isArray(kept) ? kept.filter((id): id is string => typeof id === "string") : null;
+      const waitingAgain = only?.length === 0 ? [] : await q.update(applications).set({ stage: "received", stageChangedAt: now.toISOString() }).where(and(eq(applications.roleId, original.roleId), eq(applications.stage, "talent_pool"), isNotNull(applications.lockedAt), eq(applications.toldState, "not_told"), ...(only ? [inArray(applications.id, only)] : []))).returning({ id: applications.id });
+      for (const a of waitingAgain) await emit(q, { type: "application.stage_changed", companyId: original.companyId, actor: input.actor, subject: { type: "application", id: a.id }, payload: { from: "talent_pool", to: "received", reason: "the role was reopened" } });
+      const closing =(await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, original.roleId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")))).filter((r) => (r.proposal as { kind?: unknown }).kind === "role_closed");
       for (const r of closing) {
         await q.update(approvalRequests).set({ status: "cancelled", decidedAt: now.toISOString(), decisionNote: "the role was reopened" }).where(eq(approvalRequests.id, r.id));
         await emit(q, { type: "approval.cancelled", companyId: original.companyId, actor: input.actor, subject: { type: "approval_request", id: r.id }, payload: { actionType: "disposition.send", applicationId: null, by: "outcome_corrected" } });

@@ -22,7 +22,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { AccessChoice, CUSTOMER_FILTERS, CUSTOMER_SORT, CUSTOMER_SORT_CHOICES, CustomersSection, accessPressRefused, accessQuestion, accessRequests, customerAnnouncement, customerFilterFrom, customerInFilter, customerMatches, customerOrder, customersSearch, customerTabFrom, nextCustomerSort, planChangedToast, planLimitsLine, realCustomers, screeningLine, sortedCustomers, waitingCustomers, waitingForCheck, waitingWords } = await import("@ros/web/src/pages/admin/customers");
+const { AccessChoice, CUSTOMER_FILTERS, CUSTOMER_SORT, CUSTOMER_SORT_CHOICES, CustomersSection, accessPress, accessPressRefused, accessQuestion, accessRequests, customerAnnouncement, customerFilterFrom, customerInFilter, customerMatches, customerOrder, customersSearch, customerTabFrom, nextCustomerSort, planChangedToast, planLimitsLine, realCustomers, screeningLine, sortedCustomers, waitingCustomers, waitingForCheck, waitingWords } = await import("@ros/web/src/pages/admin/customers");
 const { ApiError } = await import("@ros/web/src/api/client");
 const { extensionDaysOk, extensionLines, seatsWords, trialExtendedTo, trialExtendedToast, trialExtensionQuestion } = await import("@ros/web/src/pages/admin/customers");
 const { takeAwayQuestion, takeAwayToast } = await import("@ros/web/src/pages/admin/customers");
@@ -215,6 +215,14 @@ describe("the customers list", () => {
     expect(html).toMatch(/<td colspan="5" class="table-empty">No customers yet\.<\/td>/i);
     expect(html).toContain('<span class="sr-only" role="status">No customers yet.</span>');
     expect(html).toContain('<th scope="col">Plan and use</th>');
+  });
+
+  it("a tab left open stays true: the list and the alerts behind its pills are asked again on focus and every minute while visible, never in a hidden tab", () => {
+    const qc = client([[["admin", "customers"], three()], [["admin", "alerts"], [lowAlert]]], admin);
+    render(qc, Customers());
+    for (const key of [["admin", "customers"], ["admin", "alerts"]]) {
+      expect(qc.getQueryCache().find({ queryKey: key, exact: true })?.options, key.join(" ")).toMatchObject({ refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: false });
+    }
   });
 
   it("shows quiet rows under the headings while the customers load", () => {
@@ -455,7 +463,8 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     const words = text(html);
     expect(words).toContain("Asking for access");
     // who is asking, where, and how long; a fact is said once, so the kind, the size and the website stay in the header
-    expect(words).toContain("Sam Asker · sam@stranger.test · Austin, TX · Waiting 2 days");
+    // the address their sign-in proved first, then the name they typed
+    expect(words).toContain("sam@stranger.test · Sam Asker · Austin, TX · Waiting 2 days");
     expect(words).toContain("dental · 20-49 employees · https://asker.example (opens in a new tab) · signed up");
     expect(html.split("https://asker.example<")).toHaveLength(2);
     expect(html).toContain('<button type="button" class="btn primary sm" aria-label="Accept Harbor Dental">Accept</button>');
@@ -470,7 +479,7 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     const words = text(html);
     expect(words).toContain("Declined");
     expect(words).toMatch(/Nov 5, 2026, [^·]* by Ada Admin/);
-    expect(words).toContain("Sam Asker · sam@stranger.test");
+    expect(words).toContain("sam@stranger.test · Sam Asker");
     // no time waited: it waits for nothing
     expect(words).not.toContain("Waiting 9 days");
     expect(html).toContain('aria-label="Accept Gone Dental">Accept</button>');
@@ -478,7 +487,7 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     expect(words).not.toContain("Decline keeps them out");
     expect(words).not.toContain("Confirm the company");
     // a declined company with no record of the decision still reads, with no empty line
-    expect(text(page("open=co9&tab=check", [refused("co9", "Gone Dental", { accessRequest: { status: "declined", person, declined: null } })]))).toContain("Declined Sam Asker");
+    expect(text(page("open=co9&tab=check", [refused("co9", "Gone Dental", { accessRequest: { status: "declined", person, declined: null } })]))).toContain("Declined sam@stranger.test · Sam Asker");
   });
 
   it("every control the API refuses gives way until a request is accepted: only the Overview and the check, whatever the address asks for", () => {
@@ -556,8 +565,15 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     expect(renderToStaticMarkup(createElement(AccessChoice, { company: { name: "L".repeat(120), accessRequest: null }, asking: "accept", pending: false, onPress: () => undefined, onYes: () => undefined, onNo: () => undefined }))).toMatch(/<span class="min-w-0 text-sm font-semibold text-ink wrap-anywhere">Accept L{120}\?<\/span>/);
   });
 
+  it("each press says what its row showed, so the first press wins: a request's row says requested, and only a declined company's Accept, the undo, says declined", () => {
+    expect(accessPress({ accessRequest: { status: "requested", person, declined: null } }, "accept")).toEqual({ decision: "accept", from: "requested", confirm: true });
+    expect(accessPress({ accessRequest: { status: "requested", person, declined: null } }, "decline")).toEqual({ decision: "decline", from: "requested", confirm: true });
+    expect(accessPress({ accessRequest: { status: "declined", person, declined: { at: daysAgo(1), by: "Ada Admin" } } }, "accept")).toEqual({ decision: "accept", from: "declined", confirm: true });
+  });
+
   it("says a press that was refused plainly: someone got there first is calm, an error is an error", () => {
     expect(accessPressRefused(new ApiError(409, "already_accepted", "Harbor Dental already has access, so it cannot be declined now."))).toEqual({ title: "Harbor Dental already has access, so it cannot be declined now." });
+    expect(accessPressRefused(new ApiError(409, "access_decided", "Harbor Dental was declined a moment ago by Ada Admin. Nothing changed. To let them in, accept it under Declined."))).toEqual({ title: "Harbor Dental was declined a moment ago by Ada Admin. Nothing changed. To let them in, accept it under Declined." });
     expect(accessPressRefused(new ApiError(403, "mfa_required", "Confirm it's you."))).toEqual({ title: "Confirm it's you.", tone: "critical" });
     expect(accessPressRefused(new TypeError("Failed to fetch"))).toEqual({ title: "Could not record that. Try again.", tone: "critical" });
     expect(accessPressRefused(new SyntaxError("Unexpected token <"))).toEqual({ title: "Could not record that. Try again.", tone: "critical" });

@@ -1,6 +1,6 @@
 import { and, count, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import type { ApplicationStage, HireFollowUp, MembershipRole } from "@ros/contracts";
-import { STAGE_LABEL, activeMarksFor, can, closingDayWords, companyToday, notLocked } from "@ros/core";
+import { STAGE_LABEL, activeMarksFor, can, closingDayWords, companyToday, lockedAndWaiting, notLocked } from "@ros/core";
 import { applications, candidates, companies, hiringOutcomes, roles, type Tx } from "@ros/db";
 import { inStaffScope, type StaffScope } from "./staff-scope";
 
@@ -15,6 +15,16 @@ import { inStaffScope, type StaffScope } from "./staff-scope";
 const IN_THE_RUNNING: readonly ApplicationStage[] = ["interview_recommended", "interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval", "offer_sent", "negotiation", "accepted", "onboarding"];
 /** Everyone the role close would move to the talent pool. */
 const STILL_IN_PROCESS: readonly ApplicationStage[] = ["applied", "received", "ineligible", "eligible", "triaged", "screen_invited", "screening", "screen_complete", ...IN_THE_RUNNING];
+
+/**
+ * How many people the team cannot read are still in the running on a job, for "and N more you cannot see yet" under the people
+ * it lists as still in process: on the hire sheet and on the close card. A number and never who. Not someone who withdrew or was
+ * deleted while locked, nor someone already decided or moved on: nobody else is in the running because of them.
+ */
+export async function lockedStillInProcess(tx: Tx, roleId: string): Promise<number> {
+  const [row] = await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, roleId), inArray(applications.stage, [...STILL_IN_PROCESS]), lockedAndWaiting()));
+  return Number(row?.n ?? 0);
+}
 
 type Backup = { applicationId: string; name: string; stageLabel: string };
 
@@ -62,9 +72,8 @@ export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplica
       : "Close the role as filled. Nobody else is still in process.";
     closeRole = { path: `/api/v1/roles/${input.roleId}/outcome`, outcome: "filled", stillInProcess: others, words };
   }
-  // A number and never who: a recruiter given one candidate reads about nobody else.
-  const [lockedRow] = input.scope?.applicationId ? [] : await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, input.roleId), isNotNull(applications.lockedAt)));
-  const locked = Number(lockedRow?.n ?? 0);
+  // A recruiter given one candidate reads about nobody else.
+  const locked = input.scope?.applicationId ? 0 : await lockedStillInProcess(tx, input.roleId);
   return { startDate: input.startDate, backups: { count: backups.length, people: backups, ...(locked ? { locked } : {}) }, closeRole };
 }
 

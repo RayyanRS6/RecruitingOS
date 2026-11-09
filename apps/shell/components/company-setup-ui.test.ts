@@ -250,12 +250,12 @@ describe("a person with a request lands on the same screen from any signed-in ad
 
     // declined: the same doors, the declined screen
     const admin = await signInAdmin(app, container, "ada@identifiedtalent.com", "Ada Admin");
-    expect((await send(admin, `/api/v1/admin/customers/${company.id}/access`, { decision: "decline", confirm: true })).status).toBe(200);
+    expect((await send(admin, `/api/v1/admin/customers/${company.id}/access`, { decision: "decline", from: "requested", confirm: true })).status).toBe(200);
     expect(title(draw(await open()))).toBe("We can't offer access right now");
     expect(await everyDoor()).toEqual({ company: "redirect to /setup/company", admin: "redirect to /recruiter/queue", recruiter: "redirect to /setup/company", login: "redirect to /setup/company", setup: "stays" });
 
     // accepting later is the undo: Home, from the company step and from sign-in, and owner routes draw
-    expect((await send(admin, `/api/v1/admin/customers/${company.id}/access`, { decision: "accept", confirm: true })).status).toBe(200);
+    expect((await send(admin, `/api/v1/admin/customers/${company.id}/access`, { decision: "accept", from: "declined", confirm: true })).status).toBe(200);
     expect(await everyDoor()).toEqual({ company: "stays", admin: "redirect to /", recruiter: "redirect to /", login: "redirect to /", setup: "redirect to /" });
   });
 

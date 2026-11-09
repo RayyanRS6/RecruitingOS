@@ -4,16 +4,17 @@ import { randomInt } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
 import { answerCvLines, chatFactsWithKept } from "@ros/agents";
-import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, applicationAnswerSentences, candidateNotices, closeOutDayWords, closeOutDueAt, emit, errorForLog, onFileFormLine, onFileReceiptLine, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
+import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, applicationAnswerSentences, candidateNotices, closeOutDayWords, closeOutDueAt, emit, errorForLog, onFileEarlierFactsLine, onFileFormLine, onFileReceiptLine, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey, type UploadGrantPayload } from "../uploads";
 import { readAppCookie, setAppCookie } from "../cookies";
 import { clientIp, type Vars } from "../middleware/session";
+import { reportUnhandled } from "../middleware/errors";
 import type { Container } from "../container";
 import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware/rate-limit";
-import { createApplication, markUploadUsed, uploadAlreadyUsed, type ResumeInput as ResumeUpload } from "../services/applications";
-import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, readingAskedAt, readingFor, readingGaveUp, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
+import { createApplication, markUploadUsed, uploadAlreadyUsed, withNewApplication, type ResumeInput as ResumeUpload } from "../services/applications";
+import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, queueUnsentFileDiscard, readingAskedAt, readingFor, readingGaveUp, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
 import { applyVisitNext, interviewWaitFor, type InterviewWait } from "../services/apply-conversation";
 import { formOpenedBefore, lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { contactLineFor, type ContactLine } from "../services/company-settings-profile";
@@ -348,14 +349,14 @@ function QuickQuestions(props: { company: string; questions: QuickQuestionView[]
  * application; only the facts' ids are sent back, with the sealed link so Send can read them again. Plain boxes inside
  * the form: it works without script.
  */
-function EarlierFacts(props: { company: string; earlier: EarlierFactsState }) {
+function EarlierFacts(props: { company: string; earlier: EarlierFactsState; onFile: boolean }) {
   const { earlier } = props;
   const kept = new Set(earlier.kept);
   return (
     <div class="card earlier">
       <fieldset aria-describedby="earlier-note">
         <legend>From your earlier chats at {props.company}</legend>
-        <p class="meta" id="earlier-note">Untick anything that is no longer true. {props.company} sees what you keep as part of this application.</p>
+        <p class="meta" id="earlier-note">Untick anything that is no longer true. {props.onFile ? onFileEarlierFactsLine(props.company) : `${props.company} sees what you keep as part of this application.`}</p>
         <input type="hidden" name="reuse" value={earlier.token} />
         <ul>
           {earlier.facts.map((f) => (
@@ -440,7 +441,7 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
           <textarea id="workSummary" name="workSummary" rows={5} maxlength={WORK_SUMMARY_MAX} aria-invalid={invalid("workSummary")} aria-describedby={described("workSummary")}>{v.workSummary ?? ""}</textarea>
         </>
       ) : null}
-      {earlier?.facts.length ? <EarlierFacts company={props.company.name} earlier={earlier} /> : null}
+      {earlier?.facts.length ? <EarlierFacts company={props.company.name} earlier={earlier} onFile={onFile} /> : null}
       <QuickQuestions company={props.company.name} questions={props.questions} answers={answers} missing={missing} suggested={new Set(props.state?.marks?.suggested ?? [])} />
       <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} onFile={onFile} />
     </>
@@ -1010,6 +1011,8 @@ candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLIC
   const uploadId = uuidv7();
   const key = quarantineKey(job.company.id, job.role.id, uploadId, intent.extension);
   const now = container.engine.clock();
+  // Before there can be a file: someone may upload and leave, on a form sent back or with no reading to follow.
+  await queueUnsentFileDiscard(container, { companyId: job.company.id, key, now });
   const upload = await container.integrations.storage.createUploadUrl(key, { contentType: intent.mime, expiresSeconds: UPLOAD_URL_TTL_SECONDS });
   const grant = container.uploadGrants.seal({ v: 1, companyId: job.company.id, roleId: job.role.id, uploadId, key, filename: intent.filename, mime: intent.mime, size: intent.size, exp: Math.floor(now.getTime() / 1000) + UPLOAD_GRANT_TTL_SECONDS });
   await withTenant(container.db, job.company.id, (tx) => emit(tx, { type: "document.upload_authorized", companyId: job.company.id, actor: { kind: "candidate", id: "applicant" }, subject: { type: "role", id: job.role.id }, payload: { uploadId, extension: intent.extension, sizeBytes: intent.size } }));
@@ -1044,9 +1047,10 @@ function checkedForm(container: Container, posted: PostedApplyForm, questions: Q
  * it; this request waits up to about 15 seconds for the reading and then shows "Check your details", or the page that
  * waits a little longer. Nothing to read (Enter pressed before choosing a file) shows the form again with a plain line.
  * A form opened before the job reached its limit (its button still shows) gets no reading: nothing past the limit is read
- * by AI, so the file stays attached and the same form comes back to fill in.
+ * by AI, so the file stays attached and the same form comes back to fill in. It posts by navigation too, so what fails
+ * comes back as the form, never as JSON (`formPost`).
  */
-candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POLICY), async (c) => {
+candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POLICY), (c) => formPost(c, async (drawn) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
   if (!job) return c.notFound();
@@ -1063,7 +1067,9 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   // A form opened from the reuse link lists its earlier facts again, as they were ticked (Wave S8).
   const earlier = await earlierFormState(container, job, posted);
   if (earlier) c.header("Cache-Control", "no-store");
-  const show = (error: string, resumeLost: boolean) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost, earlier }} />, 400);
+  const show = (error: string, resumeLost: boolean, status: 400 | 500 = 400) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost, earlier }} />, status);
+  // From here what fails (the file's storage, above all) brings this form back, with what was typed (`formPost`).
+  drawn.again = (error) => show(`${error} ${keptSentence(true)}`, true, 500);
 
   let upload: UploadGrantPayload | null = null;
   const file = postedFile(body);
@@ -1093,12 +1099,15 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   }
   if (!upload && !file && !posted.grant) {
     // Nothing to read: Enter pressed in a field (the first button of a fresh form is this one), or the form filled in by
-    // hand. It is sent exactly as "Send my application" sends it, under the same checks and the same limit.
+    // hand. It is sent exactly as "Send my application" sends it, under the same checks and the same limit, and under the
+    // same `formPost`: from here the send says how the form is drawn again, and when it was stored.
     const refused = await checkRateLimits(c, [POLICIES.apply]);
-    return refused ?? sendApplication(c);
+    return refused ?? sendApplication(c, drawn);
   }
   if (!upload) return show("Choose your resume file first, then press Read my resume. Or fill in the form below yourself and press Send my application.", !!posted.grant);
   if (flow === "on_file") {
+    // No reading, so nothing else would clear it away; the form they opened may have promised it goes within a day.
+    await queueUnsentFileDiscard(container, { companyId: job.company.id, key: upload.key, now });
     const attached = container.uploadGrants.seal({ ...upload, readAskedAt: undefined });
     const unread = checkedForm(container, posted, questions, { grant: attached, filename: upload.filename }, null);
     c.header("Cache-Control", "no-store");
@@ -1124,7 +1133,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   const checked = checkedForm(container, posted, questions, { grant, filename: upload.filename }, reading ?? failedReading(upload.uploadId, now));
   c.header("Cache-Control", "no-store");
   return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={{ ...checked.state, earlier }} />);
-});
+}));
 
 /** A reading that did not come (it could not be asked for, or the page stopped waiting): the form says "We could not read … just now". */
 function failedReading(uploadId: string, now: Date): ResumeReading {
@@ -1136,9 +1145,10 @@ function failedReading(uploadId: string, now: Date): ResumeReading {
  * the page has waited long enough (`readingGaveUp`, about 75 seconds after asking) Continue always goes on: the form,
  * the résumé attached, and the line that it could not be read just now. The waiting page's script sends the same. It
  * writes nothing and asks no model, so only the candidate pages' own limit applies: the way on never runs out because
- * the waiting pages behind one address used up the asking's limit (20 Oct).
+ * the waiting pages behind one address used up the asking's limit (20 Oct). It posts by navigation too, so what fails
+ * comes back as the form, never as JSON (`formPost`).
  */
-candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", async (c) => {
+candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", (c) => formPost(c, async (drawn) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
   if (!job) return c.notFound();
@@ -1155,13 +1165,15 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", async (c) => {
   // A form opened from the reuse link lists its earlier facts again, as they were ticked (Wave S8).
   const earlier = await earlierFormState(container, job, posted);
   if (!held) return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={UPLOAD_EXPIRED} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost: true, earlier }} />, 400);
+  // From here what fails (the reading's note could not be read) brings this form back, with what was typed and the résumé still attached (`formPost`).
+  drawn.again = (error) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={`${error} ${keptSentence(false)}`} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: { grant: posted.grant, filename: held.filename }, resumeLost: false, earlier }} />, 500);
   const reading = await readingFor(container.integrations.storage, held);
   const now = container.engine.clock();
   const gaveUp = readingGaveUp(held, reading, now);
   if (!reading && !gaveUp && str("skip") !== "yes") return c.html(<ReadingPage company={job.company} title={job.packet.identity.title} flow={flow} links={applyLinks(job)} posted={posted} questions={questions} grant={posted.grant} filename={held.filename} formOpened={formOpened} still />);
   const checked = checkedForm(container, posted, questions, { grant: posted.grant, filename: held.filename }, gaveUp ? reading ?? failedReading(held.uploadId, now) : reading);
   return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={{ ...checked.state, earlier }} />);
-});
+}));
 
 /**
  * The waiting page's question (with script): is the reading done? Only for the upload the asking page holds. `gave_up`
@@ -1181,11 +1193,49 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read-status", rateLimit(R
   return c.json({ state: reading ? "done" : "reading" });
 });
 
+/** Said when an application could not be stored (a job's lock that timed out, above all): nothing was sent, and sending it again will do. */
+export const NOT_SENT_LINE = "Your application was not sent: something went wrong on our end. Please send it again in a minute.";
+
+/** What a post of the form can show if it fails: the form again, once the post knows what was typed; `committed` once it was stored. */
+type FormAgain = { again?: (error: string) => Response | Promise<Response>; committed?: boolean };
+
+/**
+ * One of the form's posts: Send, Read my resume, and Continue on the page that waits for a reading. Each posts by
+ * navigation, so whatever goes wrong before an application is stored, a job's lock that timed out behind a long change of
+ * plan above all, must not answer with the API's JSON, which is all the browser would show (the check of 9 November, C8):
+ * the form comes back with what was typed and the line that it was not sent, or, before the form can be drawn, a page that
+ * says the same. Logged and reported as the API does what nothing handled. Once stored it was sent, so what fails after
+ * that (only an inline worker's drain) is answered as it always was.
+ */
+async function formPost(c: Context<Vars>, send: (drawn: FormAgain) => Promise<Response>): Promise<Response> {
+  const drawn: FormAgain = {};
+  try {
+    return await send(drawn);
+  } catch (err) {
+    if (drawn.committed) throw err;
+    reportUnhandled(err, c);
+    if (drawn.again) return drawn.again(NOT_SENT_LINE);
+    return c.html(<NotSent href={`/careers/${encodeURIComponent(c.req.param("slug") ?? "")}/jobs/${encodeURIComponent(c.req.param("roleId") ?? "")}/apply`} />, 500);
+  }
+}
+
+/** Before the form could be drawn again (the job, or the post itself, could not be read): the same line, and the way back to the form. */
+function NotSent(props: { href: string }) {
+  return (
+    <Layout title="Not sent">
+      <h1>Not sent</h1>
+      <div class="card" role="alert"><p>{NOT_SENT_LINE}</p></div>
+      <p><a class="btn secondary" href={props.href}>Back to the form</a></p>
+    </Layout>
+  );
+}
+
 /**
  * "Send my application": the form's own address, and "Read my resume" pressed with nothing to read (Enter in a field of
- * a fresh form presses the first button, which is "Read my resume"), so the same checks apply however it was sent.
+ * a fresh form presses the first button, which is "Read my resume"), so the same checks apply however it was sent. Always
+ * through `formPost`, which `drawn` tells how to show the form again.
  */
-async function sendApplication(c: Context<Vars>): Promise<Response> {
+async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Response> {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
   if (!job) return c.notFound();
@@ -1225,7 +1275,9 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   const earlier = await earlierFormState(container, job, posted);
   if (earlier) c.header("Cache-Control", "no-store");
   const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume, marks: { fromResume: marked.fromResume, suggested: marked.suggested }, reading: resume.resume ? readView : null, earlier });
-  const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={state(missing, resume)} />, 400);
+  const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">, status: 400 | 500 = 400) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={state(missing, resume)} />, status);
+  // From here whatever fails before the application is stored brings this form back, with what was typed (`formPost`).
+  drawn.again = (error) => again(`${error} ${keptSentence(resumeLost)}`, [], { resume: keptResume, resumeLost }, 500);
   // Honeypot: a filled hidden field gets the waiting room a person gets (naming nothing), or on a job past its limit the
   // receipt a person gets, and nothing is recorded.
   if (posted.website) return toReceipt(c, job, values.email, form.flow === "on_file" ? "on_file" : "interview");
@@ -1310,7 +1362,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   // nothing on their record. A first application waits on the page for its own AI interview (20 Oct 2026, R20-12); a
   // repeat or an address the company already had gets the same waiting room, which opens a detached AI interview whose
   // answers join only when the address owner confirms them by email (Q14, founder 21 Oct; `applyVisitNext`).
-  const next = await withTenant(container.db, company.id, async (tx) => {
+  const next = await withNewApplication(container, company.id, async (tx, files) => {
     if (usedUploadId) await markUploadUsed(tx, { companyId: company.id, roleId: role.id, uploadId: usedUploadId });
     const created = await createApplication(tx, container, {
       companyId: company.id,
@@ -1335,7 +1387,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
       formReading,
       resume,
       ip,
-    }, { kind: "candidate", id: "applicant" }, { closingGrace: admitted.late, trialGrace: admitted.trialGrace });
+    }, { kind: "candidate", id: "applicant" }, { closingGrace: admitted.late, trialGrace: admitted.trialGrace, files });
     // Kept only on a new application of the very person the link is for (a repeat submission changes nothing on file):
     // this application's own answers, which its chat reads as the candidate's own words and does not ask again.
     const kept = keeping && !created.duplicate && created.candidate.id === keeping.candidateId ? keptFactsOf(keeping.facts, container.engine.clock().toISOString()) : [];
@@ -1343,13 +1395,14 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
     // The waiting room or a plain receipt: decided in this transaction, from what was typed.
     return applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, onFile: created.onFile, knownPerson: created.knownPerson, company, role, packet, eligibilityAnswers, quickAnswers: parsed.data.quickAnswers ?? null, typedFirstName: parsed.data.firstName, typedFacts: chatFactsWithKept(typedFacts, kept), pendingReading, trialPaused: admitted.trialGrace });
   });
+  drawn.committed = true;
   await container.kick();
   clearApplicationSource(c);
   // An answer that did not match an eligibility question gets the neutral receipt (E7): nothing said about why.
   return next.kind === "interview" ? toReceipt(c, job, parsed.data.email, "interview", next.applicationId ?? next.conversationId) : toReceipt(c, job, parsed.data.email, next.reason);
 }
 
-candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), (c) => sendApplication(c));
+candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), (c) => formPost(c, (drawn) => sendApplication(c, drawn)));
 
 /** What each field the form checks needs, in the words the error line uses (known-bugs row 72). */
 const FIELD_PROBLEM: Record<string, string> = {

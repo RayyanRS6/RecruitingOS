@@ -1,8 +1,8 @@
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { candidateScoreShown, type ApplicationStage, type CandidateScoreView, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type WriteupAnswer } from "@ros/contracts";
 import { DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
 import { chatPacket } from "@ros/agents";
-import { applications, assessments, rolePackets, roles, screens, type Tx } from "@ros/db";
+import { applications, assessments, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 
 /**
  * What the candidate's application record shows beyond its steps (Wave S7, slice S7-E; spec-s7-apply-flow.md steps 8, 9
@@ -22,7 +22,7 @@ export const REVIEWING_REFRESH_SECONDS = 15;
 
 /**
  * Where the match score stands on the record:
- * - `off`: ITS switched the score off for this company (or it never shows, see below): nothing is said about it.
+ * - `off`: ITS switched the score off for this company (or it never shows, or none can come for now, see below): nothing is said about it.
  * - `after_chat`: a screening chat is open or paused: the score waits until they send it (a reading of an unsent chat
  *   never counts). A chat a private decision cancelled reads the same as before, so nothing hints at the decision.
  * - `reviewing`: sent a moment ago and the reading is not written yet: "Working out your match score…", with "Check again".
@@ -46,17 +46,19 @@ export async function packetOf(tx: Tx, roleId: string, version: number): Promise
  * the team may see, against the version of the role they were read against. `hiddenDecision`: a private decision the
  * candidate was not told (founder decision B6); a chat it cancelled still reads as waiting for the chat. Nothing is said
  * about a score for someone locked (Rule 2): nothing works one out while they are, and nobody on the team sees them, so the
- * block, which says the team sees it and is under counsel word for word, stays away whole.
+ * block, which says the team sees it and is under counsel word for word, stays away whole. The same while there is no reading
+ * and what would write one waits for the plan's AI help (PL-10): nobody is told that, and "under a minute" would not be true.
  */
 export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; now: Date }): Promise<RecordScore> {
   if (!candidateScoreShown(input.companySettings) || input.app.lockedAt) return { state: "off", view: null };
   const { app } = input;
-  const last = input.screens[0];
-  const chatOpen = !!last && (OPEN_SCREEN.includes(last.status) || (input.hiddenDecision && last.status === "cancelled"));
-  if (chatOpen) return { state: "after_chat", view: null };
   const rows = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
   const hidden = unsentScreenReadings(input.screens, rows);
   const own = rows.filter((r) => !hidden.has(r.id));
+  if (!own.length && (await readingWaitsForCredit(tx, app.id, input.screens))) return { state: "off", view: null };
+  const last = input.screens[0];
+  const chatOpen = !!last && (OPEN_SCREEN.includes(last.status) || (input.hiddenDecision && last.status === "cancelled"));
+  if (chatOpen) return { state: "after_chat", view: null };
   const latest = own.find((r) => r.id === app.latestAssessmentId) ?? own[0] ?? null;
   const readAgainst = latest?.packetVersion ?? app.packetVersion;
   const packet = (await packetOf(tx, app.roleId, readAgainst)) ?? (readAgainst !== app.packetVersion ? await packetOf(tx, app.roleId, app.packetVersion) : null);
@@ -66,11 +68,19 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   // A chat they sent whose scorecard is not written yet (a moment ago, or waiting for the company's AI credit): the score is
   // about to change, and the résumé's number would read low for someone who did what was asked, so it waits for it.
   const sent = last && screenAnswersSent(last) ? last : null;
-  const scorecardDue = !!sent && !sent.assessmentId;
+  // Not about to change if it waits for the plan's AI help: what they have from their résumé stands for now.
+  const scorecardDue = !!sent && !sent.assessmentId && !sent.progress.scoreWaitsForCredit;
   const since = Date.parse(sent?.completedAt ?? app.createdAt);
   const recent = input.now.getTime() - since < REVIEWING_WINDOW_MS;
   if ((scorecardDue || !view) && recent) return { state: "reviewing", view: null };
   return view && !scorecardDue ? { state: "ready", view } : { state: "not_ready", view: null };
+}
+
+/** Whether what would write a reading waits for AI credit: a sent chat's scorecard (its mark), or the résumé's reading (its intake's run, however it started). */
+async function readingWaitsForCredit(tx: Tx, applicationId: string, sent: readonly Pick<ScreenRow, "progress">[]): Promise<boolean> {
+  if (sent.some((s) => s.progress.scoreWaitsForCredit)) return true;
+  const [run] = await tx.select({ id: workflowRuns.id }).from(workflowRuns).where(and(like(workflowRuns.idempotencyKey, `application_intake:${applicationId}%`), eq(workflowRuns.status, "waiting"), sql`${workflowRuns.state}->>'creditWaitSince' is not null`)).limit(1);
+  return !!run;
 }
 
 /** One answer from the chat as it was sent: the question in the company's words, the answer, and how it came to be. */

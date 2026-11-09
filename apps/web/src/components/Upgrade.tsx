@@ -39,6 +39,8 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
   const q = useQuery({ queryKey: ["plans"], queryFn: () => api.get<PublicPlans>("/api/v1/plans") });
   const plans = q.data?.plans ?? [];
   const choice = plans.find((p) => p.key === picked && !p.current) ?? firstChoice(plans);
+  // On the last plan nothing is above theirs: the same sheet, and the same request, in words that say so.
+  const nothingAbove = !!plans[plans.length - 1]?.current;
   const send = useMutation({
     mutationFn: (plan: PublicPlan | null) => api.post<{ id: string; message: string; alreadyAsked?: boolean }>("/api/v1/escalations", { kind: "ask", scope: "company", topic: "plan", question: planRequestQuestion(plan?.name ?? null, { reason: props.reason, note }) }),
     onSuccess: (r) => {
@@ -51,7 +53,7 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
     },
   });
   return (
-    <Drawer open onClose={props.onClose} title="Upgrade" size="lg">
+    <Drawer open onClose={props.onClose} title={nothingAbove ? "Your plan" : "Upgrade"} size="lg">
       {done ? (
         <div className="stack gap-4 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]">
           <Alert tone="info">{done} You can follow it under Your recruiter requests on Home.</Alert>
@@ -86,7 +88,7 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
               <div className="stack gap-3 border-t border-line pt-5">
                 <p className="small text-ink-2">{UPGRADE_SHEET_LINE}</p>
                 {send.error ? <Alert tone="critical">{send.error instanceof ApiError ? send.error.message : "Could not send."}</Alert> : null}
-                <div className="row"><Button variant="primary" loading={send.isPending} onClick={() => send.mutate(choice)}>Ask ITS to upgrade</Button></div>
+                <div className="row"><Button variant="primary" loading={send.isPending} onClick={() => send.mutate(choice)}>{nothingAbove ? "Ask ITS about our plan" : "Ask ITS to upgrade"}</Button></div>
               </div>
             </>
           )}

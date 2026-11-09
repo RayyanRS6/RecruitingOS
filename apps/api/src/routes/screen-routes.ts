@@ -36,7 +36,8 @@ screenApplicationRoutes.use("/:id/*", applicationScopeGuard);
 /**
  * POST /api/v1/applications/:id/screen/recruiter-notes (E3): the recruiter who called the candidate adds what they
  * learned, per question where it fits, and (by default) closes the conversation as complete so the scorecard is written.
- * For whoever works recruiter requests (an ITS recruiter under their grant, or the company's own recruiter).
+ * For whoever works recruiter requests (an ITS recruiter under their grant, or the company's own recruiter). About someone
+ * locked, the notes are kept as the recruiter's note and nothing is scored (`keptAsNote`).
  */
 screenApplicationRoutes.post("/:id/screen/recruiter-notes", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -46,7 +47,7 @@ screenApplicationRoutes.post("/:id/screen/recruiter-notes", requireTenant, async
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id") ?? "")).limit(1);
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
-    return addRecruiterCallNotes(tx, container, { app, notes: body.notes, complete: body.complete, actor: actorOf(c) });
+    return addRecruiterCallNotes(tx, container, { app, notes: body.notes, complete: body.complete, actor: actorOf(c), tenant: t });
   });
   await container.kick();
   return c.json({ ok: true, ...result });

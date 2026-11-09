@@ -89,7 +89,8 @@ export function threadHeading(entry: EscalationThreadEntry): string {
     case "question": return entry.raisedBy ? RAISED_BY_WORDS[entry.raisedBy] : entry.by ? `${entry.by} asked` : "The request";
     case "answer": return `${entry.by ?? "The recruiter"} answered`;
     case "reopen": return `${entry.by ?? "Your team"} reopened it`;
-    default: return entry.side === "recruiter" ? `${entry.by ?? "The recruiter"} wrote` : `${entry.by ?? "Your team"} added a note`;
+    // The candidate the request is about wrote back: the line says so, and their words stay on the application's own thread.
+    default: return entry.raisedBy === "candidate" ? "The candidate wrote back" : entry.side === "recruiter" ? `${entry.by ?? "The recruiter"} wrote` : `${entry.by ?? "Your team"} added a note`;
   }
 }
 
@@ -98,8 +99,7 @@ export function threadHeading(entry: EscalationThreadEntry): string {
  * A request Recruiting OS or a candidate raised says so instead of "The customer asked".
  */
 export function queueThreadHeading(entry: EscalationThreadEntry): string {
-  if (entry.side === "recruiter") return threadHeading(entry);
-  if (entry.kind === "question" && entry.raisedBy) return RAISED_BY_WORDS[entry.raisedBy];
+  if (entry.side === "recruiter" || entry.raisedBy === "candidate" || (entry.kind === "question" && entry.raisedBy)) return threadHeading(entry);
   return entry.kind === "question" ? "The customer asked" : entry.kind === "reopen" ? "The customer reopened it" : "The customer added a note";
 }
 
@@ -121,12 +121,12 @@ export type HandedOverDraft = {
  * Where "Open in the customer's workspace" goes: the draft in the job builder when the request is about one, the
  * candidate's panel when it is about one candidate (on the AI interview tab when the candidate asked for a person during the
  * screening conversation, where the call notes go; plan E3), the role's candidates when it is about a role, and Today
- * otherwise.
+ * otherwise. `message`: "Write to the candidate", their panel with its message box open.
  */
-export function workspaceHref(e: { roleId?: string | null; applicationId?: string | null; kind?: string; contextSnapshot?: Record<string, unknown> }): string {
+export function workspaceHref(e: { roleId?: string | null; applicationId?: string | null; kind?: string; contextSnapshot?: Record<string, unknown>; message?: boolean }): string {
   const draft = (e.contextSnapshot as { intakeSession?: { id?: unknown } | null } | undefined)?.intakeSession;
   if (draft && typeof draft.id === "string") return `/roles/new?session=${encodeURIComponent(draft.id)}`;
-  if (e.roleId && e.applicationId) return `/roles/${e.roleId}/talent?open=${encodeURIComponent(e.applicationId)}${e.kind === CANDIDATE_ASKED_FOR_PERSON ? "&tab=screen" : ""}`;
+  if (e.roleId && e.applicationId) return `/roles/${e.roleId}/talent?open=${encodeURIComponent(e.applicationId)}${e.message ? "&message=1" : e.kind === CANDIDATE_ASKED_FOR_PERSON ? "&tab=screen" : ""}`;
   return e.roleId ? `/roles/${e.roleId}/talent` : "/";
 }
 
@@ -135,6 +135,19 @@ export const CANDIDATE_ASKED_FOR_PERSON = "candidate_issue";
 
 /** Said on such a request once accepted: what to do after the call, and that the notes are never the candidate's words. */
 export const CALL_NOTES_HINT = "The candidate asked to talk to a person instead of the assistant. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the AI interview tab. Your notes finish the AI interview so the scorecard is written; they are kept as yours, never as the candidate's own words.";
+
+/** The same, about someone the company cannot read: they never had the assistant, and nothing is scored or started while locked. */
+export const LOCKED_CALL_NOTES_HINT = "This candidate wrote to us or asked for a person, and the company cannot read them. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the AI interview tab. Your notes are kept on their Notes tab as yours, never as the candidate's own words. Nothing scores them, and no AI interview or interview starts, while they are locked.";
+
+/**
+ * The answer on a request about someone the company cannot read: nobody there reads it while the candidate is locked (the API
+ * writes them no notice, and they see no thread), but a change of plan that opens the candidate opens the request to the team in
+ * full, answer and notes included, so the words never promise more. It does not reach the candidate either, who is written to
+ * from their panel.
+ */
+export const LOCKED_ANSWER_LABEL = "What you did or advised (not sent to the candidate; the company can't read it while the candidate is locked, but can if an upgrade opens them)";
+export const LOCKED_NOTE_TOAST = "Kept on this request, not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel.";
+export const LOCKED_RESOLVED_TOAST = "Resolved. Your note is not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel before your access ends in 24 hours.";
 
 const PAY_PER: Record<string, string> = { hourly: "an hour", salary: "a year" };
 const money = (n: unknown) => (typeof n === "number" ? `$${n.toLocaleString("en-US")}` : null);

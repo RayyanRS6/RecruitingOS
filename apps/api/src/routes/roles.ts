@@ -31,7 +31,7 @@ import { screenScorecards } from "../services/screen-scorecards";
 import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
 import { candidateEmailStates } from "../services/interview-create";
 import { interviewerApplicationView } from "../services/interviewer-view";
-import { hireFollowUp } from "../services/hire-sheet";
+import { hireFollowUp, lockedStillInProcess } from "../services/hire-sheet";
 import { recordOfferMade, settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
 import { staffMayAsk, staffScopeOf } from "../services/staff-scope";
 
@@ -85,7 +85,9 @@ roleRoutes.get("/", requireTenant, async (c) => {
       .groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt, interviewFollowups.kind, interviewFollowups.choice, interviewFollowups.autoState, interviewOpen, interviewInMotion);
     const hidden = hiddenFrom(t);
     const lockedCounts = hidden ? await tx.select({ roleId: applications.roleId, n: count() }).from(applications).where(and(inArray(applications.roleId, roleIds), hidden)).groupBy(applications.roleId) : [];
-    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).leftJoin(applications, eq(applications.id, approvalRequests.applicationId)).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), or(isNull(approvalRequests.applicationId), visibleTo(t)))).groupBy(approvalRequests.roleId);
+    // Break glass reads everyone, so it has no filter, and `or` with nothing beside it would leave only the requests about no one.
+    const readable = visibleTo(t);
+    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).leftJoin(applications, eq(applications.id, approvalRequests.applicationId)).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), readable ? or(isNull(approvalRequests.applicationId), readable) : undefined)).groupBy(approvalRequests.roleId);
     // The newest application per role, for `lastActivityAt` (the Jobs page's "Recent activity" order).
     const newest = await tx.select({ roleId: applications.roleId, at: sql<string | null>`max(${applications.createdAt})` }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId);
     const now = c.get("container").engine.clock();
@@ -441,6 +443,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
   const result = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, c.req.param("id")), visibleTo(t))).orderBy(desc(applications.createdAt))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId);
     const locked = q.counts ? await lockedCardsOf(tx, c.req.param("id"), t) : { count: 0, cards: [] };
+    // For the close card's "and N more you cannot see yet" under who is still in process: fewer than the cards when someone locked was decided or moved on.
+    const lockedInProcess = locked.count ? await lockedStillInProcess(tx, c.req.param("id")) : 0;
     const ids = apps.map((a) => a.candidateId);
     const appIds = apps.map((a) => a.id);
     const cands = ids.length ? await tx.select().from(candidates).where(inArray(candidates.id, ids)) : [];
@@ -536,9 +540,9 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const byScore = (x: (typeof rows)[number], y: (typeof rows)[number]) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1) || Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt);
     const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : q.order === "score" ? [...rows].sort(byScore) : rows;
     const shown = ordered.filter((r) => (!q.group || r.group === q.group) && (!q.stage || r.stage === q.stage) && (!q.ownerStage || r.ownerStage === q.ownerStage) && (!q.told || r.toldState === q.told) && (!q.aiInterview || r.aiInterview?.group === q.aiInterview));
-    return { shown, counts, locked };
+    return { shown, counts, locked, lockedInProcess };
   });
-  return c.json(q.counts ? { applications: result.shown, counts: result.counts, locked: result.locked } : result.shown);
+  return c.json(q.counts ? { applications: result.shown, counts: result.counts, locked: result.locked, lockedInProcess: result.lockedInProcess } : result.shown);
 });
 
 /**
@@ -733,7 +737,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const emailStates = await candidateEmailStates(tx, { interviews: ivs, hasEmail: !!cand?.email });
     const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
     // What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent.
-    const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId });
+    const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId, lockedAt: app.lockedAt });
     // A scorecard only for a complete conversation: one closed without being sent has none to show.
     const shownScorecard = (s: { status: string; assessmentId: string | null }) => s.status === "completed" && !(s.assessmentId && hiddenReadings.has(s.assessmentId));
     const scorecards = await screenScorecards(tx, scr.map((s) => (shownScorecard(s) ? s : { ...s, assessmentId: null })));

@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import type { ZodError } from "zod";
 import {
-  AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DescribeBenefits, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
+  AI_HELP_BUSY_LINE, AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DescribeBenefits, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag, type PacketRevisionProposal, type RequirementsCheck, type RolePacket,
 } from "@ros/contracts";
 import {
@@ -13,7 +13,7 @@ import { assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket
 import { approvalRequests, companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
-import { aiCreditRefusal } from "../services/ai-credit";
+import { aiCreditAnswer } from "../services/ai-credit";
 import { jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
 import { eventTargets, inStaffScope, staffScopeOf } from "../services/staff-scope";
@@ -237,8 +237,8 @@ const AI_FAILED = "The assistant could not work out that change. Nothing was cha
  * A failed model call is recorded as an event on what it was about, then answered plainly; nothing was changed. No AI credit
  * left is no failure: nothing goes on the record and there is nothing to try again, and the editor needs no model.
  */
-async function revisionFailed(container: Container, t: Pick<Tenant, "companyId" | "role">, subject: { type: "role" | "intake_session"; id: string }, out: { runId: string; reason: string; error: string }): Promise<never> {
-  if (out.reason === "no_credit") throw aiCreditRefusal(t, AI_HELP_LINE.revise);
+async function revisionFailed(container: Container, t: Pick<Tenant, "companyId" | "role">, subject: { type: "role" | "intake_session"; id: string }, out: { runId: string; reason: string; error: string; refusedHoldUsd?: number }): Promise<never> {
+  if (out.reason === "no_credit") throw await aiCreditAnswer(container, t, out.refusedHoldUsd ?? 0, { usedUp: AI_HELP_LINE.revise, busy: AI_HELP_BUSY_LINE.revise });
   await withTenant(container.db, t.companyId, (tx) => emit(tx, { type: "ai.run_failed", companyId: t.companyId, actor: { kind: "agent", id: "intake", runId: out.runId }, subject, payload: { task: "packet.revise", reason: out.reason, error: out.error } }));
   throw new HttpError(502, "ai_failed", AI_FAILED, { aiRunId: out.runId });
 }

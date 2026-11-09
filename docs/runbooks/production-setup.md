@@ -113,6 +113,13 @@ Then, in the project:
 - **Authentication, Sign In / Providers**: Email off, Phone off, **Allow anonymous sign-ins** off, **Allow new users to
   sign up** on (Microsoft and Google sign-ups need it; who may open a company is `SIGNUP_MODE`'s job). Azure and Google
   on (next section), nothing else.
+- **Confirm email** on and **Secure email change** on, wherever this dashboard shows them (with the email settings); check
+  them even with Email off, and staging's project the same. Why: the app takes the address on a sign-in as proved
+  (`packages/integrations/src/identity/claims.ts`). With **Confirm email** off, anyone holding the publishable key could
+  change their own account's address to someone else's with no proof and then sign in as that address: an open invitation
+  to it would be theirs, and under `SIGNUP_MODE=approval` our emails would go to it. **Secure email change** has both the
+  old and the new address confirm a change. Nothing in the code can read these settings, so they are read here, at
+  release (the review of 6 November 2026).
 - **Authentication, Multi-Factor**: TOTP (authenticator app) on.
 - **Storage**: steps 1 to 4 of `docs/runbooks/resume-storage.md` in this project, with staging's settings: bucket
   `resumes`, Private, 8 MB, types `application/pdf`,
@@ -121,21 +128,34 @@ Then, in the project:
   now); global limit at least 8 MB; S3 protocol on. **Two** access keys: `recruiting-os-production-app` (Vercel) and
   `recruiting-os-production-worker` (Railway), each into 1Password.
 
-Report back: `<prod-ref>`, the region, and the endpoint and region the S3 screen shows.
+Report back: `<prod-ref>`, the region, the endpoint and region the S3 screen shows, and that **Confirm email** and
+**Secure email change** read on.
 
 ### Microsoft and Google sign-in
 
-**Microsoft**: a registration of its own for production (Entra admin center, the ITS tenant, **App registrations**,
-**New registration**; background in `docs/spec/13` section 4a):
+**Microsoft** (since 10 November 2026; the decision is in `docs/workflow-decisions.md`, "10 November 2026"): one app
+registration in the ITS tenant (Entra admin center, **App registrations**) serves both Supabase projects, staging and
+production. Background in `docs/spec/13` section 4a.
 
-- Name `Identified Talent Solutions Hiring - Sign-in (production)`; supported account types **Accounts in any
-  organizational directory and personal Microsoft accounts**; redirect URI (Web)
-  `https://<prod-ref>.supabase.co/auth/v1/callback`.
-- **API permissions** (delegated): `openid`, `profile`, `email`, `User.Read`. **Token configuration**: optional claims
-  `email` and `xms_edov`.
+- Supported accounts: **Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant)**, with
+  **Allow all tenants**. Work and school accounts only: Microsoft's own page refuses a personal Microsoft account
+  (outlook.com, hotmail.com), by design, and those people use **Continue with Google**. Redirect URIs (Web): each
+  project's `https://<ref>.supabase.co/auth/v1/callback`.
+- **API permissions** (delegated): `openid`, `profile`, `email`, `User.Read`. **Token configuration**: the optional
+  ID-token claims `email` and `xms_edov`.
 - **Certificates & secrets**, **New client secret**, 12 months: the **Value** into 1Password with its expiry date, and
   a reminder a month before. An expired secret locks every administrator out.
-- Supabase, **Azure** provider: the Application (client) ID, the secret's Value, **Azure Tenant URL** empty.
+- Supabase, **Azure** provider, in both projects: the Application (client) ID, the secret's Value, **Azure Tenant URL**
+  `https://login.microsoftonline.com/organizations`, and **Allow users without an email** off. Never
+  `https://login.microsoftonline.com/consumers`: it is broken in Supabase Auth since v2.190.0 (supabase/auth issue
+  2795).
+- **Confirm email** on in both projects (the Supabase project's list above says why).
+- After every change in this list, an ITS staff member signs in with Microsoft and the authenticator before the next
+  change. The undo for a Tenant URL is putting back the tenant-specific URL the project had,
+  `https://login.microsoftonline.com/<ITS tenant id>` (the id is kept outside this repository).
+- Publisher verification comes later: a Microsoft Partner Center account and a verified domain. Until then Microsoft's
+  consent screen says the app is unverified, and a company whose IT lets people approve only verified apps approves it
+  once for everyone there.
 
 **Google** (the Google Cloud project that holds the staging sign-in client): add
 `https://<prod-ref>.supabase.co/auth/v1/callback` to the client's **Authorized redirect URIs**, and publish the app
@@ -467,8 +487,9 @@ The check:
 
 1. `curl.exe -s https://<host>/robots.txt` shows `Allow: /careers/` and a `Sitemap:` line; `curl.exe -sI
    https://<host>/welcome` shows no `x-robots-tag`.
-2. Sign-in: the first administrator with Microsoft and the authenticator; a Microsoft account from outside ITS (a
-   personal one, or another company's) and, if offered, a Google account. Each outside account signs in. Under
+2. Sign-in: the first administrator with Microsoft and the authenticator; a Microsoft work account from another
+   company and, if offered, a Google account. Each outside account signs in (a personal Microsoft account is refused on
+   Microsoft's own page, by design: step 1). Under
    `SIGNUP_MODE=invite` the company step says "Recruiting OS is by invitation for now" with the reply mailbox. Under
    `approval` it shows the form with **Send my request**: leave it unsent, because one account makes one request.
 3. **Console, Customers**, the test company: **Confirm the company**, reason "smoke test". From the second check on,
@@ -631,9 +652,10 @@ real AI money up to its credit, and only a person's press lets one in.
 2. They fill in **Tell us about your company** and press **Send my request**. Their screen says "Your request has been sent" and
    "Please wait for approval." Nothing else works for them: no job, no AI, nothing public, and every address they open lands on
    this screen. One account makes one request.
-3. **Console, Overview**, at the very top of **Needs attention**: "<Company> is asking for access", with the person's name and
-   email, the kind of business, the size, the city and state, the website and how long they have waited. A stranger typed all of
-   it, so open the website with care. Five rows at most, the longest waiting first, then "N more companies are asking for
+3. **Console, Overview**, at the very top of **Needs attention**: "<Company> is asking for access", with the person's email
+   (their sign-in proved it) and then their name, the kind of business, the size, the city and state, the website and how long
+   they have waited. A stranger typed all of it but the email, so open the website with care. The page reads again every minute
+   while it is open. Five rows at most, the longest waiting first, then "N more companies are asking for
    access", which opens **Customers**, **Waiting for the ITS check**. While email is not live this row is the only thing that
    tells you ("While testers are on").
 4. Look before you press. Accept is also the one-time ITS check: it opens their public side, and there is no second look. Nothing
@@ -694,7 +716,8 @@ Email is not live, so the queue mailbox hears nothing, and a tester's team invit
 instead, with one exception on purpose: no email about a request for access raises one, whether to the person or to ITS, so **the
 Overview's row is the only thing that says someone is waiting**. The person's screen claims nothing about email until one really
 left: it says "Keep this page open, or sign in again later to check." Once email is live their copy says ITS reviews each company
-"usually within one business day", so someone must look that often. Read the console every business day: **Overview**, **Customers**
+"usually within one business day", so someone must look that often. One address sends five requests an hour at most, and with more
+than 25 waiting at once a new request sends no email at all, to the person or to ITS: work the list down. Read the console every business day: **Overview**, **Customers**
 (filter **Waiting for the ITS check** and **Running low**, the chip **Asked to upgrade**), **Queue** and **Problems**. An AI credit
 at 80% or used up is a line in dollars on the company's row, and **Running low** counts it; it is never critical and pages nobody.
 The Anthropic workspace's monthly limit (step 1) stays the guard over the whole account.

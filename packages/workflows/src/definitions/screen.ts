@@ -24,7 +24,7 @@ import { HELD_DECISION_EVENT, aiNoticeSentSignal } from "./application-intake";
  * `mode` "with_application" (20 Oct 2026, R20-4): every applicant's AI interview, started by the intake; `readingDeadline`
  * is when it stops waiting for the résumé reading, `heldSince` when a must-have "No" started holding it (R20-10).
  */
-type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns"; invitedVia?: "apply" | "confirmed_repeat" | "recruiter_call" | "with_application"; waitingForAllowance?: string; flow?: "one_visit"; mode?: "with_application"; readingDeadline?: string; heldSince?: string } & SuggestionState;
+type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns"; invitedVia?: "apply" | "confirmed_repeat" | "recruiter_call" | "with_application"; waitingForAllowance?: string; flow?: "one_visit"; mode?: "with_application"; readingDeadline?: string; heldSince?: string; creditWaitSince?: string } & SuggestionState;
 
 /** A screen that is over without a scorecard: handed to a person, left, stopped by the team or closed with the application. Nothing more is sent. */
 const ENDED = ["human_requested", "abandoned", "cancelled", "expired"];
@@ -414,13 +414,14 @@ export const screen: WorkflowDefinition<State> = {
      * nothing failed: the answers were sent and the team reads them, so the screen is marked (`scoreWaitsForCredit`, which
      * everything that says "being scored" reads, leading to "read it yourself"), and the run waits for credit, with no
      * notice about the person: the owner's one notice is about the company. Someone who left the process during that wait is
-     * not read when it ends, and no credit is spent on them.
+     * not read when it ends, and no credit is spent on them. Refused only for money held by calls still running, nothing is
+     * used up: no mark, so the team reads "being scored", and a look again in a few minutes (`waitForCredit`).
      */
     assess: twoPhase<State, { screenId: string; out: RunOutcome<ScreenAssessment> } | null>({
       async prepare(ctx) {
         const pending = await ctx.read(async (q) => {
           const [scr] = await q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
-          if (!scr || scr.assessmentId || scr.status !== "completed" || (await leftWhileWaiting(q, scr))) return null;
+          if (!scr || scr.assessmentId || scr.status !== "completed" || (await leftWhileWaiting(q, scr, ctx.state))) return null;
           return scr.id;
         });
         if (!pending) return null;
@@ -431,7 +432,7 @@ export const screen: WorkflowDefinition<State> = {
         const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
         if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
         if (scr.assessmentId) return { kind: "next", step: "recommend" };
-        if (await leftWhileWaiting(ctx.q, scr)) return { kind: "complete" };
+        if (await leftWhileWaiting(ctx.q, scr, ctx.state)) return { kind: "complete" };
         if (scr.status !== "completed") {
           // A run that reached this step for a conversation closed without being sent (one under way when this rule
           // came in, 9 October 2026): nothing is read. Unfinished, it stays under "No AI interview yet" (R20-7, no alert);
@@ -443,8 +444,11 @@ export const screen: WorkflowDefinition<State> = {
         if (!prepared || prepared.screenId !== scr.id) return { kind: "fail", error: "the screen changed after the read phase; assessing again", retryable: true };
         const out = prepared.out;
         if (outOfCredit(out)) {
-          if (!scr.progress.scoreWaitsForCredit) await ctx.q.update(screens).set({ progress: { ...scr.progress, scoreWaitsForCredit: ctx.now.toISOString() } }).where(eq(screens.id, scr.id));
-          return waitForCredit(ctx, "assess");
+          const { roomSoon, wait } = await waitForCredit(ctx, "assess", out.refusedHoldUsd, { creditWaitSince: ctx.state.creditWaitSince ?? ctx.now.toISOString() });
+          const { scoreWaitsForCredit: marked, ...unmarked } = scr.progress;
+          if (!roomSoon && !marked) await ctx.q.update(screens).set({ progress: { ...scr.progress, scoreWaitsForCredit: ctx.now.toISOString() } }).where(eq(screens.id, scr.id));
+          if (roomSoon && marked) await ctx.q.update(screens).set({ progress: unmarked }).where(eq(screens.id, scr.id));
+          return wait;
         }
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
@@ -534,9 +538,9 @@ function byPerson(state: State): boolean {
 /** The stages of someone no longer in the process. */
 const LEFT_THE_PROCESS: readonly string[] = ["hired", "withdrawn", "rejected", "declined", "talent_pool"];
 
-/** Whether the scorecard of a chat has been waiting for AI credit, and its candidate has left the process since. */
-async function leftWhileWaiting(q: Tx, scr: { applicationId: string; progress: { scoreWaitsForCredit?: string } }): Promise<boolean> {
-  if (!scr.progress.scoreWaitsForCredit) return false;
+/** Whether the scorecard of a chat has been waiting for AI credit, a short wait or a long one, and its candidate has left the process since. */
+async function leftWhileWaiting(q: Tx, scr: { applicationId: string; progress: { scoreWaitsForCredit?: string } }, state: Pick<State, "creditWaitSince">): Promise<boolean> {
+  if (!scr.progress.scoreWaitsForCredit && !state.creditWaitSince) return false;
   const [app] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, scr.applicationId)).limit(1);
   return !app || LEFT_THE_PROCESS.includes(app.stage);
 }

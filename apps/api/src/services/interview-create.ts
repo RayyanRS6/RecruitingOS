@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import type { Actor, CandidateNotice, InterviewPlace, MembershipRole, OfferedSlot, SetInterviewTime } from "@ros/contracts";
+import { NO_WORK_WHILE_LOCKED, type Actor, type CandidateNotice, type InterviewPlace, type MembershipRole, type OfferedSlot, type SetInterviewTime } from "@ros/contracts";
 import { CANCEL_STAGES, STAGE_LABEL, audit, defaultSchedulingWindow, emit, endMarkOnMove, followUpParked, notify, openFollowUpOf, personSetSlot, setAutoState, setCurrentInterview, transition } from "@ros/core";
 import { clashingInterviewers, companyConfirmed, type InvitationNote } from "@ros/agents";
 import { applications, approvalRequests, candidates, communications, companies, interviewParticipants, interviews, memberships, randomToken, rolePackets, roles, type Tx } from "@ros/db";
@@ -154,6 +154,8 @@ export async function createApprovedInterview(tx: Tx, container: Container, inpu
   const read = tx.select().from(applications).where(and(eq(applications.id, input.applicationId), eq(applications.companyId, companyId))).limit(1);
   const [app] = input.locked ? await read : await read.for("update");
   if (!app) throw new HttpError(404, "not_found", "Application not found.");
+  // Under a grant naming someone locked too: the interviewers would get their name by email and calendar, and could not open them.
+  if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
   // Two people pressing at once take turns on the lock above: the second finds the first one's booking, and is told that.
   if (app.stage === "interview_scheduled") throw new HttpError(409, "interview_open", INTERVIEW_ALREADY_OPEN);
   if (!INTERVIEW_FROM.includes(app.stage)) throw new HttpError(409, "interview_not_schedulable", `A candidate at "${STAGE_LABEL[app.stage]}" cannot be moved to an interview from here.`);

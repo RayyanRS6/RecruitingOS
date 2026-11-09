@@ -1,14 +1,14 @@
 "use client";
 
-import { type CSSProperties, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, Button, Card, ErrorState, Icon, IconChip, PageHeader, Skeleton, StatCell, StatStrip } from "@ros/ui";
-import { api, type Me } from "../../api/client";
+import { api, ApiError, type Me } from "../../api/client";
 import { allowanceAlerts, allowanceChip } from "../../allowance";
 import { useIsClient } from "../../components/use-is-client";
 import { focusLost } from "../../focus-after";
 import { Link } from "../../nav";
-import { firstName } from "../../today";
+import { TODAY_REFRESH, firstName } from "../../today";
 import { adminKeys, adminReason, type AlertRow, type CustomerRow, type DataRequest } from "./admin-api";
 import { activityWords, money, planWords, severityWords } from "./admin-words";
 import { AccessButtons, accessFacts, accessRequests, aiCreditDollars, customerOrder, FactsLine, type LineFact, realCustomers, waitingCustomers, waitingForCheck } from "./customers";
@@ -274,25 +274,50 @@ function partOfDay(local: boolean): string {
 
 const CUSTOMERS_SHOWN = 5;
 
+/**
+ * A tab left open stays true (the review of 6 November 2026): every source behind "Needs attention" and its "Nothing needs
+ * you right now." is asked again when the window comes back into focus and every minute while the tab is visible, never in
+ * a hidden one, as Home is (TODAY_REFRESH), because each read is recorded (admin.ts) and a request for access may be waiting.
+ * The recruiter requests are recorded per customer on each read, so they are asked every five minutes, and on focus only once
+ * the answer is two minutes old.
+ */
+export const OVERVIEW_REFRESH = TODAY_REFRESH;
+export const ESCALATIONS_REFRESH = { refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 } as const;
+
+/**
+ * Whether the staff session ended under a tab left open (the review of 9 November 2026): a look answered 401. The session
+ * slides only while the tab looks, so a hidden or sleeping tab outlives it; then every look fails and each source keeps
+ * what it read before, so the page goes to sign in instead.
+ */
+export function sessionEnded(errors: readonly unknown[]): boolean {
+  return errors.some((e) => e instanceof ApiError && e.status === 401);
+}
+
 export function Overview() {
   const why = adminReason("overview");
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const customers = useQuery({ queryKey: adminKeys.customers, queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", why) });
-  const alerts = useQuery({ queryKey: adminKeys.alerts, queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", why) });
-  const failures = useQuery({ queryKey: adminKeys.failures, queryFn: () => api.get<FailuresDto>("/api/v1/admin/failures", why) });
-  const privacy = useQuery({ queryKey: adminKeys.privacy, queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", why) });
-  const failedEmail = useQuery({ queryKey: adminKeys.failedEmailApplications, queryFn: () => api.get<Array<{ id: string }>>("/api/v1/admin/failed-email-applications", why) });
-  const csp = useQuery({ queryKey: adminKeys.csp, queryFn: () => api.get<CspDto>("/api/v1/admin/csp-reports", why) });
+  const customers = useQuery({ queryKey: adminKeys.customers, queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", why), ...OVERVIEW_REFRESH });
+  const alerts = useQuery({ queryKey: adminKeys.alerts, queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", why), ...OVERVIEW_REFRESH });
+  const failures = useQuery({ queryKey: adminKeys.failures, queryFn: () => api.get<FailuresDto>("/api/v1/admin/failures", why), ...OVERVIEW_REFRESH });
+  const privacy = useQuery({ queryKey: adminKeys.privacy, queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", why), ...OVERVIEW_REFRESH });
+  const failedEmail = useQuery({ queryKey: adminKeys.failedEmailApplications, queryFn: () => api.get<Array<{ id: string }>>("/api/v1/admin/failed-email-applications", why), ...OVERVIEW_REFRESH });
+  const csp = useQuery({ queryKey: adminKeys.csp, queryFn: () => api.get<CspDto>("/api/v1/admin/csp-reports", why), ...OVERVIEW_REFRESH });
   // The recruiter queue's own list: `overdue` is worked out on business time by the API. Each read of it is recorded per
   // customer (as the queue list), so Overview keeps an answer for two minutes instead of reading it again on every visit.
-  const escalations = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<EscalationPreview[]>("/api/v1/escalations"), staleTime: 120_000 });
+  const escalations = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<EscalationPreview[]>("/api/v1/escalations"), ...ESCALATIONS_REFRESH });
   const calendar = useQuery({ queryKey: adminKeys.calendar, queryFn: () => api.get<CalendarDto>("/api/v1/admin/calendar", why) });
   const queue = useQuery({ queryKey: adminKeys.queue, queryFn: () => api.get<QueueDto>("/api/v1/admin/queue", why), refetchInterval: 30_000 });
   // "This month" starts on the 1st in the business calendar's time zone; the costs wait for the calendar's answer.
   const since = monthStart(calendar.data?.current.timeZone);
   const costs = useQuery({ queryKey: costsSinceKey(since), queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
   const isClient = useIsClient();
+  const ended = sessionEnded([me, customers, alerts, failures, privacy, failedEmail, csp, escalations, calendar, queue, costs].map((q) => q.error));
+  useEffect(() => {
+    if (ended) window.location.assign("/login");
+  }, [ended]);
 
+  // A source whose latest look failed counts as failed even while it still holds an earlier answer (the review of 9
+  // November 2026), so "Nothing needs you right now." never stands over a look that failed.
   const sources = [
     { key: "customers", thing: "the companies waiting for the ITS check", q: customers },
     { key: "alerts", thing: "alerts", q: alerts },
@@ -301,7 +326,7 @@ export function Overview() {
     { key: "csp", thing: "security reports", q: csp },
     { key: "email", thing: "email applications", q: failedEmail },
     { key: "escalations", thing: "recruiter requests", q: escalations },
-  ].map(({ key, thing, q }) => ({ key, thing, loading: q.data === undefined && !q.error, failed: q.data === undefined && !!q.error, retry: () => void q.refetch() }));
+  ].map(({ key, thing, q }) => ({ key, thing, loading: q.data === undefined && !q.isError, failed: q.isError, retry: () => void q.refetch() }));
   const rows = attentionRows({ customers: customers.data, alerts: alerts.data, failures: failures.data, privacy: privacy.data, failedEmail: failedEmail.data, csp: csp.data, escalations: escalations.data });
   const things = attentionCount(rows);
   const loading = sources.filter((s) => s.loading);

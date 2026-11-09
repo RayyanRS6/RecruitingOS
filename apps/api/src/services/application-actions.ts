@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, visibleTo, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
+import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
+import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, visibleTo, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, type PersonalLine } from "@ros/agents";
 import { heldDecisionSignal, intakeOn, interviewsBeingPrepared, startInterviewAgain } from "@ros/workflows";
@@ -42,11 +42,22 @@ export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "intervi
  * for the reading or for more interviews), so "Send a new AI interview link" waits too: it would race it.
  * `aiInterview`: where they stand under "No AI interview yet" (R20-7, `aiInterviewOf`), null outside it: "Send a
  * reminder" (`remind_screen`) follows its `canRemind`.
+ * `lockedAt`: they are past the plan's candidates per job (the plans of 5 November 2026, Rule 2): `NOT_WHILE_LOCKED` waits
+ * for an upgrade, whoever is reading.
  */
-export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean; aiInterview?: AiInterviewView | null };
+export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean; aiInterview?: AiInterviewView | null; lockedAt?: string | null };
 
 /** Why a choice is not available right now, in the reader's words; the page puts it on the disabled button. */
 export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
+
+/**
+ * Never for someone locked, even under a grant naming them or break glass: each spends the company's AI credit on them or
+ * moves them to an interview, whose interviewers would then get their name by email and calendar. Writing to them stays allowed.
+ */
+const NOT_WHILE_LOCKED: readonly string[] = ["invite_screen", "ask_in_screen", "interview", "advance_to_interview"];
+
+/** Recorded when ITS staff send something to someone locked with no approval: the company's rule asks for a reader it does not have. */
+export const NO_APPROVER_WHILE_LOCKED = "Nobody at the company may read someone locked, so nobody there can approve a message to them.";
 
 /** The permission each choice needs, and how the refusal names it. */
 const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: string }> = {
@@ -145,7 +156,7 @@ function allowedByState(f: ApplicationFacts): ApplicationCapability[] {
   if (f.followUp && followUpParked(f.followUp)) out.push("stop_new_times");
   // "Send a reminder" under "No AI interview yet" (R20-7): an open link, nothing sent about it in the last day.
   if (!terminal && f.aiInterview?.canRemind) out.push("remind_screen");
-  return out;
+  return f.lockedAt ? out.filter((cap) => !NOT_WHILE_LOCKED.includes(cap)) : out;
 }
 
 /** Why the decision message cannot be sent or recorded now. */
@@ -160,6 +171,7 @@ function tellingReason(f: ApplicationFacts): string {
 
 function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
   const step = `Not available at this step (${(STAGE_LABEL as Record<string, string>)[f.stage] ?? f.stage.replace(/_/g, " ")}).`;
+  if (f.lockedAt && NOT_WHILE_LOCKED.includes(cap)) return NO_WORK_WHILE_LOCKED;
   switch (cap) {
     case "invite_screen":
       return f.hasOpenScreen ? "An AI interview link is already open." : f.interviewPreparing ? INTERVIEW_PREPARING : step;
@@ -286,7 +298,7 @@ export function stageMoves(f: ApplicationFacts): StageMove[] {
 
 /** The facts the list depends on, from rows the caller may already hold. `triage` is the latest résumé assessment when the caller has it; without it "ask in a screen" is not offered. */
 export function applicationFactsFrom(
-  app: Pick<typeof applications.$inferSelect, "stage" | "rejectReason"> & { toldState?: ToldState | null },
+  app: Pick<typeof applications.$inferSelect, "stage" | "rejectReason" | "lockedAt"> & { toldState?: ToldState | null },
   screenStatuses: string[],
   interviewRows: Array<{ status: string; decision: string | null }>,
   role?: MembershipRole | null,
@@ -298,6 +310,7 @@ export function applicationFactsFrom(
     ...(extra.undoToCancelled ? { undoToCancelled: true } : {}),
     ...(extra.interviewPreparing ? { interviewPreparing: true } : {}),
     ...(extra.aiInterview ? { aiInterview: extra.aiInterview } : {}),
+    ...(app.lockedAt ? { lockedAt: app.lockedAt } : {}),
     roleClosed: !!extra.roleClosed,
     followUp: extra.followUp ?? null,
     stage: app.stage,
@@ -338,7 +351,7 @@ export async function undoFacts(tx: Tx, app: Pick<typeof applications.$inferSele
 }
 
 /** `now`: the moment "Send a reminder" is judged at (the engine's clock when a container is at hand). */
-export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason" | "toldState" | "roleId" | "candidateId">, role?: MembershipRole | null, now: Date = new Date()): Promise<ApplicationFacts> {
+export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason" | "toldState" | "roleId" | "candidateId" | "lockedAt">, role?: MembershipRole | null, now: Date = new Date()): Promise<ApplicationFacts> {
   const scr = await tx.select({ status: screens.status }).from(screens).where(eq(screens.applicationId, app.id));
   const ivs = await tx.select({ status: interviews.status, decision: interviews.decision }).from(interviews).where(eq(interviews.applicationId, app.id));
   const [triage] = await tx.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt)).limit(1);
@@ -411,6 +424,11 @@ export async function sendDecisionMessage(tx: Tx, container: Container, input: {
   // The wording is checked before the gate, so a request for approval never carries a wording that could not be sent.
   const draft = await decisionMessageDraft(tx, { app, wording: input.wording ?? null, personalLine, statusBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() }).catch(decisionHttpError);
   const proposal: DecisionProposal = { reason: draft?.wording === "eligibility" ? "eligibility" : "human", decision: app.stage, wording: draft?.wording ?? null, personalLine };
+  // ITS staff telling someone locked: as with a message they write, nobody at the company could read this or approve it, and "only a person" has no person there to do it.
+  if (app.lockedAt && actor.kind === "recruiter") {
+    await audit(tx, { companyId: app.companyId, actor, action: "message.approval_skipped", target: { type: "application", id: app.id }, reason: NO_APPROVER_WHILE_LOCKED, details: { actionType: "disposition.send" } });
+    return deliverDecision(tx, container, { app, actor, wording: draft?.wording ?? null, personalLine, holdForUndo: true });
+  }
   const d = await gate(tx, { companyId: app.companyId, roleId: app.roleId, applicationId: app.id, actionType: "disposition.send", subject: { type: "application", id: app.id }, proposal, requestedBy: actor });
   if (d.outcome === "wait_for_approval") return { notice: "waiting_approval", toldState: app.toldState, approvalRequestId: d.approvalRequestId };
   if (d.outcome === "human_only") return { notice: "not_sent_settings", toldState: app.toldState };
@@ -444,14 +462,17 @@ export async function decisionMessagePreview(tx: Tx, container: Container, app: 
   const draft = await decisionMessageDraft(tx, { app, wording: input.wording ?? null, personalLine, statusBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() }).catch(decisionHttpError);
   if (!draft) return null;
   const pending = await pendingDecisionMessages(tx, [app.id]);
-  return { to: draft.to, subject: draft.subject, text: draft.text, wording: draft.wording, wordings: draft.wordings, personalLine: draft.personalLine, adverseDecisionLine: draft.adverseDecisionLine, policy: await declineMessagePolicy(tx, { companyId: app.companyId, roleId: app.roleId }), toldState: app.toldState, candidateToldAt: app.candidateToldAt ? new Date(app.candidateToldAt).toISOString() : null, waitingApproval: pending.has(app.id), undoSeconds: container.env.MESSAGE_UNDO_SECONDS };
+  return { to: draft.to, subject: draft.subject, text: draft.text, wording: draft.wording, wordings: draft.wordings, personalLine: draft.personalLine, adverseDecisionLine: draft.adverseDecisionLine, policy: await declineMessagePolicy(tx, { companyId: app.companyId, roleId: app.roleId, lockedAt: app.lockedAt }), toldState: app.toldState, candidateToldAt: app.candidateToldAt ? new Date(app.candidateToldAt).toISOString() : null, waitingApproval: pending.has(app.id), undoSeconds: container.env.MESSAGE_UNDO_SECONDS };
 }
 
 /**
  * What a Send does under the company's settings for this role (takeovers included), so the page can say it before the
  * click: the message goes at once, waits for an approver, or is not sent at all. Declining itself never sends anything.
+ * About someone locked (`lockedAt`) it goes: only ITS staff can read them here, and no rule of the company's holds it for
+ * anyone who could read it (`sendDecisionMessage`).
  */
-export async function declineMessagePolicy(tx: Tx, input: { companyId: string; roleId: string }): Promise<"sends" | "needs_approval" | "not_sent"> {
+export async function declineMessagePolicy(tx: Tx, input: { companyId: string; roleId: string; lockedAt?: string | null }): Promise<"sends" | "needs_approval" | "not_sent"> {
+  if (input.lockedAt) return "sends";
   const d = await resolvePolicy(tx, input.companyId, input.roleId, "disposition.send");
   return d.level === "human_only" ? "not_sent" : d.level === "approval" ? "needs_approval" : "sends";
 }
@@ -550,6 +571,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
   assertCan(t.role, CAPABILITY[body.action].permission);
   const facts = await applicationFacts(tx, app, t.role, container.engine.clock());
   if (!allowedApplicationActions(facts).includes(body.action)) {
+    if (facts.lockedAt && NOT_WHILE_LOCKED.includes(body.action)) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
     if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open AI interview link.");
     if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.interviewPreparing) throw new HttpError(409, "interview_preparing", INTERVIEW_PREPARING);
     if (body.action === "ask_in_screen" && !(facts.openUnknowns ?? 0)) throw new HttpError(409, "nothing_to_ask", "The AI review left no open questions to ask about; send them the usual AI interview link instead.");

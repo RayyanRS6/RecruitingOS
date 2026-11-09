@@ -1,10 +1,10 @@
 import { and, asc, eq, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
-import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, aiCreditNoticeWords, type AiCreditLevel, type AiCreditView } from "@ros/contracts";
+import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, aiCreditNoticeWords, mayOfferUpgrade, type AiCreditLevel, type AiCreditView } from "@ros/contracts";
 import { adminAlerts, aiRuns, companies, entitlements, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
 import { audit } from "./audit";
 import { closingDayWords, companyToday } from "./closing-date";
-import { ALLOWANCE_WARN_RATIO, aiCreditSpentMicros, creditPercent, currentPeriod, isMonthly } from "./entitlements";
+import { ALLOWANCE_WARN_RATIO, aiCreditSpentMicros, creditPercent, currentPeriod, isMonthly, settledRun } from "./entitlements";
 import { errorForLog } from "./secrets";
 import { emit } from "./events";
 import { notify } from "./notifications";
@@ -83,7 +83,10 @@ export type AiCreditStanding = {
   told: { warnedFor?: string; usedUpFor?: string };
 };
 
-/** `settled`: leaves out calls still running, whose holds are not yet money spent. The fullest row, if a company ever has two. */
+/**
+ * `settled`: leaves out calls that can still be running, whose holds are not yet money spent (`settledRun`; one left by a
+ * process that went away counts). The fullest row, if a company ever has two.
+ */
 export async function aiCreditStanding(q: Queryable, companyId: string, opts: { now?: Date; settled?: boolean } = {}): Promise<AiCreditStanding | null> {
   const rows = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), limitedRows())).orderBy(asc(entitlements.key));
   if (!rows.length) return null;
@@ -92,7 +95,7 @@ export async function aiCreditStanding(q: Queryable, companyId: string, opts: { 
   const told = company?.settings?.aiCreditTold ?? {};
   let fullest: AiCreditStanding | null = null;
   for (const row of rows) {
-    const spentMicros = await aiCreditSpentMicros(q, companyId, { since: sinceOf(row, now), settled: opts.settled });
+    const spentMicros = await aiCreditSpentMicros(q, companyId, { since: sinceOf(row, now), settled: opts.settled, now });
     const standing = standingOf(row, spentMicros, told, now);
     if (!fullest || standing.spentMicros * fullest.limitMicros >= fullest.spentMicros * standing.limitMicros) fullest = standing;
   }
@@ -114,15 +117,47 @@ export async function aiCreditResetsAt(q: Queryable, companyId: string, opts: { 
 }
 
 /**
+ * A call the credit refused, read again from money actually spent: true when it fits without the holds of calls still running,
+ * so it will fit once they settle (a draft holds about $0.80 for two minutes and comes back at about $0.10), or it fits now, on
+ * a new plan or in a new month. False is a credit really gone for this call: what is spent refuses it by itself, and money
+ * spent never comes back within a period. The rule `tellOwner` reads for a refusal, row by row as the gate reads them. A hold
+ * left by a process that went away is spent (`settledRun`): it never settles, so waiting for it would be a wait for nothing.
+ */
+export async function aiCreditRoomSoon(q: Queryable, input: { companyId: string; holdUsd: number; now: Date }): Promise<boolean> {
+  const rows = await q.select().from(entitlements).where(and(eq(entitlements.companyId, input.companyId), limitedRows())).orderBy(asc(entitlements.key));
+  const hold = toMicros(input.holdUsd);
+  for (const row of rows) {
+    const spent = await aiCreditSpentMicros(q, input.companyId, { since: sinceOf(row, input.now), settled: true, now: input.now });
+    if (spent + hold > roomMicros(row)) return false;
+  }
+  return true;
+}
+
+/**
+ * Holds the company's credit rows until the caller's transaction ends, for a step about to wait for credit. A refusal and the
+ * wait that follows are two moments, and a change of plan's signal between them finds nobody waiting. Behind this the two
+ * take turns: a change of plan in progress has finished by the next statement, so that statement reads the new plan; or it
+ * waits for this commit before it writes, and its signal then finds the run waiting. Shared, because such steps need not wait
+ * for each other, and one row is locked (a plan limits one credit), so no order of locks can meet another's.
+ */
+export async function holdAiCreditRows(q: Queryable, companyId: string): Promise<void> {
+  await q.select({ id: entitlements.id }).from(entitlements).where(and(eq(entitlements.companyId, companyId), limitedRows())).orderBy(asc(entitlements.key)).for("share");
+}
+
+/**
  * Whether a new job could be written with what is left (the draft is the dearest call, so it is the first to stop): `ok`,
  * `too_low` for a draft, or `used_up`. Asked before anyone types (`planRoom`), so nobody fills in a job the AI cannot write.
+ * From money actually spent, as Home's row is: the hold of a draft still running comes back long before anyone has typed.
  */
 export async function aiCreditRoomForJob(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<"ok" | "too_low" | "used_up"> {
-  const s = await aiCreditStanding(q, companyId, opts);
+  const s = await aiCreditStanding(q, companyId, { now: opts.now, settled: true });
   if (!s) return "ok";
   if (s.usedUp) return "used_up";
-  return s.spentMicros + toMicros(AI_CREDIT_DRAFT_HOLD_USD) > s.limitMicros - SLACK ? "too_low" : "ok";
+  return draftNoLongerFits(s) ? "too_low" : "ok";
 }
+
+/** Whether a job's draft, the dearest call, no longer fits in what is left: from here a new job stops, though the credit is not all gone. */
+const draftNoLongerFits = (s: AiCreditStanding): boolean => s.spentMicros + toMicros(AI_CREDIT_DRAFT_HOLD_USD) > s.limitMicros - SLACK;
 
 /** The day a monthly credit starts again, in words, on the company's own calendar. */
 const dayWords = (iso: string | null, timeZone: string | null | undefined): string | null => (iso ? closingDayWords(companyToday(new Date(iso), timeZone)) : null);
@@ -131,14 +166,26 @@ const dayWords = (iso: string | null, timeZone: string | null | undefined): stri
  * The AI credit as a customer's browser receives it (GET /companies/current): no amounts. From money actually spent, as the
  * notices are, so Home's row does not come and go with a draft's hold. Null when the plan puts no limit on it.
  */
-export async function aiCreditView(q: Queryable, companyId: string, opts: { now?: Date; timeZone?: string | null } = {}): Promise<AiCreditView | null> {
+export async function aiCreditView(q: Queryable, companyId: string, opts: { now?: Date; timeZone?: string | null; planKey?: string | null } = {}): Promise<AiCreditView | null> {
   const s = await aiCreditStanding(q, companyId, { now: opts.now, settled: true });
   if (!s) return null;
-  return { level: s.level, percent: s.percent, resetsAt: s.resetsAt, notice: s.level ? aiCreditNoticeWords(s.level, { resetsOn: dayWords(s.resetsAt, opts.timeZone) }) : null };
+  return { level: s.level, percent: s.percent, resetsAt: s.resetsAt, notice: s.level ? aiCreditNoticeWords(s.level, { resetsOn: dayWords(s.resetsAt, opts.timeZone), newJobsStopped: draftNoLongerFits(s), planKey: opts.planKey }) : null };
 }
 
 /** What ITS's alert says, in dollars. */
-type CreditNote = { level: AiCreditLevel; companyId: string; companyName: string; standing: AiCreditStanding };
+type CreditNote = { level: AiCreditLevel; companyId: string; companyName: string; planKey: string; standing: AiCreditStanding };
+
+/** The line the owner has not been told yet, if the company has reached one. */
+async function lineDue(q: Queryable, input: { companyId: string; now: Date; refusedHoldUsd?: number }): Promise<{ standing: AiCreditStanding; level: AiCreditLevel } | null> {
+  const standing = await aiCreditStanding(q, input.companyId, { now: input.now, settled: true });
+  if (!standing) return null;
+  const goneForThisCall = input.refusedHoldUsd !== undefined && standing.spentMicros + toMicros(input.refusedHoldUsd) > standing.limitMicros - SLACK;
+  const level: AiCreditLevel | null = goneForThisCall ? "used_up" : standing.level;
+  if (!level) return null;
+  const { periodKey, told } = standing;
+  if (level === "used_up" ? told.usedUpFor === periodKey : told.warnedFor === periodKey || told.usedUpFor === periodKey) return null;
+  return { standing, level };
+}
 
 /**
  * Tells the owner once that the credit reached a line, and hands back what ITS's alert needs. Each line is stamped on the
@@ -147,29 +194,33 @@ type CreditNote = { level: AiCreditLevel; companyId: string; companyName: string
  * acknowledgement is a day old. Used up covers 80%: a credit that jumps past both is told once. Read from money actually
  * spent, so a big hold that comes back does not cry wolf: `refusedHoldUsd`, a small call was just refused, says the credit
  * is gone only when what is spent would refuse it by itself (money spent never comes back, so that stays true for the period).
+ *
+ * A line that looks due is read again behind the company's row, because this read and the stamp must see one plan: a Change
+ * plan holds that row, and writes the settings without the stamps; a stamp waiting for it would go on the settings it just
+ * cleaned, from a limit it just replaced, and an upgraded company would read used up for the month. Only then, so a call with
+ * nothing to tell takes no lock.
  */
 async function tellOwner(db: Db, input: { companyId: string; now: Date; refusedHoldUsd?: number }): Promise<CreditNote | null> {
   return withTenant(db, input.companyId, async (q) => {
-    const standing = await aiCreditStanding(q, input.companyId, { now: input.now, settled: true });
-    if (!standing) return null;
-    const goneForThisCall = input.refusedHoldUsd !== undefined && standing.spentMicros + toMicros(input.refusedHoldUsd) > standing.limitMicros - SLACK;
-    const level: AiCreditLevel | null = goneForThisCall ? "used_up" : standing.level;
-    if (!level) return null;
-    const { periodKey, told } = standing;
-    if (level === "used_up" ? told.usedUpFor === periodKey : told.warnedFor === periodKey || told.usedUpFor === periodKey) return null;
+    if (!(await lineDue(q, input))) return null;
+    await q.execute(sql`select 1 from ${companies} where ${companies.id} = ${input.companyId} for no key update`);
+    const due = await lineDue(q, input);
+    if (!due) return null;
+    const { standing, level } = due;
+    const { periodKey } = standing;
     const stamp = JSON.stringify(level === "used_up" ? { warnedFor: periodKey, usedUpFor: periodKey } : { warnedFor: periodKey });
     const field = sql.raw(level === "used_up" ? "'usedUpFor'" : "'warnedFor'");
     const [company] = await q
       .update(companies)
       .set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('aiCreditTold', coalesce(${companies.settings}->'aiCreditTold', '{}'::jsonb) || ${stamp}::jsonb)` })
       .where(and(eq(companies.id, input.companyId), sql`(${companies.settings}->'aiCreditTold'->>${field}) is distinct from ${periodKey}`))
-      .returning({ name: companies.name, timezone: companies.timezone });
+      .returning({ name: companies.name, timezone: companies.timezone, planKey: companies.planKey });
     if (!company) return null;
     const usedUp = level === "used_up";
     await emit(q, { type: usedUp ? "entitlement.exceeded" : "entitlement.warning", companyId: input.companyId, actor: { kind: "system", id: "allowance" }, subject: { type: "company", id: input.companyId }, payload: { key: standing.key, percent: standing.percent } });
-    const { title, body } = aiCreditNoticeWords(level, { resetsOn: dayWords(standing.resetsAt, company.timezone) });
+    const { title, body } = aiCreditNoticeWords(level, { resetsOn: dayWords(standing.resetsAt, company.timezone), newJobsStopped: draftNoLongerFits(standing), planKey: company.planKey });
     await notify(q, { companyId: input.companyId, kind: "entitlement.ai_credit", title, body, action: { label: "See usage", href: "/setup" }, roles: ["owner", "admin"] });
-    return { level, companyId: input.companyId, companyName: company.name, standing };
+    return { level, companyId: input.companyId, companyName: company.name, planKey: company.planKey, standing };
   });
 }
 
@@ -184,6 +235,8 @@ async function flagIts(q: Queryable, note: CreditNote, now: Date): Promise<void>
   await settleAiCreditAlerts(q, { companyId, now });
   const usedUp = note.level === "used_up";
   const spent = `${usd(standing.spentMicros)} of ${usd(standing.limitMicros)} used${standing.monthly ? " this month" : ""}.`;
+  // On the last plan nothing is above theirs, so there is no upgrade to talk about.
+  const talkAbout = mayOfferUpgrade(note.planKey) ? "upgrading" : "their plan";
   await raiseAlertOnce(q, {
     kind: usedUp ? "billing.ai_credit_used_up" : "billing.ai_credit_warning",
     severity: usedUp ? "high" : "info",
@@ -191,8 +244,8 @@ async function flagIts(q: Queryable, note: CreditNote, now: Date): Promise<void>
     target: { type: "company", id: companyId },
     title: usedUp ? `${companyName} has used up its AI credit` : `${companyName} has used 80% of its AI credit`,
     body: usedUp
-      ? `${spent} Applications still come in and candidates finish their chats in the job's own words; new applicants are not read by AI and AI reviews wait until the plan changes${standing.monthly ? " or the month starts again" : ""}. Talk with the customer about upgrading.`
-      : `${spent} Nothing has stopped. Talk with the customer about upgrading before it runs out.`,
+      ? `${spent} Applications still come in and candidates finish their chats in the job's own words; new applicants are not read by AI and AI reviews wait until the plan changes${standing.monthly ? " or the month starts again" : ""}. Talk with the customer about ${talkAbout}.`
+      : `${spent}${draftNoLongerFits(standing) ? " New jobs have stopped, because a draft needs more than is left." : ""} Talk with the customer about ${talkAbout} before it runs out.`,
     details: { key: standing.key, spentUsd: standing.spentMicros / MICROS, limitUsd: standing.limitMicros / MICROS },
   }, { now });
 }
@@ -257,7 +310,10 @@ export function createAiCreditGate(deps: { now?: () => Date } = {}) {
 /** A company's AI credit on ITS's customer row, in dollars. Never sent to a customer. */
 export type AiCreditLine = { monthly: boolean; spentUsd: number; limitUsd: number; percent: number; level: AiCreditLevel | null; resetsAt: string | null };
 
-/** Every limited company's line, in a fixed handful of queries (the console's customer list). Platform side only. */
+/**
+ * Every limited company's line, in a fixed handful of queries (the console's customer list). Platform side only. From money
+ * actually spent, as ITS's alerts and the owner's row are, so a draft's hold does not read as used up for two minutes.
+ */
 export async function aiCreditLines(q: Queryable, opts: { now?: Date } = {}): Promise<Map<string, AiCreditLine>> {
   const now = opts.now ?? new Date();
   const rows = await q.select().from(entitlements).where(limitedRows()).orderBy(asc(entitlements.key));
@@ -265,9 +321,10 @@ export async function aiCreditLines(q: Queryable, opts: { now?: Date } = {}): Pr
   const companyIds = [...new Set(rows.map((r) => r.companyId))];
   const told = new Map((await q.select({ id: companies.id, settings: companies.settings }).from(companies).where(inArray(companies.id, companyIds))).map((c) => [c.id, c.settings?.aiCreditTold ?? {}]));
   const micros = sql<string>`coalesce(sum(${aiRuns.costUsd}), 0) * 1000000`;
-  const lifetime = new Map((await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(inArray(aiRuns.companyId, companyIds)).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]));
+  const settled = settledRun(now);
+  const lifetime = new Map((await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(and(inArray(aiRuns.companyId, companyIds), settled)).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]));
   const months = rows.flatMap((r) => { const since = sinceOf(r, now); return since ? [{ companyId: r.companyId, since }] : []; });
-  const thisMonth = new Map(months.length ? (await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(or(...months.map((m) => and(eq(aiRuns.companyId, m.companyId), gte(aiRuns.createdAt, m.since))))).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]) : []);
+  const thisMonth = new Map(months.length ? (await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(and(settled, or(...months.map((m) => and(eq(aiRuns.companyId, m.companyId), gte(aiRuns.createdAt, m.since)))))).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]) : []);
   const out = new Map<string, AiCreditLine>();
   for (const row of rows) {
     const spent = (isMonthly(row.key) && sinceOf(row, now) ? thisMonth : lifetime).get(row.companyId) ?? 0;

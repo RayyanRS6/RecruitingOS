@@ -9,6 +9,7 @@ import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, ty
 import { ALLOWANCE_ASK, screeningAllowanceWarning, type AllowanceWarning, type UsageLine } from "../allowance";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { OwnRequest } from "../components/OwnRequest";
 import { RecruiterRequests } from "../components/RecruiterRequests";
 import { Upgrade } from "../components/Upgrade";
 import { useIsClient } from "../components/use-is-client";
@@ -121,6 +122,9 @@ export function Home() {
           </>
         }
       />
+
+      {/* Where this person's own company's request for access stands, while they work in another company (OwnRequest.tsx). */}
+      <OwnRequest />
 
       {/* A row's one-click request says what the recruiter will see and until when, and stays until read (the row itself may go). */}
       {sentToRecruiter ? <Alert tone="info"><div className="row justify-between"><span>{sentToRecruiter}</span><Button size="sm" variant="quiet" onClick={() => setSentToRecruiter(null)}>Got it</Button></div></Alert> : null}
@@ -240,12 +244,13 @@ function AllowanceRow({ warning, onSentToRecruiter }: { warning: AllowanceWarnin
 /**
  * The plan's AI help at 80%, or used up (the plans of 5 November 2026, Rule 4): the words the owner's notice says, a word or
  * a percentage beside them and never dollars, and the way on. Applications keep coming in and candidates can still finish.
+ * Always a way to ITS: with no plan above theirs the sheet asks to talk about the plan, so that is what the button says.
  */
 function AiCreditRow({ credit, planKey, onSentToRecruiter }: { credit: AiCreditView; planKey?: string; onSentToRecruiter: (message: string) => void }) {
   const { line, rest } = cardLine(credit.notice?.body ?? "");
   return (
     <Row title={credit.notice?.title ?? ""} pill={<Pill size="sm" tone="caution">{credit.level === "used_up" ? "Used up" : `${credit.percent}% used`}</Pill>} line={line} rest={rest ? restText(rest) : null}>
-      {mayOfferUpgrade(planKey) ? <Upgrade size="sm" reason={AI_HELP_UPGRADE_QUESTION} onSent={onSentToRecruiter} /> : null}
+      <Upgrade size="sm" label={mayOfferUpgrade(planKey) ? undefined : "Talk to ITS"} reason={AI_HELP_UPGRADE_QUESTION} onSent={onSentToRecruiter} />
       <Link to="/setup" className="btn quiet sm">See usage</Link>
     </Row>
   );

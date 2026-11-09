@@ -58,11 +58,17 @@ export type GettingStarted = { verified: boolean; heldMessages: number; steps: G
 export const GettingStartedRequest = z.object({ action: z.enum(["dismiss", "policies_reviewed"]) }).strict();
 export type GettingStartedRequest = z.infer<typeof GettingStartedRequest>;
 
-/** POST /api/v1/admin/customers/:id/verification: ITS confirms the company, or takes the confirmation back, with a reason. */
+/**
+ * POST /api/v1/admin/customers/:id/verification: ITS confirms the company, or takes the confirmation back, with a reason.
+ * `heldOnly` with `verified: true` ("Send the held messages", the review of 9 November 2026): only send what is still held
+ * for a company that is confirmed, so a press from a card that still showed it confirmed, once someone took that back,
+ * answers 409 `not_confirmed` and confirms nothing.
+ */
 export const CompanyVerificationChange = z.object({
   verified: z.boolean(),
   reason: z.string().trim().min(5, "Say how you checked the company (at least five characters).").max(500),
   confirm: z.literal(true, { message: "Confirm the change." }),
+  heldOnly: z.literal(true).optional(),
 }).strict();
 export type CompanyVerificationChange = z.infer<typeof CompanyVerificationChange>;
 
@@ -85,13 +91,18 @@ export function isAccessRequestStatus(status: string | null | undefined): status
 }
 
 /**
- * POST /api/v1/admin/customers/:id/access: an administrator accepts or declines a request. No reason is typed. `remove`
- * (6 November 2026): takes an accepted company's access away; from then on it is a declined company, and Accept is the undo.
+ * POST /api/v1/admin/customers/:id/access: an administrator accepts or declines a request. No reason is typed. `from`: where
+ * the request stood on the row that was pressed, so the first press wins (the review of 6 November 2026): a press from a row
+ * that no longer says what is true changes nothing, and is told who decided and when. Only a declined company's Accept, the
+ * undo, sends `declined`. `remove` (6 November 2026): takes an accepted company's access away; from then on it is a declined
+ * company, and Accept is the undo. An accepted company has no request to stand anywhere, so `remove` needs no `from` (a
+ * second press is already refused as `no_access`); Accept and Decline must send one.
  */
 export const CustomerAccessChange = z.object({
   decision: z.enum(["accept", "decline", "remove"]),
+  from: z.enum(ACCESS_REQUEST_STATUSES).optional(),
   confirm: z.literal(true, { message: "Confirm the decision." }),
-}).strict();
+}).strict().refine((change) => change.decision === "remove" || change.from !== undefined, { message: "Say where the request stood on the row.", path: ["from"] });
 export type CustomerAccessChange = z.infer<typeof CustomerAccessChange>;
 
 /**
@@ -111,7 +122,7 @@ export type CustomerAccessRequest = { status: AccessRequestStatus; person: { nam
 /**
  * A person's own request, as `signup.request` on GET /api/v1/auth/config and `accessRequest` on POST /api/v1/companies say
  * it. `emailedAt`: when the copy really left (`accessRequestEmailedAt` in the company's settings); null means no claim about
- * email may be made on the screen.
+ * email may be made on the screen, also once the address is stopped (a bounce or a complaint), as no email can follow.
  */
 export type SignupRequest = { status: AccessRequestStatus; companyName: string; email: string; emailedAt: string | null };
 
@@ -127,9 +138,36 @@ export type SignupConfig = { mode: "open" | "invite" | "approval"; allowed: bool
  * What a person typed, for one line of an email (a subject, or one "Label: value" of a body) or a request's details: as a
  * display name in `mailbox` (packages/integrations) can never start a header of its own, this can never start a line of
  * its own. Line breaks and other control characters become one space, runs of spaces close up, and a very long value
- * stops at `max` characters.
+ * stops at `max` characters. The characters that turn the text after them around, or take no room at all, go (the review
+ * of 6 November 2026): a name of two of them would be no name, and one could reverse the rest of a console row. So does
+ * half of a character (a lone surrogate, from a hand-made body or from the cut at `max` going through an emoji): kept in a
+ * jsonb value, Postgres would refuse it and the request would fail.
  */
 export function oneLine(value: string | null | undefined, max = 200): string {
-  const line = (value ?? "").replace(/[\s\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim();
-  return line.length > max ? line.slice(0, max).trimEnd() : line;
+  const line = (value ?? "").replace(UNSEEN, "").replace(/\p{Cs}/gu, "").replace(/[\s\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim();
+  return line.length > max ? line.slice(0, max).replace(/\p{Cs}$/u, "").trimEnd() : line;
+}
+
+/**
+ * The bidi controls (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F) and the zero-width spaces (U+200B, U+2060). Not
+ * every format character: U+200C and U+200D belong inside some names and emoji.
+ */
+const UNSEEN = /[\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069]/gu;
+
+/** Blank letters and symbols: they count as letters to Unicode and show nothing. */
+const BLANK = new Set(["\u115F", "\u1160", "\u3164", "\uFFA0", "\u2800"]);
+
+/** How many characters of a typed value a reader can see: letters, digits, punctuation and symbols, by code point. */
+export function visibleLength(value: string): number {
+  return (value.match(/[\p{L}\p{N}\p{P}\p{S}]/gu) ?? []).filter((ch) => !BLANK.has(ch)).length;
+}
+
+/**
+ * A name a person typed, for a console row or one line of an email (the review of 6 November 2026): `oneLine`, with no angle
+ * brackets, so "Pat Example <pat@its.example>" cannot pass for an address beside the real one, and null unless at
+ * least two characters of it can be seen.
+ */
+export function typedName(value: string | null | undefined, max = 120): string | null {
+  const name = oneLine((value ?? "").replace(/[<>]/g, " "), max);
+  return visibleLength(name) >= 2 ? name : null;
 }

@@ -36,6 +36,9 @@ const { NewRole } = await import("@ros/web/src/pages/NewRole");
 const { ReportFigures } = await import("@ros/web/src/pages/RoleReport");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 const { ScorecardWaitingCard } = await import("@ros/web/src/pages/candidate-panel/assessment");
+const { CallNotesCard } = await import("@ros/web/src/pages/candidate-panel/call-notes");
+const { MessagesTab, ScreenTab } = await import("@ros/web/src/pages/candidate-panel/sections");
+const { CloseRoleCard } = await import("@ros/web/src/components/ClosingMessage");
 const { RecruiterRequests } = await import("@ros/web/src/components/RecruiterRequests");
 const { RecruiterQueue } = await import("@ros/web/src/pages/RecruiterQueue");
 const { CustomersSection, aiCreditDollars, planChangedToast, planLimitsLine, planPriceLine } = await import("@ros/web/src/pages/admin/customers");
@@ -106,12 +109,14 @@ describe("the one Upgrade and its sheet", () => {
     for (const not of ["will see", "every candidate", "access", "How urgent", "What do you want help with", "Send to a recruiter", "Bring in a recruiter", "$10", "cents"]) expect(words, not).not.toContain(not);
   });
 
-  it("on the last plan nothing below is chosen for them, and they can still talk with ITS", () => {
+  it("on the last plan nothing below is chosen for them, and they can still talk with ITS, in words that do not send them to a plan that is not there", () => {
     const html = sheet({ requested: false, plans: plans.plans.map((p) => ({ ...p, current: p.key === "ultra" })) });
     expect(html.match(/type="radio"/g)).toHaveLength(3);
     expect(html).not.toContain('checked=""');
-    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS to upgrade<\/button>/);
-    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Ask ITS to upgrade/);
+    expect(html).toContain('aria-label="Your plan"');
+    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS about our plan<\/button>/);
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Ask ITS about our plan/);
+    expect(text(html)).not.toContain("Ask ITS to upgrade");
   });
 
   it("on a plan not in the list (the pilot, Trial, a retired one) Free is not chosen for them: they pick one, or ask with none picked", () => {
@@ -153,6 +158,17 @@ describe("the one Upgrade and its sheet", () => {
     // a plan with places at a time keeps its own words, and its ask opens the same sheet
     const full = { ok: false, limit: 2, used: 2, holding: [{ roleId: "r1", title: "Front Desk", status: "open" }], message: "Your plan includes 2 roles at a time." };
     expect(render(client(), createElement(RoomAlert, { room: full, ask: null }))).toContain("Talk to ITS about more roles");
+  });
+
+  it("the room alert on the last plan, with no AI help left for a new job: no Upgrade, but Talk to ITS, which opens the same sheet", () => {
+    const words = "Your plan's AI help is used up. Talk with ITS, or wait until your AI help starts again on Friday, December 4.";
+    const room = { ok: false, limit: 30, used: 2, holding: [], message: words, upgrade: true, aiHelp: true, nothingAbove: true };
+    const html = render(client(), createElement(RoomAlert, { room, ask: null }));
+    expect(text(html)).toContain(words);
+    expect(html).toContain(">Talk to ITS<");
+    expect(html).not.toContain(">Upgrade<");
+    // with somewhere to go, the same room says Upgrade
+    expect(render(client(), createElement(RoomAlert, { room: { ...room, nothingAbove: undefined }, ask: null }))).toContain(">Upgrade<");
   });
 });
 
@@ -236,12 +252,14 @@ describe("Home", () => {
     expect(gone).toContain("See usage");
   });
 
-  it("nothing below the line, nothing to a hiring manager, and no Upgrade at the top of the plans", () => {
+  it("nothing below the line, nothing to a hiring manager, and at the top of the plans no Upgrade, but a way to ITS: the row always has something to press", () => {
     expect(text(page({ credit: { level: null, percent: 40, resetsAt: null, notice: null } }))).not.toContain("AI help");
     expect(text(page({ credit: warning, role: "hiring_manager" }))).not.toContain("AI help");
     const top = text(page({ credit: { ...usedUp, resetsAt: "2026-12-05T00:00:00Z" }, planKey: "ultra" }));
     expect(top).toContain("Your plan's AI help is used up");
     expect(top).not.toContain("Upgrade See usage");
+    expect(top).toContain("Talk to ITS See usage");
+    expect(text(page({ credit: warning, planKey: "pro" }))).toContain("Upgrade See usage");
   });
 
   it("a card's Upgrade opens the sheet: a button of its own, with the card's other ways on beside it", () => {
@@ -312,6 +330,12 @@ describe("a person past the plan's candidates per job", () => {
     expect(html.match(/class="locked-card /g)).toHaveLength(2);
   });
 
+  it("the close card's 'and N more you cannot see yet' is who is still in process, not every card an upgrade would open", () => {
+    const close = (lockedInProcess: number) => text(render(client([[["applications", "r1"], { applications: [vera], counts: counts(3), locked: { count: 2, cards }, lockedInProcess }]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled", mayTell: true, onClose: () => undefined })));
+    expect(close(1)).toContain("and 1 more you cannot see yet");
+    expect(close(0)).not.toContain("you cannot see yet");
+  });
+
   it("a direct link to them shows the same card in the panel, not an error, with no name and no way to read them", () => {
     const qc = client();
     refused(qc, ["application", "a9"], locked402);
@@ -346,6 +370,65 @@ describe("a person past the plan's candidates per job", () => {
     const words = text(render(client(), createElement(ReportFigures, { report: report as never })));
     expect(words).toContain("people are locked");
     expect(text(render(client(), createElement(ReportFigures, { report: { ...report, applicants: { ...report.applicants, locked: 0 } } as never })))).not.toContain("locked");
+  });
+});
+
+describe("someone locked, as ITS reads them under a grant naming them", () => {
+  const person = (over: Record<string, unknown> = {}) => ({ id: "a9", roleId: "r1", stage: "received", lockedAt: daysAgo(3), allowedActions: ["reject"], blockedReasons: {}, screens: [], communications: [], packetLabels: { mustHaves: [], competencies: [], questions: [{ key: "q1", question: "Can you work Saturdays?" }], written: [] }, candidate: { firstName: "Sam", lastName: "Lockwood", email: "sam@people.test" }, ...over }) as never;
+
+  it("the notes from a call say what they do: on the Notes tab, with no AI review and no AI interview to finish", () => {
+    const words = text(render(client(), createElement(CallNotesCard, { a: person(), roleId: "r1", prominent: true })));
+    expect(words).toContain("Sam is locked, so these notes go on the Notes tab and no AI review is written from them.");
+    expect(words).not.toContain("Finish the AI interview");
+    expect(words).not.toContain("these notes are their AI interview");
+    // someone the team can read keeps what they had
+    const open = text(render(client(), createElement(CallNotesCard, { a: person({ lockedAt: null }), roleId: "r1", prominent: true })));
+    expect(open).toContain("these notes are their AI interview");
+    expect(open).not.toContain("is locked");
+  });
+
+  it("the AI interview tab the queue's hint sends the recruiter to has the notes from a call at any stage, a closed job's talent pool too", () => {
+    const tab = (over: Record<string, unknown>) => text(render(client(), createElement(ScreenTab, { a: person({ assessments: [], timeline: [], ownerStage: "no_ai_interview", aiInterview: null, ...over }), roleId: "r1", myRole: "recruiter" })));
+    for (const stage of ["talent_pool", "withdrawn", "rejected"]) expect(tab({ stage }), stage).toContain("Add notes from a call");
+    // someone the team can read, at the talent pool, has no AI interview to add notes to
+    expect(tab({ stage: "talent_pool", lockedAt: null })).not.toContain("Add notes from a call");
+  });
+
+  it("writing to them stays, with no suggested line on the company's credit", () => {
+    const tab = (a: never) => text(render(client([[["message-preview", "a9"], { to: "sam@people.test", fromName: "Bright Dental hiring team", footer: "Rae Recruiter", needsApproval: false, repliesComeBack: true, undoSeconds: 0 }]]), createElement(MessagesTab, { a, roleId: "r1", compose: { open: true, subject: "", text: "" }, setCompose: () => undefined })));
+    const words = tab(person());
+    expect(words).toContain("Write to Sam");
+    expect(words).toContain("Send");
+    expect(words).not.toContain("Suggest an opening line");
+    expect(tab(person({ lockedAt: null }))).toContain("Suggest an opening line");
+  });
+
+  it("the queue's request gives its own hint, never that the notes finish an AI interview", () => {
+    nav.path = "/recruiter/queue/e1";
+    nav.params = { id: "e1" };
+    const taken = { id: "e1", status: "claimed", kind: "candidate_issue", urgency: "normal", requiredExpertise: "candidate follow-up", summary: "A candidate asked for a person.", companyName: "Bright Dental", roleTitle: "Dental Hygienist", slaDueAt: null, slaRemainingMinutes: null, businessMinutesRemaining: null, overdue: false, createdAt: daysAgo(0), claimedByMe: true, claimed: true, accessGranted: true, why: null, companyId: "co1", roleId: "r1", applicationId: "a9", question: "Sam replied HUMAN.", contextSnapshot: { capturedAt: daysAgo(0) }, thread: [], reopenedCount: 0, grant: { id: "g1", purpose: "A candidate", expiresAt: daysAgo(-7), scope: { roleId: "r1", applicationId: "a9" } } };
+    const hint = (detail: unknown) => text(render(client([[["escalations"], [taken]], [["escalation", "e1"], detail]], recruiter), createElement(RecruiterQueue)));
+    const locked = hint({ ...taken, lockedForCompany: true });
+    expect(locked).toContain("the company cannot read them");
+    expect(locked).toContain("no AI interview or interview starts, while they are locked");
+    expect(locked).not.toContain("Your notes finish the AI interview");
+    expect(hint({ ...taken, lockedForCompany: false })).toContain("Your notes finish the AI interview so the scorecard is written");
+
+    // Nobody at the company reads an answer about them while they are locked, it can once an upgrade opens them, and it never
+    // reaches them: the card says so and offers the candidate instead.
+    expect(locked).toContain("Write to the candidate");
+    expect(locked).toContain("What you did or advised (not sent to the candidate; the company can't read it while the candidate is locked, but can if an upgrade opens them)");
+    expect(locked).not.toContain("only ITS reads");
+    expect(locked).toContain("Do not name them to the company");
+    expect(locked).not.toContain("Write to the customer");
+    expect(locked).not.toContain("The person who asked and the owners read it in full");
+    expect(locked).not.toContain("the customer reads this in full");
+    // Everyone else's request reads as it did.
+    const open = hint({ ...taken, lockedForCompany: false });
+    expect(open).toContain("Write to the customer");
+    expect(open).toContain("the customer reads this in full");
+    expect(open).not.toContain("Write to the candidate");
+    expect(open).not.toContain("while the candidate is locked");
   });
 });
 
@@ -509,6 +592,12 @@ describe("the console", () => {
     expect(planChangedToast("Bright Dental", "Pro", false, 1).detail).toBe("The new limits apply at once. This month's usage stays; the reset date does not move. 1 locked candidate opens now.");
     expect(planChangedToast("Bright Dental", "Pro", false, 3).detail).toContain("3 locked candidates open now.");
     expect(planChangedToast("Bright Dental", "Pro").detail).toBe("The new limits apply at once. This month's usage stays; the reset date does not move.");
+  });
+
+  it("the toast after a move up from Free says AI help starts a new month today, the part ITS may be asked about; other allowances keep their dates", () => {
+    expect(planChangedToast("Bright Dental", "Basic", false, 0, true).detail).toBe("The new limits apply at once. AI help starts a new month today; other allowances keep their dates.");
+    expect(planChangedToast("Bright Dental", "Basic", false, 2, true).detail).toBe("The new limits apply at once. AI help starts a new month today; other allowances keep their dates. 2 locked candidates open now.");
+    expect(planChangedToast("Bright Dental", "Basic", false, 0, true).detail).not.toContain("the reset date does not move");
   });
 
   it("Overview names a customer low on AI credit and one who asked to upgrade; those notices do not count as alerts waiting for a person", () => {

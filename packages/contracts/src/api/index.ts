@@ -441,7 +441,8 @@ export const EscalationEstimateQuery = z.object({ kind: CreateEscalation.shape.k
 /**
  * One entry in a request's thread as the team reads it: what they asked, every note, every answer, every reopening.
  * `raisedBy` is on the opening question only when nobody on the team or at ITS raised the request: Recruiting OS on its
- * own ("system"), or a candidate (15 October 2026). It names nobody.
+ * own ("system"), or a candidate (15 October 2026). It names nobody. It is also on the wordless line saying the candidate wrote
+ * back to a request a recruiter holds ("candidate", 6 November 2026), whose words stay on the application's thread.
  */
 export type EscalationThreadEntry = { id: string; side: "customer" | "recruiter"; kind: "question" | "reply" | "answer" | "reopen"; body: string; by: string | null; at: string; raisedBy?: "system" | "candidate" };
 /**

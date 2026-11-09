@@ -165,6 +165,12 @@ export const MORE_CANDIDATES_UPGRADE_QUESTION = "We would like to view more cand
 /** A recruiter request about someone locked, as the team's own list shows it: their words, and ITS's, stay with ITS. */
 export const LOCKED_REQUEST_LINE = "An ITS recruiter is helping a candidate you cannot see yet.";
 
+/**
+ * Why nothing starts for someone locked: on the button, and in the route's refusal. Only ITS staff who may read them see it
+ * (a grant naming them, or break glass); the team is refused at the door and never reads it.
+ */
+export const NO_WORK_WHILE_LOCKED = "Locked on the company's plan: no AI help, no AI interview and no interview until an upgrade opens them.";
+
 /** One locked person on a job's list: where they came in, and when. Nothing else about them. */
 export type LockedCard = { position: number; appliedAt: string };
 /** The locked people of one job, beside the people the team can read (GET /roles/:id/applications?counts=1). */
@@ -183,6 +189,8 @@ export const AI_HELP_UPGRADE_QUESTION = "We would like more AI help.";
 const USED_UP = "Your plan's AI help is used up.";
 /** A call too big for what is left: the credit is not all gone, so it does not say so. */
 const NEARLY_USED_UP = "Your plan's AI help is nearly used up";
+/** A call refused only for money held by work still running: nothing is used up, and it comes back within minutes. */
+const BUSY = "Your plan's AI help is finishing other work.";
 
 /**
  * What the owner reads when the AI help stops something they asked for: words only, never dollars
@@ -203,13 +211,50 @@ export const AI_HELP_LINE = {
   newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. Upgrade to keep going.`,
 } as const;
 
+/**
+ * `AI_HELP_LINE` for a company on this plan. On the last plan nothing is above theirs (`mayOfferUpgrade`), so no line tells
+ * them to upgrade: the way on is ITS, or the day a monthly credit starts again (`resetsOn`, in words), as the notices say
+ * (the check of 9 November). A plan not given reads as one with somewhere to go, as `aiCreditNoticeWords` reads it.
+ */
+export function aiHelpLine(key: keyof typeof AI_HELP_LINE, opts: { planKey?: string | null; resetsOn?: string | null } = {}): string {
+  if (opts.planKey === undefined || mayOfferUpgrade(opts.planKey)) return AI_HELP_LINE[key];
+  const way = opts.resetsOn ? `Talk with ITS, or wait until your AI help starts again on ${opts.resetsOn}.` : "Talk with ITS about your plan.";
+  const onTheLastPlan: Record<keyof typeof AI_HELP_LINE, string> = {
+    turn: `${USED_UP} Your draft is saved. ${way}`,
+    draft: `${USED_UP} Everything you confirmed is kept. ${way}`,
+    draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. ${way}`,
+    revise: AI_HELP_LINE.revise,
+    about: AI_HELP_LINE.about,
+    newJob: `${USED_UP} ${way}`,
+    newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. ${way}`,
+  };
+  return onTheLastPlan[key];
+}
+
+/** The same calls refused only for money held by work still running: here, and only here, what is true is to try again. */
+export const AI_HELP_BUSY_LINE = {
+  turn: `${BUSY} Your draft is saved. Try again in a few minutes.`,
+  draft: `${BUSY} Everything you confirmed is kept. Try again in a few minutes.`,
+  revise: `${BUSY} Nothing was changed. Try again in a few minutes, or make the change in the editor.`,
+  about: `${BUSY} Try again in a few minutes, or write this text yourself; it shows the same way.`,
+} as const;
+
 /** Where the AI credit stands for the owner: at the 80% line, used up, or neither. */
 export type AiCreditLevel = "warning" | "used_up";
 
-/** What the owner's notices and the Home row say at each level. `resetsOn`: the day a monthly credit starts again, in words. */
-export function aiCreditNoticeWords(level: AiCreditLevel, opts: { resetsOn?: string | null } = {}): { title: string; body: string } {
-  if (level === "warning") return { title: "80% of your plan's AI help used", body: "Nothing has stopped. Upgrade before it runs out." };
-  return { title: "Your plan's AI help is used up", body: `Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade${opts.resetsOn ? ` or it starts again on ${opts.resetsOn}` : ""}.` };
+/**
+ * What the owner's notices and the Home row say at each level. `resetsOn`: the day a monthly credit starts again, in words.
+ * `newJobsStopped`: past the 80% line a draft may no longer fit (`aiCreditRoomForJob`), and then something has stopped.
+ * `planKey`: on the last plan nothing is above theirs (`mayOfferUpgrade`), so nothing tells them to upgrade: the way on is ITS.
+ */
+export function aiCreditNoticeWords(level: AiCreditLevel, opts: { resetsOn?: string | null; newJobsStopped?: boolean; planKey?: string | null } = {}): { title: string; body: string } {
+  const nothingAbove = opts.planKey !== undefined && !mayOfferUpgrade(opts.planKey);
+  if (level === "warning") {
+    const before = nothingAbove ? "Talk with ITS before" : "Upgrade before";
+    return { title: "80% of your plan's AI help used", body: opts.newJobsStopped ? `New jobs have stopped: writing one needs more than is left. ${before} the rest runs out.` : `Nothing has stopped. ${before} it runs out.` };
+  }
+  const until = nothingAbove ? (opts.resetsOn ? `until it starts again on ${opts.resetsOn}` : "until ITS changes your plan") : `until you upgrade${opts.resetsOn ? ` or it starts again on ${opts.resetsOn}` : ""}`;
+  return { title: "Your plan's AI help is used up", body: `Applications still come in and candidates can still finish. New applicants are not read by AI ${until}.` };
 }
 
 /**

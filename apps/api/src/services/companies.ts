@@ -1,13 +1,43 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { ACCESS_REQUEST_STATUSES, FREE_PLAN_KEY, type Actor, type CreateCompany } from "@ros/contracts";
 import { audit, emit, entitlements } from "@ros/core";
-import { companies, events, memberships, users, withPlatform, type Db } from "@ros/db";
+import { companies, events, memberships, users, withPlatform, type Db, type Queryable } from "@ros/db";
 import type { Env } from "../env";
 import { HttpError } from "../middleware/errors";
 import { AUTO_CHECK_ACTOR, autoVerification } from "./company-trust";
 
 export function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "company";
+}
+
+/**
+ * A careers address no other company holds: `base`, or, when that is taken, `base` with four characters more. `exceptId`:
+ * the company the address is for, which may hold it already.
+ *
+ * Under a lock on `base` held until the caller's transaction ends (the review of 9 November 2026), as both callers write the
+ * address in the same transaction (`createCompany`, Accept in `decideAccess`): two companies of one name made or accepted
+ * at the same moment would otherwise both read it as free, and the second would fail on the unique index. The second
+ * waits, then reads the first's address as taken. Neither holds a row the other needs, so the wait cannot turn into a cycle.
+ */
+export async function freeSlug(q: Queryable, base: string, exceptId?: string): Promise<string> {
+  await q.execute(sql`select pg_advisory_xact_lock(hashtext(${`company_slug:${base}`}))`);
+  let slug = base;
+  for (let i = 0; i < 20; i++) {
+    const taken = await q.select({ id: companies.id }).from(companies).where(exceptId ? and(eq(companies.slug, slug), ne(companies.id, exceptId)) : eq(companies.slug, slug)).limit(1);
+    if (!taken[0]) break;
+    slug = `${base}-${Math.random().toString(36).slice(2, 6)}`;
+  }
+  return slug;
+}
+
+/**
+ * The address a request holds until it is accepted (the review of 6 November 2026): "request-" and the start of its id, never
+ * one of its name, so a stranger cannot take a real company's careers address, and a Decline keeps none. Nothing of a
+ * request answers in public, so no link to it can exist; Accept gives it the address of its name (`decideAccess`).
+ */
+export function requestSlug(companyId: string): string {
+  return `request-${companyId.slice(0, 8)}`;
 }
 
 /** What a person who already has a company reads when they try to open another one themselves (founder decision L-17 A). */
@@ -48,7 +78,8 @@ export function signupDoor(env: Pick<Env, "SIGNUP_MODE" | "SIGNUP_ALLOWED_EMAILS
  *
  * `request` (SIGNUP_MODE=approval): the owner's membership starts as `requested`, not `active`, so they have no tenant and
  * every `requireTenant` route refuses them. A request is never confirmed by `autoVerify`, whatever COMPANY_CHECK says:
- * a request or a declined company is unconfirmed, so every public page and feed answers as if it did not exist.
+ * a request or a declined company is unconfirmed, so every public page and feed answers as if it did not exist. It holds
+ * a neutral address (`requestSlug`) until it is accepted, never the careers address of its name.
  *
  * A second company of one's own goes through ITS (founder decision L-17 A, known bug 65): unless `mayOpenAnother` (a
  * platform admin setting a company up, as ITS always could), a person who already belongs to a company, has a request
@@ -65,18 +96,15 @@ export async function createCompany(db: Db, input: CreateCompany, ownerUserId: s
       const [created] = member ? [] : await tx.select({ id: events.id }).from(events).where(and(eq(events.type, "company.created"), sql`${events.actor}->>'id' = ${ownerUserId}`)).limit(1);
       if (member || created) throw new HttpError(409, "another_company_needs_its", ANOTHER_COMPANY_MESSAGE);
     }
-    let slug = slugify(input.name);
-    for (let i = 0; i < 20; i++) {
-      const taken = await tx.select({ id: companies.id }).from(companies).where(eq(companies.slug, slug)).limit(1);
-      if (!taken[0]) break;
-      slug = `${slugify(input.name)}-${Math.random().toString(36).slice(2, 6)}`;
-    }
+    const id = randomUUID();
+    const slug = await freeSlug(tx, opts.request ? requestSlug(id) : slugify(input.name));
     const now = opts.now ?? new Date();
     const confirmedAtOnce = !!opts.autoVerify && !opts.request;
     const ownerStatus = opts.request ? "requested" : "active";
     const [company] = await tx
       .insert(companies)
       .values({
+        id,
         name: input.name,
         slug,
         vertical: input.vertical.toLowerCase(),

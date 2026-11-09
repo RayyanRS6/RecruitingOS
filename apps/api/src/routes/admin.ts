@@ -120,10 +120,13 @@ function recruiterAsksOf(row: { used: number; limit: number | null } | undefined
  * or declines a person's request, with a second press and no reason typed (services/access-requests.ts). Accept lets them
  * in, on the Free plan, and counts as the one-time ITS check too: one approval, not two. Decline stops there, and accepting
  * later is the undo. Two presses at once make one change, and the second reads `changed: false` with what happened.
- * Accepting a company with nobody waiting changes nothing and says so; declining one answers 409 `already_accepted`.
+ * Accepting a company with nobody waiting changes nothing and says so; declining one answers 409 `already_accepted`. The
+ * first press wins: an Accept from a row that still showed the request, once it was declined, answers 409 `access_decided`
+ * with who declined it and when, and only the declined company's own Accept (`from: "declined"`) undoes a Decline.
  * `remove` (6 November 2026) takes an accepted company's access away: everyone on it is declined, its confirmation taken
  * back and their sessions in it ended, in one transaction; then one email to the owners (`emailed` says whether it left).
- * On a request, a declined company or one with nobody active it answers 409 `no_access`, and changes nothing.
+ * On a request, a declined company or one with nobody active it answers 409 `no_access`, and changes nothing. It sends no
+ * `from`, as an accepted company has no request.
  */
 adminRoutes.post("/customers/:id/access", async (c) => {
   const s = c.get("session")!;
@@ -132,7 +135,7 @@ adminRoutes.post("/customers/:id/access", async (c) => {
   if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
   const body = CustomerAccessChange.parse(await c.req.json().catch(() => ({})));
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const result = await withPlatform(container.db, (tx) => decideAccess(tx, container, { companyId, decision: body.decision, actor, now: container.engine.clock() }));
+  const result = await withPlatform(container.db, (tx) => decideAccess(tx, container, { companyId, decision: body.decision, from: body.from, actor, now: container.engine.clock() }));
   // As the verification route does: the feeds and the sitemap are rebuilt at once.
   resetPublicFeedCache(container);
   if (result.declined) await tellPersonDeclined(container, result.declined);
@@ -148,7 +151,9 @@ adminRoutes.post("/customers/:id/access", async (c) => {
  * makes the careers page, job pages and feeds public, publishes approved roles and sends every message to candidates that
  * waited; taking it back puts them offline again and holds messages. A reason and a confirmation are required; the
  * change is audited (the customer sees it, with the reason, in their own history) and the owners are told. A request for
- * access, waiting or declined, answers 409 `access_request_open`: its one door is the route above.
+ * access, waiting or declined, answers 409 `access_request_open`: its one door is the route above. `heldOnly`, the
+ * console's "Send the held messages", only sends what is still held: on a company not confirmed it answers 409
+ * `not_confirmed` and changes nothing.
  */
 adminRoutes.post("/customers/:id/verification", async (c) => {
   const s = c.get("session")!;
@@ -160,6 +165,12 @@ adminRoutes.post("/customers/:id/verification", async (c) => {
   const now = container.engine.clock();
   const result = await withPlatform(container.db, async (tx) => {
     await refuseWhileAccessOpen(tx, companyId);
+    // "Send the held messages" only sends (the review of 9 November 2026): from a card that still showed the company
+    // confirmed, once someone took that back, it confirms nothing. Read under the row lock verifyCompany takes again.
+    if (body.verified && body.heldOnly) {
+      const [co] = await tx.select({ name: companies.name, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
+      if (co && !companyVerifiedAt(co.settings)) throw new HttpError(409, "not_confirmed", `${co.name} is not confirmed any more, so nothing was sent. Its held messages go out when it is confirmed again.`);
+    }
     return body.verified ? verifyCompany(tx, container, { companyId, actor, reason: body.reason, now }) : unverifyCompany(tx, { companyId, actor, reason: body.reason });
   });
   if (!result) throw new HttpError(404, "not_found", "Company not found.");
@@ -611,7 +622,8 @@ adminRoutes.get("/plans", async (c) => {
 
 /**
  * Founder decision F8: a platform admin puts a customer on the Design Partner plan (or another plan). Pilot term 90 days,
- * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move.
+ * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move, except
+ * that a monthly AI credit that had no limit starts its first month now (`aiCreditMonthStarted` in the answer).
  * Allowance alerts the new limits clear are resolved. Any plan other than Trial and Design Partner reads as "active".
  *
  * The Trial plan (founder decision L-02 B): moving a customer to Trial sets its status to "trial" and starts a new 30
@@ -642,17 +654,20 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     if (!co) throw new HttpError(404, "not_found", "Company not found.");
     // Accept lets a person in on the Free plan; a plan is chosen once they are in.
     await refuseWhileAccessOpen(tx, companyId);
-    const [plan] = await tx.select({ key: plans.key, name: plans.name, active: plans.active }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
+    const [plan] = await tx.select({ key: plans.key, name: plans.name, active: plans.active, limits: plans.limits }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
     if (!plan) throw new HttpError(400, "unknown_plan", `There is no plan called ${body.planKey}.`);
     // a retired plan (hidden from GET /admin/plans) is not offered by the API either
     if (plan.active === false) throw new HttpError(400, "inactive_plan", `The ${body.planKey} plan is retired and can no longer be given to a customer.`);
     const [fromPlan] = await tx.select({ name: plans.name }).from(plans).where(eq(plans.key, co.planKey)).limit(1);
     // Who posts on the boards before the change: the plan decides that too (Rule 6), read against what it decides after.
     const postedBy = await whoPostsBoards(tx, companyId, co.settings);
-    await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
-    await entitlements.settleAllowanceAlerts(tx, { companyId });
     // People a smaller plan left locked open now, oldest first, up to the new limit. A move down opens nobody and locks nobody.
-    const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, actor, reason, now: clock });
+    // Before the plan's rows are written, because opening many takes a while and every AI call of this company waits on those
+    // rows: until they are written its calls go on under the old plan, and they wait only for the short rest of this transaction.
+    const limit = entitlements.CANDIDATES_PER_JOB in plan.limits ? plan.limits[entitlements.CANDIDATES_PER_JOB] : await entitlements.limitOf(tx, companyId, entitlements.CANDIDATES_PER_JOB);
+    const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, limit, actor, reason, now: clock, integrations: container.integrations, statusBaseUrl: container.env.JOBS_BASE_URL });
+    const { aiCreditMonthStarted } = await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
+    await entitlements.settleAllowanceAlerts(tx, { companyId });
     const pilot = body.planKey === "design_partner"
       ? { startedAt: co.settings.pilot?.startedAt ?? now.toISOString(), endsAt: co.settings.pilot?.endsAt ?? new Date(now.getTime() + (body.pilotDays ?? 90) * 86_400_000).toISOString(), ...(body.extendUntil ? { extendedUntil: body.extendUntil } : {}) }
       : co.settings.pilot;
@@ -677,7 +692,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     if (term) await emit(tx, { type: "trial.started", companyId, actor, subject: { type: "company", id: companyId }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
     // The boards' work follows the plan, the open plan request is answered and the owners and admins are told.
     await afterPlanChange(tx, container, { companyId, planName: plan.name, opened: opened.unlocked, postedBy, postsNow: await whoPostsBoards(tx, companyId, settings), actor, now: clock });
-    return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked };
+    return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked, aiCreditMonthStarted };
   });
   if (result.wasPaused) {
     // Paused no more: the jobs go back on the feeds, and the emails that arrived meanwhile are added to their jobs.
@@ -685,7 +700,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     await replayHeldEmailsForCompany(container, companyId);
   }
   await container.kick();
-  return c.json({ ...result.updated, trialEnded: result.leavingTrial, unlocked: result.unlocked });
+  return c.json({ ...result.updated, trialEnded: result.leavingTrial, unlocked: result.unlocked, aiCreditMonthStarted: result.aiCreditMonthStarted });
 });
 
 /**

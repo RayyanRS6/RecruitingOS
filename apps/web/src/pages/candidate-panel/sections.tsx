@@ -523,7 +523,8 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
           {preview.data ? <div className="small muted whitespace-pre-wrap border-t border-line pt-3">{aiHelped && preview.data.aiFooter ? preview.data.aiFooter : preview.data.footer}</div> : null}
           <div className="row">
             <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
-            {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
+            {/* no AI call on the company's credit for someone locked (the API refuses it too) */}
+            {!kept && !a.lockedAt ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
             <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
           </div>
           {aiHelped ? (

@@ -68,6 +68,13 @@ export type StructuredResult<T> =
        * the reply was cut off at max_tokens, or the call's time budget is spent. The runner then does not retry.
        */
       final?: boolean;
+      /**
+       * Set when the call may have cost more than `usage` says: a reply that had started was stopped at the deadline or dropped
+       * part-way (usage is added only once a reply has ended). Left out when `usage` is all of it: no answer at all (a connection
+       * that never opened, or a provider that had not answered by the deadline), an answer with an HTTP status, a local error, a
+       * call never sent.
+       */
+      usageUnknown?: boolean;
     };
 
 export interface AiProvider {

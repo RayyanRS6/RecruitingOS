@@ -1,13 +1,15 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
-import type { Actor, AiInterviewView, ApplicationStage, RecruiterCallNotes, ScreeningFunnel, ScreenTranscriptEntry } from "@ros/contracts";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { NOTE_BODY_MAX, type Actor, type AiInterviewView, type ApplicationStage, type RecruiterCallNotes, type ScreeningFunnel, type ScreenTranscriptEntry } from "@ros/contracts";
 import { AI_INTERVIEW_PHASE, AI_INTERVIEW_REMIND_EXTENDS_HOURS, aiInterviewCanRemind, aiInterviewOf, audit, disclosureLine, emit, isOneVisitFlow, notLocked, screeningFunnel, transition, unsentScreenReadings, writtenQuestionsOf, type AiInterviewScreen } from "@ros/core";
 import { HELD_REASON, createScreen, deliver, linkEmailWaiting, linkEmailsWaiting, loadScreenBundle, sendConversationIdleReminder, sendConversationNotStartedReminder, sendConversationReviewReminder, sendScreenReminder, type ScreenDeps } from "@ros/agents";
 import { interviewsWaitingForMore } from "@ros/workflows";
-import { applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
+import { applicationNotes, applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import type { SendResult } from "@ros/integrations";
-import { HttpError } from "../middleware/errors";
+import { HttpError, messageTooLong } from "../middleware/errors";
+import type { Tenant } from "../middleware/session";
 import type { Container } from "../container";
 import { exitCleanup } from "./exit-cleanup";
+import { writeOwnNote } from "./notes";
 
 /**
  * What the screening agent needs from the app: the model, the channels, the public host candidate links use, a way to
@@ -60,8 +62,9 @@ const NOTES_ALLOWED: readonly string[] = ["invited", "reminded", "in_progress", 
  * the conversation closes as complete and the scorecard is written from the notes alone: anything the candidate typed
  * before was never sent, so neither the team nor the recruiter sees it (founder decision of 9 October 2026).
  */
-export async function addRecruiterCallNotes(tx: Tx, container: Container, input: { app: App; notes: RecruiterCallNotes["notes"]; complete: boolean; actor: Actor }): Promise<{ screenId: string; completed: boolean }> {
+export async function addRecruiterCallNotes(tx: Tx, container: Container, input: { app: App; notes: RecruiterCallNotes["notes"]; complete: boolean; actor: Actor; tenant: Tenant }): Promise<{ screenId: string | null; completed: boolean; keptAsNote?: true }> {
   const { app, actor } = input;
+  if (app.lockedAt) return keepCallNotesAsNote(tx, container, input);
   const [latest] = await tx.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1);
   if (latest && !NOTES_ALLOWED.includes(latest.status)) throw new HttpError(409, "screen_closed", latest.status === "completed" ? "This AI interview is already complete. Add what you learned as a note on the candidate instead." : "This AI interview is closed.");
   if (!["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"].includes(app.stage)) throw new HttpError(409, "not_screening", "This candidate is past the screening step.");
@@ -109,6 +112,26 @@ export async function addRecruiterCallNotes(tx: Tx, container: Container, input:
 }
 
 /**
+ * A call with someone locked (the plans of 5 November 2026, Rule 2): nothing spends AI on them, so there is no AI interview to
+ * finish and no scorecard to write, whatever `complete` says. The notes go on the recruiter's own note on the candidate, after
+ * what it already held: no AI reads that table and the candidate never sees it, and the team reads it once an upgrade opens them.
+ * No screen is made, because a screen would stop the AI interview that upgrade starts by itself (`offerInterview`).
+ */
+async function keepCallNotesAsNote(tx: Tx, container: Container, input: { app: App; notes: RecruiterCallNotes["notes"]; actor: Actor; tenant: Tenant }): Promise<{ screenId: null; completed: false; keptAsNote: true }> {
+  const { app, actor, tenant } = input;
+  const now = container.engine.clock();
+  const [pv] = await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
+  const asked = new Map((pv ? [...pv.packet.screening.questions, ...writtenQuestionsOf(pv.packet)] : []).map((q) => [q.key, q.question]));
+  const words = input.notes.map((n) => (n.questionKey && asked.has(n.questionKey) ? `${asked.get(n.questionKey)}\n${n.text}` : n.text)).join("\n\n");
+  const [mine] = await tx.select({ body: applicationNotes.body, starter: applicationNotes.starter }).from(applicationNotes).where(and(eq(applicationNotes.applicationId, app.id), eq(applicationNotes.authorUserId, tenant.userId), isNull(applicationNotes.deletedAt))).limit(1).for("update");
+  const body = `${mine ? `${mine.body}\n\n` : ""}Notes from a call, ${now.toISOString().slice(0, 10)}:\n${words}`;
+  if (body.length > NOTE_BODY_MAX) throw messageTooLong(NOTE_BODY_MAX);
+  await writeOwnNote(tx, { companyId: app.companyId, applicationId: app.id, tenant, actor, note: { starter: mine?.starter ?? null, body }, now });
+  await audit(tx, { companyId: app.companyId, actor, action: "screen.recruiter_notes_added", target: { type: "application", id: app.id }, reason: "notes from a call with the candidate", details: { screenId: null, notes: input.notes.length, complete: false, keptAsNote: true } });
+  return { screenId: null, completed: false, keptAsNote: true };
+}
+
+/**
  * How the conversation goes for a role (plan E13): offered, started, finished, the median time to finish, how many
  * chose a person, and the questions people skipped in the answers they sent. From the latest screen of each
  * application; counts only, never a name or an answer, and nothing from a conversation nobody sent (`screeningFunnel`), nor
@@ -147,10 +170,11 @@ export async function latestScreensFor(tx: Tx, applicationIds: string[]): Promis
 /**
  * Where each application under "No AI interview yet" stands with it (20 Oct 2026, R20-7; `aiInterviewOf`): the list
  * rows', the detail's and the board's `aiInterview`, with whether one still being prepared only waits for more AI
- * interviews this month (Q17, `interviewsWaitingForMore`). Applications outside the column are left out.
+ * interviews this month (Q17, `interviewsWaitingForMore`). Applications outside the column are left out, and so is someone
+ * locked: no AI interview is coming, so nothing may say it is being prepared.
  */
-export async function aiInterviewsFor(tx: Tx, apps: ReadonlyArray<{ id: string; stage: string }>, now: Date): Promise<Map<string, AiInterviewView>> {
-  const inColumn = apps.filter((a) => AI_INTERVIEW_PHASE.includes(a.stage as ApplicationStage));
+export async function aiInterviewsFor(tx: Tx, apps: ReadonlyArray<{ id: string; stage: string; lockedAt?: string | null }>, now: Date): Promise<Map<string, AiInterviewView>> {
+  const inColumn = apps.filter((a) => AI_INTERVIEW_PHASE.includes(a.stage as ApplicationStage) && !a.lockedAt);
   const latest = await latestScreensFor(tx, inColumn.map((a) => a.id));
   const waitingForMore = await interviewsWaitingForMore(tx, inColumn.filter((a) => !latest.has(a.id)).map((a) => a.id));
   const out = new Map<string, AiInterviewView>();

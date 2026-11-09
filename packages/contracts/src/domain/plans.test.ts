@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_LINE, FREE_PLAN_KEY, MORE_CANDIDATES_UPGRADE_QUESTION, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, mayOfferUpgrade, planChangedWords, planRequestQuestion, publicPlanView } from "./plans";
+import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_BUSY_LINE, AI_HELP_LINE, FREE_PLAN_KEY, aiHelpLine, MORE_CANDIDATES_UPGRADE_QUESTION, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, mayOfferUpgrade, planChangedWords, planRequestQuestion, publicPlanView } from "./plans";
 
 describe("asking for a bigger plan", () => {
   it("offers an upgrade on every plan but the last public one and the private pilot, read from the list", () => {
@@ -81,9 +81,55 @@ describe("what a customer may read about a plan", () => {
     expect(AI_HELP_LINE.about).toBe("Your plan's AI help is used up. You can write this text yourself; it shows the same way.");
   });
 
+  it("refused only for money held by work still running, it says to try again, and neither that anything is used up nor to upgrade", () => {
+    for (const line of Object.values(AI_HELP_BUSY_LINE)) {
+      expect(line).toMatch(/^Your plan's AI help is finishing other work\. /);
+      expect(line).toMatch(/try again in a few minutes/i);
+      expect(line).not.toMatch(/\$|\bdollars?\b|\bcents?\b|\bcredit\b|used up|upgrade|recruiter/i);
+    }
+  });
+
   it("says when a monthly credit starts again, and only then", () => {
     expect(aiCreditNoticeWords("used_up").body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade.");
     expect(aiCreditNoticeWords("used_up", { resetsOn: "Friday, December 4" }).body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until you upgrade or it starts again on Friday, December 4.");
     expect(aiCreditNoticeWords("warning")).toEqual({ title: "80% of your plan's AI help used", body: "Nothing has stopped. Upgrade before it runs out." });
+  });
+
+  it("on the last plan it never says upgrade, because nothing is above theirs", () => {
+    expect(aiCreditNoticeWords("warning", { planKey: "ultra" }).body).toBe("Nothing has stopped. Talk with ITS before it runs out.");
+    expect(aiCreditNoticeWords("warning", { planKey: "ultra", newJobsStopped: true }).body).toBe("New jobs have stopped: writing one needs more than is left. Talk with ITS before the rest runs out.");
+    expect(aiCreditNoticeWords("used_up", { planKey: "ultra", resetsOn: "Friday, December 4" }).body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until it starts again on Friday, December 4.");
+    expect(aiCreditNoticeWords("used_up", { planKey: "ultra" }).body).toBe("Applications still come in and candidates can still finish. New applicants are not read by AI until ITS changes your plan.");
+    // every other plan has somewhere to go
+    for (const planKey of ["free", "basic", "pro", "trial"]) {
+      expect(aiCreditNoticeWords("warning", { planKey }).body, planKey).toBe("Nothing has stopped. Upgrade before it runs out.");
+      expect(aiCreditNoticeWords("used_up", { planKey }).body, planKey).toContain("until you upgrade");
+    }
+  });
+
+  it("on the last plan the job builder, the draft and Start a hire say to talk with ITS or when it starts again, never to upgrade", () => {
+    const ultra = { planKey: "ultra", resetsOn: "Friday, December 4" };
+    const way = "Talk with ITS, or wait until your AI help starts again on Friday, December 4.";
+    expect(aiHelpLine("turn", ultra)).toBe(`Your plan's AI help is used up. Your draft is saved. ${way}`);
+    expect(aiHelpLine("draft", ultra)).toBe(`Your plan's AI help is used up. Everything you confirmed is kept. ${way}`);
+    expect(aiHelpLine("draftTooBig", ultra)).toBe(`Your plan's AI help is nearly used up, and writing the draft needs more than is left. Everything you confirmed is kept. ${way}`);
+    expect(aiHelpLine("newJob", ultra)).toBe(`Your plan's AI help is used up. ${way}`);
+    expect(aiHelpLine("newJobTooBig", ultra)).toBe(`Your plan's AI help is nearly used up, and a new job needs more than is left. ${way}`);
+    // the editor and their own text need no plan above theirs
+    expect(aiHelpLine("revise", ultra)).toBe(AI_HELP_LINE.revise);
+    expect(aiHelpLine("about", ultra)).toBe(AI_HELP_LINE.about);
+    expect(aiHelpLine("newJob", { planKey: "ultra" })).toBe("Your plan's AI help is used up. Talk with ITS about your plan.");
+    for (const key of Object.keys(AI_HELP_LINE) as Array<keyof typeof AI_HELP_LINE>) {
+      const line = aiHelpLine(key, ultra);
+      expect(line, key).not.toMatch(/upgrade|\$|\bdollars?\b|\bcents?\b|\bcredit\b|try again|recruiter/i);
+      // every other plan has somewhere to go, and a plan not given reads as one
+      for (const planKey of ["free", "basic", "pro", "trial", undefined]) expect(aiHelpLine(key, { planKey, resetsOn: "Friday, December 4" }), `${key} ${planKey}`).toBe(AI_HELP_LINE[key]);
+    }
+  });
+
+  it("does not say nothing has stopped once a new job has", () => {
+    expect(aiCreditNoticeWords("warning", { newJobsStopped: true })).toEqual({ title: "80% of your plan's AI help used", body: "New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out." });
+    expect(aiCreditNoticeWords("warning", { newJobsStopped: false }).body).toContain("Nothing has stopped.");
+    expect(aiCreditNoticeWords("used_up", { newJobsStopped: true }).body).not.toContain("Nothing has stopped");
   });
 });

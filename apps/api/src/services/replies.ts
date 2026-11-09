@@ -1,11 +1,12 @@
 import { and, desc, eq, inArray, like, notInArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, createDataRequest, createEscalation, decisionTold, disclosureLine, followUpParked, humanResponseExpectation, loadBusinessCalendar, notify, openFollowUpOf, raiseAlert, setAutoState } from "@ros/core";
+import { CANCEL_STAGES, DECISION_STAGES, createDataRequest, createEscalation, decisionTold, disclosureLine, followUpParked, humanResponseExpectation, loadBusinessCalendar, noteCandidateWroteBack, notify, openFollowUpOf, raiseAlert, setAutoState } from "@ros/core";
 import { fromAddress, newTimesDayWords, queueCommunication, recordInbound, replyToFor, requestHuman, sendPrivacyAcknowledgment } from "@ros/agents";
 import { applications, candidates, communications, companies, dataRequests, inboundEmails, recruiterEscalations, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { InboundEmail } from "@ros/integrations";
 import { cancelNewTimesRuns, stopPreparedNewTimes } from "@ros/workflows";
 import type { Container } from "../container";
+import { emailHolderAboutCandidateReply, type HeldNote } from "./escalation-queue";
 import { screenDeps } from "./screens";
 import { optOutOfTalentPool } from "./talent-pool";
 
@@ -22,7 +23,8 @@ import { optOutOfTalentPool } from "./talent-pool";
  *
  * While the application is locked (the plans of 5 November 2026, Rule 2) the team may not read this person, so no notice goes
  * to them and nothing names them: a reply reaches ITS instead (`replyReachesIts`), and so does HUMAN. A request for a person
- * or an adjustment must reach a person (register item 12), and that is never limited.
+ * or an adjustment must reach a person (register item 12), and that is never limited: a later reply tells the recruiter holding
+ * the request, never its words.
  */
 type App = typeof applications.$inferSelect;
 type InboundRow = typeof inboundEmails.$inferSelect;
@@ -122,15 +124,53 @@ async function noThanksMeansFutureRoles(tx: Tx, app: App): Promise<boolean> {
 
 /**
  * A locked applicant wrote back, and nobody on the team may read it: ITS's queue gets it, with the words left on the thread,
- * so a person reads it. One request at a time: while one stands, the person holding it reads the next reply there too.
+ * so a person reads it. One request at a time: while one stands waiting, whoever picks it up reads this reply with the rest.
+ * Someone already holding one is not looking for it, so its thread gets a wordless line, and the holders this returns are
+ * emailed once the caller's transaction has committed (`tellHolders`).
  */
-async function replyReachesIts(tx: Tx, input: { app: App; roleTitle: string; name: string; now: Date }): Promise<void> {
-  const [open] = await tx.select({ id: recruiterEscalations.id }).from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, input.app.id), notInArray(recruiterEscalations.status, ["resolved", "cancelled"]))).limit(1);
-  if (open) return;
-  await createEscalation(tx, { companyId: input.app.companyId, roleId: input.app.roleId, applicationId: input.app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: `${input.name} wrote back about the ${input.roleTitle} role. The hiring team cannot read this application, so a person at ITS answers. Their message is on the application's thread.`, requestedBy: EMAIL_REPLY_ACTOR, now: input.now });
+async function replyReachesIts(tx: Tx, input: { app: App; roleTitle: string; name: string; now: Date; question?: string; actor?: Actor }): Promise<CandidateReplyHeld[]> {
+  const standing = await tx.select({ id: recruiterEscalations.id, companyId: recruiterEscalations.companyId, kind: recruiterEscalations.kind, status: recruiterEscalations.status, holderId: recruiterEscalations.assignedToUserId }).from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, input.app.id), notInArray(recruiterEscalations.status, ["resolved", "cancelled"])));
+  if (!standing.length) {
+    await createEscalation(tx, { companyId: input.app.companyId, roleId: input.app.roleId, applicationId: input.app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: input.question ?? `${input.name} wrote back about the ${input.roleTitle} role. The hiring team cannot read this application, so a person at ITS answers. Their message is on the application's thread.`, requestedBy: input.actor ?? EMAIL_REPLY_ACTOR, now: input.now });
+    return [];
+  }
+  const held: CandidateReplyHeld[] = [];
+  for (const e of standing) {
+    if (e.status === "open" || !e.holderId) continue;
+    const message = await noteCandidateWroteBack(tx, { escalation: e, candidateId: input.app.candidateId, now: input.now });
+    held.push({ escalationId: e.id, companyId: e.companyId, kind: e.kind, holderId: e.holderId, messageId: message.id });
+  }
+  return held;
 }
 
-export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; talentPoolOptOut?: boolean; duplicate?: boolean; explanationRequested?: ExplanationAsk }> {
+/** A recruiter to tell that the candidate on the request they hold wrote back (`replyReachesIts`). */
+export type CandidateReplyHeld = HeldNote & { companyId: string };
+
+/** Tells the holders of what a reply found, after its transaction has committed. Never fails what called it. */
+export async function tellHolders(container: Container, held: readonly CandidateReplyHeld[] | undefined): Promise<void> {
+  for (const n of held ?? []) await emailHolderAboutCandidateReply(container, n);
+}
+
+/**
+ * A text from someone with no conversation open (webhooks/twilio.ts), once it is on their thread. The fallback text promises
+ * "Reply HUMAN for a person", so as with an email it reaches one: someone locked reaches ITS whatever they wrote, because nobody
+ * on the team may read it; anyone else's team is told, and HUMAN also brings in a recruiter. Nothing goes back to them by text.
+ * Returns who to tell once this transaction has committed (`tellHolders`).
+ */
+export async function textWithNoConversation(tx: Tx, container: Container, input: { app: App; candidate: { firstName: string; lastName: string }; text: string }): Promise<CandidateReplyHeld[]> {
+  const { app, text } = input;
+  const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
+  const roleTitle = role?.title ?? "this";
+  const name = `${input.candidate.firstName} ${input.candidate.lastName}`.trim() || "A candidate";
+  const at = { app, roleTitle, name, now: container.engine.clock(), actor: { kind: "system", id: "sms_inbound" } as const };
+  if (app.lockedAt) return replyReachesIts(tx, at);
+  const wantsHuman = humanRequested(text);
+  const held = wantsHuman ? await replyReachesIts(tx, { ...at, question: `${name} replied HUMAN to a text about the ${roleTitle} role and needs a person. Please reach out by phone and pick up the conversation.` }) : [];
+  await notify(tx, { companyId: app.companyId, about: app.id, kind: wantsHuman ? "screen.human_requested" : "message.received", title: wantsHuman ? `${name} asked for a person` : `${name} wrote back`, body: wantsHuman ? `They replied HUMAN to a text about ${roleTitle}. A recruiter has the request; you can also call them.` : `By text, about ${roleTitle}: "${firstLine(text).slice(0, 140)}"`, action: { label: "Read it", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  return held;
+}
+
+export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; talentPoolOptOut?: boolean; duplicate?: boolean; explanationRequested?: ExplanationAsk; holdersToTell?: CandidateReplyHeld[] }> {
   const { app, mail } = input;
   // Postmark redelivers a message it thinks was not taken (a timeout after this transaction committed, for instance):
   // the same MessageID on this application is the same reply, recorded once, acted on once. A replay of a request for
@@ -174,8 +214,8 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
   if (wantsExplanation) return { communicationId, humanRequested: false, explanationRequested: { candidateId: candidate.id, email: candidate.email ?? mail.from ?? null, companyName: company.name } };
   if (!wantsHuman) {
     // Saying no to being kept is done and confirmed; anything else they wrote needs someone who may read it.
-    if (app.lockedAt && !aboutFutureRoles) await replyReachesIts(tx, { app, roleTitle: role.title, name, now: container.engine.clock() });
-    return { communicationId, humanRequested: false, talentPoolOptOut: optedOut };
+    const holdersToTell = app.lockedAt && !aboutFutureRoles ? await replyReachesIts(tx, { app, roleTitle: role.title, name, now: container.engine.clock() }) : [];
+    return { communicationId, humanRequested: false, talentPoolOptOut: optedOut, holdersToTell };
   }
 
   const now = container.engine.clock();
@@ -273,6 +313,7 @@ export async function receiveCandidateReply(container: Container, input: { inbou
     }
   }
   if (r.duplicate) return { status: 200, body: { ok: true, matched: true, reply: true, duplicate: true, applicationId: app.id, ...(explanationRequestId ? { explanationRequestId } : {}) } };
+  await tellHolders(container, r.holdersToTell);
   await container.kick();
   return { status: 200, body: { ok: true, matched: true, reply: true, applicationId: app.id, humanRequested: r.humanRequested, talentPoolOptOut: !!r.talentPoolOptOut, ...(explanationRequestId ? { explanationRequestId } : {}) } };
 }

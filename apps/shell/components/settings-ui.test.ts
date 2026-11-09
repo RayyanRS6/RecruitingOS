@@ -244,8 +244,49 @@ describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
 
   it("a plan with no limit of jobs ever keeps the jobs at a time, and its monthly AI help says when it starts again", () => {
     const lines = usageLines({ active_roles: { used: 2, limit: 3 }, ai_credit_monthly_cents: { used: 40, limit: 100, unit: "percent", resetsAt: "2026-12-05T12:00:00.000Z" } });
-    expect(lines).toEqual(["active jobs: 2 of 3", "AI help this month: 40% used"]);
-    expect(usageResets({ ai_credit_monthly_cents: { limit: 100, resetsAt: "2026-12-05T12:00:00.000Z" } })).toBe("Monthly allowances reset on December 5.");
+    expect(lines).toEqual(["active jobs: 2 of 3", "AI help this month: 40% used, starts again December 5"]);
+    // its own date, so it is not said again as a month for everything
+    expect(usageResets({ ai_credit_monthly_cents: { limit: 100, resetsAt: "2026-12-05T12:00:00.000Z" } })).toBeNull();
+  });
+
+  it("after an upgrade the AI help's month and the other allowances' dates differ, and each says its own: Free on October 1, Basic on November 5", () => {
+    // the upgrade starts the credit's month, November 5 to December 5; recruiter requests keep rolling from sign-up, to November 30
+    const usage = { ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent" as const, resetsAt: "2026-12-05T18:00:00.000Z" }, recruiter_asks: { used: 0, limit: 1, resetsAt: "2026-11-30T18:00:00.000Z" } };
+    expect(usageLines(usage)).toEqual(["AI help this month: 18% used, starts again December 5", "recruiter requests: 0 of 1"]);
+    expect(usageResets(usage)).toBe("Monthly allowances reset on November 30.");
+    const words = text(page({ company: onFree({ usage }) }));
+    expect(words).toContain("AI help this month: 18% used, starts again December 5 · recruiter requests: 0 of 1 Monthly allowances reset on November 30.");
+    // on the company's calendar, as Home says it, whichever server draws it: 2 a.m. in UTC on the 5th is still the 4th in Los Angeles
+    expect(usageLines({ ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent", resetsAt: "2026-12-05T02:00:00.000Z" } }, "America/Los_Angeles")).toEqual(["AI help this month: 18% used, starts again December 4"]);
+    // and the page reads the company's own zone: 6 p.m. in UTC on the 5th is already the 6th in Tokyo
+    expect(text(page({ company: onFree({ timezone: "Asia/Tokyo", usage: { ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent", resetsAt: "2026-12-05T18:00:00.000Z" } } }) }))).toContain("AI help this month: 18% used, starts again December 6");
+    // the AI help on Free never starts again, so it names no day
+    expect(usageLines({ ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" } })).toEqual(["AI help: 18% used"]);
+  });
+
+  it("says used up when everything else does, where the percentage still reads 98: Free at $9.89, past what one small call needs", () => {
+    const usedUp = { level: "used_up", percent: 98, resetsAt: null, notice: { title: "Your plan's AI help is used up", body: "Applications still come in and candidates can still finish." } };
+    const words = text(page({ company: onFree({ aiCredit: usedUp, usage: { jobs_total: { used: 1, limit: 1 }, ai_credit_total_cents: { used: 98, limit: 100, unit: "percent" } } }) }));
+    expect(words).toContain("AI help: used up");
+    expect(words).not.toContain("98% used");
+    // a monthly one says when it starts again too
+    expect(usageLines({ ai_credit_monthly_cents: { used: 99, limit: 100, unit: "percent", resetsAt: "2026-12-05T18:00:00.000Z" } }, "America/Los_Angeles", "used_up")).toEqual(["AI help this month: used up, starts again December 5"]);
+    // at the 80% line, and below it, the figure stands
+    expect(usageLines({ ai_credit_total_cents: { used: 83, limit: 100, unit: "percent" } }, null, "warning")).toEqual(["AI help: 83% used"]);
+    expect(usageLines({ ai_credit_total_cents: { used: 12, limit: 100, unit: "percent" } }, null, null)).toEqual(["AI help: 12% used"]);
+    // and nothing else on the row reads the level
+    expect(usageLines({ recruiter_asks: { used: 1, limit: 1 } }, null, "used_up")).toEqual(["recruiter requests: 1 of 1"]);
+  });
+
+  it("promises a pilot only while the company is on one: its dates stay on record after a move to Pro or Free, and the line goes", () => {
+    const pilot = { startedAt: "2026-08-01T00:00:00.000Z", endsAt: "2026-10-30T00:00:00.000Z" };
+    const on = text(page({ company: onFree({ planKey: "design_partner", status: "design_partner", plan: { key: "design_partner", name: "Design Partner", limits: {} }, settings: { ...company.settings, pilot } }) }));
+    expect(on).toContain("pilot until");
+    expect(on).toContain("jobs in progress are never cut off");
+    const moved = text(page({ company: onFree({ planKey: "pro", status: "active", plan: { key: "pro", name: "Pro", limits: {} }, settings: { ...company.settings, pilot } }) }));
+    expect(moved).toContain("Plan Pro");
+    expect(moved).not.toContain("pilot until");
+    expect(moved).not.toContain("never cut off");
   });
 
   it("the Team tab's invite form says the plan's words, on the plan's two people", () => {

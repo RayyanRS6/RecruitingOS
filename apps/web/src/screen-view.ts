@@ -269,10 +269,13 @@ const CALL_NOTES_STAGES = ["received", "eligible", "triaged", "screen_invited", 
 
 /**
  * Whether the signed-in person can add notes from a call (escalation.work: a recruiter, the company's own or ITS under a
- * grant), and whether it is the thing waiting on them: the candidate asked for a person.
+ * grant), and whether it is the thing waiting on them: the candidate asked for a person. About someone locked the API keeps
+ * the notes on the recruiter's own note whatever the stage (a closed job's talent pool, a withdrawal, a decline), so the card
+ * is there at any stage, never as the step at the top: they have no AI interview.
  */
-export function callNotesState(a: Pick<ApplicationDetail, "stage" | "screens">, role: string | null | undefined): { show: boolean; prominent: boolean } {
+export function callNotesState(a: Pick<ApplicationDetail, "stage" | "screens" | "lockedAt">, role: string | null | undefined): { show: boolean; prominent: boolean } {
   const latest = a.screens[0];
+  if (a.lockedAt) return { show: canAddCallNotes(role), prominent: false };
   if (!canAddCallNotes(role) || !CALL_NOTES_STAGES.includes(a.stage) || (latest && !CALL_NOTES_STATUSES.includes(latest.status))) return { show: false, prominent: false };
   return { show: true, prominent: latest?.status === "human_requested" };
 }
@@ -309,7 +312,8 @@ export function callNotesBody(byQuestion: Record<string, string>, other: string,
 }
 
 /** What adding the notes did, in two short lines. */
-export function callNotesToast(r: { completed: boolean }, firstName: string): { title: string; detail: string } {
+export function callNotesToast(r: { completed: boolean; keptAsNote?: boolean }, firstName: string): { title: string; detail: string } {
+  if (r.keptAsNote) return { title: "Notes kept.", detail: `They are on the Notes tab. ${firstName} is locked, so no AI review is written.` };
   return r.completed
     ? { title: "Notes added. The conversation is complete.", detail: `${firstName}'s scorecard is written from them, marked as your notes and never as their own words.` }
     : { title: "Notes added.", detail: `The conversation stays open for ${firstName}.` };

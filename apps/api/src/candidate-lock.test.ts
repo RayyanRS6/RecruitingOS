@@ -2,11 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { detectStuckRoles } from "@ros/agents";
 import { LOCKED_REQUEST_LINE, MORE_CANDIDATES_LINE, MORE_CANDIDATES_UPGRADE_QUESTION, type ClosingMessagePreview, type RecruiterRequestView } from "@ros/contracts";
-import { MORE_APPLIED_KIND } from "@ros/core";
+import { MORE_APPLIED_KIND, anonymizeCandidate } from "@ros/core";
 import { aiRuns, applications, approvalRequests, auditRecords, candidates, communications, documents, entitlements, events, interviewParticipants, interviews, notifications, plans, postings, recruiterEscalations, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
+import { Hono } from "hono";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { errorHandler } from "./middleware/errors";
+import { sessionMiddleware, type Vars } from "./middleware/session";
+import { interviewRoutes } from "./routes/interviews";
 import { putOnInterview, signInAdmin, signInAs, signInStaff, usePlan } from "./test-helpers";
 
 const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
@@ -283,6 +287,8 @@ describe("the team cannot read a locked person", () => {
     expect((await json(named, "POST", `/api/v1/escalations/${ids.lockedRequest}/claim`)).status).toBe(200);
     expect((await json(named, "POST", "/api/v1/auth/switch", { companyId: job.id })).status).toBe(200);
 
+    // Only as the database writes the id, even for them.
+    expect((await json(named, "GET", `/api/v1/applications/${ids.locked.replace(/-/g, "")}`)).status).toBe(404);
     const detail = await json(named, "GET", `/api/v1/applications/${ids.locked}`);
     expect(detail.status).toBe(200);
     const text = await detail.text();
@@ -296,10 +302,13 @@ describe("the team cannot read a locked person", () => {
     expect(list.applications.map((a) => a.id)).toEqual([ids.locked]);
     expect(list.locked).toEqual({ count: 0, cards: [] });
     expect(list.counts.total).toBe(1);
+    // The volume says that one person, by source too: the grant may read them.
+    expect(await read(await json(named, "GET", `/api/v1/roles/${ids.role}/volume`))).toMatchObject({ totals: { total: 1, bySource: { [lockedRow.source]: 1 } } });
     expect(JSON.stringify(await read(await json(named, "GET", `/api/v1/events?subjectId=${ids.locked}`)))).toContain("application.received");
-    // Their call notes go through (409: there is no interview to keep open, not 402).
+    // Their call notes go through, as the recruiter's own note: nothing is scored while they are locked.
     const notes = await json(named, "POST", `/api/v1/applications/${ids.locked}/screen/recruiter-notes`, { notes: [{ text: "We talked." }], complete: false });
-    expect(notes.status).toBe(409);
+    expect(notes.status).toBe(200);
+    expect(await read(notes)).toMatchObject({ completed: false, keptAsNote: true });
     // In the queue, with the warning: words cannot be checked by a machine.
     const queue = await read<{ accessGranted: boolean; lockedForCompany: boolean; contextSnapshot: { candidate: { name: string } }; question: string }>(await json(named, "GET", `/api/v1/escalations/${ids.lockedRequest}`));
     expect(queue).toMatchObject({ accessGranted: true, lockedForCompany: true });
@@ -370,6 +379,113 @@ describe("the team cannot read a locked person", () => {
     expect(await container.db.select().from(interviews).where(eq(interviews.applicationId, ids.locked))).toHaveLength(lockedInterviews.length);
     expect((container.integrations.email as FakeEmailAdapter).sent.length).toBe(mail);
   }, 120_000);
+  /** The same id as Postgres's uuid input also reads it, and finds the row: every way of writing it but the database's own. */
+  const respelled = (id: string): Array<[string, string]> => {
+    const hex = id.replace(/-/g, "");
+    return [["no hyphens", hex], ["braces", `{${id}}`], ["no hyphens, in braces", `{${hex}}`], ["hyphens elsewhere", hex.replace(/(.{4})(?=.)/g, "$1-")], ["capitals", id.toUpperCase()]];
+  };
+
+  it("an id written any other way Postgres would read answers 404 before any handler, for everyone, on every route under the two prefixes, and nothing is read or written", async () => {
+    const viewed = async () => (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "candidate.viewed"))).length;
+    const opened = async () => (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "document.read"))).length;
+    const [viewedBefore, openedBefore] = [await viewed(), await opened()];
+    const refused = async (who: string, cookie: string, method: string, path: string, words: string) => {
+      const r = await json(cookie, method, path, method === "GET" ? undefined : {});
+      const body = await r.text();
+      expect(r.status, `${who}: ${method} ${path} answered ${r.status}: ${body.slice(0, 200)}`).toBe(404);
+      expect(JSON.parse(body).error).toMatchObject({ code: "not_found", message: words });
+      expect(leaks(body)).toEqual([]);
+    };
+    // Everyone who reads the team's lists: the record, the file and the interview, which each answered with the person before.
+    for (const [who, cookie] of readers) {
+      for (const [how, spelled] of respelled(ids.locked)) {
+        for (const path of [`/api/v1/applications/${spelled}`, `/api/v1/applications/${spelled}/documents/${ids.lockedDoc}/inline`, `/api/v1/applications/${spelled}/documents/${ids.lockedDoc}/file`]) await refused(`${who} (${how})`, cookie, "GET", path, "Application not found.");
+      }
+      for (const [how, spelled] of respelled(ids.interview)) await refused(`${who} (${how})`, cookie, "GET", `/api/v1/interviews/${spelled}`, "Interview not found.");
+    }
+    // Every route under the two prefixes, whatever the method: the guard does not know which handler would have answered.
+    for (const method of ["GET", "POST", "PUT", "DELETE", "PATCH"]) {
+      for (const route of routesOf(method).filter((r) => r.startsWith("/api/v1/applications/:id") || r.startsWith("/api/v1/interviews/:id"))) {
+        const interview = route.startsWith("/api/v1/interviews");
+        for (const [how, spelled] of respelled(interview ? ids.interview : ids.locked)) {
+          const path = route.replace(":id", spelled).replace(":documentId", ids.lockedDoc).replace(/:[A-Za-z]+/g, "00000000-0000-0000-0000-000000000000");
+          await refused(`the owner (${how})`, owner, method, path, interview ? "Interview not found." : "Application not found.");
+        }
+      }
+    }
+    expect(await viewed()).toBe(viewedBefore);
+    expect(await opened()).toBe(openedBefore);
+    // Someone visible is no different: an id is written the database's way, or it names nobody. Written that way they open as usual.
+    for (const [how, spelled] of respelled(ids.visible)) await refused(`the owner (${how})`, owner, "GET", `/api/v1/applications/${spelled}`, "Application not found.");
+    expect((await json(owner, "GET", `/api/v1/applications/${ids.visible}`)).status).toBe(200);
+    // Something that is no id at all answers the same, not a database error.
+    await refused("the owner", owner, "GET", "/api/v1/applications/not-an-id", "Application not found.");
+    await refused("the owner", owner, "GET", "/api/v1/interviews/not-an-id", "Interview not found.");
+    // Nobody signed in still hears that first.
+    expect((await app.request(`/api/v1/applications/${ids.locked.replace(/-/g, "")}`)).status).toBe(401);
+  }, 300_000);
+
+  it("the interview scope guard refuses another spelling itself, with no help from the guard at the prefix", async () => {
+    const bare = new Hono<Vars>();
+    bare.onError(errorHandler);
+    bare.use("*", sessionMiddleware(container));
+    bare.route("/api/v1/interviews", interviewRoutes);
+    const open = (id: string) => bare.request(`/api/v1/interviews/${id}`, { headers: { cookie: recruiter } });
+    // The canonical id reaches the handler here, so the refusals below are the guard's and nothing else's.
+    expect((await open(ids.interview)).status).toBe(200);
+    for (const [how, spelled] of respelled(ids.interview)) expect((await open(spelled)).status, how).toBe(404);
+  }, 60_000);
+
+  it("an interviewer cannot read a job they do not interview for by writing its id another way", async () => {
+    const company = await newCompany();
+    await usePlan(container, company.id, "ultra");
+    const theirs = await openRole(company);
+    const other = await openRole(company);
+    const onIt = await signInAs(container, app, { companyId: company.id, role: "interviewer" });
+    await putOnInterview(container, app, { cookie: onIt, roleId: theirs.roleId });
+    expect((await json(onIt, "GET", `/api/v1/roles/${theirs.roleId}`)).status).toBe(200);
+    expect((await json(onIt, "GET", `/api/v1/roles/${other.roleId}`)).status).toBe(404);
+    for (const [how, spelled] of respelled(other.roleId)) {
+      for (const path of [`/api/v1/roles/${spelled}`, `/api/v1/roles/${spelled}/packets`, `/api/v1/roles/${spelled}/interviews`]) {
+        const r = await json(onIt, "GET", path);
+        expect(r.status, `${how}: GET ${path}`).toBe(404);
+        expect((await read<{ error: { message: string } }>(r)).error.message).toBe("Role not found.");
+      }
+    }
+    // Their own job, written another way, is not looked up either: the same answer for every id not written the database's way.
+    expect((await json(onIt, "GET", `/api/v1/roles/${theirs.roleId.replace(/-/g, "")}`)).status).toBe(404);
+  }, 300_000);
+
+  it("Settings' recruiter access says a grant covers one candidate and leaves out which, for someone the reader cannot read", async () => {
+    const company = await newCompany();
+    await setLimit(company.id, 1);
+    const j = await openRole(company);
+    const seen = await apply(j, person("Sia", "Open"));
+    const email = "zqgrantmark@people.test";
+    const hidden = await apply(j, { first: "Zqgrantfirst", last: "Zqgrantlast", email });
+    expect((await reply(hidden, email, "HUMAN", "grant-human")).status).toBe(200);
+    await container.drain();
+    const about = await json(company.cookie, "POST", "/api/v1/escalations", { kind: "review", applicationId: seen.id, question: "Please look at this person." });
+    expect(about.status, await about.clone().text()).toBe(201);
+    const [lockedAsk] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, hidden.id));
+    const staffOnHidden = await signInStaff(app, container, "hope@its.test", "its_recruiter", "Hope Recruiter");
+    const staffOnSeen = await signInStaff(app, container, "seth@its.test", "its_recruiter", "Seth Recruiter");
+    expect((await json(staffOnHidden, "POST", `/api/v1/escalations/${lockedAsk.id}/claim`)).status).toBe(200);
+    expect((await json(staffOnSeen, "POST", `/api/v1/escalations/${(await read<{ id: string }>(about)).id}/claim`)).status).toBe(200);
+
+    type Row = { recruiterEmail: string; applicationId: string | null; oneCandidate: boolean };
+    const listed = await json(company.cookie, "GET", "/api/v1/companies/current/staff-access");
+    const text = await listed.text();
+    expect(listed.status, text).toBe(200);
+    expect(text).not.toContain(hidden.id);
+    const rows = JSON.parse(text) as Row[];
+    expect(rows.find((g) => g.recruiterEmail === "hope@its.test")).toMatchObject({ applicationId: null, oneCandidate: true });
+    expect(rows.find((g) => g.recruiterEmail === "seth@its.test")).toMatchObject({ applicationId: seen.id, oneCandidate: true });
+    // The recruiter under that grant may read that person, so their own list may say who it is.
+    expect((await json(staffOnHidden, "POST", "/api/v1/auth/switch", { companyId: company.id })).status).toBe(200);
+    const own = await read<Row[]>(await json(staffOnHidden, "GET", "/api/v1/companies/current/staff-access"));
+    expect(own.find((g) => g.recruiterEmail === "hope@its.test")?.applicationId).toBe(hidden.id);
+  }, 300_000);
 
   it("the list: nobody locked is a row, whatever the order or the filter; `locked` holds where they came in and when, and nothing else; counts cover those shown, and only the total says more applied", async () => {
     const lockedCount = (await container.db.select().from(applications).where(and(eq(applications.roleId, ids.role), sql`${applications.lockedAt} is not null`))).length;
@@ -420,9 +536,19 @@ describe("the team cannot read a locked person", () => {
     const applicantsCsv = await (await json(owner, "GET", `/api/v1/roles/${ids.role}/report.csv`)).text();
     expect(applicantsCsv).toContain("Vera Visible");
     expect(applicantsCsv.trim().split("\r\n")).toHaveLength(2);
-    // The share tab's volume keeps everyone in it: a count by day and source names nobody, and it shows demand.
-    const volume = await read<{ totals: { total: number } }>(await json(owner, "GET", `/api/v1/roles/${ids.role}/volume`));
+    // The share tab's volume keeps everyone an upgrade could open in each day's total: a count names nobody, and it shows demand.
+    // Where they came from is only for people the team can read: a locked card says when, so a day's sources would say how.
+    type Volume = { totals: { total: number; bySource: Record<string, number> }; days: Array<{ total: number; bySource: Record<string, number> }>; sources: Array<{ total: number }>; today: { total: number } };
+    const sum = (bySource: Record<string, number>) => Object.values(bySource).reduce((a, b) => a + b, 0);
+    const volume = await read<Volume>(await json(owner, "GET", `/api/v1/roles/${ids.role}/volume`));
     expect(volume.totals.total).toBe(1 + lockedCount);
+    expect(volume.today.total).toBe(1 + lockedCount);
+    expect(volume.days.at(-1)?.total).toBe(1 + lockedCount);
+    expect(sum(volume.totals.bySource)).toBe(1);
+    expect(sum(volume.days.at(-1)!.bySource)).toBe(1);
+    expect(volume.sources.reduce((n, s) => n + s.total, 0)).toBe(1);
+    // None of them came by email as far as this reader can tell, though one did: the only source left is the visible person's.
+    expect(volume.totals.bySource.email_in).toBeUndefined();
   }, 120_000);
 
   it("ids in a body or a query answer like an id that is not in the role, and nothing happens to the person", async () => {
@@ -454,6 +580,9 @@ describe("the team cannot read a locked person", () => {
     const timesText = await times.text();
     expect(leaks(timesText)).toEqual([]);
     expect(JSON.parse(timesText).results[0]).toEqual({ applicationId: ids.locked, name: "This candidate", ok: false, code: "not_found", message: "Application not found." });
+    // The body's check lets an id in capitals through, and it is the same person.
+    const inCapitals = await read<{ results: Array<{ code: string }> }>(await json(owner, "POST", `/api/v1/roles/${ids.role}/new-times`, { applicationIds: [ids.locked.toUpperCase()] }));
+    expect(inCapitals.results[0]).toMatchObject({ code: "not_found" });
 
     // Bringing in a recruiter on them is refused; on the role it goes on as ever.
     const asked2 = await json(owner, "POST", "/api/v1/escalations", { kind: "review", applicationId: ids.locked, question: "Who is this?" });
@@ -617,6 +746,45 @@ describe("the team cannot read a locked person", () => {
     expect(JSON.stringify(await read(await json(admin, "GET", `/api/v1/events?subjectId=${ids.locked}`)))).toContain("application.received");
     const logged = (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "admin.break_glass"))).filter((r) => r.actor.id === ada.id);
     expect(logged.length).toBeGreaterThan(0);
+    // The volume by source covers everyone it can read, which here is everyone.
+    const volume = await read<{ totals: { total: number; bySource: Record<string, number> } }>(await json(admin, "GET", `/api/v1/roles/${ids.role}/volume`));
+    expect(Object.values(volume.totals.bySource).reduce((a, b) => a + b, 0)).toBe(volume.totals.total);
+    // The jobs list counts what waits on a person: all of it, not only what is about nobody.
+    const [waiting] = await container.db.insert(approvalRequests).values({ companyId: ids.company, roleId: ids.role, applicationId: ids.locked, actionType: "message.send_freeform", subject: { type: "application", id: ids.locked }, proposal: { text: "A message." }, requestedBy: { kind: "system", id: "test" }, requiredRoles: ["owner"] }).returning();
+    const jobs = await read<Array<{ id: string; needsYou: number }>>(await json(admin, "GET", "/api/v1/roles"));
+    expect(jobs.find((j) => j.id === ids.role)?.needsYou).toBeGreaterThanOrEqual(1);
+    await container.db.delete(approvalRequests).where(eq(approvalRequests.id, waiting.id));
+  }, 120_000);
+
+  it("the Share tab's volume counts someone locked only while an upgrade could open them: who withdrew or was deleted while locked is in no figure, so it adds up and agrees with the job page", async () => {
+    const company = await newCompany();
+    await setLimit(company.id, 1);
+    const j = await openRole(company);
+    await apply(j, person("Vic", "Visible"));
+    const left = await apply(j, person("Lea"));
+    expect((await app.request(`/c/status/${left.statusToken}/withdraw`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ confirm: "yes" }).toString() })).status).toBe(302);
+    const deleted = await apply(j, person("Del"));
+    await withTenant(container.db, company.id, (tx) => anonymizeCandidate(tx, { companyId: company.id, candidateId: deleted.candidateId, actor: { kind: "system", id: "candidate-lock.test" }, deleteFile: async () => undefined }));
+    const waits = await apply(j, person("Wai"));
+    for (const r of [left, deleted, waits]) expect(r.lockedAt).not.toBeNull();
+    type Volume = { totals: { total: number; bySource: Record<string, number> }; days: Array<{ total: number }>; today: { total: number } };
+    const volume = async () => read<Volume>(await json(company.cookie, "GET", `/api/v1/roles/${j.roleId}/volume`));
+    const sources = (v: Volume) => Object.values(v.totals.bySource).reduce((a, b) => a + b, 0);
+    const lockedOnJobPage = async () => (await read<{ locked: { count: number } }>(await json(company.cookie, "GET", `/api/v1/roles/${j.roleId}/applications?counts=1`))).locked.count;
+    // Vic, whom the team reads, and Wai, locked and waiting: one on the Locked line, as on the job page.
+    const before = await volume();
+    expect([before.totals.total, before.today.total, before.days.at(-1)?.total]).toEqual([2, 2, 2]);
+    expect(sources(before)).toBe(1);
+    expect(await lockedOnJobPage()).toBe(1);
+    expect(before.totals.total - sources(before)).toBe(1);
+    // An upgrade opens Wai, and the Locked line goes: the two who left stay locked, and still count nowhere.
+    const moved = await json(admin, "POST", `/api/v1/admin/customers/${company.id}/plan`, { planKey: "pro", reason: "They asked to upgrade." });
+    expect(moved.status, await moved.clone().text()).toBe(200);
+    await container.drain();
+    const after = await volume();
+    expect(after.totals.total).toBe(2);
+    expect(sources(after)).toBe(2);
+    expect(await lockedOnJobPage()).toBe(0);
   }, 120_000);
 
   describe("one neutral notice per job per day", () => {
@@ -763,7 +931,8 @@ describe("the team cannot read a locked person", () => {
       expect((await container.db.select().from(aiRuns).where(eq(aiRuns.companyId, company.id))).length).toBeGreaterThan(runsBefore);
       const list = await read<{ applications: Array<{ id: string }>; locked: { count: number } }>(await json(company.cookie, "GET", `/api/v1/roles/${j.roleId}/applications?counts=1`));
       expect(list.applications.map((a) => a.id)).toContain(row.id);
-      expect(list.locked.count).toBe(1);
+      // Nobody is left to open: the one still locked withdrew while locked, so they have no card, and stay unread.
+      expect(list.locked.count).toBe(0);
 
       // A move back down locks nobody: they stay readable.
       await withPlatform(container.db, (tx) => tx.insert(plans).values({ key: "test_one_here", name: "One", limits: { candidates_per_job: 1 } }).onConflictDoNothing());
@@ -829,6 +998,49 @@ describe("the team cannot read a locked person", () => {
     const again = await json(company.cookie, "POST", `/api/v1/roles/${j.roleId}/closing-message`, { confirm: true, applicationIds: [leeRow.id] });
     expect(again.status).toBe(409);
   }, 120_000);
+
+  it("held emails let in when a job resumes: the notice counts only who the team can read, and says of the rest that more applied", async () => {
+    const heldNotices = (companyId: string) => container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "application.email_held")));
+    const hold = async (j: Job, mark: string, names: string[]) => {
+      const [emailIn] = await container.db.select().from(postings).where(and(eq(postings.roleId, j.roleId), eq(postings.channel, "email_in")));
+      expect((await json(j.cookie, "POST", `/api/v1/roles/${j.roleId}/pause`, {})).status).toBe(200);
+      for (const n of names) expect(await read(await inbound({ From: `${n}@people.test`, FromName: `${n} Sender`, To: `apply-${emailIn.intakeToken}@${container.integrations.env.intakeDomain}`, Subject: `${n} applying`, TextBody: "Please consider me.", Attachments: [], MessageID: `${mark}-${n}` }))).toMatchObject({ matched: true, held: true });
+      const resumed = await json(j.cookie, "POST", `/api/v1/roles/${j.roleId}/resume`, {});
+      expect(resumed.status, await resumed.clone().text()).toBe(200);
+      await container.drain();
+    };
+
+    // Everyone past the limit: nobody was added to anything the team can read.
+    const full = await newCompany();
+    await setLimit(full.id, 1);
+    const allLocked = await openRole(full);
+    await apply(allLocked, { first: "Una", last: "Visible", email: "una.replayed@people.test" });
+    await hold(allLocked, "replay-all", ["zqreplaya", "zqreplayb"]);
+    const [all] = await heldNotices(full.id);
+    expect(all).toMatchObject({ title: `More people applied to ${allLocked.title}.`, body: MORE_CANDIDATES_LINE });
+    expect(`${all.title} ${all.body}`).not.toMatch(/\badded\b|\b2\b/);
+
+    // One within the limit and one past it: the notice counts the one, and says more applied.
+    const some = await newCompany();
+    await setLimit(some.id, 2);
+    const oneRoom = await openRole(some);
+    await apply(oneRoom, { first: "Vic", last: "Visible", email: "vic.replayed@people.test" });
+    await hold(oneRoom, "replay-some", ["zqreplayc", "zqreplayd"]);
+    const [mixed] = await heldNotices(some.id);
+    expect(mixed.title).toBe(`A held email application was added to ${oneRoom.title}`);
+    expect(mixed.body).toContain("so the application that arrived by email while they were closed has been added to the role's applications.");
+    expect(mixed.body).toContain(MORE_CANDIDATES_LINE);
+    expect(`${mixed.title} ${mixed.body}`).not.toMatch(/zqreplay|2 applications/i);
+
+    // Within the limit it reads as it always did.
+    const open = await newCompany();
+    await usePlan(container, open.id, "ultra");
+    const noLimit = await openRole(open);
+    await hold(noLimit, "replay-open", ["zqreplaye", "zqreplayf"]);
+    const [plain] = await heldNotices(open.id);
+    expect(plain.title).toBe(`2 held email applications were added to ${noLimit.title}`);
+    expect(plain.body).not.toContain(MORE_CANDIDATES_LINE);
+  }, 300_000);
 
   it("an emailed-in applicant's address and subject stay out of the two lists that return raw payloads, and the close notice for a held email counts only who the team can read", async () => {
     const company = await newCompany();

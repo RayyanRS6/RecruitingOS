@@ -3,8 +3,8 @@ import { and, eq } from "drizzle-orm";
 import type { FakeHandler, StructuredRequest } from "@ros/ai";
 import type { LearnedFact, RolePacket } from "@ros/contracts";
 import { KEPT_FACTS_MAX, chatFactsOf, chatFactsWithKept, chatGaps, chatOpening, keptFactLines } from "@ros/agents";
-import { entitlements } from "@ros/core";
-import { applications, candidates } from "@ros/db";
+import { entitlements, onFileEarlierFactsLine, onFileFormLine } from "@ros/core";
+import { applications, candidates, entitlements as entitlementRows, withPlatform } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { changeLearnedFact, factsToKeep, reuseToken } from "./services/profile-facts";
@@ -187,6 +187,20 @@ describe("a form opened from the reuse link: the earlier facts, kept or unticked
       expect(page).not.toContain("maria.reyes@example.com");
     }
     expect(plain).toContain(`action="/careers/${slug}/jobs/${roles.b.id}/apply/reuse"`);
+  });
+
+  it("on a job past its limit the same form never says the company sees what they keep: nobody there may read it unless it is reviewed", async () => {
+    const setLimit = (limit: number | null) => withPlatform(container.db, (tx) => tx.update(entitlementRows).set({ limit }).where(and(eq(entitlementRows.companyId, companyId), eq(entitlementRows.key, "candidates_per_job"))));
+    await setLimit(0);
+    try {
+      const html = decode(await (await app.request(`/careers/${slug}/jobs/${roles.b.id}/apply?reuse=${encodeURIComponent(tokenFor(roles.b.id))}`)).text());
+      expect(html).toContain("<legend>From your earlier chats at Kept Dental</legend>");
+      expect(html).toContain(`<p class="meta" id="earlier-note">Untick anything that is no longer true. ${onFileEarlierFactsLine("Kept Dental")}</p>`);
+      expect(html).not.toContain("Kept Dental sees what you keep");
+      expect(html).toContain(onFileFormLine("Kept Dental"));
+    } finally {
+      await setLimit(null);
+    }
   });
 
   it("keeps only ticked ids that are hers, read again through the link, and only when the address typed is the one on file", async () => {
