@@ -1047,9 +1047,10 @@ function checkedForm(container: Container, posted: PostedApplyForm, questions: Q
  * it; this request waits up to about 15 seconds for the reading and then shows "Check your details", or the page that
  * waits a little longer. Nothing to read (Enter pressed before choosing a file) shows the form again with a plain line.
  * A form opened before the job reached its limit (its button still shows) gets no reading: nothing past the limit is read
- * by AI, so the file stays attached and the same form comes back to fill in.
+ * by AI, so the file stays attached and the same form comes back to fill in. It posts by navigation too, so what fails
+ * comes back as the form, never as JSON (`formPost`).
  */
-candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POLICY), async (c) => {
+candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POLICY), (c) => formPost(c, async (drawn) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
   if (!job) return c.notFound();
@@ -1066,7 +1067,9 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   // A form opened from the reuse link lists its earlier facts again, as they were ticked (Wave S8).
   const earlier = await earlierFormState(container, job, posted);
   if (earlier) c.header("Cache-Control", "no-store");
-  const show = (error: string, resumeLost: boolean) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost, earlier }} />, 400);
+  const show = (error: string, resumeLost: boolean, status: 400 | 500 = 400) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost, earlier }} />, status);
+  // From here what fails (the file's storage, above all) brings this form back, with what was typed (`formPost`).
+  drawn.again = (error) => show(`${error} ${keptSentence(true)}`, true, 500);
 
   let upload: UploadGrantPayload | null = null;
   const file = postedFile(body);
@@ -1129,7 +1132,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   const checked = checkedForm(container, posted, questions, { grant, filename: upload.filename }, reading ?? failedReading(upload.uploadId, now));
   c.header("Cache-Control", "no-store");
   return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={{ ...checked.state, earlier }} />);
-});
+}));
 
 /** A reading that did not come (it could not be asked for, or the page stopped waiting): the form says "We could not read … just now". */
 function failedReading(uploadId: string, now: Date): ResumeReading {
@@ -1141,9 +1144,10 @@ function failedReading(uploadId: string, now: Date): ResumeReading {
  * the page has waited long enough (`readingGaveUp`, about 75 seconds after asking) Continue always goes on: the form,
  * the résumé attached, and the line that it could not be read just now. The waiting page's script sends the same. It
  * writes nothing and asks no model, so only the candidate pages' own limit applies: the way on never runs out because
- * the waiting pages behind one address used up the asking's limit (20 Oct).
+ * the waiting pages behind one address used up the asking's limit (20 Oct). It posts by navigation too, so what fails
+ * comes back as the form, never as JSON (`formPost`).
  */
-candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", async (c) => {
+candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", (c) => formPost(c, async (drawn) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
   if (!job) return c.notFound();
@@ -1160,13 +1164,15 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", async (c) => {
   // A form opened from the reuse link lists its earlier facts again, as they were ticked (Wave S8).
   const earlier = await earlierFormState(container, job, posted);
   if (!held) return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={UPLOAD_EXPIRED} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost: true, earlier }} />, 400);
+  // From here what fails (the reading's note could not be read) brings this form back, with what was typed and the résumé still attached (`formPost`).
+  drawn.again = (error) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={`${error} ${keptSentence(false)}`} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: { grant: posted.grant, filename: held.filename }, resumeLost: false, earlier }} />, 500);
   const reading = await readingFor(container.integrations.storage, held);
   const now = container.engine.clock();
   const gaveUp = readingGaveUp(held, reading, now);
   if (!reading && !gaveUp && str("skip") !== "yes") return c.html(<ReadingPage company={job.company} title={job.packet.identity.title} flow={flow} links={applyLinks(job)} posted={posted} questions={questions} grant={posted.grant} filename={held.filename} formOpened={formOpened} still />);
   const checked = checkedForm(container, posted, questions, { grant: posted.grant, filename: held.filename }, gaveUp ? reading ?? failedReading(held.uploadId, now) : reading);
   return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={{ ...checked.state, earlier }} />);
-});
+}));
 
 /**
  * The waiting page's question (with script): is the reading done? Only for the upload the asking page holds. `gave_up`
@@ -1193,11 +1199,12 @@ export const NOT_SENT_LINE = "Your application was not sent: something went wron
 type FormAgain = { again?: (error: string) => Response | Promise<Response>; committed?: boolean };
 
 /**
- * Sends the form. It posts by navigation, so whatever goes wrong before the application is stored, a job's lock that timed
- * out behind a long change of plan above all, must not answer with the API's JSON, which is all the browser would show
- * (the check of 9 November, C8): the form comes back with what was typed and the line that it was not sent, or, before the
- * form can be drawn, a page that says the same. Logged and reported as the API does what nothing handled. Once stored it
- * was sent, so what fails after that (only an inline worker's drain) is answered as it always was.
+ * One of the form's posts: Send, Read my resume, and Continue on the page that waits for a reading. Each posts by
+ * navigation, so whatever goes wrong before an application is stored, a job's lock that timed out behind a long change of
+ * plan above all, must not answer with the API's JSON, which is all the browser would show (the check of 9 November, C8):
+ * the form comes back with what was typed and the line that it was not sent, or, before the form can be drawn, a page that
+ * says the same. Logged and reported as the API does what nothing handled. Once stored it was sent, so what fails after
+ * that (only an inline worker's drain) is answered as it always was.
  */
 async function formPost(c: Context<Vars>, send: (drawn: FormAgain) => Promise<Response>): Promise<Response> {
   const drawn: FormAgain = {};

@@ -9,7 +9,7 @@ import { DISCARD_OBJECT_JOB_KIND } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { CSS } from "./pages/layout";
-import { APPLY_CSS, APPLY_READ_WAIT_JS, FROM_RESUME_TAG, RESUME_READ_NOTICE, SUGGESTED_FROM_RESUME_TAG, formQuestions, postedApplyForm, reusedState, withResumeReading } from "./pages/apply-form";
+import { APPLY_CSS, APPLY_READ_WAIT_JS, FROM_RESUME_TAG, NOT_SENT_LINE, RESUME_READ_NOTICE, SUGGESTED_FROM_RESUME_TAG, formQuestions, keptSentence, postedApplyForm, reusedState, withResumeReading } from "./pages/apply-form";
 import { JOURNEY_CSS } from "./pages/journey";
 import { RESUME_READING_EXPIRE_JOB_KIND, RESUME_READING_JOB_KIND, detailsFrom, expireResumeReading, factsFrom, readingFor, readingKey, runResumeReading, splitName, suggestQuickAnswer, workSummaryFrom, type ResumeReading } from "./services/apply-details";
 import type { UploadGrantPayload } from "./uploads";
@@ -493,6 +493,41 @@ describe("the apply form: résumé first, check your details, questions from the
     expect(flagged).toContain("We could not use flagged.txt. Please choose a different file, or answer the four short questions instead.");
     expect(grantOf(flagged)).toBe("");
     expect(flagged).toContain("Start with your resume");
+  });
+
+  it("Read my resume and Continue never answer with the API's JSON: what fails brings the form back, with what was typed and the line that nothing was sent", async () => {
+    const storage = container.integrations.storage;
+    const { put, get } = storage;
+    // the form's own copy of the file cannot be stored: the form again, everything typed kept, and the file to attach again
+    storage.put = async () => { throw new StorageError("put", 503); };
+    let read: Response;
+    try {
+      read = await post("/apply/read", fields({ firstName: "Ora", lastName: "Kept", email: "ora.kept@example.com", resume: new File([RESUME], "ora.txt", { type: "text/plain" }) }));
+    } finally {
+      storage.put = put;
+    }
+    expect(read.status).toBe(500);
+    expect(read.headers.get("content-type")).toContain("text/html");
+    const page = decode(await read.text());
+    expect(page).not.toContain('"error":{');
+    expect(page).toContain(`${NOT_SENT_LINE} ${keptSentence(true)}`);
+    expect(inputValue(page, "firstName")).toBe("Ora");
+    expect(inputValue(page, "email")).toBe("ora.kept@example.com");
+    // Continue, when the reading's note cannot be read: the form again, with the résumé still attached
+    const grant = container.uploadGrants.seal(await directUpload("ora.txt", RESUME));
+    storage.get = async () => { throw new StorageError("get", 503); };
+    let more: Response;
+    try {
+      more = await post("/apply/details", fields({ uploadGrant: grant, firstName: "Ora" }));
+    } finally {
+      storage.get = get;
+    }
+    expect(more.status).toBe(500);
+    const again = decode(await more.text());
+    expect(again).not.toContain('"error":{');
+    expect(again).toContain(`${NOT_SENT_LINE} ${keptSentence(false)}`);
+    expect(inputValue(again, "firstName")).toBe("Ora");
+    expect(grantOf(again)).toBe(grant);
   });
 
   it("a reading nobody sent keeps only its bookkeeping after a day; the job does nothing twice", async () => {
