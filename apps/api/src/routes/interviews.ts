@@ -366,10 +366,17 @@ export async function routePick(tx: Tx, input: { iv: typeof interviews.$inferSel
   const wokenNow = input.woken > 0 && run?.status === "waiting" && Array.isArray(keys) && keys.includes(key);
   if (wokenNow) return "workflow";
   if (run && ((run.status === "waiting" && run.currentStep === "offer_slots") || (run.status === "running" && BOOKS_A_PICK.includes(run.currentStep ?? "")))) return "workflow";
-  const userIds = (await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, input.iv.id))).map((p) => p.userId);
-  if (await clashesWithBookings(tx, { companyId: input.iv.companyId, interviewId: input.iv.id, userIds, slot: input.slot })) return "taken";
+  if (await slotTakenSince(tx, input.iv, input.slot)) return "taken";
   return "direct";
 }
+
+/** Whether one of the interview's interviewers was booked for another interview at that time since it was offered. */
+async function slotTakenSince(tx: Tx, iv: typeof interviews.$inferSelect, slot: OfferedSlot): Promise<boolean> {
+  const userIds = (await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id))).map((p) => p.userId);
+  return clashesWithBookings(tx, { companyId: iv.companyId, interviewId: iv.id, userIds, slot });
+}
+
+const SLOT_TAKEN = "That time is no longer free: an interviewer was booked for another interview then. Choose another time.";
 
 /**
  * Books a picked time straight away (`routePick` said "direct"): a new attempt, so a run still waiting on this interview
@@ -393,7 +400,9 @@ export async function bookPickNow(tx: Tx, container: Container, input: { iv: typ
 /**
  * The owner picks a time for the candidate after a phone call; recorded as a human action and audited as a booking.
  * Booked by the run that waits for a pick, or straight away when none does (`routePick`); a time that clashes with
- * another interview booked since is refused with a plain message. `booking` says which ("workflow" or "direct").
+ * another interview booked since is refused with a plain message, before any run is told, so the person on the phone
+ * hears it at once (a run would find it only as it books, and offer the times again). `booking` says which ("workflow"
+ * or "direct").
  */
 interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -407,10 +416,12 @@ interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
     if (iv.status !== "scheduling") throw new HttpError(409, "interview_not_schedulable", "Times are not being offered right now.");
     const slot = iv.offeredSlots.find((s) => s.id === body.slotId);
     if (!slot) throw new HttpError(400, "slot_unknown", "That time is not one of the offered slots.");
+    // a time that has passed is refused below as stale; one taken since, here, before the run waiting for a pick is told
+    if (slotStillAhead(slot, container.engine.clock()) && (await slotTakenSince(tx, iv, slot))) throw new HttpError(409, "slot_taken", SLOT_TAKEN);
     const woken = await container.engine.signal(tx, { companyId: t.companyId, key: `${iv.id}:interview.slot_selected`, payload: { slotId: slot.id, onBehalf: true } });
     const route = await routePick(tx, { iv, slot, woken, now: container.engine.clock() });
     if (route === "stale") throw new HttpError(409, "slot_unknown", "That time has passed or starts within the hour. Choose a later one.");
-    if (route === "taken") throw new HttpError(409, "slot_taken", "That time is no longer free: an interviewer was booked for another interview then. Choose another time.");
+    if (route === "taken") throw new HttpError(409, "slot_taken", SLOT_TAKEN);
     const [picked] = await tx.update(interviews).set({ selectedSlot: slot }).where(and(eq(interviews.id, iv.id), eq(interviews.attempt, iv.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
     if (!picked) throw new HttpError(409, "interview_not_schedulable", "The times changed a moment ago. Open the interview again and choose from the new ones.");
     await emit(tx, { type: "interview.slot_selected", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { slotId: slot.id, onBehalf: true, note: body.note ?? null, booking: route } });

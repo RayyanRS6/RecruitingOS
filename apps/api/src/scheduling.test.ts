@@ -725,6 +725,39 @@ describe("interview scheduling", () => {
     await container.drain();
   });
 
+  // Found by the whole-flow walks in a real browser (10 November 2026): two people offered the same times, one picked a
+  // time, and "Book this for them" on that same time for the other said "Booking that time for them" while the run that
+  // waits for a pick was told; it found the clash only when it booked, and offered the times again. A person booking for
+  // them is told at once instead, and nothing moves.
+  it("a booking for them on a time booked for another interview since is refused plainly while a run still waits for a pick, and nothing is offered again", async () => {
+    const lia = await apply("Lia", "Moss");
+    const max = await apply("Max", "Reed");
+    const ivA = await requestInterview(lia.id);
+    const ivB = await requestInterview(max.id);
+    const rowA = await interview(ivA.id);
+    const rowB = await interview(ivB.id);
+    const shared = rowA.offeredSlots.find((s) => rowB.offeredSlots.some((x) => x.startsAt === s.startsAt))!;
+    expect(shared).toBeTruthy();
+    // Max picks the shared time on his own page
+    await pick(rowB.scheduleToken!, rowB.offeredSlots.find((x) => x.startsAt === shared.startsAt)!.id);
+    expect((await interview(ivB.id)).status).toBe("scheduled");
+    const before = outbox().length;
+    // the owner, on the phone with Lia, books that same time for her: refused in words, and her interview is as it was
+    const refused = await json(owner, "POST", `/api/v1/interviews/${ivA.id}/book-on-behalf`, { slotId: shared.id, note: "agreed by phone" });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "slot_taken", message: "That time is no longer free: an interviewer was booked for another interview then. Choose another time." } });
+    await container.drain();
+    expect(await interview(ivA.id)).toMatchObject({ status: "scheduling", selectedSlot: null, attempt: rowA.attempt });
+    expect(outbox().slice(before).filter((m) => m.to === lia.email).map((m) => m.subject)).toEqual([]);
+    // another of her times still books for her
+    const other = rowA.offeredSlots.find((s) => s.startsAt !== shared.startsAt && Math.abs(Date.parse(s.startsAt) - Date.parse(shared.startsAt)) > 3 * H)!;
+    expect((await json(owner, "POST", `/api/v1/interviews/${ivA.id}/book-on-behalf`, { slotId: other.id, note: "agreed by phone" })).status).toBe(200);
+    await container.drain();
+    expect(await interview(ivA.id)).toMatchObject({ status: "scheduled" });
+    for (const id of [ivA.id, ivB.id]) await json(owner, "POST", `/api/v1/interviews/${id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+  });
+
   it("a time that has passed is never booked: the page leaves it out, and a pick or a booking for them is refused plainly", async () => {
     await wesIn();
     expect((await hoursFor(wes, weekdays("09:00", "17:00"))).status).toBe(200);
