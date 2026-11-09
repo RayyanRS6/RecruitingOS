@@ -149,7 +149,7 @@ describe("the interview approval's meeting link", () => {
 
   it("without a working calendar, asks for the link instead of promising one the calendar cannot make", () => {
     const words = step(null);
-    expect(words).toContain("Approve an interview");
+    expect(words).toContain("Set a date and time");
     expect(words).not.toContain("Create it with the calendar event");
     expect(words).toContain("Meeting link (optional)");
     // "(optional)" says it may stay empty, and the video-call line below says what an empty one means: no hint repeats it

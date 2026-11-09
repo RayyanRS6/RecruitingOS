@@ -40,29 +40,41 @@ export function suggestedStepOf(a: ApplicationDetail): { label: string; reason: 
 /** The button beside the suggested next step: a stage move (it opens the same step as the stage button), a section, or writing to them. */
 export type NextStepAction = { kind: "move"; to: OwnerStage; label: string } | { kind: "tab"; tab: "resume"; label: string } | { kind: "write"; label: string };
 
-const MOVE_WORDS: Partial<Record<OwnerStage, string>> = { shortlist: "Move to Shortlist", longlist: "Move to Longlist", interviewing: "Approve an interview", not_moving_forward: "Not moving forward" };
+const MOVE_WORDS: Partial<Record<OwnerStage, string>> = { shortlist: "Move to Shortlist", longlist: "Move to Longlist", interviewing: "Set a date and time", not_moving_forward: "Not moving forward" };
 
 /**
- * What the one button beside the suggested next step does (Wave S1): the board's suggestion applied the way the stage
- * button would (an interview opens the approval, Not moving forward opens the private decline; nothing moves by itself),
- * the résumé for "Read it yourself", or the message box for "Ask for more detail". Null when there is nothing to press:
- * no suggestion, or a move the API does not allow now.
+ * The buttons beside the suggested next step (Wave S1), the first the main one: the board's suggestion applied the way the
+ * stage button would (Not moving forward opens the private decline; nothing moves by itself), the résumé for "Read it
+ * yourself", or the message box for "Ask for more detail". An interview offers Shortlist first and then "Set a date and
+ * time", as the owner works ("Nadine reads and shortlists", 6 November 2026); a time can still be set from New. Empty when
+ * there is nothing to press: no suggestion, or moves the API does not allow now.
  */
-export function nextStepAction(a: Pick<ApplicationDetail, "stageMoves" | "candidate"> & ScoredDetail): NextStepAction | null {
+export function nextStepActions(a: Pick<ApplicationDetail, "stageMoves" | "candidate"> & ScoredDetail): NextStepAction[] {
   const p = a.placement;
-  if (p?.state !== "suggested" || !p.nextStep) return null;
+  if (p?.state !== "suggested" || !p.nextStep) return [];
   const may = (to: OwnerStage) => a.stageMoves.some((m) => m.to === to && m.allowed && !m.current);
   const move = (to: OwnerStage): NextStepAction | null => (may(to) && MOVE_WORDS[to] ? { kind: "move", to, label: MOVE_WORDS[to]! } : null);
+  // the buttons given, in order, each move once
+  const some = (...xs: Array<NextStepAction | null>) => {
+    const out: NextStepAction[] = [];
+    for (const x of xs) if (x && !out.some((y) => y.kind === "move" && x.kind === "move" && y.to === x.to)) out.push(x);
+    return out;
+  };
   switch (p.nextStep.kind) {
     case "read_yourself":
-      return { kind: "tab", tab: "resume", label: "Open the résumé" };
+      return [{ kind: "tab", tab: "resume", label: "Open the résumé" }];
     case "interview":
-      return move("interviewing") ?? (p.suggestedAction ? move(p.suggestedAction) : null);
+      return some(move("shortlist"), move("interviewing"), p.suggestedAction ? move(p.suggestedAction) : null).slice(0, 2);
     case "ask_more":
-      return a.candidate.email ? { kind: "write", label: `Write to ${a.candidate.firstName || "them"}` } : null;
+      return a.candidate.email ? [{ kind: "write", label: `Write to ${a.candidate.firstName || "them"}` }] : [];
     default:
-      return p.suggestedAction ? move(p.suggestedAction) : null;
+      return some(p.suggestedAction ? move(p.suggestedAction) : null);
   }
+}
+
+/** The main button beside the suggested next step, or null (`nextStepActions`). */
+export function nextStepAction(a: Pick<ApplicationDetail, "stageMoves" | "candidate"> & ScoredDetail): NextStepAction | null {
+  return nextStepActions(a)[0] ?? null;
 }
 
 /**

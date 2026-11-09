@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment, RolePacket } from "@ros/contracts";
 import type { ApplicationDetail } from "../../apps/web/src/api/client";
-import { MATCH_PROMISE, basisLine, cappedLine, competencyChip, confidenceChip, coverageLine, criterionTag, fitWord, importanceTag, leftOut, matchBars, matchCardState, missingMustHaves, mustHaveLineOf, nextStepAction, orderCompetencyFindings, orderRequirementFindings, quoteSummary, requirementChip, suggestedStepOf, verdictLine, versionNote } from "../../apps/web/src/pages/candidate-panel/match-view";
+import { MATCH_PROMISE, basisLine, cappedLine, competencyChip, confidenceChip, coverageLine, criterionTag, fitWord, importanceTag, leftOut, matchBars, matchCardState, missingMustHaves, mustHaveLineOf, nextStepAction, nextStepActions, orderCompetencyFindings, orderRequirementFindings, quoteSummary, requirementChip, suggestedStepOf, verdictLine, versionNote } from "../../apps/web/src/pages/candidate-panel/match-view";
 import { firstSentence, recChip } from "../../apps/web/src/pages/candidate-panel/helpers";
 import { MATCH_SCORE_PROMISE, matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
@@ -93,9 +93,14 @@ describe("the match card", () => {
     const moves = (allowed: string[]) => ["new", "longlist", "shortlist", "interviewing", "not_moving_forward"].map((to) => ({ to, label: to, via: "set_mark", allowed: allowed.includes(to), current: to === "new" }));
     const at = (kind: string, suggestedAction: string | null, allowed = ["longlist", "shortlist", "interviewing", "not_moving_forward"], email: string | null = "maria@example.com") => ({ stageMoves: moves(allowed), candidate: { firstName: "Maria", email }, placement: { column: "shortlist", state: "suggested", doneLabel: null, confident: true, needsYourEye: null, reason: "r", nextStep: { kind, label: kind, reason: "r" }, suggestedAction, declineReason: null } }) as never;
     expect(nextStepAction(at("keep_as_backup", "longlist"))).toEqual({ kind: "move", to: "longlist", label: "Move to Longlist" });
-    expect(nextStepAction(at("interview", "shortlist"))).toEqual({ kind: "move", to: "interviewing", label: "Approve an interview" });
+    // an interview: Shortlist first, then "Set a date and time" (6 November 2026: Nadine reads, shortlists, then sets the time)
+    expect(nextStepAction(at("interview", "shortlist"))).toEqual({ kind: "move", to: "shortlist", label: "Move to Shortlist" });
+    expect(nextStepActions(at("interview", "shortlist"))).toEqual([{ kind: "move", to: "shortlist", label: "Move to Shortlist" }, { kind: "move", to: "interviewing", label: "Set a date and time" }]);
+    // with Shortlist not open to them now, "Set a date and time" is the one
+    expect(nextStepActions(at("interview", "shortlist", ["interviewing"]))).toEqual([{ kind: "move", to: "interviewing", label: "Set a date and time" }]);
     // an interview the role may not request yet: the board's own column instead
     expect(nextStepAction(at("interview", "shortlist", ["shortlist"]))).toEqual({ kind: "move", to: "shortlist", label: "Move to Shortlist" });
+    expect(nextStepActions(at("interview", "shortlist", ["shortlist"]))).toHaveLength(1);
     expect(nextStepAction(at("not_moving_forward", "not_moving_forward"))).toEqual({ kind: "move", to: "not_moving_forward", label: "Not moving forward" });
     expect(nextStepAction(at("read_yourself", "longlist"))).toEqual({ kind: "tab", tab: "resume", label: "Open the résumé" });
     expect(nextStepAction(at("ask_more", null))).toEqual({ kind: "write", label: "Write to Maria" });

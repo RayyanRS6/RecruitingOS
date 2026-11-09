@@ -146,13 +146,13 @@ export function keepWarmToast(name: string, startDate: string | null, now: Date 
 /* The interview approval filled in from a suggestion (plan H4)                                                   */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** The line above the filled-in interview approval: what was filled in, and that the approval is still a person's. */
-export function interviewDraftLine(draft: Pick<InterviewDraft, "roundTitle" | "durationMinutes" | "interviewerUserIds" | "window" | "nextRound">): string {
-  const who = draft.interviewerUserIds.length ? `${draft.interviewerUserIds.length === 1 ? "1 interviewer" : `${draft.interviewerUserIds.length} interviewers`} from the plan` : "nobody yet (choose who interviews below)";
-  const from = draft.window.fromDate ? plainDayWords(draft.window.fromDate) : null;
-  const to = draft.window.toDate ? plainDayWords(draft.window.toDate) : null;
-  const when = from && to ? ` Times are offered between ${from} and ${to}${draft.window.businessDaysOnly ? ", on working days" : ""}.` : "";
-  return `Filled in from your interview plan: the ${draft.nextRound ? "next round, " : ""}${draft.roundTitle} (${draft.durationMinutes} minutes), with ${who}.${when} Check it and approve; nothing goes to the candidate until you do.`;
+/**
+ * What the "Set a date and time" form was filled in with, one click away under "Why": the round and who interviews, and
+ * that the press is still a person's (6 November 2026: the day and time are the person's own, so no window is said).
+ */
+export function interviewDraftLine(draft: Pick<InterviewDraft, "roundTitle" | "durationMinutes" | "interviewerUserIds" | "nextRound">): string {
+  const who = draft.interviewerUserIds.length ? `${draft.interviewerUserIds.length === 1 ? "1 interviewer" : `${draft.interviewerUserIds.length} interviewers`} from the plan` : "nobody yet (choose who interviews above)";
+  return `Filled in from your interview plan: the ${draft.nextRound ? "next round, " : ""}${draft.roundTitle} (${draft.durationMinutes} minutes), with ${who}. Nothing goes to the candidate until you book it.`;
 }
 
 /**

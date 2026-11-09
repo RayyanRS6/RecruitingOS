@@ -74,25 +74,31 @@ export async function candidateNoticeOfBooking(tx: Tx, input: { companyId: strin
 }
 
 /**
- * What became of the candidate's email about a booked time, for the sheet and the panel: `held` until ITS confirms the
- * company, `failed` when it could not be delivered, `no_email` when there is no address to send it to, null when nothing
- * needs saying. Only for an interview still booked, read off the current attempt's own email.
+ * What became of the candidate's email about an interview, for the Interviews page, its sheet and the panel: `held` until
+ * ITS confirms the company, `failed` when it could not be delivered, `no_email` when there is no address to send it to,
+ * null when nothing needs saying. Read off the current attempt's own email: a booked time's confirmation, or the times
+ * offered to pick from (still offered, or lapsed), so a screen never says "Waiting on the candidate" when nothing reached
+ * them. `hasEmail` on an interview (a list of several people) wins over the one given for all of them.
  */
 export type CandidateEmailState = "held" | "failed" | "no_email" | null;
 const NOT_DELIVERED = new Set(["failed", "bounced", "unknown"]);
-export async function candidateEmailStates(tx: Tx, input: { interviews: ReadonlyArray<{ id: string; attempt: number; status: string }>; hasEmail: boolean }): Promise<Map<string, CandidateEmailState>> {
-  const booked = input.interviews.filter((i) => i.status === "scheduled");
+type EmailFacts = { id: string; attempt: number; status: string; offeredSlots?: readonly unknown[] | null; hasEmail?: boolean };
+/** The key of the email that tells them of this interview as it stands, or null when none is due. */
+function tellingKey(i: EmailFacts): string | null {
+  if (i.status === "scheduled") return `confirm:${i.id}:${i.attempt}`;
+  if ((i.status === "scheduling" && (i.offeredSlots?.length ?? 0) > 0) || i.status === "offer_expired") return `slots:${i.id}:${i.attempt}`;
+  return null;
+}
+export async function candidateEmailStates(tx: Tx, input: { interviews: ReadonlyArray<EmailFacts>; hasEmail?: boolean }): Promise<Map<string, CandidateEmailState>> {
   const out = new Map<string, CandidateEmailState>(input.interviews.map((i) => [i.id, null]));
-  if (!booked.length) return out;
-  if (!input.hasEmail) {
-    for (const i of booked) out.set(i.id, "no_email");
-    return out;
-  }
-  const keys = booked.map((i) => `confirm:${i.id}:${i.attempt}`);
-  const rows = await tx.select({ key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, keys));
+  const due = input.interviews.flatMap((i) => { const key = tellingKey(i); return key ? [{ i, key }] : []; });
+  const reachable = due.filter(({ i }) => i.hasEmail ?? input.hasEmail ?? true);
+  for (const { i } of due) if (!(i.hasEmail ?? input.hasEmail ?? true)) out.set(i.id, "no_email");
+  if (!reachable.length) return out;
+  const rows = await tx.select({ key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, reachable.map((x) => x.key)));
   const statusOf = new Map(rows.map((r) => [r.key, r.status]));
-  for (const i of booked) {
-    const status = statusOf.get(`confirm:${i.id}:${i.attempt}`);
+  for (const { i, key } of reachable) {
+    const status = statusOf.get(key);
     out.set(i.id, status === "held" ? "held" : status && NOT_DELIVERED.has(status) ? "failed" : null);
   }
   return out;

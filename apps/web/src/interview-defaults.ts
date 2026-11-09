@@ -1,5 +1,5 @@
 /**
- * Who is ticked when "Approve an interview" opens on a candidate. The round itself comes from the packet version the
+ * Who is ticked when "Set a date and time" opens on a candidate. The round itself comes from the packet version the
  * application runs on (the API checks the round against it), but the people come from the role's current interview plan
  * when that round is still in it, so interviewers assigned on the Interview plan tab reach candidates who applied
  * before the assignment. Only active team members are ever ticked: a removed member's id would be invisible on the
@@ -51,11 +51,17 @@ export function defaultInterviewers(input: {
   picked?: string[] | null;
   /** Active members of the team; null while the list is loading, which ticks nobody yet. */
   activeMemberIds: ReadonlySet<string> | null;
+  /**
+   * The person setting it up (6 November 2026): ticked when the plan names nobody still on the team, so the button is never
+   * greyed for want of a name nobody was asked for. Never once they changed the ticks by hand.
+   */
+  fallbackUserId?: string | null;
 }): string[] {
   if (!input.activeMemberIds) return [];
   const active = input.activeMemberIds;
   const fromCurrent = input.currentPlan?.find((r) => r.key === input.roundKey)?.interviewerUserIds;
   const fromApplication = input.applicationPlan.find((r) => r.key === input.roundKey)?.interviewerUserIds;
-  const ids = input.picked ?? fromCurrent ?? fromApplication ?? [];
-  return [...new Set(ids)].filter((id) => active.has(id));
+  const ids = [...new Set(input.picked ?? fromCurrent ?? fromApplication ?? [])].filter((id) => active.has(id));
+  if (!ids.length && !input.picked && input.fallbackUserId && active.has(input.fallbackUserId)) return [input.fallbackUserId];
+  return ids;
 }

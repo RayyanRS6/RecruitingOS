@@ -563,7 +563,8 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
         review_anyway: "Reopened after an eligibility decline",
         invite_screen: "Invited to an AI interview",
         ask_in_screen: "Invited to an AI interview that starts with the open questions",
-        "interview.request": "Approved an interview; times go out to the candidate",
+        // a time a person set, or times worked out for them to pick: both start here, so neither is said
+        "interview.request": "Set up an interview",
         flag_assessment: "Flagged the AI review as wrong",
         outcome: `Recorded an outcome${str(p.outcome) ? `: ${String(p.outcome).replace(/_/g, " ")}` : ""}`,
         outcome_corrected: "An ITS administrator corrected the recorded outcome",

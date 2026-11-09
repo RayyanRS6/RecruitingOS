@@ -1368,6 +1368,39 @@ describe("a person sets the date and time", () => {
       const moved = (await (await routeB(booked.id)).json()) as Booked;
       expect(moved.moved).toBe(false);
     });
+
+    it("times offered on the old path that did not reach them say so on the list, the sheet and the panel; times that did say nothing", async () => {
+      // the old path needs hours: Pia has them; nobody else does
+      const pia = await signInAs(container, app, { companyId, role: "hiring_manager", email: "pia@settime.test", name: "Pia Moss" });
+      const piaId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "pia@settime.test")))[0].id;
+      expect((await json(pia, "PUT", "/api/v1/me/availability", { timezone: TZ, windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 12 })).status).toBe(200);
+      const states = async (cand: Applicant, id: string) => {
+        const list = (await (await json(owner, "GET", "/api/v1/interviews")).json()) as Array<{ id: string; status: string; offeredSlots: unknown[]; candidateEmail: string | null }>;
+        const sheet = (await (await json(owner, "GET", `/api/v1/interviews/${id}`)).json()) as { candidateEmail: string | null };
+        const panel = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { interviews: Array<{ id: string; candidateEmail: string | null }> };
+        const row = list.find((i) => i.id === id)!;
+        expect(row.status).toBe("scheduling");
+        expect(row.offeredSlots.length).toBeGreaterThan(0);
+        return [row.candidateEmail, sheet.candidateEmail, panel.interviews.find((i) => i.id === id)?.candidateEmail];
+      };
+      // the times reached them: nothing to say, so the page may say "Waiting on the candidate"
+      const { cand: rex, id } = await approveFor(await apply("Rex", "Offered"), { interviewerUserIds: [piaId] });
+      const offered = await interview(id);
+      expect((await emailOf(`slots:${id}:${offered.attempt}`)).status).toBe("sent");
+      expect(await states(rex, id)).toEqual([null, null, null]);
+      // the provider refused it: never "Waiting on the candidate"
+      await container.db.update(communications).set({ status: "failed", error: "provider refused" }).where(eq(communications.idempotencyKey, `slots:${id}:${offered.attempt}`));
+      expect(await states(rex, id)).toEqual(["failed", "failed", "failed"]);
+      // no address on file: the times can never reach them
+      const sol = await apply("Sol", "Noaddress");
+      await withPlatform(container.db, (tx) => tx.update(candidates).set({ email: null }).where(eq(candidates.id, sol.candidateId)));
+      const { id: solId } = await approveFor(sol, { interviewerUserIds: [piaId] });
+      expect(await states(sol, solId)).toEqual(["no_email", "no_email", "no_email"]);
+      // a person sets the time instead: the interview is booked, and its own confirmation is what the screens read
+      const r = await routeB(id);
+      expect(r.status, await r.clone().text()).toBe(200);
+      expect(((await r.json()) as Booked & { candidateEmail: string | null }).candidateEmail).toBeNull();
+    });
   });
 
   describe("a company ITS has not confirmed", () => {

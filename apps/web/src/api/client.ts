@@ -265,6 +265,8 @@ export type InterviewSummary = {
   participants: Array<{ userId: string; name: string | null; email: string; status: string }>;
   calendarRefs: Record<string, { provider: string; eventId: string; htmlLink: string | null; meetingUrl: string | null }>;
   followUp?: InterviewFollowUpRef | null;
+  /** What became of the email that tells them of it as it stands (a booked time, or times to pick from); older answers leave it out. */
+  candidateEmail?: CandidateEmailState;
 };
 // Postings (docs/spec/20): what the Posting tab reads and writes (apps/api/src/routes/postings.ts).
 /** `landing`: a shared link opens the job page first ("job"), a board's own link the form ("apply"), plan D8. */
@@ -322,8 +324,8 @@ export type PostingTaskDetail = {
 export type VolumeDay = { day: string; total: number; bySource: Record<string, number> };
 export type VolumeReport = { from: string; to: string; timeZone: string; days: VolumeDay[]; totals: { total: number; bySource: Record<string, number> }; sources: Array<{ source: string; label: string; total: number }>; threshold: number; yesterday: { day: string; total: number }; today: { day: string; total: number }; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null };
 
-export type InterviewDetail = InterviewSummary & { timeline: Array<{ type: string; occurredAt: string; actor: { kind: string; name?: string; id: string }; payload: Record<string, unknown> }>; availabilitySources: Array<{ userId: string; source: "calendar" | "declared" | "none"; calendarStatus: string | null }>; brief: InterviewerBrief | null; /** What became of the email about a booked time (`CandidateEmailState`). */ candidateEmail?: CandidateEmailState };
-/** What became of the candidate's email about a booked time: it waits for the ITS check, it could not be delivered, or there is no address on file. Null when nothing needs saying. */
+export type InterviewDetail = InterviewSummary & { timeline: Array<{ type: string; occurredAt: string; actor: { kind: string; name?: string; id: string }; payload: Record<string, unknown> }>; availabilitySources: Array<{ userId: string; source: "calendar" | "declared" | "none"; calendarStatus: string | null }>; brief: InterviewerBrief | null };
+/** What became of the candidate's email about an interview (a booked time, or times to pick from): it waits for the ITS check, it could not be delivered, or there is no address on file. Null when nothing needs saying. */
 export type CandidateEmailState = "held" | "failed" | "no_email" | null;
 /**
  * The answer to setting a date and time (POST /applications/:id/interviews with `setTime`, POST /interviews/:id/set-time):

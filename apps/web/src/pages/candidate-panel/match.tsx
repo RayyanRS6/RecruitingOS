@@ -8,7 +8,7 @@ import { CLOSER_LOOK_LABEL, LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLoo
 import { overallLabel } from "./assessment";
 import { resumeOnlyChip } from "../../talent-list";
 import { firstSentence, notReadYetWords } from "./helpers";
-import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, basisLine, cappedLine, confidenceChip, coverageLine, fitWord, leftOut, matchBars, matchCardState, missingMustHaves, nextStepAction, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
+import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, basisLine, cappedLine, confidenceChip, coverageLine, fitWord, leftOut, matchBars, matchCardState, missingMustHaves, nextStepActions, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
 import { CARD, QUOTE, Why } from "./why";
 
 /**
@@ -105,14 +105,15 @@ export function TheirWords({ quote, label = "Their words" }: { quote: string; la
 export function NextStepLine({ a, onAction }: { a: ApplicationDetail; onAction?: (action: NextStepAction) => void }) {
   const next = suggestedStepOf(a);
   if (!next) return null;
-  const action = onAction ? nextStepAction(a) : null;
+  // the main button first; an interview's second ("Set a date and time" after Shortlist) quieter beside it
+  const actions = onAction ? nextStepActions(a) : [];
   const { line, rest } = firstSentence(next.reason);
   return (
     <div className={PART}>
       <h3 className="eyebrow">Suggested next step</h3>
       <div className="row justify-between">
         <p className="small min-w-0 flex-[1_1_220px]"><strong>{next.label}</strong>{line ? <> · <span className={next.needsYourEye ? "text-caution" : undefined}>{line}</span></> : null}</p>
-        {action ? <Button size="sm" onClick={() => onAction?.(action)}>{action.label}</Button> : null}
+        {actions.length ? <span className="row">{actions.map((x, i) => <Button key={x.label} size="sm" variant={i === 0 ? undefined : "quiet"} onClick={() => onAction?.(x)}>{x.label}</Button>)}</span> : null}
       </div>
       {rest ? <Why>{rest}</Why> : null}
     </div>

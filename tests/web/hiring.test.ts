@@ -98,9 +98,10 @@ describe("the hire sheet (plan H1)", () => {
 describe("Yes, interview: the approval filled in (plan H4)", () => {
   const draft = { applicationId: "a1", roleId: "r1", roundKey: "working", roundTitle: "Working interview", durationMinutes: 45, interviewerUserIds: ["u1", "u2"], window: { fromDate: "2026-10-12", toDate: "2026-10-23", businessDaysOnly: true }, nextRound: false };
 
-  it("says what was filled in, and that nothing goes until the person approves", () => {
-    expect(interviewDraftLine(draft)).toBe("Filled in from your interview plan: the Working interview (45 minutes), with 2 interviewers from the plan. Times are offered between Monday, October 12 and Friday, October 23, on working days. Check it and approve; nothing goes to the candidate until you do.");
-    expect(interviewDraftLine({ ...draft, interviewerUserIds: [], nextRound: true })).toMatch(/the next round, Working interview \(45 minutes\), with nobody yet \(choose who interviews below\)/);
+  it("says what was filled in, and that nothing goes until the person books it", () => {
+    // the day and time are the person's own (6 November 2026), so no window of times is said
+    expect(interviewDraftLine(draft)).toBe("Filled in from your interview plan: the Working interview (45 minutes), with 2 interviewers from the plan. Nothing goes to the candidate until you book it.");
+    expect(interviewDraftLine({ ...draft, interviewerUserIds: [], nextRound: true })).toMatch(/the next round, Working interview \(45 minutes\), with nobody yet \(choose who interviews above\)/);
   });
 
   it("opens the candidate's panel with the interview approval from Today, once", () => {

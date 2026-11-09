@@ -3,7 +3,8 @@ import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, si
 
 /**
  * The release-1 journey in a real browser: sign in, set up the company, publish a role, receive an applicant, declare
- * availability, approve an interview, pick a time as the candidate, confirm, see it on the Interviews page, reschedule.
+ * availability, let the candidate pick from the owner's free times (the old way, folded under "Set a date and time" since
+ * 6 November 2026), pick a time as the candidate, confirm, see it on the Interviews page, offer new times.
  * Every page visited is checked against WCAG 2.1 AA with axe. Everything is synthetic; every provider is a fake.
  */
 const run = Date.now().toString(36);
@@ -72,7 +73,7 @@ test.describe("owner and candidate journey", () => {
     await page.getByRole("button", { name: "Save availability" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Availability saved/ })).toBeVisible();
 
-    // the owner opens the candidate and approves an interview
+    // the owner opens the candidate; with her hours saved, the old way is one fold under "Set a date and time"
     await page.goto(`/roles/${seeded.roleId}/talent`);
     await page.getByRole("tab", { name: /^All/ }).click();
     await expect(page.getByRole("button", { name: "Maria Reyes" })).toBeVisible({ timeout: 30_000 });
@@ -83,10 +84,12 @@ test.describe("owner and candidate journey", () => {
     await expectAccessible(page, "candidate panel");
     await sheet.getByRole("button", { name: /^Stage: / }).click();
     await sheet.getByRole("menuitemradio", { name: /^Interviewing/ }).click();
-    await expect(sheet.getByRole("heading", { name: "Approve an interview" })).toBeVisible();
-    await sheet.getByRole("checkbox").first().check();
-    await sheet.getByRole("button", { name: "Approve and offer times" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Interview approved/ })).toBeVisible();
+    await expect(sheet.getByRole("heading", { name: "Set a date and time" })).toBeVisible();
+    // the person setting it up is ticked when the plan names nobody
+    await expect(sheet.getByText("With Dana Whitfield", { exact: true })).toBeVisible();
+    await sheet.getByText("Or let them pick from your free times", { exact: true }).click();
+    await sheet.getByRole("button", { name: "Offer times to pick from" }).click();
+    await expect(page.getByRole("status").filter({ hasText: /Times are being worked out/ })).toBeVisible();
 
     // the candidate follows the status page to pick a time in their own zone
     await page.goto(seeded.statusPath);
@@ -121,6 +124,9 @@ test.describe("owner and candidate journey", () => {
     const ivSheet = page.getByRole("dialog");
     await expect(ivSheet.getByText(/Captions on/)).toBeVisible();
     await expectAccessible(page, "interview sheet");
+    // "Move it" sets another date and time; offering new times to pick from is the old way, folded beside it
+    await expect(ivSheet.getByRole("button", { name: "Move it" })).toBeVisible();
+    await ivSheet.getByText("Or let them pick from your free times", { exact: true }).click();
     await ivSheet.getByLabel(/Reason/).fill("Interviewer is travelling.");
     await ivSheet.getByRole("button", { name: "Offer new times" }).click();
     await expect(page.getByRole("status").filter({ hasText: /New times are going out/ })).toBeVisible();

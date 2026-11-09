@@ -8,6 +8,8 @@ import { Link } from "../../nav";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { InlineUndo } from "../../components/InlineUndo";
+import { useCompanyCheck } from "../../components/use-company-check";
+import { interviewLine } from "../../interview-time";
 import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { openScreenOf } from "../../evidence";
 import { offerMadeOn, plainDayWords } from "../../hiring";
@@ -96,6 +98,7 @@ function AiInterviewCard({ a, roleId, onDecline }: { a: ApplicationDetail; roleI
  * company's questions it answered (Wave S7).
  */
 function WhereTheyAre({ a }: { a: ApplicationDetail }) {
+  const check = useCompanyCheck();
   const outcomes = useQuery({ queryKey: ["outcomes", a.id], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRecord[] }>(`/api/v1/applications/${a.id}/outcomes`), enabled: ["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(a.stage) });
   const recorded = outcomes.data?.outcomes.find((o) => !o.correctedAt);
   const lines: string[] = [];
@@ -116,7 +119,8 @@ function WhereTheyAre({ a }: { a: ApplicationDetail }) {
       {lines.length || interviews.length ? (
         <div className="grid gap-1">
           {lines.map((l) => <p key={l} className="small">{l}</p>)}
-          {interviews.map((i) => <p key={i.id} className="small"><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {i.status.replace(/_/g, " ")}{i.startsAt ? ` · ${new Date(i.startsAt).toLocaleString("en-US", { timeZone: i.timezone ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : i.status === "scheduling" ? ` · ${i.offeredSlots.length} times offered` : ""}{i.decision ? ` · decision: ${i.decision.replace(/_/g, " ")}` : ""}</p>)}
+          {/* each interview in the Interviews page's own words (`interviewLine`), never its raw status */}
+          {interviews.map((i) => <p key={i.id} className="small"><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {interviewLine(i, check)}</p>)}
         </div>
       ) : null}
       {recorded ? (

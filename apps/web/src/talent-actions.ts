@@ -96,7 +96,7 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
     case "clear_mark":
       return { title: r.ownerStage ? `Moved to ${OWNER_STAGE_LABEL[r.ownerStage]}.` : "Mark taken off.", detail: NOT_TOLD };
     case "advance_to_interview":
-      return { title: "Marked for interview.", detail: "The candidate was not told; choose Interviewing to offer them times." };
+      return { title: "Marked for interview.", detail: "The candidate was not told. Set a date and time from their page." };
     case "move_to_talent_pool":
       // The person's own "don't keep me for future roles" stands (Wave 0 item 0.11); the page says so instead of "added".
       return r.talentPoolOptOut
@@ -132,7 +132,7 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
 /** The toast after "How did the interview go?" (POST /applications/:id/decision). */
 export function decisionToast(decision: "next_round" | "finalist" | "not_moving_forward", r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint & { nextRoundKey?: string | null }, now: Date = new Date()): ToastParts {
   if (decision === "finalist") return { title: "Marked as a finalist.", detail: "The candidate was not told." };
-  if (decision === "next_round") return { title: r.nextRoundKey ? "Next round." : "Next round recorded.", detail: r.nextRoundKey ? "Check the interviewers below and approve; times go out from there." : undefined };
+  if (decision === "next_round") return { title: r.nextRoundKey ? "Next round." : "Next round recorded.", detail: r.nextRoundKey ? "Set its date and time below." : undefined };
   return { title: "Recorded: not moving forward.", detail: decisionDetail(r, now) };
 }
 
@@ -205,7 +205,7 @@ export function briefDecisionToast(action: { label: string; body?: Record<string
   if (/^Yes, interview/i.test(action.label)) {
     // The answer carries the interview approval filled in (plan H4): the page opens it on the candidate's panel.
     const filled = !!(response as { interviewDraft?: unknown } | null)?.interviewDraft;
-    return { title: "Moved to Interviewing.", detail: filled ? "Check the interview filled in from your plan and approve it; times go out to the candidate from there." : "Open the candidate to choose the round and the interviewers; times go out from there." };
+    return { title: "Moved to Interviewing.", detail: filled ? "Set the date and time on their page: the round is filled in from your plan." : "Open the candidate to set a date and time." };
   }
   if (action.label === "Yes, send it") {
     // a message a team member wrote, approved: on its way, or saved until ITS confirms the company (founder decision B7)
@@ -279,6 +279,29 @@ export function interviewWords(iv: InterviewRef): string {
     return `the ${iv.title} on ${when}`;
   }
   return candidateKnowsOf(iv) ? `the ${iv.title} (times offered, none chosen yet)` : `the ${iv.title} (times not offered yet)`;
+}
+
+/**
+ * The toast after a person set the date and time (POST /applications/:id/interviews with `setTime`, or POST
+ * /interviews/:id/set-time): booked or moved, then what may be said about the email, from the API's `candidateNotice`.
+ * Never that it left: the worker sends it after the press, it waits for ITS to confirm the company, or there is no address.
+ */
+export function interviewSetToast(r: { candidateNotice?: "queued" | "held" | "not_sent_no_email" | null }, firstName: string, opts: { moving?: boolean } = {}): ToastParts {
+  const title = opts.moving ? "Moved." : "Booked.";
+  const first = firstName || "the candidate";
+  if (r.candidateNotice === "not_sent_no_email") return { title, detail: "There is no email address on file: tell them yourself." };
+  if (r.candidateNotice === "held") return { title, detail: `${first.charAt(0).toUpperCase()}${first.slice(1)} has not been told: the email waits for ITS to confirm your company.` };
+  return { title, detail: `The email to ${first} is on its way.` };
+}
+
+/**
+ * The toast after "Offer times to pick from" (the old path, folded under "Or let them pick from your free times"): the
+ * times are worked out from the interviewers' hours or calendars, then emailed; while ITS has not confirmed the company the
+ * email waits for it.
+ */
+export function pickTimesToast(firstName: string, check: "confirmed" | "waiting" | "unknown"): ToastParts {
+  const first = firstName || "the candidate";
+  return { title: "Times are being worked out.", detail: check === "waiting" ? `They go to ${first} by email once ITS confirms your company.` : `${first.charAt(0).toUpperCase()}${first.slice(1)} gets them by email to pick one.` };
 }
 
 /** The toast after "Cancel interview" on the Interviews page: exactly who was told (POST /interviews/:id/cancel). */

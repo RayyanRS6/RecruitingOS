@@ -55,7 +55,9 @@ async function summaries(tx: Q, rows: readonly InterviewRow[], followUps?: Map<s
   const partsOf = new Map<string, typeof partRows>();
   for (const p of partRows) partsOf.set(p.interviewId, [...(partsOf.get(p.interviewId) ?? []), p]);
   const views = followUps ?? (await activeFollowUpsFor(tx, appIds));
-  return rows.map((row) => summaryOf(row, apps.get(row.applicationId)!, cands.get(apps.get(row.applicationId)!.candidateId), titles.get(apps.get(row.applicationId)!.roleId), partsOf.get(row.id) ?? [], views));
+  // What became of the email about each one (one read for the whole list): the page's word for it is worked out from it.
+  const emails = await candidateEmailStates(tx, { interviews: rows.map((r) => ({ id: r.id, attempt: r.attempt, status: r.status, offeredSlots: r.offeredSlots, hasEmail: !!cands.get(apps.get(r.applicationId)!.candidateId)?.email })) });
+  return rows.map((row) => ({ ...summaryOf(row, apps.get(row.applicationId)!, cands.get(apps.get(row.applicationId)!.candidateId), titles.get(apps.get(row.applicationId)!.roleId), partsOf.get(row.id) ?? [], views), candidateEmail: emails.get(row.id) ?? null }));
 }
 
 function summaryOf(
@@ -236,9 +238,8 @@ interviewRoutes.get("/:id", requireTenant, async (c) => {
     }
     // The interviewer's brief (F7): the round, what it covers, what the evidence says so far; pay only for roles that may see it.
     const brief = await interviewBriefFor(tx, { interview: iv, viewerRole: t.role });
-    // What became of the email about a booked time (`candidateEmailStates`): the sheet says when they have not been told.
-    const candidateEmail = (await candidateEmailStates(tx, { interviews: [iv], hasEmail: s.candidate.hasEmail })).get(iv.id) ?? null;
-    return { ...s, timeline, availabilitySources: sources, brief, candidateEmail };
+    // `candidateEmail` (on every summary): what became of the email about it, so the sheet says when they have not been told.
+    return { ...s, timeline, availabilitySources: sources, brief };
   });
   if (!row) throw new HttpError(404, "not_found", "Interview not found.");
   return c.json(row);

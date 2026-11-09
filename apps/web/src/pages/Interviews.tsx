@@ -3,23 +3,27 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Eyebrow, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
-import { api, ApiError, isCandidateLocked, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
+import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Eyebrow, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, useTableSort } from "@ros/ui";
+import { api, ApiError, isCandidateLocked, type InterviewBooked, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
 import { LockedCard } from "../components/LockedCandidates";
+import { SetTimeForm } from "../components/SetTimeForm";
+import { useCompanyCheck, useCompanyTimezone } from "../components/use-company-check";
 import { toast } from "../toast";
 import { interviewNewTimesText } from "../cancelled";
+import { DECISION_WORDS, candidateEmailLine, formFromBooked, freshForm, interviewWord, shortWhen, type SetTimeForm as SetTimeFormState } from "../interview-time";
 import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
 import { interviewCancelToast, newTimesToast } from "../talent-actions";
 import { againChoice, tookPlaceCard } from "../interview-defaults";
 import { MyNote, useNotes } from "./candidate-panel/notes";
 
-const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
-// `new_times`: the candidate did not come, and the team sent new times for the same round (the Cancelled column).
-const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired", new_times: "New times sent" };
-// Red is only for a missing must-have or a critical error (docs/07), so a cancelled interview is plain grey.
-const STATUS_TONE: Record<string, Tone> = { proposed: "accent", scheduling: "caution", scheduled: "good", completed: "neutral", cancelled: "neutral", no_show: "caution", offer_expired: "caution" };
-const when = (iso: string | null, tz: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: tz ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not yet");
+/**
+ * Where an interview stands, in one word worked out from what is true of it (`interviewWord`, 6 November 2026): "No time
+ * yet" while nothing has a time and nothing went to the candidate, "Waiting on the candidate" only while times reached
+ * them, the email's fate beside a booked time. Red is only for a missing must-have or a critical error (docs/07), so a
+ * cancelled interview is plain grey.
+ */
+const when = (iso: string | null, tz: string | null) => shortWhen(iso, tz) ?? "not yet";
 /** The offered times still ahead: one that has passed can no longer be booked (the server refuses it too). */
 const aheadSlots = <S extends { startsAt: string }>(slots: readonly S[], now: number = Date.now()): S[] => slots.filter((s) => Date.parse(s.startsAt) > now);
 const INTERVIEW_SORT: Record<"candidate" | "round" | "when", (i: InterviewSummary) => SortValue> = { candidate: (i) => `${i.candidate.firstName} ${i.candidate.lastName}`, round: (i) => i.title, when: (i) => (i.startsAt ? Date.parse(i.startsAt) : null) };
@@ -37,6 +41,7 @@ export function Interviews() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const company = activeCompanyOf(me.data);
   const role = company.role;
+  const check = useCompanyCheck();
   // Every interview, not the newest few hundred; refreshed every 30 seconds (the open interview's sheet refreshes faster).
   const list = useQuery({ queryKey: ["interviews"], queryFn: () => api.get<InterviewSummary[]>("/api/v1/interviews"), refetchInterval: 30000 });
   const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status));
@@ -54,19 +59,22 @@ export function Interviews() {
       {list.isLoading ? <Card><Skeleton lines={4} /></Card> : list.error ? <ErrorState message="Could not load interviews." onRetry={() => list.refetch()} /> : (
         <>
           {/* the empty state's line only where it says what to do (founder, 23 October 2026: fewer words) */}
-          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews coming up" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : undefined} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Candidates</Link> : undefined} /> : (
+          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews coming up" body={canSeeTalent(role) ? "Open a candidate and set a date and time." : undefined} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Candidates</Link> : undefined} /> : (
             <Card title={`Coming up (${upcoming.length})`}>
               <Table head={[soon.col("candidate", "Candidate", "text"), soon.col("round", "Round", "text"), soon.col("when", "When", "date", { first: "ascending" }), "Interviewers", "Status", ""]} announce={soon.announce}>
-                {soon.apply(upcoming, INTERVIEW_SORT).map((i) => (
-                  <tr key={i.id}>
-                    <td><CandidateCell i={i} /></td>
-                    <td>{i.title}</td>
-                    <td className="text-ink-2">{when(i.startsAt, i.timezone)}{i.status === "scheduling" ? <><br /><span className="small muted">{i.offeredSlots.length} times offered</span></> : null}</td>
-                    <td className="small text-ink-2">{i.participants.map((p) => p.name ?? p.email).join(", ")}</td>
-                    <td><Pill size="sm" tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Pill></td>
-                    <td className="text-right"><OpenLink id={i.id} /></td>
-                  </tr>
-                ))}
+                {soon.apply(upcoming, INTERVIEW_SORT).map((i) => {
+                  const w = interviewWord(i, check);
+                  return (
+                    <tr key={i.id}>
+                      <td><CandidateCell i={i} /></td>
+                      <td>{i.title}</td>
+                      <td className="text-ink-2">{when(i.startsAt, i.timezone)}{w.note ? <><br /><span className="small muted">{w.note}</span></> : null}</td>
+                      <td className="small text-ink-2">{i.participants.map((p) => p.name ?? p.email).join(", ")}</td>
+                      <td><Pill size="sm" tone={w.tone}>{w.label}</Pill></td>
+                      <td className="text-right"><OpenLink id={i.id} /></td>
+                    </tr>
+                  );
+                })}
               </Table>
               {Object.keys(load).length ? <p className="small muted mt-3">Interviewer load: {Object.entries(load).map(([n, c]) => `${n} ${c}`).join(" · ")}</p> : null}
             </Card>
@@ -74,16 +82,19 @@ export function Interviews() {
           {past.length ? (
             <Card title={`Past (${past.length})`}>
               <Table head={[done.col("candidate", "Candidate", "text"), done.col("round", "Round", "text"), done.col("when", "When", "date"), "Outcome", "Decision", ""]} announce={done.announce}>
-                {done.apply(past, INTERVIEW_SORT).map((i) => (
-                  <tr key={i.id}>
-                    <td><CandidateCell i={i} /></td>
-                    <td>{i.title}</td>
-                    <td className="text-ink-2">{when(i.startsAt, i.timezone)}</td>
-                    <td><Pill size="sm" tone={STATUS_TONE[i.status] ?? "neutral"}>{i.outcome ? i.outcome.replace(/_/g, " ") : STATUS_LABEL[i.status] ?? i.status}</Pill></td>
-                    <td className="small text-ink-2">{i.decision ? DECISION_LABEL[i.decision] ?? i.decision.replace(/_/g, " ") : "not yet"}</td>
-                    <td className="text-right"><OpenLink id={i.id} /></td>
-                  </tr>
-                ))}
+                {done.apply(past, INTERVIEW_SORT).map((i) => {
+                  const w = interviewWord(i, check);
+                  return (
+                    <tr key={i.id}>
+                      <td><CandidateCell i={i} /></td>
+                      <td>{i.title}</td>
+                      <td className="text-ink-2">{when(i.startsAt, i.timezone)}</td>
+                      <td><Pill size="sm" tone={w.tone}>{w.label}</Pill></td>
+                      <td className="small text-ink-2">{i.decision ? DECISION_WORDS[i.decision] ?? i.decision.replace(/_/g, " ") : "not yet"}</td>
+                      <td className="text-right"><OpenLink id={i.id} /></td>
+                    </tr>
+                  );
+                })}
               </Table>
             </Card>
           ) : null}
@@ -137,12 +148,16 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
     refetchInterval: (query) => (query.state.status === "error" ? false : 10000),
     retry: (count, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404 || isCandidateLocked(e))) && count < 3,
   });
+  const check = useCompanyCheck();
+  // "Change it": move a booked time, set a different one, or cancel (each opens in the card); the cancel's reason is the candidate's to read.
+  const [changing, setChanging] = useState<"move" | "set" | "cancel" | null>(null);
   const [reason, setReason] = useState("");
-  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [offerReason, setOfferReason] = useState("");
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ["interview", id] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); await qc.invalidateQueries({ queryKey: ["brief"] }); };
-  // New times over a fresh window from tomorrow; a candidate whose time was booked is told at once that it is off.
-  const reschedule = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean | null }>(`/api/v1/interviews/${id}/reschedule`, { reason: reason || undefined }), onSuccess: async (r) => { toast("New times are going out.", r?.candidateTold ? "The candidate was told their booked time is off." : undefined); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not reschedule.") });
-  const cancel = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean; interviewersTold?: boolean; candidateNotice?: string }>(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async (r) => { const t = interviewCancelToast(r); toast(t.title, t.detail); setConfirmCancel(false); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
+  // The old way, folded: new times over a fresh window from tomorrow, from the interviewers' hours; a candidate whose time
+  // was booked is told at once that it is off. Offered only where every interviewer has hours, so times do follow.
+  const reschedule = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean | null }>(`/api/v1/interviews/${id}/reschedule`, { reason: offerReason || undefined }), onSuccess: async (r) => { toast(check === "waiting" ? "New times are being prepared." : "New times are going out.", r?.candidateTold ? "The candidate was told their booked time is off." : check === "waiting" ? "They go to the candidate once ITS confirms your company." : undefined); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not reschedule.") });
+  const cancel = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean; interviewersTold?: boolean; candidateNotice?: string }>(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async (r) => { const t = interviewCancelToast(r); toast(t.title, t.detail); setChanging(null); setReason(""); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
   const outcome = useMutation({ mutationFn: (o: string) => api.post(`/api/v1/interviews/${id}/outcome`, { outcome: o }), onSuccess: async () => { toast("Recorded."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
   // A time that clashes with another interview booked since is refused with a plain message (409 slot_taken).
   const book = useMutation({ mutationFn: (slotId: string) => api.post<{ status?: string }>(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async (r) => { toast(r?.status === "scheduled" ? "Booked on the candidate's behalf." : "Booking that time for them.", r?.status === "scheduled" ? undefined : "It shows here as booked in a moment."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
@@ -164,6 +179,17 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
   // Before ITS confirms the company the team's send is refused (409 company_not_checked), so the card does not offer it.
   const setting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), retry: false, enabled: again === "send_new_times" });
   const companyConfirmed = setting.data?.companyConfirmed;
+  const word = i ? interviewWord(i, check) : null;
+  // A time a person set has no hours behind it: the hours chips and the window say nothing about it.
+  const setByPerson = i?.selectedSlot?.source === "person";
+  // The old way works only where every interviewer has hours or a calendar, so only then is it offered, folded.
+  const everyoneHasHours = !!i && i.participants.length > 0 && i.participants.every((p) => (i.availabilitySources.find((x) => x.userId === p.userId)?.source ?? "none") !== "none");
+  // Nothing has a time and nothing reached them (6 November 2026): the form, on this interview. Lapsed times only while
+  // this is still their newest interview and they are at the interview step (`againChoice`).
+  const needsTime = !!i && manage && !!word?.needsTime && (i.status !== "offer_expired" || again === "offer_again");
+  // What became of the email about it: said once, where the team looks (never claimed as sent).
+  const emailLine = i && (i.status === "scheduled" || (i.status === "scheduling" && i.offeredSlots.length > 0)) ? candidateEmailLine(i.candidateEmail, i.candidate.firstName, check) : null;
+  const refreshAll = async () => { await refresh(); if (i) await qc.invalidateQueries({ queryKey: ["application", i.applicationId] }); };
   return (
     <Drawer open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"} leading={i ? <Avatar name={`${i.candidate.firstName} ${i.candidate.lastName}`} size="lg" /> : undefined}>
       {/* an old link to someone past the plan's candidates per job (Rule 3): the same card as on their job, not an error */}
@@ -172,16 +198,22 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
         // value rows (dl.glance), the questions to answer in their own cards, the history last.
         <div className="stack gap-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="row"><Pill tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Pill><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></span>
+            <span className="row"><Pill tone={word?.tone ?? "neutral"}>{word?.label}</Pill><span className="small muted">{i.roleTitle}</span></span>
             {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&message=1`} className="btn secondary sm">Message the candidate</Link> : null}
           </div>
+          {emailLine ? <Alert tone="caution">{emailLine}</Alert> : null}
+          {needsTime ? (
+            <Card needsYou title="Set the date and time" className={SHEET_CARD}>
+              <SheetSetTime i={i} onDone={refreshAll} />
+            </Card>
+          ) : null}
           {i.brief ? <BriefCard brief={i.brief} /> : null}
           {participant || canReadNotes(role) ? <InterviewNote applicationId={i.applicationId} roleId={i.roleId} firstName={i.candidate.firstName} seesTalent={canSeeTalent(role)} /> : null}
           {finished ? (
             <Card needsYou={!i.decision && canDecideInterviews(role)} title="After the interview" className={SHEET_CARD}>
               {i.decision ? (
                 <>
-                  <p><strong>Decision: {DECISION_LABEL[i.decision] ?? i.decision.replace(/_/g, " ")}</strong></p>
+                  <p><strong>Decision: {DECISION_WORDS[i.decision] ?? i.decision.replace(/_/g, " ")}</strong></p>
                   {i.decisionNote ? <p className="small muted mt-1">Note (kept internally): {i.decisionNote}</p> : null}
                 </>
               ) : (
@@ -196,9 +228,10 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
             <dl className="glance">
               <dt>When</dt><dd>{when(i.startsAt, i.timezone)}{i.timezone ? ` (${i.timezone})` : ""}</dd>
               <dt>Length</dt><dd>{i.durationMinutes} minutes, {i.format.replace("_", " ")}</dd>
-              <dt>Link</dt><dd>{i.meetingUrl ? <a href={i.meetingUrl} target="_blank" rel="noreferrer">{i.meetingUrl}</a> : noLinkText(i)}</dd>
-              <dt>Interviewers</dt><dd className="flex flex-wrap gap-x-4 gap-y-1.5">{i.participants.map((p) => { const s = i.availabilitySources.find((x) => x.userId === p.userId); return <span key={p.userId} className="inline-flex flex-wrap items-center gap-1.5">{p.name ?? p.email} <Chip tone={s?.source === "calendar" ? "good" : s?.source === "declared" ? "accent" : "caution"}>{s?.source === "calendar" ? "calendar" : s?.source === "declared" ? "declared hours" : "no availability"}</Chip></span>; })}</dd>
-              <dt>Window</dt><dd>{i.schedulingWindow.fromDate} to {i.schedulingWindow.toDate}</dd>
+              {/* where it is: the address or the phone a person chose, else the link */}
+              {i.selectedSlot?.address ? <><dt>Where</dt><dd>{i.selectedSlot.address}</dd></> : setByPerson && i.format === "phone" ? <><dt>Where</dt><dd>By phone</dd></> : <><dt>Link</dt><dd>{i.meetingUrl ? <a href={i.meetingUrl} target="_blank" rel="noreferrer">{i.meetingUrl}</a> : noLinkText(i)}</dd></>}
+              <dt>Interviewers</dt><dd className="flex flex-wrap gap-x-4 gap-y-1.5">{i.participants.map((p) => { const s = i.availabilitySources.find((x) => x.userId === p.userId); return <span key={p.userId} className="inline-flex flex-wrap items-center gap-1.5">{p.name ?? p.email}{setByPerson ? null : <> <Chip tone={s?.source === "calendar" ? "good" : s?.source === "declared" ? "accent" : "neutral"}>{s?.source === "calendar" ? "calendar" : s?.source === "declared" ? "declared hours" : "no hours set"}</Chip></>}</span>; })}</dd>
+              {setByPerson ? null : <><dt>Window</dt><dd>{i.schedulingWindow.fromDate} to {i.schedulingWindow.toDate}</dd></>}
               <dt>Candidate reschedules</dt><dd>{i.rescheduleCountCandidate} of 2</dd>
             </dl>
           </Card>
@@ -217,41 +250,81 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
               <div className="row"><Button size="sm" variant="primary" loading={outcome.isPending} onClick={() => outcome.mutate("happened")}>Yes</Button><Button size="sm" loading={outcome.isPending} onClick={() => outcome.mutate("no_show_candidate")}>Candidate did not show</Button><Button size="sm" loading={outcome.isPending} onClick={() => outcome.mutate("no_show_interviewer")}>We did not show</Button></div>
             </Card>
           ) : null}
-          {manage && ["proposed", "scheduling", "scheduled"].includes(i.status) ? (
+          {manage && (["proposed", "scheduling", "scheduled"].includes(i.status) || (i.status === "offer_expired" && again === "offer_again" && everyoneHasHours)) ? (
             <Card title="Change it" className={SHEET_CARD}>
-              <Field label="Reason (the candidate sees it if you cancel, or move a booked time)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-              <div className="row mt-3">
-                <Button size="sm" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button>
-                {confirmCancel ? <Button size="sm" variant="destructive" loading={cancel.isPending} disabled={!reason.trim()} onClick={() => cancel.mutate()}>Confirm cancel</Button> : <Button size="sm" variant="destructive" onClick={() => setConfirmCancel(true)}>Cancel interview</Button>}
-              </div>
+              {changing === "move" || changing === "set" ? (
+                <SheetSetTime i={i} moving={changing === "move"} onDone={async () => { setChanging(null); await refreshAll(); }} onCancel={() => setChanging(null)} />
+              ) : changing === "cancel" ? (
+                <div className="stack gap-3">
+                  <Field label="Reason (the candidate sees it)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></Field>
+                  <div className="row">
+                    <Button size="sm" variant="destructive" loading={cancel.isPending} disabled={!reason.trim()} onClick={() => cancel.mutate()}>Confirm cancel</Button>
+                    <Button size="sm" variant="quiet" onClick={() => setChanging(null)}>Keep it</Button>
+                  </div>
+                </div>
+              ) : i.status === "offer_expired" ? null : (
+                <div className="row">
+                  {i.status === "scheduled" ? <Button size="sm" onClick={() => setChanging("move")}>Move it</Button> : !needsTime && i.status === "scheduling" ? <Button size="sm" onClick={() => setChanging("set")}>Set a different time</Button> : null}
+                  <Button size="sm" variant="destructive" onClick={() => setChanging("cancel")}>Cancel interview</Button>
+                </div>
+              )}
+              {everyoneHasHours && !changing ? (
+                <details className="more mt-3">
+                  <summary>Or let them pick from your free times</summary>
+                  <div className="stack gap-3">
+                    {i.status === "scheduled" ? <Field label="Reason for new times (the candidate sees it)" htmlFor="iv-offer-reason"><input id="iv-offer-reason" className="input" value={offerReason} maxLength={500} onChange={(e) => setOfferReason(e.target.value)} /></Field> : null}
+                    <div className="row"><Button size="sm" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button></div>
+                  </div>
+                </details>
+              ) : null}
             </Card>
           ) : null}
           {again === "send_new_times" && i.followUp ? (
             <Card needsYou={companyConfirmed !== false} title={companyConfirmed === false ? "New times" : "Send new times"} className={SHEET_CARD}>
               <p className="small text-ink-2">{interviewNewTimesText(i.candidate.firstName, i.followUp.reason, companyConfirmed)}</p>
               <div className="row mt-3">
-                {companyConfirmed === false ? null : <Button size="sm" variant="primary" icon="send" loading={newTimes.isPending} onClick={() => newTimes.mutate(i.applicationId)}>Send new times</Button>}
-                {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}`} className="btn quiet sm">Open their page</Link> : null}
-              </div>
-            </Card>
-          ) : again === "offer_again" ? (
-            <Card needsYou title="Offer times again" className={SHEET_CARD}>
-              <p className="small text-ink-2">{i.candidate.firstName} did not pick a time. New times go out for the same round and interviewers, or you can decide about them from their page.</p>
-              <div className="row mt-3">
-                <Button size="sm" variant="primary" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button>
-                {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}`} className="btn quiet sm">Open their page</Link> : null}
+                {/* a time a person sets needs no hours, and takes them out of Cancelled once booked: it comes first */}
+                {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&step=interview`} className="btn primary sm">Set a date and time</Link> : null}
+                {companyConfirmed === false ? null : <Button size="sm" variant={canSeeTalent(role) ? undefined : "primary"} icon="send" loading={newTimes.isPending} onClick={() => newTimes.mutate(i.applicationId)}>Send new times</Button>}
               </div>
             </Card>
           ) : again === "approve_new" ? (
             <Card title="Interview again?" className={SHEET_CARD}>
-              <p className="small text-ink-2">This interview was cancelled. To meet {i.candidate.firstName} after all, approve a new interview; fresh times go out from there.</p>
-              <div className="row mt-3"><Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&step=interview`} className="btn secondary sm">Approve a new interview</Link></div>
+              <p className="small text-ink-2">This interview was cancelled.</p>
+              <div className="row mt-3"><Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&step=interview`} className="btn secondary sm">Set a new date and time</Link></div>
             </Card>
           ) : null}
           <Card title="Timeline" className={SHEET_CARD}><Timeline items={i.timeline.map((e) => ({ when: new Date(e.occurredAt).toLocaleString(), what: e.type.replace(/[._]/g, " "), who: e.actor.name ?? e.actor.kind }))} /></Card>
         </div>
       )}
     </Drawer>
+  );
+}
+
+/**
+ * The interview's own "Set a date and time" (POST /interviews/:id/set-time): the same form as on the candidate's panel, on
+ * the company's clock. `moving` a booked time opens it filled in with that time and asks for an optional reason, which the
+ * candidate reads in the one email that says the time moved.
+ */
+function SheetSetTime({ i, moving, onDone, onCancel }: { i: InterviewDetail; moving?: boolean; onDone: () => Promise<void>; onCancel?: () => void }) {
+  const timeZone = useCompanyTimezone() ?? i.timezone;
+  const [form, setForm] = useState<SetTimeFormState>(() => (moving ? formFromBooked(i, timeZone) : freshForm(i)));
+  return (
+    <SetTimeForm
+      idBase={moving ? `move-${i.id}` : `set-${i.id}`}
+      firstName={i.candidate.firstName}
+      hasEmail={i.candidate.hasEmail !== false}
+      timeZone={timeZone}
+      form={form}
+      onChange={setForm}
+      roundMinutes={i.durationMinutes}
+      videoRound={i.format === "video"}
+      calendarLive={i.availabilitySources.some((s) => s.source === "calendar")}
+      moving={moving}
+      submit={(body) => api.post<InterviewBooked>(`/api/v1/interviews/${i.id}/set-time`, body)}
+      onDone={onDone}
+      onCancel={onCancel}
+    />
   );
 }
 
