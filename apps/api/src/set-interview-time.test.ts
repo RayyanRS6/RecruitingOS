@@ -85,7 +85,8 @@ describe("a person sets the date and time", () => {
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": `198.51.100.${n % 250}` } });
     expect(r.status).toBe(302);
     await container.drain();
-    const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId)).orderBy(desc(applications.createdAt)).limit(1);
+    // Found by who applied, not by the newest time: the machine's clock can step back while a suite runs.
+    const [{ a }] = await container.db.select({ a: applications }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, roleId), eq(candidates.email, email))).limit(1);
     return { id: a.id, email, candidateId: a.candidateId, statusToken: a.statusToken };
   };
   type Booked = { id: string; status: string; startsAt: string; candidateNotice?: string; moved?: boolean; [k: string]: unknown };

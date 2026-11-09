@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { activeFollowUpsFor, anonymizeCandidate, cancelledView, entitlements, grantStaffAccess } from "@ros/core";
 import { newTimesDayWords } from "@ros/agents";
-import { applications, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, recruiterEscalations, takeovers, users, withPlatform, withTenant, workflowRuns, type WaitCondition } from "@ros/db";
+import { applications, candidates, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, recruiterEscalations, takeovers, users, withPlatform, withTenant, workflowRuns, type WaitCondition } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -112,7 +112,8 @@ describe("new times for people under Cancelled", () => {
     const r = await app.request(`/careers/${companySlug}/jobs/${role}/apply`, { method: "POST", body: fd });
     expect(r.status).toBe(302);
     await container.drain();
-    const [a] = await container.db.select().from(applications).where(eq(applications.roleId, role)).orderBy(desc(applications.createdAt)).limit(1);
+    // Found by who applied, not by the newest time: the machine's clock can step back while a suite runs.
+    const [a] = await container.db.select({ id: applications.id }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, role), eq(candidates.email, email))).limit(1);
     return { id: a.id, email, name: `${first} ${last}` };
   };
   const pick = async (token: string, slotId: string) => {

@@ -28,8 +28,8 @@ function candidateKnows(iv: InterviewRow): { booked: boolean; offered: boolean }
 /**
  * Cancels one interview inside the caller's tenant transaction, the same way whoever asks for it (the Cancel button, a
  * team member's removal that left the interview with nobody to run it, an application leaving the process). The status
- * and the attempt change, so a scheduling run still going ends on its own at its next step; a candidate at "Interview
- * booked" goes back to "Interview approved" so the team can approve a new one; the interviewers still on it are told;
+ * and the attempt change, so a scheduling run still going ends on its own at its next step; a candidate at "Interviewing"
+ * goes back to "Interview to set up" so the team can set a new date and time; the interviewers still on it are told;
  * the candidate is told through the outbox as `notice` says; calendar events are queued for removal by the worker. The
  * candidate's link keeps working and says the interview was cancelled, instead of a bare "not found".
  * `leftProcess`: the application left the process, so the candidate's note carries no reason and promises nothing.
