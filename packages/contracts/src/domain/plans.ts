@@ -211,6 +211,26 @@ export const AI_HELP_LINE = {
   newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. Upgrade to keep going.`,
 } as const;
 
+/**
+ * `AI_HELP_LINE` for a company on this plan. On the last plan nothing is above theirs (`mayOfferUpgrade`), so no line tells
+ * them to upgrade: the way on is ITS, or the day a monthly credit starts again (`resetsOn`, in words), as the notices say
+ * (the check of 9 November). A plan not given reads as one with somewhere to go, as `aiCreditNoticeWords` reads it.
+ */
+export function aiHelpLine(key: keyof typeof AI_HELP_LINE, opts: { planKey?: string | null; resetsOn?: string | null } = {}): string {
+  if (opts.planKey === undefined || mayOfferUpgrade(opts.planKey)) return AI_HELP_LINE[key];
+  const way = opts.resetsOn ? `Talk with ITS, or wait until your AI help starts again on ${opts.resetsOn}.` : "Talk with ITS about your plan.";
+  const onTheLastPlan: Record<keyof typeof AI_HELP_LINE, string> = {
+    turn: `${USED_UP} Your draft is saved. ${way}`,
+    draft: `${USED_UP} Everything you confirmed is kept. ${way}`,
+    draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. ${way}`,
+    revise: AI_HELP_LINE.revise,
+    about: AI_HELP_LINE.about,
+    newJob: `${USED_UP} ${way}`,
+    newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. ${way}`,
+  };
+  return onTheLastPlan[key];
+}
+
 /** The same calls refused only for money held by work still running: here, and only here, what is true is to try again. */
 export const AI_HELP_BUSY_LINE = {
   turn: `${BUSY} Your draft is saved. Try again in a few minutes.`,

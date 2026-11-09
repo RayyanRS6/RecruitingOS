@@ -729,6 +729,66 @@ describe("the AI credit", () => {
       const own = await json(cookie, "POST", "/api/v1/companies/current/about/approve", { text: "We are a friendly dental practice in Irvine, looking after families for twenty years." });
       expect(own.status, await own.clone().text()).toBe(200);
     });
+
+    it("on Ultra, the last plan, nothing in the job builder or Start a hire says to upgrade: talk with ITS, or wait for the day it starts again, and the button says Talk to ITS", async () => {
+      const { cookie, id } = await newCompany();
+      const sessionId = await draftOf(cookie);
+      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`)).status).toBe(200);
+      await usePlan(container, id, "ultra");
+      // Ultra's $200 a month, with $199.95 spent: a small call no longer fits under $199.90, so it is used up
+      await spend(id, "199.950000");
+      const home = await read<{ aiCredit: { level: string; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      expect(home.aiCredit.level).toBe("used_up");
+      // the day it starts again, in the words Home already uses
+      const day = /until it starts again on (\w+, \w+ \d+)\.$/.exec(home.aiCredit.notice.body)?.[1];
+      expect(day).toBeTruthy();
+      const way = `Talk with ITS, or wait until your AI help starts again on ${day}.`;
+      // the same request about the plan as the Upgrade's, which opens the same sheet: only its label is different
+      const talksToIts = (actions: Array<{ label: string; path: string; body: Record<string, unknown> }>) => {
+        expect(actions).toHaveLength(1);
+        expect(actions[0]).toMatchObject({ label: "Talk to ITS", path: "/api/v1/escalations", body: { topic: "plan", question: AI_HELP_UPGRADE_QUESTION } });
+      };
+      const runs = (await runsOf(id)).length;
+      const said: string[] = [];
+
+      // Start a hire, before anyone types: the room, from GET /intake/sessions and GET /intake/room
+      const room = (await read<{ room: { ok: boolean; message: string; nothingAbove?: boolean } }>(await json(cookie, "GET", "/api/v1/intake/sessions?mine=1"))).room;
+      expect(room).toMatchObject({ ok: false, upgrade: true, aiHelp: true, nothingAbove: true, message: `Your plan's AI help is used up. ${way}` });
+      expect(await read(await json(cookie, "GET", "/api/v1/intake/room"))).toMatchObject({ ok: false, nothingAbove: true, message: room.message });
+      const start = await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE });
+      expect(start.status).toBe(402);
+      const refused = await errorOf(start);
+      expect(refused).toMatchObject({ code: "limit_reached", message: room.message, details: { upgrade: true, room: { nothingAbove: true } } });
+      talksToIts(refused.details.actions);
+      said.push(refused.message, ...refused.details.actions.map((a) => a.label));
+
+      // a turn on the draft, here and through the conversation: their words saved, and the way on is ITS
+      const turn = await read<{ reply: { recovery: string; upgrade: boolean; proposedActions: Array<{ label: string; path: string; body: Record<string, unknown> }> } }>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
+      expect(turn.reply).toMatchObject({ recovery: `Your plan's AI help is used up. Your draft is saved. ${way}`, upgrade: true });
+      talksToIts(turn.reply.proposedActions);
+      const wrapper = await read<{ reply: string; proposedActions: Array<{ label: string }> }>(await json(cookie, "POST", "/api/v1/intake/conversation/messages", { message: "One more thing." }));
+      expect(wrapper).toMatchObject({ reply: turn.reply.recovery, proposedActions: [{ label: "Talk to ITS" }] });
+      said.push(turn.reply.recovery, wrapper.reply, ...turn.reply.proposedActions.map((a) => a.label));
+
+      // Write draft, a change by chat and the text about the company: 402, with the same button
+      const draft = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`);
+      expect(draft.status).toBe(402);
+      const draftRefused = await errorOf(draft);
+      expect(draftRefused).toMatchObject({ code: "ai_credit_used_up", message: `Your plan's AI help is used up. Everything you confirmed is kept. ${way}`, details: { upgrade: true } });
+      talksToIts(draftRefused.details.actions);
+      for (const [path, body, line] of [[`/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." }, AI_HELP_LINE.revise], ["/api/v1/companies/current/about/draft", {}, AI_HELP_LINE.about]] as const) {
+        const r = await json(cookie, "POST", path, body);
+        expect(r.status, path).toBe(402);
+        const e = await errorOf(r);
+        expect(e, path).toMatchObject({ code: "ai_credit_used_up", message: line });
+        talksToIts(e.details.actions);
+        said.push(e.message, ...e.details.actions.map((a) => a.label));
+      }
+      said.push(draftRefused.message, ...draftRefused.details.actions.map((a) => a.label));
+      for (const words of said) expect(words).not.toMatch(/upgrade/i);
+      // and no model was asked
+      expect((await runsOf(id)).length).toBe(runs);
+    });
   });
 
   describe("an application still arrives", () => {
