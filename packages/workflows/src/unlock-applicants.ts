@@ -29,18 +29,22 @@ const CLOSE_OUT_LEFT = ["sending", "sent", "delivered", "opened", "clicked", "un
  * promised (`tellOneLockedOfClose`).
  *
  * Runs in the transaction that changed the plan, behind each job's lock, so an application being decided at this moment takes
- * its place before this or under the new limit after it. Every job of the company, in id order, also one with nobody locked
- * yet: the first person past the limit may be being decided right now, on the old limit, in a transaction nothing here can
- * see. Behind the lock they have either committed, and are read and opened, or they wait, and read the new limit. `limit` is
- * the new plan's own: the caller writes the plan's rows after this (POST /admin/customers/:id/plan). Returns how many were
- * opened, and how many of them go on to the interview by themselves.
+ * its place before this or under the new limit after it. Every job of the company, also one with nobody locked yet: the first
+ * person past the limit may be being decided right now, on the old limit, in a transaction nothing here can see. Behind the
+ * lock they have either committed, and are read and opened, or they wait, and read the new limit. First the jobs that had
+ * someone locked when they were listed, in id order, because opening people takes a while and those jobs' applicants wait for
+ * it anyway; then the others, in id order, so a job with nobody to open is held only for the short rest of the transaction
+ * and its applicants never wait for the opening (the check of 9 November, C8). `limit` is the new plan's own: the caller
+ * writes the plan's rows after this (POST /admin/customers/:id/plan). Returns how many were opened, and how many of them go
+ * on to the interview by themselves.
  */
 export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; planKey: string; limit: number | null; actor: Actor; reason: string; now: Date; integrations: Integrations; statusBaseUrl: string }): Promise<{ unlocked: number; interviews: number }> {
   const { companyId, planKey, limit, actor, now } = input;
   const jobs = await q.select({ roleId: roles.id }).from(roles).where(eq(roles.companyId, companyId)).orderBy(asc(roles.id));
+  const lockedOn = new Set((await q.selectDistinct({ roleId: applications.roleId }).from(applications).where(and(eq(applications.companyId, companyId), lockedAndWaiting()))).map((r) => r.roleId));
   let unlocked = 0;
   let interviews = 0;
-  for (const { roleId } of jobs) {
+  for (const { roleId } of [...jobs.filter((j) => lockedOn.has(j.roleId)), ...jobs.filter((j) => !lockedOn.has(j.roleId))]) {
     await lockApplicants(q, roleId);
     const [visible] = await q.select({ n: count() }).from(applications).where(and(eq(applications.roleId, roleId), isNull(applications.lockedAt)));
     const room = limit === null ? null : limit - Number(visible?.n ?? 0);

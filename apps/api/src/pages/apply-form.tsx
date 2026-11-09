@@ -10,6 +10,7 @@ import { refFor } from "@ros/integrations";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey, type UploadGrantPayload } from "../uploads";
 import { readAppCookie, setAppCookie } from "../cookies";
 import { clientIp, type Vars } from "../middleware/session";
+import { reportUnhandled } from "../middleware/errors";
 import type { Container } from "../container";
 import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware/rate-limit";
 import { createApplication, markUploadUsed, uploadAlreadyUsed, withNewApplication, type ResumeInput as ResumeUpload } from "../services/applications";
@@ -1097,7 +1098,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
     // Nothing to read: Enter pressed in a field (the first button of a fresh form is this one), or the form filled in by
     // hand. It is sent exactly as "Send my application" sends it, under the same checks and the same limit.
     const refused = await checkRateLimits(c, [POLICIES.apply]);
-    return refused ?? sendApplication(c);
+    return refused ?? formPost(c, (drawn) => sendApplication(c, drawn));
   }
   if (!upload) return show("Choose your resume file first, then press Read my resume. Or fill in the form below yourself and press Send my application.", !!posted.grant);
   if (flow === "on_file") {
@@ -1185,11 +1186,48 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read-status", rateLimit(R
   return c.json({ state: reading ? "done" : "reading" });
 });
 
+/** Said when an application could not be stored (a job's lock that timed out, above all): nothing was sent, and sending it again will do. */
+export const NOT_SENT_LINE = "Your application was not sent: something went wrong on our end. Please send it again in a minute.";
+
+/** What a post of the form can show if it fails: the form again, once the post knows what was typed; `committed` once it was stored. */
+type FormAgain = { again?: (error: string) => Response | Promise<Response>; committed?: boolean };
+
+/**
+ * Sends the form. It posts by navigation, so whatever goes wrong before the application is stored, a job's lock that timed
+ * out behind a long change of plan above all, must not answer with the API's JSON, which is all the browser would show
+ * (the check of 9 November, C8): the form comes back with what was typed and the line that it was not sent, or, before the
+ * form can be drawn, a page that says the same. Logged and reported as the API does what nothing handled. Once stored it
+ * was sent, so what fails after that (only an inline worker's drain) is answered as it always was.
+ */
+async function formPost(c: Context<Vars>, send: (drawn: FormAgain) => Promise<Response>): Promise<Response> {
+  const drawn: FormAgain = {};
+  try {
+    return await send(drawn);
+  } catch (err) {
+    if (drawn.committed) throw err;
+    reportUnhandled(err, c);
+    if (drawn.again) return drawn.again(NOT_SENT_LINE);
+    return c.html(<NotSent href={`/careers/${encodeURIComponent(c.req.param("slug") ?? "")}/jobs/${encodeURIComponent(c.req.param("roleId") ?? "")}/apply`} />, 500);
+  }
+}
+
+/** Before the form could be drawn again (the job, or the post itself, could not be read): the same line, and the way back to the form. */
+function NotSent(props: { href: string }) {
+  return (
+    <Layout title="Not sent">
+      <h1>Not sent</h1>
+      <div class="card" role="alert"><p>{NOT_SENT_LINE}</p></div>
+      <p><a class="btn secondary" href={props.href}>Back to the form</a></p>
+    </Layout>
+  );
+}
+
 /**
  * "Send my application": the form's own address, and "Read my resume" pressed with nothing to read (Enter in a field of
- * a fresh form presses the first button, which is "Read my resume"), so the same checks apply however it was sent.
+ * a fresh form presses the first button, which is "Read my resume"), so the same checks apply however it was sent. Always
+ * through `formPost`, which `drawn` tells how to show the form again.
  */
-async function sendApplication(c: Context<Vars>): Promise<Response> {
+async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Response> {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
   if (!job) return c.notFound();
@@ -1229,7 +1267,9 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   const earlier = await earlierFormState(container, job, posted);
   if (earlier) c.header("Cache-Control", "no-store");
   const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume, marks: { fromResume: marked.fromResume, suggested: marked.suggested }, reading: resume.resume ? readView : null, earlier });
-  const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={state(missing, resume)} />, 400);
+  const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">, status: 400 | 500 = 400) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={state(missing, resume)} />, status);
+  // From here whatever fails before the application is stored brings this form back, with what was typed (`formPost`).
+  drawn.again = (error) => again(`${error} ${keptSentence(resumeLost)}`, [], { resume: keptResume, resumeLost }, 500);
   // Honeypot: a filled hidden field gets the waiting room a person gets (naming nothing), or on a job past its limit the
   // receipt a person gets, and nothing is recorded.
   if (posted.website) return toReceipt(c, job, values.email, form.flow === "on_file" ? "on_file" : "interview");
@@ -1347,13 +1387,14 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
     // The waiting room or a plain receipt: decided in this transaction, from what was typed.
     return applyVisitNext(tx, container, { application: created.application, duplicate: created.duplicate, onFile: created.onFile, knownPerson: created.knownPerson, company, role, packet, eligibilityAnswers, quickAnswers: parsed.data.quickAnswers ?? null, typedFirstName: parsed.data.firstName, typedFacts: chatFactsWithKept(typedFacts, kept), pendingReading, trialPaused: admitted.trialGrace });
   });
+  drawn.committed = true;
   await container.kick();
   clearApplicationSource(c);
   // An answer that did not match an eligibility question gets the neutral receipt (E7): nothing said about why.
   return next.kind === "interview" ? toReceipt(c, job, parsed.data.email, "interview", next.applicationId ?? next.conversationId) : toReceipt(c, job, parsed.data.email, next.reason);
 }
 
-candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), (c) => sendApplication(c));
+candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), (c) => formPost(c, (drawn) => sendApplication(c, drawn)));
 
 /** What each field the form checks needs, in the words the error line uses (known-bugs row 72). */
 const FIELD_PROBLEM: Record<string, string> = {

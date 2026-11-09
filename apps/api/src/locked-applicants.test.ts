@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
 import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
@@ -8,7 +8,7 @@ import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider, ty
 import { DISCARD_OBJECT_JOB_KIND, UNLOCK_INTERVIEW_DAYS, discardUnusedObject, startInterviewAgain, unlockApplicants } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { RESUME_READ_NOTICE } from "./pages/apply-form";
+import { NOT_SENT_LINE, RESUME_READ_NOTICE, keptSentence } from "./pages/apply-form";
 import { createApplication } from "./services/applications";
 import { RESUME_READING_KEEP_MS } from "./services/apply-details";
 import { followApply, signInAdmin, signInStaff, usePlan } from "./test-helpers";
@@ -1588,11 +1588,76 @@ describe("locked candidates", () => {
       const p = person("Ria");
       const seen = await whenItsCommitFails(() => sendForm(job, p));
       expect(seen.result.status).toBe(500);
+      // the form again, never the API's JSON: the form posts by navigation, so that would be all the browser shows
+      expect(seen.result.headers.get("content-type")).toContain("text/html");
+      const form = decode(await seen.result.text());
+      expect(form).toContain(`${NOT_SENT_LINE} ${keptSentence(true)}`);
+      expect(form).toContain(`value="${p.email}"`);
       expect(seen.quarantined).toHaveLength(1);
       expect(seen.removed).toEqual(seen.quarantined);
       expect(await container.db.select().from(candidates).where(and(eq(candidates.companyId, job.id), eq(candidates.email, p.email)))).toEqual([]);
       const row = await apply(job, p);
       expect(await container.db.select().from(documents).where(eq(documents.applicationId, row.id))).toHaveLength(1);
+    });
+
+    /** The job's lock times out once in the transaction the form's application is made in, as it does behind a long change of plan. */
+    const whenTheJobLockTimesOut = async <T>(run: () => Promise<T>) => {
+      const db = container.db as unknown as { transaction: (fn: (tx: Tx) => Promise<unknown>, ...rest: unknown[]) => Promise<unknown> };
+      const real = db.transaction;
+      let timedOut = 0;
+      db.transaction = (fn, ...rest) => real.call(db, (tx: Tx) => fn(new Proxy(tx, {
+        get(target, prop) {
+          if (prop !== "execute") return Reflect.get(target, prop);
+          return async (statement: Parameters<Tx["execute"]>[0]) => {
+            const jobLock = (statement as { queryChunks?: unknown[] }).queryChunks?.some((c) => typeof c === "string" && c.startsWith("applicants:"));
+            // as the driver and the query builder report it, 15 seconds on
+            if (jobLock && !timedOut++) throw Object.assign(new Error("Failed query"), { cause: Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" }) });
+            return target.execute(statement);
+          };
+        },
+      })), ...rest);
+      const logged: string[] = [];
+      const log = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { logged.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")); });
+      try {
+        return { result: await run(), timedOut, logged };
+      } finally {
+        db.transaction = real;
+        log.mockRestore();
+      }
+    };
+
+    it("a job's lock that times out brings the form back with what they typed and one line that it was not sent, never the API's JSON; it is logged as before, and sent again it goes", async () => {
+      const job = await openJob();
+      const p = person("Rho");
+      const seen = await whenTheJobLockTimesOut(() => sendForm(job, p, { phone: "(949) 555-0142" }));
+      expect(seen.timedOut).toBe(1);
+      expect(seen.result.status).toBe(500);
+      expect(seen.result.headers.get("content-type")).toContain("text/html");
+      const html = await seen.result.text();
+      expect(html).not.toContain('"error":{');
+      const form = decode(html);
+      expect(form).toContain(`${NOT_SENT_LINE} ${keptSentence(true)}`);
+      for (const typed of [p.first, p.last, p.email, "(949) 555-0142", "Irvine, CA"]) expect(form, typed).toContain(`value="${typed}"`);
+      // the form itself, to send again, with nothing about a plan, a lock or a timeout
+      expect(form).toContain('name="acknowledged"');
+      expect(wordsOf(form)).not.toMatch(/\block(ed)?\b|time ?out|upgrade|free plan/i);
+      // logged as the API logs what nothing handled
+      expect(seen.logged.some((line) => line.startsWith("[api] unhandled") && line.includes("lock timeout"))).toBe(true);
+      // nothing was stored, and sent again it goes
+      expect(await container.db.select().from(candidates).where(and(eq(candidates.companyId, job.id), eq(candidates.email, p.email)))).toEqual([]);
+      expect((await apply(job, p)).lockedAt).toBeNull();
+    });
+
+    it("a post the form could not even read says it was not sent, on a page of its own, never the API's JSON", async () => {
+      const job = await openJob();
+      const r = await app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply`, { method: "POST", body: "--not-a-boundary\r\nbroken", headers: { "content-type": "multipart/form-data; boundary=expected-boundary", "x-forwarded-for": "198.51.100.251" } });
+      expect(r.status).toBe(500);
+      expect(r.headers.get("content-type")).toContain("text/html");
+      const html = decode(await r.text());
+      expect(html).not.toContain('"error":{');
+      expect(html).toContain(NOT_SENT_LINE);
+      expect(html).toContain(`href="/careers/${job.slug}/jobs/${job.roleId}/apply"`);
+      expect(await container.db.select().from(applications).where(eq(applications.roleId, job.roleId))).toEqual([]);
     });
 
     it("is removed when an email's transaction does not commit, on arrival and when a person tries it again: only the email's own parked copy stays, until it goes through", async () => {
@@ -1676,6 +1741,47 @@ describe("locked candidates", () => {
       await container.drain();
       const seven = await apply(job, person("Sev"));
       expect(seven.lockedAt).toBeNull();
+    });
+
+    it("opens the jobs with someone locked first and takes the lock of a job with nobody locked last, so applying there never waits for the opening", async () => {
+      // The older job has nobody locked; the newer one has its five and a sixth, locked. In id order alone the older job's lock
+      // came first, and anyone applying to it waited behind it for every person the newer job opened, past the 15-second timeout.
+      const company = await newCompany();
+      await usePlan(container, company.id, "basic");
+      const quiet = await openRole(company);
+      const busy = await openRole(company);
+      expect(quiet.roleId < busy.roleId).toBe(true);
+      await usePlan(container, company.id, "free");
+      await fill(busy, 5);
+      const six = await apply(busy, person("Lia"));
+      expect(six.lockedAt).not.toBeNull();
+      await usePlan(container, company.id, "basic");
+      const order: string[] = [];
+      let openedBeforeQuietLock: boolean | null = null;
+      const out = await withPlatform(container.db, async (tx) => {
+        // Which job's lock each statement asks for, and at the quiet job's, whether the opening is already done.
+        const watched = new Proxy(tx, {
+          get(target, prop) {
+            if (prop !== "execute") return Reflect.get(target, prop);
+            return async (statement: Parameters<typeof tx.execute>[0]) => {
+              const key = (statement as { queryChunks?: unknown[] }).queryChunks?.find((c): c is string => typeof c === "string" && c.startsWith("applicants:"));
+              if (key === `applicants:${busy.roleId}`) order.push("busy");
+              if (key === `applicants:${quiet.roleId}`) {
+                order.push("quiet");
+                const [row] = await target.select({ lockedAt: applications.lockedAt }).from(applications).where(eq(applications.id, six.id));
+                openedBeforeQuietLock = row.lockedAt === null;
+              }
+              return target.execute(statement);
+            };
+          },
+        });
+        return unlockApplicants(watched, container.engine, { companyId: company.id, planKey: "basic", limit: 25, actor: { kind: "system", id: "test" }, reason: "They asked to upgrade.", now: new Date(), integrations: container.integrations, statusBaseUrl: container.env.JOBS_BASE_URL });
+      });
+      expect(out.unlocked).toBe(1);
+      expect(order).toEqual(["busy", "quiet"]);
+      expect(openedBeforeQuietLock).toBe(true);
+      await container.drain();
+      expect((await applicationOf(six.id)).lockedAt).toBeNull();
     });
 
     it("writes the plan's rows after it opens people, so the company's AI calls are not held up behind them; those opened follow the new plan", async () => {
