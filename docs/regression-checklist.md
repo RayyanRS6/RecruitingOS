@@ -653,7 +653,8 @@ Who: a new owner and the ITS platform admin. Under `SIGNUP_MODE=approval` this j
 - [ ] **Do:** open `/careers/<slug>`. **Expect:** "not found" until ITS confirms (B7). Candidate emails for this company wait in the outbox as "held".
 - [ ] **Do:** as the platform admin, open Admin → Customers and confirm the company. **Expect:** the careers page appears, and held messages that still matter go out.
 - [ ] **Do:** take the confirmation back. **Expect:** the careers page goes offline, and Today tells the owner why.
-- [ ] Automated: `api/company-check.test.ts`, `db/company-verification-migration.test.ts`, `web/company-check.test.ts`, `api/app.test.ts`, `api/free-plan.test.ts` (a new company on Free), `api/outbox.test.ts`, `api/held-email-replay.test.ts`, `e2e/company-check.spec.ts`. Note that the browser tests run with `COMPANY_CHECK=auto`, so companies are confirmed at sign-up there.
+- [ ] **Do:** type a reason and press **Confirm the company**, so "Confirm <company> and make its pages public?" shows; confirm the same company from another tab, then come back. **Expect:** the question is gone, never turned into "Take back the confirmation of <company>?", the reason typed is still in the field, and only **Take back the confirmation** is offered. The same the other way round.
+- [ ] Automated: `api/company-check.test.ts`, `shell/console-presses.test.ts` (the question pressed while the list reads itself again), `db/company-verification-migration.test.ts`, `web/company-check.test.ts`, `api/app.test.ts`, `api/free-plan.test.ts` (a new company on Free), `api/outbox.test.ts`, `api/held-email-replay.test.ts`, `e2e/company-check.spec.ts`. Note that the browser tests run with `COMPANY_CHECK=auto`, so companies are confirmed at sign-up there.
 - [ ] Known issues, do not make worse:
   - since 5 November 2026 a new company is on Free until ITS changes its plan from the console;
   - allowances never reset (KB #2, #6);

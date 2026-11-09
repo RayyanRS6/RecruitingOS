@@ -1012,21 +1012,41 @@ function CandidateScorePanel({ company }: { company: CustomerRow }) {
 }
 
 /**
+ * The toast after the ITS check was pressed, from what the press asked for (`verified`) and whether it changed anything: a
+ * press another administrator got to first changes nothing and says so (the review of 9 November 2026).
+ */
+export function companyCheckToast(company: string, verified: boolean, r: { changed: boolean; releasedMessages: number }): { title: string; detail: string } {
+  const n = r.releasedMessages;
+  const released = n ? `${n} held ${n === 1 ? "message is" : "messages are"} on ${n === 1 ? "its" : "their"} way` : "";
+  if (!r.changed) return verified ? { title: `${company} was already confirmed.`, detail: released ? `${released}.` : "Nothing changed." } : { title: `${company}'s confirmation was already taken back.`, detail: "Nothing changed." };
+  return verified
+    ? { title: `${company} is confirmed.`, detail: `Its pages are public now${released ? ` and ${released}` : ""}. The owners were told.` }
+    : { title: `${company} is no longer confirmed.`, detail: "Its public pages are offline and its messages to candidates wait. The owners were told." };
+}
+
+/**
  * The one-time ITS check of a company (founder decision B7): confirm it after checking it is real, or take a confirmation
  * back; both need a reason, which the customer sees in their own history, and a second press to confirm. Below, whether
  * ITS can sign in to the company's job boards, which ticks the owner's getting-started step.
+ *
+ * The question keeps what its first press asked for (`to`) and the confirmation it was asked on (`at`), the review of 9
+ * November 2026: the list read again under it with another administrator's confirmation, or its taking back, takes the
+ * question away and keeps the reason typed, so its Yes never sends the opposite of what was asked.
  */
-function CompanyCheckPanel({ company }: { company: CustomerRow }) {
+export function CompanyCheckPanel({ company }: { company: CustomerRow }) {
   const qc = useQueryClient();
   const [why, setWhy] = useState("");
-  const [confirming, setConfirming] = useState(false);
+  const [asked, setAsked] = useState<{ to: boolean; at: string | null } | null>(null);
   const verified = !!company.verifiedAt;
+  const at = company.verifiedAt ?? null;
+  if (asked && asked.at !== at) setAsked(null);
   const change = useMutation({
-    mutationFn: () => api.post<{ changed: boolean; releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: !verified, reason: why.trim(), confirm: true }, reason),
-    onSuccess: (r) => {
-      toast(verified ? `${company.name} is no longer confirmed.` : `${company.name} is confirmed.`, verified ? "Its public pages are offline and its messages to candidates wait. The owners were told." : `Its pages are public now${r.releasedMessages ? ` and ${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way` : ""}. The owners were told.`);
+    mutationFn: (to: boolean) => api.post<{ changed: boolean; releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: to, reason: why.trim(), confirm: true }, reason),
+    onSuccess: (r, to) => {
+      const t = companyCheckToast(company.name, to, r);
+      toast(t.title, t.detail);
       setWhy("");
-      setConfirming(false);
+      setAsked(null);
       qc.invalidateQueries({ queryKey: ["admin", "customers"] });
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the check."),
@@ -1064,9 +1084,9 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
         <p className="small muted">{verified ? "Its careers page, job pages and feeds go offline at once and its messages to candidates wait again. Roles, candidates and decisions are kept." : "Confirm only after checking the company is real: the kick-off call, its website, a phone number. Its pages go public, approved roles are published and held messages go out."} The owners are told, and they see your reason in their activity history.</p>
         <div className={FORM}>
           <Field label={verified ? "Why you are taking it back" : "How you checked the company"} htmlFor="co-check-why"><input id="co-check-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
-          {confirming ? (
-            <Alert tone="caution"><div className={CONFIRM}><span>{verified ? `Take back the confirmation of ${company.name}?` : `Confirm ${company.name} and make its pages public?`}</span><span className="row"><Button size="sm" variant={verified ? "destructive" : "primary"} loading={change.isPending} onClick={() => change.mutate()}>{verified ? "Yes, take it back" : "Yes, confirm it"}</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
-          ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setConfirming(true)}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
+          {asked ? (
+            <Alert tone="caution"><div className={CONFIRM}><span>{asked.to ? `Confirm ${company.name} and make its pages public?` : `Take back the confirmation of ${company.name}?`}</span><span className="row"><Button size="sm" variant={asked.to ? "primary" : "destructive"} loading={change.isPending} onClick={() => change.mutate(asked.to)}>{asked.to ? "Yes, confirm it" : "Yes, take it back"}</Button><Button size="sm" variant="quiet" onClick={() => setAsked(null)}>No</Button></span></div></Alert>
+          ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setAsked({ to: !verified, at })}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
         </div>
       </Card>
       {/* no ITS staff time on the company's plan: its team posts, so there is nothing for ITS to sign in to */}

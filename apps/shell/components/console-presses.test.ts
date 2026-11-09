@@ -101,10 +101,10 @@ vi.mock("@ros/web/src/toast", () => ({ toast: (title: string, more?: unknown) =>
 vi.mock("next/navigation", () => ({ usePathname: () => "/admin", useRouter: () => ({ push: () => undefined, replace: () => undefined, refresh: () => undefined }), useParams: () => ({}), useSearchParams: () => new URLSearchParams("") }));
 vi.mock("next/link", () => ({ default: () => null }));
 
-const { AccessButtons, AccessChoice } = await import("@ros/web/src/pages/admin/customers");
+const { AccessButtons, AccessChoice, CompanyCheckPanel, companyCheckToast } = await import("@ros/web/src/pages/admin/customers");
 const { Overview } = await import("@ros/web/src/pages/admin/Overview");
 const { ApiError } = await import("@ros/web/src/api/client");
-const { Button } = await import("@ros/ui");
+const { Button, Field } = await import("@ros/ui");
 
 type El = ReactElement<{ children?: ReactNode; [key: string]: unknown }>;
 const isEl = (n: unknown): n is El => !!n && typeof n === "object" && "props" in (n as object);
@@ -129,6 +129,8 @@ const button = (tree: unknown, name: string) => {
   expect(b, name).toBeDefined();
   return b?.props as { onClick: () => void; disabled?: boolean; variant?: string };
 };
+/** Every string drawn in a tree: children, and the titles and labels of components not drawn. */
+const words = (tree: unknown): string[] => [...elements(tree)].flatMap((e) => [e.props.children, e.props.title, e.props.label].flat().filter((w): w is string => typeof w === "string"));
 
 /** What the console sent, as `fetch` saw it, and the API's answer to each. */
 const sent: Array<{ path: string; body: unknown }> = [];
@@ -204,6 +206,90 @@ describe("a question asked on a request for access", () => {
     button(AccessChoice(propsOf<Choice>(tree, AccessChoice)), "Yes, decline Harbor Dental").onClick();
     await ui.settled();
     expect(sent).toEqual([{ path: "/api/v1/admin/customers/co-harbor/access", body: { decision: "decline", from: "requested", confirm: true } }]);
+  });
+});
+
+describe("a question asked in the company check", () => {
+  const CONFIRMED_AT = "2026-11-09T10:00:00.000Z";
+  type Panel = Parameters<typeof CompanyCheckPanel>[0];
+  const check = (verifiedAt: string | null): Panel => ({ company: { id: "co-harbor", name: "Harbor Dental", verifiedAt, verifiedBy: verifiedAt ? { id: "s2", name: "Nadine" } : null, heldMessages: 0, whoPosts: "its", jobBoardsConfirmedAt: null, settings: {} } as never });
+  const field = (tree: unknown) => {
+    const input = [...elements(tree)].find((e) => e.type === "input" && e.props.id === "co-check-why");
+    const label = [...elements(tree)].find((e) => e.type === Field && e.props.htmlFor === "co-check-why");
+    return { value: input?.props.value, label: label?.props.label, type: (text: string) => (input?.props.onChange as (e: unknown) => void)({ target: { value: text } }) };
+  };
+  /** Types the reason and presses the card's button: the question, and its Yes as drawn then. */
+  const ask = (verifiedAt: string | null, reasonTyped: string, press: string) => {
+    ui.fresh();
+    let tree = ui.draw(CompanyCheckPanel, check(verifiedAt));
+    field(tree).type(reasonTyped);
+    tree = ui.draw(CompanyCheckPanel, check(verifiedAt));
+    button(tree, press).onClick();
+    return ui.draw(CompanyCheckPanel, check(verifiedAt));
+  };
+
+  it("keeps what its first press asked for: another administrator's confirmation read in under a pending Confirm takes the question away, keeps the reason, and a Yes that lands first sends verified: true, never a taking back", async () => {
+    answer(200, { ok: true, companyId: "co-harbor", verified: true, changed: false, verifiedAt: CONFIRMED_AT, releasedMessages: 0 });
+    // Paul types how he checked it and presses Confirm the company
+    let tree = ask(null, "Called the owner", "Confirm the company");
+    expect(words(tree)).toContain("Confirm Harbor Dental and make its pages public?");
+    const yes = button(tree, "Yes, confirm it");
+    expect(yes.variant).toBe("primary");
+    // Nadine confirms the same company; the minute's look lands, and no question is left, either way round
+    tree = ui.draw(CompanyCheckPanel, check(CONFIRMED_AT));
+    expect(words(tree)).not.toContain("Take back the confirmation of Harbor Dental?");
+    expect(words(tree)).not.toContain("Confirm Harbor Dental and make its pages public?");
+    expect(buttons(tree).map(named)).toEqual(["Take back the confirmation", "ITS can sign in to the job boards"]);
+    // the card now says what is true, and what he typed stays
+    expect(field(tree)).toMatchObject({ label: "Why you are taking it back", value: "Called the owner" });
+    // a Yes pressed before that draw asks for what it said
+    yes.onClick();
+    await ui.settled();
+    expect(sent).toEqual([{ path: "/api/v1/admin/customers/co-harbor/verification", body: { verified: true, reason: "Called the owner", confirm: true } }]);
+    expect(ui.toasts).toEqual([{ title: "Harbor Dental was already confirmed.", more: "Nothing changed." }]);
+  });
+
+  it("the mirror: a pending take-back, once someone else took it back, never makes the pages public again", async () => {
+    answer(200, { ok: true, companyId: "co-harbor", verified: false, changed: false, verifiedAt: null, releasedMessages: 0 });
+    let tree = ask(CONFIRMED_AT, "The website does not match", "Take back the confirmation");
+    expect(words(tree)).toContain("Take back the confirmation of Harbor Dental?");
+    const yes = button(tree, "Yes, take it back");
+    expect(yes.variant).toBe("destructive");
+    tree = ui.draw(CompanyCheckPanel, check(null));
+    expect(words(tree)).not.toContain("Confirm Harbor Dental and make its pages public?");
+    expect(words(tree)).not.toContain("Take back the confirmation of Harbor Dental?");
+    expect(buttons(tree).map(named)).toEqual(["Confirm the company", "ITS can sign in to the job boards"]);
+    expect(field(tree)).toMatchObject({ label: "How you checked the company", value: "The website does not match" });
+    yes.onClick();
+    await ui.settled();
+    expect(sent).toEqual([{ path: "/api/v1/admin/customers/co-harbor/verification", body: { verified: false, reason: "The website does not match", confirm: true } }]);
+    expect(ui.toasts).toEqual([{ title: "Harbor Dental's confirmation was already taken back.", more: "Nothing changed." }]);
+  });
+
+  it("a question on a card that stays as it was sends what it asked, and the toast says what changed", async () => {
+    answer(200, { ok: true, companyId: "co-harbor", verified: true, changed: true, verifiedAt: CONFIRMED_AT, releasedMessages: 2 });
+    let tree = ask(null, "Called the owner", "Confirm the company");
+    tree = ui.draw(CompanyCheckPanel, check(null));
+    button(tree, "Yes, confirm it").onClick();
+    await ui.settled();
+    expect(sent).toEqual([{ path: "/api/v1/admin/customers/co-harbor/verification", body: { verified: true, reason: "Called the owner", confirm: true } }]);
+    expect(ui.toasts).toEqual([{ title: "Harbor Dental is confirmed.", more: "Its pages are public now and 2 held messages are on their way. The owners were told." }]);
+    // No takes the question away and keeps the reason
+    tree = ask(CONFIRMED_AT, "A doubt about the company", "Take back the confirmation");
+    button(tree, "No").onClick();
+    tree = ui.draw(CompanyCheckPanel, check(CONFIRMED_AT));
+    expect(words(tree)).not.toContain("Take back the confirmation of Harbor Dental?");
+    expect(field(tree).value).toBe("A doubt about the company");
+  });
+
+  it("words the toast from what was asked and whether it changed anything", () => {
+    expect(companyCheckToast("Harbor Dental", true, { changed: true, releasedMessages: 0 })).toEqual({ title: "Harbor Dental is confirmed.", detail: "Its pages are public now. The owners were told." });
+    expect(companyCheckToast("Harbor Dental", true, { changed: true, releasedMessages: 1 })).toEqual({ title: "Harbor Dental is confirmed.", detail: "Its pages are public now and 1 held message is on its way. The owners were told." });
+    expect(companyCheckToast("Harbor Dental", false, { changed: true, releasedMessages: 0 })).toEqual({ title: "Harbor Dental is no longer confirmed.", detail: "Its public pages are offline and its messages to candidates wait. The owners were told." });
+    expect(companyCheckToast("Harbor Dental", true, { changed: false, releasedMessages: 0 })).toEqual({ title: "Harbor Dental was already confirmed.", detail: "Nothing changed." });
+    // confirming a confirmed company sends anything still held, and says so
+    expect(companyCheckToast("Harbor Dental", true, { changed: false, releasedMessages: 3 })).toEqual({ title: "Harbor Dental was already confirmed.", detail: "3 held messages are on their way." });
+    expect(companyCheckToast("Harbor Dental", false, { changed: false, releasedMessages: 0 })).toEqual({ title: "Harbor Dental's confirmation was already taken back.", detail: "Nothing changed." });
   });
 });
 
