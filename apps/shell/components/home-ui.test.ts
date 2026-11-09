@@ -301,10 +301,10 @@ describe("emails to candidates that did not arrive (6 November 2026)", () => {
     expect(words).toContain("3 emails to candidates did not arrive Email failed Phone each of them, or write to them yourself.");
     expect(html).toMatch(/<span class="pill caution sm"><span class="dot" aria-hidden="true"><\/span>Email failed<\/span>/);
     expect(html).toContain('<ul class="grid w-full gap-2" aria-label="Who did not get an email">');
-    expect(html).toContain('<a href="/roles/r1/talent?open=a1" class="font-semibold">Ana Reyes</a>');
+    expect(html).toContain('<a href="/roles/r1/talent?open=a1" class="link-like">Ana Reyes</a>');
     expect(html).toContain('<a href="tel:+17145550101">+17145550101</a>');
     expect(words).toContain("ana@people.test");
-    expect(html).toContain('<a href="/roles/r1/talent?open=a2" class="font-semibold">Ben Ortiz</a>');
+    expect(html).toContain('<a href="/roles/r1/talent?open=a2" class="link-like">Ben Ortiz</a>');
     expect(words).toContain("No email address on file");
     // the people are never behind a fold
     expect(html).not.toContain('aria-label="Why: 3 emails to candidates did not arrive"');

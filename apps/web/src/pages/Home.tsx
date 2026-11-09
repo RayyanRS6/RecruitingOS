@@ -359,7 +359,8 @@ function UnreachedRow({ card }: { card: BriefCard }) {
       <ul className="grid w-full gap-2" aria-label="Who did not get an email">
         {people.map((p) => (
           <li key={p.applicationId} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <Link to={openPersonPath(p)} className="font-semibold">{p.name}</Link>
+            {/* the kit's link look, so it reads as the way to their page */}
+            <Link to={openPersonPath(p)} className="link-like">{p.name}</Link>
             <span className="small min-w-0 text-ink-2 [overflow-wrap:anywhere]">{p.email ?? NO_EMAIL_ON_FILE}{p.phone ? <>{" · "}<a href={telHref(p.phone)}>{p.phone}</a></> : null}</span>
             <span className="small muted">{p.roleTitle}</span>
           </li>
