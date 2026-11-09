@@ -129,11 +129,13 @@ export type SignupConfig = { mode: "open" | "invite" | "approval"; allowed: bool
  * display name in `mailbox` (packages/integrations) can never start a header of its own, this can never start a line of
  * its own. Line breaks and other control characters become one space, runs of spaces close up, and a very long value
  * stops at `max` characters. The characters that turn the text after them around, or take no room at all, go (the review
- * of 6 November 2026): a name of two of them would be no name, and one could reverse the rest of a console row.
+ * of 6 November 2026): a name of two of them would be no name, and one could reverse the rest of a console row. So does
+ * half of a character (a lone surrogate, from a hand-made body or from the cut at `max` going through an emoji): kept in a
+ * jsonb value, Postgres would refuse it and the request would fail.
  */
 export function oneLine(value: string | null | undefined, max = 200): string {
-  const line = (value ?? "").replace(UNSEEN, "").replace(/[\s\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim();
-  return line.length > max ? line.slice(0, max).trimEnd() : line;
+  const line = (value ?? "").replace(UNSEEN, "").replace(/\p{Cs}/gu, "").replace(/[\s\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim();
+  return line.length > max ? line.slice(0, max).replace(/\p{Cs}$/u, "").trimEnd() : line;
 }
 
 /**

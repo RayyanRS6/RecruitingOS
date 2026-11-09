@@ -195,6 +195,17 @@ describe("a person's words are data", () => {
     expect(companyRequestDetails({ ...body, ownerName: zwsp + zwsp }).ownerName).toBeUndefined();
   });
 
+  it("half a character never stays: the cut at the limit keeps an emoji whole or leaves it out, and a lone half from a hand-made body goes", () => {
+    const smile = String.fromCodePoint(0x1f600);
+    const [high, low] = [String.fromCharCode(0xd83d), String.fromCharCode(0xde00)];
+    expect(oneLine(`${"w".repeat(199)}${smile}`, 200)).toBe("w".repeat(199));
+    expect(oneLine(`${"w".repeat(198)}${smile}`, 200)).toBe(`${"w".repeat(198)}${smile}`);
+    expect(oneLine(`Harbor${high} Dental${low}`)).toBe("Harbor Dental");
+    expect(oneLine(`${low}${high}`)).toBe("");
+    expect(oneLine(`Smile ${smile}`)).toBe(`Smile ${smile}`);
+    expect(/\p{Cs}/u.test(oneLine(`${"c".repeat(119)}${smile}`, 120))).toBe(false);
+  });
+
   it("the accepted email says the company's name in one line, whatever is in the row", () => {
     const { subject, text } = renderAlertEmail({ kind: "company.access_accepted", recipientName: "Sam Asker", companyName: "Acme\r\nBcc: evil@example.test", roleTitle: null, link: "https://app.example/", appBaseUrl: "https://app.example" });
     expect(subject).toBe("Your request was approved");
@@ -771,6 +782,25 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const accepted = w.mailTo("typed@stranger.test").find((m) => m.subject === "Your request was approved")!;
     expect(accepted.text).toContain("Company: Acme Bcc: evil@example.test\n");
     expect(accepted.text.split("\n").filter((l) => l.startsWith("Bcc:"))).toEqual([]);
+  });
+
+  it("half a character never fails a request: an emoji at the cut of a long website or place, and a lone half in a hand-made body (the review of 6 November 2026)", async () => {
+    const smile = String.fromCodePoint(0x1f600);
+    const half = String.fromCharCode(0xd83d);
+    // 199 characters and then an emoji: the cut at 200 would keep half of it, which the database refuses in a jsonb value
+    const cut = await w.ask("emoji.cut@stranger.test", "Emoji Cut Dental", { website: `https://${"w".repeat(191)}${smile}`, locations: [{ city: `${"c".repeat(119)}${smile}`, region: "TX", country: "US" }] });
+    const row = await w.rowOf(cut.id);
+    expect(row.settings.website).toBe(`https://${"w".repeat(191)}`);
+    expect(row.locations[0]?.city).toBe("c".repeat(119));
+    expect(w.mailTo("queue@its.example").some((m) => m.subject === "[access request] Emoji Cut Dental is asking for access")).toBe(true);
+    // a hand-made body with half an emoji and nothing to cut: the half goes, and the request is sent
+    const hand = await w.ask("half.char@stranger.test", `Half${half} Dental`, { website: `https://half${half}.example`, ownerName: `Sam${half} Asker` });
+    expect((await w.rowOf(hand.id)).name).toBe("Half Dental");
+    expect((await w.rowOf(hand.id)).settings.website).toBe("https://half.example");
+    expect((await w.customers(adminCookie)).find((c) => c.id === hand.id)?.accessRequest?.person.name).toBe("Sam Asker");
+    // a whole one stays
+    const whole = await w.ask("whole.emoji@stranger.test", `Smile ${smile} Dental`);
+    expect((await w.rowOf(whole.id)).name).toBe(`Smile ${smile} Dental`);
   });
 
   it("a typed name cannot pass for someone else, blank the row or turn it around: the proved address first, no angle brackets, two characters to see", async () => {
