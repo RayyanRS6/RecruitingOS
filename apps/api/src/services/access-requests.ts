@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { ACCESS_REQUEST_STATUSES, oneLine, type Actor, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
-import { audit, emit, errorForLog, notify } from "@ros/core";
+import { activeSuppression, audit, emit, errorForLog, notify } from "@ros/core";
 import { companies, events, memberships, users, withPlatform, type Db, type Queryable } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
@@ -137,7 +137,11 @@ export async function signupConfigFor(container: Container, user: { id: string; 
       .limit(1),
   );
   if (!row) return base;
-  return { ...base, allowed: false, request: { status: row.status as SignupRequest["status"], companyName: row.companyName, email: user.email, emailedAt: row.settings.accessRequestEmailedAt ?? null } };
+  // "We will email you when it is decided" holds only while we still may: once the address is stopped (a hard bounce, a
+  // complaint), no email goes to it, so the screen claims none and says to keep the page open (the review of 6 November 2026)
+  const emailed = row.settings.accessRequestEmailedAt ?? null;
+  const emailedAt = emailed && !(await withPlatform(container.db, (tx) => activeSuppression(tx, user.email))) ? emailed : null;
+  return { ...base, allowed: false, request: { status: row.status as SignupRequest["status"], companyName: row.companyName, email: user.email, emailedAt } };
 }
 
 /** What is left to do once a Decline has committed: the direct email, because a declined person is not an active member. */

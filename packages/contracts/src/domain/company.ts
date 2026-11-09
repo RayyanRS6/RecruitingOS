@@ -112,7 +112,7 @@ export type CustomerAccessRequest = { status: AccessRequestStatus; person: { nam
 /**
  * A person's own request, as `signup.request` on GET /api/v1/auth/config and `accessRequest` on POST /api/v1/companies say
  * it. `emailedAt`: when the copy really left (`accessRequestEmailedAt` in the company's settings); null means no claim about
- * email may be made on the screen.
+ * email may be made on the screen, also once the address is stopped (a bounce or a complaint), as no email can follow.
  */
 export type SignupRequest = { status: AccessRequestStatus; companyName: string; email: string; emailedAt: string | null };
 

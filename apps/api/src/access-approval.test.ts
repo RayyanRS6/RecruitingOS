@@ -867,10 +867,15 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const [copy] = w.mailTo("bounced@stranger.test");
     const bounce = async (id: number, providerMessageId: string) => w.app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakePostmarkEvent({ providerMessageId, email: "bounced@stranger.test", type: "HardBounce", id })) });
     const unreachable = () => w.container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "email.person_unreachable"), sql`${adminAlerts.title} like '%bounced@stranger.test%'`));
+    expect((await w.signupOf(asker.cookie)).request?.emailedAt).toEqual(expect.any(String));
     expect((await bounce(910_001, copy.providerMessageId)).status).toBe(200);
     expect(await unreachable()).toEqual([]);
     const [stopped] = await w.container.db.select().from(emailSuppressions).where(eq(emailSuppressions.address, "bounced@stranger.test"));
     expect(stopped.active).toBe(true);
+    // the copy did leave, but nothing more can reach that address: the screen stops promising an email (the review of
+    // 6 November 2026), and says to keep the page open instead; the record of the copy stays as it was
+    expect((await w.signupOf(asker.cookie)).request).toMatchObject({ status: "requested", emailedAt: null });
+    expect((await w.rowOf(asker.id)).settings.accessRequestEmailedAt).toEqual(expect.any(String));
     // Accept still goes through with the address stopped, and the email that cannot go raises nothing
     expect((await w.decide(adminCookie, asker.id, "accept")).status).toBe(200);
     await w.container.drain();
