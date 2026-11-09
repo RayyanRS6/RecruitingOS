@@ -25,6 +25,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { AccessChoice, CUSTOMER_FILTERS, CUSTOMER_SORT, CUSTOMER_SORT_CHOICES, CustomersSection, accessPressRefused, accessQuestion, accessRequests, customerAnnouncement, customerFilterFrom, customerInFilter, customerMatches, customerOrder, customersSearch, customerTabFrom, nextCustomerSort, planChangedToast, planLimitsLine, realCustomers, screeningLine, sortedCustomers, waitingCustomers, waitingForCheck, waitingWords } = await import("@ros/web/src/pages/admin/customers");
 const { ApiError } = await import("@ros/web/src/api/client");
 const { extensionDaysOk, extensionLines, seatsWords, trialExtendedTo, trialExtendedToast, trialExtensionQuestion } = await import("@ros/web/src/pages/admin/customers");
+const { takeAwayQuestion, takeAwayToast } = await import("@ros/web/src/pages/admin/customers");
 const { Outcomes, outcomeWords } = await import("@ros/web/src/pages/admin/outcomes");
 const { sortRows } = await import("@ros/ui");
 
@@ -508,6 +509,29 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     for (const tab of ["Overview", "ITS check", "Plan", "How people apply", "Report"]) expect(html).toContain(`data-label="${tab}"`);
     expect(text(html)).toContain("Take back the confirmation");
     expect(html).not.toContain("Accept</button>");
+  });
+
+  it("an accepted company's check ends with a quiet Take away access, never offered on a request or a declined company (6 November 2026)", () => {
+    const html = page("open=co8&tab=check", [company("co8", "Harbor Dental", { accessRequest: null })]);
+    expect(html).toContain('<button type="button" class="btn quiet sm">Take away access</button>');
+    expect(text(html)).toContain("Everyone on the company can no longer sign in to it, its pages go offline and its emails to candidates wait. Nothing of theirs is deleted. Accept brings everyone back.");
+    // it comes after everything else on the tab
+    expect(html.indexOf("Take away access")).toBeGreaterThan(html.indexOf("Take back the confirmation"));
+    for (const id of ["co8", "co9"]) expect(page(`open=${id}&tab=check`), id).not.toContain("Take away access");
+    // the console's usual second press, then a toast in the API's words that claims the email only when it left
+    expect(takeAwayQuestion("Harbor Dental")).toBe("Take away access from Harbor Dental?");
+    expect(takeAwayToast({ message: "Harbor Dental no longer has access.", people: 2, emailed: true })).toEqual({ title: "Harbor Dental no longer has access.", detail: "2 people can no longer sign in to it. We emailed the owner." });
+    expect(takeAwayToast({ message: "Harbor Dental no longer has access.", people: 1, emailed: false })).toEqual({ title: "Harbor Dental no longer has access.", detail: "1 person can no longer sign in to it." });
+  });
+
+  it("a company whose access was taken away reads as declined, with Accept, which brings everyone back on their own plan", () => {
+    const html = page("open=co9&tab=check", [refused("co9", "Gone Dental", { planKey: "pro", accessRequest: { status: "declined", removed: true, person, declined: { at: new Date(2026, 10, 7, 9, 0).toISOString(), by: "Ada Admin" } } })]);
+    const words = text(html);
+    expect(words).toContain("Declined");
+    expect(html).toContain('aria-label="Accept Gone Dental">Accept</button>');
+    expect(words).toContain("Accept brings back everyone who lost access, on the same plan, and confirms the company again.");
+    expect(words).not.toContain("on the Free plan");
+    expect(html).not.toContain("Take away access");
   });
 
   it("the second press swaps the buttons for the question, Yes and No, each saying which company", () => {

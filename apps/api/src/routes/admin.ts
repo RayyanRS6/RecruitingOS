@@ -18,7 +18,7 @@ import { and } from "drizzle-orm";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import { customerReport } from "../services/role-report";
-import { customerAccessRequests, decideAccess, refuseWhileAccessOpen, tellPersonDeclined } from "../services/access-requests";
+import { customerAccessRequests, decideAccess, refuseWhileAccessOpen, tellOwnersRemoved, tellPersonDeclined } from "../services/access-requests";
 import { setJobBoardAccess, unverifyCompany, verifyCompany } from "../services/company-trust";
 import { resetPublicFeedCache } from "../pages/public-feeds";
 import { failedEmailApplications, retryFailedEmail } from "../webhooks/postmark";
@@ -121,6 +121,9 @@ function recruiterAsksOf(row: { used: number; limit: number | null } | undefined
  * in, on the Free plan, and counts as the one-time ITS check too: one approval, not two. Decline stops there, and accepting
  * later is the undo. Two presses at once make one change, and the second reads `changed: false` with what happened.
  * Accepting a company with nobody waiting changes nothing and says so; declining one answers 409 `already_accepted`.
+ * `remove` (6 November 2026) takes an accepted company's access away: everyone on it is declined, its confirmation taken
+ * back and their sessions in it ended, in one transaction; then one email to the owners (`emailed` says whether it left).
+ * On a request, a declined company or one with nobody active it answers 409 `no_access`, and changes nothing.
  */
 adminRoutes.post("/customers/:id/access", async (c) => {
   const s = c.get("session")!;
@@ -133,8 +136,10 @@ adminRoutes.post("/customers/:id/access", async (c) => {
   // As the verification route does: the feeds and the sitemap are rebuilt at once.
   resetPublicFeedCache(container);
   if (result.declined) await tellPersonDeclined(container, result.declined);
+  // Taken away (6 November 2026): one email to the owners, said on screen only when it really left.
+  const emailed = result.removed ? await tellOwnersRemoved(container, result.removed) : undefined;
   await container.kick();
-  return c.json(result.answer);
+  return c.json(emailed === undefined ? result.answer : { ...result.answer, emailed });
 });
 
 /**

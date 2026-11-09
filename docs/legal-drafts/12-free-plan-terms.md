@@ -8,7 +8,7 @@ Between **Identified Talent Solutions** ("ITS") and **[Tester's legal name]** ("
 
 ## 1. What this is
 
-ITS lets Tester use its recruiting software on the Free plan, to try it, because ITS accepted Tester's request or added Tester's address. Tester is the employer of anyone it hires. A person at ITS decides who is let in, may decline a request, and may end this as section 8 says. [Founder: ending it cannot be done from the console today. ITS can take Tester's public pages offline, and taking its access away needs an engineer.]
+ITS lets Tester use its recruiting software on the Free plan, to try it, because ITS accepted Tester's request or added Tester's address. Tester is the employer of anyone it hires. A person at ITS decides who is let in, may decline a request, and may end this as section 8 says. [Founder: since 6 November 2026 ITS ends it from the console with Take away access: everyone on Tester's company loses access at once and is signed out of it, its public pages go offline and its emails to candidates wait, and its records are kept. Accepting again brings everyone back.]
 
 ## 2. What the Free plan includes
 

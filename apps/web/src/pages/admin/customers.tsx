@@ -619,6 +619,9 @@ function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: Custom
  */
 function AccessRequestPanel({ company, request }: { company: CustomerRow; request: CustomerAccessRequest }) {
   const declined = request.status === "declined";
+  // Its access was taken away (6 November 2026): a declined company like any other, and Accept brings everyone back as they
+  // were, on their own plan.
+  const removed = declined && !!request.removed;
   return (
     <Card title={declined ? "Declined" : ASKING_FOR_ACCESS_CHIP}>
       <div className="grid gap-1.5">
@@ -630,7 +633,7 @@ function AccessRequestPanel({ company, request }: { company: CustomerRow; reques
       </div>
       <details className="more mt-3">
         <summary>How this works</summary>
-        <p className="small text-ink-2">Accept lets them in on the Free plan and counts as the ITS check.{declined ? "" : " Decline keeps them out, and you can still accept later."}</p>
+        <p className="small text-ink-2">{removed ? "Accept brings back everyone who lost access, on the same plan, and confirms the company again." : <>Accept lets them in on the Free plan and counts as the ITS check.{declined ? "" : " Decline keeps them out, and you can still accept later."}</>}</p>
       </details>
     </Card>
   );
@@ -1057,7 +1060,76 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
             : <Button size="sm" variant="primary" loading={boards.isPending} onClick={() => boards.mutate(true)}>ITS can sign in to the job boards</Button>}
         </div>
       </Card>}
+      <TakeAwayAccess company={company} />
     </div>
+  );
+}
+
+/** The second press's question for taking an accepted company's access away (6 November 2026). */
+export function takeAwayQuestion(company: string): string {
+  return `Take away access from ${company}?`;
+}
+
+/** The toast after it: the API's words, and that the owner was emailed only when the email really left. */
+export function takeAwayToast(answer: Pick<CustomerAccessAnswer, "message" | "people" | "emailed">): { title: string; detail?: string } {
+  const people = answer.people ? `${answer.people === 1 ? "1 person" : `${answer.people} people`} can no longer sign in to it.` : "";
+  return { title: answer.message, detail: [people, answer.emailed ? "We emailed the owner." : ""].filter(Boolean).join(" ") || undefined };
+}
+
+/**
+ * Take away access (6 November 2026): for an accepted company, a quiet button at the foot of the ITS check, then the
+ * console's second press ("Take away access from Harbor Dental?", Yes and No), then a toast. Everyone on the company can no
+ * longer sign in to it, its pages go offline and its emails to candidates wait; from then on it is a declined company,
+ * and Accept brings everyone back (POST /admin/customers/:id/access, `remove`).
+ */
+function TakeAwayAccess({ company }: { company: CustomerRow }) {
+  const qc = useQueryClient();
+  const [asking, setAsking] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  // Swapping the buttons removes the one that had focus: it goes to Yes, and after No back to the button that asked.
+  const swapped = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asking` is what swaps the buttons, and this runs once they are drawn
+  useEffect(() => {
+    if (!swapped.current) return;
+    swapped.current = false;
+    box.current?.querySelector("button")?.focus();
+  }, [asking]);
+  const ask = (next: boolean) => { swapped.current = true; setAsking(next); };
+  const remove = useMutation({
+    mutationFn: () => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, { decision: "remove", confirm: true }, adminReason("take away access")),
+    onSuccess: async (answer) => {
+      const t = takeAwayToast(answer);
+      toast(t.title, t.detail);
+      setAsking(false);
+      await qc.invalidateQueries({ queryKey: adminKeys.customers });
+      // The tab now shows the declined company with Accept: the keyboard's place goes to the tab, not the page.
+      requestAnimationFrame(() => { if (focusLost(document.activeElement, document.body)) document.getElementById("customer-drawer-tab-check")?.focus(); });
+    },
+    onError: async (e) => {
+      const refused = accessPressRefused(e);
+      toast(refused.title, refused.tone ? { tone: refused.tone } : undefined);
+      ask(false);
+      await qc.invalidateQueries({ queryKey: adminKeys.customers });
+    },
+  });
+  return (
+    <Card title="Access">
+      <div ref={box} className={CONFIRM}>
+        {asking ? (
+          <>
+            <span className="min-w-0 text-sm font-semibold text-ink wrap-anywhere">{takeAwayQuestion(company.name)}</span>
+            <span className="row">
+              <Button size="sm" variant="destructive" loading={remove.isPending} ariaLabel={`Yes, take away access from ${company.name}`} onClick={() => remove.mutate()}>Yes</Button>
+              <Button size="sm" variant="quiet" disabled={remove.isPending} ariaLabel={`No, keep access for ${company.name}`} onClick={() => ask(false)}>No</Button>
+            </span>
+          </>
+        ) : <Button size="sm" variant="quiet" onClick={() => ask(true)}>Take away access</Button>}
+      </div>
+      <details className="more mt-3">
+        <summary>How this works</summary>
+        <p className="small text-ink-2">Everyone on the company can no longer sign in to it, its pages go offline and its emails to candidates wait. Nothing of theirs is deleted. Accept brings everyone back.</p>
+      </details>
+    </Card>
   );
 }
 

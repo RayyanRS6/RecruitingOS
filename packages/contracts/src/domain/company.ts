@@ -84,9 +84,12 @@ export function isAccessRequestStatus(status: string | null | undefined): status
   return status === "requested" || status === "declined";
 }
 
-/** POST /api/v1/admin/customers/:id/access: an administrator accepts or declines a request. No reason is typed. */
+/**
+ * POST /api/v1/admin/customers/:id/access: an administrator accepts or declines a request. No reason is typed. `remove`
+ * (6 November 2026): takes an accepted company's access away; from then on it is a declined company, and Accept is the undo.
+ */
 export const CustomerAccessChange = z.object({
-  decision: z.enum(["accept", "decline"]),
+  decision: z.enum(["accept", "decline", "remove"]),
   confirm: z.literal(true, { message: "Confirm the decision." }),
 }).strict();
 export type CustomerAccessChange = z.infer<typeof CustomerAccessChange>;
@@ -94,14 +97,16 @@ export type CustomerAccessChange = z.infer<typeof CustomerAccessChange>;
 /**
  * What that route answers. `status`: where the person stands now, `active` once they are in. `changed`: false when this
  * press changed nothing (another administrator got there first, or a second press), and `message` says so in plain words.
+ * After `remove`: `people`, how many lost access, and `emailed`, whether the email to the owner really left (a screen may
+ * say it went only then).
  */
-export type CustomerAccessAnswer = { ok: true; companyId: string; decision: CustomerAccessChange["decision"]; status: "active" | "declined"; changed: boolean; message: string };
+export type CustomerAccessAnswer = { ok: true; companyId: string; decision: CustomerAccessChange["decision"]; status: "active" | "declined"; changed: boolean; message: string; people?: number; emailed?: boolean };
 
 /**
  * `accessRequest` on a row of GET /api/v1/admin/customers, null for any other company: the status, the person who asked,
  * and for a declined one when and by whom, read from its `company.access_declined` event.
  */
-export type CustomerAccessRequest = { status: AccessRequestStatus; person: { name: string | null; email: string }; declined: { at: string; by: string | null } | null };
+export type CustomerAccessRequest = { status: AccessRequestStatus; person: { name: string | null; email: string }; declined: { at: string; by: string | null } | null; /** declined because an administrator took an accepted company's access away (6 November 2026) */ removed?: boolean };
 
 /**
  * A person's own request, as `signup.request` on GET /api/v1/auth/config and `accessRequest` on POST /api/v1/companies say

@@ -6,8 +6,9 @@ export const EventType = z.enum([
   "company.created", "company.updated", "user.invited", "user.joined", "membership.changed",
   // The one-time ITS check of a self-serve company (founder decision B7): confirmed, or the confirmation taken back.
   "company.verified", "company.unverified",
-  // First sign-in asks for approval (6 November 2026): an administrator accepted or declined the person's request.
-  "company.access_accepted", "company.access_declined",
+  // First sign-in asks for approval (6 November 2026): an administrator accepted or declined the person's request, or took
+  // an accepted company's access away (everyone on it declined; Accept is the undo).
+  "company.access_accepted", "company.access_declined", "company.access_removed",
   // Team membership through invitations (docs/spec/21, area A): someone joined on an invitation, was removed, or an invitation was withdrawn.
   "member.joined", "member.removed", "invitation.revoked",
   "integration.connected", "integration.failed", "policy.changed", "plan.changed", "entitlement.exceeded",

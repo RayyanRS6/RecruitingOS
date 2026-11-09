@@ -314,7 +314,11 @@ So the journey is the owner's, and how it is built is Claude's choice on that re
 - **All leaves declined companies out.** They are under the Declined filter, so a public door cannot fill the list with refusals. A search under All does not reach one until Declined is pressed.
 - **One folded "How this works" line in the drawer**, under the fewer-words rule: "Accept lets them in on the Free plan and counts as the ITS check. Decline keeps them out, and you can still accept later." It is one element to cut.
 
-**Left open by the build.** There is no button that takes an accepted company's access away: Decline answers 409 once accepted, **Take back the confirmation** takes only its public side offline, and its people can still sign in and draft with what is left of the AI credit (`docs/runbooks/production-setup.md`, "Ending a tester's access").
+**Left open by the build, then closed (6 November 2026).** There was no button that took an accepted company's access away: Decline answered 409 once accepted, **Take back the confirmation** took only its public side offline, and its people could still sign in and draft with what was left of the AI credit. Nadine is about to accept strangers, so she must be able to undo that:
+
+| # | Decision | By | Where |
+|---|---|---|---|
+| AP-9 | **Take away access.** On an accepted company's ITS check tab, a quiet **Take away access**, the console's second press ("Take away access from {company}?", Yes and No), then a toast. In one transaction every active membership becomes `declined`, open invitations are withdrawn, the confirmation is taken back as **Take back the confirmation** does it, and their sessions in that company end. Event and audit `company.access_removed`. One direct email to each owner with the declined email's words, never blocking and never an alert, claimed on screen only when it left. From then on it is a declined company (the wall, the declined screen, the Declined pill, AP-7's one door), and Accept is the undo: it brings back everyone it took away, on the same plan, confirms the company again and tells each of them "Your access is back". Someone also on another company keeps that one. On a request, a declined company or one with nobody active it answers 409 `no_access`. | Owner's brief; Claude | `decideAccess` and `takeAccessAway` in `apps/api/src/services/access-requests.ts`; `TakeAwayAccess` in `apps/web/src/pages/admin/customers.tsx`; `docs/runbooks/production-setup.md`, "Ending a tester's access" |
 
 ### The open question
 

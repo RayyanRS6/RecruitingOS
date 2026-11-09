@@ -81,6 +81,20 @@ function worldOf(container: Container, app: ReturnType<typeof createApp>) {
     const [interview] = await tx.insert(interviews).values({ companyId, applicationId: application.id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "cancelled", timezone: "America/Los_Angeles" }).returning();
     return { application: application.id, interview: interview.id };
   });
+  /** Someone on a company's team, active, straight into the tables: their account and their membership. */
+  const addMember = async (companyId: string, email: string, role: string) => withPlatform(container.db, async (tx) => {
+    let [user] = await tx.select().from(users).where(eq(users.email, email)).limit(1);
+    if (!user) [user] = await tx.insert(users).values({ email, name: email.split("@")[0] }).returning();
+    await tx.insert(memberships).values({ companyId, userId: user.id, role, status: "active" });
+    return user.id;
+  });
+  /** ITS confirms a company, from the console, as for real. */
+  const confirm = async (adminCookie: string, companyId: string) => {
+    const r = await json(adminCookie, "POST", `/api/v1/admin/customers/${companyId}/verification`, { verified: true, reason: "Checked the website.", confirm: true });
+    expect(r.status, await r.clone().text()).toBe(200);
+  };
+  /** Everyone on a company, by status. */
+  const statusesOf = async (companyId: string) => (await container.db.select({ status: memberships.status }).from(memberships).where(eq(memberships.companyId, companyId))).map((m) => m.status).sort();
   /** A company through the allow-list's door, with a real open role. */
   const openDirect = async (email: string, name: string) => {
     const cookie = await google(email, "Pat Partner");
@@ -95,7 +109,7 @@ function worldOf(container: Container, app: ReturnType<typeof createApp>) {
     await container.drain();
     return { cookie, id: company.id, slug: company.slug, roleId, session: s.session.id };
   };
-  return { container, app, json, read, code, mail, form, google, signupOf, meOf, admin, decide, ask, statusOf, rowOf, runsOf, aiRunsOf, noticesOf, eventsOf, alertsOf, customers, mailTo, plantRole, plantPerson, openDirect };
+  return { container, app, json, read, code, mail, form, google, signupOf, meOf, admin, decide, ask, statusOf, rowOf, runsOf, aiRunsOf, noticesOf, eventsOf, alertsOf, customers, mailTo, plantRole, plantPerson, openDirect, addMember, confirm, statusesOf };
 }
 
 async function boot(check: "its" | "auto", extra: Env = {}): Promise<World> {
@@ -1074,6 +1088,12 @@ const MARK = {
   declinedRole: "Zqdeclinedrolemark",
   declinedPerson: "Zqdeclinedpersonmark",
   declinedSite: "zqdeclinedsitemark",
+  // An accepted company in use whose access was taken away (6 November 2026): its owner, a teammate, a job and a candidate.
+  removedName: "Zqremovedcompanymark",
+  removedEmail: "pat.zqremovedownermark@listed-domain.test",
+  removedMemberEmail: "zqremovedmembermark@stranger.test",
+  removedRole: "Zqremovedrolemark",
+  removedPerson: "Zqremovedpersonmark",
 };
 const MARKS = Object.values(MARK);
 
@@ -1091,6 +1111,8 @@ describe("a waiting and a declined person reach nothing, by any route", () => {
   let declinedTargets: Targets;
   let waiting: Awaited<ReturnType<World["ask"]>>;
   let declined: Awaited<ReturnType<World["ask"]>>;
+  let removed: Awaited<ReturnType<World["openDirect"]>>;
+  let removedTargets: Targets;
 
   beforeAll(async () => {
     w = await boot("its");
@@ -1108,6 +1130,20 @@ describe("a waiting and a declined person reach nothing, by any route", () => {
     ({ asker: waiting, targets: waitingTargets } = await prepare(MARK.waitingEmail, MARK.waitingName, MARK.waitingSite, MARK.waitingRole, MARK.waitingPerson));
     ({ asker: declined, targets: declinedTargets } = await prepare(MARK.declinedEmail, MARK.declinedName, MARK.declinedSite, MARK.declinedRole, MARK.declinedPerson));
     expect((await w.decide(adminCookie, declined.id, "decline")).status).toBe(200);
+    // A company that had access and used it (6 November 2026): confirmed, with a live job, a candidate, an interview and a
+    // teammate. Before its access is taken away its owner and teammate really do read the markers, so the sweep below
+    // would see a single one of them leak.
+    removed = await w.openDirect(MARK.removedEmail, MARK.removedName);
+    await w.confirm(adminCookie, removed.id);
+    const removedRole = await w.plantRole(removed.roleId, removed.id, MARK.removedRole);
+    const removedPerson = await w.plantPerson(removed.id, removedRole, MARK.removedPerson);
+    await w.addMember(removed.id, MARK.removedMemberEmail, "hiring_manager");
+    removedTargets = { company: removed.id, userId: (await w.meOf(removed.cookie)).user.id, slug: removed.slug, role: removedRole, application: removedPerson.application, interview: removedPerson.interview, session: removed.session };
+    expect(await (await w.json(removed.cookie, "GET", `/api/v1/applications/${removedPerson.application}`)).text()).toContain(MARK.removedPerson);
+    const teammate = await w.google(MARK.removedMemberEmail);
+    expect(await (await w.json(teammate, "GET", "/api/v1/roles")).text()).toContain(MARK.removedRole);
+    expect((await w.app.request(`/careers/${removed.slug}`)).status).toBe(200);
+    expect((await w.decide(adminCookie, removed.id, "remove")).status).toBe(200);
     await w.container.drain();
   });
   afterAll(async () => {
@@ -1162,6 +1198,36 @@ describe("a waiting and a declined person reach nothing, by any route", () => {
     expect(await w.runsOf(waiting.id)).toEqual([]);
     expect(await w.runsOf(declined.id)).toEqual([]);
   }, 300_000);
+
+  it("an owner and a teammate whose company's access was taken away reach nothing either, by any route, with the ids of their own company and of another; nothing moved (6 November 2026)", async () => {
+    const ids = [removed.id, other.id];
+    const before = await snapshot(w, ids);
+    const problems: string[] = [];
+    let wall = 0;
+    let answers = 0;
+    // their own request reads the company's name on GET /auth/config (the declined screen), as a declined person's does
+    for (const email of [MARK.removedEmail, MARK.removedMemberEmail]) {
+      for (const targets of [removedTargets, otherTargets]) {
+        const done = await sweep(w, w.app, { email, name: MARK.removedName }, targets, MARKS);
+        problems.push(...done.problems);
+        wall += done.wall;
+        answers += done.answers;
+      }
+    }
+    expect([...new Set(problems)]).toEqual([]);
+    // not a sweep of nothing: the wall itself refused most of it, each of the four times
+    expect(answers).toBeGreaterThan(1200);
+    expect(wall).toBeGreaterThan(600);
+    await w.container.drain();
+    expect(await snapshot(w, ids)).toEqual(before);
+    // and neither of them can switch back into it
+    for (const email of [MARK.removedEmail, MARK.removedMemberEmail]) {
+      const cookie = await w.google(email);
+      expect((await w.meOf(cookie)).memberships).toEqual([]);
+      const r = await w.json(cookie, "POST", "/api/v1/auth/switch", { companyId: removed.id });
+      expect(r.status, email).toBe(403);
+    }
+  }, 400_000);
 
   it("setting a date and time, with a real time and a real body: someone waiting or declined meets the wall, and the candidate's new pages answer as if the token did not exist", async () => {
     // all of them are in the sweep above, by the route table: this is the same wall with a body that would book
@@ -1249,4 +1315,182 @@ describe("the same sweep under COMPANY_CHECK=auto", () => {
       await w.container.close();
     }
   }, 300_000);
+});
+
+/**
+ * Taking an accepted company's access away (6 November 2026): Nadine is about to accept strangers, so she must be able to
+ * undo that. Decline answered 409 once a company was accepted, and taking the confirmation back left everyone signed in.
+ * Take away access makes it a declined company in one transaction; Accept is the undo.
+ */
+describe("taking an accepted company's access away", () => {
+  let w: World;
+  let adminCookie = "";
+  /**
+   * A company in use: through the allow-list's door with a live job, confirmed by ITS, and a teammate signed in. `meanwhile`
+   * runs before the teammate joins (Free has two people, and an invitation takes one).
+   */
+  const inUse = async (owner: string, name: string, teammate: string, meanwhile?: (co: { cookie: string }) => Promise<void>) => {
+    const co = await w.openDirect(owner, name);
+    await w.confirm(adminCookie, co.id);
+    if (meanwhile) await meanwhile(co);
+    await w.addMember(co.id, teammate, "hiring_manager");
+    const mate = await w.google(teammate);
+    expect((await w.meOf(mate)).activeCompanyId).toBe(co.id);
+    return { ...co, mate };
+  };
+
+  beforeAll(async () => {
+    w = await boot("its");
+    adminCookie = await w.admin();
+  });
+  afterAll(async () => {
+    await w.container.close();
+  });
+
+  it("everyone on it is out at once, in one press: memberships, sessions, invitations and the public side; one email to the owner, and they read the declined screen", async () => {
+    // an invitation still open when the access goes
+    const co = await inUse("pat.remove@listed-domain.test", "Remove Dental", "mel.mate@stranger.test", async (c) => {
+      const invited = await w.json(c.cookie, "POST", "/api/v1/companies/current/invites", { email: "ivy.invited@stranger.test", role: "interviewer" });
+      expect(invited.status, await invited.clone().text()).toBe(201);
+    });
+    expect((await w.app.request(`/careers/${co.slug}`)).status).toBe(200);
+    await w.container.drain();
+    const before = w.mail().sent.length;
+    const r = await w.decide(adminCookie, co.id, "remove");
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await w.read<CustomerAccessAnswer>(r)).toEqual({ ok: true, companyId: co.id, decision: "remove", status: "declined", changed: true, message: "Remove Dental no longer has access.", people: 2, emailed: true });
+    // everyone on it is declined, and every session they had in it ended
+    expect(await w.statusesOf(co.id)).toEqual(["declined", "declined"]);
+    expect((await w.json(co.cookie, "GET", "/api/v1/auth/me")).status).toBe(401);
+    expect((await w.json(co.mate, "GET", "/api/v1/auth/me")).status).toBe(401);
+    // signing in again opens nothing: the wall, and the declined screen
+    for (const email of ["pat.remove@listed-domain.test", "mel.mate@stranger.test"]) {
+      const again = await w.google(email);
+      expect((await w.meOf(again)).activeCompanyId, email).toBeNull();
+      expect(await w.code(await w.json(again, "GET", "/api/v1/companies/current")), email).toBe("no_company");
+      expect(await w.signupOf(again), email).toMatchObject({ allowed: false, request: { status: "declined", companyName: "Remove Dental" } });
+    }
+    // an invitation still open would have let someone in: it is withdrawn
+    expect(await w.container.db.select().from(invitations).where(and(eq(invitations.companyId, co.id), eq(invitations.status, "pending")))).toEqual([]);
+    // the confirmation is taken back as "Take back the confirmation" does it: its pages are offline
+    expect((await w.rowOf(co.id)).settings.verifiedAt).toBeUndefined();
+    expect((await w.app.request(`/careers/${co.slug}`)).status).toBe(404);
+    expect(await w.eventsOf(co.id, "company.unverified")).toHaveLength(1);
+    // one email, to the owner, with the declined email's words; nothing to the teammate, and nobody else was told
+    const sent = w.mail().sent.slice(before);
+    expect(sent.filter((m) => m.to === "pat.remove@listed-domain.test").map((m) => m.subject)).toEqual(["We can't offer access right now"]);
+    expect(sent.find((m) => m.to === "pat.remove@listed-domain.test")!.text).toContain("Questions? recruiting@its.example");
+    expect(sent.some((m) => m.to === "mel.mate@stranger.test")).toBe(false);
+    // on the record, with the stock reason, and no alert
+    expect(await w.eventsOf(co.id, "company.access_removed")).toHaveLength(1);
+    const audited = await w.container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, co.id), eq(auditRecords.action, "company.access_removed")));
+    expect(audited.map((a) => [a.reason, a.actor.name])).toEqual([["Access taken away from the console", "Ada Admin"]]);
+    expect(await w.alertsOf(co.id)).toEqual([]);
+    // the console: a declined company, its owner named, and that its access was taken away
+    const listed = (await w.customers(adminCookie)).find((c) => c.id === co.id)!;
+    expect(listed.accessRequest).toMatchObject({ status: "declined", removed: true, person: { email: "pat.remove@listed-domain.test" }, declined: { at: expect.any(String), by: "Ada Admin" } });
+    // and every other console action refuses it, as for any declined company
+    const plan = await w.json(adminCookie, "POST", `/api/v1/admin/customers/${co.id}/plan`, { planKey: "basic", reason: "A bigger plan." });
+    expect(plan.status).toBe(409);
+    expect(((await plan.json()) as { error: { code: string; message: string } }).error).toMatchObject({ code: "access_request_open", message: "This company's access was taken away. Accept it first if you want to let it in again." });
+  });
+
+  it("Accept brings everyone back, confirms the company again, tells each of them, and keeps everything they had", async () => {
+    const co = await inUse("pat.undo@listed-domain.test", "Undo Dental", "una.mate@stranger.test");
+    expect((await w.decide(adminCookie, co.id, "remove")).status).toBe(200);
+    const undone = await w.decide(adminCookie, co.id, "accept");
+    expect(await w.read<CustomerAccessAnswer>(undone)).toMatchObject({ status: "active", changed: true, message: "Undo Dental has access again." });
+    await w.container.drain();
+    expect(await w.statusesOf(co.id)).toEqual(["active", "active"]);
+    expect((await w.rowOf(co.id)).settings.verifiedAt).toEqual(expect.any(String));
+    expect((await w.app.request(`/careers/${co.slug}`)).status).toBe(200);
+    // each of them hears their access is back, in those words
+    const back = (await w.noticesOf(co.id)).filter((n) => n.kind === "company.access_accepted");
+    expect(back.map((n) => n.title)).toEqual(["Your access is back", "Your access is back"]);
+    // they sign in to it as before, and what they had is there
+    const owner = await w.google("pat.undo@listed-domain.test");
+    expect((await w.meOf(owner)).activeCompanyId).toBe(co.id);
+    expect(await (await w.json(owner, "GET", "/api/v1/roles")).text()).toContain(co.roleId);
+    expect((await w.meOf(await w.google("una.mate@stranger.test"))).activeCompanyId).toBe(co.id);
+    expect((await w.customers(adminCookie)).find((c) => c.id === co.id)?.accessRequest).toBeNull();
+    // their own history says both, in plain words
+    const history = await w.read<Array<{ action: string; description: string }>>(await w.json(owner, "GET", "/api/v1/companies/current/audit?actions=company.access_removed,company.access_accepted"));
+    expect(history.map((h) => h.description).sort()).toEqual(["ITS gave your company its access back.", "ITS took your company's access away: nobody on it could sign in to it, and its careers page and job pages were offline."]);
+  });
+
+  it("a second press changes nothing; a request, a declined company and one with nobody active are told calmly, and nothing moves", async () => {
+    const co = await inUse("pat.twice@listed-domain.test", "Twice Removed", "tom.mate@stranger.test");
+    expect((await w.decide(adminCookie, co.id, "remove")).status).toBe(200);
+    const mails = w.mail().sent.length;
+    const again = await w.decide(adminCookie, co.id, "remove");
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({ error: { code: "no_access", message: "Twice Removed has no access to take away. Nothing changed." } });
+    expect(await w.eventsOf(co.id, "company.access_removed")).toHaveLength(1);
+    expect(w.mail().sent.length).toBe(mails);
+    // a request: there is nothing to take away, and Decline is its door
+    const asker = await w.ask("still.asking@stranger.test", "Still Asking");
+    const onRequest = await w.decide(adminCookie, asker.id, "remove");
+    expect(onRequest.status).toBe(409);
+    expect(await onRequest.json()).toMatchObject({ error: { code: "no_access", message: "Still Asking is asking for access and has none to take away. Decline it instead." } });
+    expect(await w.statusOf(asker.id)).toBe("requested");
+    // a declined one
+    expect((await w.decide(adminCookie, asker.id, "decline")).status).toBe(200);
+    expect((await w.decide(adminCookie, asker.id, "remove")).status).toBe(409);
+    expect(await w.statusOf(asker.id)).toBe("declined");
+    // a company with nobody active on it
+    const empty = await w.openDirect("pat.empty@listed-domain.test", "Empty Dental");
+    await withPlatform(w.container.db, (tx) => tx.update(memberships).set({ status: "removed" }).where(eq(memberships.companyId, empty.id)));
+    const none = await w.decide(adminCookie, empty.id, "remove");
+    expect(none.status).toBe(409);
+    expect(await none.json()).toMatchObject({ error: { code: "no_access", message: "Empty Dental has nobody with access to take away. Nothing changed." } });
+    expect(await w.eventsOf(empty.id, "company.access_removed")).toEqual([]);
+    // two administrators at once: one change, one email
+    const race = await inUse("pat.race@listed-domain.test", "Race Removed", "rob.mate@stranger.test");
+    const raced = await Promise.all([w.decide(adminCookie, race.id, "remove"), w.decide(adminCookie, race.id, "remove")]);
+    expect(raced.map((x) => x.status).sort()).toEqual([200, 409]);
+    expect(await w.eventsOf(race.id, "company.access_removed")).toHaveLength(1);
+    expect(w.mailTo("pat.race@listed-domain.test").filter((m) => m.subject === "We can't offer access right now")).toHaveLength(1);
+  });
+
+  it("only a platform administrator with a second factor may take it away", async () => {
+    const co = await inUse("pat.guarded@listed-domain.test", "Guarded Removal", "gus.mate@stranger.test");
+    const body = { decision: "remove", confirm: true };
+    expect((await w.json("", "POST", `/api/v1/admin/customers/${co.id}/access`, body)).status).toBe(401);
+    expect((await w.json(co.cookie, "POST", `/api/v1/admin/customers/${co.id}/access`, body)).status).toBe(403);
+    const recruiter = await signInStaff(w.app, w.container, "ray@identifiedtalent.com", "its_recruiter", "Ray Recruiter");
+    expect((await w.json(recruiter, "POST", `/api/v1/admin/customers/${co.id}/access`, body)).status).toBe(403);
+    expect((await w.json(adminCookie, "POST", `/api/v1/admin/customers/${co.id}/access`, { decision: "remove" })).status).toBe(400);
+    expect(await w.statusesOf(co.id)).toEqual(["active", "active"]);
+  });
+
+  it("a failed email changes none of it and raises nothing, and the answer says it did not leave", async () => {
+    const co = await inUse("pat.nomail@listed-domain.test", "No Mail Removal", "nia.mate@stranger.test");
+    w.mail().failNext(1);
+    const r = await w.decide(adminCookie, co.id, "remove");
+    expect(r.status).toBe(200);
+    expect(await w.read<CustomerAccessAnswer>(r)).toMatchObject({ changed: true, status: "declined", emailed: false });
+    expect(await w.statusesOf(co.id)).toEqual(["declined", "declined"]);
+    expect((await w.rowOf(co.id)).settings.verifiedAt).toBeUndefined();
+    expect(await w.alertsOf(co.id)).toEqual([]);
+    expect(await w.container.db.select().from(adminAlerts).where(inArray(adminAlerts.kind, ["message.delivery_failed", "message.provider_refused"]))).toEqual([]);
+  });
+
+  it("someone also on another company simply loses this one: their session there stays open, and they land in it", async () => {
+    const keep = await w.openDirect("pat.keep@listed-domain.test", "Keep Dental");
+    const gone = await inUse("pat.gone@listed-domain.test", "Gone Dental", "both.companies@stranger.test");
+    await w.addMember(keep.id, "both.companies@stranger.test", "interviewer");
+    // their session working in the other company
+    const there = await w.google("both.companies@stranger.test");
+    expect((await w.json(there, "POST", "/api/v1/auth/switch", { companyId: keep.id })).status).toBe(200);
+    expect((await w.decide(adminCookie, gone.id, "remove")).status).toBe(200);
+    // the session in the removed company ended; the one in the other company did not
+    expect((await w.json(gone.mate, "GET", "/api/v1/auth/me")).status).toBe(401);
+    const still = await w.meOf(there);
+    expect(still.activeCompanyId).toBe(keep.id);
+    expect(still.memberships.map((m) => m.companyId)).toEqual([keep.id]);
+    // signing in again lands in the company they still have
+    expect((await w.meOf(await w.google("both.companies@stranger.test"))).activeCompanyId).toBe(keep.id);
+    // and the other company's own people are untouched
+    expect(await w.statusesOf(keep.id)).toEqual(["active", "active"]);
+  });
 });

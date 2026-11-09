@@ -658,10 +658,15 @@ door again: a stranger reads "Recruiting OS is by invitation for now" where the 
 Anyone already waiting keeps their screen, stays on the Overview and can still be accepted or declined. `approval` opens the door
 again. Any other value stops the app.
 
-**Ending a tester's access.** There is no button for it. Once a company is accepted, Decline answers that it already has access.
-**Take back the confirmation**, with a reason, takes its pages, feeds and candidate emails offline at once, so press that first. Its
-people can still sign in, read what they have and draft with what is left of the AI credit, and **Sign someone out everywhere** ends
-their sessions, not their way back. Taking them off altogether needs an engineer today. Their company and its records stay.
+**Ending a tester's access.** **Console, Customers**, the company, **ITS check**, **Take away access** at the foot of the tab, then
+**Yes** to "Take away access from {company}?". In one press everyone on the company is declined and signed out of it, its open
+invitations are withdrawn, and its confirmation is taken back as **Take back the confirmation** does it: pages, feeds and candidate
+emails go offline at once. The owner gets one email with the declined email's words; the toast says "We emailed the owner." only
+when it really left, and a failed email changes nothing. From then on it is a declined company: they read "We can't offer access
+right now" when they sign in, the row has the **Declined** pill, and every other console action refuses it. Someone who also works
+for another company keeps that one. **Accept** is the undo: it brings everyone back on the same plan, confirms the company again
+and tells each of them. Their company and its records stay either way. It is offered only on a company that has access; on a
+request or a declined company the API answers 409 and changes nothing.
 
 ### How ITS changes a plan
 
