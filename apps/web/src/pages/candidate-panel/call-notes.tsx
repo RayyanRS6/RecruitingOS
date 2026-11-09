@@ -42,8 +42,9 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
       setByQuestion({});
       setOther("");
       setOpen(false);
-      // They went on the Notes tab: what it read before would have the next save write over them.
-      if (r.keptAsNote) await qc.invalidateQueries({ queryKey: notesKey(a.id) });
+      // They went on the Notes tab. Nothing draws that tab while this card is open, so marking its read stale would leave the old
+      // words for its box to open on, and its next save would write over them: the read is dropped, and the tab reads it afresh.
+      if (r.keptAsNote) await qc.resetQueries({ queryKey: notesKey(a.id) });
       await refresh();
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not add the notes. Try again."),

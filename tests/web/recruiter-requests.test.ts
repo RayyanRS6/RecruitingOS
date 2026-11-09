@@ -217,9 +217,8 @@ describe("the recruiter queue shows the draft a request is about (plan C12)", ()
     expect(LOCKED_CALL_NOTES_HINT).not.toMatch(/instead of the assistant|scorecard is written|finish the AI interview/i);
     const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
     expect(queue).toContain("e.lockedForCompany ? LOCKED_CALL_NOTES_HINT : CALL_NOTES_HINT");
-    // Those notes land on the Notes tab, whose own read has to start again, or its next save writes over them.
-    const card = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/call-notes.tsx", import.meta.url), "utf8");
-    expect(card).toContain("if (r.keptAsNote) await qc.invalidateQueries({ queryKey: notesKey(a.id) });");
+    // Those notes land on the Notes tab, whose own read has to start again, or its next save writes over them: pressed with a
+    // real query cache in apps/shell/components/call-notes-ui.test.ts.
   });
 
   it("on such a request the answer's words say nobody at the company reads it, from what the API answers, and Write to the candidate opens their message box", () => {
