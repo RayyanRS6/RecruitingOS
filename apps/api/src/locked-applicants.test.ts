@@ -2057,10 +2057,19 @@ describe("locked candidates", () => {
       await fill(job, 1);
       const p = person("Cal");
       const row = await apply(job, p);
-      await close(job);
+      // ITS decided about him while he was locked, under the grant his request for a person gave, and nobody told him (B6). (Had
+      // the job closed instead, the change of plan would tell him it closed before opening him: no decision would be held.)
+      expect((await reply(row, p.email, "HUMAN", "msg-cal")).status).toBe(200);
+      await container.drain();
+      const [ask] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, row.id));
+      const recruiter = await signInStaff(app, container, "cal.recruiter@identifiedtalent.com", "its_recruiter", "Cal Recruiter");
+      expect((await json(recruiter, "POST", `/api/v1/escalations/${ask.id}/claim`)).status).toBe(200);
+      expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId: job.id })).status).toBe(200);
+      expect((await json(recruiter, "POST", `/api/v1/applications/${row.id}/actions`, { action: "move_to_talent_pool" })).status).toBe(200);
       await changePlan(job.id, "pro");
+      expect(await applicationOf(row.id)).toMatchObject({ stage: "talent_pool", lockedAt: null, toldState: "not_told" });
       const unlockedAt = Date.now();
-      // The job closed long ago as far as the stage says.
+      // The decision was made long ago as far as the stage says.
       await container.db.update(applications).set({ stageChangedAt: new Date(unlockedAt - 20 * DAY).toISOString() }).where(eq(applications.id, row.id));
       const untold = async (at: Date) => (await withTenant(container.db, job.id, (tx) => detectStuckRoles(tx, job.id, at))).find((d) => d.detector === "decisions_untold" && (d.applicationIds ?? []).includes(row.id));
       expect(await untold(new Date(unlockedAt + 60_000))).toBeUndefined();
