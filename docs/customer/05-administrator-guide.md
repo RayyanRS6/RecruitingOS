@@ -39,12 +39,12 @@ You create one company of your own this way. To open another one, contact ITS: t
 
 A person at ITS looks at each new company. After you press **Send my request**, the screen says **Your request has been sent** and **Please wait for approval**. ITS reviews each company, usually within one business day. Until then nothing else in the product works for you, whatever page you open, the assistant does no work for you, and nothing of your company is public.
 
-If we were able to email you, the screen says so, and we email you when it is decided. If not, it asks you to keep the page open or sign in again later. Either is fine: an open page moves on by itself within 30 seconds of the decision, and signing in again brings you to the same place.
+If we were able to email you, the screen says so, and we email you when it is decided. If not, or if our email to you came back since, it asks you to keep the page open or sign in again later. Either is fine: an open page moves on by itself within 30 seconds of the decision, and signing in again brings you to the same place.
 
 - **Accepted.** You go to **Home**, on the Free plan. This also counts as ITS's one-time check of your company, so there is nothing more to wait for: your careers page and job pages go public once you approve a job.
 - **Not accepted.** The screen says **We can't offer access right now**, with an address to write to, and we email you the same if we can. You cannot use the product or send a second request. ITS can still let you in later, and you then go to **Home** by yourself.
 
-An invitation into someone else's company works as usual, whatever became of your own request.
+An invitation into someone else's company works as usual, whatever became of your own request. While you work there, its **Home** says in one line where your own request stands.
 
 ## 3. The screens at a glance
 

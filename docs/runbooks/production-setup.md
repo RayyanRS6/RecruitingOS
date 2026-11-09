@@ -112,6 +112,13 @@ Then, in the project:
 - **Authentication, Sign In / Providers**: Email off, Phone off, **Allow anonymous sign-ins** off, **Allow new users to
   sign up** on (Microsoft and Google sign-ups need it; who may open a company is `SIGNUP_MODE`'s job). Azure and Google
   on (next section), nothing else.
+- **Confirm email** on and **Secure email change** on, wherever this dashboard shows them (with the email settings); check
+  them even with Email off, and staging's project the same. Why: the app takes the address on a sign-in as proved
+  (`packages/integrations/src/identity/claims.ts`). With **Confirm email** off, anyone holding the publishable key could
+  change their own account's address to someone else's with no proof and then sign in as that address: an open invitation
+  to it would be theirs, and under `SIGNUP_MODE=approval` our emails would go to it. **Secure email change** has both the
+  old and the new address confirm a change. Nothing in the code can read these settings, so they are read here, at
+  release (the review of 6 November 2026).
 - **Authentication, Multi-Factor**: TOTP (authenticator app) on.
 - **Storage**: steps 1 to 4 of `docs/runbooks/resume-storage.md` in this project, with staging's settings: bucket
   `resumes`, Private, 8 MB, types `application/pdf`,
@@ -120,7 +127,8 @@ Then, in the project:
   now); global limit at least 8 MB; S3 protocol on. **Two** access keys: `recruiting-os-production-app` (Vercel) and
   `recruiting-os-production-worker` (Railway), each into 1Password.
 
-Report back: `<prod-ref>`, the region, and the endpoint and region the S3 screen shows.
+Report back: `<prod-ref>`, the region, the endpoint and region the S3 screen shows, and that **Confirm email** and
+**Secure email change** read on.
 
 ### Microsoft and Google sign-in
 
@@ -628,9 +636,10 @@ real AI money up to its credit, and only a person's press lets one in.
 2. They fill in **Tell us about your company** and press **Send my request**. Their screen says "Your request has been sent" and
    "Please wait for approval." Nothing else works for them: no job, no AI, nothing public, and every address they open lands on
    this screen. One account makes one request.
-3. **Console, Overview**, at the very top of **Needs attention**: "<Company> is asking for access", with the person's name and
-   email, the kind of business, the size, the city and state, the website and how long they have waited. A stranger typed all of
-   it, so open the website with care. Five rows at most, the longest waiting first, then "N more companies are asking for
+3. **Console, Overview**, at the very top of **Needs attention**: "<Company> is asking for access", with the person's email
+   (their sign-in proved it) and then their name, the kind of business, the size, the city and state, the website and how long
+   they have waited. A stranger typed all of it but the email, so open the website with care. The page reads again every minute
+   while it is open. Five rows at most, the longest waiting first, then "N more companies are asking for
    access", which opens **Customers**, **Waiting for the ITS check**. While email is not live this row is the only thing that
    tells you ("While testers are on").
 4. Look before you press. Accept is also the one-time ITS check: it opens their public side, and there is no second look. Nothing
@@ -686,7 +695,8 @@ Email is not live, so the queue mailbox hears nothing, and a tester's team invit
 instead, with one exception on purpose: no email about a request for access raises one, whether to the person or to ITS, so **the
 Overview's row is the only thing that says someone is waiting**. The person's screen claims nothing about email until one really
 left: it says "Keep this page open, or sign in again later to check." Once email is live their copy says ITS reviews each company
-"usually within one business day", so someone must look that often. Read the console every business day: **Overview**, **Customers**
+"usually within one business day", so someone must look that often. One address sends five requests an hour at most, and with more
+than 25 waiting at once a new request sends no email at all, to the person or to ITS: work the list down. Read the console every business day: **Overview**, **Customers**
 (filter **Waiting for the ITS check** and **Running low**, the chip **Asked to upgrade**), **Queue** and **Problems**. An AI credit
 at 80% or used up is a line in dollars on the company's row, and **Running low** counts it; it is never critical and pages nobody.
 The Anthropic workspace's monthly limit (step 1) stays the guard over the whole account.
