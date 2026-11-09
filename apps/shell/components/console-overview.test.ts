@@ -199,6 +199,18 @@ describe("the console's Overview", () => {
     expect(html).toContain('<a href="/admin/system?view=costs" class="console-more">See all costs</a>');
   });
 
+  it("a tab left open stays true: every source behind Needs attention is asked again on focus and every minute while visible, never in a hidden tab; the recruiter requests less often", () => {
+    // the review of 6 November 2026: left open at 9:00, it said "Nothing needs you right now." at 15:00 with someone waiting
+    const qc = client(ALL);
+    render(qc);
+    const options = (queryKey: unknown[]) => qc.getQueryCache().find({ queryKey, exact: true })?.options as Record<string, unknown> | undefined;
+    for (const key of [["admin", "customers"], ["admin", "alerts"], ["admin", "failures"], ["admin", "privacy"], ["admin", "failed-email-applications"], ["admin", "csp"]]) {
+      expect(options(key), key.join(" ")).toMatchObject({ refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: false });
+    }
+    // each read of the recruiter requests is recorded per customer: every five minutes, and on focus only once two have passed
+    expect(options(["escalations"])).toMatchObject({ refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 });
+  });
+
   it("sums up the system in one line, and says when it could not check the queue", () => {
     const t = text(render(client(ALL)));
     expect(t).toContain("System: 0 jobs waiting · 0 failed · 2 workflow runs waiting · business calendar version 3 in force");
@@ -274,7 +286,8 @@ describe("Overview's rules", () => {
 });
 
 describe("first sign-in asks for approval, on the Overview", () => {
-  const now = Date.parse("2026-11-06T12:00:00Z");
+  // the page draws on today's clock, so the requests are dated from it too: the suite does not depend on the day it runs
+  const now = Date.now();
   const asker = (id: string, called: string, days: number, over: Record<string, unknown> = {}) => customer(id, called, { verifiedAt: null, verifiedBy: null, createdAt: new Date(now - days * DAY).toISOString(), locations: [{ city: "Austin", region: "TX", country: "US" }], settings: { website: "https://asker.example" }, accessRequest: { status: "requested", person: { name: "Sam Asker", email: "sam@stranger.test" }, declined: null }, ...over });
   const declined = (id: string, called: string, days: number) => asker(id, called, days, { accessRequest: { status: "declined", person: { name: "Dee Clined", email: "dee@stranger.test" }, declined: { at: new Date(now - DAY).toISOString(), by: "Ada Admin" } } });
   const ordinary = (id: string, called: string, days: number) => customer(id, called, { verifiedAt: null, verifiedBy: null, createdAt: new Date(now - days * DAY).toISOString() });

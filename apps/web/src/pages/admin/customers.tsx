@@ -11,6 +11,7 @@ import { focusLost } from "../../focus-after";
 import { useNavigate, useSearchParams } from "../../nav";
 import { RECRUITER_ASKS_OVER_CHIP } from "../../recruiter-requests";
 import { toast } from "../../toast";
+import { TODAY_REFRESH } from "../../today";
 import { trialDate } from "../../trial";
 import { CustomerReportPanel } from "../AdminCustomerReport";
 import { adminKeys, adminReason, type AiCreditLine, type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
@@ -404,9 +405,11 @@ const TINTED = "border-line-tint bg-tint shadow-none";
 export function Customers() {
   const [search] = useSearchParams();
   const nav = useNavigate();
-  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason) });
+  // A tab left open stays true, as the Overview's does (the review of 6 November 2026): on focus, and every minute while it
+  // is visible, never in a hidden tab, because each read is recorded. A form in the drawer keeps what was typed.
+  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason), ...TODAY_REFRESH });
   // Companies at 80% of their screening conversations, or past them (Q17): from the alerts ITS was sent.
-  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason) });
+  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason), ...TODAY_REFRESH });
   const low = allowanceAlerts(alerts.data ?? []);
   const [filter, setFilter] = useState<CustomerFilter>(() => customerFilterFrom(search.get("show")));
   const [query, setQuery] = useState(() => search.get("q") ?? "");

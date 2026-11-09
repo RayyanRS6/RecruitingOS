@@ -8,7 +8,7 @@ import { allowanceAlerts, allowanceChip } from "../../allowance";
 import { useIsClient } from "../../components/use-is-client";
 import { focusLost } from "../../focus-after";
 import { Link } from "../../nav";
-import { firstName } from "../../today";
+import { TODAY_REFRESH, firstName } from "../../today";
 import { adminKeys, adminReason, type AlertRow, type CustomerRow, type DataRequest } from "./admin-api";
 import { activityWords, money, planWords, severityWords } from "./admin-words";
 import { AccessButtons, accessFacts, accessRequests, aiCreditDollars, customerOrder, FactsLine, type LineFact, realCustomers, waitingCustomers, waitingForCheck } from "./customers";
@@ -274,18 +274,28 @@ function partOfDay(local: boolean): string {
 
 const CUSTOMERS_SHOWN = 5;
 
+/**
+ * A tab left open stays true (the review of 6 November 2026): every source behind "Needs attention" and its "Nothing needs
+ * you right now." is asked again when the window comes back into focus and every minute while the tab is visible, never in
+ * a hidden one, as Home is (TODAY_REFRESH), because each read is recorded (admin.ts) and a request for access may be waiting.
+ * The recruiter requests are recorded per customer on each read, so they are asked every five minutes, and on focus only once
+ * the answer is two minutes old.
+ */
+export const OVERVIEW_REFRESH = TODAY_REFRESH;
+export const ESCALATIONS_REFRESH = { refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 } as const;
+
 export function Overview() {
   const why = adminReason("overview");
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const customers = useQuery({ queryKey: adminKeys.customers, queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", why) });
-  const alerts = useQuery({ queryKey: adminKeys.alerts, queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", why) });
-  const failures = useQuery({ queryKey: adminKeys.failures, queryFn: () => api.get<FailuresDto>("/api/v1/admin/failures", why) });
-  const privacy = useQuery({ queryKey: adminKeys.privacy, queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", why) });
-  const failedEmail = useQuery({ queryKey: adminKeys.failedEmailApplications, queryFn: () => api.get<Array<{ id: string }>>("/api/v1/admin/failed-email-applications", why) });
-  const csp = useQuery({ queryKey: adminKeys.csp, queryFn: () => api.get<CspDto>("/api/v1/admin/csp-reports", why) });
+  const customers = useQuery({ queryKey: adminKeys.customers, queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", why), ...OVERVIEW_REFRESH });
+  const alerts = useQuery({ queryKey: adminKeys.alerts, queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", why), ...OVERVIEW_REFRESH });
+  const failures = useQuery({ queryKey: adminKeys.failures, queryFn: () => api.get<FailuresDto>("/api/v1/admin/failures", why), ...OVERVIEW_REFRESH });
+  const privacy = useQuery({ queryKey: adminKeys.privacy, queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", why), ...OVERVIEW_REFRESH });
+  const failedEmail = useQuery({ queryKey: adminKeys.failedEmailApplications, queryFn: () => api.get<Array<{ id: string }>>("/api/v1/admin/failed-email-applications", why), ...OVERVIEW_REFRESH });
+  const csp = useQuery({ queryKey: adminKeys.csp, queryFn: () => api.get<CspDto>("/api/v1/admin/csp-reports", why), ...OVERVIEW_REFRESH });
   // The recruiter queue's own list: `overdue` is worked out on business time by the API. Each read of it is recorded per
   // customer (as the queue list), so Overview keeps an answer for two minutes instead of reading it again on every visit.
-  const escalations = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<EscalationPreview[]>("/api/v1/escalations"), staleTime: 120_000 });
+  const escalations = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<EscalationPreview[]>("/api/v1/escalations"), ...ESCALATIONS_REFRESH });
   const calendar = useQuery({ queryKey: adminKeys.calendar, queryFn: () => api.get<CalendarDto>("/api/v1/admin/calendar", why) });
   const queue = useQuery({ queryKey: adminKeys.queue, queryFn: () => api.get<QueueDto>("/api/v1/admin/queue", why), refetchInterval: 30_000 });
   // "This month" starts on the 1st in the business calendar's time zone; the costs wait for the calendar's answer.

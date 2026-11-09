@@ -216,6 +216,14 @@ describe("the customers list", () => {
     expect(html).toContain('<th scope="col">Plan and use</th>');
   });
 
+  it("a tab left open stays true: the list and the alerts behind its pills are asked again on focus and every minute while visible, never in a hidden tab", () => {
+    const qc = client([[["admin", "customers"], three()], [["admin", "alerts"], [lowAlert]]], admin);
+    render(qc, Customers());
+    for (const key of [["admin", "customers"], ["admin", "alerts"]]) {
+      expect(qc.getQueryCache().find({ queryKey: key, exact: true })?.options, key.join(" ")).toMatchObject({ refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: false });
+    }
+  });
+
   it("shows quiet rows under the headings while the customers load", () => {
     const loading = render(client([[["admin", "alerts"], []]], admin), Customers());
     expect(loading).toContain('<tbody aria-busy="true">');
