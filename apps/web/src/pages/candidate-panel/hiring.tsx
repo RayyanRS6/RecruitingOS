@@ -199,10 +199,10 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
           ) : null}
           {v.keepWarmWords ? (
             <div className={CHOICE}>
-              {/* a start date already past has no Today reminder to promise (plan H1) */}
-              <strong className="text-[15px]">{v.started ? "Leave the role open for now" : "Keep them warm until the start date"}</strong>
+              {/* a start date already past has no Today reminder to promise (plan H1), and with nobody to keep warm there are no backups to name */}
+              <strong className="text-[15px]">{v.keepsBackups && !v.started ? "Keep them warm until the start date" : "Leave the role open for now"}</strong>
               <p className="small muted">{v.keepWarmWords}</p>
-              <Button size="sm" onClick={() => { const t = keepWarmToast(a.candidate.firstName || name, after.startDate); toast(t.title, t.detail); onClose(); }}>{v.started ? "Leave it open" : "Keep the role open"}</Button>
+              <Button size="sm" onClick={() => { const t = keepWarmToast(a.candidate.firstName || name, after.startDate, undefined, after.backups.count); toast(t.title, t.detail); onClose(); }}>{v.keepsBackups && !v.started ? "Keep the role open" : "Leave it open"}</Button>
             </div>
           ) : null}
         </div>

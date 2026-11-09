@@ -106,6 +106,25 @@ describe("the hire sheet (plan H1)", () => {
     expect(hireFollowUpView({ ...hire, backups: { count: 1, people: hire.backups.people.slice(0, 1) } }, "Maria", after).keepWarmWords).toMatch(/Home asks you to close the role until you do\.$/);
     expect(keepWarmToast("Maria", "2026-11-02", after)).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." });
   });
+
+  // Found by the whole-hire walk of 9 November 2026: hired with only people who applied still in process (not backups:
+  // never interviewed, never shortlisted), the sheet offered "Close it now" and nothing else.
+  it("with nobody to keep warm but the role still open, it is never only Close: leaving it open is offered, saying what Home does", () => {
+    const alone: HireFollowUp = { ...hire, backups: { count: 0, people: [] }, closeRole: { ...hire.closeRole!, stillInProcess: 1, words: "Close the role as filled. The 1 person still in process moves to your talent pool, privately: nobody is told at once, and you see the closing message before it goes." } };
+    const v = hireFollowUpView(alone, "Maria", before);
+    expect(v).toMatchObject({ mayClose: true, backupsLine: null, people: [], keepsBackups: false, started: false });
+    expect(v.keepWarmWords).toBe("Leave the role open for now. Nobody is told anything. After Maria starts on Monday, November 2, Home asks you to close it.");
+    expect(v.keepWarmWords).not.toMatch(/backups|Today reminds/);
+    expect(keepWarmToast("Maria", "2026-11-02", before, 0)).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. After Maria starts on Monday, November 2, Home asks you to close it." });
+    // with backups the sheet still says it keeps them warm
+    expect(hireFollowUpView(hire, "Maria", before).keepsBackups).toBe(true);
+    // once the start date has passed, the same words as with backups: Home asks every day
+    const after = new Date(2026, 10, 3, 9);
+    expect(hireFollowUpView(alone, "Maria", after).keepWarmWords).toBe("Leave the role open for now. Nobody is told anything. Maria has already started, so Home asks you to close the role until you do.");
+    expect(keepWarmToast("Maria", "2026-11-02", after, 0)).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." });
+    // nothing to close and nobody to keep: nothing is offered but Done, as before
+    expect(hireFollowUpView({ ...alone, closeRole: null }, "Maria", before)).toMatchObject({ mayClose: false, keepWarmWords: null });
+  });
 });
 
 describe("Yes, interview: the approval filled in (plan H4)", () => {
