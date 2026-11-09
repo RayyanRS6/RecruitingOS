@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { devices, expect, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
 /** True when the run targets a deployed address (E2E_BASE_URL) rather than the local shell with fake providers. */
 export const REMOTE_TARGET = !!process.env.E2E_BASE_URL?.trim();
@@ -358,10 +358,12 @@ export function resumeOf(who: Applicant): string {
  * Applying through the job's own pages, in a browser of their own as candidates are: the job page (or the link someone
  * shared), Apply now, the résumé first and "Check your details" filled in from it, every question of the job answered
  * Yes (or its first choice) where the résumé chose nothing, the notice read and ticked, and Send my application. The page
- * is left on the waiting room; `waitForTheAiInterview` follows it to the AI interview.
+ * is left on the waiting room; `waitForTheAiInterview` follows it to the AI interview. The browser says it is an ordinary
+ * desktop Chrome, as a person's does: a headless one names itself "HeadlessChrome", which a tracked link rightly treats as
+ * a link-preview fetcher (never counted, never given the source), so a walk through a shared link would prove nothing.
  */
 export async function applyThroughTheForm(browser: Browser, base: string, jobUrl: string, who: Applicant): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext({ baseURL: base });
+  const context = await browser.newContext({ baseURL: base, userAgent: devices["Desktop Chrome"].userAgent });
   const cand = await context.newPage();
   await cand.goto(jobUrl);
   await expect(cand.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
