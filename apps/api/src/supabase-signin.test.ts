@@ -65,6 +65,8 @@ describe("sign-in through the identity service's return trip", () => {
   };
   /** Microsoft's description as it comes: the AADSTS number, the reason, then lines that identify the request. */
   const microsoftSays = (aadsts: string, reason: string) => `${aadsts}: ${reason}\r\nTrace ID: 00000000-0000-0000-0000-000000000000\r\nCorrelation ID: 00000000-0000-0000-0000-000000000000\r\nTimestamp: 2026-11-10 09:00:00Z`;
+  /** Someone from another company, whose address the service's mailer names in its refusal. */
+  const outsider = "pat@another-company.example";
   const cookieOf = (r: Response) => r.headers.get("set-cookie")!.split(";")[0];
 
   beforeAll(async () => {
@@ -116,9 +118,14 @@ describe("sign-in through the identity service's return trip", () => {
     { said: "an administrator must approve the app first (AADSTS90094)", refusal: { error: "access_denied", error_description: microsoftSays("AADSTS90094", "Admin consent is required for the permissions requested by this application.") }, code: "microsoft_needs_approval", aadsts: "AADSTS90094" },
     { said: "Cancel was pressed on Microsoft's permissions screen (AADSTS65004)", refusal: { error: "access_denied", error_description: microsoftSays("AADSTS65004", "User declined to consent to access the app.") }, code: "microsoft_declined", aadsts: "AADSTS65004" },
     { said: "the service does not trust the address Microsoft sent (provider_email_needs_verification)", refusal: { error: "access_denied", error_code: "provider_email_needs_verification", error_description: "Unverified email with azure. A confirmation email has been sent to your azure email" }, code: "email_unverified", aadsts: null },
+    // A first sign-in from an unverified address makes the service mail it a confirmation before it refuses; when that
+    // mail cannot go (the built-in mailer writes only to the Supabase organization's members), the mailer's refusal comes.
+    { said: "the service's mailer would not send the unverified address its confirmation (email_address_not_authorized)", refusal: { error: "invalid_request", error_code: "email_address_not_authorized", error_description: `Email address "${outsider}" cannot be used as it is not authorized` }, code: "email_unverified", aadsts: null, address: outsider },
+    { said: "the confirmation asked for again within the mail interval (over_email_send_rate_limit)", refusal: { error: "server_error", error_code: "over_email_send_rate_limit", error_description: "For security purposes, you can only request this after 52 seconds." }, code: "email_unverified", aadsts: null },
+    { said: "the mailer calls the unverified address invalid (email_address_invalid)", refusal: { error: "invalid_request", error_code: "email_address_invalid", error_description: `Email address "${outsider}" is invalid` }, code: "email_unverified", aadsts: null, address: outsider },
     { said: "Microsoft sent no email address", refusal: { error: "server_error", error_code: "unexpected_failure", error_description: "Error getting user email from external provider" }, code: "microsoft_no_email", aadsts: null },
     { said: "a refusal with no words of its own (sign-ups switched off at the service)", refusal: { error: "access_denied", error_code: "signup_disabled", error_description: "Signups not allowed for this instance" }, code: "signin_incomplete", aadsts: null },
-  ])("a refusal opens no session and reaches the sign-in page as its code, never as Microsoft's words: $said", async ({ refusal, code, aadsts }) => {
+  ])("a refusal opens no session and reaches the sign-in page as its code, never as Microsoft's words: $said", async ({ refusal, code, aadsts, address }) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const start = await app.request("/api/v1/auth/start/azure");
@@ -138,6 +145,10 @@ describe("sign-in through the identity service's return trip", () => {
       expect(logged[0]).toContain(code);
       if (aadsts) expect(logged[0]).toContain(aadsts);
       expect(logged[0]).not.toContain(reason);
+      if (address) {
+        expect(decodeURIComponent(location)).not.toContain(address);
+        expect(logged[0]).not.toContain(address);
+      }
     } finally {
       warn.mockRestore();
     }

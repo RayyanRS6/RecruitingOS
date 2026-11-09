@@ -64,6 +64,15 @@ authRoutes.get("/start/:provider", async (c) => {
 const NEEDS_APPROVAL = ["AADSTS65001", "AADSTS90093", "AADSTS90094", "AADSTS90095", "AADSTS900941", "AADSTS900981"];
 
 /**
+ * The service's refusals of an address the provider has not verified (Microsoft: xms_edov false). With Confirm email on,
+ * the service mails that address a confirmation and refuses with provider_email_needs_verification; when the mail cannot
+ * go, the mailer's own refusal comes back instead: email_address_not_authorized (Supabase's built-in mailer writes only
+ * to its organization's members, and no custom SMTP is set up), over_email_send_rate_limit (a second try within the mail
+ * interval) or email_address_invalid. That confirmation is the only mail on the way back from a provider.
+ */
+const EMAIL_UNVERIFIED = ["provider_email_needs_verification", "email_address_not_authorized", "over_email_send_rate_limit", "email_address_invalid"];
+
+/**
  * A refusal the identity service brings back, as a code the sign-in page has words for. Supabase Auth sends the browser
  * to redirect_to with `error` and `error_description` (Microsoft's own, or the service's) and, for the service's own
  * refusals only, `error_code`, in the query and again in the fragment, and no code. Microsoft's reason is the AADSTS
@@ -72,7 +81,7 @@ const NEEDS_APPROVAL = ["AADSTS65001", "AADSTS90093", "AADSTS90094", "AADSTS9009
 function refusalCode(q: { error?: string; errorCode?: string; errorSubcode?: string; description?: string }): { code: string; aadsts: string | null } {
   const numbers: string[] = q.description?.match(/AADSTS\d+/g) ?? [];
   const aadsts = numbers[0] ?? null;
-  if (q.errorCode === "provider_email_needs_verification") return { code: "email_unverified", aadsts };
+  if (q.errorCode && EMAIL_UNVERIFIED.includes(q.errorCode)) return { code: "email_unverified", aadsts };
   // Cancel pressed on Microsoft's permissions screen, or Back to the app after asking IT for approval.
   if (numbers.includes("AADSTS65004") || q.errorSubcode === "cancel") return { code: "microsoft_declined", aadsts };
   if (numbers.some((n) => NEEDS_APPROVAL.includes(n)) || q.error === "consent_required") return { code: "microsoft_needs_approval", aadsts };
