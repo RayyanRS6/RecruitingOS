@@ -295,7 +295,9 @@ function InterviewStep({ a, roleId, initialRoundKey, myUserId, onClose }: { a: A
           roundMinutes={round?.durationMinutes}
           videoRound={round?.format === "video"}
           calendarLive={calendarLive}
-          interviewers={membersKnown ? chosenInterviewers.length : undefined}
+          // the team, the plan and who is pressing, all read before anyone can be ticked (the person pressing is the default)
+          interviewers={membersKnown && myUserId ? chosenInterviewers.length : undefined}
+          teamLoading={!membersKnown || !myUserId}
           onMissingInterviewers={openWith}
           autoFocus
           before={a.interviewPlan.length > 1 ? <Field label="Round" htmlFor="iv-round"><select id="iv-round" className="select" value={chosenRoundKey ?? ""} onChange={(e) => { setRoundKey(e.target.value); setInterviewers(null); }}>{a.interviewPlan.map((r) => <option key={r.key} value={r.key}>{r.title}</option>)}</select></Field> : null}

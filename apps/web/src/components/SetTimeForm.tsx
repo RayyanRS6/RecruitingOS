@@ -40,6 +40,8 @@ export function SetTimeForm(p: {
   moving?: boolean;
   /** How many people interview, when the form asks (the panel); left out on an interview that already has them. */
   interviewers?: number;
+  /** The panel's team is still loading, so nobody can be ticked yet: Book waits, saying so. */
+  teamLoading?: boolean;
   onMissingInterviewers?: () => void;
   before?: ReactNode;
   after?: ReactNode;
@@ -61,7 +63,7 @@ export function SetTimeForm(p: {
     setClash(null);
     p.onChange({ ...p.form, ...patch });
   };
-  const missing = setTimeMissing(p.form, { interviewers: p.interviewers, timeZone: p.timeZone, calendarLive: p.calendarLive });
+  const missing = setTimeMissing(p.form, { interviewers: p.interviewers, teamLoading: p.teamLoading, timeZone: p.timeZone, calendarLive: p.calendarLive });
   const link = meetingLinkFor({ calendarLive: !!p.calendarLive, picked: p.form.linkPicked ?? null, url: p.form.url });
   const said = whenLine(p.form.date, p.form.time, p.timeZone);
   // the usual lengths, the round's own, and whatever the form holds now (a booked time of another length being moved)

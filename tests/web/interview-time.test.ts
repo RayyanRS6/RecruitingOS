@@ -65,6 +65,11 @@ describe("what the form sends, and why it cannot yet", () => {
     expect(setTimeMissing(form({ date: "2026-11-10", time: "10:00", url: "meet.example.com/abc" }), at)).toEqual({ field: "url", text: "The link must start with https://" });
     // who interviews comes first, when the form asks
     expect(setTimeMissing(form({ date: "2026-11-10", time: "10:00" }), { ...at, interviewers: 0 })).toEqual({ field: "interviewers", text: "Tick who will interview." });
+    // while the team is still loading nobody can be ticked yet: Book waits with its reason, said after what the person must
+    // do, and never "Tick who will interview." (a press in that moment said so: found by the whole-flow walks, 10 Nov 2026)
+    expect(setTimeMissing(form({ date: "2026-11-10", time: "10:00", place: "phone" }), { ...at, teamLoading: true })).toEqual({ field: "interviewers", text: "Loading who interviews…" });
+    expect(setTimeMissing(form(), { ...at, teamLoading: true })).toEqual({ field: "date", text: "Choose a date and a time." });
+    expect(setTimeMissing(form({ date: "2026-11-10", time: "10:00", place: "phone" }), { ...at, teamLoading: false, interviewers: 1 })).toBeNull();
     // a pasted link the person chose over a live calendar's must be there
     expect(setTimeMissing(form({ date: "2026-11-10", time: "10:00", linkPicked: "pasted" }), { ...at, calendarLive: true })).toEqual({ field: "url", text: "Paste the meeting link." });
     // today is allowed (a time this afternoon), and nothing else is needed: no calendar, no declared hours

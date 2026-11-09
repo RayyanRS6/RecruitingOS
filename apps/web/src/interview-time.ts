@@ -132,8 +132,11 @@ export type MissingField = { field: "interviewers" | "date" | "time" | "address"
 /**
  * Why "Book" cannot go yet, in the words beside it, or null when it can: the first thing missing, in the order the form
  * reads: who interviews (when the form asks), the day and time, the place. The button is never greyed without them.
+ * `teamLoading`: the team is still being read, so nobody can be ticked yet. Said last, after what the person must do, and
+ * never "Tick who will interview." (a press in that moment said so, to someone who had nothing to tick: found by the
+ * whole-flow walks, 10 November 2026).
  */
-export function setTimeMissing(form: SetTimeForm, input: { interviewers?: number; timeZone?: string | null; calendarLive?: boolean; now?: Date } = {}): MissingField | null {
+export function setTimeMissing(form: SetTimeForm, input: { interviewers?: number; teamLoading?: boolean; timeZone?: string | null; calendarLive?: boolean; now?: Date } = {}): MissingField | null {
   if (input.interviewers === 0) return { field: "interviewers", text: "Tick who will interview." };
   if (!form.date && !form.time) return { field: "date", text: "Choose a date and a time." };
   if (!wallClock(form.date, "00:00")) return { field: "date", text: "Choose a date." };
@@ -146,6 +149,7 @@ export function setTimeMissing(form: SetTimeForm, input: { interviewers?: number
     const url = linkOf(form, !!input.calendarLive);
     if (url && !linkLooksRight(url)) return { field: "url", text: "The link must start with https://" };
   }
+  if (input.teamLoading) return { field: "interviewers", text: "Loading who interviews…" };
   return null;
 }
 
