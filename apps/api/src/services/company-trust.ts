@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { companyVerifiedAt, newTrialTerm, onTrialPlan, oneLine, trialTermOf, type Actor } from "@ros/contracts";
+import { companyVerifiedAt, newTrialTerm, onTrialPlan, oneLine, trialTermOf, typedName, type Actor } from "@ros/contracts";
 import { BOARD_UP_STATES, audit, closingDateRequired, defaultClosingDate, emit, errorForLog, isBoardChannel, notify, raiseAlert, transitionPosting, type PostingState } from "@ros/core";
 import { releaseHeldCommunications } from "@ros/agents";
 import { companies, postings, rolePackets, roles, type Queryable } from "@ros/db";
@@ -192,9 +192,13 @@ export async function tellItsAboutNewCompany(container: Container, input: { comp
   const website = oneLine(input.company.website, 200) || "not given";
   const owner = input.owner.name ? `${oneLine(input.owner.name, 120)} <${input.owner.email}>` : input.owner.email;
   if (input.request) {
+    // The address their sign-in proved comes first, and the name they typed after it with no angle brackets, so a name
+    // such as "Pat Example <pat@its.example>" cannot pass for an address of ours (the review of 6 November 2026).
+    const typed = typedName(input.owner.name);
+    const person = typed ? `${input.owner.email} (${typed})` : input.owner.email;
     const text = [
-      "Someone is asking for access. Nothing works for them until an administrator accepts: no AI runs, and nothing of theirs is public.",
-      `Company: ${name}\nPerson: ${owner}\nKind of business: ${vertical}\nSize: ${input.company.sizeBand} employees\nCity and state: ${oneLine(input.company.place, 120) || "not given"}\nWebsite: ${website}`,
+      "Someone is asking for access. Nothing works for them until an administrator accepts: no AI runs, and nothing of theirs is public. Only the email address is proved; the rest is what they typed.",
+      `Company: ${name}\nPerson: ${person}\nKind of business: ${vertical}\nSize: ${input.company.sizeBand} employees\nCity and state: ${oneLine(input.company.place, 120) || "not given"}\nWebsite: ${website}`,
       `Accept or decline it in the admin console, on the Overview: ${container.env.APP_BASE_URL}/admin`,
     ].join("\n\n");
     await sendWithoutAlert(container, { to: container.env.ITS_QUEUE_EMAIL, from, subject: `[access request] ${name} is asking for access`, text, idempotencyKey: `access_request_its:${input.company.id}`, tags: { template: "access_request_its" } });

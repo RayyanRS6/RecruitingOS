@@ -128,9 +128,34 @@ export type SignupConfig = { mode: "open" | "invite" | "approval"; allowed: bool
  * What a person typed, for one line of an email (a subject, or one "Label: value" of a body) or a request's details: as a
  * display name in `mailbox` (packages/integrations) can never start a header of its own, this can never start a line of
  * its own. Line breaks and other control characters become one space, runs of spaces close up, and a very long value
- * stops at `max` characters.
+ * stops at `max` characters. The characters that turn the text after them around, or take no room at all, go (the review
+ * of 6 November 2026): a name of two of them would be no name, and one could reverse the rest of a console row.
  */
 export function oneLine(value: string | null | undefined, max = 200): string {
-  const line = (value ?? "").replace(/[\s\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim();
+  const line = (value ?? "").replace(UNSEEN, "").replace(/[\s\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim();
   return line.length > max ? line.slice(0, max).trimEnd() : line;
+}
+
+/**
+ * The bidi controls (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F) and the zero-width spaces (U+200B, U+2060). Not
+ * every format character: U+200C and U+200D belong inside some names and emoji.
+ */
+const UNSEEN = /[\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069]/gu;
+
+/** Blank letters and symbols: they count as letters to Unicode and show nothing. */
+const BLANK = new Set(["\u115F", "\u1160", "\u3164", "\uFFA0", "\u2800"]);
+
+/** How many characters of a typed value a reader can see: letters, digits, punctuation and symbols, by code point. */
+export function visibleLength(value: string): number {
+  return (value.match(/[\p{L}\p{N}\p{P}\p{S}]/gu) ?? []).filter((ch) => !BLANK.has(ch)).length;
+}
+
+/**
+ * A name a person typed, for a console row or one line of an email (the review of 6 November 2026): `oneLine`, with no angle
+ * brackets, so "Pat Example <pat@its.example>" cannot pass for an address beside the real one, and null unless at
+ * least two characters of it can be seen.
+ */
+export function typedName(value: string | null | undefined, max = 120): string | null {
+  const name = oneLine((value ?? "").replace(/[<>]/g, " "), max);
+  return visibleLength(name) >= 2 ? name : null;
 }

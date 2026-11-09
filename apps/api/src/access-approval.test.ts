@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, SPAM_ALERT_WINDOW_MS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
-import { CreateCompany, FREE_PLAN_KEY, oneLine, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
+import { CreateCompany, FREE_PLAN_KEY, oneLine, typedName, visibleLength, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
 import { createApplicationLink, createInvitation, renderAlertEmail } from "@ros/core";
 import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
@@ -171,6 +171,30 @@ describe("a person's words are data", () => {
     expect(() => companyRequestDetails({ ...body, name: " \r\n\t " })).toThrow(/missing or invalid/);
   });
 
+  it("what turns text around or takes no room goes, two of those are no name, and a typed name cannot pass for an address (the review of 6 November 2026)", () => {
+    const ch = (...codes: number[]) => String.fromCharCode(...codes);
+    const [zwsp, wordJoiner, rlo, lri, pdi, lrm, zwnj] = [ch(0x200b), ch(0x2060), ch(0x202e), ch(0x2066), ch(0x2069), ch(0x200e), ch(0x200c)];
+    expect(oneLine(`Harbor Dental${rlo} is asking`)).toBe("Harbor Dental is asking");
+    expect(oneLine(`${lri}Harbor${pdi}${lrm} ${zwsp}Dental${wordJoiner}`)).toBe("Harbor Dental");
+    expect(oneLine(zwsp + zwsp)).toBe("");
+    // the joiners stay: some names and emoji need them
+    const family = String.fromCodePoint(0x1f468, 0x200d, 0x1f469);
+    expect(oneLine(`Ni${zwnj}na ${family}`)).toBe(`Ni${zwnj}na ${family}`);
+    expect(visibleLength("Al")).toBe(2);
+    expect(visibleLength(`A${zwnj}`)).toBe(1);
+    expect(visibleLength(ch(0x3164, 0x3164))).toBe(0);
+    expect(visibleLength(String.fromCodePoint(0x1f600))).toBe(1);
+    expect(typedName("Pat Example <pat@its.example>")).toBe("Pat Example pat@its.example");
+    expect(typedName(" Sam\nAsker ")).toBe("Sam Asker");
+    for (const none of [zwsp + zwsp, "A", ch(0x3164, 0x3164), "", null, undefined]) expect(typedName(none)).toBeNull();
+    // a request's name needs two characters a reader can see; the person's name too, or it is left out
+    const body = { name: "Harbor Dental", ownerName: "Sam Asker", vertical: "dental", sizeBand: "1-19" as const, timezone: "America/Chicago", locations: [{ city: "Austin", region: "TX", country: "US" }] };
+    for (const blank of [zwsp + zwsp, ch(0x3164, 0x3164), `${rlo}A`]) expect(() => companyRequestDetails({ ...body, name: blank })).toThrow(/missing or invalid/);
+    expect(companyRequestDetails({ ...body, name: `Harbor Dental${rlo}` }).name).toBe("Harbor Dental");
+    expect(companyRequestDetails({ ...body, ownerName: "Pat Example <pat@its.example>" }).ownerName).toBe("Pat Example pat@its.example");
+    expect(companyRequestDetails({ ...body, ownerName: zwsp + zwsp }).ownerName).toBeUndefined();
+  });
+
   it("the accepted email says the company's name in one line, whatever is in the row", () => {
     const { subject, text } = renderAlertEmail({ kind: "company.access_accepted", recipientName: "Sam Asker", companyName: "Acme\r\nBcc: evil@example.test", roleTitle: null, link: "https://app.example/", appBaseUrl: "https://app.example" });
     expect(subject).toBe("Your request was approved");
@@ -261,7 +285,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(copy.text).toContain("we will email you when it is decided");
     const toIts = sent.find((m) => m.to === "queue@its.example")!;
     expect(toIts.subject).toBe("[access request] Harbor Dental is asking for access");
-    for (const line of ["Company: Harbor Dental", "Person: Sam Asker <sam@stranger.test>", "Kind of business: dental", "Size: 1-19 employees", "City and state: Austin, TX", "Website: https://asker.example", `${w.container.env.APP_BASE_URL}/admin`]) expect(toIts.text, line).toContain(line);
+    for (const line of ["Company: Harbor Dental", "Person: sam@stranger.test (Sam Asker)", "Kind of business: dental", "Size: 1-19 employees", "City and state: Austin, TX", "Website: https://asker.example", `${w.container.env.APP_BASE_URL}/admin`]) expect(toIts.text, line).toContain(line);
     expect(sent.some((m) => m.subject.includes("[company check]"))).toBe(false);
 
     // Nadine's list: the person, and what the row needs
@@ -698,7 +722,7 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     }
     const toIts = sent.find((m) => m.to === "queue@its.example")!;
     expect(toIts.subject).toBe("[access request] Acme Bcc: evil@example.test is asking for access");
-    expect(toIts.text).toContain("Person: Sam Asker <typed@stranger.test>");
+    expect(toIts.text).toContain("Person: typed@stranger.test (Sam Asker)");
     expect(toIts.text).toContain("City and state: Aus tin, T X");
     expect(toIts.text.split("\n").find((l) => l.startsWith("Website: "))!.length).toBeLessThanOrEqual(209);
     // the door that goes in directly keeps what was typed, as in every mode, and its email to ITS is one line each all the same
@@ -721,6 +745,30 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const accepted = w.mailTo("typed@stranger.test").find((m) => m.subject === "Your request was approved")!;
     expect(accepted.text).toContain("Company: Acme Bcc: evil@example.test\n");
     expect(accepted.text.split("\n").filter((l) => l.startsWith("Bcc:"))).toEqual([]);
+  });
+
+  it("a typed name cannot pass for someone else, blank the row or turn it around: the proved address first, no angle brackets, two characters to see", async () => {
+    const rlo = String.fromCharCode(0x202e);
+    const zwsp = String.fromCharCode(0x200b);
+    // two zero-width spaces are no company name, so nothing is made
+    const blank = await w.google("blank.name@stranger.test");
+    expect((await w.json(blank, "POST", "/api/v1/companies", w.form(zwsp + zwsp))).status).toBe(400);
+    expect((await w.signupOf(blank)).request).toBeUndefined();
+    const posing = await w.ask("real.person@gmail.test", `Harbor Dental${rlo} Group`, { ownerName: "Pat Example <pat@its.example>" });
+    expect((await w.rowOf(posing.id)).name).toBe("Harbor Dental Group");
+    const toIts = w.mailTo("queue@its.example").find((m) => m.subject === "[access request] Harbor Dental Group is asking for access")!;
+    expect(toIts.text).toContain("Person: real.person@gmail.test (Pat Example pat@its.example)\n");
+    expect(toIts.text).toContain("Only the email address is proved; the rest is what they typed.");
+    expect(toIts.text).not.toMatch(/[<>]/);
+    // the console's row, from what was kept
+    expect((await w.customers(adminCookie)).find((c) => c.id === posing.id)?.accessRequest?.person).toEqual({ name: "Pat Example pat@its.example", email: "real.person@gmail.test" });
+    // a name from the sign-in provider, when they typed none, is read the same way
+    const provider = await w.google("provider.name@stranger.test", `Ada <ada@identifiedtalent.com>${rlo}`);
+    const made = await w.json(provider, "POST", "/api/v1/companies", w.form("Provider Dental", { ownerName: undefined }));
+    expect(made.status, await made.clone().text()).toBe(201);
+    const { id } = await w.read<{ id: string }>(made);
+    expect((await w.customers(adminCookie)).find((c) => c.id === id)?.accessRequest?.person.name).toBe("Ada ada@identifiedtalent.com");
+    expect(w.mailTo("queue@its.example").find((m) => m.subject === "[access request] Provider Dental is asking for access")!.text).toContain("Person: provider.name@stranger.test (Ada ada@identifiedtalent.com)\n");
   });
 
   it("the request's email goes only to an address its holder proved: no session for an unverified one, and a body cannot name another", async () => {

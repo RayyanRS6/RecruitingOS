@@ -298,8 +298,9 @@ describe("first sign-in asks for approval, on the Overview", () => {
     expect(rows.map((r) => r.text)).toEqual(["Old Dental is asking for access", "New Dental is asking for access", "1 company waits for the ITS check", "1 alert needs a person: “Credential delete failed”"]);
     expect(rows.slice(0, 2).map((r) => r.urgent)).toEqual([true, true]);
     expect(rows[0].access?.company.id).toBe("co-old");
-    // the row's facts: the person's name and email, kind of business, size, city and state, website, how long
-    expect(rows[0].sub).toBe("Sam Asker · sam@stranger.test · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example · Waiting 4 days");
+    // the row's facts: the person's email, which their sign-in proved, then the name they typed (so a name cannot pass for
+    // someone else's address), kind of business, size, city and state, website, how long
+    expect(rows[0].sub).toBe("sam@stranger.test · Sam Asker · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example · Waiting 4 days");
     expect(rows[1].sub).toContain("Waiting 1 day");
     expect(rows[0].access?.facts.filter((f) => f.href)).toEqual([{ text: "https://asker.example", href: "https://asker.example/" }]);
   });
@@ -375,7 +376,7 @@ describe("first sign-in asks for approval, on the Overview", () => {
     const html = render(client(withRequests([asker("co-a", "Harbor Dental", 2)])));
     const row = html.slice(html.indexOf("<h2>Needs attention</h2>"), html.indexOf("<h2>Customers</h2>"));
     expect(text(row)).toContain("Harbor Dental is asking for access");
-    expect(text(row)).toContain("Sam Asker · sam@stranger.test · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example (opens in a new tab) · Waiting 2 days");
+    expect(text(row)).toContain("sam@stranger.test · Sam Asker · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example (opens in a new tab) · Waiting 2 days");
     expect(row).toContain('<button type="button" class="btn primary sm" aria-label="Accept Harbor Dental">Accept</button>');
     expect(row).toContain('<button type="button" class="btn quiet sm" aria-label="Decline Harbor Dental">Decline</button>');
     expect(row).not.toContain("Review");

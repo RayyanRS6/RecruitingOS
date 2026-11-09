@@ -462,7 +462,8 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     const words = text(html);
     expect(words).toContain("Asking for access");
     // who is asking, where, and how long; a fact is said once, so the kind, the size and the website stay in the header
-    expect(words).toContain("Sam Asker · sam@stranger.test · Austin, TX · Waiting 2 days");
+    // the address their sign-in proved first, then the name they typed
+    expect(words).toContain("sam@stranger.test · Sam Asker · Austin, TX · Waiting 2 days");
     expect(words).toContain("dental · 20-49 employees · https://asker.example (opens in a new tab) · signed up");
     expect(html.split("https://asker.example<")).toHaveLength(2);
     expect(html).toContain('<button type="button" class="btn primary sm" aria-label="Accept Harbor Dental">Accept</button>');
@@ -477,7 +478,7 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     const words = text(html);
     expect(words).toContain("Declined");
     expect(words).toMatch(/Nov 5, 2026, [^·]* by Ada Admin/);
-    expect(words).toContain("Sam Asker · sam@stranger.test");
+    expect(words).toContain("sam@stranger.test · Sam Asker");
     // no time waited: it waits for nothing
     expect(words).not.toContain("Waiting 9 days");
     expect(html).toContain('aria-label="Accept Gone Dental">Accept</button>');
@@ -485,7 +486,7 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     expect(words).not.toContain("Decline keeps them out");
     expect(words).not.toContain("Confirm the company");
     // a declined company with no record of the decision still reads, with no empty line
-    expect(text(page("open=co9&tab=check", [refused("co9", "Gone Dental", { accessRequest: { status: "declined", person, declined: null } })]))).toContain("Declined Sam Asker");
+    expect(text(page("open=co9&tab=check", [refused("co9", "Gone Dental", { accessRequest: { status: "declined", person, declined: null } })]))).toContain("Declined sam@stranger.test · Sam Asker");
   });
 
   it("every control the API refuses gives way until a request is accepted: only the Overview and the check, whatever the address asks for", () => {

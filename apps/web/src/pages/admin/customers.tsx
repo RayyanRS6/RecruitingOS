@@ -250,14 +250,17 @@ const websiteFact = (website: string): LineFact => ({ text: website, href: websi
 
 type AccessFactsOf = Pick<CustomerRow, "accessRequest" | "vertical" | "sizeBand" | "locations" | "settings" | "createdAt">;
 
-/** What a request says, in the parts its two places choose from. */
+/**
+ * What a request says, in the parts its two places choose from. The address their sign-in proved comes first, then the name
+ * they typed, so a name cannot pass for someone else's address (the review of 6 November 2026).
+ */
 function accessFactParts(c: AccessFactsOf, now: number) {
   const person = c.accessRequest?.person;
   const where = c.locations?.[0];
   const website = c.settings.website?.trim();
   const place = [where?.city, where?.region].filter(Boolean).join(", ");
   return {
-    who: [person?.name, person?.email].filter((v): v is string => !!v).map((text) => ({ text })),
+    who: [person?.email, person?.name].filter((v): v is string => !!v).map((text) => ({ text })),
     place: place ? [{ text: place }] : [],
     website: website ? [websiteFact(website)] : [],
     waited: c.accessRequest?.status === "requested" ? [{ text: waitingWords(c.createdAt, now) }] : [],
@@ -265,8 +268,8 @@ function accessFactParts(c: AccessFactsOf, now: number) {
 }
 
 /**
- * The Overview's row: the person's name and email, the kind of business, the size, the city and state, the website, and how
- * long they have waited. All of it was typed by a stranger, so it is only ever drawn as text and the checked link.
+ * The Overview's row: the person's email and name, the kind of business, the size, the city and state, the website, and how
+ * long they have waited. All of it but the email was typed by a stranger, so it is only ever drawn as text and the checked link.
  */
 export function accessFacts(c: AccessFactsOf, now: number = Date.now()): LineFact[] {
   const { who, place, website, waited } = accessFactParts(c, now);

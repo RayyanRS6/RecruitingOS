@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { ACCESS_REQUEST_STATUSES, oneLine, type Actor, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
+import { ACCESS_REQUEST_STATUSES, oneLine, typedName, visibleLength, type Actor, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
 import { activeSuppression, audit, emit, errorForLog, notify } from "@ros/core";
 import { companies, events, memberships, users, withPlatform, type Db, type Queryable } from "@ros/db";
 import { mailbox } from "@ros/integrations";
@@ -37,18 +37,20 @@ export const DECLINED_REASON = "Declined from the console";
  * A request's details as they are kept: what a stranger typed is data, so each value is one line and no longer than the
  * same field may be once it is theirs to change (UpdateCompany and the like). The form cannot send a line break, so this
  * only ever changes what a hand-made request sent. Nothing is refused for being long, except by CreateCompany's own limits.
- * Only the one place the form sends is kept (the review of 6 November 2026): a hand-made body cannot store twenty.
+ * Only the one place the form sends is kept (the review of 6 November 2026): a hand-made body cannot store twenty. A name
+ * needs two characters a reader can see, and the person's own name has no angle brackets (`typedName`), so neither can be
+ * blank on the console's row or pass for someone else's address in the ITS email.
  */
 export function companyRequestDetails(input: CreateCompany): CreateCompany {
   const name = oneLine(input.name, 120);
   const vertical = oneLine(input.vertical, 60);
-  if (name.length < 2 || vertical.length < 2) throw new HttpError(400, "invalid_request", "Some fields are missing or invalid.");
+  if (visibleLength(name) < 2 || vertical.length < 2) throw new HttpError(400, "invalid_request", "Some fields are missing or invalid.");
   const place = (value: string | undefined) => (value === undefined ? undefined : oneLine(value, 120));
   return {
     ...input,
     name,
     vertical,
-    ownerName: oneLine(input.ownerName, 120) || undefined,
+    ownerName: typedName(input.ownerName) ?? undefined,
     website: oneLine(input.website, 200) || undefined,
     locations: input.locations.slice(0, 1).map((l) => ({ ...l, label: place(l.label), address1: place(l.address1), city: place(l.city), region: place(l.region), postalCode: place(l.postalCode), country: oneLine(l.country, 120) || "US", timezone: place(l.timezone) })),
   };
@@ -252,7 +254,8 @@ export async function isAccessRequestCompany(q: Queryable, companyId: string): P
 
 /**
  * `accessRequest` for GET /admin/customers: every request and declined company with the person who asked, and who declined
- * it and when (its newest `company.access_declined` event). Two queries, however many customers there are.
+ * it and when (its newest `company.access_declined` event). Two queries, however many customers there are. The person's name
+ * is what they typed, or what their sign-in provider holds, so it reads as `typedName` does: one line, no angle brackets.
  */
 export async function customerAccessRequests(db: Db): Promise<Map<string, CustomerAccessRequest>> {
   const rows = await db
@@ -271,6 +274,6 @@ export async function customerAccessRequests(db: Db): Promise<Map<string, Custom
   const decidedBy = new Map(decided.map((d) => [d.companyId, d]));
   return new Map(rows.map((r): [string, CustomerAccessRequest] => {
     const by = decidedBy.get(r.companyId);
-    return [r.companyId, { status: r.status as CustomerAccessRequest["status"], person: { name: r.name, email: r.email }, declined: r.status === "declined" && by ? { at: by.at, by: by.actor.name ?? null } : null }];
+    return [r.companyId, { status: r.status as CustomerAccessRequest["status"], person: { name: typedName(r.name), email: r.email }, declined: r.status === "declined" && by ? { at: by.at, by: by.actor.name ?? null } : null }];
   }));
 }

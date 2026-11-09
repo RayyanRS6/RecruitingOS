@@ -110,7 +110,7 @@ test.describe("first sign-in asks for approval", () => {
     const row = requestRow(admin, company);
     await expect(row).toBeVisible({ timeout: 30_000 });
     await expect(needsAttention(admin).getByRole("listitem").first()).toContainText("is asking for access");
-    await expect(row).toContainText(`Sam Asker · ${me.email} · Dental practice or group · 1-19 employees · Austin, TX · https://asker.example`);
+    await expect(row).toContainText(`${me.email} · Sam Asker · Dental practice or group · 1-19 employees · Austin, TX · https://asker.example`);
     await expect(row).toContainText("Waiting since today");
     const website = row.getByRole("link", { name: /asker\.example/ });
     await expect(website).toHaveAttribute("href", "https://asker.example/");
