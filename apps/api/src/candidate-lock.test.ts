@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { detectStuckRoles } from "@ros/agents";
 import { LOCKED_REQUEST_LINE, MORE_CANDIDATES_LINE, MORE_CANDIDATES_UPGRADE_QUESTION, type ClosingMessagePreview, type RecruiterRequestView } from "@ros/contracts";
-import { MORE_APPLIED_KIND } from "@ros/core";
+import { MORE_APPLIED_KIND, anonymizeCandidate } from "@ros/core";
 import { aiRuns, applications, approvalRequests, auditRecords, candidates, communications, documents, entitlements, events, interviewParticipants, interviews, notifications, plans, postings, recruiterEscalations, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { Hono } from "hono";
@@ -509,8 +509,8 @@ describe("the team cannot read a locked person", () => {
     const applicantsCsv = await (await json(owner, "GET", `/api/v1/roles/${ids.role}/report.csv`)).text();
     expect(applicantsCsv).toContain("Vera Visible");
     expect(applicantsCsv.trim().split("\r\n")).toHaveLength(2);
-    // The share tab's volume keeps everyone in each day's total: a count names nobody, and it shows demand. Where they came
-    // from is only for people the team can read: a locked card says when, so a day's sources would say how.
+    // The share tab's volume keeps everyone an upgrade could open in each day's total: a count names nobody, and it shows demand.
+    // Where they came from is only for people the team can read: a locked card says when, so a day's sources would say how.
     type Volume = { totals: { total: number; bySource: Record<string, number> }; days: Array<{ total: number; bySource: Record<string, number> }>; sources: Array<{ total: number }>; today: { total: number } };
     const sum = (bySource: Record<string, number>) => Object.values(bySource).reduce((a, b) => a + b, 0);
     const volume = await read<Volume>(await json(owner, "GET", `/api/v1/roles/${ids.role}/volume`));
@@ -727,6 +727,37 @@ describe("the team cannot read a locked person", () => {
     const jobs = await read<Array<{ id: string; needsYou: number }>>(await json(admin, "GET", "/api/v1/roles"));
     expect(jobs.find((j) => j.id === ids.role)?.needsYou).toBeGreaterThanOrEqual(1);
     await container.db.delete(approvalRequests).where(eq(approvalRequests.id, waiting.id));
+  }, 120_000);
+
+  it("the Share tab's volume counts someone locked only while an upgrade could open them: who withdrew or was deleted while locked is in no figure, so it adds up and agrees with the job page", async () => {
+    const company = await newCompany();
+    await setLimit(company.id, 1);
+    const j = await openRole(company);
+    await apply(j, person("Vic", "Visible"));
+    const left = await apply(j, person("Lea"));
+    expect((await app.request(`/c/status/${left.statusToken}/withdraw`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ confirm: "yes" }).toString() })).status).toBe(302);
+    const deleted = await apply(j, person("Del"));
+    await withTenant(container.db, company.id, (tx) => anonymizeCandidate(tx, { companyId: company.id, candidateId: deleted.candidateId, actor: { kind: "system", id: "candidate-lock.test" }, deleteFile: async () => undefined }));
+    const waits = await apply(j, person("Wai"));
+    for (const r of [left, deleted, waits]) expect(r.lockedAt).not.toBeNull();
+    type Volume = { totals: { total: number; bySource: Record<string, number> }; days: Array<{ total: number }>; today: { total: number } };
+    const volume = async () => read<Volume>(await json(company.cookie, "GET", `/api/v1/roles/${j.roleId}/volume`));
+    const sources = (v: Volume) => Object.values(v.totals.bySource).reduce((a, b) => a + b, 0);
+    const lockedOnJobPage = async () => (await read<{ locked: { count: number } }>(await json(company.cookie, "GET", `/api/v1/roles/${j.roleId}/applications?counts=1`))).locked.count;
+    // Vic, whom the team reads, and Wai, locked and waiting: one on the Locked line, as on the job page.
+    const before = await volume();
+    expect([before.totals.total, before.today.total, before.days.at(-1)?.total]).toEqual([2, 2, 2]);
+    expect(sources(before)).toBe(1);
+    expect(await lockedOnJobPage()).toBe(1);
+    expect(before.totals.total - sources(before)).toBe(1);
+    // An upgrade opens Wai, and the Locked line goes: the two who left stay locked, and still count nowhere.
+    const moved = await json(admin, "POST", `/api/v1/admin/customers/${company.id}/plan`, { planKey: "pro", reason: "They asked to upgrade." });
+    expect(moved.status, await moved.clone().text()).toBe(200);
+    await container.drain();
+    const after = await volume();
+    expect(after.totals.total).toBe(2);
+    expect(sources(after)).toBe(2);
+    expect(await lockedOnJobPage()).toBe(0);
   }, 120_000);
 
   describe("one neutral notice per job per day", () => {

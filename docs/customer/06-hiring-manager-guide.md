@@ -129,7 +129,7 @@ When ITS posts, you do not have to do anything on the boards yourself. If a boar
 
 **Other links.** Under **Other links** you can make an application link for a referral, a direct approach or anything else. Applications through it carry the name you gave it.
 
-**Applications by source (last 14 days).** How many people applied each day, and through which board or link, in your time zone. Anyone locked is in the totals and on a line of their own, never under a source. If more than 100 people apply in a day, owners and admins are told the next day. Nobody is ever turned away because of the number.
+**Applications by source (last 14 days).** How many people applied each day, and through which board or link, in your time zone. Anyone locked is in the totals and on a line of their own, never under a source; someone who withdrew or whose details were deleted while locked is not counted. If more than 100 people apply in a day, owners and admins are told the next day. Nobody is ever turned away because of the number.
 
 **Pause** in the job page's **More** menu stops new applications without declining anyone: the job page says the position is not accepting applications and the role disappears from your careers page. **Resume** puts it back. If you have enough applicants and want the job to stay listed but closed, use **Stop accepting applications** in the job page's **More** menu instead: the page stays up and says applications are closed, a banner under the title says since when, nobody who applied is affected, and nobody is declined. **Accept applications again** reopens it. Either way, the board postings stay up until they are paused or removed there; tell your ITS contact.
 
