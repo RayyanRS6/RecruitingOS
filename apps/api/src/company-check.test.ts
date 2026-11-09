@@ -102,14 +102,15 @@ describe("the ITS company check and getting started", () => {
     expect(mine?.gettingStarted).toMatchObject({ verified: false, heldMessages: 0, dismissible: true });
     expect(mine?.body).toContain("ITS is confirming your company");
     expect(mine?.body).toContain("emails to candidates wait");
-    expect(stepKeys(mine)).toEqual(["company_details", "team", "interview_hours", "first_role", "job_boards", "ai_rules"]);
+    // no step for interview hours (6 November 2026): a person sets each interview's date and time, so hours are optional
+    expect(stepKeys(mine)).toEqual(["company_details", "team", "first_role", "job_boards", "ai_rules"]);
     // derived from the record: the website was given at sign-up; a role exists; nothing else is done yet
     expect(step(mine, "company_details")).toMatchObject({ done: false, detail: "Still to add: a careers-page introduction, a benefits summary. A logo is optional." });
     expect(step(mine, "first_role")?.done).toBe(true);
     expect(mine?.gettingStarted?.steps.filter((s) => s.done).map((s) => s.key)).toEqual(["first_role"]);
     for (const s of mine?.gettingStarted?.steps ?? []) expect(s.why.length, s.key).toBeGreaterThan(20);
     const hm = await signInAs(container, app, { companyId, role: "hiring_manager" });
-    expect(stepKeys(await setupCard(hm))).toEqual(["interview_hours", "first_role"]);
+    expect(stepKeys(await setupCard(hm))).toEqual(["first_role"]);
     const hr = await signInAs(container, app, { companyId, role: "hr" });
     expect(stepKeys(await setupCard(hr))).toEqual(["team"]);
     // only those who may draft and approve roles are told they can meanwhile; HR may do neither

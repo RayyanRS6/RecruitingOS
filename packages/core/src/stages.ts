@@ -1,6 +1,6 @@
-import { and, asc, eq, inArray, isNull, like } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, type ActorKind, type ApplicationStage, type Actor, type CandidateStep, type MarkKind, type OwnerGroup, type OwnerStage, type ToldState } from "@ros/contracts";
-import { applicationMarks, applications, communications, events, type Queryable } from "@ros/db";
+import { applicationMarks, applications, communications, events, interviews, type Queryable } from "@ros/db";
 import { emit } from "./events";
 import { CANCEL_STAGES, followUpInMotion, inCancelled, resolveOpenFollowUp, restoreFollowUpAfterUndo, type FollowUpStrip } from "./interview-followups";
 
@@ -315,17 +315,44 @@ export function holdEnded(mark: MarkView, now: Date = new Date()): boolean {
  * a running hold waits on nobody, so it is in process; once its date passes the person waits on you again; someone set
  * aside as not a fit for now counts as not moving forward. Someone under Cancelled waits on you only when nothing is in
  * motion for them: a promised automatic set, or new times being prepared or out, wait on nobody at the company.
+ * `interviewInMotion` (6 November 2026; `interviewsInMotionFor`): an open interview with a time booked or times out to
+ * pick from is in process, not waiting on you; one with no time (set up with nobody's hours, reopened with nothing to
+ * offer) still waits on a person, who sets the date and time.
  */
-export function groupFor(app: { stage: ApplicationStage }, mark?: MarkView, now: Date = new Date(), followUp?: FollowUpStrip | null): OwnerGroup {
+export function groupFor(app: { stage: ApplicationStage }, mark?: MarkView, now: Date = new Date(), followUp?: FollowUpStrip | null, interviewInMotion = false): OwnerGroup {
   const g = ownerGroup(app.stage);
   if (g === "hired" || g === "not_moving_forward") return g;
   if (inCancelled(app.stage, followUp)) return followUpInMotion(followUp) ? "in_process" : "waiting_on_you";
-  if (!mark) return g;
+  const moving = (x: OwnerGroup): OwnerGroup => (interviewInMotion && x === "waiting_on_you" ? "in_process" : x);
+  if (!mark) return moving(g);
   if (mark.mark === "not_a_fit_for_now") return "not_moving_forward";
   if (holdRunning(mark, now)) return "in_process";
   if (holdEnded(mark, now)) return "waiting_on_you";
-  return g;
+  return moving(g);
 }
+
+/**
+ * Which of these applications have an open interview in motion: a time booked, or times offered to pick from whose email
+ * did not fail (it is on its way, delivered, or waiting for the ITS check). The fact `groupFor` takes; one read for a whole
+ * list. Times whose email could not be delivered, or that had no address to go to, reached nobody: a person sets the time,
+ * so they still wait on the team. The same condition, in SQL, for a count that groups rows itself (`IN_MOTION_SQL`).
+ */
+export async function interviewsInMotionFor(q: Queryable, applicationIds: readonly string[]): Promise<Set<string>> {
+  if (!applicationIds.length) return new Set();
+  const rows = await q.select({ applicationId: interviews.applicationId }).from(interviews).where(and(inArray(interviews.applicationId, [...applicationIds]), or(eq(interviews.status, "scheduled"), and(eq(interviews.status, "scheduling"), sql`jsonb_array_length(${interviews.offeredSlots}) > 0`, sql`${TIMES_REACH_THEM(sql`${interviews.id}`, sql`${interviews.attempt}`, sql`${interviews.applicationId}`)}`))));
+  return new Set(rows.map((r) => r.applicationId));
+}
+
+/**
+ * Times offered whose email can reach them: there is an address on file, and the email with them (`slots:<id>:<attempt>`)
+ * did not fail. Only whether an address exists is read, never the address or the person.
+ */
+function TIMES_REACH_THEM(id: ReturnType<typeof sql>, attempt: ReturnType<typeof sql>, applicationId: ReturnType<typeof sql>) {
+  return sql`(NOT EXISTS (SELECT 1 FROM communications c WHERE c.idempotency_key = 'slots:' || ${id}::text || ':' || ${attempt}::text AND c.status IN ('failed', 'bounced', 'unknown')) AND EXISTS (SELECT 1 FROM applications a2 JOIN candidates p2 ON p2.id = a2.candidate_id WHERE a2.id = ${applicationId} AND p2.email IS NOT NULL))`;
+}
+
+/** `interviewsInMotionFor` for one application row in a grouped count: true when it has an open interview in motion. */
+export const IN_MOTION_SQL = sql<boolean>`EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = ${applications.id} AND (i.status = 'scheduled' OR (i.status = 'scheduling' AND jsonb_array_length(i.offered_slots) > 0 AND ${TIMES_REACH_THEM(sql`i.id`, sql`i.attempt`, sql`i.application_id`)})))`;
 
 /** The small tags a row carries next to its stage: what the person has to do about it. */
 export const OWNER_TAG = { checkEligibility: "Check eligibility", holdEnded: "Hold ended" } as const;

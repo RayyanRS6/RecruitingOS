@@ -71,8 +71,9 @@ describe("Setup's calendar connection", () => {
     expect(calendarConnectOffered(undefined)).toBe(false);
   });
 
-  it("says in plain words that calendars are not switched on, and how interviews are scheduled meanwhile", () => {
-    expect(CALENDAR_OFF_LINE).toBe("Calendar connection is not switched on for this workspace yet. Interviews are scheduled with the times you set below.");
+  it("says in plain words that calendars are not switched on, and what the hours below are for meanwhile", () => {
+    // a person sets each interview's date and time (6 November 2026); hours are what let candidates pick one instead
+    expect(CALENDAR_OFF_LINE).toBe("Calendar connection is not switched on for this workspace yet. The hours below let candidates pick a time with you.");
     expect(CALENDAR_OFF_LINE).not.toMatch(/deployment|configured|_/);
     const setup = read("../../apps/web/src/pages/Setup.tsx");
     expect(setup).toContain("<p className=\"small muted\">{CALENDAR_OFF_LINE}</p>");

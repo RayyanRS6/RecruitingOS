@@ -123,6 +123,13 @@ describe("Setup's calendar line", () => {
     expect(words).not.toContain("We ask only for events on your calendar");
   });
 
+  it("never shows the suggested weekday hours as saved when nothing is (6 November 2026: hours are optional)", () => {
+    expect(page({ connection: null, availability: null, providers: [{ key: "google", status: "fake" }] })).toContain("Declared hours Not saved yet");
+    const saved = page({ connection: null, availability: { timezone: "America/Los_Angeles", windows: [{ day: 1, start: "09:00", end: "17:00" }], bufferMinutes: 15, maxPerDay: 3 }, providers: [{ key: "google", status: "fake" }] });
+    expect(saved).toContain("Declared hours");
+    expect(saved).not.toContain("Not saved yet");
+  });
+
   it("offers Connect Google Calendar once the real Google provider is set up", () => {
     const words = page({ connection: null, availability: null, providers: [{ key: "google", status: "live" }] });
     expect(words).toContain("Connect Google Calendar");

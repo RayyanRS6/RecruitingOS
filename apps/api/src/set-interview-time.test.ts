@@ -1383,23 +1383,50 @@ describe("a person sets the date and time", () => {
         expect(row.offeredSlots.length).toBeGreaterThan(0);
         return [row.candidateEmail, sheet.candidateEmail, panel.interviews.find((i) => i.id === id)?.candidateEmail];
       };
+      // who waits on whom (6 November 2026): times out, or a time booked, wait on nobody; no time, or times that reached
+      // nobody, wait on a person, on the list, the panel, the compare view and Home
+      const groupOf = async (applicationId: string) => {
+        const rows = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; group: string }>;
+        const panel = (await (await json(owner, "GET", `/api/v1/applications/${applicationId}`)).json()) as { group: string };
+        const compare = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/compare?ids=${applicationId}`)).json()) as { candidates?: Array<{ applicationId: string; group: string }> };
+        const listed = rows.find((x) => x.id === applicationId)?.group;
+        expect(panel.group).toBe(listed);
+        if (compare.candidates) expect(compare.candidates.find((x) => x.applicationId === applicationId)?.group).toBe(listed);
+        return listed;
+      };
+      // Home's "N candidates need your review" for this job
+      const reviewCount = async () => {
+        const cards = ((await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string; roleId?: string }> }).cards;
+        const card = cards.find((c) => c.kind === "needs_review" && c.roleId === roleId && /need/.test(c.title) && /your review/.test(c.title));
+        return Number(/^(\d+) candidates? needs? your review/.exec(card?.title ?? "")?.[1] ?? 0);
+      };
       // the times reached them: nothing to say, so the page may say "Waiting on the candidate"
       const { cand: rex, id } = await approveFor(await apply("Rex", "Offered"), { interviewerUserIds: [piaId] });
       const offered = await interview(id);
       expect((await emailOf(`slots:${id}:${offered.attempt}`)).status).toBe("sent");
       expect(await states(rex, id)).toEqual([null, null, null]);
-      // the provider refused it: never "Waiting on the candidate"
+      expect(await groupOf(rex.id)).toBe("in_process");
+      const before = await reviewCount();
+      // the provider refused it: never "Waiting on the candidate", and it waits on a person again, Home's card too
       await container.db.update(communications).set({ status: "failed", error: "provider refused" }).where(eq(communications.idempotencyKey, `slots:${id}:${offered.attempt}`));
       expect(await states(rex, id)).toEqual(["failed", "failed", "failed"]);
+      expect(await groupOf(rex.id)).toBe("waiting_on_you");
+      expect(await reviewCount()).toBe(before + 1);
       // no address on file: the times can never reach them
       const sol = await apply("Sol", "Noaddress");
       await withPlatform(container.db, (tx) => tx.update(candidates).set({ email: null }).where(eq(candidates.id, sol.candidateId)));
       const { id: solId } = await approveFor(sol, { interviewerUserIds: [piaId] });
       expect(await states(sol, solId)).toEqual(["no_email", "no_email", "no_email"]);
+      expect(await groupOf(sol.id)).toBe("waiting_on_you");
+      // set up with nobody's hours: no time, so it waits on a person
+      const { cand: wen } = await approveOnly("Wen", "Stuck");
+      expect((await interview((await container.db.select().from(interviews).where(eq(interviews.applicationId, wen.id)))[0].id)).status).toBe("proposed");
+      expect(await groupOf(wen.id)).toBe("waiting_on_you");
       // a person sets the time instead: the interview is booked, and its own confirmation is what the screens read
       const r = await routeB(id);
       expect(r.status, await r.clone().text()).toBe(200);
       expect(((await r.json()) as Booked & { candidateEmail: string | null }).candidateEmail).toBeNull();
+      expect(await groupOf(rex.id)).toBe("in_process");
     });
   });
 

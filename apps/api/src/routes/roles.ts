@@ -5,7 +5,7 @@ import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalat
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { aiInterviewsFor } from "../services/screens";
-import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, whoPostsBoards, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, hiddenFrom, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion, unlockedAtFor, visibleTo, waitingSince } from "@ros/core";
+import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, whoPostsBoards, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, IN_MOTION_SQL, interviewsInMotionFor, hiddenFrom, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion, unlockedAtFor, visibleTo, waitingSince } from "@ros/core";
 import { lockedCardsOf, withoutLockedApprovals } from "../services/locked-visibility";
 import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson, shownReadings } from "../services/pool";
 import { applyBatch, previewBatch } from "../services/review-apply";
@@ -72,15 +72,17 @@ roleRoutes.get("/", requireTenant, async (c) => {
     // talent list and the report read through `activeFollowUpsFor`, so the three agree (J18).
     const roleIds = visible.map((r) => r.id);
     const interviewOpen = sql<boolean>`EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = ${applications.id} AND i.status IN ('proposed','scheduling'))`;
+    // An interview booked or with times out waits on nobody at the company (6 November 2026; `interviewsInMotionFor`).
+    const interviewInMotion = IN_MOTION_SQL;
     // Past the plan's candidates per job (Rule 3) nobody counts toward a stage, a group or a decision waiting: only the total
     // and `lockedCount` say more people applied, which names nobody and shows what an upgrade opens.
     const stageCounts = await tx
-      .select({ roleId: applications.roleId, stage: applications.stage, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, kind: interviewFollowups.kind, choice: interviewFollowups.choice, autoState: interviewFollowups.autoState, interviewOpen, n: count() })
+      .select({ roleId: applications.roleId, stage: applications.stage, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, kind: interviewFollowups.kind, choice: interviewFollowups.choice, autoState: interviewFollowups.autoState, interviewOpen, interviewInMotion, n: count() })
       .from(applications)
       .leftJoin(applicationMarks, and(eq(applicationMarks.applicationId, applications.id), isNull(applicationMarks.clearedAt)))
       .leftJoin(interviewFollowups, and(eq(interviewFollowups.applicationId, applications.id), isNull(interviewFollowups.resolvedAt)))
       .where(and(inArray(applications.roleId, roleIds), visibleTo(t)))
-      .groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt, interviewFollowups.kind, interviewFollowups.choice, interviewFollowups.autoState, interviewOpen);
+      .groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt, interviewFollowups.kind, interviewFollowups.choice, interviewFollowups.autoState, interviewOpen, interviewInMotion);
     const hidden = hiddenFrom(t);
     const lockedCounts = hidden ? await tx.select({ roleId: applications.roleId, n: count() }).from(applications).where(and(inArray(applications.roleId, roleIds), hidden)).groupBy(applications.roleId) : [];
     const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).leftJoin(applications, eq(applications.id, approvalRequests.applicationId)).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), or(isNull(approvalRequests.applicationId), visibleTo(t)))).groupBy(approvalRequests.roleId);
@@ -97,7 +99,7 @@ roleRoutes.get("/", requireTenant, async (c) => {
         const mark = row.mark ? { mark: row.mark, remindAt: row.remindAt } : null;
         const followUp = followUpStripOf(row);
         total += n;
-        const g = groupFor({ stage: row.stage }, mark, now, followUp);
+        const g = groupFor({ stage: row.stage }, mark, now, followUp, !!row.interviewInMotion);
         counts[g] = (counts[g] ?? 0) + n;
         stageStrip[ownerStage({ stage: row.stage }, mark, followUp)] += n;
       }
@@ -458,6 +460,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     // Never a reading of a conversation the candidate did not send ("hide them until they send", 9 October 2026).
     const hiddenReadings = unsentScreenReadings(scr, asmts);
     const ivs = appIds.length ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, decision: interviews.decision }).from(interviews).where(inArray(interviews.applicationId, appIds)) : [];
+    // An interview booked or with times out waits on nobody at the company (6 November 2026): not "Waiting on you".
+    const inMotion = await interviewsInMotionFor(tx, appIds);
     const waitingToTell = await pendingDecisionMessages(tx, appIds);
     // "No AI interview yet" (R20-7): where each person in that column stands with it (the latest screen's times).
     const aiInterviews = await aiInterviewsFor(tx, apps, now);
@@ -484,7 +488,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
         id: a.id,
         stage: a.stage,
         stageLabel: evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[a.stage],
-        group: groupFor(a, mark, now, followUp),
+        group: groupFor(a, mark, now, followUp, inMotion.has(a.id)),
         ownerStage: strip,
         ownerStageLabel: ownerStageLabel(strip, mark, followUp, aiInterview),
         cancelled: strip === "cancelled" && followUp ? cancelledView(followUp, { timeZone }) : null,
@@ -752,7 +756,10 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     // answers given after applying again): each body is shown with the tokens hidden, without the reply address (it
     // carries the reply token) and with attachments named only. Links outlive any team member's or recruiter's access.
     const thread = comms.map(({ replyTo: _replyTo, attachments, ...m }) => ({ ...m, bodyText: maskCandidateLinks(m.bodyText), bodyHtml: maskCandidateLinks(m.bodyHtml), attachments: attachments ? attachments.map((a) => ({ filename: a.filename, contentType: a.contentType })) : null }));
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now, followUp), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark, followUp, strip === "no_ai_interview" ? aiInterview : null), cancelled, aiInterview: strip === "no_ai_interview" ? aiInterview : null, mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs.map((i) => ({ ...i, candidateEmail: emailStates.get(i.id) ?? null })), interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: thread, timeline, screens: scr.map(teamScreenView).map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, idleRemindedAt: s.idleRemindedAt, expiresAt: s.expiresAt, transcript: s.transcript, answers: s.answers, progress: s.progress, answersShared: s.answersShared, assessmentId: shownScorecard(s) ? s.assessmentId : null, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, formAnswers, workSummary, keptFacts, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion, hiddenTextNote };
+    // An interview booked, or with times out whose email did not fail, waits on nobody at the company (6 November 2026;
+    // the same rule as `interviewsInMotionFor`, from the rows already read).
+    const inMotion = ivs.some((i) => i.status === "scheduled" || (i.status === "scheduling" && i.offeredSlots.length > 0 && emailStates.get(i.id) !== "failed" && emailStates.get(i.id) !== "no_email"));
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now, followUp, inMotion), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark, followUp, strip === "no_ai_interview" ? aiInterview : null), cancelled, aiInterview: strip === "no_ai_interview" ? aiInterview : null, mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs.map((i) => ({ ...i, candidateEmail: emailStates.get(i.id) ?? null })), interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: thread, timeline, screens: scr.map(teamScreenView).map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, idleRemindedAt: s.idleRemindedAt, expiresAt: s.expiresAt, transcript: s.transcript, answers: s.answers, progress: s.progress, answersShared: s.answersShared, assessmentId: shownScorecard(s) ? s.assessmentId : null, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, formAnswers, workSummary, keptFacts, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion, hiddenTextNote };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);

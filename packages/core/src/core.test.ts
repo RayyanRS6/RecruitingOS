@@ -157,6 +157,20 @@ describe("the stage strip (founder decision B3)", () => {
     expect(at("rejected", "waiting", false)).toBe("not_moving_forward");
     expect(groupFor({ stage: "interview_recommended" }, null, now)).toBe("waiting_on_you");
   });
+  it("counts an interview booked or with times out as in process, and one with no time as waiting on you (6 November 2026)", () => {
+    // "Interview to set up" with nothing booked or out: a person sets the date and time
+    expect(groupFor({ stage: "interview_recommended" }, null, now, null, false)).toBe("waiting_on_you");
+    // a time booked, or times out to pick from: nothing waits on the team
+    expect(groupFor({ stage: "interview_recommended" }, null, now, null, true)).toBe("in_process");
+    expect(groupFor({ stage: "interview_complete" }, null, now, null, true)).toBe("in_process");
+    // marks still count first: a hold that ended waits on you whatever the interview does; a running one waits on nobody
+    expect(groupFor({ stage: "interview_recommended" }, { mark: "on_hold", remindAt: earlier }, now, null, true)).toBe("waiting_on_you");
+    expect(groupFor({ stage: "interview_recommended" }, { mark: "on_hold", remindAt: later }, now, null, false)).toBe("in_process");
+    // nothing else moves: out of the process, an answer awaited, under Cancelled
+    expect(groupFor({ stage: "hired" }, null, now, null, true)).toBe("hired");
+    expect(groupFor({ stage: "offer_sent" }, null, now, null, true)).toBe("waiting_on_candidate");
+    expect(groupFor({ stage: "interview_recommended" }, null, now, { reason: "asked_new_times", autoState: "none", interviewOpen: false }, true)).toBe("waiting_on_you");
+  });
   it("gives the Cancelled column's alerts headlines that name nobody", () => {
     expect(alertHeadline("interview.no_show")).toBe("A candidate did not come to an interview");
     expect(alertHeadline("interview.new_times_sent")).toBe("New interview times went to a candidate who asked for them");

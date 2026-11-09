@@ -311,7 +311,8 @@ describe("the loop after an interview", () => {
     const othersNames = ["Maria Reyes", "Luis Ortega", "Ana Silva", "Ben Okafor", "Chloe Nguyen", "Priya Raman", "Omar Haddad"];
     let b = await brief(interviewer);
     expect(b.cards.every((c) => c.kind === "interviews" || c.kind === "empty")).toBe(true);
-    expect(b.cards.some((c) => c.kind === "interviews" && c.body.includes("Sofia Marin") && /being offered/.test(c.body))).toBe(true);
+    // times offered only once there are some (6 November 2026); before that it has no time yet
+    expect(b.cards.some((c) => c.kind === "interviews" && c.body.includes("Sofia Marin") && /times offered to the candidate/.test(c.body))).toBe(true);
     for (const c of b.cards) for (const name of othersNames) { expect(c.title).not.toContain(name); expect(c.body).not.toContain(name); }
     expect(b.summary).toContain("1 being scheduled");
     // the owner's brief is the company's day, with candidate names and decisions

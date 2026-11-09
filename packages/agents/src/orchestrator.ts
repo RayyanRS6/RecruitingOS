@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
-import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, planIncludesItsPosting, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
+import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, interviewsInMotionFor, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, planIncludesItsPosting, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import { mailbox, type Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -179,11 +179,14 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     // Nor does someone under Cancelled whose automatic new times are still to come: nothing waits on the team before that day.
     const marks = await activeMarksFor(q, apps.map((a) => a.id));
     const followUps = await activeFollowUpsFor(q, apps.map((a) => a.id));
+    // An interview booked, or with times out to pick from, waits on nobody at the company (6 November 2026); one with no
+    // time does, so it is still nagged about.
+    const inMotion = await interviewsInMotionFor(q, apps.map((a) => a.id));
     const parked = (a: { id: string }) => { const m = marks.get(a.id); const f = followUps.get(a.id); return m?.mark === "on_hold" || m?.mark === "not_a_fit_for_now" || (!!f && followUpParked(f)); };
     // Decisions pending: ready for review, screened, recommended, interviewed with nobody's decision recorded yet, or a
     // finalist with no next step recorded (plan G10). People under Cancelled have a Today card of their own (apps/api
     // brief.ts), so they are never named here as well.
-    const waiting = apps.filter((a) => WAITING_ON_TEAM.includes(a.stage) && !parked(a) && !inCancelled(a.stage, followUps.get(a.id)));
+    const waiting = apps.filter((a) => WAITING_ON_TEAM.includes(a.stage) && !parked(a) && !inMotion.has(a.id) && !inCancelled(a.stage, followUps.get(a.id)));
     if (waiting.length) {
       // From when the team could act: an upgrade never reads as weeks of neglect.
       const unlocks = await unlockedAtFor(q, waiting.map((a) => a.id));

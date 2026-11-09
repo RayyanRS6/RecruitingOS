@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { ApplicationStage as ApplicationStageEnum, CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
-import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, isSource, notLocked, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
+import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, interviewsInMotionFor, isSource, notLocked, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
 import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
 import { localDays } from "@ros/workflows";
 import { boardView, loadPool, shownLatestReadings } from "./pool";
@@ -69,7 +69,8 @@ type MarkRow = { applicationId: string; mark: MarkKind; remindAt: string | null;
 type FollowUpRowOfReport = FollowUpStrip & { applicationId: string };
 type EventRow = { subjectId: string; occurredAt: string; payload: Record<string, unknown> };
 type AssessmentRow = { id: string; applicationId: string; createdAt: string; recommendation: string | null };
-type InterviewRow = { applicationId: string; status: string; outcome?: string | null; roundKey: string; title: string; rescheduleCountCandidate: number; decision: string | null };
+/** `offered`: how many times are offered to pick from; optional so hand-made rows need not say. */
+type InterviewRow = { applicationId: string; status: string; outcome?: string | null; roundKey: string; title: string; rescheduleCountCandidate: number; decision: string | null; offered?: number };
 type ApprovalRow = { id: string; actionType: string; applicationId: string | null; createdAt: string };
 type EscalationRow = { status: string; createdAt: string; firstResponseAt: string | null; slaDueAt: string | null; resolvedAt: string | null };
 type OutcomeRow = { applicationId: string | null; roleId: string | null; outcome: string; milestone: string; recordedAt: string; correctionOf: string | null; correctedAt: string | null };
@@ -94,6 +95,8 @@ export type ReportData = {
   followUps?: FollowUpRowOfReport[];
   /** How many applied past the plan's candidates per job and are in none of these rows (Rule 3); optional as the marks are. */
   lockedCount?: number;
+  /** Whose open interview is in motion (`interviewsInMotionFor`); optional, and worked out from `interviews` without it. */
+  inMotion?: string[];
 };
 
 const NO_MESSAGES: RoleReport["messages"] = { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 };
@@ -180,7 +183,9 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     : [];
   // Who is under Cancelled and whether anything is in motion for them, the same loader as the Talent list (J18).
   const followUps = [...(await activeFollowUpsFor(tx, ids)).values()].map((f) => ({ applicationId: f.applicationId, reason: f.reason, autoState: f.autoState, interviewOpen: f.interviewOpen }));
-  return { roles: roleRows, timeZone: company?.timezone ?? null, apps, stageEvents, overrides, assessments: asmts, interviews: ivs, approvals, escalations, messages, outcomes, marks, followUps, lockedCount };
+  // Whose interview is in motion (a time booked, or times out that reached them), the same loader as the Talent list.
+  const inMotion = [...(await interviewsInMotionFor(tx, ids))];
+  return { roles: roleRows, timeZone: company?.timezone ?? null, apps, stageEvents, overrides, assessments: asmts, interviews: ivs, approvals, escalations, messages, outcomes, marks, followUps, lockedCount, inMotion };
 }
 
 /** The active mark of each application, from the rows the report loaded. */
@@ -188,6 +193,12 @@ function activeMarkOf(data: ReportData): Map<string, MarkRow> {
   const out = new Map<string, MarkRow>();
   for (const m of data.marks ?? []) if (!m.clearedAt) out.set(m.applicationId, m);
   return out;
+}
+
+/** Who has an open interview in motion (a time booked, or times out to pick from): it waits on nobody (`interviewsInMotionFor`). */
+function inMotionOf(data: ReportData): Set<string> {
+  if (data.inMotion) return new Set(data.inMotion);
+  return new Set(data.interviews.filter((i) => i.status === "scheduled" || (i.status === "scheduling" && Number(i.offered ?? 0) > 0)).map((i) => i.applicationId));
 }
 
 /** The open follow-up of each application, from the rows the report loaded. */
@@ -219,9 +230,10 @@ export async function customerReport(tx: Tx, input: { companyId: string; now: Da
   const report = composeRoleReport(data, input.now);
   const marks = activeMarkOf(data);
   const followUps = activeFollowUpOf(data);
+  const inMotion = inMotionOf(data);
   const rolesOut = data.roles.map((r) => {
     const own = data.apps.filter((a) => a.roleId === r.id);
-    return { ...r, applicants: own.length, waitingOnYou: own.filter((a) => groupFor(a, marks.get(a.id), input.now, followUps.get(a.id)) === "waiting_on_you").length, hired: own.filter((a) => a.stage === "hired").length };
+    return { ...r, applicants: own.length, waitingOnYou: own.filter((a) => groupFor(a, marks.get(a.id), input.now, followUps.get(a.id), inMotion.has(a.id)) === "waiting_on_you").length, hired: own.filter((a) => a.stage === "hired").length };
   });
   return { report, roles: rolesOut };
 }
@@ -340,6 +352,8 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   // and the Cancelled column, and whether the people a decision was made about have been told.
   const marks = activeMarkOf(data);
   const followUps = activeFollowUpOf(data);
+  // an interview booked or with times out waits on nobody (6 November 2026)
+  const inMotion = inMotionOf(data);
   const stageCount = new Map<ApplicationStage, number>();
   const byGroup: Record<OwnerGroup, number> = { waiting_on_you: 0, waiting_on_candidate: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
   const byOwnerStage = Object.fromEntries(OwnerStageEnum.options.map((s) => [s, 0])) as Record<OwnerStage, number>;
@@ -351,7 +365,7 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
     const mark = marks.get(a.id);
     const followUp = followUps.get(a.id);
     stageCount.set(a.stage, (stageCount.get(a.stage) ?? 0) + 1);
-    byGroup[groupFor(a, mark, now, followUp)] += 1;
+    byGroup[groupFor(a, mark, now, followUp, inMotion.has(a.id))] += 1;
     byOwnerStage[ownerStage(a, mark, followUp)] += 1;
     if (mark) markCounts[markKey[mark.mark]] += 1;
     if (holdEnded(mark, now)) markCounts.holdsEnded += 1;
@@ -363,7 +377,7 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   }
   const byStage: StageCount[] = ApplicationStageEnum.options.filter((s) => stageCount.has(s)).map((s) => ({ stage: s, label: STAGE_LABEL[s], group: ownerGroup(s), count: stageCount.get(s) ?? 0 }));
   const stages = { total: data.apps.length, byStage, byGroup, byOwnerStage, marks: markCounts, told };
-  const waitsOnYou = (a: AppRow) => groupFor(a, marks.get(a.id), now, followUps.get(a.id)) === "waiting_on_you";
+  const waitsOnYou = (a: AppRow) => groupFor(a, marks.get(a.id), now, followUps.get(a.id), inMotion.has(a.id)) === "waiting_on_you";
 
   // 3. Time in stage: every completed stay from the stage-change history, and how long the people in each stage have been there now.
   const eventsByApp = new Map<string, EventRow[]>();

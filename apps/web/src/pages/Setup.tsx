@@ -404,7 +404,7 @@ const ACTION_MORE: Record<string, string> = {
 export function calendarConnectOffered(providers: MyCalendar["providers"] | undefined): boolean {
   return !!providers?.some((p) => p.key === "google" && p.status === "live");
 }
-export const CALENDAR_OFF_LINE = "Calendar connection is not switched on for this workspace yet. Interviews are scheduled with the times you set below.";
+export const CALENDAR_OFF_LINE = "Calendar connection is not switched on for this workspace yet. The hours below let candidates pick a time with you.";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const ZONES = ["America/Los_Angeles", "America/Denver", "America/Phoenix", "America/Chicago", "America/New_York"];
@@ -465,7 +465,8 @@ function MyAvailability() {
           ) : null}
         </div>
         <div className="stack gap-4">
-          <h3 className="text-[15px]">Declared hours</h3>
+          {/* the days below are a suggestion until saved (6 November 2026): they never look saved when nothing is */}
+          <div className="row"><h3 className="text-[15px]">Declared hours</h3>{q.data && !q.data.availability ? <Chip tone="neutral">Not saved yet</Chip> : null}</div>
           <div className="max-w-[22rem]"><Field label="Time zone" htmlFor="av-tz"><select id="av-tz" className="select" value={timezone} onChange={(e) => setTimezone(e.target.value)}>{[...new Set([timezone, ...ZONES])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field></div>
           <div className="grid divide-y divide-line rounded-xl border border-line">
             {[1, 2, 3, 4, 5, 6, 0].map((d) => (

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings, visibleTo } from "@ros/core";
+import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, interviewsInMotionFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings, visibleTo } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, screens, withTenant, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
@@ -81,6 +81,8 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const marks = await activeMarksFor(tx, apps.map((a) => a.id));
   // Under Cancelled (founder decisions 1A to 4A), as on the Talent list.
   const followUps = await activeFollowUpsFor(tx, apps.map((a) => a.id));
+  // An interview booked or with times out waits on nobody at the company (6 November 2026), as on the Talent list.
+  const inMotion = await interviewsInMotionFor(tx, apps.map((a) => a.id));
   const notes = await notesForApplications(tx, { applicationIds: apps.map((a) => a.id), tenant: t });
   const rows: CompareCandidate[] = [];
   for (const id of ids) {
@@ -114,7 +116,7 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
       name: `${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "Unknown",
       stage: a.stage,
       stageLabel: STAGE_LABEL[a.stage],
-      group: groupFor(a, mark, input.now, followUp),
+      group: groupFor(a, mark, input.now, followUp, inMotion.has(a.id)),
       ownerStage: strip,
       ownerStageLabel: ownerStageLabel(strip, mark, followUp),
       mustHaves: mh,
