@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
-import { expectAccessible, gotoSettled, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { exactlyOneEmail, expectAccessible, gotoSettled, signIn, skipWithoutFakeSignIn, waitForEmail } from "./helpers";
 
 /**
  * First sign-in asks for approval (the owner's request of 6 November 2026), from end to end in a real browser. Someone signs
@@ -87,6 +87,10 @@ test.describe("first sign-in asks for approval", () => {
     await expect(page.getByText("Keep this page open")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
     await expectAccessible(page, "the waiting screen");
+    // the copy the screen promises, by its words, and the one to the ITS queue
+    await waitForEmail(page.request, baseURL!, { to: me.email, subject: "Your request has been sent", says: [`Your request for ${company} has been sent.`, "Please wait for approval. ITS reviews each company, usually within one business day, and we will email you when it is decided."] });
+    await exactlyOneEmail(page.request, baseURL!, { to: me.email, subject: "Your request has been sent" });
+    await waitForEmail(page.request, baseURL!, { to: "recruiters@its.localhost", subject: `[access request] ${company} is asking for access`, says: [`Company: ${company}`, `Person: Sam Asker <${me.email}>`, "Accept or decline it in the admin console, on the Overview:"] });
 
     // Reloading, any signed-in address, and signing out and in again all land here, with no error and no loop
     await page.reload();
@@ -153,6 +157,8 @@ test.describe("first sign-in asks for approval", () => {
     await expect(page.getByRole("link", { name: /@/ })).toHaveAttribute("href", /^mailto:/);
     await expect(page.getByText(/sent a copy|will email/)).toHaveCount(0);
     await expectAccessible(page, "the declined screen");
+    await waitForEmail(page.request, baseURL!, { to: me.email, subject: "We can't offer access right now", says: [`for ${company}. We can't offer access right now.`, "Questions? "] });
+    await exactlyOneEmail(page.request, baseURL!, { to: me.email, subject: "We can't offer access right now" });
     // the same from anywhere, and after signing in again
     for (const address of ["/", "/admin", "/login"]) {
       await gotoSettled(page, address);
@@ -193,6 +199,9 @@ test.describe("first sign-in asks for approval", () => {
     expect(current.planKey).toBe("free");
     expect(current.settings.verifiedAt).toBeTruthy();
     expect(scriptErrors).toEqual([]);
+    // and the email that says so, once
+    await waitForEmail(page.request, baseURL!, { to: me.email, subject: "Your request was approved", says: ["Your request was approved.", `Company: ${company}`] });
+    await exactlyOneEmail(page.request, baseURL!, { to: me.email, subject: "Your request was approved" });
   });
 
   test("two administrators: whoever comes second gets a calm answer and the row refreshes", async ({ page, browser, baseURL }) => {
