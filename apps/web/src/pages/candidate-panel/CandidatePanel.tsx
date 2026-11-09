@@ -142,12 +142,21 @@ export function CandidatePanel(props: PanelProps) {
 
   const name = a ? `${a.candidate.firstName} ${a.candidate.lastName}`.trim() : "Candidate";
   const openCompose = () => { setCompose({ ...composing, open: true }); onTab("messages"); };
+  // The panel's top, where the next step a move brings appears ("Shortlist", then "Set a date and time", 6 November 2026):
+  // brought into view once the move is saved and the panel read again, as the browser otherwise keeps the old content in
+  // place and the new card waits above it, out of sight.
+  const body = useRef<HTMLDivElement>(null);
+  const toTop = () => {
+    const sheet = body.current?.closest<HTMLElement>('[role="dialog"]');
+    const still = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    sheet?.scrollTo({ top: 0, behavior: still ? "auto" : "smooth" });
+  };
   const onMove = (to: OwnerStage) => {
     const move = a?.stageMoves.find((m) => m.to === to);
     if (!move) return;
     const intent = stageIntent(move);
     // a step opens at the top of the panel, above every section, so the section in view stays as it was
-    if (intent.kind === "action") act.mutate(intent.body);
+    if (intent.kind === "action") act.mutate(intent.body, { onSuccess: () => { window.setTimeout(toTop, 60); } });
     else if (intent.kind === "step") props.onStep(intent.step);
   };
   // The Overview's suggested next step: its one button does what the stage button, a section or Email would.
@@ -225,7 +234,7 @@ export function CandidatePanel(props: PanelProps) {
     >
       {locked ? <LockedCard /> : q.error && !a ? <ErrorState message="Could not load this candidate. They may have been removed, or you may not have access." onRetry={() => q.refetch()} /> : !a ? <Skeleton lines={6} /> : (
         <DraftContext.Provider value={report}>
-          <div key={id}>
+          <div key={id} ref={body}>
             <NeedsYou a={a} roleId={roleId} myRole={viewer.role} myUserId={viewer.userId} step={props.step} setStep={props.onStep} roundKey={props.roundKey} onTab={onTab} />
             <TabPanel idBase="candidate-panel" value={tab}>
               {/* keyed by the section, so a switch fades the new one in (CSS: before any script, and not at all for less motion);

@@ -256,8 +256,12 @@ function InterviewStep({ a, roleId, initialRoundKey, myUserId, onClose }: { a: A
     onError: (e) => toast(e instanceof ApiError ? e.message : "The assistant could not suggest a line just now."),
   });
   const invitationLine = line.trim() ? { invitationLine: { text: line.trim(), aiHelped: lineAiHelped, ...(kept?.runId ? { suggestionRunId: kept.runId } : {}) } } : {};
-  // One press books it: the date and time a person set (POST /applications/:id/interviews with `setTime`).
-  const book = (setTime: SetInterviewTime) => api.post<InterviewBooked>(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, setTime, ...invitationLine });
+  // One press books it: the date and time a person set (POST /applications/:id/interviews with `setTime`). A press before
+  // the team has loaded (nobody can be ticked yet) says what is missing instead of sending nobody.
+  const book = async (setTime: SetInterviewTime) => {
+    if (!chosenInterviewers.length) throw new ApiError(400, "no_interviewers", "Tick who will interview.");
+    return api.post<InterviewBooked>(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, setTime, ...invitationLine });
+  };
   // The old way: the times are worked out from the interviewers' hours or calendars and emailed for the candidate to pick.
   const offer = useMutation({
     mutationFn: () => api.post(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, ...link.body, ...invitationLine }),
@@ -299,7 +303,7 @@ function InterviewStep({ a, roleId, initialRoundKey, myUserId, onClose }: { a: A
             <>
               {/* who interviews: ticked from the plan, else the person pressing; folded, and open while nobody is ticked */}
               <details className="more" open={withOpen || nobody} onToggle={(e) => setWithOpen(e.currentTarget.open)}>
-                <summary id="iv-with">{names.length ? `With ${namesWords(names)}` : "Choose who interviews"}</summary>
+                <summary id="iv-with">{names.length ? `With ${namesWords(names)}` : membersKnown ? "Choose who interviews" : "Who interviews"}</summary>
                 <fieldset className="grid gap-2">
                   <legend className="sr-only">Interviewers</legend>
                   {members.isLoading || currentPlan.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team, so nobody can be picked yet." onRetry={() => members.refetch()} /> : activeMembers.map((m) => (
