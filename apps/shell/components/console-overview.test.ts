@@ -353,7 +353,8 @@ describe("first sign-in asks for approval, on the Overview", () => {
   });
 
   it("draws the row: Accept the primary button and Decline a quiet one, the facts in one wrapping line, and no button to open it elsewhere", () => {
-    const html = render(client(withRequests([asker("co-a", "Harbor Dental", 2)])));
+    // The page counts the wait on the real clock, so the request is two days old by that clock, not by `now` above.
+    const html = render(client(withRequests([asker("co-a", "Harbor Dental", 2, { createdAt: daysAgo(2) })])));
     const row = html.slice(html.indexOf("<h2>Needs attention</h2>"), html.indexOf("<h2>Customers</h2>"));
     expect(text(row)).toContain("Harbor Dental is asking for access");
     expect(text(row)).toContain("Sam Asker · sam@stranger.test · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example (opens in a new tab) · Waiting 2 days");
@@ -367,7 +368,7 @@ describe("first sign-in asks for approval, on the Overview", () => {
   });
 
   it("makes the website a link only for http and https, with the brief's rel and target; anything else is plain text", () => {
-    const rowOf = (website: unknown) => render(client(withRequests([asker("co-a", "Harbor Dental", 2, { settings: { website } })])));
+    const rowOf = (website: unknown) => render(client(withRequests([asker("co-a", "Harbor Dental", 2, { createdAt: daysAgo(2), settings: { website } })])));
     expect(rowOf("https://asker.example")).toContain('<a href="https://asker.example/" target="_blank" rel="noopener noreferrer nofollow">https://asker.example<span class="sr-only"> (opens in a new tab)</span></a>');
     expect(rowOf("HTTP://Asker.Example/a")).toContain('<a href="http://asker.example/a" target="_blank" rel="noopener noreferrer nofollow">');
     for (const typed of ["javascript:alert(1)", "asker.example", "data:text/html,x", "https://good.example@evil.example"]) {
