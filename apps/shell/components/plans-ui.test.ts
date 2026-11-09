@@ -396,9 +396,11 @@ describe("someone locked, as ITS reads them under a grant naming them", () => {
     expect(locked).not.toContain("Your notes finish the AI interview");
     expect(hint({ ...taken, lockedForCompany: false })).toContain("Your notes finish the AI interview so the scorecard is written");
 
-    // Nobody at the company reads an answer about them, and it never reaches them: the card says so and offers the candidate instead.
+    // Nobody at the company reads an answer about them while they are locked, it can once an upgrade opens them, and it never
+    // reaches them: the card says so and offers the candidate instead.
     expect(locked).toContain("Write to the candidate");
-    expect(locked).toContain("only ITS reads this, and the candidate is not sent it");
+    expect(locked).toContain("What you did or advised (not sent to the candidate; the company can't read it while the candidate is locked, but can if an upgrade opens them)");
+    expect(locked).not.toContain("only ITS reads");
     expect(locked).toContain("Do not name them to the company");
     expect(locked).not.toContain("Write to the customer");
     expect(locked).not.toContain("The person who asked and the owners read it in full");
@@ -408,7 +410,7 @@ describe("someone locked, as ITS reads them under a grant naming them", () => {
     expect(open).toContain("Write to the customer");
     expect(open).toContain("the customer reads this in full");
     expect(open).not.toContain("Write to the candidate");
-    expect(open).not.toContain("only ITS reads this");
+    expect(open).not.toContain("while the candidate is locked");
   });
 });
 

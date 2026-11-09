@@ -221,14 +221,16 @@ describe("the recruiter queue shows the draft a request is about (plan C12)", ()
     // real query cache in apps/shell/components/call-notes-ui.test.ts.
   });
 
-  it("on such a request the answer's words say nobody at the company reads it, from what the API answers, and Write to the candidate opens their message box", () => {
+  it("on such a request the answer's words say the company can't read it while the candidate is locked but can once an upgrade opens them, from what the API answers, and Write to the candidate opens their message box", () => {
     expect(workspaceHref({ roleId: "r1", applicationId: "a1", kind: CANDIDATE_ASKED_FOR_PERSON, message: true, contextSnapshot: {} })).toBe("/roles/r1/talent?open=a1&message=1");
+    // True at every moment: after an upgrade the team reads the request in full, the answer and the notes included (the check of 9 November 2026, C5).
+    expect(LOCKED_ANSWER_LABEL).toBe("What you did or advised (not sent to the candidate; the company can't read it while the candidate is locked, but can if an upgrade opens them)");
+    expect(LOCKED_NOTE_TOAST).toBe("Kept on this request, not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel.");
+    expect(LOCKED_RESOLVED_TOAST).toBe("Resolved. Your note is not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel before your access ends in 24 hours.");
     for (const words of [LOCKED_ANSWER_LABEL, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST]) {
-      expect(words).toMatch(/only ITS reads/i);
+      expect(words).not.toMatch(/only ITS reads/i);
       expect(words).not.toMatch(/customer/i);
     }
-    expect(LOCKED_ANSWER_LABEL).toMatch(/the candidate is not sent it/);
-    for (const toast of [LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST]) expect(toast).toContain("To reach the candidate, write to them from their panel");
     const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
     expect(queue).toContain('toast(r?.lockedForCompany ? LOCKED_NOTE_TOAST : "Sent to the customer.")');
     expect(queue).toContain('r?.lockedForCompany ? LOCKED_RESOLVED_TOAST : "Resolved. The customer has your answer in full; your access ends in 24 hours."');

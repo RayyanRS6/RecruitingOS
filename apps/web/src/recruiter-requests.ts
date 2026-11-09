@@ -140,12 +140,14 @@ export const CALL_NOTES_HINT = "The candidate asked to talk to a person instead 
 export const LOCKED_CALL_NOTES_HINT = "This candidate wrote to us or asked for a person, and the company cannot read them. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the AI interview tab. Your notes are kept on their Notes tab as yours, never as the candidate's own words. Nothing scores them, and no AI interview or interview starts, while they are locked.";
 
 /**
- * The answer on a request about someone the company cannot read: nobody there reads it (the API writes them no notice, and they
- * see no thread), and it does not reach the candidate either, who is written to from their panel.
+ * The answer on a request about someone the company cannot read: nobody there reads it while the candidate is locked (the API
+ * writes them no notice, and they see no thread), but a change of plan that opens the candidate opens the request to the team in
+ * full, answer and notes included, so the words never promise more. It does not reach the candidate either, who is written to
+ * from their panel.
  */
-export const LOCKED_ANSWER_LABEL = "What you did or advised (only ITS reads this, and the candidate is not sent it)";
-export const LOCKED_NOTE_TOAST = "Kept on this request. Only ITS reads it. To reach the candidate, write to them from their panel.";
-export const LOCKED_RESOLVED_TOAST = "Resolved. Only ITS reads your note. To reach the candidate, write to them from their panel before your access ends in 24 hours.";
+export const LOCKED_ANSWER_LABEL = "What you did or advised (not sent to the candidate; the company can't read it while the candidate is locked, but can if an upgrade opens them)";
+export const LOCKED_NOTE_TOAST = "Kept on this request, not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel.";
+export const LOCKED_RESOLVED_TOAST = "Resolved. Your note is not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel before your access ends in 24 hours.";
 
 const PAY_PER: Record<string, string> = { hourly: "an hour", salary: "a year" };
 const money = (n: unknown) => (typeof n === "number" ? `$${n.toLocaleString("en-US")}` : null);
