@@ -8,7 +8,7 @@ import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import { suggestionRunOf } from "./messages";
 
-/** The steps from which a person may approve an interview round. */
+/** The steps from which a person may set up an interview round: set its date and time, or let the candidate pick. */
 export const INTERVIEW_FROM: readonly string[] = ["triaged", "screen_complete", "interview_recommended", "interview_complete", "eligible", "screen_invited", "screening"];
 /** Interviews with times being worked out, offered or booked: an application has one at a time. */
 export const OPEN_INTERVIEW: string[] = ["proposed", "scheduling", "scheduled"];
@@ -124,11 +124,12 @@ export type ApproveInterviewInput = {
 };
 
 /**
- * A person approves an interview round (policy `interview.request`, approval level, AC10.1: the click is the approval).
- * The interview is written with its interviewers, who are told at once; a pending recommendation is resolved by it; the
- * candidate moves to "Interview approved" (or, already at the interview step, their private mark ends, founder decision
- * B3); and `schedule_interview` starts. The same for the usual "Approve an interview" and for the team's "Send new times"
- * to someone who did not come (the Cancelled column, founder decision 4A).
+ * A person sets up an interview round (policy `interview.request`, approval level, AC10.1: the click is the approval).
+ * The interview is written with its interviewers; a pending recommendation is resolved by it; the candidate moves to
+ * "Interview to set up" (or, already at the interview step, their private mark ends, founder decision B3); and
+ * `schedule_interview` starts. The same for "Set a date and time" (`setTime`, below), for "Or let them pick from your free
+ * times" (no `setTime`: the interviewers are told at once, and times are worked out for the candidate to pick), and for the
+ * team's "Send new times" to someone who did not come (the Cancelled column, founder decision 4A).
  *
  * The application is locked first, then its open follow-up, the order the automatic set of new times and a person's
  * "Send new times" take them, so an automatic send and an approval at the same moment never both open an interview. For
@@ -180,7 +181,8 @@ export async function createApprovedInterview(tx: Tx, container: Container, inpu
   // The human's click is the approval (policy interview.request, approval level, AC10.1). Any pending recommendation is resolved by it.
   const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.actionType, "application.recommend_interview"), eq(approvalRequests.status, "pending")));
   for (const p of pending) await tx.update(approvalRequests).set({ status: "approved", decidedBy: input.approvedBy, decidedAt: now.toISOString(), decisionNote: input.note ?? "interview requested" }).where(eq(approvalRequests.id, p.id));
-  if (app.stage !== "interview_recommended" && app.stage !== "interview_complete") await transition(tx, { applicationId: app.id, companyId, to: "interview_recommended", by: input.by, actor, reason: input.note ?? "interview approved" });
+  // The reason is what History shows beside the move: a time a person set says so, in the words its next move uses too.
+  if (app.stage !== "interview_recommended" && app.stage !== "interview_complete") await transition(tx, { applicationId: app.id, companyId, to: "interview_recommended", by: input.by, actor, reason: input.note ?? (input.setTime ? "a person set the date and time" : "interview approved") });
   // Already at the interview step there is no move, but a person approving an interview still moves them on: a hold
   // (or any other private mark) ends here, as it would with the move (founder decision B3).
   else await endMarkOnMove(tx, { applicationId: app.id, companyId, actor, to: app.stage });

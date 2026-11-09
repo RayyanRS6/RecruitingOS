@@ -181,6 +181,9 @@ describe("a person sets the date and time", () => {
       expect((await eventsOf(out.id, "interview.booked"))[0].payload).toMatchObject({ setByPerson: true, attempt: 1, clashAllowed: false });
       const audits = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "interview.booked_on_behalf")));
       expect(audits.filter((a) => a.target?.id === out.id)[0]).toMatchObject({ reason: "a person set the date and time" });
+      // History's reason beside each move of the one press: what the person did, never that an interview was approved
+      const moves = (await eventsOf(cand.id, "application.stage_changed")).slice(-2).map((e) => [e.payload.to, e.payload.reason]);
+      expect(moves).toEqual([["interview_recommended", "a person set the date and time"], ["interview_scheduled", "a person set the date and time"]]);
       // the run starts past `prepare`, so it never asks for hours, and an older worker in a release puts it back rather than failing it
       await container.drain();
       const [run] = await runs(out.id);
