@@ -38,7 +38,7 @@ ALTER TABLE interviews
   ADD COLUMN schedule_token_expires_at timestamptz,
   ADD COLUMN scheduling_window jsonb NOT NULL DEFAULT '{}',   -- {fromDate, toDate, businessDaysOnly, candidateTimezone?}
   ADD COLUMN offered_slots jsonb NOT NULL DEFAULT '[]',        -- OfferedSlot[]
-  ADD COLUMN selected_slot jsonb,                              -- OfferedSlot | null
+  ADD COLUMN selected_slot jsonb,                              -- OfferedSlot | null; since 6 Nov 2026 a time a person set is source 'person', with the address when there is one (no migration)
   ADD COLUMN link_source text NOT NULL DEFAULT 'calendar',     -- calendar | pasted
   ADD COLUMN reschedule_count_candidate integer NOT NULL DEFAULT 0,
   ADD COLUMN cancel_reason text,
