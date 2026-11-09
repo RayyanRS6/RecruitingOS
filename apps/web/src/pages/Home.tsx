@@ -9,6 +9,7 @@ import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, ty
 import { ALLOWANCE_ASK, screeningAllowanceWarning, type AllowanceWarning, type UsageLine } from "../allowance";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { OwnRequest } from "../components/OwnRequest";
 import { RecruiterRequests } from "../components/RecruiterRequests";
 import { Upgrade } from "../components/Upgrade";
 import { useIsClient } from "../components/use-is-client";
@@ -120,6 +121,9 @@ export function Home() {
           </>
         }
       />
+
+      {/* Where this person's own company's request for access stands, while they work in another company (OwnRequest.tsx). */}
+      <OwnRequest />
 
       {/* A row's one-click request says what the recruiter will see and until when, and stays until read (the row itself may go). */}
       {sentToRecruiter ? <Alert tone="info"><div className="row justify-between"><span>{sentToRecruiter}</span><Button size="sm" variant="quiet" onClick={() => setSentToRecruiter(null)}>Got it</Button></div></Alert> : null}

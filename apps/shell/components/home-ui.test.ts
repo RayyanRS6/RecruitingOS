@@ -95,6 +95,42 @@ describe("Home's top", () => {
   });
 });
 
+describe("someone whose own company asked for access, at work in another company (the review of 6 November 2026)", () => {
+  const signup = (status?: "requested" | "declined") => ({ signup: { mode: "approval", allowed: false, contact: "recruiting@its.example", door: "request", ...(status ? { request: { status, companyName: "Harbor Dental", email: "dana@bright.test", emailedAt: null } } : {}) } });
+  const drawn = (config: unknown) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+    qc.setQueryData(["me"], me("interviewer"));
+    qc.setQueryData(["brief"], { generatedAt: "2026-10-14T09:00:00Z", summary: "", cards: [] });
+    qc.setQueryData(["escalations", "mine"], []);
+    qc.setQueryData(["auth", "config", "own request"], config);
+    return { qc, html: renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(Home))) };
+  };
+
+  it("Home says in one line where their own request stands, waiting or declined, since the waiting screen never shows again", () => {
+    const waiting = drawn(signup("requested")).html;
+    expect(text(waiting)).toContain("Your own company's request is waiting for approval.");
+    expect(text(waiting)).not.toContain("Questions?");
+    const declined = drawn(signup("declined")).html;
+    expect(text(declined)).toContain("We can't offer access to your own company right now. Questions? recruiting@its.example");
+    expect(declined).toContain('<a href="mailto:recruiting@its.example">recruiting@its.example</a>');
+    // with no request of their own, or before the answer, nothing
+    for (const none of [signup(), undefined]) {
+      const words = text(drawn(none).html);
+      expect(words).not.toContain("Your own company's request");
+      expect(words).not.toContain("your own company right now");
+    }
+  });
+
+  it("looks again on focus and every minute while there is a request, never in a hidden tab, so the line goes once it is accepted", () => {
+    const { qc } = drawn(signup("requested"));
+    const query = qc.getQueryCache().find({ queryKey: ["auth", "config", "own request"], exact: true })!;
+    const options = query.options as { refetchOnWindowFocus?: boolean; refetchIntervalInBackground?: boolean; refetchInterval?: (q: unknown) => number | false };
+    expect(options).toMatchObject({ refetchOnWindowFocus: true, refetchIntervalInBackground: false });
+    expect(options.refetchInterval?.(query)).toBe(60_000);
+    expect(options.refetchInterval?.({ state: { data: signup() } })).toBe(false);
+  });
+});
+
 describe("Needs you", () => {
   it("shows each card as a short row: the title and its word, the first sentence, the buttons, and the rest behind Why", () => {
     const html = render();
