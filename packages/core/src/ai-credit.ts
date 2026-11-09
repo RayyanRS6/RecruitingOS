@@ -1,10 +1,10 @@
-import { and, asc, eq, gte, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, aiCreditNoticeWords, mayOfferUpgrade, type AiCreditLevel, type AiCreditView } from "@ros/contracts";
 import { adminAlerts, aiRuns, companies, entitlements, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
 import { audit } from "./audit";
 import { closingDayWords, companyToday } from "./closing-date";
-import { ALLOWANCE_WARN_RATIO, aiCreditSpentMicros, creditPercent, currentPeriod, isMonthly } from "./entitlements";
+import { ALLOWANCE_WARN_RATIO, aiCreditSpentMicros, creditPercent, currentPeriod, isMonthly, settledRun } from "./entitlements";
 import { errorForLog } from "./secrets";
 import { emit } from "./events";
 import { notify } from "./notifications";
@@ -83,7 +83,10 @@ export type AiCreditStanding = {
   told: { warnedFor?: string; usedUpFor?: string };
 };
 
-/** `settled`: leaves out calls still running, whose holds are not yet money spent. The fullest row, if a company ever has two. */
+/**
+ * `settled`: leaves out calls that can still be running, whose holds are not yet money spent (`settledRun`; one left by a
+ * process that went away counts). The fullest row, if a company ever has two.
+ */
 export async function aiCreditStanding(q: Queryable, companyId: string, opts: { now?: Date; settled?: boolean } = {}): Promise<AiCreditStanding | null> {
   const rows = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), limitedRows())).orderBy(asc(entitlements.key));
   if (!rows.length) return null;
@@ -92,7 +95,7 @@ export async function aiCreditStanding(q: Queryable, companyId: string, opts: { 
   const told = company?.settings?.aiCreditTold ?? {};
   let fullest: AiCreditStanding | null = null;
   for (const row of rows) {
-    const spentMicros = await aiCreditSpentMicros(q, companyId, { since: sinceOf(row, now), settled: opts.settled });
+    const spentMicros = await aiCreditSpentMicros(q, companyId, { since: sinceOf(row, now), settled: opts.settled, now });
     const standing = standingOf(row, spentMicros, told, now);
     if (!fullest || standing.spentMicros * fullest.limitMicros >= fullest.spentMicros * standing.limitMicros) fullest = standing;
   }
@@ -117,13 +120,14 @@ export async function aiCreditResetsAt(q: Queryable, companyId: string, opts: { 
  * A call the credit refused, read again from money actually spent: true when it fits without the holds of calls still running,
  * so it will fit once they settle (a draft holds about $0.80 for two minutes and comes back at about $0.10), or it fits now, on
  * a new plan or in a new month. False is a credit really gone for this call: what is spent refuses it by itself, and money
- * spent never comes back within a period. The rule `tellOwner` reads for a refusal, row by row as the gate reads them.
+ * spent never comes back within a period. The rule `tellOwner` reads for a refusal, row by row as the gate reads them. A hold
+ * left by a process that went away is spent (`settledRun`): it never settles, so waiting for it would be a wait for nothing.
  */
 export async function aiCreditRoomSoon(q: Queryable, input: { companyId: string; holdUsd: number; now: Date }): Promise<boolean> {
   const rows = await q.select().from(entitlements).where(and(eq(entitlements.companyId, input.companyId), limitedRows())).orderBy(asc(entitlements.key));
   const hold = toMicros(input.holdUsd);
   for (const row of rows) {
-    const spent = await aiCreditSpentMicros(q, input.companyId, { since: sinceOf(row, input.now), settled: true });
+    const spent = await aiCreditSpentMicros(q, input.companyId, { since: sinceOf(row, input.now), settled: true, now: input.now });
     if (spent + hold > roomMicros(row)) return false;
   }
   return true;
@@ -317,7 +321,7 @@ export async function aiCreditLines(q: Queryable, opts: { now?: Date } = {}): Pr
   const companyIds = [...new Set(rows.map((r) => r.companyId))];
   const told = new Map((await q.select({ id: companies.id, settings: companies.settings }).from(companies).where(inArray(companies.id, companyIds))).map((c) => [c.id, c.settings?.aiCreditTold ?? {}]));
   const micros = sql<string>`coalesce(sum(${aiRuns.costUsd}), 0) * 1000000`;
-  const settled = ne(aiRuns.status, "running");
+  const settled = settledRun(now);
   const lifetime = new Map((await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(and(inArray(aiRuns.companyId, companyIds), settled)).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]));
   const months = rows.flatMap((r) => { const since = sinceOf(r, now); return since ? [{ companyId: r.companyId, since }] : []; });
   const thisMonth = new Map(months.length ? (await q.select({ companyId: aiRuns.companyId, micros }).from(aiRuns).where(and(settled, or(...months.map((m) => and(eq(aiRuns.companyId, m.companyId), gte(aiRuns.createdAt, m.since)))))).groupBy(aiRuns.companyId)).map((r) => [r.companyId, Math.round(Number(r.micros))]) : []);

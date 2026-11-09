@@ -4,13 +4,13 @@ import { z } from "zod";
 import { AI_CREDIT_USED_UP, creditHoldUsd, estimateCostUsd, outOfCredit, runPromptDetached, runPromptsDetached, type AiProvider, type AiRuntime, type PromptDef, type StructuredRequest, type StructuredResult, type Usage } from "@ros/ai";
 import { INTAKE_COMPILE_MAX_TOKENS, runIntakeTurn, runScreenTurn, startIntakeSession } from "@ros/agents";
 import { AI_CREDIT_AVAILABLE, AI_HELP_BUSY_LINE, AI_HELP_LINE, AI_HELP_UPGRADE_QUESTION } from "@ros/contracts";
-import { AI_CREDIT_SLACK_USD, aiCreditRoomForJob, aiCreditRoomSoon, aiCreditStanding, entitlements as allowance, holdAiCreditRows, reserveAiCredit } from "@ros/core";
+import { AI_CREDIT_DRAFT_HOLD_USD, AI_CREDIT_SLACK_USD, aiCreditRoomForJob, aiCreditRoomSoon, aiCreditStanding, entitlements as allowance, holdAiCreditRows, reserveAiCredit } from "@ros/core";
 import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, intakeSessions, notifications, recruiterEscalations, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, workflowSteps, type Tx } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider, FakeSmsAdapter } from "@ros/integrations";
 import { AI_OUTAGE_ALERT_KIND } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { runMaintenance } from "./maintenance";
+import { runHourlyChecks, runMaintenance } from "./maintenance";
 import { SENT_RECORD_LINE, SENT_RECORD_NO_SCORE_LINE } from "./pages/chat-pages";
 import { conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ConversationRef } from "./services/apply-conversation";
 import { readingFor, runResumeReading } from "./services/apply-details";
@@ -91,6 +91,8 @@ describe("the AI credit", () => {
 
   const spend = (companyId: string, costUsd: number | string, opts: { status?: string; createdAt?: string } = {}) => withPlatform(container.db, (tx) => tx.insert(aiRuns).values({ companyId, agent: "test", task: "test.spent", provider: "fake", model: "fake", promptKey: "test.spent", promptVersion: 1, promptHash: "x", costUsd: String(costUsd), status: opts.status ?? "ok", ...(opts.createdAt ? { createdAt: opts.createdAt } : {}) }));
   const spent = async (companyId: string) => withTenant(container.db, companyId, (tx) => allowance.aiCreditSpentMicros(tx, companyId)).then((m) => m / 1_000_000);
+  /** The monthly credit's period began `ms` ago (a plan's first month starts when it is applied, so a hold dated before it would not count). */
+  const monthBegan = (companyId: string, ms: number) => withPlatform(container.db, (tx) => tx.update(entitlements).set({ periodStart: new Date(Date.now() - ms).toISOString() }).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "ai_credit_monthly_cents"))));
   const runsOf = (companyId: string) => container.db.select().from(aiRuns).where(and(eq(aiRuns.companyId, companyId), sql`${aiRuns.task} <> 'test.spent'`));
   const runtime = (provider: AiProvider): AiRuntime => ({ provider, models: REAL_MODELS, credit: container.ai.credit });
   /** With the company's real AI at real prices, for a route under test. */
@@ -449,6 +451,20 @@ describe("the AI credit", () => {
       expect(await spent(id)).toBeCloseTo(9.89, 6);
       expect((await failures()).map((r) => r.task)).toEqual(["test.spent"]);
     });
+
+    it("the hourly check closes a call whose process went away once it is an hour old, keeping its hold as its cost, and never one that could still be running", async () => {
+      const { id } = await newCompany();
+      const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+      await spend(id, "0.800000", { status: "running", createdAt: ago(61) });
+      await spend(id, "0.020000", { status: "running", createdAt: ago(4) });
+      const report = await runHourlyChecks(container.db, new Date(), { workerInline: true });
+      expect(report.interruptedAiRuns).toBeGreaterThanOrEqual(1);
+      const rows = await container.db.select({ costUsd: aiRuns.costUsd, status: aiRuns.status, error: aiRuns.error }).from(aiRuns).where(eq(aiRuns.companyId, id));
+      expect(rows.map((r) => `${r.costUsd} ${r.status}`).sort()).toEqual(["0.020000 running", "0.800000 error"]);
+      expect(rows.find((r) => r.status === "error")?.error).toMatch(/^interrupted: /);
+      // what the company spent does not change: the hold was money spent from its tenth minute
+      expect(await spent(id)).toBeCloseTo(0.82, 6);
+    });
   });
 
   describe("periods", () => {
@@ -637,6 +653,43 @@ describe("the AI credit", () => {
         expect(turn.reply.assistantMessage).toBeTruthy();
         expect(provider.calls).toBe(1);
       });
+    });
+
+    it("a draft's hold whose process went away is money spent once no call could still be running: Write draft says it is too big, and every page reads what the gate reads", async () => {
+      // the words below are real money: Basic stops at $19.90, $19.06 is settled, and a draft holding $0.80 lost its process
+      const { cookie, id } = await newCompany();
+      const sessionId = await draftOf(cookie);
+      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`)).status).toBe(200);
+      await usePlan(container, id, "basic");
+      await monthBegan(id, 3_600_000);
+      await spend(id, "19.060000");
+      // nine minutes after its hold it may still be running (a call's own budget is 4.5 minutes): try again in a few minutes
+      await spend(id, "0.800000", { status: "running", createdAt: new Date(Date.now() - 9 * 60_000).toISOString() });
+      await atRealPrices(async () => {
+        const draft = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`);
+        expect(draft.status).toBe(409);
+        expect(await errorOf(draft)).toMatchObject({ code: "ai_help_busy", message: AI_HELP_BUSY_LINE.draft });
+      });
+      // eleven minutes after it, no call can still be running: the $0.80 is spent, $19.86 of $20, and the draft's own hold no longer fits
+      await withPlatform(container.db, (tx) => tx.update(aiRuns).set({ createdAt: new Date(Date.now() - 11 * 60_000).toISOString() }).where(and(eq(aiRuns.companyId, id), eq(aiRuns.status, "running"))));
+      await atRealPrices(async (provider) => {
+        const draft = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`);
+        expect(draft.status).toBe(402);
+        expect(await errorOf(draft)).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.draftTooBig, details: { upgrade: true } });
+        expect(provider.calls).toBe(0);
+      });
+      // Home, Settings, ITS's line and Start a hire read the same $19.86: 99%, and a new job has stopped
+      const current = await read<{ usage: { ai_credit_monthly_cents: { used: number } }; aiCredit: { level: string; percent: number; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      expect(current.aiCredit).toMatchObject({ level: "warning", percent: 99 });
+      expect(current.aiCredit.notice.body).toBe("New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out.");
+      expect(current.usage.ai_credit_monthly_cents.used).toBe(99);
+      const line = (await read<Array<{ id: string; aiCredit: { spentUsd: number; percent: number } | null }>>(await json(admin, "GET", "/api/v1/admin/customers"))).find((c) => c.id === id)!.aiCredit;
+      expect(line).toMatchObject({ spentUsd: 19.86, percent: 99 });
+      expect(await withTenant(container.db, id, (tx) => aiCreditRoomForJob(tx, id))).toBe("too_low");
+      expect(await read<{ ok: boolean; message: string }>(await json(cookie, "GET", "/api/v1/intake/room"))).toMatchObject({ ok: false, message: AI_HELP_LINE.newJobTooBig });
+      // and what the gate counted all along: the stale hold, and room for no draft
+      expect(await spent(id)).toBeCloseTo(19.86, 6);
+      expect(await withTenant(container.db, id, (tx) => aiCreditRoomSoon(tx, { companyId: id, holdUsd: AI_CREDIT_DRAFT_HOLD_USD, now: new Date() }))).toBe(false);
     });
 
     it("the same refusals with the money really spent say used up, or that the draft is too big, and offer the Upgrade", async () => {
@@ -923,8 +976,8 @@ describe("the AI credit", () => {
       expect(record).not.toContain("Working out your match score");
     });
 
-    /** A chat sent on a Basic job, its résumé read and $19.06 of the $20 settled, with `inFlight` held by a draft still running. */
-    const sentOnBasic = async (who: { first: string; last: string; email: string }, settled: string, inFlight: string | null) => {
+    /** A chat sent on a Basic job, its résumé read and $19.06 of the $20 settled, with `inFlight` held by a draft still running, its hold taken `heldAgoMs` ago. */
+    const sentOnBasic = async (who: { first: string; last: string; email: string }, settled: string, inFlight: string | null, heldAgoMs = 0) => {
       const job = await openJob();
       await usePlan(container, job.id, "basic");
       const a = await apply(job, who);
@@ -932,7 +985,8 @@ describe("the AI credit", () => {
       await conversationStart(container, ref);
       expect((await answerToTheEnd(ref)).phase).toBe("review");
       await spend(job.id, settled);
-      if (inFlight) await spend(job.id, inFlight, { status: "running" });
+      if (heldAgoMs) await monthBegan(job.id, heldAgoMs + 3_600_000);
+      if (inFlight) await spend(job.id, inFlight, { status: "running", ...(heldAgoMs ? { createdAt: new Date(Date.now() - heldAgoMs).toISOString() } : {}) });
       await atRealPrices(async () => {
         expect(await conversationSubmit(container, ref)).toBe(true);
         await container.drain();
@@ -998,6 +1052,25 @@ describe("the AI credit", () => {
       expect((await screenOf(a.id)).progress.scoreWaitsForCredit).toBeUndefined();
       expect(Date.parse((await runOf("screen", a.id)).wait!.until!) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
       expect((await screenOf(a.id)).assessmentId).toBeNull();
+    });
+
+    it("a scorecard refused for a draft's hold whose process went away parks in the used-up words, which are true, and does not look again every 15 minutes for a day", async () => {
+      // 19.06 settled + 0.80 held by a draft whose process died 11 minutes ago + the three readings' 6 cents = 19.92: the hold never settles
+      const { job, a } = await sentOnBasic({ first: "Quin", last: "Rook", email: "quin@ai-credit.test" }, "19.060000", "0.800000", 11 * 60_000);
+      const scr = await screenOf(a.id);
+      expect(scr.status).toBe("completed");
+      expect(scr.assessmentId).toBeNull();
+      expect(scr.progress.scoreWaitsForCredit).toBeTruthy();
+      const run = await runOf("screen", a.id);
+      const [credit] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, job.id), eq(entitlements.key, "ai_credit_monthly_cents")));
+      expect(run).toMatchObject({ status: "waiting", currentStep: "assess", attempts: 0 });
+      expect(run.wait?.until).toBe(credit.periodEnd);
+      // the team reads "not scored", with the way to read the answers, and the owner is told it is used up, as the gate says
+      const detail = await read<{ screens: Array<{ scorecard: string }>; placement: { doneLabel: string | null } }>(await json(job.cookie, "GET", `/api/v1/applications/${a.id}`));
+      expect(detail.screens[0].scorecard).toBe("waiting_for_credit");
+      expect(detail.placement.doneLabel).toBe("AI interview not scored");
+      expect((await creditNotes(job.id)).map((n) => n.title)).toContain("Your plan's AI help is used up");
+      await noFalseAlarm(job.id, [a.id]);
     });
 
     it("the line between the two, in real money: what is settled plus the three readings' hold, against the limit less the slack", async () => {

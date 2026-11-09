@@ -16,8 +16,9 @@ export const CREDIT_IN_FLIGHT_WAIT_MINUTES = 15;
  * Read again here, in the step's own transaction and behind the credit's rows (`holdAiCreditRows`), because the refusal came
  * before it opened. `roomSoon`: what `refusedHoldUsd` asked for fits on the money actually spent. Nothing is used up then, so
  * nothing may say so: the wait is a short one, on the same signal, for the holds of calls still running to settle (or for a
- * new plan the refusal came just before). Those end by themselves, at the latest with the daily sweep of a call whose process
- * went away, so this cannot go on looking for long.
+ * new plan the refusal came just before). Those end by themselves within minutes, and the hold of a call whose process went
+ * away counts as money spent once no call could still be running (`settledRun` in packages/core), so this cannot go on
+ * looking for long, and a hold that will never settle parks the step in the used-up words, which are then true.
  */
 export async function waitForCredit<S extends Record<string, unknown>>(ctx: StepContext<S>, resumeStep: string, refusedHoldUsd: number, state?: Partial<S>): Promise<{ roomSoon: boolean; wait: StepResult<S> }> {
   await holdAiCreditRows(ctx.q, ctx.companyId);
