@@ -68,7 +68,7 @@ Seven agents and one orchestrator. Each agent is a module in `packages/agents` w
 - **Tools.** Email and SMS adapters, calendar adapters, template renderer, `propose_slots`, `book_slot`, `reschedule`.
 - **Outputs.** `MessageDraft` (channel, body, disclosure, template key), `SlotProposal`, `BookingResult`.
 - **Model tier.** `fast` for templated messages; `standard` for free-form replies to candidate questions.
-- **Policy.** `message.send_templated` (auto); `message.send_freeform` (auto_notify); `interview.schedule` (auto); `interview.reschedule` (auto_notify); `disposition.send` (auto_notify after a human decision).
+- **Policy.** `message.send_templated` (auto); `message.send_freeform` (auto_notify); `interview.schedule` (auto); `interview.reschedule` (auto_notify); `disposition.send` (auto_notify after a human decision). Since 6 November 2026 a person usually sets the interview's date and time (`docs/06`, `schedule_interview`): then nothing proposes slots, and the Coordinator only puts the booking on calendars, confirms it in one email and reminds. Slots are proposed only on the folded pick-a-time path.
 - **Failure modes.** Sending without consent (guard: the adapter refuses if consent is missing for the channel); double booking (guard: re-check busy before booking; idempotent booking keys); bounces (guard: retry on the other channel, then flag); answering outside policy (guard: allowed-topics list from the packet; otherwise "I'll have someone from the team answer that" and create a task).
 - **Evals.** Consent gates; disclosure on every message; slot proposal correctness across time zones; bounce handling.
 
