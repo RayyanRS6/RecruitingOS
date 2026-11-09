@@ -196,7 +196,8 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       const finalists = waiting.filter((a) => a.stage === "finalist").length;
       const body = finalists === waiting.length
         ? `${finalists === 1 ? "A finalist is" : `${finalists} finalists are`} waiting to hear what comes next: record an offer made, the next step, or not moving forward. Finalists who wait more than a week often take another job.`
-        : "They are ready for a decision: invite to an AI interview, interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.";
+        // Everyone gets the AI interview by themselves (R20-4), so inviting to one is no choice of the team's (6 November 2026).
+        : "They are ready for a decision: shortlist them, set a date and time for an interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.";
       // the people, longest waiting first, so Today can name the first and open them (plan G10)
       const longestFirst = [...waiting].sort((a, b) => since(a) - since(b)).map((a) => a.id);
       if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, applicationIds: longestFirst, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body, action: { label: "Review them", href: `/roles/${role.id}/talent` } });

@@ -50,7 +50,7 @@ test("approve a role, see where it is going, share it and give it a closing date
   await expect(shareGroup).toBeVisible();
   await expect(shareGroup.getByText("WhatsApp")).toBeVisible();
   await expect(page.locator("script[src*='facebook'], script[src*='linkedin'], script[src*='twitter'], iframe")).toHaveCount(0);
-  await done.getByRole("button", { name: "Go to your role" }).click();
+  await done.getByRole("button", { name: "Go to your job" }).click();
   await expect(done).toBeHidden();
 
   // the Posting tab: the share block, the boards, and the closing date
@@ -115,7 +115,7 @@ test("a board unticked on the approval card is left out, without pressing Save t
   await expect(where.getByText("Your careers page", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(where.getByText("Indeed", { exact: true })).toHaveCount(0);
   await expect(where.getByText(/No job boards were chosen for this job/)).toBeVisible();
-  await done.getByRole("button", { name: "Go to your role" }).click();
+  await done.getByRole("button", { name: "Go to your job" }).click();
   expect(saves).toEqual([]);
 
   // and the Share tab agrees

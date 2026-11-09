@@ -123,11 +123,11 @@ describe("the screen right after approval (D2)", () => {
     expect(outdatedBoardsLine([], "its")).toBeNull();
   });
 
-  it("is a calm confirmation with a tick, 'Go to your role' as the main button and 'Share it now'", () => {
+  it("is a calm confirmation with a tick, 'Go to your job' as the main button and 'Share it now'", () => {
     const screen = read("../../apps/web/src/pages/AfterApproval.tsx");
     expect(screen).toContain('title={props.editWhileOpen ? "Your change is approved" : "Your job is approved"}');
     expect(screen).toContain('mark="check"');
-    expect(screen).toContain('<Button variant="primary" onClick={props.onClose}>Go to your role</Button>');
+    expect(screen).toContain('<Button variant="primary" onClick={props.onClose}>Go to your job</Button>');
     expect(screen).toContain(">Share it now</Button>");
     expect(screen).toContain("pollInterval(query.state.data?.publishing)");
     expect(screen).toContain("props.editWhileOpen && Date.now() - openedAt.current < EDIT_SETTLE_MS ? 3000");

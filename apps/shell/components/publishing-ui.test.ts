@@ -76,12 +76,12 @@ function client(): QueryClient {
 describe("the confirmation dialog", () => {
   it("is a named modal dialog with a decorative tick, the title, the line under it, the body and the buttons at the foot", () => {
     // biome-ignore lint/correctness/noChildrenProp: createElement's types want a required children prop among the props
-    const out = renderToStaticMarkup(createElement(Dialog, { open: true, onClose: () => undefined, title: "Your job is approved", sub: "Getting it ready.", mark: "check", markTone: "good", footer: createElement("button", { type: "button" }, "Go to your role"), children: "body" }));
+    const out = renderToStaticMarkup(createElement(Dialog, { open: true, onClose: () => undefined, title: "Your job is approved", sub: "Getting it ready.", mark: "check", markTone: "good", footer: createElement("button", { type: "button" }, "Go to your job"), children: "body" }));
     expect(out).toContain('role="dialog" aria-modal="true" aria-label="Your job is approved" tabindex="-1"');
     expect(out).toContain('<span class="dialog-mark good" aria-hidden="true">');
     expect(out).toContain("<h2>Your job is approved</h2>");
     expect(out).toContain('<p class="dialog-sub">Getting it ready.</p>');
-    expect(out).toMatch(/<div class="dialog-body">body<\/div><div class="dialog-foot"><button type="button">Go to your role<\/button><\/div>/);
+    expect(out).toMatch(/<div class="dialog-body">body<\/div><div class="dialog-foot"><button type="button">Go to your job<\/button><\/div>/);
     // a Close button a screen reader names, and the backdrop closes it too
     expect(out.match(/aria-label="Close"/g)).toHaveLength(2);
   });
@@ -123,10 +123,10 @@ describe("the screen right after approval (D2)", () => {
     expect(words).not.toContain("Applications by email");
   });
 
-  it("notes that nobody is set to interview, and offers 'Share it now' and 'Go to your role'", () => {
+  it("notes that nobody is set to interview, and offers 'Share it now' and 'Go to your job'", () => {
     expect(words).toContain("Nobody is set to interview yet.");
     expect(words).toContain("Choose interviewers");
-    expect(html).toMatch(/<div class="dialog-foot"><button[^>]*>.*Share it now<\/button><button type="button" class="btn primary"[^>]*>Go to your role<\/button><\/div>/);
+    expect(html).toMatch(/<div class="dialog-foot"><button[^>]*>.*Share it now<\/button><button type="button" class="btn primary"[^>]*>Go to your job<\/button><\/div>/);
   });
 });
 

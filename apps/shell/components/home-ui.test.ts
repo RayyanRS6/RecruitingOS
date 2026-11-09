@@ -85,12 +85,13 @@ describe("Home's top", () => {
   });
 
   it("says all caught up when nothing needs you, and shows the quiet day's card on its own", () => {
-    const empty = { kind: "empty", title: "Nothing needs you right now", body: "Applicants are being acknowledged and screened. I will tell you when someone is worth your time.", actions: [{ label: "See your roles", method: "GET", path: "/roles" }] };
+    // the quiet day's words as the server writes them (6 November 2026): no promise about email, no judgement of anyone
+    const empty = { kind: "empty", title: "Nothing needs you right now", body: "New applicants, and anything that waits on you, show up here.", actions: [{ label: "See your jobs", method: "GET", path: "/roles" }] };
     const html = render({ cards: [empty] });
     expect(html).toContain('<p class="page-header-sub">All caught up</p>');
     expect(html).toMatch(/<h2 class="[^"]*">Nothing needs you right now<\/h2>/);
-    expect(text(html)).toContain("Applicants are being acknowledged and screened.");
-    expect(text(html)).toContain("I will tell you when someone is worth your time.");
+    expect(text(html)).toContain("New applicants, and anything that waits on you, show up here.");
+    expect(text(html)).not.toContain("worth your time");
     expect(html).not.toContain(">Needs you</h2>");
   });
 });

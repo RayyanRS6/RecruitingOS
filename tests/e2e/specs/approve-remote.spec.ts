@@ -127,7 +127,7 @@ test("a remote job from the owner's first words to its public page: greyed Appro
   await approve.click();
   const done = page.getByRole("dialog", { name: "Your job is approved" });
   await expect(done).toBeVisible({ timeout: 30_000 });
-  await done.getByRole("button", { name: "Go to your role" }).click();
+  await done.getByRole("button", { name: "Go to your job" }).click();
   await expect(card).toBeHidden({ timeout: 30_000 });
   const { slug } = await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json() as { slug: string };
   await expect.poll(async () => (await page.request.get(`${baseURL}/careers/${slug}/jobs/${roleId}`)).status(), { timeout: 30_000 }).toBe(200);

@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import { PROVIDER_REFUSED_ALERT, queueCommunication } from "@ros/agents";
+import { PROVIDER_REFUSED_ALERT, detectStuckRoles, queueCommunication } from "@ros/agents";
 import { entitlements, findInvitationByToken } from "@ros/core";
 import { adminAlerts, applications, candidates, communications, hiringOutcomes as hiringOutcomesTable, interviews as interviewsTable, notifications, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, SendResult } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { APPLY_WAIT_JS, WAIT_GAVE_UP_LINE, WAIT_GAVE_UP_MORE } from "./pages/apply-form";
+import { QUIET_DAY_LINE } from "./services/brief";
 import { signInAs } from "./test-helpers";
 
 /**
@@ -294,6 +295,19 @@ describe("the dead ends a first-time owner met", () => {
       // and the stage menu says the way to an offer from where they are, in plain words
       const row = await rowOf(fay.id);
       expect(row.stageMoves.find((m) => m.to === "offer")).toMatchObject({ allowed: true });
+    });
+  });
+
+  describe("rank 20: the word pass", () => {
+    it("a quiet day promises nothing about emails and judges nobody; the long-wait nudge offers only what the team can choose", async () => {
+      expect(QUIET_DAY_LINE).toBe("New applicants, and anything that waits on you, show up here.");
+      // someone ready for the team's decision, waiting five days
+      const tia = await apply("Tia", "Waiting");
+      await container.db.update(applications).set({ stage: "triaged" }).where(eq(applications.id, tia.id));
+      const detections = await withTenant(container.db, companyId, (tx) => detectStuckRoles(tx, companyId, new Date(Date.now() + 5 * DAY)));
+      const waiting = detections.find((d) => d.detector === "candidates_waiting" && d.body.startsWith("They are ready for a decision"));
+      expect(waiting?.body).toBe("They are ready for a decision: shortlist them, set a date and time for an interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.");
+      expect(JSON.stringify(detections)).not.toContain("invite to an AI interview");
     });
   });
 

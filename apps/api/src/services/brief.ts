@@ -64,6 +64,9 @@ export type BriefCard = {
   unreached?: UnreachedPerson[];
 };
 
+/** The quiet day's line on Home, when jobs are open and nothing waits. */
+export const QUIET_DAY_LINE = "New applicants, and anything that waits on you, show up here.";
+
 /** At most this many people are named on the unreached card; the rest are counted. */
 export const UNREACHED_NAMED = 8;
 
@@ -395,7 +398,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     // A brand-new company's first screen always offers the way forward; so does a quiet day.
     const startsHires = !viewer || (can(viewer.role, "role.create") && can(viewer.role, "compensation.read") && !scope);
     const actions: BriefCard["actions"] = openRoles.length ? [{ label: "See your jobs", method: "GET", path: "/roles" }] : startsHires ? [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }] : [];
-    cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : startsHires ? "Tell me who you need to hire" : "No jobs are open yet", body: openRoles.length ? "Applicants are being acknowledged and reviewed. I will tell you when someone is worth your time." : startsHires ? "Describe the job in a sentence or two and I will ask what I need to know." : "When someone on your team opens a job, its applicants and decisions show up here.", actions });
+    // A quiet day says what is true (6 November 2026): no promise about emails that may not arrive, and no judgement of
+    // who is "worth your time", which the app does not make.
+    cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : startsHires ? "Tell me who you need to hire" : "No jobs are open yet", body: openRoles.length ? QUIET_DAY_LINE : startsHires ? "Describe the job in a sentence or two and I will ask what I need to know." : "When someone on your team opens a job, its applicants and decisions show up here.", actions });
   }
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
   const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review" || c.kind === "unreached").length;

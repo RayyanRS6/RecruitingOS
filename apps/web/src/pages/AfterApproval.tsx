@@ -57,7 +57,7 @@ function DestinationRow({ d }: { d: Destination }) {
  * where the job is going, each place with a status that ticks only once it was checked: the careers page ("checking it
  * is up"), Google (marked found once someone sees it there), the email address for applications only while it works,
  * and each chosen board with who posts it. A note when no interviewers are set. "Share it now" opens the share block at
- * the top; "Go to your role" closes the screen. It asks the server again while publishing is under way (with the
+ * the top; "Go to your job" closes the screen. It asks the server again while publishing is under way (with the
  * worker separate from the web server, opening and preparing the channels takes a moment).
  *
  * For an approved change to a live job (`editWhileOpen`) it says the job page shows the new version and names the boards
@@ -109,7 +109,7 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
       footer={
         <>
           {props.canShare && !props.editWhileOpen && !sharing ? <Button icon="share" onClick={shareNow}>Share it now</Button> : null}
-          <Button variant="primary" onClick={props.onClose}>Go to your role</Button>
+          <Button variant="primary" onClick={props.onClose}>Go to your job</Button>
         </>
       }
     >
