@@ -145,7 +145,9 @@ adminRoutes.post("/customers/:id/access", async (c) => {
  * makes the careers page, job pages and feeds public, publishes approved roles and sends every message to candidates that
  * waited; taking it back puts them offline again and holds messages. A reason and a confirmation are required; the
  * change is audited (the customer sees it, with the reason, in their own history) and the owners are told. A request for
- * access, waiting or declined, answers 409 `access_request_open`: its one door is the route above.
+ * access, waiting or declined, answers 409 `access_request_open`: its one door is the route above. `heldOnly`, the
+ * console's "Send the held messages", only sends what is still held: on a company not confirmed it answers 409
+ * `not_confirmed` and changes nothing.
  */
 adminRoutes.post("/customers/:id/verification", async (c) => {
   const s = c.get("session")!;
@@ -157,6 +159,12 @@ adminRoutes.post("/customers/:id/verification", async (c) => {
   const now = container.engine.clock();
   const result = await withPlatform(container.db, async (tx) => {
     await refuseWhileAccessOpen(tx, companyId);
+    // "Send the held messages" only sends (the review of 9 November 2026): from a card that still showed the company
+    // confirmed, once someone took that back, it confirms nothing. Read under the row lock verifyCompany takes again.
+    if (body.verified && body.heldOnly) {
+      const [co] = await tx.select({ name: companies.name, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
+      if (co && !companyVerifiedAt(co.settings)) throw new HttpError(409, "not_confirmed", `${co.name} is not confirmed any more, so nothing was sent. Its held messages go out when it is confirmed again.`);
+    }
     return body.verified ? verifyCompany(tx, container, { companyId, actor, reason: body.reason, now }) : unverifyCompany(tx, { companyId, actor, reason: body.reason });
   });
   if (!result) throw new HttpError(404, "not_found", "Company not found.");

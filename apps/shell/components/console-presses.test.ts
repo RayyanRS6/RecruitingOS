@@ -282,6 +282,17 @@ describe("a question asked in the company check", () => {
     expect(field(tree).value).toBe("A doubt about the company");
   });
 
+  it("Send the held messages asks only to send them, so the API can refuse it on a company no longer confirmed, in its own words", async () => {
+    ui.fresh();
+    const refusal = "Harbor Dental is not confirmed any more, so nothing was sent. Its held messages go out when it is confirmed again.";
+    answer(409, { error: { code: "not_confirmed", message: refusal } });
+    const tree = ui.draw(CompanyCheckPanel, { company: { ...check(CONFIRMED_AT).company, heldMessages: 2 } as never });
+    button(tree, "Send the held messages").onClick();
+    await ui.settled();
+    expect(sent).toEqual([{ path: "/api/v1/admin/customers/co-harbor/verification", body: { verified: true, heldOnly: true, reason: "Held messages sent after the company was confirmed.", confirm: true } }]);
+    expect(ui.toasts).toEqual([{ title: refusal, more: undefined }]);
+  });
+
   it("words the toast from what was asked and whether it changed anything", () => {
     expect(companyCheckToast("Harbor Dental", true, { changed: true, releasedMessages: 0 })).toEqual({ title: "Harbor Dental is confirmed.", detail: "Its pages are public now. The owners were told." });
     expect(companyCheckToast("Harbor Dental", true, { changed: true, releasedMessages: 1 })).toEqual({ title: "Harbor Dental is confirmed.", detail: "Its pages are public now and 1 held message is on its way. The owners were told." });

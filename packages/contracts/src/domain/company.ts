@@ -58,11 +58,17 @@ export type GettingStarted = { verified: boolean; heldMessages: number; steps: G
 export const GettingStartedRequest = z.object({ action: z.enum(["dismiss", "policies_reviewed"]) }).strict();
 export type GettingStartedRequest = z.infer<typeof GettingStartedRequest>;
 
-/** POST /api/v1/admin/customers/:id/verification: ITS confirms the company, or takes the confirmation back, with a reason. */
+/**
+ * POST /api/v1/admin/customers/:id/verification: ITS confirms the company, or takes the confirmation back, with a reason.
+ * `heldOnly` with `verified: true` ("Send the held messages", the review of 9 November 2026): only send what is still held
+ * for a company that is confirmed, so a press from a card that still showed it confirmed, once someone took that back,
+ * answers 409 `not_confirmed` and confirms nothing.
+ */
 export const CompanyVerificationChange = z.object({
   verified: z.boolean(),
   reason: z.string().trim().min(5, "Say how you checked the company (at least five characters).").max(500),
   confirm: z.literal(true, { message: "Confirm the change." }),
+  heldOnly: z.literal(true).optional(),
 }).strict();
 export type CompanyVerificationChange = z.infer<typeof CompanyVerificationChange>;
 

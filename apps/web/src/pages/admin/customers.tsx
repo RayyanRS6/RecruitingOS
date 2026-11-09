@@ -1057,10 +1057,12 @@ export function CompanyCheckPanel({ company }: { company: CustomerRow }) {
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record it."),
   });
   // A confirmed company with messages still held (one held while the confirmation was being made): confirming again sends them.
+  // Only that (`heldOnly`, the review of 9 November 2026): once someone took the confirmation back, the API confirms nothing
+  // and says so, and the card is read again.
   const release = useMutation({
-    mutationFn: () => api.post<{ releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: true, reason: "Held messages sent after the company was confirmed.", confirm: true }, reason),
+    mutationFn: () => api.post<{ releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: true, heldOnly: true, reason: "Held messages sent after the company was confirmed.", confirm: true }, reason),
     onSuccess: (r) => { toast(r.releasedMessages ? `${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way.` : "Nothing was held any more."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the held messages."),
+    onError: (e) => { toast(e instanceof ApiError ? e.message : "Could not send the held messages."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
   });
   return (
     <div className="stack gap-4">

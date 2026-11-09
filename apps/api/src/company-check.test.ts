@@ -264,6 +264,22 @@ describe("the ITS company check and getting started", () => {
     expect(notice?.text).not.toContain("<pat@its.example>");
     expect(notice?.text).toContain("Only the email address is proved; the rest is what they typed.");
   });
+
+  it("Send the held messages only sends: from a card that still showed the company confirmed, once the confirmation was taken back, it confirms nothing (the review of 9 November 2026)", async () => {
+    // confirmed, as the tests before leave it; another administrator takes the confirmation back
+    expect((await verify(admin, { verified: false, reason: "A doubt about the company.", confirm: true })).status).toBe(200);
+    const heldOnly = { verified: true, heldOnly: true, reason: "Held messages sent after the company was confirmed.", confirm: true };
+    const refused = await verify(admin, heldOnly);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "not_confirmed", message: "Check Dental is not confirmed any more, so nothing was sent. Its held messages go out when it is confirmed again." } });
+    const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    expect(co.settings.verifiedAt).toBeUndefined();
+    expect((await page(`/careers/${slug}`)).status).toBe(404);
+    // confirmed again, the same press sends what is still held and changes nothing else
+    expect((await verify(admin, { verified: true, reason: "Spoke with the owner again.", confirm: true })).status).toBe(200);
+    expect(await (await verify(admin, heldOnly)).json()).toMatchObject({ ok: true, verified: true, changed: false });
+    expect((await verify(admin, { ...heldOnly, heldOnly: false })).status).toBe(400);
+  });
 });
 
 /**
