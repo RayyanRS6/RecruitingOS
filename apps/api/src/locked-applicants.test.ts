@@ -1146,6 +1146,39 @@ describe("locked candidates", () => {
       expect(held.status, await held.clone().text()).toBe(202);
       expect(await auditsOf(seen.id, "message.approval_skipped")).toEqual([]);
     }, 120_000);
+
+    it("a void of the job's close moves back only the people the close moved: someone ITS put in the talent pool under the grant before it stays as ITS decided", async () => {
+      const { job, row: ana, recruiter } = await underGrant("Ana");
+      // ITS decides about her under the grant naming her: the talent pool, and nobody tells her (B6).
+      const kept = await json(recruiter, "POST", `/api/v1/applications/${ana.id}/actions`, { action: "move_to_talent_pool" });
+      expect(kept.status, await kept.clone().text()).toBe(200);
+      expect(await applicationOf(ana.id)).toMatchObject({ stage: "talent_pool", toldState: "not_told" });
+      // Someone else locked is still waiting when the owner closes the job, so the close moves them.
+      const bo = await apply(job, person("Bo"));
+      await close(job);
+      expect((await applicationOf(bo.id)).stage).toBe("talent_pool");
+      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, job.roleId));
+      expect((outcome.details as { lockedMoved?: string[] }).lockedMoved).toEqual([bo.id]);
+      const voided = await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." });
+      expect(voided.status, await voided.clone().text()).toBe(200);
+      // The one the close moved waits again; ITS's own decision stands, still untold and locked, with no "the role was reopened".
+      expect((await applicationOf(bo.id)).stage).toBe("received");
+      const after = await applicationOf(ana.id);
+      expect(after).toMatchObject({ stage: "talent_pool", toldState: "not_told" });
+      expect(after.lockedAt).not.toBeNull();
+      expect((await eventsOf(ana.id, "application.stage_changed")).map((e) => (e.payload as { reason?: string }).reason)).not.toContain("the role was reopened");
+
+      // A close recorded before it kept that list moves back, as it did, everyone locked and untold in its talent pool.
+      const older = await openJob(1);
+      await fill(older, 1);
+      const cy = await apply(older, person("Cy"));
+      await close(older);
+      const [old] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, older.roleId));
+      const { lockedMoved: _kept, ...before } = old.details as Record<string, unknown>;
+      await container.db.update(hiringOutcomes).set({ details: before }).where(eq(hiringOutcomes.id, old.id));
+      expect((await json(admin, "POST", `/api/v1/admin/outcomes/${old.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." })).status).toBe(200);
+      expect((await applicationOf(cy.id)).stage).toBe("received");
+    }, 120_000);
   });
 
   describe("the close-out note", () => {

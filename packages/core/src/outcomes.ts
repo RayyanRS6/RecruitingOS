@@ -111,11 +111,14 @@ export async function recordRoleOutcome(
   const open = await q.select({ id: applications.id, stage: applications.stage, candidateId: applications.candidateId, lockedAt: applications.lockedAt }).from(applications).where(eq(applications.roleId, role.id));
   const movedApplicationIds: string[] = [];
   const movedCandidateIds: string[] = [];
+  // The locked people this close moved, kept on its record: a void moves back exactly these (`correctOutcome`).
+  const lockedMoved: string[] = [];
   for (const a of open) {
     if (!ACTIVE_STAGES.has(a.stage)) continue;
     await transition(q, { applicationId: a.id, companyId: input.companyId, to: "talent_pool", by: input.by, actor: input.actor, reason: `role closed: ${input.outcome}` });
     movedApplicationIds.push(a.id);
     if (!a.lockedAt) movedCandidateIds.push(a.candidateId);
+    else lockedMoved.push(a.id);
   }
   const movedToTalentPool = movedCandidateIds.length;
   // every posting closes with the role; a board that is up on the outside is named for manual removal
@@ -130,7 +133,7 @@ export async function recordRoleOutcome(
       await emit(q, { type: "posting.closure_required", companyId: input.companyId, actor: input.actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: role.id, url: p.externalUrl } });
     }
   }
-  const [row] = await q.insert(hiringOutcomes).values({ companyId: input.companyId, applicationId: null, roleId: role.id, milestone: "role", outcome: input.outcome, notes: input.reason ?? null, details: { reason: input.reason ?? null, previousStatus: role.status, recordedOutsidePlatform: true, closureRequired: closureRequired.map((c) => c.channel) }, recordedBy: input.actor, recordedAt: now.toISOString() }).returning();
+  const [row] = await q.insert(hiringOutcomes).values({ companyId: input.companyId, applicationId: null, roleId: role.id, milestone: "role", outcome: input.outcome, notes: input.reason ?? null, details: { reason: input.reason ?? null, previousStatus: role.status, recordedOutsidePlatform: true, closureRequired: closureRequired.map((c) => c.channel), lockedMoved }, recordedBy: input.actor, recordedAt: now.toISOString() }).returning();
   await audit(q, { companyId: input.companyId, actor: input.actor, action: "role.outcome_recorded", target: { type: "role", id: role.id }, reason: input.reason ?? input.outcome, details: { outcomeId: row.id, outcome: input.outcome, previousStatus: role.status, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "role.closed", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { reason: input.outcome, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "outcome.recorded", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { outcome: input.outcome, level: "role", outcomeId: row.id, roleId: role.id, movedToTalentPool } });
@@ -200,7 +203,12 @@ export async function correctOutcome(
       const previous = before === "pending_approval" ? "draft" : before;
       await q.update(roles).set({ status: previous, closedAt: null, closeReason: null }).where(eq(roles.id, original.roleId));
       await lockApplicants(q, original.roleId);
-      const waitingAgain = await q.update(applications).set({ stage: "received", stageChangedAt: now.toISOString() }).where(and(eq(applications.roleId, original.roleId), eq(applications.stage, "talent_pool"), isNotNull(applications.lockedAt), eq(applications.toldState, "not_told"))).returning({ id: applications.id });
+      // Exactly the people locked the close moved: someone ITS moved to the talent pool under a grant before it is a decision
+      // of its own, which a void does not undo. A close recorded before that list was kept moves back, as it did, everyone locked
+      // and untold in the talent pool.
+      const kept = (original.details as { lockedMoved?: unknown }).lockedMoved;
+      const only = Array.isArray(kept) ? kept.filter((id): id is string => typeof id === "string") : null;
+      const waitingAgain = only?.length === 0 ? [] : await q.update(applications).set({ stage: "received", stageChangedAt: now.toISOString() }).where(and(eq(applications.roleId, original.roleId), eq(applications.stage, "talent_pool"), isNotNull(applications.lockedAt), eq(applications.toldState, "not_told"), ...(only ? [inArray(applications.id, only)] : []))).returning({ id: applications.id });
       for (const a of waitingAgain) await emit(q, { type: "application.stage_changed", companyId: original.companyId, actor: input.actor, subject: { type: "application", id: a.id }, payload: { from: "talent_pool", to: "received", reason: "the role was reopened" } });
       const closing =(await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, original.roleId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")))).filter((r) => (r.proposal as { kind?: unknown }).kind === "role_closed");
       for (const r of closing) {
