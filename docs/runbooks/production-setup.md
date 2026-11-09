@@ -132,17 +132,29 @@ Report back: `<prod-ref>`, the region, the endpoint and region the S3 screen sho
 
 ### Microsoft and Google sign-in
 
-**Microsoft**: a registration of its own for production (Entra admin center, the ITS tenant, **App registrations**,
-**New registration**; background in `docs/spec/13` section 4a):
+**Microsoft** (since 10 November 2026; the decision is in `docs/workflow-decisions.md`, "10 November 2026"): one app
+registration in the ITS tenant (Entra admin center, **App registrations**) serves both Supabase projects, staging and
+production. Background in `docs/spec/13` section 4a.
 
-- Name `Identified Talent Solutions Hiring - Sign-in (production)`; supported account types **Accounts in any
-  organizational directory and personal Microsoft accounts**; redirect URI (Web)
-  `https://<prod-ref>.supabase.co/auth/v1/callback`.
-- **API permissions** (delegated): `openid`, `profile`, `email`, `User.Read`. **Token configuration**: optional claims
-  `email` and `xms_edov`.
+- Supported accounts: **Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant)**, with
+  **Allow all tenants**. Work and school accounts only: Microsoft's own page refuses a personal Microsoft account
+  (outlook.com, hotmail.com), by design, and those people use **Continue with Google**. Redirect URIs (Web): each
+  project's `https://<ref>.supabase.co/auth/v1/callback`.
+- **API permissions** (delegated): `openid`, `profile`, `email`, `User.Read`. **Token configuration**: the optional
+  ID-token claims `email` and `xms_edov`.
 - **Certificates & secrets**, **New client secret**, 12 months: the **Value** into 1Password with its expiry date, and
   a reminder a month before. An expired secret locks every administrator out.
-- Supabase, **Azure** provider: the Application (client) ID, the secret's Value, **Azure Tenant URL** empty.
+- Supabase, **Azure** provider, in both projects: the Application (client) ID, the secret's Value, **Azure Tenant URL**
+  `https://login.microsoftonline.com/organizations`, and **Allow users without an email** off. Never
+  `https://login.microsoftonline.com/consumers`: it is broken in Supabase Auth since v2.190.0 (supabase/auth issue
+  2795).
+- **Confirm email** on in both projects (the Supabase project's list above says why).
+- After every change in this list, an ITS staff member signs in with Microsoft and the authenticator before the next
+  change. The undo for a Tenant URL is putting back the tenant-specific URL the project had,
+  `https://login.microsoftonline.com/<ITS tenant id>` (the id is kept outside this repository).
+- Publisher verification comes later: a Microsoft Partner Center account and a verified domain. Until then Microsoft's
+  consent screen says the app is unverified, and a company whose IT lets people approve only verified apps approves it
+  once for everyone there.
 
 **Google** (the Google Cloud project that holds the staging sign-in client): add
 `https://<prod-ref>.supabase.co/auth/v1/callback` to the client's **Authorized redirect URIs**, and publish the app
@@ -474,8 +486,9 @@ The check:
 
 1. `curl.exe -s https://<host>/robots.txt` shows `Allow: /careers/` and a `Sitemap:` line; `curl.exe -sI
    https://<host>/welcome` shows no `x-robots-tag`.
-2. Sign-in: the first administrator with Microsoft and the authenticator; a Microsoft account from outside ITS (a
-   personal one, or another company's) and, if offered, a Google account. Each outside account signs in. Under
+2. Sign-in: the first administrator with Microsoft and the authenticator; a Microsoft work account from another
+   company and, if offered, a Google account. Each outside account signs in (a personal Microsoft account is refused on
+   Microsoft's own page, by design: step 1). Under
    `SIGNUP_MODE=invite` the company step says "Recruiting OS is by invitation for now" with the reply mailbox. Under
    `approval` it shows the form with **Send my request**: leave it unsent, because one account makes one request.
 3. **Console, Customers**, the test company: **Confirm the company**, reason "smoke test". From the second check on,
