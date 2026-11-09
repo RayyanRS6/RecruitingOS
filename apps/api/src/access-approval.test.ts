@@ -4,7 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, SPAM_ALERT_WINDOW_MS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
 import { CreateCompany, FREE_PLAN_KEY, oneLine, typedName, visibleLength, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
 import { createApplicationLink, createInvitation, renderAlertEmail } from "@ros/core";
-import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns } from "@ros/db";
+import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns, type Tx } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -14,7 +14,7 @@ import { POLICIES } from "./middleware/rate-limit";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { OPEN_REQUESTS_EMAILED, companyRequestDetails, decideAccess, sendAccessRequest } from "./services/access-requests";
 import { emailReallyLeft } from "./services/company-trust";
-import { signupDoor } from "./services/companies";
+import { createCompany, signupDoor } from "./services/companies";
 import { backfillPublishing } from "./services/publishing-backfill";
 import { signInAdmin, signInStaff, signInWithIdentity, testContainerOptions } from "./test-helpers";
 
@@ -990,7 +990,58 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect((await bounce(910_002, copy.providerMessageId)).status).toBe(200);
     expect(await unreachable()).toHaveLength(1);
   });
+
+  it("two companies of one name accepted or made at the same moment do not both take its address: each waits on the name's lock, then reads the other's (the review of 9 November 2026)", async () => {
+    // PGlite runs one connection, so it cannot show a second transaction waiting; this shows the order of the statements
+    // only. The lock on the name's address is asked before the address is read as free: at that moment a company of the
+    // same name takes it, as one committed by the transaction the lock waited for, and the address read after the lock is
+    // the next free one. Read before the lock, it would have been taken twice and failed on the unique index.
+    const seen: string[] = [];
+    const rival = (slug: string) => async (tx: Tx) => {
+      await tx.insert(companies).values({ name: "A company of the same name", slug, vertical: "dental", sizeBand: "1-19", planKey: FREE_PLAN_KEY, status: "active" });
+    };
+    const watched = (tx: Tx, atLock: (tx: Tx) => Promise<void>) => new Proxy(tx, {
+      get(target, prop) {
+        if (prop !== "execute") return Reflect.get(target, prop);
+        return async (statement: Parameters<Tx["execute"]>[0]) => {
+          const key = slugLockOf(statement);
+          if (key) {
+            seen.push(key);
+            await atLock(target);
+          }
+          return target.execute(statement);
+        };
+      },
+    });
+    // Accept of a request, while another Twin Harbor Dental takes the name's address
+    const asker = await w.ask("twin.request@stranger.test", "Twin Harbor Dental");
+    const actor = { kind: "user" as const, id: "ada", name: "Ada Admin" };
+    await withPlatform(w.container.db, (tx) => decideAccess(watched(tx, rival("twin-harbor-dental")), w.container, { companyId: asker.id, decision: "accept", from: "requested", actor, now: w.container.engine.clock() }));
+    expect(seen).toEqual(["company_slug:twin-harbor-dental"]);
+    expect((await w.rowOf(asker.id)).slug).toMatch(/^twin-harbor-dental-[a-z0-9]{1,4}$/);
+    expect(await w.statusOf(asker.id)).toBe("active");
+    // the direct door, while another Twin Direct Dental takes it
+    seen.length = 0;
+    const owner = (await w.meOf(await w.google("twin.direct@listed-domain.test", "Twin Owner"))).user;
+    const db = new Proxy(w.container.db, {
+      get(target, prop) {
+        if (prop !== "transaction") return Reflect.get(target, prop);
+        return (fn: (tx: Tx) => Promise<unknown>) => target.transaction((tx) => fn(watched(tx as unknown as Tx, rival("twin-direct-dental"))));
+      },
+    });
+    const made = await createCompany(db, CreateCompany.parse(w.form("Twin Direct Dental")), owner.id, { kind: "user", id: owner.id, name: "Twin Owner" });
+    expect(seen).toEqual(["company_slug:twin-direct-dental"]);
+    expect(made.slug).toMatch(/^twin-direct-dental-[a-z0-9]{1,4}$/);
+  });
 });
+
+/** The key of a lock on a careers address (`freeSlug`), when the statement is one; null for any other statement. */
+function slugLockOf(statement: unknown): string | null {
+  const chunks = (statement as { queryChunks?: unknown[] }).queryChunks ?? [];
+  const text = chunks.map((c) => (c && typeof c === "object" && Array.isArray((c as { value?: unknown }).value) ? (c as { value: unknown[] }).value.join("") : "")).join("");
+  const key = chunks.find((c): c is string => typeof c === "string" && c.startsWith("company_slug:"));
+  return text.includes("pg_advisory_xact_lock") && key ? key : null;
+}
 
 /**
  * The public door's own bounds (the review of 6 November 2026): one address sends five requests an hour, past 25 waiting at

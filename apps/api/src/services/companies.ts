@@ -14,8 +14,14 @@ export function slugify(name: string): string {
 /**
  * A careers address no other company holds: `base`, or, when that is taken, `base` with four characters more. `exceptId`:
  * the company the address is for, which may hold it already.
+ *
+ * Under a lock on `base` held until the caller's transaction ends (the review of 9 November 2026), as both callers write the
+ * address in the same transaction (`createCompany`, Accept in `decideAccess`): two companies of one name made or accepted
+ * at the same moment would otherwise both read it as free, and the second would fail on the unique index. The second
+ * waits, then reads the first's address as taken. Neither holds a row the other needs, so the wait cannot turn into a cycle.
  */
 export async function freeSlug(q: Queryable, base: string, exceptId?: string): Promise<string> {
+  await q.execute(sql`select pg_advisory_xact_lock(hashtext(${`company_slug:${base}`}))`);
   let slug = base;
   for (let i = 0; i < 20; i++) {
     const taken = await q.select({ id: companies.id }).from(companies).where(exceptId ? and(eq(companies.slug, slug), ne(companies.id, exceptId)) : eq(companies.slug, slug)).limit(1);
