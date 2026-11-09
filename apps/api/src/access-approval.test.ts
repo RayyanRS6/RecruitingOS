@@ -244,6 +244,8 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
   it("the full journey: the form sends a request, nothing starts, Accept opens everything", async () => {
     const before = w.mail().sent.length;
     const asker = await w.ask("sam@stranger.test", "Harbor Dental");
+    // no careers address of its name until it is accepted: a neutral one (the review of 6 November 2026)
+    expect(asker.slug).toBe(`request-${asker.id.slice(0, 8)}`);
     // the answer says where they stand, and the email really left
     expect(asker.accessRequest).toMatchObject({ status: "requested", companyName: "Harbor Dental", email: "sam@stranger.test" });
     expect(asker.accessRequest.emailedAt).toEqual(expect.any(String));
@@ -339,8 +341,10 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.read<{ planKey: string; id: string }>(current)).toMatchObject({ id: asker.id, planKey: FREE_PLAN_KEY });
     expect((await w.json(asker.cookie, "GET", "/api/v1/brief")).status).toBe(200);
     expect((await w.json(asker.cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE })).status).toBe(201);
-    // and it is confirmed, so its public side is up
-    expect((await w.app.request(`/careers/${asker.slug}`)).status).toBe(200);
+    // and it is confirmed, so its public side is up, at the careers address of its name, given at Accept
+    expect(after.slug).toBe("harbor-dental");
+    expect((await w.app.request("/careers/harbor-dental")).status).toBe(200);
+    expect((await w.app.request(`/careers/${asker.slug}`)).status).toBe(404);
     // the configuration has moved on too
     expect((await w.signupOf(asker.cookie)).request).toBeUndefined();
     expect((await w.customers(adminCookie)).find((c) => c.id === asker.id)).toMatchObject({ accessRequest: null, seats: { used: 1 } });
@@ -605,6 +609,28 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.eventsOf(asker.id, "company.verified")).toEqual([]);
     expect((await w.noticesOf(asker.id)).map((n) => n.kind)).toEqual(["company.access_accepted"]);
     expect(w.mailTo("confirmed@stranger.test").filter((m) => m.subject === "Your request was approved")).toHaveLength(1);
+  });
+
+  it("a request holds no careers address of its name: a stranger cannot take a real company's, and Accept gives the name's address, or the next free one", async () => {
+    const squatter = await w.ask("squatter@stranger.test", "Bright Smile Dental");
+    expect(squatter.slug).toBe(`request-${squatter.id.slice(0, 8)}`);
+    expect((await w.decide(adminCookie, squatter.id, "decline")).status).toBe(200);
+    // the real company, through the direct door, gets the address of its name
+    const real = await w.google("bright.smile@listed-domain.test", "Real Owner");
+    const made = await w.read<{ id: string; slug: string }>(await w.json(real, "POST", "/api/v1/companies", w.form("Bright Smile Dental")));
+    expect(made.slug).toBe("bright-smile-dental");
+    // the declined one kept its neutral address; accepted after all, it gets the next free one, and the real one keeps its own
+    expect((await w.rowOf(squatter.id)).slug).toBe(squatter.slug);
+    expect((await w.decide(adminCookie, squatter.id, "accept")).status).toBe(200);
+    expect((await w.rowOf(squatter.id)).slug).toMatch(/^bright-smile-dental-[a-z0-9]{1,4}$/);
+    expect((await w.rowOf(made.id)).slug).toBe("bright-smile-dental");
+    // a request whose name's address is free gets exactly that, and answers there once it is public
+    const free = await w.ask("free.name@stranger.test", "Quiet Harbor Dental");
+    expect((await w.app.request("/careers/quiet-harbor-dental")).status).toBe(404);
+    expect((await w.decide(adminCookie, free.id, "accept")).status).toBe(200);
+    expect((await w.rowOf(free.id)).slug).toBe("quiet-harbor-dental");
+    expect((await w.app.request("/careers/quiet-harbor-dental")).status).toBe(200);
+    expect((await w.app.request(`/careers/${free.slug}`)).status).toBe(404);
   });
 
   it("a failed email changes nothing and raises no alert; accessRequestEmailedAt is set only when the send really left", async () => {
@@ -1082,10 +1108,14 @@ describe.each(["its", "auto"] as const)("a request or a declined company shows n
     expect((await w.decide(adminCookie, waiting.id, "accept")).status).toBe(200);
     await w.container.drain();
     expect((await w.rowOf(waiting.id)).settings.verifiedBy).toMatchObject({ kind: "user", name: "Ada Admin" });
-    expect((await w.app.request(`/careers/${waiting.slug}`)).status).toBe(200);
-    expect(await (await w.app.request(`/careers/${waiting.slug}`)).text()).toContain("Zqpublicrole");
+    // at the careers address of its name, given at Accept: the neutral one it held answers nothing
+    const { slug } = await w.rowOf(waiting.id);
+    expect(slug).toBe(`zqpublicwaitingname-${check}`);
+    expect((await w.app.request(`/careers/${slug}`)).status).toBe(200);
+    expect(await (await w.app.request(`/careers/${slug}`)).text()).toContain("Zqpublicrole");
+    expect((await w.app.request(`/careers/${waiting.slug}`)).status).toBe(404);
     // no reset here: the route rebuilds the feeds itself, as the verification route does
-    expect(await (await w.app.request("/feeds/jobs.json")).text()).toContain(waiting.slug);
+    expect(await (await w.app.request("/feeds/jobs.json")).text()).toContain(slug);
     // one notice under either value
     expect((await w.noticesOf(waiting.id)).map((n) => n.kind)).toEqual(["company.access_accepted"]);
     // the declined one stays dark

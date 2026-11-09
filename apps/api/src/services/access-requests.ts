@@ -5,7 +5,7 @@ import { companies, events, memberships, users, withPlatform, type Db, type Quer
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
-import { createCompany, signupDoor } from "./companies";
+import { createCompany, freeSlug, signupDoor, slugify } from "./companies";
 import { sendWithoutAlert, tellItsAboutNewCompany, verifyCompany } from "./company-trust";
 
 /**
@@ -153,7 +153,8 @@ type DeclinedNotice = { companyId: string; companyName: string; email: string };
  * Accept or Decline, in the caller's platform transaction, under the company's row lock, so two presses at once make one
  * change and the second is told so. What it finds under the lock decides:
  *
- * - Accept of a request or a declined company (the undo): the membership becomes active, `verifyCompany` runs (quiet, and
+ * - Accept of a request or a declined company (the undo): the membership becomes active, the company gets the careers
+ *   address of its name in place of its neutral one (`requestSlug`), `verifyCompany` runs (quiet, and
  *   already a no-op if the company was confirmed), `company.access_accepted` is emitted and audited, `stuck_role_detector`
  *   starts (idempotent), and the owner gets one notice, written after the membership is active or it would reach nobody.
  * - Decline of a request: the membership becomes `declined`, `company.access_declined` is emitted and audited; the email
@@ -192,6 +193,10 @@ export async function decideAccess(tx: Queryable, container: Container, input: {
     return { answer: answer("declined", true, `${co.name} was declined.`), declined: { companyId: co.id, companyName: co.name, email: owner.email } };
   }
   await tx.update(memberships).set({ status: "active" }).where(eq(memberships.id, owner.id));
+  // The careers address of its name, given now, under the row lock, before anything of it can go public: a request held a
+  // neutral one, so nobody took a real company's address by asking (the review of 6 November 2026). Taken meanwhile, it
+  // gets four characters more, as any new company does.
+  await tx.update(companies).set({ slug: await freeSlug(tx, slugify(co.name), co.id) }).where(eq(companies.id, co.id));
   await verifyCompany(tx, container, { companyId: co.id, actor, reason: ACCEPTED_REASON, now, quiet: true });
   await emit(tx, { type: "company.access_accepted", companyId: co.id, actor, subject: company, payload: { from: owner.status } });
   await emit(tx, { type: "membership.changed", companyId: co.id, actor, subject: person, payload: { role: owner.role, status: "active" } });
