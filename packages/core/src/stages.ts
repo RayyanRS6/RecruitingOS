@@ -367,10 +367,13 @@ export function ownerTags(app: { stage: ApplicationStage }, mark?: MarkView, now
  * The owner-stage label, with the mark's own words for a mark the strip has no column for, under Cancelled why they are
  * there ("Asked for new times", "No longer interested", "No-show"), and under "No AI interview yet" where they stand
  * with it (`aiInterview`, `aiInterviewOf`: "Invited (not started)", "Link expired"…), the sub-label on the stage button.
+ * `internal`: the application's own stage. Under Not moving forward, the candidate's own choice reads as theirs, "Withdrew"
+ * or "Declined the offer", never as if the team said no (6 November 2026).
  */
-export function ownerStageLabel(stage: OwnerStage, mark?: MarkView, followUp?: FollowUpStrip | null, aiInterview?: { label: string } | null): string {
+export function ownerStageLabel(stage: OwnerStage, mark?: MarkView, followUp?: FollowUpStrip | null, aiInterview?: { label: string } | null, internal?: ApplicationStage | null): string {
   if (stage === "cancelled" && followUp) return CANCELLED_REASON_LABEL[followUp.reason];
   if (stage === "no_ai_interview" && aiInterview) return aiInterview.label;
+  if (stage === "not_moving_forward" && (internal === "withdrawn" || internal === "declined")) return STAGE_LABEL[internal];
   return mark?.mark === "not_a_fit_for_now" && stage === "not_moving_forward" ? MARK_LABEL.not_a_fit_for_now : OWNER_STAGE_LABEL[stage];
 }
 
@@ -397,9 +400,12 @@ export function decisionTold(toldState: ToldState | string | null | undefined): 
 
 /**
  * The step a candidate sees on their status page (plan A1): Received, Under review, Interview or Decision. Steps the
- * team uses internally (recommended for interview, finalist, held on eligibility) read as Under review. A decision the
- * team made privately (declined, talent pool) shows only once the candidate was told; until then they see the step they
- * were at before it (`before`, the stage the decision was made from; Under review when unknown). Marks are never read.
+ * team uses internally (recommended for interview, held on eligibility) read as Under review. After a real interview the
+ * step stays Interview until a decision they hold (6 November 2026): a finalist, or someone whose references are being
+ * checked, had read Review again with the interview not ticked, as if it never happened; "finalist" itself is never
+ * named. A decision the team made privately (declined, talent pool) shows only once the candidate was told; until then
+ * they see the step they were at before it (`before`, the stage the decision was made from; Under review when unknown).
+ * Marks are never read.
  */
 export function candidateStep(stage: ApplicationStage, toldState: ToldState | string | null | undefined, before?: ApplicationStage | null): CandidateStep {
   if (DECISION_STAGES.includes(stage)) {
@@ -409,7 +415,7 @@ export function candidateStep(stage: ApplicationStage, toldState: ToldState | st
   // the candidate's own acts and an offer they hold are known to them
   if (["hired", "withdrawn", "declined", "offer_sent", "negotiation", "accepted", "onboarding"].includes(stage)) return "decision";
   if (stage === "applied" || stage === "received") return "received";
-  if (["interview_scheduled", "interview_complete", "debrief"].includes(stage)) return "interview";
+  if (["interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval"].includes(stage)) return "interview";
   return "under_review";
 }
 

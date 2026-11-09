@@ -19,7 +19,7 @@ import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { focusLost, rowFocusAfterMove } from "../focus-after";
 import { activeCompanyOf } from "../rail";
 import { canDecline, canManageInterviews, canSeeTalent, canShareJob, canTryWeights } from "../roles";
-import { jobTabs, roleStatus } from "../role-status";
+import { defaultCloseOutcome, jobTabs, roleStatus } from "../role-status";
 import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, newTimesToast, noticeText, panelStepFrom, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
 import { InlineUndo } from "../components/InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "../components/use-undo";
@@ -336,7 +336,8 @@ export function People() {
       {again.limit?.room && !again.limit.room.ok ? <RoomAlert room={again.limit.room} ask={again.limit.ask} /> : null}
       {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
       {/* Closing lists who is still in process, then shows the one closing message for them all (founder decision Q30). */}
-      {closing && roleId ? <CloseRoleCard roleId={roleId} initialOutcome="filled_outside_platform" mayTell={mayTell} onClose={() => setClosing(false)} /> : null}
+      {/* "Filled" when someone here is hired, "Cancelled" for a job that never went live (6 November 2026) */}
+      {closing && roleId ? <CloseRoleCard roleId={roleId} initialOutcome={defaultCloseOutcome({ status: status ?? "", counts: { hired: counts?.byOwnerStage.hired ?? 0 } })} mayTell={mayTell} onClose={() => setClosing(false)} /> : null}
       {closingMessage && !closing && roleId && status === "closed" && mayTell ? <ClosingMessageCard roleId={roleId} onDone={() => setClosingMessage(false)} /> : null}
       {roleId && (total > 0 || mode === "board") ? <ViewSwitch mode={mode} onMode={setMode} onRefresh={() => board.refetch()} refreshing={board.isFetching} generatedAt={board.data?.generatedAt ?? null} /> : null}
       {!roleId ? (

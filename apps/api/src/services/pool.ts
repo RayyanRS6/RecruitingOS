@@ -249,7 +249,7 @@ export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
     stage: app.stage,
     stageLabel: row.evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[app.stage],
     ownerStage: strip,
-    ownerStageLabel: ownerStageLabel(strip, row.mark, row.followUp, row.aiInterview),
+    ownerStageLabel: ownerStageLabel(strip, row.mark, row.followUp, row.aiInterview, app.stage),
     mark: row.mark,
     score: match,
     mustHaves: row.mustHaves,

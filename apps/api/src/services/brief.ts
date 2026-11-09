@@ -12,7 +12,7 @@ import { APPROVAL_LABEL } from "./role-report";
 import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
 import { boardView, fitsOf, loadPool } from "./pool";
 import { aiInterviewsFor } from "./screens";
-import { backupsWarmCards } from "./hire-sheet";
+import { backupsWarmCards, closeAfterHireCards } from "./hire-sheet";
 import { emailsOf, unreachedCandidates, type UnreachedPerson } from "./email-health";
 
 /**
@@ -369,6 +369,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
 
   // "Keep your backups warm" until a new hire starts (plan H1); the cards filter by application.read and the staff scope.
   for (const card of await backupsWarmCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner", scope }, now })) cards.push(card);
+  // Then, once every hire on a job has started, "Close this job?" until it is closed (6 November 2026).
+  for (const card of await closeAfterHireCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner", scope }, now })) cards.push(card);
   for (const card of await draftCards(tx, companyId, viewer)) cards.push(card);
 
   // ITS posting tasks are ITS's own work, shown with each board on the Posting tab, not as the team's requests (plan D3).

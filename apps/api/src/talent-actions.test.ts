@@ -97,7 +97,10 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(owner.hired).toMatchObject({ allowed: true, via: "record_hire" });
       expect(owner.not_moving_forward).toMatchObject({ allowed: true, via: "decline" });
       // Offer opens the record-only "Offer made" (plan H2): for a finalist, by those who record outcomes; before that, why not
-      expect(owner.offer).toMatchObject({ allowed: false, via: "offer", blockedReason: "Record an offer once they are a finalist." });
+      // the way on in plain words (6 November 2026): interview first, or Hired for someone already agreed outside the app
+      expect(owner.offer).toMatchObject({ allowed: false, via: "offer", blockedReason: "Interview them first, or mark them Hired." });
+      expect(moves({ stage: "interview_scheduled" }).offer).toMatchObject({ allowed: false, blockedReason: "Finish the interview first, or mark them Hired." });
+      expect(moves({ stage: "interview_complete" }).offer).toMatchObject({ allowed: false, blockedReason: "Record Finalist as the interview's decision first, or mark them Hired." });
       expect(moves({ stage: "finalist" }).offer).toMatchObject({ allowed: true, via: "offer" });
       expect(moves({ stage: "reference_check" }).offer).toMatchObject({ allowed: true, via: "offer" });
       expect(moves({ stage: "finalist", role: "recruiter" }).offer).toMatchObject({ allowed: false, blockedReason: "Your role can't record that an offer was made; ask an owner, an admin, a hiring manager or HR." });

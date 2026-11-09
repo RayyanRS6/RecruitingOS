@@ -263,14 +263,27 @@ export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: 
 
 /**
  * What "Record what happened" says the candidate gets: nothing about the outcome, but an interview they know of (a booked
- * time, or times to pick from) is called off by any outcome but a hire, and they are told now, in a short note with no
- * reason, that it is off.
+ * time, or times to pick from) is called off, and they are told now, in a short note with no reason, that it is off. A
+ * hire is the hire sheet's (`hireSheetLead`): it ends their interviews too, and tells the candidate nothing.
  */
 export function outcomeNoticeText(interviews: readonly InterviewRef[]): string {
   const known = interviews.filter(candidateKnowsOf);
   if (!known.length) return "Nothing is sent to the candidate.";
-  return `Nothing about the outcome is sent to the candidate. Unless it is a hire, ${listWords(known.map(interviewWords))} ${known.length === 1 ? "is" : "are"} called off, and they are told now, in a short note that gives no reason, that ${known.length === 1 ? "it is" : "they are"} off.`;
+  return `Nothing about the outcome is sent to the candidate. ${capitalized(listWords(known.map(interviewWords)))} ${known.length === 1 ? "is" : "are"} called off, and they are told now, in a short note that gives no reason, that ${known.length === 1 ? "it is" : "they are"} off.`;
 }
+
+/**
+ * The hire sheet's lead (6 November 2026): a hire ends that person's interviews still to come, quietly. Nothing is sent to
+ * them; the interviewers of one still to come are told it is off.
+ */
+export function hireSheetLead(firstName: string, interviews: readonly InterviewRef[]): string {
+  const open = interviews.filter((iv) => ["proposed", "scheduling", "scheduled"].includes(iv.status) && !(iv.status === "scheduled" && iv.startsAt && Date.parse(iv.startsAt) <= Date.now()));
+  const first = firstName || "them";
+  if (!open.length) return `Recorded with your name. Nothing is sent to ${first}.`;
+  return `Recorded with your name. Nothing is sent to ${first}. ${capitalized(listWords(open.map(interviewWords)))} ${open.length === 1 ? "is" : "are"} called off, and the interviewers are told.`;
+}
+
+const capitalized = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
 
 /** "the Phone screen on Tuesday, October 14, 2:00 PM": an interview the decision would call off, named. */
 export function interviewWords(iv: InterviewRef): string {

@@ -13,7 +13,7 @@ import { canApproveRole, canChangeCompany, canDecline, canEditPacket, canEditPac
 import { outdatedBoardsLine } from "../publishing";
 import { payShownLabel } from "../role-words";
 import { REASON_WORD } from "./new-role/rules";
-import { jobTabFrom, jobTabHref, jobTabs, type JobPageTab } from "../role-status";
+import { CLOSABLE, defaultCloseOutcome, jobTabFrom, jobTabHref, jobTabs, type JobPageTab } from "../role-status";
 import { MUST_HAVES_SCORE_LINE, SCORE_WEIGHTS_LINE, checkedInLabel, editorFocusFrom, importanceLabel, type EditorFocus } from "../skills-form";
 import { SAFETY_NET_NOTE } from "../talent-list";
 import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
@@ -131,7 +131,7 @@ export function RoleDetail() {
     if (!wantsClose || closeAsked.current || !role.data || !me.data) return;
     closeAsked.current = true;
     const mine = me.data.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
-    if (canRecordOutcome(mine) && ["open", "paused"].includes(role.data.status)) setClosing({ outcome: "no_hire" });
+    if (canRecordOutcome(mine) && CLOSABLE.includes(role.data.status)) setClosing({ outcome: defaultCloseOutcome(role.data, "no_hire") });
   }, [wantsClose, role.data, me.data]);
   // "Send the closing message" on Home's card for a closed role links here with `?closingMessage=1` (founder decision Q30).
   const wantsClosingMessage = search.get("closingMessage") === "1";
@@ -204,7 +204,7 @@ export function RoleDetail() {
                 edit: editSource ? () => openEditor() : undefined,
                 preview: shown && talent ? () => setPreviewOpen(true) : undefined,
                 weights: mayTryWeights ? () => setWeightsOpen(true) : undefined,
-                close: () => setClosing({ outcome: "filled_outside_platform" }),
+                close: () => setClosing({ outcome: defaultCloseOutcome(r) }),
                 // Not while the close card is up (it shows the closing message, then its Undo): the sheet would not open under it.
                 "closing-message": () => setClosingMessage(true),
                 "hire-again": () => again.hireAgain(r.id),

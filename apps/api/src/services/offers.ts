@@ -24,8 +24,11 @@ type App = typeof applications.$inferSelect;
 export function offerBlockedReason(stage: ApplicationStage): string | null {
   if (OFFER_FROM.includes(stage)) return null;
   if (stage === "offer_sent" || stage === "negotiation") return "An offer is already recorded for them. Record whether they accepted or declined.";
-  // The stage menu's line, so it never names an internal step.
-  return "Record an offer once they are a finalist.";
+  // The stage menu's line, so it never names an internal step, and it says the way on (6 November 2026): an offer comes
+  // after the interview's decision (Finalist), and someone already agreed outside the app is simply marked Hired.
+  if (stage === "interview_complete" || stage === "debrief") return "Record Finalist as the interview's decision first, or mark them Hired.";
+  if (stage === "interview_recommended" || stage === "interview_scheduled") return "Finish the interview first, or mark them Hired.";
+  return "Interview them first, or mark them Hired.";
 }
 
 export async function recordOfferMade(tx: Tx, input: { app: App; by: MembershipRole; actor: Actor; body: RecordOfferMade; now: Date }): Promise<OfferMadeResult> {

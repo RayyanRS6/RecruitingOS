@@ -249,6 +249,9 @@ export function stripParts(counts: Pick<StageStripCounts, "total" | "byOwnerStag
   return { shown: all.filter(keep), more: all.filter((i) => !keep(i)) };
 }
 
+/** The internal steps of someone chosen as a finalist after their interview: still under Interviewing, read as "Finalist". */
+const FINALIST_STAGES: readonly string[] = ["finalist", "reference_check"];
+
 /** A chip on a candidate's row: a word, its colour, and (for a short one) the full words it stands for. */
 export type RowChip = { key: string; label: string; tone: Tone; title?: string; kind: "pill" | "chip" };
 /** At most this many chips on a row, besides the score and the stage button (Wave S1); the rest are counted in "+N". */
@@ -259,13 +262,15 @@ export const ROW_CHIP_LIMIT = 2;
  * interview yet" (R20-7), where new times stand under Cancelled, a tag ("Check eligibility", "Hold ended"), whether the
  * decision was told, the one verdict word, and a low-confidence review ("Check", its full words as the title), only beside
  * Strong or Potential: beside any other word it says nothing new. The page shows the first ROW_CHIP_LIMIT. "Not told yet"
- * carries the day-5 safety net as its title (founder decision D-03).
+ * carries the day-5 safety net as its title (founder decision D-03). A finalist reads "Finalist" (6 November 2026): under
+ * Interviewing they looked like everyone still being interviewed.
  */
-export function rowChips(a: Pick<ApplicationSummary, "aiInterview" | "ownerStage" | "cancelled" | "tags" | "toldState" | "decisionMessageWaiting" | "fit" | "assessment" | "evidence">, words: { onItsWay: string; lowConfidence: string; notToldTitle?: string }): RowChip[] {
+export function rowChips(a: Pick<ApplicationSummary, "aiInterview" | "ownerStage" | "cancelled" | "tags" | "toldState" | "decisionMessageWaiting" | "fit" | "assessment" | "evidence"> & { stage?: string }, words: { onItsWay: string; lowConfidence: string; notToldTitle?: string }): RowChip[] {
   const out: RowChip[] = [];
   const reading = readingOf(a);
   if (a.ownerStage === "no_ai_interview" && a.aiInterview) out.push({ key: "ai-interview", label: aiInterviewChipLabel(a.aiInterview), tone: "neutral", title: a.aiInterview.label, kind: "pill" });
   if (a.ownerStage === "cancelled" && a.cancelled) out.push({ key: "cancelled", label: a.cancelled.status, tone: "neutral", kind: "chip" });
+  if (a.ownerStage === "interviewing" && FINALIST_STAGES.includes(a.stage ?? "")) out.push({ key: "finalist", label: "Finalist", tone: "accent", kind: "chip" });
   for (const t of a.tags) out.push({ key: `tag-${t}`, label: t, tone: "caution", kind: "chip" });
   if (a.toldState === "not_told") out.push({ key: "told", label: a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet", tone: "neutral", title: a.decisionMessageWaiting ? undefined : words.notToldTitle ?? SAFETY_NET_NOTE, kind: "chip" });
   if (a.toldState === "queued") out.push({ key: "told", label: words.onItsWay, tone: "neutral", kind: "chip" });

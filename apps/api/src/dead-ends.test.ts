@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { PROVIDER_REFUSED_ALERT, queueCommunication } from "@ros/agents";
 import { entitlements, findInvitationByToken } from "@ros/core";
-import { adminAlerts, applications, candidates, communications, notifications, users, withPlatform, withTenant } from "@ros/db";
+import { adminAlerts, applications, candidates, communications, hiringOutcomes as hiringOutcomesTable, interviews as interviewsTable, notifications, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, SendResult } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -198,6 +198,102 @@ describe("the dead ends a first-time owner met", () => {
       await container.drain();
       expect(await mails()).toBe(before + 1);
       expect((await pending()).find((i) => i.id === sent.invitation.id)?.emailState).toBe("sent");
+    });
+  });
+
+  describe("rank 14: a hire ends that person's interviews still to come, and the job asks to be closed", () => {
+    let jobB = "";
+    let roundKey = "";
+    const dayFromNow = (days: number) => new Date(Date.now() + days * DAY).toISOString().slice(0, 10);
+    const book = async (applicationId: string, days: number) => {
+      const r = await json(owner, "POST", `/api/v1/applications/${applicationId}/interviews`, { roundKey, interviewerUserIds: [ownerId], setTime: { date: dayFromNow(days), time: "10:00", durationMinutes: 45, place: { kind: "phone" } } });
+      expect(r.status, await r.clone().text()).toBe(201);
+      await container.drain();
+      return read<{ id: string }>(r);
+    };
+    const hire = async (applicationId: string, hireDate: string) => {
+      const r = await json(owner, "POST", `/api/v1/applications/${applicationId}/outcome`, { outcome: "hired_externally", confirm: true, hireDate });
+      expect(r.status, await r.clone().text()).toBe(201);
+      await container.drain();
+      return read<{ stage: string; interviewsEnded?: number }>(r);
+    };
+
+    beforeAll(async () => {
+      const s = await read<{ session: { id: string } }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a front desk coordinator in Tustin, $22 to $26 an hour, full time. It's a new role. Ceiling $27. I decide. Must-haves: two years at a front desk. Just draft it." }));
+      jobB = (await read<{ roleId: string }>(await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`))).roleId;
+      expect((await json(owner, "POST", `/api/v1/roles/${jobB}/approve`, { version: 1, note: "ok" })).status).toBe(200);
+      await container.drain();
+      const role = await read<{ currentPacket: { packet: { interviews: { plan: Array<{ key: string }> } } } }>(await json(owner, "GET", `/api/v1/roles/${jobB}`));
+      roundKey = role.currentPacket.packet.interviews.plan[0].key;
+    });
+
+    it("a hire calls off a booked interview quietly: nothing to the candidate, the interviewers told, nothing left under Coming up", async () => {
+      const mo = await apply("Mo", "Hired", { role: jobB });
+      const iv = await book(mo.id, 20);
+      const before = (await container.db.select({ id: communications.id }).from(communications).where(eq(communications.applicationId, mo.id))).length;
+      const done = await hire(mo.id, dayFromNow(30));
+      expect(done).toMatchObject({ stage: "hired", interviewsEnded: 1 });
+      const [row] = await container.db.select().from(interviewsTable).where(eq(interviewsTable.id, iv.id));
+      expect(row.status).toBe("cancelled");
+      // the candidate hears nothing about it
+      const after = await container.db.select({ templateKey: communications.templateKey }).from(communications).where(eq(communications.applicationId, mo.id));
+      expect(after.length).toBe(before);
+      // the interviewer is told, in words that say why
+      const [told] = await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.cancelled"), eq(notifications.userId, ownerId))).orderBy(desc(notifications.createdAt)).limit(1);
+      expect(told.body).toBe("The candidate was hired, so this interview is off.");
+      const coming = await read<Array<{ id: string; status: string }>>(await json(owner, "GET", "/api/v1/interviews"));
+      expect(coming.find((i) => i.id === iv.id)?.status ?? "cancelled").toBe("cancelled");
+    });
+
+    it("once every hire on a job has started, Home asks \"Close this job?\" every day until it is closed; never before", async () => {
+      const ned = await apply("Ned", "Starts", { role: jobB });
+      const closeCard = async () => (await brief()).cards.find((c) => c.title.startsWith("Close this job?") && c.actions.some((a) => a.path === `/roles/${jobB}?close=1`));
+      // Mo starts in 30 days: nothing asks to close yet
+      expect(await closeCard()).toBeUndefined();
+      // Ned was hired and started two days ago, but Mo has not started: still nothing
+      await hire(ned.id, dayFromNow(-2));
+      expect(await closeCard()).toBeUndefined();
+      // once Mo's start has passed too (a correction of the date, here by hand), the job asks to be closed
+      await container.db.update(hiringOutcomesTable).set({ hireDate: dayFromNow(-1) }).where(eq(hiringOutcomesTable.roleId, jobB));
+      const card = (await closeCard())!;
+      expect(card.kind).toBe("needs_review");
+      expect(card.title).toMatch(/^Close this job\? /);
+      expect(card.body).toMatch(/started on .+, and .+ is still live and taking applications\. Close it if the job is filled/);
+      expect(card.actions).toEqual([{ label: "Close the job", method: "GET", path: `/roles/${jobB}?close=1` }]);
+      // it asks again the next time Home is read: there is no way to wave it off but closing
+      expect(await closeCard()).toBeTruthy();
+      // an interviewer, who cannot close a job, is never asked
+      expect((await brief(await member("interviewer", "ivy2@deadends.test"))).cards.some((c) => c.title.startsWith("Close this job?"))).toBe(false);
+      // closed as filled: the question goes
+      expect((await json(owner, "POST", `/api/v1/roles/${jobB}/outcome`, { outcome: "filled", confirm: true })).status).toBe(200);
+      expect(await closeCard()).toBeUndefined();
+    });
+  });
+
+  describe("ranks 15, 17 and 18: a finalist, the candidate's tracker, and who withdrew", () => {
+    type Row = { id: string; stage: string; ownerStage: string; ownerStageLabel: string; stageMoves: Array<{ to: string; allowed: boolean; blockedReason?: string }> };
+    const rowOf = async (id: string) => (await read<Row[]>(await json(owner, "GET", `/api/v1/roles/${roleId}/applications`))).find((r) => r.id === id)!;
+
+    it("someone who withdrew reads Withdrew on their row and stage button, never Not moving forward", async () => {
+      const wes = await apply("Wes", "Withdrew");
+      await withPlatform(container.db, (tx) => tx.update(applications).set({ stage: "withdrawn", withdrawnAt: new Date().toISOString() }).where(eq(applications.id, wes.id)));
+      const row = await rowOf(wes.id);
+      expect(row).toMatchObject({ ownerStage: "not_moving_forward", ownerStageLabel: "Withdrew" });
+      const panel = await read<{ ownerStageLabel: string }>(await json(owner, "GET", `/api/v1/applications/${wes.id}`));
+      expect(panel.ownerStageLabel).toBe("Withdrew");
+    });
+
+    it("a finalist's status page stays at the interview they had, in words that hint at nothing", async () => {
+      const fay = await apply("Fay", "Finalist");
+      const [applied] = await container.db.select().from(applications).where(eq(applications.id, fay.id));
+      await withPlatform(container.db, (tx) => tx.update(applications).set({ stage: "finalist" }).where(eq(applications.id, fay.id)));
+      const page = await (await app.request(`/c/status/${applied.statusToken}`)).text();
+      expect(page).toMatch(/<span>Status<\/span><strong>Interview<\/strong>/);
+      expect(page).toContain("Thanks for interviewing. The team is deciding, and you will hear from them either way.");
+      expect(page).not.toMatch(/finalist/i);
+      // and the stage menu says the way to an offer from where they are, in plain words
+      const row = await rowOf(fay.id);
+      expect(row.stageMoves.find((m) => m.to === "offer")).toMatchObject({ allowed: true });
     });
   });
 

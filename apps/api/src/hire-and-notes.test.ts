@@ -103,7 +103,8 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       expect((await json(owner, "POST", `/api/v1/applications/${ana.id}/offer`, { confirm: true, terms: { salary: 1 } })).status).toBe(400);
       const tooEarly = await json(owner, "POST", `/api/v1/applications/${early.id}/offer`, { confirm: true });
       expect(tooEarly.status).toBe(409);
-      expect(((await tooEarly.json()) as { error: { message: string } }).error.message).toMatch(/once they are a finalist/);
+      // the refusal says the way on, in plain words (6 November 2026)
+      expect(((await tooEarly.json()) as { error: { message: string } }).error.message).toBe("Interview them first, or mark them Hired.");
       expect((await json(owner, "POST", `/api/v1/applications/${ana.id}/offer`, { confirm: true, madeOn: addCalendarDays(today(), 3) })).status).toBe(400);
       const madeOn = addCalendarDays(today(), -1);
       const r = await json(hm, "POST", `/api/v1/applications/${ana.id}/offer`, { confirm: true, madeOn, note: "Offered on the phone." });

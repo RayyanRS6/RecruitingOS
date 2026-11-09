@@ -44,7 +44,8 @@ const CANDIDATE_READERS: Record<string, number> = {
   "apps/api/src/services/brief.ts": 8,
   // Home's "emails to candidates did not arrive": `notLocked` in the query that names them.
   "apps/api/src/services/email-health.ts": 1,
-  "apps/api/src/services/hire-sheet.ts": 2,
+  // The backups (`notLocked`), and the name of the person hired on the backups card and on "Close this job?" (never someone locked).
+  "apps/api/src/services/hire-sheet.ts": 3,
   "apps/api/src/services/new-times.ts": 2,
   "apps/api/src/services/pool.ts": 1,
   "apps/api/src/services/role-report.ts": 2,

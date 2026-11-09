@@ -5,7 +5,7 @@ import {
   plainDayWords, waitingOnCandidateRow, waitingOnCandidateText,
 } from "../../apps/web/src/hiring";
 import { historyItem, panelSearch, resumeToShow, resumeView, whoDecides, PANEL_TABS } from "../../apps/web/src/pages/candidate-panel/helpers";
-import { panelStepFrom } from "../../apps/web/src/talent-actions";
+import { hireSheetLead, panelStepFrom } from "../../apps/web/src/talent-actions";
 
 /**
  * Interviews to hire (plan Wave H; founder decisions Q24, Q29), the page's words and rules: the record-only "Offer
@@ -52,10 +52,22 @@ describe("the hire sheet (plan H1)", () => {
     closeRole: { path: "/api/v1/roles/r1/outcome", outcome: "filled", stillInProcess: 4, words: "Close the role as filled. The 4 people still in process move to your talent pool, privately: nobody is told at once, and you see the closing message before it goes." },
   };
 
-  it("asks before recording, with the start date and the day they accepted, and says nothing was sent", () => {
-    expect(hireConfirmText({ name: "Maria Reyes", startDate: "2026-11-02", offerAcceptedAt: "2026-10-08" })).toBe("Record the hire of Maria Reyes, who accepted the offer on Thursday, October 8, starting Monday, November 2? It is recorded with your name and can only be corrected by an administrator. Nothing is sent to anyone.");
+  it("asks before recording, with the start date and the day they accepted, and says nothing was sent to them", () => {
+    // "to them", not "to anyone" (6 November 2026): the interviewers of an interview the hire calls off are told it is off
+    expect(hireConfirmText({ name: "Maria Reyes", startDate: "2026-11-02", offerAcceptedAt: "2026-10-08" })).toBe("Record the hire of Maria Reyes, who accepted the offer on Thursday, October 8, starting Monday, November 2? It is recorded with your name and can only be corrected by an administrator. Nothing is sent to them.");
     expect(hireConfirmText({ name: "Maria Reyes", startDate: "2026-11-02" })).toMatch(/^Record the hire of Maria Reyes, starting Monday, November 2\?/);
-    expect(hireToast({ name: "Maria Reyes", startDate: "2026-11-02" })).toEqual({ title: "Maria Reyes is hired.", detail: "Starting Monday, November 2. Recorded with your name; nothing was sent to anyone." });
+    expect(hireToast({ name: "Maria Reyes", startDate: "2026-11-02" })).toEqual({ title: "Maria Reyes is hired.", detail: "Starting Monday, November 2. Recorded with your name; nothing was sent to them." });
+    // their interview still to come ends with the hire, and the toast says so
+    expect(hireToast({ name: "Maria Reyes", startDate: "2026-11-02", interviewsEnded: 1 }).detail).toBe("Starting Monday, November 2. Recorded with your name; nothing was sent to them. Their interview still to come is called off; the interviewers were told.");
+    expect(hireToast({ name: "Maria Reyes", startDate: null, interviewsEnded: 2 }).detail).toBe("Recorded with your name; nothing was sent to them. Their 2 interviews still to come are called off; the interviewers were told.");
+  });
+
+  it("the hire sheet says what happens to an interview still to come: called off, the interviewers told, nothing to the candidate (6 November 2026)", () => {
+    const later = new Date(Date.now() + 7 * 86_400_000).toISOString();
+    expect(hireSheetLead("Maria", [])).toBe("Recorded with your name. Nothing is sent to Maria.");
+    expect(hireSheetLead("Maria", [{ title: "Working interview", startsAt: later, timezone: "America/Los_Angeles", status: "scheduled" }])).toMatch(/^Recorded with your name\. Nothing is sent to Maria\. The Working interview on .+ is called off, and the interviewers are told\.$/);
+    // one already over, or cancelled, is not called off by anything
+    expect(hireSheetLead("Maria", [{ title: "Phone screen", startsAt: "2026-01-05T17:00:00.000Z", timezone: null, status: "completed" }, { title: "Second", startsAt: null, timezone: null, status: "cancelled" }])).toBe("Recorded with your name. Nothing is sent to Maria.");
   });
 
   // a fixed "now" before the start date, so these do not change meaning once November 2 has passed
@@ -82,16 +94,17 @@ describe("the hire sheet (plan H1)", () => {
     expect(keepWarmToast("Maria", "2026-11-02", onTheDay).detail).toMatch(/Today reminds you about your backups until Maria starts/);
   });
 
-  it("with a start date already past (a hire recorded late), promises no Today reminder that would never come", () => {
+  it("with a start date already past (a hire recorded late), promises no backups reminder, and says Home asks to close the role", () => {
     const after = new Date(2026, 10, 3, 9);
     const v = hireFollowUpView(hire, "Maria", after);
     expect(v.started).toBe(true);
     expect(v.startLine).toBe("Maria started on Monday, November 2.");
-    // leaving it open is still offered, so the sheet always has a way out, but plainly
-    expect(v.keepWarmWords).toBe("Leave the role open for now. Nobody is told anything. Maria has already started, so Today will not remind you about the others; close the role from its page when you are ready.");
+    // leaving it open is still offered, so the sheet always has a way out, but plainly: Home's "Close this job?" asks
+    // every day until it is closed (6 November 2026)
+    expect(v.keepWarmWords).toBe("Leave the role open for now. Nobody is told anything. Maria has already started, so Home asks you to close the role until you do.");
     expect(v.keepWarmWords).not.toMatch(/Today reminds/);
-    expect(hireFollowUpView({ ...hire, backups: { count: 1, people: hire.backups.people.slice(0, 1) } }, "Maria", after).keepWarmWords).toMatch(/Today will not remind you about them;/);
-    expect(keepWarmToast("Maria", "2026-11-02", after)).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. Close the role from its page when you are ready." });
+    expect(hireFollowUpView({ ...hire, backups: { count: 1, people: hire.backups.people.slice(0, 1) } }, "Maria", after).keepWarmWords).toMatch(/Home asks you to close the role until you do\.$/);
+    expect(keepWarmToast("Maria", "2026-11-02", after)).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." });
   });
 });
 

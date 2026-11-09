@@ -241,6 +241,14 @@ describe("the strip and the row's words", () => {
     expect(rowChips(row({}), words)).toEqual([]);
   });
 
+  it("a finalist reads Finalist on their row (6 November 2026): under Interviewing they looked like everyone else", () => {
+    expect(rowChips(row({ ownerStage: "interviewing", stage: "finalist", fit: "strong" }), words)).toEqual([{ key: "finalist", label: "Finalist", tone: "accent", kind: "chip" }, expect.objectContaining({ label: "Strong match" })]);
+    expect(rowChips(row({ ownerStage: "interviewing", stage: "reference_check" }), words).map((c) => c.label)).toEqual(["Finalist"]);
+    // still being interviewed, or past it: no such word
+    expect(rowChips(row({ ownerStage: "interviewing", stage: "interview_scheduled" }), words).map((c) => c.label)).not.toContain("Finalist");
+    expect(rowChips(row({ ownerStage: "offer", stage: "offer_sent" }), words).map((c) => c.label)).not.toContain("Finalist");
+  });
+
   it("says the safety net in one short line for lists that know neither the day nor the setting (D-03)", () => {
     expect(SAFETY_NET_NOTE).toBe("If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
   });

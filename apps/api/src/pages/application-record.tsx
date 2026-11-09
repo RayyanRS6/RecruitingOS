@@ -322,7 +322,9 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
     if (news.lapsed) return "The interview times we sent have passed. The hiring team will be in touch.";
     if (news.noShow) return "The hiring team will be in touch about next steps.";
     if (news.missedByUs) return "We are sorry: the interviewer could not join your interview. The hiring team will be in touch about what happens next.";
-    if (stage === "interview_complete" || stage === "debrief") return "Thanks for interviewing. The team is deciding, and you will hear from them either way.";
+    // After a real interview, whatever the team decided meanwhile (a finalist, references): the same words, so nothing
+    // private is hinted at (6 November 2026).
+    if (["interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval"].includes(stage)) return "Thanks for interviewing. The team is deciding, and you will hear from them either way.";
     return "The hiring team will be in touch about next steps.";
   }
   if (stage === "hired") return "You are on the team.";
@@ -597,8 +599,8 @@ function OtherApplications(props: { others: OtherApplication[]; companyName: str
 /**
  * The candidate's status page (plan A1). It leads with the progress line (Wave S2, slice K4) and the one line on what
  * happens next; its status card speaks in the four candidate steps (Received, Under review, Interview, Decision). Never
- * the team's stage names: the assistant's suggestions, an eligibility hold and "finalist" read as Under
- * review. A decision shows only once the candidate was told (founder decision B6), in the words of the message that
+ * the team's stage names: the assistant's suggestions and an eligibility hold read as Under review, and "finalist" reads
+ * as the interview they had (6 November 2026). A decision shows only once the candidate was told (founder decision B6), in the words of the message that
  * told it (plan G6); until then the page stands where it was and withdrawing stays open. The messages about the
  * application read as a conversation (plan G7): only messages that actually reached them, and their own replies. A line
  * says a person decides.

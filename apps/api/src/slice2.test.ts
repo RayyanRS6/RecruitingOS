@@ -166,7 +166,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const row = ((await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; ownerStage: string; group: string; stageMoves: Array<{ to: string; allowed: boolean; blockedReason?: string }> }>).find((x) => x.id === mariaId)!;
     expect(row).toMatchObject({ ownerStage: "new", group: "waiting_on_you" });
     expect(row.stageMoves.find((m) => m.to === "shortlist")).toMatchObject({ allowed: true });
-    expect(row.stageMoves.find((m) => m.to === "offer")).toMatchObject({ allowed: false, blockedReason: "Record an offer once they are a finalist." });
+    expect(row.stageMoves.find((m) => m.to === "offer")).toMatchObject({ allowed: false, blockedReason: "Interview them first, or mark them Hired." });
     expect((await json("POST", `/api/v1/applications/${mariaId}/actions`, { action: "set_mark", mark: "shortlist" })).status).toBe(200);
     const marked = ((await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; ownerStage: string }>).find((x) => x.id === mariaId)!;
     expect(marked.ownerStage).toBe("shortlist");

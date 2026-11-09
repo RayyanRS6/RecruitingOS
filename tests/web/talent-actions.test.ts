@@ -144,7 +144,8 @@ describe("the private decline step", () => {
     // "Record what happened" says the same: nothing about the outcome goes, but an interview they knew of is called off
     expect(outcomeNoticeText([])).toBe("Nothing is sent to the candidate.");
     expect(outcomeNoticeText([proposed])).toBe("Nothing is sent to the candidate.");
-    expect(outcomeNoticeText([booked])).toBe(`Nothing about the outcome is sent to the candidate. Unless it is a hire, ${iv} is called off, and they are told now, in a short note that gives no reason, that it is off.`);
+    // a hire is the hire sheet's, which ends their interviews too and tells the candidate nothing (6 November 2026)
+    expect(outcomeNoticeText([booked])).toBe(`Nothing about the outcome is sent to the candidate. ${iv.charAt(0).toUpperCase()}${iv.slice(1)} is called off, and they are told now, in a short note that gives no reason, that it is off.`);
     expect(outcomeNoticeText([booked, offered])).toMatch(/ are called off, and they are told now, in a short note that gives no reason, that they are off\.$/);
   });
 
@@ -279,11 +280,11 @@ describe("the stage button's choices", () => {
   it("greys out every move that is not allowed, with its reason, and never the current stage", () => {
     const blocked = stageBlocked([
       move({ to: "new", via: "none", allowed: false, current: true, blockedReason: "They are here now." }),
-      move({ to: "offer", via: "offer", allowed: false, blockedReason: "Record an offer once they are a finalist." }),
+      move({ to: "offer", via: "offer", allowed: false, blockedReason: "Interview them first, or mark them Hired." }),
       move({ to: "hired", via: "record_hire", allowed: false }),
       move({}),
     ]);
-    expect(blocked).toEqual({ offer: "Record an offer once they are a finalist.", hired: "Not available at this step." });
+    expect(blocked).toEqual({ offer: "Interview them first, or mark them Hired.", hired: "Not available at this step." });
   });
 });
 

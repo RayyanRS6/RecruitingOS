@@ -118,7 +118,7 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
       stageLabel: STAGE_LABEL[a.stage],
       group: groupFor(a, mark, input.now, followUp, inMotion.has(a.id)),
       ownerStage: strip,
-      ownerStageLabel: ownerStageLabel(strip, mark, followUp),
+      ownerStageLabel: ownerStageLabel(strip, mark, followUp, null, a.stage),
       mustHaves: mh,
       competencies: comp,
       screen: screen ? { recommendation: screen.result.recommendation, summary: screen.result.summary } : null,

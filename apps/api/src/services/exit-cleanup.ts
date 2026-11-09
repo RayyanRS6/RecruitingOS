@@ -21,15 +21,18 @@ import { cancelInterviewInTx, type CancelNotice } from "./interview-cancel";
  *   interview whenever nobody sends it before the interview time.
  * - "with_decision_message": nothing is sent here, because the caller sends the decision message in this same
  *   transaction and that message names the cancelled interview, so the candidate gets one message, not two.
+ * - "hired" (6 November 2026): a hire ends that person's interviews still to come, quietly. The candidate is sent nothing
+ *   (they know they are hired; the app never says it for the team), and the interviewers are told it is off, so nothing
+ *   is left under "Coming up" for ever.
  * A privacy deletion does not come here: packages/core/src/privacy-requests.ts ends the person's interviews itself and
  * writes nothing to the candidate. A screen is closed without a note in every case (its link says the conversation is closed). A booked interview whose
  * time has already started is left to the scheduling run, which records that it ended without asking for a decision.
  */
-export type ExitCandidateEmail = "send_cancellation" | "private_decision" | "with_decision_message";
+export type ExitCandidateEmail = "send_cancellation" | "private_decision" | "with_decision_message" | "hired";
 export type ExitCleanupInput = { companyId: string; applicationId: string; reason: string; actor: Actor; candidateEmail: ExitCandidateEmail };
 export type ExitCleanupResult = { interviewsCancelled: number; screensCancelled: number; suggestionsWithdrawn: number; candidateNotes: number };
 
-const NOTICE: Record<ExitCandidateEmail, CancelNotice> = { send_cancellation: "known", private_decision: "known", with_decision_message: "none" };
+const NOTICE: Record<ExitCandidateEmail, CancelNotice> = { send_cancellation: "known", private_decision: "known", with_decision_message: "none", hired: "none" };
 const OPEN_INTERVIEWS = ["proposed", "scheduling", "scheduled"];
 // A conversation paused while the assistant was down (plan E5) is still open.
 const OPEN_SCREENS = ["invited", "reminded", "in_progress", "paused"];
@@ -43,7 +46,7 @@ export async function exitCleanup(tx: Tx, container: Container, input: ExitClean
   const open = await tx.select().from(interviews).where(and(eq(interviews.applicationId, applicationId), inArray(interviews.status, OPEN_INTERVIEWS)));
   const byCandidate = actor.kind === "candidate";
   // The interviewers get a sentence; the recorded reason (a code like "declined: position_filled") stays on the interview for the team's record.
-  const interviewerNote = byCandidate ? "The candidate withdrew, so this interview is off." : "The candidate is no longer in the process, so this interview is off.";
+  const interviewerNote = byCandidate ? "The candidate withdrew, so this interview is off." : input.candidateEmail === "hired" ? "The candidate was hired, so this interview is off." : "The candidate is no longer in the process, so this interview is off.";
   for (const iv of open) {
     if (iv.status === "scheduled" && iv.startsAt && Date.parse(iv.startsAt) <= now.getTime()) continue; // it took place, or is taking place
     const done = await cancelInterviewInTx(tx, container, { companyId, interview: iv, actor, by: "system", reason: input.reason, byCandidate, cause: "left_process", now, notice: NOTICE[input.candidateEmail], leftProcess: true, interviewerNote });

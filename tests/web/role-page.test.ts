@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { can, type Permission } from "../../packages/core/src/permissions";
 import { againChoice, defaultInterviewers } from "../../apps/web/src/interview-defaults";
-import { jobActions, jobTabFrom, jobTabHref, jobTabs, roleStatus } from "../../apps/web/src/role-status";
+import { CLOSABLE, defaultCloseOutcome, jobActions, jobTabFrom, jobTabHref, jobTabs, roleStatus } from "../../apps/web/src/role-status";
 import { actorWords, describeRoleEvent, payShownLabel, roleWords } from "../../apps/web/src/role-words";
 import { canApproveRole, canChangeCompany, canDecideInterviews, canDecline, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../../apps/web/src/roles";
 
@@ -279,7 +279,24 @@ describe("the job's one header, tab strip and More menu (Wave S1)", () => {
     expect(ids({ status: "closed", can: all })).toEqual(["edit", "preview", "hire-again", "closing-message"]);
     expect(ids({ status: "closed", can: all, closingMessageOpen: true })).not.toContain("closing-message");
     expect(ids({ status: "filled", can: all })).toContain("hire-again");
-    expect(ids({ status: "draft", can: all })).toEqual(["edit", "preview"]);
+    // a job sent back to a draft, or waiting for approval, can be closed too (6 November 2026): a plan with no room says
+    // "close a role you no longer need", and these were the ones with nothing to press
+    expect(ids({ status: "draft", can: all })).toEqual(["edit", "preview", "close"]);
+    expect(ids({ status: "pending_approval", can: all })).toEqual(["edit", "preview", "close"]);
+    expect(ids({ status: "draft", can: { ...all, close: false } })).toEqual(["edit", "preview"]);
+    // and never a job already closed or filled
+    expect(ids({ status: "closed", can: all })).not.toContain("close");
+    expect(ids({ status: "filled", can: all })).not.toContain("close");
+  });
+
+  it("opens the close on Filled once someone here is hired, on Cancelled for a job that never went live, else as asked (6 November 2026)", () => {
+    expect(defaultCloseOutcome({ status: "open", counts: { hired: 1, triaged: 3 } })).toBe("filled");
+    expect(defaultCloseOutcome({ status: "paused", counts: { hired: 2 } }, "no_hire")).toBe("filled");
+    expect(defaultCloseOutcome({ status: "open", counts: { triaged: 3 } })).toBe("filled_outside_platform");
+    expect(defaultCloseOutcome({ status: "open", counts: {} }, "no_hire")).toBe("no_hire");
+    expect(defaultCloseOutcome({ status: "pending_approval", counts: {} })).toBe("role_cancelled");
+    expect(defaultCloseOutcome({ status: "draft", counts: null })).toBe("role_cancelled");
+    expect(CLOSABLE).toEqual(["open", "paused", "pending_approval", "draft"]);
   });
 
   it("offers \"Try different weights\" (L-07 A) only where the page allows it, right after Candidate view", () => {

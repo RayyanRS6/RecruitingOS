@@ -581,7 +581,9 @@ describe("the loop after an interview", () => {
   });
 
   it("the status page speaks in the candidate's steps (the progress line's names), never the team's stage names", async () => {
-    const cases: Array<[ApplicationStage, string]> = [["applied", "Applied"], ["received", "Applied"], ["ineligible", "Review"], ["triaged", "Review"], ["screen_complete", "Review"], ["interview_recommended", "Review"], ["interview_complete", "Interview"], ["finalist", "Review"], ["offer_sent", "Decision"], ["hired", "Decision"], ["withdrawn", "Decision"]];
+    // a finalist stays at the interview they had (6 November 2026): it read Review again, as if it never happened; the
+    // word Finalist itself is still never shown
+    const cases: Array<[ApplicationStage, string]> = [["applied", "Applied"], ["received", "Applied"], ["ineligible", "Review"], ["triaged", "Review"], ["screen_complete", "Review"], ["interview_recommended", "Review"], ["interview_complete", "Interview"], ["finalist", "Interview"], ["offer_sent", "Decision"], ["hired", "Decision"], ["withdrawn", "Decision"]];
     for (const [stage, word] of cases) {
       const html = await statusPage(await seed(stage));
       expect(statusWord(html), stage).toBe(word);

@@ -6,7 +6,7 @@ import { Alert, Avatar, Button, Card, Field } from "@ros/ui";
 import { api, ApiError, type ActionResult, type ApplicationDetail, type ClosingMessagePreview, type HireFollowUp, type OfferMadeResult } from "../../api/client";
 import { toast } from "../../toast";
 import { ClosingMessageCard } from "../../components/ClosingMessage";
-import { closeRoleToast, type PanelStep } from "../../talent-actions";
+import { closeRoleToast, hireSheetLead, type PanelStep } from "../../talent-actions";
 import { useCompanyTimeZone } from "../../components/use-company-time-zone";
 import { hireConfirmText, hireFollowUpView, hireToast, keepWarmToast, offerAnswerToast, offerDateBounds, offerMadeToast, offerNote, offerStepText, waitingOnCandidateText } from "../../hiring";
 import { cannotSeeYetWords } from "../../upgrade";
@@ -123,8 +123,8 @@ export function WaitingOnCandidateCard({ a, roleId, onAccepted }: { a: Applicati
   );
 }
 
-/** What the hire answers: the backups and closing the role (plan H1). */
-type HireAnswer = { hire?: HireFollowUp | null; roleId?: string };
+/** What the hire answers: the backups and closing the role (plan H1), and their interviews still to come it called off. */
+type HireAnswer = { hire?: HireFollowUp | null; roleId?: string; interviewsEnded?: number };
 
 /**
  * The hire sheet (plan H1), one sheet: the start date, the day they accepted the offer (optional), a confirmation, and
@@ -152,7 +152,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
       ? api.post<HireAnswer>(`/api/v1/applications/${a.id}/decision`, { decision: "hired", hireDate: startDate, offerAcceptedAt: acceptedOn || undefined, note: note.trim() || undefined })
       : api.post<HireAnswer>(`/api/v1/applications/${a.id}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: startDate, offerAcceptedAt: acceptedOn || undefined, note: note.trim() || undefined }),
     onSuccess: async (r) => {
-      const t = hireToast({ name, startDate });
+      const t = hireToast({ name, startDate, interviewsEnded: r.interviewsEnded });
       toast(t.title, t.detail);
       setConfirming(false);
       const follow = r.hire ?? null;
@@ -213,7 +213,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
   const valid = !!startDate;
   return (
     <Card needsYou lift title={`Hire ${name}`} className={STEP}>
-      <p className={LEAD}>Recorded with your name. Nothing is sent to anyone.</p>
+      <p className={LEAD}>{hireSheetLead(a.candidate.firstName, a.interviews)}</p>
       <Why>You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</Why>
       <div className="stack gap-3">
         <Field label="Start date (agreed with them)" htmlFor="hire-start"><input ref={first} id="hire-start" className="input" type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setConfirming(false); }} /></Field>

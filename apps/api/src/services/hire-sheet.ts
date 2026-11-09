@@ -71,6 +71,49 @@ export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplica
 /** A Today card about a hire; the brief adds it with its other cards (kind "hire"). */
 export type HireCard = { kind: "hire"; title: string; body: string; roleId: string; applicationId: string; actions: Array<{ label: string; method: "GET"; path: string }> };
 
+/** "Close this job?" once a hire has started: a person's question, so it is a card that needs them. */
+export type CloseJobCard = { kind: "needs_review"; title: string; body: string; roleId: string; applicationId: string; actions: Array<{ label: string; method: "GET"; path: string }> };
+
+/**
+ * "Close this job?" (6 November 2026): once every hire on a job has started, a job still open or paused asks to be closed,
+ * on Home every day until it is. "Keep the role open" used to leave it live and taking applications with nothing asking
+ * again. While any hire on it is still to start, the backups card stands instead. For those who may close a role
+ * (outcome.record), within a recruiter's grant; never about someone the team may not read.
+ */
+export async function closeAfterHireCards(tx: Tx, input: { companyId: string; viewer: { role: MembershipRole; scope?: StaffScope | null }; now: Date }): Promise<CloseJobCard[]> {
+  if (!can(input.viewer.role, "outcome.record")) return [];
+  const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
+  const today = companyToday(input.now, company?.timezone ?? null);
+  const hires = await tx
+    .select({ applicationId: hiringOutcomes.applicationId, roleId: hiringOutcomes.roleId, hireDate: hiringOutcomes.hireDate, stage: applications.stage, lockedAt: applications.lockedAt, candidateId: applications.candidateId })
+    .from(hiringOutcomes)
+    .innerJoin(applications, eq(applications.id, hiringOutcomes.applicationId))
+    .where(and(eq(hiringOutcomes.companyId, input.companyId), eq(hiringOutcomes.outcome, "hired_externally"), isNull(hiringOutcomes.correctedAt), isNotNull(hiringOutcomes.hireDate)));
+  // The hires that still stand (a corrected or reopened record leaves the stage), by job.
+  const byRole = new Map<string, typeof hires>();
+  for (const h of hires) if (h.roleId && h.stage === "hired" && !h.lockedAt && inStaffScope(input.viewer.scope ?? null, { roleId: h.roleId })) byRole.set(h.roleId, [...(byRole.get(h.roleId) ?? []), h]);
+  if (!byRole.size) return [];
+  const live = await tx.select({ id: roles.id, title: roles.title, status: roles.status, acceptingApplications: roles.acceptingApplications }).from(roles).where(and(inArray(roles.id, [...byRole.keys()]), inArray(roles.status, ["open", "paused"])));
+  const cards: CloseJobCard[] = [];
+  for (const role of live) {
+    const own = byRole.get(role.id) ?? [];
+    if (own.some((h) => (h.hireDate ?? "").slice(0, 10) >= today)) continue;
+    const last = [...own].sort((a, b) => (b.hireDate ?? "").localeCompare(a.hireDate ?? ""))[0];
+    const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, last.candidateId)).limit(1);
+    const name = `${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "Your new hire";
+    const still = role.status === "paused" ? "paused, and still open" : role.acceptingApplications ? "still live and taking applications" : "still open";
+    cards.push({
+      kind: "needs_review",
+      title: `Close this job? ${role.title}`,
+      body: `${name} started on ${closingDayWords(last.hireDate!)}, and ${role.title} is ${still}. Close it if the job is filled: anyone still in process moves to your talent pool, privately, and you see the closing message before it goes.`,
+      roleId: role.id,
+      applicationId: last.applicationId!,
+      actions: [{ label: "Close the job", method: "GET", path: `/roles/${role.id}?close=1` }],
+    });
+  }
+  return cards;
+}
+
 /**
  * "Keep your backups warm" (plan H1), one card per hire whose start date has not passed yet, while anyone else is still
  * in the running for that role. Keyed on the start date: the card goes away the day after the hire starts. Shown to

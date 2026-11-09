@@ -655,12 +655,14 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
         throw e;
       });
       await settleOutsideOffer(tx, { applicationId: app.id, companyId: t.companyId, outcome: "hired_externally", actor, now });
+      // Their interviews still to come end with the hire, quietly (6 November 2026), as the hire sheet's do.
+      interviewsCancelled = (await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: "outcome: hired_externally", actor, candidateEmail: "hired" })).interviewsCancelled;
       hired = { outcomeId: r.row.id, roleId: r.roleId, hire: await hireFollowUp(tx, { roleId: r.roleId, hiredApplicationId: app.id, startDate: r.row.hireDate, role: t.role, scope: staffScopeOf(t) }) };
       stage = "hired";
     }
     await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last.id, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
-    return { out: { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes }), ...(hired ? { outcomeId: hired.outcomeId, hire: hired.hire, statement: OUTCOME_STATEMENT } : {}) }, hired };
+    return { out: { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes }), ...(hired ? { outcomeId: hired.outcomeId, hire: hired.hire, statement: OUTCOME_STATEMENT, ...(interviewsCancelled ? { interviewsEnded: interviewsCancelled } : {}) } : {}) }, hired };
   });
   if (result.hired) await tellRecruiterAboutOutcome(container, t.companyId, result.hired.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} recorded a hire (offer accepted outside the platform).`, `outcome:${result.hired.outcomeId}`);
   await container.kick();
