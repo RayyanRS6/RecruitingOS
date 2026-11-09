@@ -315,9 +315,9 @@ export function accessPressRefused(e: unknown): { title: string; tone?: "critica
 }
 
 /**
- * What a press sends: the decision, and where the request stood on this row (`from`), so a press on a row someone else has
- * just decided changes nothing and is told who decided (the first press wins). Only a declined company's Accept, the undo,
- * says `declined`.
+ * What a press sends: the decision, and where the request stood on this row (`from`) at its first press, the one that asked
+ * the question, so a press on a row someone else has just decided changes nothing and is told who decided (the first press
+ * wins). Only a declined company's Accept, the undo, says `declined`.
  */
 export function accessPress(company: Pick<CustomerRow, "accessRequest">, decision: AccessDecision): CustomerAccessChange {
   return { decision, from: company.accessRequest?.status ?? "requested", confirm: true };
@@ -352,10 +352,15 @@ export function AccessChoice(props: { company: Pick<CustomerRow, "name" | "acces
  * `onDecided` runs once the new list is drawn, either way, for the place around it to look after focus should the row have
  * left with it. Swapping the buttons removes the one that had focus: it goes to Yes, and after No back to the button that
  * asked.
+ *
+ * The question keeps what its first press sends, `from` included: where the request stood then (the review of 9 November
+ * 2026). It stands only while the request still stands there, so the list read again under it with another
+ * administrator's decision takes it away, and its Yes never sends where this row stands now (a Decline undone by mistake).
  */
 export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRow, "id" | "name" | "accessRequest">; onDecided?: () => void }) {
   const qc = useQueryClient();
-  const [asking, setAsking] = useState<AccessDecision | null>(null);
+  const [asking, setAsking] = useState<CustomerAccessChange | null>(null);
+  if (asking && asking.from !== company.accessRequest?.status) setAsking(null);
   const box = useRef<HTMLSpanElement>(null);
   const focusButton = useRef<number | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `asking` is what swaps the buttons, and this runs once they are drawn
@@ -365,11 +370,11 @@ export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRo
     focusButton.current = null;
   }, [asking]);
   const ask = (decision: AccessDecision | null) => {
-    focusButton.current = !decision && asking === "decline" ? 1 : 0;
-    setAsking(decision);
+    focusButton.current = !decision && asking?.decision === "decline" ? 1 : 0;
+    setAsking(decision ? accessPress(company, decision) : null);
   };
   const decide = useMutation({
-    mutationFn: (decision: AccessDecision) => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, accessPress(company, decision), adminReason("access request")),
+    mutationFn: (press: CustomerAccessChange) => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, press, adminReason("access request")),
     onSuccess: async (answer) => {
       toast(answer.message);
       await qc.invalidateQueries({ queryKey: adminKeys.customers });
@@ -386,7 +391,7 @@ export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRo
   });
   return (
     <span ref={box} className="flex max-w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-      <AccessChoice company={company} asking={asking} pending={decide.isPending} onPress={ask} onYes={() => asking && decide.mutate(asking)} onNo={() => ask(null)} />
+      <AccessChoice company={company} asking={asking?.decision ?? null} pending={decide.isPending} onPress={ask} onYes={() => asking && decide.mutate(asking)} onNo={() => ask(null)} />
     </span>
   );
 }
