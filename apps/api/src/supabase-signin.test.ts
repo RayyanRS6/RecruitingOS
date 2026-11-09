@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { signHs256, SupabaseIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -42,6 +42,29 @@ describe("sign-in through the identity service's return trip", () => {
     back.searchParams.set("code", code);
     return back;
   };
+  /**
+   * What the service does when Microsoft, or the service itself, says no (Supabase Auth's redirectErrors and
+   * getErrorQueryString, internal/api/external.go): `error` and `error_description`, and `error_code` for the service's
+   * own refusals only (Microsoft's pass through without one, and without its error_subcode), are set on redirect_to's
+   * query, which keeps its own parameters (this browser's state), and copied into the fragment with an empty `sb`.
+   * There is no code. A browser sends the query and keeps the fragment.
+   */
+  const serviceRefuses = (authorizeLocation: string, refusal: { error: string; error_description: string; error_code?: string }) => {
+    const back = new URL(new URL(authorizeLocation).searchParams.get("redirect_to")!);
+    const fragment = new URLSearchParams();
+    for (const [key, value] of Object.entries(refusal)) {
+      if (value === undefined) continue;
+      back.searchParams.set(key, value);
+      fragment.set(key, value);
+    }
+    back.searchParams.sort();
+    fragment.set("sb", "");
+    fragment.sort();
+    back.hash = fragment.toString();
+    return back;
+  };
+  /** Microsoft's description as it comes: the AADSTS number, the reason, then lines that identify the request. */
+  const microsoftSays = (aadsts: string, reason: string) => `${aadsts}: ${reason}\r\nTrace ID: 00000000-0000-0000-0000-000000000000\r\nCorrelation ID: 00000000-0000-0000-0000-000000000000\r\nTimestamp: 2026-11-10 09:00:00Z`;
   const cookieOf = (r: Response) => r.headers.get("set-cookie")!.split(";")[0];
 
   beforeAll(async () => {
@@ -80,6 +103,59 @@ describe("sign-in through the identity service's return trip", () => {
     const back = serviceReturns(start.headers.get("location")!, "code-3");
     const refused = await app.request(`${back.pathname}${back.search}`, { headers: { cookie: cookieOf(start) } });
     expect(refused.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/login?error=provider_mismatch`);
+    expect(refused.headers.get("set-cookie") ?? "").not.toContain("ros_session=");
+  });
+
+  /**
+   * Microsoft sign-in for people from other companies (10 November 2026): a refusal the service brings back reaches the
+   * sign-in page as a code it has words for. The address ends with `#`, so the browser drops the service's copy of the
+   * refusal (the fragment) instead of carrying it onto the page, and Microsoft's description is never shown, kept or
+   * put in an address: the one log line has the code and the bare AADSTS number.
+   */
+  it.each([
+    { said: "an administrator must approve the app first (AADSTS90094)", refusal: { error: "access_denied", error_description: microsoftSays("AADSTS90094", "Admin consent is required for the permissions requested by this application.") }, code: "microsoft_needs_approval", aadsts: "AADSTS90094" },
+    { said: "Cancel was pressed on Microsoft's permissions screen (AADSTS65004)", refusal: { error: "access_denied", error_description: microsoftSays("AADSTS65004", "User declined to consent to access the app.") }, code: "microsoft_declined", aadsts: "AADSTS65004" },
+    { said: "the service does not trust the address Microsoft sent (provider_email_needs_verification)", refusal: { error: "access_denied", error_code: "provider_email_needs_verification", error_description: "Unverified email with azure. A confirmation email has been sent to your azure email" }, code: "email_unverified", aadsts: null },
+    { said: "Microsoft sent no email address", refusal: { error: "server_error", error_code: "unexpected_failure", error_description: "Error getting user email from external provider" }, code: "microsoft_no_email", aadsts: null },
+    { said: "a refusal with no words of its own (sign-ups switched off at the service)", refusal: { error: "access_denied", error_code: "signup_disabled", error_description: "Signups not allowed for this instance" }, code: "signin_incomplete", aadsts: null },
+  ])("a refusal opens no session and reaches the sign-in page as its code, never as Microsoft's words: $said", async ({ refusal, code, aadsts }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const start = await app.request("/api/v1/auth/start/azure");
+      const back = serviceRefuses(start.headers.get("location")!, refusal);
+      expect(back.searchParams.get("state")).toBeTruthy();
+      const refused = await app.request(`${back.pathname}${back.search}`, { headers: { cookie: cookieOf(start) } });
+      expect(refused.status).toBe(302);
+      const location = refused.headers.get("location")!;
+      expect(location).toBe(`${container.env.APP_BASE_URL}/login?error=${code}#`);
+      expect(location.endsWith("#")).toBe(true);
+      const reason = refusal.error_description.split("\r\n")[0]!;
+      expect(decodeURIComponent(location.replace(/\+/g, " "))).not.toContain(reason);
+      expect(refused.headers.get("set-cookie") ?? "").not.toContain("ros_session=");
+      expect(refused.headers.getSetCookie()).toContainEqual(expect.stringMatching(/^ros_pkce=; Max-Age=0/));
+      const logged = warn.mock.calls.map((args) => args.join(" ")).filter((line) => line.startsWith("[sign-in]"));
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain(code);
+      if (aadsts) expect(logged[0]).toContain(aadsts);
+      expect(logged[0]).not.toContain(reason);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a refusal during \"Confirm it's you\" goes back where it started with reauth=failed, as its other failures do, both of its cookies cleared", async () => {
+    const start = await app.request("/api/v1/auth/start/google");
+    const returned = serviceReturns(start.headers.get("location")!, "code-4");
+    const signedIn = await app.request(`${returned.pathname}${returned.search}`, { headers: { cookie: cookieOf(start) } });
+    const session = signedIn.headers.getSetCookie().find((c) => c.startsWith("ros_session="))!.split(";")[0]!;
+    const begin = await app.request("/api/v1/auth/reauth/start", { method: "POST", headers: { cookie: session, "content-type": "application/json" }, body: JSON.stringify({ returnTo: "/setup" }) });
+    const { url } = (await begin.json()) as { url: string };
+    const flow = begin.headers.getSetCookie().map((c) => c.split(";")[0]!);
+    expect(flow).toEqual(expect.arrayContaining([expect.stringMatching(/^ros_pkce=./), expect.stringMatching(/^ros_reauth=./)]));
+    const back = serviceRefuses(url, { error: "access_denied", error_description: microsoftSays("AADSTS65004", "User declined to consent to access the app.") });
+    const refused = await app.request(`${back.pathname}${back.search}`, { headers: { cookie: [session, ...flow].join("; ") } });
+    expect(refused.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup?reauth=failed#`);
+    expect(refused.headers.getSetCookie()).toEqual(expect.arrayContaining([expect.stringMatching(/^ros_reauth=; Max-Age=0/), expect.stringMatching(/^ros_pkce=; Max-Age=0/)]));
     expect(refused.headers.get("set-cookie") ?? "").not.toContain("ros_session=");
   });
 });

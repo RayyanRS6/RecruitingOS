@@ -5,7 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { InvitationRefused, audit, consumeMagicLink, createMagicLink, escapeHtml, findInvitationByToken, hashInvitationToken, invitationState, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, roleInWords, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
 import { companies, memberships, users, withPlatform } from "@ros/db";
 import { mfaRoutes } from "./auth-mfa";
-import { REAUTH_STATE_SUFFIX, completeReauth, readReauthMarker } from "./auth-sessions";
+import { REAUTH_STATE_SUFFIX, completeReauth, readReauthMarker, refusedReauth } from "./auth-sessions";
 import { renderSignInLinkPage } from "../pages/signin-link";
 import { renderInvitePage, type InvitePageProps } from "../pages/invite";
 import { signupConfigFor } from "../services/access-requests";
@@ -57,18 +57,56 @@ authRoutes.get("/start/:provider", async (c) => {
 });
 
 /**
+ * Microsoft's refusals that wait on the person's company IT approving the app once (Entra AADSTS numbers): 65001 (nobody
+ * has consented to the app yet), 90093, 90094 and 90095 (an administrator must approve, or the person may only ask for
+ * it), 900941 and 900981 (an administrator must approve an app Microsoft counts as risky).
+ */
+const NEEDS_APPROVAL = ["AADSTS65001", "AADSTS90093", "AADSTS90094", "AADSTS90095", "AADSTS900941", "AADSTS900981"];
+
+/**
+ * A refusal the identity service brings back, as a code the sign-in page has words for. Supabase Auth sends the browser
+ * to redirect_to with `error` and `error_description` (Microsoft's own, or the service's) and, for the service's own
+ * refusals only, `error_code`, in the query and again in the fragment, and no code. Microsoft's reason is the AADSTS
+ * number its description starts with; Microsoft also sends error_subcode=cancel, which the service does not pass on.
+ */
+function refusalCode(q: { error?: string; errorCode?: string; errorSubcode?: string; description?: string }): { code: string; aadsts: string | null } {
+  const numbers: string[] = q.description?.match(/AADSTS\d+/g) ?? [];
+  const aadsts = numbers[0] ?? null;
+  if (q.errorCode === "provider_email_needs_verification") return { code: "email_unverified", aadsts };
+  // Cancel pressed on Microsoft's permissions screen, or Back to the app after asking IT for approval.
+  if (numbers.includes("AADSTS65004") || q.errorSubcode === "cancel") return { code: "microsoft_declined", aadsts };
+  if (numbers.some((n) => NEEDS_APPROVAL.includes(n)) || q.error === "consent_required") return { code: "microsoft_needs_approval", aadsts };
+  if (/Error getting user email from external provider/i.test(q.description ?? "")) return { code: "microsoft_no_email", aadsts };
+  return { code: "signin_incomplete", aadsts };
+}
+
+/**
  * The identity service returns here with a single-use code; the code is exchanged server-side and the token verified
  * before a session opens. The provider this browser started with (the PKCE cookie) is this sign-in's provider when the
- * account holds it; otherwise the sign-in is refused (identityForSignIn in packages/core).
+ * account holds it; otherwise the sign-in is refused (identityForSignIn in packages/core). A refusal comes back with an
+ * error instead of a code (refusalCode above): the sign-in page says what it means, or "Confirm it's you" says it failed.
  */
 authRoutes.get("/callback", async (c) => {
   const container = c.get("container");
   const fail = (code: string) => { clearPkceCookie(c); return c.redirect(`${container.env.APP_BASE_URL}/login?error=${encodeURIComponent(code)}`, 302); };
   const pkce = readPkceCookie(c);
   const code = c.req.query("code");
+  const returnedState = c.req.query("state");
+  const error = c.req.query("error");
+  const errorCode = c.req.query("error_code");
+  const description = c.req.query("error_description");
+  if (!code && (error || errorCode || description)) {
+    // Microsoft's description is never shown, kept or put in an address: the log has the code and the bare AADSTS number.
+    const refusal = refusalCode({ error, errorCode, errorSubcode: c.req.query("error_subcode"), description });
+    console.warn(`[sign-in] the identity service sent back a refusal: ${refusal.code}${refusal.aadsts ? ` (${refusal.aadsts})` : ""}`);
+    const reauth = readReauthMarker(c, container);
+    if (reauth && pkce && returnedState === pkce.state && returnedState.endsWith(REAUTH_STATE_SUFFIX)) return refusedReauth(c, container, reauth);
+    clearPkceCookie(c);
+    // The trailing `#`: a browser carries the service's fragment, a copy of the refusal, through a redirect that names none.
+    return c.redirect(`${container.env.APP_BASE_URL}/login?error=${encodeURIComponent(refusal.code)}#`, 302);
+  }
   if (!pkce || !code) return fail("signin_incomplete");
   // The state is mandatory and must be the one this browser was given; PKCE binds the code, the state binds the flow.
-  const returnedState = c.req.query("state");
   if (!returnedState || returnedState !== pkce.state) return fail("signin_incomplete");
   try {
     const { accessToken } = await container.integrations.identity.exchangeCode({ code, codeVerifier: pkce.verifier });
