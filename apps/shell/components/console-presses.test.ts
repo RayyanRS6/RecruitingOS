@@ -101,10 +101,10 @@ vi.mock("@ros/web/src/toast", () => ({ toast: (title: string, more?: unknown) =>
 vi.mock("next/navigation", () => ({ usePathname: () => "/admin", useRouter: () => ({ push: () => undefined, replace: () => undefined, refresh: () => undefined }), useParams: () => ({}), useSearchParams: () => new URLSearchParams("") }));
 vi.mock("next/link", () => ({ default: () => null }));
 
-const { AccessButtons, AccessChoice, CompanyCheckPanel, PlanPanel, companyCheckToast } = await import("@ros/web/src/pages/admin/customers");
+const { AccessButtons, AccessChoice, CandidateScorePanel, CompanyCheckPanel, PlanPanel, TrialExtensionCard, companyCheckToast } = await import("@ros/web/src/pages/admin/customers");
 const { Overview } = await import("@ros/web/src/pages/admin/Overview");
 const { ApiError } = await import("@ros/web/src/api/client");
-const { Button, Field } = await import("@ros/ui");
+const { Button, Field, Segmented } = await import("@ros/ui");
 
 type El = ReactElement<{ children?: ReactNode; [key: string]: unknown }>;
 const isEl = (n: unknown): n is El => !!n && typeof n === "object" && "props" in (n as object);
@@ -131,6 +131,8 @@ const button = (tree: unknown, name: string) => {
 };
 /** Every string drawn in a tree: children, and the titles and labels of components not drawn. */
 const words = (tree: unknown): string[] => [...elements(tree)].flatMap((e) => [e.props.children, e.props.title, e.props.label].flat().filter((w): w is string => typeof w === "string"));
+/** A native field by its id: what it holds, and typing into it. */
+const control = (tree: unknown, type: string, id: string) => [...elements(tree)].find((e) => e.type === type && e.props.id === id)?.props as { value: string; onChange: (e: unknown) => void } | undefined;
 
 /** What the console sent, as `fetch` saw it, and the API's answer to each. */
 const sent: Array<{ path: string; body: unknown }> = [];
@@ -311,7 +313,6 @@ describe("a change of plan picked in the drawer", () => {
     { key: "pro", name: "Pro", prices: { monthlyUsd: 99 }, limits: {} },
   ];
   const onPlan = (planKey: string): Parameters<typeof PlanPanel>[0] => ({ company: { id: "co-harbor", name: "Harbor Dental", planKey, status: "active", screeningConversations: null, trial: null } as never, onDone: () => undefined });
-  const control = (tree: unknown, type: string, id: string) => [...elements(tree)].find((e) => e.type === type && e.props.id === id)?.props as { value: string; onChange: (e: unknown) => void } | undefined;
 
   it("starts again from the plan another administrator moved the company to, so it never offers to move it back unasked; the reason stays, and a Yes that lands first sends the plan its question named", async () => {
     ui.fresh();
@@ -340,6 +341,47 @@ describe("a change of plan picked in the drawer", () => {
     await ui.settled();
     expect(sent).toEqual([{ path: "/api/v1/admin/customers/co-harbor/plan", body: { planKey: "pro", reason: "Asked for more jobs." } }]);
     expect(ui.toasts.map((t) => t.title)).toEqual(["Harbor Dental is on Pro now."]);
+  });
+});
+
+describe("a trial extension asked in the drawer", () => {
+  const card = (endsAt: string): Parameters<typeof TrialExtensionCard>[0] => ({ company: { id: "co-harbor", name: "Harbor Dental", timezone: "America/Los_Angeles" } as never, trial: { started: true, startedAt: "2026-10-21T17:00:00.000Z", endsAt, daysLeft: 11, endingSoon: false, ended: false, extendedDays: 0 } });
+
+  it("goes when another administrator's extension is read in under it, so its date never moves under a pending Yes that would add the days again; the days and the reason stay", () => {
+    ui.fresh();
+    let tree = ui.draw(TrialExtensionCard, card("2026-11-20T17:00:00.000Z"));
+    control(tree, "input", "trial-why")?.onChange({ target: { value: "The owner's kick-off moved." } });
+    tree = ui.draw(TrialExtensionCard, card("2026-11-20T17:00:00.000Z"));
+    button(tree, "Extend the trial").onClick();
+    tree = ui.draw(TrialExtensionCard, card("2026-11-20T17:00:00.000Z"));
+    expect(buttons(tree).map(named)).toEqual(["Yes, extend it", "No"]);
+    // Nadine extended it by 14 days meanwhile; the minute's look lands
+    tree = ui.draw(TrialExtensionCard, card("2026-12-04T17:00:00.000Z"));
+    expect(buttons(tree).map(named)).toEqual(["Extend the trial"]);
+    expect(control(tree, "input", "trial-why")?.value).toBe("The owner's kick-off moved.");
+    expect(control(tree, "input", "trial-days")?.value).toBe("14");
+  });
+});
+
+describe("the applicants' match score switch in the drawer", () => {
+  const panel = (shown: boolean): Parameters<typeof CandidateScorePanel>[0] => ({ company: { id: "co-harbor", name: "Harbor Dental", candidateScoreShown: shown, settings: {} } as never });
+  const choice = (tree: unknown) => propsOf<{ value: string; onChange: (v: string) => void }>(tree, Segmented);
+
+  it("starts again from the switch as another administrator left it, so it never shows the old setting with a Save that would turn it back", () => {
+    ui.fresh();
+    let tree = ui.draw(CandidateScorePanel, panel(true));
+    expect(choice(tree).value).toBe("shown");
+    // Nadine turned it off; the minute's look lands
+    tree = ui.draw(CandidateScorePanel, panel(false));
+    expect(choice(tree).value).toBe("hidden");
+    expect(buttons(tree).map(named)).toEqual([]);
+    // the same in the middle of a change: the switch as it now is, and nothing to save
+    choice(tree).onChange("shown");
+    tree = ui.draw(CandidateScorePanel, panel(false));
+    expect(buttons(tree).map(named)).toEqual(["Save", "Cancel"]);
+    tree = ui.draw(CandidateScorePanel, panel(true));
+    expect(choice(tree).value).toBe("shown");
+    expect(buttons(tree).map(named)).toEqual([]);
   });
 });
 

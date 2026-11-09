@@ -905,12 +905,21 @@ export function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: (
  * started: a number of days (1 to 90) and a reason, then a second press to confirm. The new end counts from the later of
  * the old end and today (POST /admin/customers/:id/trial); the extension is audited with the reason, the owners are told,
  * the "trial ended" alert is resolved and a paused company takes applications again.
+ *
+ * The question stands on the end it was asked on (the review of 9 November 2026): another administrator's extension read in
+ * under it takes it away, so its date never moves under a pending Yes that would add the days a second time; the days and
+ * the reason typed stay.
  */
-function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: TrialStanding }) {
+export function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: TrialStanding }) {
   const qc = useQueryClient();
   const [days, setDays] = useState("14");
   const [why, setWhy] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [askedOn, setAskedOn] = useState(trial.endsAt);
+  if (askedOn !== trial.endsAt) {
+    setAskedOn(trial.endsAt);
+    setConfirming(false);
+  }
   const count = Number(days);
   const ready = extensionDaysOk(count) && reasonReady(why);
   const to = trialExtendedTo(trial, extensionDaysOk(count) ? count : 0);
@@ -982,12 +991,20 @@ type ScoreChoice = "shown" | "hidden";
  * company. Every change needs a reason, which is audited and kept with who made it (POST
  * /admin/customers/:id/candidate-score). Counsel items 1 and 21: a lawyer reviews it before real candidates in NYC, IL,
  * CA or CO.
+ *
+ * The choice starts from the switch as it is, and starts again from it when another administrator's change is read in
+ * (the review of 9 November 2026), so the panel never shows the old setting with a Save that would turn it back.
  */
-function CandidateScorePanel({ company }: { company: CustomerRow }) {
+export function CandidateScorePanel({ company }: { company: CustomerRow }) {
   const qc = useQueryClient();
   const current: ScoreChoice = candidateScoreOn(company) ? "shown" : "hidden";
   const [choice, setChoice] = useState<ScoreChoice>(current);
   const [why, setWhy] = useState("");
+  const [chosenOn, setChosenOn] = useState(current);
+  if (chosenOn !== current) {
+    setChosenOn(current);
+    setChoice(current);
+  }
   const setBy = company.settings.candidateScoreSetBy;
   const save = useMutation({
     mutationFn: () => api.post<{ shown: boolean; changed: boolean }>(`/api/v1/admin/customers/${company.id}/candidate-score`, { shown: choice === "shown", reason: why.trim() }, reason),
