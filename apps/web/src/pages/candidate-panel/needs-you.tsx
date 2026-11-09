@@ -265,7 +265,7 @@ function InterviewStep({ a, roleId, initialRoundKey, myUserId, onClose }: { a: A
   // The old way: the times are worked out from the interviewers' hours or calendars and emailed for the candidate to pick.
   const offer = useMutation({
     mutationFn: () => api.post(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, ...link.body, ...invitationLine }),
-    onSuccess: async () => { const t = pickTimesToast(a.candidate.firstName, check); toast(t.title, t.detail); onClose(); await refresh(); },
+    onSuccess: async () => { const t = pickTimesToast(a.candidate.firstName, check); toast(t.title, t.detail); await refresh(); onClose(); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not set up the interview."),
   });
   const suggestion = suggest.data;
@@ -352,7 +352,8 @@ function InterviewStep({ a, roleId, initialRoundKey, myUserId, onClose }: { a: A
             </details>
           ) : null}
           submit={book}
-          onDone={async () => { onClose(); await refresh(); }}
+          // the panel is read again before the form closes, so what shows next is the booking, never the card it came from
+          onDone={async () => { await refresh(); onClose(); }}
           onCancel={onClose}
         />
       )}
@@ -389,7 +390,7 @@ function NoTimeCard({ a, roleId, iv }: { a: ApplicationDetail; roleId: string; i
           videoRound={iv.format === "video"}
           autoFocus
           submit={(body) => api.post<InterviewBooked>(`/api/v1/interviews/${iv.id}/set-time`, body)}
-          onDone={async () => { setOpen(false); await refresh(); }}
+          onDone={async () => { await refresh(); setOpen(false); }}
           onCancel={() => setOpen(false)}
         />
       ) : (
