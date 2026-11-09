@@ -835,13 +835,23 @@ export function trialExtendedToast(to: string, timeZone?: string | null): string
  * The Plan control (Wave S2 F1; founder decision F8), platform admins only: pick a plan, say why, confirm. The new limits
  * apply at once (POST /admin/customers/:id/plan); the change is audited with the reason and the customer sees it in
  * their history. Design Partner starts the 90-day pilot. Once changed, the drawer goes back to its Overview.
+ *
+ * The pick starts from the plan the company is on, and starts again from it when the list read again brings another
+ * administrator's change of plan (the review of 9 November 2026), so the panel never offers to undo that change unasked;
+ * the reason typed stays.
  */
-function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => void }) {
+export function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => void }) {
   const qc = useQueryClient();
   const plans = useQuery({ queryKey: ["admin", "plans"], queryFn: () => api.get<PlanOption[]>("/api/v1/admin/plans", reason) });
   const [pick, setPick] = useState(company.planKey);
   const [why, setWhy] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [pickedOn, setPickedOn] = useState(company.planKey);
+  if (pickedOn !== company.planKey) {
+    setPickedOn(company.planKey);
+    setPick(company.planKey);
+    setConfirming(false);
+  }
   // A retired plan the company is still on stays in the list, or the list would draw its first option as if chosen and
   // offer no change to it. The API offers nothing else, so it can only be left as it is.
   const offered = plans.data ?? [];
@@ -850,9 +860,9 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
   const price = planPriceLine(chosen?.prices);
   const includes = chosen ? [price, planLimitsLine(chosen.limits)].filter(Boolean).join(" · ") : "";
   const save = useMutation({
-    mutationFn: () => api.post<{ trialEnded?: boolean; unlocked?: number; aiCreditMonthStarted?: boolean }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
-    onSuccess: (r) => {
-      const t = planChangedToast(company.name, chosen?.name ?? pick, !!r?.trialEnded, r?.unlocked ?? 0, !!r?.aiCreditMonthStarted);
+    mutationFn: (planKey: string) => api.post<{ trialEnded?: boolean; unlocked?: number; aiCreditMonthStarted?: boolean }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey, reason: why.trim() }, reason),
+    onSuccess: (r, planKey) => {
+      const t = planChangedToast(company.name, options.find((p) => p.key === planKey)?.name ?? planKey, !!r?.trialEnded, r?.unlocked ?? 0, !!r?.aiCreditMonthStarted);
       toast(t.title, t.detail);
       setWhy("");
       setConfirming(false);
@@ -878,7 +888,7 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
               <>
                 <Field label="Why (required, kept with the change)" htmlFor="plan-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="plan-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
                 {confirming ? (
-                  <Alert tone="caution"><div className={CONFIRM}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+                  <Alert tone="caution"><div className={CONFIRM}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate(pick)}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
                 ) : <div className="row"><Button variant="primary" disabled={!reasonReady(why)} onClick={() => setConfirming(true)}>Change plan</Button><Button variant="quiet" onClick={() => { setPick(company.planKey); setWhy(""); }}>Cancel</Button></div>}
               </>
             ) : null}

@@ -101,7 +101,7 @@ vi.mock("@ros/web/src/toast", () => ({ toast: (title: string, more?: unknown) =>
 vi.mock("next/navigation", () => ({ usePathname: () => "/admin", useRouter: () => ({ push: () => undefined, replace: () => undefined, refresh: () => undefined }), useParams: () => ({}), useSearchParams: () => new URLSearchParams("") }));
 vi.mock("next/link", () => ({ default: () => null }));
 
-const { AccessButtons, AccessChoice, CompanyCheckPanel, companyCheckToast } = await import("@ros/web/src/pages/admin/customers");
+const { AccessButtons, AccessChoice, CompanyCheckPanel, PlanPanel, companyCheckToast } = await import("@ros/web/src/pages/admin/customers");
 const { Overview } = await import("@ros/web/src/pages/admin/Overview");
 const { ApiError } = await import("@ros/web/src/api/client");
 const { Button, Field } = await import("@ros/ui");
@@ -301,6 +301,45 @@ describe("a question asked in the company check", () => {
     // confirming a confirmed company sends anything still held, and says so
     expect(companyCheckToast("Harbor Dental", true, { changed: false, releasedMessages: 3 })).toEqual({ title: "Harbor Dental was already confirmed.", detail: "3 held messages are on their way." });
     expect(companyCheckToast("Harbor Dental", false, { changed: false, releasedMessages: 0 })).toEqual({ title: "Harbor Dental's confirmation was already taken back.", detail: "Nothing changed." });
+  });
+});
+
+describe("a change of plan picked in the drawer", () => {
+  const PLANS = [
+    { key: "free", name: "Free", prices: { monthlyUsd: 0 }, limits: {} },
+    { key: "basic", name: "Basic", prices: { monthlyUsd: 49 }, limits: {} },
+    { key: "pro", name: "Pro", prices: { monthlyUsd: 99 }, limits: {} },
+  ];
+  const onPlan = (planKey: string): Parameters<typeof PlanPanel>[0] => ({ company: { id: "co-harbor", name: "Harbor Dental", planKey, status: "active", screeningConversations: null, trial: null } as never, onDone: () => undefined });
+  const control = (tree: unknown, type: string, id: string) => [...elements(tree)].find((e) => e.type === type && e.props.id === id)?.props as { value: string; onChange: (e: unknown) => void } | undefined;
+
+  it("starts again from the plan another administrator moved the company to, so it never offers to move it back unasked; the reason stays, and a Yes that lands first sends the plan its question named", async () => {
+    ui.fresh();
+    ui.answers.set(JSON.stringify(["admin", "plans"]), { data: PLANS });
+    answer(200, { trialEnded: false, unlocked: 0, aiCreditMonthStarted: false });
+    // Paul picks Pro for a company on Free, says why, and presses Change plan
+    let tree = ui.draw(PlanPanel, onPlan("free"));
+    control(tree, "select", "plan-pick")?.onChange({ target: { value: "pro" } });
+    tree = ui.draw(PlanPanel, onPlan("free"));
+    control(tree, "input", "plan-why")?.onChange({ target: { value: "Asked for more jobs." } });
+    tree = ui.draw(PlanPanel, onPlan("free"));
+    button(tree, "Change plan").onClick();
+    tree = ui.draw(PlanPanel, onPlan("free"));
+    const yes = button(tree, "Yes, change it");
+    // Nadine put it on Basic meanwhile; the minute's look lands: the panel shows Basic, and offers nothing
+    tree = ui.draw(PlanPanel, onPlan("basic"));
+    expect(control(tree, "select", "plan-pick")?.value).toBe("basic");
+    expect(buttons(tree).map(named)).toEqual([]);
+    expect(control(tree, "input", "plan-why")).toBeUndefined();
+    // picking again, the reason typed is still there
+    control(tree, "select", "plan-pick")?.onChange({ target: { value: "free" } });
+    tree = ui.draw(PlanPanel, onPlan("basic"));
+    expect(control(tree, "input", "plan-why")?.value).toBe("Asked for more jobs.");
+    // a Yes pressed before that draw sends the plan its question named, never the plan the company is on
+    yes.onClick();
+    await ui.settled();
+    expect(sent).toEqual([{ path: "/api/v1/admin/customers/co-harbor/plan", body: { planKey: "pro", reason: "Asked for more jobs." } }]);
+    expect(ui.toasts.map((t) => t.title)).toEqual(["Harbor Dental is on Pro now."]);
   });
 });
 
