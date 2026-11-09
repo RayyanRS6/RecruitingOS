@@ -241,10 +241,11 @@ export async function queueClosingMessages(q: Queryable, integrations: Integrati
  * The closing message for one person past the plan's candidates per job (the plans of 5 November 2026, Rule 2): the role_closed
  * wording, with no word about keeping them, whatever the company's settings say, because the team cannot tell them. Its key is
  * one per application, so nobody gets it twice, and the fact on the record means nobody tries again if it could not go. Nothing
- * goes to the team and nobody is brought in. Sent by itself at five working days (`runUntoldSafetyNet`), or when a person sends
- * the closing message for the others (`tellLockedOfClose`). True when it is on its way.
+ * goes to the team and nobody is brought in. Sent by itself at five working days (`runUntoldSafetyNet`), when a person sends
+ * the closing message for the others (`tellLockedOfClose`), or by a change of plan about to open them, so they are opened as
+ * told (`unlockApplicants`). True when it is on its way.
  */
-async function tellOneLockedOfClose(q: Queryable, integrations: Integrations, input: { app: App; statusBaseUrl: string; now: Date }): Promise<boolean> {
+export async function tellOneLockedOfClose(q: Queryable, integrations: Integrations, input: { app: App; statusBaseUrl: string; now: Date }): Promise<boolean> {
   const { app } = input;
   const decisionAt = new Date(app.rejectedAt ?? app.stageChangedAt).toISOString();
   const r = await queueDecisionMessage(q, integrations, { app, actor: CANDIDATE_LOCK_ACTOR, wording: "role_closed", statusBaseUrl: input.statusBaseUrl, now: input.now }).catch((e: unknown) => {

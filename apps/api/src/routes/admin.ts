@@ -659,7 +659,7 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     // Before the plan's rows are written, because opening many takes a while and every AI call of this company waits on those
     // rows: until they are written its calls go on under the old plan, and they wait only for the short rest of this transaction.
     const limit = entitlements.CANDIDATES_PER_JOB in plan.limits ? plan.limits[entitlements.CANDIDATES_PER_JOB] : await entitlements.limitOf(tx, companyId, entitlements.CANDIDATES_PER_JOB);
-    const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, limit, actor, reason, now: clock });
+    const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, limit, actor, reason, now: clock, integrations: container.integrations, statusBaseUrl: container.env.JOBS_BASE_URL });
     const { aiCreditMonthStarted } = await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
     await entitlements.settleAllowanceAlerts(tx, { companyId });
     const pilot = body.planKey === "design_partner"

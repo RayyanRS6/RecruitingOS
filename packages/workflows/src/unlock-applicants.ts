@@ -1,8 +1,9 @@
 import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
-import { CLOSE_OUT_TEMPLATE } from "@ros/agents";
+import { CLOSE_OUT_TEMPLATE, tellOneLockedOfClose } from "@ros/agents";
 import type { Actor } from "@ros/contracts";
 import { audit, emit, evaluateEligibility, lockApplicants, lockedAndWaiting, transition } from "@ros/core";
 import { applications, communications, rolePackets, roles, workflowRuns, type Tx } from "@ros/db";
+import type { Integrations } from "@ros/integrations";
 import type { WorkflowEngine } from "./engine";
 import { intakeOn } from "./with-application";
 
@@ -23,7 +24,9 @@ const CLOSE_OUT_LEFT = ["sending", "sent", "delivered", "opened", "clicked", "un
  * one email went already). The worker takes runs one at a time, so a large upgrade reaches the AI and the mail one by one.
  * Anyone else is simply visible, with no email: the answers on their form are read in code, so a must-have "No" is held for a
  * person as it always is, and the rest wait for the team's review. Someone who left, or whom a closed job moved, stays where
- * they are.
+ * they are. Someone a closed job moved whom nobody has told hears that it closed first, in this transaction and in the words
+ * someone locked gets (no line about keeping them, and no word about a plan): they are opened as told, by the date they were
+ * promised (`tellOneLockedOfClose`).
  *
  * Runs in the transaction that changed the plan, behind each job's lock, so an application being decided at this moment takes
  * its place before this or under the new limit after it. Every job of the company, in id order, also one with nobody locked
@@ -32,7 +35,7 @@ const CLOSE_OUT_LEFT = ["sending", "sent", "delivered", "opened", "clicked", "un
  * the new plan's own: the caller writes the plan's rows after this (POST /admin/customers/:id/plan). Returns how many were
  * opened, and how many of them go on to the interview by themselves.
  */
-export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; planKey: string; limit: number | null; actor: Actor; reason: string; now: Date }): Promise<{ unlocked: number; interviews: number }> {
+export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; planKey: string; limit: number | null; actor: Actor; reason: string; now: Date; integrations: Integrations; statusBaseUrl: string }): Promise<{ unlocked: number; interviews: number }> {
   const { companyId, planKey, limit, actor, now } = input;
   const jobs = await q.select({ roleId: roles.id }).from(roles).where(eq(roles.companyId, companyId)).orderBy(asc(roles.id));
   let unlocked = 0;
@@ -48,6 +51,12 @@ export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "star
     const [role] = await q.select({ status: roles.status }).from(roles).where(eq(roles.id, roleId)).limit(1);
     const noted = new Set((await q.select({ id: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, opening.map((a) => a.id)), eq(communications.templateKey, CLOSE_OUT_TEMPLATE), inArray(communications.status, CLOSE_OUT_LEFT)))).map((r) => r.id));
     for (const app of opening) {
+      // Their job closed while they were locked and nobody has told them: they hear it first, while still locked, so the message
+      // is the one someone locked gets, and they are opened as told.
+      if (role?.status === "closed" && app.stage === "talent_pool") {
+        const [row] = await q.select().from(applications).where(eq(applications.id, app.id)).limit(1);
+        if (row?.toldState === "not_told") await tellOneLockedOfClose(q, input.integrations, { app: row, statusBaseUrl: input.statusBaseUrl, now });
+      }
       await q.update(applications).set({ lockedAt: null }).where(eq(applications.id, app.id));
       unlocked += 1;
       const inProcess = app.stage === "applied" || app.stage === "received";

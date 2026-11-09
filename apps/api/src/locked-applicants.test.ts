@@ -1662,7 +1662,7 @@ describe("locked candidates", () => {
             };
           },
         });
-        const opened = await unlockApplicants(watched, container.engine, { companyId: company.id, planKey: "basic", limit: 25, actor: { kind: "system", id: "test" }, reason: "They asked to upgrade.", now: new Date() });
+        const opened = await unlockApplicants(watched, container.engine, { companyId: company.id, planKey: "basic", limit: 25, actor: { kind: "system", id: "test" }, reason: "They asked to upgrade.", now: new Date(), integrations: container.integrations, statusBaseUrl: container.env.JOBS_BASE_URL });
         // Behind each job's lock, in the same transaction: both jobs' locks are held until it commits, so an applicant can only wait and read the new limit.
         const keys = rowsOf<{ a: string; b: string }>(await tx.execute(sql`select (hashtext(${`applicants:${job.roleId}`})::bigint & 4294967295)::text as a, (hashtext(${`applicants:${empty.roleId}`})::bigint & 4294967295)::text as b`))[0];
         const held = rowsOf<{ objid: string }>(await tx.execute(sql`select objid::text as objid from pg_locks where locktype = 'advisory' and granted`)).map((r) => r.objid);
@@ -1813,7 +1813,7 @@ describe("locked candidates", () => {
       expect(mailsTo(p.email).at(-1)!.text).toContain("Thanks again for applying");
     });
 
-    it("someone whose job closed is opened where they are, with nothing started; someone who left the process stays as they are", async () => {
+    it("someone whose job closed is opened where they are, with nothing started, and hears first that it closed if nobody had told them; someone who left the process stays as they are", async () => {
       const job = await openJob(1);
       await fill(job, 1);
       const left = await apply(job, person("Zed"));
@@ -1826,11 +1826,57 @@ describe("locked candidates", () => {
       await changePlan(job.id, "pro");
       expect((await applicationOf(left.id))).toMatchObject({ stage: "withdrawn", lockedAt: left.lockedAt });
       expect(await eventsOf(left.id, "application.unlocked")).toEqual([]);
-      expect((await applicationOf(pooledRow.id))).toMatchObject({ stage: "talent_pool", lockedAt: null });
+      expect((await applicationOf(pooledRow.id))).toMatchObject({ stage: "talent_pool", lockedAt: null, toldState: "sent" });
       expect(await screenRunsOf(pooledRow.id)).toEqual([]);
-      expect(mailsTo(pooled.email).length).toBe(before);
+      // The one email is that the job closed, in the words someone locked gets (the check of 9 November 2026, C7): nothing else is sent.
+      const sent = mailsTo(pooled.email).slice(before);
+      expect(sent.map((m) => m.subject)).toEqual([`Your application to ${job.name}`]);
+      expect(sent[0].text).toContain(`${job.name} has closed this position`);
+      expect(sent[0].text).not.toContain("keep your information");
       expect((await eventsOf(pooledRow.id, "application.unlocked"))[0].payload).toMatchObject({ interview: false });
     });
+
+    it("a change of plan between a job's close and the date someone locked was promised tells them it closed, before they are opened, so the date holds", async () => {
+      // Sam applies on Thursday 1 October 2026 and is locked: he is promised an email at the latest on Saturday 31 October.
+      const job = await openJob(1);
+      await fill(job, 1);
+      const p = person("Sam");
+      const row = await apply(job, p);
+      const applied = "2026-10-01T17:00:00.000Z";
+      await container.db.update(applications).set({ createdAt: applied, lockedAt: applied }).where(eq(applications.id, row.id));
+      expect(closeOutDayWords(closeOutDueAt(applied), job.timezone)).toBe("Saturday, October 31, 2026");
+      // The owner closes the job on Monday 26 October: he moves to the talent pool, still locked, and nobody tells him.
+      await close(job);
+      await container.db.update(applications).set({ stageChangedAt: "2026-10-26T17:00:00.000Z" }).where(eq(applications.id, row.id));
+      expect(await applicationOf(row.id)).toMatchObject({ stage: "talent_pool", toldState: "not_told" });
+      // On Tuesday 27 October the owner upgrades for another job, and the change of plan opens him.
+      const before = mailsTo(p.email).length;
+      moveClock(Date.parse("2026-10-27T17:00:00.000Z"));
+      let changed: Response;
+      try {
+        changed = await json(admin, "POST", `/api/v1/admin/customers/${job.id}/plan`, { planKey: "basic", reason: "They asked to upgrade." });
+      } finally {
+        moveClock(null);
+      }
+      expect(changed.status, await changed.clone().text()).toBe(200);
+      expect((await read<{ unlocked: number }>(changed)).unlocked).toBe(1);
+      await container.drain();
+      // He heard that day that the job closed, once, in the words someone locked gets: nothing about keeping him or about a plan.
+      const sent = mailsTo(p.email).slice(before);
+      expect(sent.map((m) => m.subject)).toEqual([`Your application to ${job.name}`]);
+      expect(sent[0].text).toContain(`${job.name} has closed this position, so your application for this role will not go any further.`);
+      expect(sent[0].text).not.toContain("keep your information");
+      expect(sent[0].text).not.toMatch(/\b(plan|plans|upgrade|upgraded|locked)\b/i);
+      expect(await applicationOf(row.id)).toMatchObject({ stage: "talent_pool", lockedAt: null, toldState: "sent" });
+      expect((await eventsOf(row.id, "application.untold_fallback")).map((e) => e.payload)).toEqual([expect.objectContaining({ action: "sent", locked: true })]);
+      // Nothing is left for Tuesday 3 November, five working days after the unlock, nor for a recruiter: he was told.
+      expect(await safetyNet(job.id, new Date("2026-11-03T17:00:00.000Z"))).toEqual([]);
+      // His page says the job closed, not that his application is being checked, and nothing about keeping him.
+      const page2 = await statusOf(row);
+      expect(page2).toContain(`${job.name} has closed this position, so your application for it will not go any further.`);
+      expect(page2).not.toContain("We are checking the basics");
+      expect(page2).not.toContain("We are keeping you in mind");
+    }, 120_000);
 
     it("someone told their job closed and opened only after it is not told they were kept or reviewed: nobody kept them; someone the team could read still is", async () => {
       const job = await openJob(1);
