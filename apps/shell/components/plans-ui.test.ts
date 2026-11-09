@@ -37,7 +37,7 @@ const { ReportFigures } = await import("@ros/web/src/pages/RoleReport");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 const { ScorecardWaitingCard } = await import("@ros/web/src/pages/candidate-panel/assessment");
 const { CallNotesCard } = await import("@ros/web/src/pages/candidate-panel/call-notes");
-const { MessagesTab } = await import("@ros/web/src/pages/candidate-panel/sections");
+const { MessagesTab, ScreenTab } = await import("@ros/web/src/pages/candidate-panel/sections");
 const { CloseRoleCard } = await import("@ros/web/src/components/ClosingMessage");
 const { RecruiterRequests } = await import("@ros/web/src/components/RecruiterRequests");
 const { RecruiterQueue } = await import("@ros/web/src/pages/RecruiterQueue");
@@ -374,6 +374,13 @@ describe("someone locked, as ITS reads them under a grant naming them", () => {
     const open = text(render(client(), createElement(CallNotesCard, { a: person({ lockedAt: null }), roleId: "r1", prominent: true })));
     expect(open).toContain("these notes are their AI interview");
     expect(open).not.toContain("is locked");
+  });
+
+  it("the AI interview tab the queue's hint sends the recruiter to has the notes from a call at any stage, a closed job's talent pool too", () => {
+    const tab = (over: Record<string, unknown>) => text(render(client(), createElement(ScreenTab, { a: person({ assessments: [], timeline: [], ownerStage: "no_ai_interview", aiInterview: null, ...over }), roleId: "r1", myRole: "recruiter" })));
+    for (const stage of ["talent_pool", "withdrawn", "rejected"]) expect(tab({ stage }), stage).toContain("Add notes from a call");
+    // someone the team can read, at the talent pool, has no AI interview to add notes to
+    expect(tab({ stage: "talent_pool", lockedAt: null })).not.toContain("Add notes from a call");
   });
 
   it("writing to them stays, with no suggested line on the company's credit", () => {

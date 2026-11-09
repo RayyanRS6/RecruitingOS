@@ -197,6 +197,16 @@ describe("a recruiter's notes from a call (plan E3)", () => {
     expect(callNotesState(detail("human_requested", "rejected"), "recruiter").show).toBe(false);
   });
 
+  it("about someone locked it is there at any stage, as a quiet choice: the API keeps the notes on the Notes tab whatever the stage (the check of 9 November 2026, C4)", () => {
+    const locked = (stage: string) => ({ ...detail(null, stage), lockedAt: "2026-10-01T17:00:00.000Z" });
+    // a closed job moved them to its talent pool, they withdrew, or ITS declined them, and then they wrote back
+    for (const stage of ["talent_pool", "withdrawn", "rejected", "received"]) expect(callNotesState(locked(stage), "recruiter"), stage).toEqual({ show: true, prominent: false });
+    // still for recruiters only
+    for (const role of ["owner", "admin", "hiring_manager", "hr", "interviewer", null]) expect(callNotesState(locked("talent_pool"), role).show, String(role)).toBe(false);
+    // someone the team can read keeps the screening's stages
+    expect(callNotesState(detail(null, "talent_pool"), "recruiter").show).toBe(false);
+  });
+
   it("sends only what was written, per question where it fits, and says what it did", () => {
     expect(callNotesBody({ q_saturdays: "  Yes, mornings.  ", q_pay: "   " }, " Warm. ", true)).toEqual({ notes: [{ questionKey: "q_saturdays", text: "Yes, mornings." }, { text: "Warm." }], complete: true });
     expect(callNotesBody({ q_pay: "" }, "", true)).toBeNull();
