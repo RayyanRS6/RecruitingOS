@@ -319,7 +319,8 @@ describe("the kit without inline styles", () => {
     const styles = (file: string) => (readFileSync(new URL(file, import.meta.url), "utf8").match(/style=\{/g) ?? []).length;
     expect(styles("./index.tsx")).toBe(1); // the pipeline's widths and colours per stage
     expect(styles("./score-bars.tsx")).toBe(1); // a bar's width
-    expect(styles("./menu.tsx")).toBe(1); // a menu placed against the window inside a table's scrolling box
+    // a menu placed against the window inside a table's scrolling box; a menu's list height inside a dialog (--menu-max)
+    expect(styles("./menu.tsx")).toBe(2);
     for (const file of ["./sheet.tsx", "./tabs.tsx", "./toast.tsx", "./split-view.tsx", "./auto-textarea.tsx", "./motion-provider.tsx"]) expect(styles(file), file).toBe(0);
   });
 });
