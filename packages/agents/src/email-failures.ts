@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import { ACCESS_REQUEST_STATUSES, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, nextContactWindow, notify, onlyLockedApplications, raiseAlert, suppressAddress } from "@ros/core";
+import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, nextContactWindow, notify, onlyLockedApplications, raiseAlert, raiseAlertOnce, suppressAddress } from "@ros/core";
 import { applications, candidates, communications, companies, events, jobs, memberships, rolePackets, roles, users, type Queryable } from "@ros/db";
 import { mailbox, type EmailEvent, type Integrations } from "@ros/integrations";
 import { deliverSms } from "./coordinator";
@@ -14,6 +14,9 @@ import { QUIET_ON_FAILURE_TAG, queueCommunication } from "./outbox";
  * alerted. Every outcome is an event on the communication; nothing is silent.
  */
 export type EmailFailureOutcome = { handled: boolean; communicationId: string | null; action: "suppressed" | "retry_scheduled" | "recorded" | "unmatched"; suppressionReason?: string };
+
+/** A spam complaint raises one alert for its message (or, with none recorded, one for all such) while it stands, and at most one in this time. */
+export const SPAM_ALERT_WINDOW_MS = 60 * 60_000;
 
 export async function handleEmailEvent(q: Queryable, integrations: Integrations, input: { event: EmailEvent; appBaseUrl: string; now: Date }): Promise<EmailFailureOutcome> {
   const { event, now } = input;
@@ -55,7 +58,10 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
     if (user && !(await onlyAskedForAccess(q, user.id))) {
       await raiseAlert(q, { kind: "email.person_unreachable", severity: event.complaint ? "critical" : "high", title: event.complaint ? `A team member's address complained: ${address}` : `A team member's address bounces: ${address}`, body: `${event.description} Sign-in links and notifications to this address will not be delivered until an administrator releases the suppression after confirming the address.`, companyId, details: { userId: user.id, type: event.type } });
     }
-    if (event.complaint) await raiseAlert(q, { kind: "email.spam_complaint", severity: "critical", title: `Spam complaint from ${address}`, body: `Message: ${comm?.subject ?? "unknown"} (${comm?.templateKey ?? "unknown template"}). The address is suppressed. Review the message and the sending pattern before anything else goes to similar recipients.`, companyId, target: comm ? { type: "communication", id: comm.id } : null, details: { type: event.type, description: event.description } });
+    // one alert while one stands and at most one an hour (the review of 6 November 2026): every complaint is a critical alert
+    // emailed to the administrators, and complaints about mail with no message of ours recorded (a request's copy, a sign-in
+    // link) could come from as many accounts as someone makes. Each address is suppressed whatever is raised.
+    if (event.complaint) await raiseAlertOnce(q, { kind: "email.spam_complaint", severity: "critical", title: `Spam complaint from ${address}`, body: `Message: ${comm?.subject ?? "unknown"} (${comm?.templateKey ?? "unknown template"}). The address is suppressed. Review the message and the sending pattern before anything else goes to similar recipients.`, companyId, target: comm ? { type: "communication", id: comm.id } : null, details: { type: event.type, description: event.description } }, { withinMs: SPAM_ALERT_WINDOW_MS, now });
     return { handled: true, communicationId: comm?.id ?? null, action: "suppressed", suppressionReason: reason };
   }
 

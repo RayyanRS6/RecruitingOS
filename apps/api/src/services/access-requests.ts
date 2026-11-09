@@ -37,6 +37,7 @@ export const DECLINED_REASON = "Declined from the console";
  * A request's details as they are kept: what a stranger typed is data, so each value is one line and no longer than the
  * same field may be once it is theirs to change (UpdateCompany and the like). The form cannot send a line break, so this
  * only ever changes what a hand-made request sent. Nothing is refused for being long, except by CreateCompany's own limits.
+ * Only the one place the form sends is kept (the review of 6 November 2026): a hand-made body cannot store twenty.
  */
 export function companyRequestDetails(input: CreateCompany): CreateCompany {
   const name = oneLine(input.name, 120);
@@ -49,7 +50,7 @@ export function companyRequestDetails(input: CreateCompany): CreateCompany {
     vertical,
     ownerName: oneLine(input.ownerName, 120) || undefined,
     website: oneLine(input.website, 200) || undefined,
-    locations: input.locations.slice(0, 20).map((l) => ({ ...l, label: place(l.label), address1: place(l.address1), city: place(l.city), region: place(l.region), postalCode: place(l.postalCode), country: oneLine(l.country, 120) || "US", timezone: place(l.timezone) })),
+    locations: input.locations.slice(0, 1).map((l) => ({ ...l, label: place(l.label), address1: place(l.address1), city: place(l.city), region: place(l.region), postalCode: place(l.postalCode), country: oneLine(l.country, 120) || "US", timezone: place(l.timezone) })),
   };
 }
 
@@ -60,14 +61,26 @@ function placeOf(locations: ReadonlyArray<{ city?: string; region?: string }>): 
 }
 
 /**
+ * Past this many requests waiting at once, a new one is still taken, with its row on the Overview, but neither of its emails
+ * goes (the review of 6 November 2026): many accounts could otherwise fill the ITS mailbox and send our mail, from our domain,
+ * to addresses of their own. The Overview's row is what tells an administrator, and the person's screen claims no email.
+ */
+export const OPEN_REQUESTS_EMAILED = 25;
+
+/**
  * Sends the request (`POST /companies` for someone whose door is `request`): the company and the `requested` membership in
  * one transaction, with no active company, no workflow and no AI, then the emails outside it, to the person and to ITS.
- * `accessRequestEmailedAt` is written only when the person's copy really left, in one statement on the settings.
+ * `accessRequestEmailedAt` is written only when the person's copy really left, in one statement on the settings. With more
+ * than OPEN_REQUESTS_EMAILED waiting, this one counted, no email goes.
  */
 export async function sendAccessRequest(container: Container, input: { body: CreateCompany; user: { id: string; email: string; name: string | null }; actor: Actor }) {
   const details = companyRequestDetails(input.body);
   const company = await createCompany(container.db, details, input.user.id, input.actor, { request: true, now: container.engine.clock() });
   const person = { name: details.ownerName ?? input.user.name ?? null, email: input.user.email };
+  if ((await openRequests(container)) > OPEN_REQUESTS_EMAILED) {
+    const quiet: SignupRequest = { status: "requested", companyName: company.name, email: person.email, emailedAt: null };
+    return { ...company, accessRequest: quiet };
+  }
   const left = await sendWithoutAlert(container, {
     to: person.email,
     from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
@@ -84,6 +97,12 @@ export async function sendAccessRequest(container: Container, input: { body: Cre
   await tellItsAboutNewCompany(container, { company: { id: company.id, name: company.name, vertical: company.vertical, sizeBand: company.sizeBand, website: details.website ?? null, place: placeOf(details.locations) }, owner: person, request: true });
   const accessRequest: SignupRequest = { status: "requested", companyName: company.name, email: person.email, emailedAt };
   return { ...company, settings: emailedAt ? { ...company.settings, accessRequestEmailedAt: emailedAt } : company.settings, accessRequest };
+}
+
+/** How many requests are waiting for a decision now, across every company. */
+async function openRequests(container: Container): Promise<number> {
+  const [row] = await withPlatform(container.db, (tx) => tx.select({ n: sql<number>`count(*)` }).from(memberships).where(eq(memberships.status, "requested")));
+  return Number(row?.n ?? 0);
 }
 
 /** The one thing kept in settings. A failure to write it costs only the line on the screen, so it stops nothing. */

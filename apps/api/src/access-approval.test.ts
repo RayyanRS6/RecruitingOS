@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { SEND_MAX_ATTEMPTS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
+import { SEND_MAX_ATTEMPTS, SPAM_ALERT_WINDOW_MS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
 import { CreateCompany, FREE_PLAN_KEY, oneLine, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
 import { createApplicationLink, createInvitation, renderAlertEmail } from "@ros/core";
 import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns } from "@ros/db";
@@ -12,7 +12,7 @@ import { loadEnv, signupModeOf } from "./env";
 import { runHourlyChecks, runMaintenance } from "./maintenance";
 import { POLICIES } from "./middleware/rate-limit";
 import { resetPublicFeedCache } from "./pages/public-feeds";
-import { companyRequestDetails, decideAccess, sendAccessRequest } from "./services/access-requests";
+import { OPEN_REQUESTS_EMAILED, companyRequestDetails, decideAccess, sendAccessRequest } from "./services/access-requests";
 import { emailReallyLeft } from "./services/company-trust";
 import { signupDoor } from "./services/companies";
 import { backfillPublishing } from "./services/publishing-backfill";
@@ -163,7 +163,8 @@ describe("a person's words are data", () => {
     expect(hand.ownerName).toBe("Sam Asker");
     expect(hand.website).toHaveLength(200);
     expect(hand.website).not.toMatch(/\s/);
-    expect(hand.locations).toHaveLength(20);
+    // the one place the form sends, and no more: a hand-made body cannot store fifty (the review of 6 November 2026)
+    expect(hand.locations).toHaveLength(1);
     expect(hand.locations[0].city).toHaveLength(120);
     expect(hand.locations[0].region).toBe("T X");
     // what is left of a name that was only line breaks is no name
@@ -879,6 +880,101 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     // on a team now, so a bounce is told as for anyone on a team
     expect((await bounce(910_002, copy.providerMessageId)).status).toBe(200);
     expect(await unreachable()).toHaveLength(1);
+  });
+});
+
+/**
+ * The public door's own bounds (the review of 6 November 2026): one address sends five requests an hour, past 25 waiting at
+ * once a request is still taken but sends no email, and spam complaints about those emails raise one alert, not one each.
+ * A container of its own, with every other limit out of the way and this one at its real value.
+ */
+describe("the door's own bounds under SIGNUP_MODE=approval", () => {
+  let w: World;
+  let adminCookie = "";
+  const OTHERS_UNLIMITED = JSON.stringify(Object.fromEntries(Object.values(POLICIES).filter((p) => p.name !== POLICIES.accessRequest.name).map((p) => [p.name, 1_000_000])));
+  /** The form sent by a new account from one address, as a browser behind the proxy sends it. */
+  const askFrom = async (address: string, email: string, name: string, body: unknown = undefined) => {
+    const cookie = await w.google(email, "Sam Asker");
+    return w.app.request("/api/v1/companies", { method: "POST", headers: { "content-type": "application/json", cookie, "x-forwarded-for": address }, body: JSON.stringify(body ?? w.form(name)) });
+  };
+
+  beforeAll(async () => {
+    w = await boot("its", { RATE_LIMIT_OVERRIDES: OTHERS_UNLIMITED });
+    adminCookie = await w.admin();
+  });
+  afterAll(async () => {
+    await w.container.close();
+  });
+
+  it("one address sends five requests an hour, whichever accounts it signs in with; the sixth makes nothing; a bad body, another address and the direct door are not counted", async () => {
+    expect(POLICIES.accessRequest).toEqual({ name: "access.request", rules: [{ by: "ip", windowMs: 3_600_000, limit: 5 }] });
+    for (let i = 1; i <= 5; i++) expect((await askFrom("203.0.113.7", `flood${i}@stranger.test`, `Flood Dental ${i}`)).status, `request ${i}`).toBe(201);
+    const mails = w.mail().sent.length;
+    const sixth = await askFrom("203.0.113.7", "flood6@stranger.test", "Flood Dental 6");
+    expect(sixth.status).toBe(429);
+    expect(await w.code(sixth)).toBe("rate_limited");
+    expect(await w.container.db.select().from(companies).where(eq(companies.name, "Flood Dental 6"))).toEqual([]);
+    expect(w.mail().sent.length).toBe(mails);
+    // a body the form would never send is refused before anything counts
+    for (let i = 1; i <= 6; i++) expect((await askFrom("192.0.2.9", `typo${i}@stranger.test`, "", { name: "" })).status).toBe(400);
+    expect((await askFrom("192.0.2.9", "typo7@stranger.test", "Typo Dental")).status).toBe(201);
+    // another address still asks, and the allow-list's door is not this door
+    expect((await askFrom("198.51.100.20", "elsewhere@stranger.test", "Elsewhere Dental")).status).toBe(201);
+    const pat = await w.google("pat@listed.test", "Pat Partner");
+    expect((await w.app.request("/api/v1/companies", { method: "POST", headers: { "content-type": "application/json", cookie: pat, "x-forwarded-for": "203.0.113.7" }, body: JSON.stringify(w.form("Listed Flood Dental")) })).status).toBe(201);
+  });
+
+  it("past 25 waiting at once, a request is still taken and on the Overview, but neither email goes and the screen claims none; with fewer waiting they go again", async () => {
+    expect(OPEN_REQUESTS_EMAILED).toBe(25);
+    const open = async () => Number((await w.container.db.select({ n: sql<number>`count(*)` }).from(memberships).where(eq(memberships.status, "requested")))[0].n);
+    // up to the bound straight through the service: the route's own limit is the case above
+    for (let i = 1; (await open()) < OPEN_REQUESTS_EMAILED; i++) {
+      const [user] = await w.container.db.insert(users).values({ email: `many${i}@stranger.test`, name: "Many Asker" }).returning();
+      await sendAccessRequest(w.container, { body: CreateCompany.parse(w.form(`Many Dental ${i}`)), user: { id: user.id, email: user.email, name: user.name }, actor: { kind: "user", id: user.id, name: "Many Asker" } });
+    }
+    const before = w.mail().sent.length;
+    const quiet = await askFrom("192.0.2.50", "one.too.many@stranger.test", "One Too Many Dental");
+    expect(quiet.status).toBe(201);
+    const made = await w.read<{ id: string; accessRequest: { status: string; emailedAt: string | null } }>(quiet);
+    expect(made.accessRequest).toMatchObject({ status: "requested", emailedAt: null });
+    expect(w.mail().sent.length).toBe(before);
+    expect(await w.statusOf(made.id)).toBe("requested");
+    expect((await w.rowOf(made.id)).settings.accessRequestEmailedAt).toBeUndefined();
+    expect((await w.signupOf(await w.google("one.too.many@stranger.test"))).request).toMatchObject({ status: "requested", emailedAt: null });
+    expect((await w.customers(adminCookie)).find((c) => c.id === made.id)?.accessRequest?.status).toBe("requested");
+    // an administrator works through the list: with fewer waiting, the next request is emailed again
+    for (const c of (await w.customers(adminCookie)).filter((c) => c.accessRequest?.status === "requested").slice(0, 2)) expect((await w.decide(adminCookie, c.id, "decline")).status).toBe(200);
+    const after = await askFrom("192.0.2.51", "next.one@stranger.test", "Next One Dental");
+    expect((await w.read<{ accessRequest: { emailedAt: string | null } }>(after)).accessRequest.emailedAt).toEqual(expect.any(String));
+    expect(w.mailTo("next.one@stranger.test").map((m) => m.subject)).toEqual(["Your request has been sent"]);
+    expect(w.mailTo("queue@its.example").map((m) => m.subject)).toContain("[access request] Next One Dental is asking for access");
+  });
+
+  it("spam complaints about these emails raise one alert while it stands, and at most one an hour, however many accounts complain; every address is stopped", async () => {
+    const complain = (email: string, id: number) => w.app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakePostmarkEvent({ providerMessageId: w.mailTo(email)[0].providerMessageId, email, type: "SpamComplaint", id })) });
+    const spam = () => w.container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "email.spam_complaint"));
+    const stopped = async (email: string) => (await w.container.db.select().from(emailSuppressions).where(and(eq(emailSuppressions.address, email), eq(emailSuppressions.active, true)))).length;
+    for (const [i, email] of ["flood1@stranger.test", "flood2@stranger.test", "flood3@stranger.test"].entries()) {
+      expect((await complain(email, 920_001 + i)).status).toBe(200);
+      expect(await stopped(email), email).toBe(1);
+    }
+    const [one] = await spam();
+    expect(await spam()).toHaveLength(1);
+    expect(one.severity).toBe("critical");
+    // resolved, a complaint within the hour raises nothing; one after the hour does
+    await withPlatform(w.container.db, (tx) => tx.update(adminAlerts).set({ status: "resolved", resolvedAt: new Date().toISOString() }).where(eq(adminAlerts.id, one.id)));
+    expect((await complain("flood4@stranger.test", 920_010)).status).toBe(200);
+    expect(await spam()).toHaveLength(1);
+    expect(await stopped("flood4@stranger.test")).toBe(1);
+    const clock = w.container.engine as unknown as { now: () => Date };
+    const real = clock.now;
+    clock.now = () => new Date(Date.now() + SPAM_ALERT_WINDOW_MS + 60_000);
+    try {
+      expect((await complain("flood5@stranger.test", 920_011)).status).toBe(200);
+    } finally {
+      clock.now = real;
+    }
+    expect(await spam()).toHaveLength(2);
   });
 });
 

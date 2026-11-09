@@ -323,6 +323,12 @@ describe("first sign-in asks for approval, on the Overview", () => {
     expect(attentionCount(six)).toBe(6);
     // five is exactly five rows: no row for a rest that is not there
     expect(attentionRows({ customers: asking.slice(0, 5) as never }, now).map((r) => r.key)).not.toContain("access-more");
+    // a flood of requests (the review of 6 November 2026): still five rows, in the order they came, and one line for the rest
+    const flood = Array.from({ length: 60 }, (_, i) => asker(`co-f${i}`, `Flood ${i} Dental`, 90 - i));
+    const many = attentionRows({ customers: flood as never }, now);
+    expect(many.map((r) => r.text)).toEqual([...[0, 1, 2, 3, 4].map((i) => `Flood ${i} Dental is asking for access`), "55 more companies are asking for access"]);
+    expect(many[5].sub).toBe("Flood 5 Dental, Flood 6 Dental, Flood 7 Dental and 52 more");
+    expect(attentionCount(many)).toBe(60);
   });
 
   it("leaves requests and declined companies out of the waiting companies' row, and a declined company out of everything", () => {
