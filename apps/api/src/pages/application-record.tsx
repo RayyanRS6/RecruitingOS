@@ -645,9 +645,12 @@ candidatePages.get("/c/status/:token", async (c) => {
   const step: CandidateStep = baseStep === "under_review" && (offered || booked) ? "interview" : baseStep;
   // An interview counts on the line once times were offered to them or one was booked, never one still waiting for approval.
   const invitedToInterview = (!!iv && iv.status !== "proposed" && (!!iv.startsAt || iv.offeredSlots.length > 0)) || wording === "after_interview";
-  // A private decision cancels an open chat: the line keeps its step as it was, so nothing hints at the decision.
-  const chatStep = chatCounts(lastScreen, !!(openScreen_ ?? pausedScreen) || (view.hidden && lastScreen?.status === "cancelled"));
-  const progress = progressLine({ step, hasChat: chatStep, chatOpen: !!(openScreen_ ?? pausedScreen), hadInterview: invitedToInterview });
+  // A private decision cancels an open chat: the line keeps its step as it was, so nothing hints at the decision. An
+  // interview set up while their AI interview is still open or paused (a person booked them first): that chat never
+  // happened, so it is no step behind them and never ticked as done. Its link keeps working.
+  const chatOpenNow = !!(openScreen_ ?? pausedScreen);
+  const chatStep = chatOpenNow && step === "interview" ? false : chatCounts(lastScreen, chatOpenNow || (view.hidden && lastScreen?.status === "cancelled"));
+  const progress = progressLine({ step, hasChat: chatStep, chatOpen: chatOpenNow, hadInterview: invitedToInterview });
   // The AI interview still being prepared (20 Oct 2026): its run waits for the reading, or for more interviews (Q17).
   const coming = !lastScreen && !view.hidden ? await withTenant(container.db, app.companyId, (tx) => interviewComing(tx, app)) : null;
   // "Don't keep me for future roles", from the decision message's link (#future-roles) or the button: it says it was saved.

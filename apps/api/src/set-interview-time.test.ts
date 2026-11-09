@@ -382,6 +382,11 @@ describe("a person sets the date and time", () => {
       const booked = await page();
       expect(booked).toContain("Your interview is booked. The details are below and in your email.");
       expect(booked).not.toMatch(/<a class="btn" href="\/c\/screen\//);
+      // the line where they are never ticks an AI interview they have not done: Applied and Review behind them, Interview now
+      const track = (html: string) => html.slice(html.indexOf('<ol class="track"'), html.indexOf("</ol>", html.indexOf('<ol class="track"')));
+      expect(track(booked)).not.toContain("AI interview");
+      expect(track(booked)).toContain('<li class="current" aria-current="step"><span class="dot" aria-hidden="true"></span><span>Interview</span></li>');
+      expect(track(booked)).toContain('<span>Review</span><span class="sr-only"> (done)</span>');
       expect((await app.request(`/c/screen/${scr.token}`)).status).toBe(200);
     });
 
