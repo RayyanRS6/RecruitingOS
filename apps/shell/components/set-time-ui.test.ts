@@ -174,7 +174,7 @@ describe("the Interviews page", () => {
   const base = (over: Record<string, unknown> = {}) => ({
     id: "iv1", applicationId: "a1", roleId: "r1", roleTitle: "Dental Hygienist", roundKey: "r1", title: "Working interview", format: "video", durationMinutes: 30, status: "proposed", startsAt: null, endsAt: null, timezone: "America/Chicago", meetingUrl: null, linkSource: "calendar", attempt: 1,
     offeredSlots: [], selectedSlot: null, candidateAvailability: null, schedulingWindow: { fromDate: "2026-11-10", toDate: "2026-11-23" }, rescheduleCountCandidate: 0, outcome: null, decision: null, decisionNote: null, reminders: {}, cancelReason: null, scheduleTokenExpiresAt: null, createdAt: daysAgo(1),
-    candidate: { firstName: "Maria", lastName: "Reyes", timezone: null, hasEmail: true, stage: "interview_recommended", stageLabel: "Interview to set up" }, participants: [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", status: "invited" }], calendarRefs: {}, followUp: null, candidateEmail: null,
+    candidate: { firstName: "Maria", lastName: "Reyes", timezone: null, hasEmail: true, stage: "interview_recommended", stageLabel: "Interview to set up" }, participants: [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", status: "invited" }], calendarRefs: {}, followUp: null, candidateEmail: null as string | null,
     timeline: [], availabilitySources: [{ userId: "u1", source: "none" as string, calendarStatus: null }], brief: null,
     ...over,
   });
