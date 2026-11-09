@@ -20,8 +20,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { ACCESS_ROWS_EACH, Overview, attentionCount, attentionRows, costSummary, customerLine, customerMatches, dueWords, monthStart, waitedWords } = await import("@ros/web/src/pages/admin/Overview");
+const { ACCESS_ROWS_EACH, Overview, attentionCount, attentionRows, costSummary, customerLine, customerMatches, dueWords, monthStart, sessionEnded, waitedWords } = await import("@ros/web/src/pages/admin/Overview");
 const { Console, viewSearch } = await import("@ros/web/src/pages/admin/Console");
+const { ApiError } = await import("@ros/web/src/api/client");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const DAY = 86_400_000;
@@ -90,6 +91,13 @@ function failed(qc: QueryClient, queryKey: unknown[]) {
   qc.getQueryCache().build(qc, { queryKey }).setState({ status: "error", error: new Error("The server did not answer."), fetchStatus: "idle" });
   return qc;
 }
+/** A look that failed after an earlier one answered: TanStack keeps the earlier answer beside the error. */
+function failedAgain(qc: QueryClient, queryKey: unknown[], error: Error) {
+  const query = qc.getQueryCache().find({ queryKey, exact: true });
+  expect(query?.state.data, queryKey.join(" ")).toBeDefined();
+  query?.setState({ status: "error", error, fetchStatus: "idle" });
+  return qc;
+}
 const render = (qc: QueryClient, node: ReactNode = createElement(Overview)) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 
 describe("the console's Overview", () => {
@@ -155,6 +163,27 @@ describe("the console's Overview", () => {
     expect(t).toContain("1 alert needs a person");
     expect(t).not.toContain("Nothing needs you right now.");
     expect(t).toContain("7 things need you.");
+  });
+
+  it("counts a source whose latest look failed as failed while it still holds an earlier answer, so 'Nothing needs you right now.' never stands over it (the review of 9 November 2026)", () => {
+    // left open overnight with nothing waiting: this morning's looks failed, and each source kept yesterday's answer
+    const qc = client(NOTHING);
+    failedAgain(qc, ["admin", "customers"], new ApiError(500, "error", "Something went wrong. It has been logged."));
+    failedAgain(qc, ["escalations"], new TypeError("Failed to fetch"));
+    const html = render(qc);
+    const t = text(html);
+    expect(t).toContain("Could not check the companies waiting for the ITS check.");
+    expect(html).toContain('aria-label="Try again: the companies waiting for the ITS check">Try again</button>');
+    expect(t).toContain("Could not check recruiter requests.");
+    expect(t).not.toContain("Nothing needs you right now.");
+    // the other sources, which answered, add no row of their own
+    expect(t).not.toContain("Could not check alerts.");
+  });
+
+  it("goes to sign in once a look answers 401, as when the staff session ended while the tab was hidden or asleep; any other failure is a row", () => {
+    expect(sessionEnded([null, undefined, new ApiError(401, "unauthorized", "Sign in to continue.")])).toBe(true);
+    expect(sessionEnded([null, new ApiError(500, "error", "Something went wrong. It has been logged."), new ApiError(403, "mfa_required", "Confirm it's you."), new TypeError("Failed to fetch"), new Error("401")])).toBe(false);
+    expect(sessionEnded([])).toBe(false);
   });
 
   it("waits quietly while nothing has been read yet", () => {

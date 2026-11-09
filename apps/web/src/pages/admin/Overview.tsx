@@ -1,9 +1,9 @@
 "use client";
 
-import { type CSSProperties, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, Button, Card, ErrorState, Icon, IconChip, PageHeader, Skeleton, StatCell, StatStrip } from "@ros/ui";
-import { api, type Me } from "../../api/client";
+import { api, ApiError, type Me } from "../../api/client";
 import { allowanceAlerts, allowanceChip } from "../../allowance";
 import { useIsClient } from "../../components/use-is-client";
 import { focusLost } from "../../focus-after";
@@ -284,6 +284,15 @@ const CUSTOMERS_SHOWN = 5;
 export const OVERVIEW_REFRESH = TODAY_REFRESH;
 export const ESCALATIONS_REFRESH = { refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 } as const;
 
+/**
+ * Whether the staff session ended under a tab left open (the review of 9 November 2026): a look answered 401. The session
+ * slides only while the tab looks, so a hidden or sleeping tab outlives it; then every look fails and each source keeps
+ * what it read before, so the page goes to sign in instead.
+ */
+export function sessionEnded(errors: readonly unknown[]): boolean {
+  return errors.some((e) => e instanceof ApiError && e.status === 401);
+}
+
 export function Overview() {
   const why = adminReason("overview");
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
@@ -302,7 +311,13 @@ export function Overview() {
   const since = monthStart(calendar.data?.current.timeZone);
   const costs = useQuery({ queryKey: costsSinceKey(since), queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
   const isClient = useIsClient();
+  const ended = sessionEnded([me, customers, alerts, failures, privacy, failedEmail, csp, escalations, calendar, queue, costs].map((q) => q.error));
+  useEffect(() => {
+    if (ended) window.location.assign("/login");
+  }, [ended]);
 
+  // A source whose latest look failed counts as failed even while it still holds an earlier answer (the review of 9
+  // November 2026), so "Nothing needs you right now." never stands over a look that failed.
   const sources = [
     { key: "customers", thing: "the companies waiting for the ITS check", q: customers },
     { key: "alerts", thing: "alerts", q: alerts },
@@ -311,7 +326,7 @@ export function Overview() {
     { key: "csp", thing: "security reports", q: csp },
     { key: "email", thing: "email applications", q: failedEmail },
     { key: "escalations", thing: "recruiter requests", q: escalations },
-  ].map(({ key, thing, q }) => ({ key, thing, loading: q.data === undefined && !q.error, failed: q.data === undefined && !!q.error, retry: () => void q.refetch() }));
+  ].map(({ key, thing, q }) => ({ key, thing, loading: q.data === undefined && !q.isError, failed: q.isError, retry: () => void q.refetch() }));
   const rows = attentionRows({ customers: customers.data, alerts: alerts.data, failures: failures.data, privacy: privacy.data, failedEmail: failedEmail.data, csp: csp.data, escalations: escalations.data });
   const things = attentionCount(rows);
   const loading = sources.filter((s) => s.loading);

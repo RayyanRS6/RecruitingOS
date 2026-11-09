@@ -102,6 +102,8 @@ vi.mock("next/navigation", () => ({ usePathname: () => "/admin", useRouter: () =
 vi.mock("next/link", () => ({ default: () => null }));
 
 const { AccessButtons, AccessChoice } = await import("@ros/web/src/pages/admin/customers");
+const { Overview } = await import("@ros/web/src/pages/admin/Overview");
+const { ApiError } = await import("@ros/web/src/api/client");
 const { Button } = await import("@ros/ui");
 
 type El = ReactElement<{ children?: ReactNode; [key: string]: unknown }>;
@@ -202,5 +204,29 @@ describe("a question asked on a request for access", () => {
     button(AccessChoice(propsOf<Choice>(tree, AccessChoice)), "Yes, decline Harbor Dental").onClick();
     await ui.settled();
     expect(sent).toEqual([{ path: "/api/v1/admin/customers/co-harbor/access", body: { decision: "decline", from: "requested", confirm: true } }]);
+  });
+});
+
+describe("the console's Overview left open", () => {
+  /** Draws the Overview with yesterday's customers and this look's failure, then runs what it does once drawn. */
+  const comeBack = (error: unknown) => {
+    ui.fresh();
+    ui.answers.set(JSON.stringify(["admin", "customers"]), { data: [], error });
+    ui.answers.set(JSON.stringify(["admin", "alerts"]), { data: [] });
+    const assign = vi.fn();
+    vi.stubGlobal("window", { location: { assign } });
+    ui.draw(Overview, {});
+    for (const effect of ui.effects) effect();
+    return assign.mock.calls;
+  };
+
+  it("goes to sign in once a look answers 401: the staff session ended while the tab was hidden or asleep", () => {
+    expect(comeBack(new ApiError(401, "unauthorized", "Sign in to continue."))).toEqual([["/login"]]);
+  });
+
+  it("stays on any other failure, which says so on its own row", () => {
+    expect(comeBack(new ApiError(500, "error", "Something went wrong. It has been logged."))).toEqual([]);
+    expect(comeBack(new ApiError(403, "mfa_required", "Confirm it's you."))).toEqual([]);
+    expect(comeBack(new TypeError("Failed to fetch"))).toEqual([]);
   });
 });
