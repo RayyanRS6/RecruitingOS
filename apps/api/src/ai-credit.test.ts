@@ -362,7 +362,7 @@ describe("the AI credit", () => {
       const provider = new PricedProvider();
       const said = (error: string, usage: Usage = NO_USAGE, over: { usageUnknown?: boolean } = {}) => { provider.answer = (_req, model) => ({ kind: "invalid", error, model, usage, latencyMs: 5, final: true, ...over }); };
       const lastCost = async () => { const rows = await runsOf(id); return Number(rows[rows.length - 1].costUsd); };
-      // stopped at the deadline, or dropped part-way after a reply began: it may well have been billed
+      // stopped at the deadline or dropped part-way, after a reply began: it may well have been billed
       said("provider error: the model did not finish within 270 seconds, so the call was stopped", NO_USAGE, { usageUnknown: true });
       expect(await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id })).toMatchObject({ ok: false, reason: "error" });
       expect(await lastCost()).toBeCloseTo(hold, 6);

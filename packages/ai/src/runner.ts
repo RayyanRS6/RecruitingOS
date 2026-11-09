@@ -165,8 +165,9 @@ export async function recordRun<TInput, TOutput>(q: Queryable, rt: AiRuntime, pr
 /**
  * Whether a call that failed may have cost more than the usage it recorded, so its hold stays as its cost: the provider says so
  * (a reply that had begun was stopped at the deadline or dropped part-way, `usageUnknown`, providers/anthropic.ts), or a provider
- * threw. Everything else is exact: a connection that never opened and an answer with an HTTP status wrote nothing, a call never
- * sent cost nothing, and a local error never reached anyone, so an hour's outage costs the company nothing.
+ * threw. Everything else is exact: a connection that never opened, a provider that had not answered by the deadline and an answer
+ * with an HTTP status wrote nothing, a call never sent cost nothing, and a local error never reached anyone, so an hour's outage
+ * costs the company nothing.
  */
 function usageUnknown<TOutput>(result: StructuredResult<TOutput>): boolean {
   if (result.kind !== "invalid" || !result.error.startsWith("provider")) return false;

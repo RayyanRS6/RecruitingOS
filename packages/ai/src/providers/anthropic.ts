@@ -174,8 +174,9 @@ export class AnthropicProvider implements AiProvider {
     } catch (err) {
       const stopped = deadline.signal.aborted;
       const message = stopped ? `the model did not finish within ${Math.round((endsAt - started) / 1000)} seconds, so the call was stopped` : err instanceof Error ? err.message : String(err);
-      // Stopped at the deadline, or cut after a reply began: it may well be billed. A failure before any reply is not, and neither is an error of our own.
-      return { kind: "invalid", error: `provider error: ${message}`, model, usage, latencyMs: Date.now() - started, final: true, ...(stopped || call.replying ? { usageUnknown: true } : {}) };
+      // Cut after a reply began, at the deadline or part-way: it may well be billed. A failure before any reply is not, a deadline
+      // that came first included (a provider that never answered), and neither is an error of our own.
+      return { kind: "invalid", error: `provider error: ${message}`, model, usage, latencyMs: Date.now() - started, final: true, ...(call.replying ? { usageUnknown: true } : {}) };
     } finally {
       clearTimeout(timer);
     }

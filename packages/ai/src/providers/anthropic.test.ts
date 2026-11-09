@@ -15,11 +15,13 @@ import { AnthropicProvider, CALL_BUDGET_MS, CORRECTION_FLOOR_MS, ROUTE_RESERVE_M
 type Sent = Record<string, unknown> & { output_config?: { format?: unknown; effort?: string }; system?: Array<{ text: string }>; messages?: Array<{ role: string; content: string }> };
 type Options = { timeout?: number; signal?: AbortSignal };
 type Reply = ReturnType<typeof reply>;
-type Answer = Reply | Error | Cut | ((options: Options) => Reply | Promise<Reply>);
+type Answer = Reply | Error | Cut | Silent | ((options: Options) => Reply | Promise<Reply>);
 /** A reply that began to arrive (the stream said "connect"), then was lost: an error thrown part-way through. */
 class Cut {
   constructor(readonly error: Error) {}
 }
+/** A provider that never answers: no "connect", and nothing at all until the call is stopped. */
+class Silent {}
 
 function reply(over: { text?: string; stop?: string } = {}) {
   return {
@@ -49,6 +51,7 @@ function fakeClient(answers: Answer[]) {
           finalMessage: async () => {
             if (!next) throw new Error("no answer queued");
             if (next instanceof Error) throw next;
+            if (next instanceof Silent) return new Promise<Reply>((_, reject) => opts?.signal?.addEventListener("abort", () => reject(new Anthropic.APIUserAbortError())));
             connected();
             if (next instanceof Cut) throw next.error;
             return typeof next === "function" ? next(opts ?? {}) : next;
@@ -247,12 +250,31 @@ describe("whether a failed call says its usage may be more than it recorded", ()
     expect(out).toMatchObject({ kind: "invalid", error: "provider error: terminated", usage: { inputTokens: 10, outputTokens: 5 }, usageUnknown: true });
   });
 
-  it("a call stopped at the deadline says so, whether or not a reply had begun", async () => {
+  it("a call stopped at the deadline after a reply began says so: it may be billed for what it wrote", async () => {
     vi.useFakeTimers();
     const hangs = (opts: Options) => new Promise<Reply>((_, reject) => opts.signal?.addEventListener("abort", () => reject(new Anthropic.APIUserAbortError())));
     const pending = asked([hangs]);
     await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
     expect(await pending).toMatchObject({ kind: "invalid", error: "provider error: the model did not finish within 270 seconds, so the call was stopped", usageUnknown: true });
+  });
+
+  it("a call stopped at the deadline before any answer: a provider that never answered billed nothing, and the usage is exact", async () => {
+    // an outage where the connection hangs rather than fails: each try waits out its 270 seconds, and costs what it recorded
+    vi.useFakeTimers();
+    const pending = asked([new Silent()]);
+    await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
+    const out = await pending;
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: the model did not finish within 270 seconds, so the call was stopped", final: true, usage: { inputTokens: 0, outputTokens: 0 } });
+    expect(out).not.toHaveProperty("usageUnknown");
+  });
+
+  it("a correction turn stopped at the deadline before it was answered: the first reply's usage is all of it", async () => {
+    vi.useFakeTimers();
+    const pending = asked([reply({ text: '{"count":"three"}' }), new Silent()]);
+    await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
+    const out = await pending;
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: the model did not finish within 270 seconds, so the call was stopped", usage: { inputTokens: 10, outputTokens: 5 } });
+    expect(out).not.toHaveProperty("usageUnknown");
   });
 
   it("a request with no time left is never sent: the usage is exact", async () => {

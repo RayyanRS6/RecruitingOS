@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { creditHoldUsd, estimateCostUsd } from "./pricing";
 import type { PromptDef } from "./prompts/registry";
-import { AnthropicProvider } from "./providers/anthropic";
+import { AnthropicProvider, ROUTE_RESERVE_MS } from "./providers/anthropic";
 import { AI_CREDIT_BUSY, API_ROUTE_LIMIT_MS, callPrompt, routeDeadline, runPromptDetached, type AiCreditGate, type AiRunValues, type AiRuntime } from "./runner";
 import type { AiProvider, StructuredRequest, StructuredResult } from "./types";
 
@@ -123,13 +123,13 @@ describe("the deadline of the request a call serves", () => {
 describe("what a failed call settles at", () => {
   const HAIKU = "claude-haiku-5-5";
   const turn: PromptDef<null, Draft> = { ...prompt, task: "screen.turn" };
-  type Next = { fails: Error; began?: boolean } | { text: string };
+  type Next = { fails: Error; began?: boolean } | { text: string } | { hangs: true; began?: boolean };
   const firstReply = { input_tokens: 1000, output_tokens: 1000, cache_read_input_tokens: 0 };
 
-  /** The stand-in client: each request fails before or after "connect", or answers. */
+  /** The stand-in client: each request fails before or after "connect", answers, or says nothing more until the call is stopped. */
   const clientOf = (answers: Next[]) => ({
     messages: {
-      stream() {
+      stream(_params: unknown, opts?: { signal?: AbortSignal }) {
         const next = answers.shift()!;
         let connected = () => {};
         const stream = {
@@ -137,6 +137,7 @@ describe("what a failed call settles at", () => {
           finalMessage: async () => {
             if ("text" in next) { connected(); return { content: [{ type: "text", text: next.text }], stop_reason: "end_turn", stop_details: null, usage: firstReply }; }
             if (next.began) connected();
+            if ("hangs" in next) return new Promise((_, reject) => opts?.signal?.addEventListener("abort", () => reject(new Anthropic.APIUserAbortError())));
             throw next.fails;
           },
         };
@@ -145,11 +146,11 @@ describe("what a failed call settles at", () => {
     },
   }) as unknown as Anthropic;
 
-  const settledAt = async (answers: Next[]) => {
+  const settledAt = async (answers: Next[], meta: { deadlineAt?: number } = {}) => {
     const settled: Array<Partial<AiRunValues>> = [];
     const credit: AiCreditGate = { hold: async () => "held", settle: async (_db, input) => { settled.push(input.values); } };
     const rt: AiRuntime = { provider: new AnthropicProvider(undefined, clientOf(answers)), models: { judgment: HAIKU, standard: HAIKU, fast: HAIKU }, credit };
-    const out = await runPromptDetached({} as Db, rt, turn, null, { companyId: "c1" });
+    const out = await runPromptDetached({} as Db, rt, turn, null, { companyId: "c1", ...meta });
     expect(out.ok).toBe(false);
     expect(settled).toHaveLength(1);
     return Number(settled[0]!.costUsd);
@@ -186,6 +187,15 @@ describe("what a failed call settles at", () => {
 
   it("the whole hold for a reply that began and was cut", async () => {
     expect(await settledAt([{ fails: new Error("terminated"), began: true }])).toBeCloseTo(hold, 6);
+  });
+
+  it("nothing for a call the deadline stopped before the provider answered, and the whole hold for one it stopped part-way through a reply", async () => {
+    // an outage where the connection hangs rather than fails: 15 tries of 6 calls kept 1.6 cents each, $1.44 of Free's $10 for one
+    // applicant. A budget of 200 ms here: the request the call serves must answer by then (`deadlineAt`, less the route's reserve).
+    const soon = () => ({ deadlineAt: Date.now() + ROUTE_RESERVE_MS + 200 });
+    expect(await settledAt([{ hangs: true }], soon())).toBe(0);
+    expect(await settledAt([{ hangs: true, began: true }], soon())).toBeCloseTo(hold, 6);
+    expect(90 * hold).toBeGreaterThan(1.4);
   });
 
   it("the first reply's cost for a correction turn lost before it began, and the hold for one cut part-way", async () => {
