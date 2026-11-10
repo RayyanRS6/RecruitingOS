@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import type { QueryClient } from "@tanstack/react-query";
 import { ApiError } from "./api/client";
 
 /**
@@ -21,4 +22,20 @@ export function useSignInWhenSessionEnds(errors: readonly unknown[]): void {
   useEffect(() => {
     if (ended) window.location.assign("/login");
   }, [ended]);
+}
+
+/**
+ * The signed-in frame's watch (the release review, 11 November 2026): any page's own look that answers 401 sends it to sign
+ * in, once. After Take away access, or an administrator's Sign out everywhere, a job page, Candidates, Interviews or Settings
+ * left open read "Could not load…" with a Try again that failed every time, and moving between pages did not run the
+ * server's own redirect again. Any other failure stays on the page, which says so where it happened. Answers the unsubscribe.
+ */
+export function watchForEndedSession(qc: QueryClient, goToSignIn: () => void): () => void {
+  let sent = false;
+  return qc.getQueryCache().subscribe((event) => {
+    if (sent || event.type !== "updated" || event.action.type !== "error") return;
+    if (!sessionEnded([event.action.error])) return;
+    sent = true;
+    goToSignIn();
+  });
 }

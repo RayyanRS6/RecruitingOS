@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as React from "react";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -23,6 +24,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { ACCESS_ROWS_EACH, Overview, attentionCount, attentionRows, costSummary, customerLine, customerMatches, dueWords, monthStart, sessionEnded, waitedWords } = await import("@ros/web/src/pages/admin/Overview");
 const { Console, viewSearch } = await import("@ros/web/src/pages/admin/Console");
 const { ApiError } = await import("@ros/web/src/api/client");
+const { watchForEndedSession } = await import("@ros/web/src/session-ended");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const DAY = 86_400_000;
@@ -184,6 +186,29 @@ describe("the console's Overview", () => {
     expect(sessionEnded([null, undefined, new ApiError(401, "unauthorized", "Sign in to continue.")])).toBe(true);
     expect(sessionEnded([null, new ApiError(500, "error", "Something went wrong. It has been logged."), new ApiError(403, "mfa_required", "Confirm it's you."), new TypeError("Failed to fetch"), new Error("401")])).toBe(false);
     expect(sessionEnded([])).toBe(false);
+  });
+
+  /**
+   * The release review (11 November 2026, L3-8): only Home, the Overview and Customers went to sign in on a 401; a job page,
+   * Candidates, Interviews or Settings left open after Take away access said "Could not load…" with a Try again that failed.
+   * The signed-in frame watches every page's looks.
+   */
+  it("the signed-in frame sends any page whose look answers 401 to sign in, once; any other failure stays on the page", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const sent: string[] = [];
+    const stop = watchForEndedSession(qc, () => sent.push("/login"));
+    const look = (key: string, error: unknown) => qc.fetchQuery({ queryKey: [key], queryFn: () => Promise.reject(error) }).catch(() => undefined);
+    await look("role", new ApiError(500, "error", "Something went wrong. It has been logged."));
+    await look("settings", new ApiError(403, "mfa_required", "Confirm it's you."));
+    await look("interviews", new TypeError("Failed to fetch"));
+    expect(sent).toEqual([]);
+    await look("applications", new ApiError(401, "unauthorized", "Sign in to continue."));
+    await look("company", new ApiError(401, "unauthorized", "Sign in to continue."));
+    expect(sent).toEqual(["/login"]);
+    stop();
+    // the frame every signed-in page sits in mounts it
+    const shell = readFileSync(new URL("./AppShell.tsx", import.meta.url), "utf8");
+    expect(shell).toContain('useEffect(() => watchForEndedSession(qc, () => window.location.assign("/login")), [qc]);');
   });
 
   it("waits quietly while nothing has been read yet", () => {
