@@ -13,7 +13,7 @@ import { interviewNewTimesText } from "../cancelled";
 import { DECISION_WORDS, candidateEmailLine, formFromBooked, freshForm, interviewWord, shortWhen, type SetTimeForm as SetTimeFormState } from "../interview-time";
 import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
-import { interviewCancelToast, newTimesToast } from "../talent-actions";
+import { cancelReasonLabel, interviewCancelToast, newTimesToast } from "../talent-actions";
 import { againChoice, tookPlaceCard } from "../interview-defaults";
 import { MyNote, useNotes } from "./candidate-panel/notes";
 
@@ -256,7 +256,7 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
                 <SheetSetTime i={i} moving={changing === "move"} onDone={async () => { setChanging(null); await refreshAll(); }} onCancel={() => setChanging(null)} />
               ) : changing === "cancel" ? (
                 <div className="stack gap-3">
-                  <Field label="Reason (the candidate sees it)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></Field>
+                  <Field label={cancelReasonLabel(i)} htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></Field>
                   <div className="row">
                     <Button size="sm" variant="destructive" loading={cancel.isPending} disabled={!reason.trim()} onClick={() => cancel.mutate()}>Confirm cancel</Button>
                     <Button size="sm" variant="quiet" onClick={() => setChanging(null)}>Keep it</Button>

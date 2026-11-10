@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { emit, notify, openFollowUpOf, resolveOpenFollowUp, transition } from "@ros/core";
-import { HELD_REASON, interviewReachedThem, onItsWay, sendInterviewCancelled } from "@ros/agents";
+import { HELD_REASON, interviewReachedThem, interviewsThatReachedThem, onItsWay, sendInterviewCancelled } from "@ros/agents";
 import { applications, candidates, companies, interviewParticipants, interviews, jobs, rolePackets, roles, type Tx } from "@ros/db";
 import type { Container } from "../container";
 
@@ -21,8 +21,26 @@ type Mover = Parameters<typeof transition>[1]["by"];
 export type CancelNotice = "known" | "none";
 
 /** Whether the candidate holds a booked time, and whether they were offered times to pick from. */
-function candidateKnows(iv: InterviewRow): { booked: boolean; offered: boolean } {
+function candidateKnows(iv: Pick<InterviewRow, "status" | "startsAt" | "scheduleToken" | "offeredSlots">): { booked: boolean; offered: boolean } {
   return { booked: iv.status === "scheduled" && !!iv.startsAt, offered: iv.status === "scheduling" && !!iv.scheduleToken && iv.offeredSlots.length > 0 };
+}
+
+/**
+ * Whether the candidate heard of this interview, so a cancellation tells them it is off: a time they picked themselves, or a
+ * booked time or times on offer that an email about has left us for (`reached`, from `interviewReachedThem`). The decline and
+ * "Record what happened" steps read it before the press, so they never promise a note that will not go (the release review,
+ * 11 November 2026).
+ */
+export function candidateHeardOf(iv: Pick<InterviewRow, "status" | "startsAt" | "scheduleToken" | "offeredSlots" | "selectedSlot">, reached: boolean): boolean {
+  const knows = candidateKnows(iv);
+  return (knows.booked && iv.selectedSlot?.source !== "person") || ((knows.booked || knows.offered) && reached);
+}
+
+/** `candidateHeardOf` for each interview of one application, with one read of its emails. */
+export async function candidatesHeard(tx: Tx, applicationId: string): Promise<Map<string, boolean>> {
+  const rows = await tx.select().from(interviews).where(eq(interviews.applicationId, applicationId));
+  const reached = rows.length ? await interviewsThatReachedThem(tx, { applicationIds: [applicationId] }) : new Set<string>();
+  return new Map(rows.map((iv) => [iv.id, candidateHeardOf(iv, reached.has(iv.id))]));
 }
 
 /**
@@ -56,7 +74,7 @@ export async function cancelInterviewInTx(
   const hadEvents = Object.keys((iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
   const knows = candidateKnows(iv);
   const theirOwnPick = knows.booked && iv.selectedSlot?.source !== "person";
-  const heard = theirOwnPick || ((knows.booked || knows.offered) && (await interviewReachedThem(tx, { applicationId: iv.applicationId, interviewId: iv.id })));
+  const heard = theirOwnPick || candidateHeardOf(iv, (knows.booked || knows.offered) && (await interviewReachedThem(tx, { applicationId: iv.applicationId, interviewId: iv.id })));
   const neverHeard = (knows.booked || knows.offered) && !heard;
   const tell = (input.notice ?? "known") === "known" && heard;
   const [app] = await tx.select().from(applications).where(eq(applications.id, iv.applicationId)).limit(1).for("update");

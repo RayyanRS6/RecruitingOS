@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveMark, ApplicationDetail, CandidateNotice, StageMove } from "../../apps/web/src/api/client";
 import { LOW_CONFIDENCE_LABEL, NO_QUOTE_LABEL, closerLook, competencyUnquoted, isUnquoted, lowConfidence, requirementUnquoted, scorecardUnavailable } from "../../apps/web/src/evidence";
-import { NOT_NOW_TOAST, NOT_TOLD, PRIVATE_DECISION, actionToast, batches, briefDecisionToast, bulkSendToast, closeRoleToast, declineConfirmText, declineSummary, decisionToast, interviewCancelToast, interviewWords, mergeDecisionResults, newTimesToast, noticeText, outcomeNoticeText, outcomeToast, safetyNetAfterDecision, sendDecisionToast, stageBlocked, stageIntent } from "../../apps/web/src/talent-actions";
+import { NOT_NOW_TOAST, NOT_TOLD, PRIVATE_DECISION, actionToast, batches, briefDecisionToast, bulkSendToast, cancelReasonLabel, closeRoleToast, declineConfirmText, declineSummary, decisionToast, interviewCancelToast, interviewWords, mergeDecisionResults, newTimesToast, noticeText, outcomeNoticeText, outcomeToast, safetyNetAfterDecision, sendDecisionToast, stageBlocked, stageIntent } from "../../apps/web/src/talent-actions";
 
 /**
  * The Candidates page's words (plans 0.5, 0.6, 0.9, A4, A6 and A9; founder decisions B3, B6 and D-03 A: moves and
@@ -147,6 +147,36 @@ describe("the private decline step", () => {
     // a hire is the hire sheet's, which ends their interviews too and tells the candidate nothing (6 November 2026)
     expect(outcomeNoticeText([booked])).toBe(`Nothing about the outcome is sent to the candidate. ${iv.charAt(0).toUpperCase()}${iv.slice(1)} is called off, and they are told now, in a short note that gives no reason, that it is off.`);
     expect(outcomeNoticeText([booked, offered])).toMatch(/ are called off, and they are told now, in a short note that gives no reason, that they are off\.$/);
+  });
+
+  /**
+   * The release review (11 November 2026, L2-1): the server tells the candidate an interview is off only when an email about
+   * it reached them, so the words before the press read the server's `candidateHeard`, never the booking alone.
+   */
+  it("promises the short note only for an interview an email about reached them; one booked or offered that never reached them just stops", () => {
+    const booked = { title: "Phone screen", startsAt: "2026-10-14T18:00:00.000Z", timezone: "America/New_York", status: "scheduled", offeredSlots: [] };
+    const offered = { title: "Working interview", startsAt: null, timezone: null, status: "scheduling", offeredSlots: [{ id: "s1" }] };
+    const held = { ...booked, candidateHeard: false };
+    const heldOffer = { ...offered, candidateHeard: false };
+    const iv = interviewWords(booked);
+    // still named for what it is: a booked time, or times offered
+    expect(interviewWords(heldOffer)).toBe("the Working interview (times offered, none chosen yet)");
+    const text = declineConfirmText("sends", { hasEmail: true, interviews: [held, heldOffer] });
+    expect(text).toMatch(/It is private: nothing is sent to the candidate now\./);
+    expect(text).not.toMatch(/short note|told now/);
+    expect(text).toContain(`It also stops ${iv} and the Working interview (times offered, none chosen yet); no email about them reached the candidate, so nothing is sent about them.`);
+    expect(declineConfirmText("sends", { hasEmail: true, interviews: [held] })).toContain(`It also stops ${iv}; no email about it reached the candidate, so nothing is sent about it.`);
+    expect(declineSummary("sends", { hasEmail: true, interviews: [held], now: NOW })[0]).toBe("Private: nothing is sent to them now.");
+    expect(outcomeNoticeText([held, heldOffer])).toBe("Nothing is sent to the candidate.");
+    // the server says they heard of it: the note, as before; an older answer without the word keeps the booking's rule
+    for (const known of [{ ...booked, candidateHeard: true }, booked]) {
+      expect(declineSummary("sends", { hasEmail: true, interviews: [known], now: NOW })[0]).toBe("Private: the decision is not sent now. Their interview is called off, and they get a short note saying so.");
+      expect(outcomeNoticeText([known])).toMatch(/they are told now, in a short note that gives no reason, that it is off\.$/);
+    }
+    // the Interviews sheet's cancel reason reaches the candidate only in that note
+    expect(cancelReasonLabel({ candidateHeard: false })).toBe("Reason (only the team sees it)");
+    expect(cancelReasonLabel({ candidateHeard: true })).toBe("Reason (the candidate sees it)");
+    expect(cancelReasonLabel({})).toBe("Reason (the candidate sees it)");
   });
 
   it("the decline's toast says the interview was called off and the candidate was told only that it is off", () => {

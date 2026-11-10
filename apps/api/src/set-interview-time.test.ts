@@ -1056,6 +1056,33 @@ describe("a person sets the date and time", () => {
       expect(await withTenant(container.db, companyId, (tx) => interviewsCalledOff(tx, row, container.engine.clock()))).toEqual([]);
     });
 
+    /**
+     * The release review (11 November 2026, L2-1): the decline and "Record what happened" steps promised "a short note saying
+     * so" from a booking alone, while the cancellation tells only someone an email about it reached. The panel and the
+     * Interviews sheet read `candidateHeard`, worked out the way the cancellation works it out.
+     */
+    it("the panel and the Interviews sheet say whether an email about the interview reached them (candidateHeard), as the cancellation decides", async () => {
+      const heardOn = async (applicationId: string, interviewId: string) => {
+        const detail = (await (await json(owner, "GET", `/api/v1/applications/${applicationId}`)).json()) as { interviews: Array<{ id: string; candidateHeard?: boolean }> };
+        const sheet = (await (await json(owner, "GET", `/api/v1/interviews/${interviewId}`)).json()) as { candidateHeard?: boolean };
+        return { panel: detail.interviews.find((i) => i.id === interviewId)?.candidateHeard, sheet: sheet.candidateHeard };
+      };
+      // the worker has not sent it yet
+      const waiting = await apply("Una", "Heard");
+      await withWorkerStopped(async () => {
+        const r = await routeA(waiting.id);
+        expect(r.status, await r.clone().text()).toBe(201);
+        const { id } = (await r.json()) as Booked;
+        expect(await heardOn(waiting.id, id)).toEqual({ panel: false, sheet: false });
+      });
+      // it left: they heard of it
+      const { cand, booked } = await book("Vic", "Heard");
+      expect(await heardOn(cand.id, booked.id)).toEqual({ panel: true, sheet: true });
+      // it could not be delivered: never heard
+      await container.db.update(communications).set({ status: "failed", error: "provider refused" }).where(eq(communications.idempotencyKey, `confirm:${booked.id}:1`));
+      expect(await heardOn(cand.id, booked.id)).toEqual({ panel: false, sheet: false });
+    });
+
     it("told of it and then declined: the short note goes, and the decision message leaves it out as before", async () => {
       const { cand, booked } = await book("Tom", "Off");
       const before = mailTo(cand.email).length;

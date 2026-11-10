@@ -354,8 +354,14 @@ export function onItsWay(result: SendResult): boolean {
  * one they never heard of. Read by the interview's id in each email's key (`slots:<id>:<attempt>`, `confirm:<id>:<attempt>`).
  */
 export async function interviewReachedThem(q: Queryable, input: { applicationId: string; interviewId: string }): Promise<boolean> {
-  const told = await q.select({ key: communications.idempotencyKey }).from(communications).where(and(eq(communications.applicationId, input.applicationId), inArray(communications.templateKey, ABOUT_AN_INTERVIEW), notInArray(communications.status, NEVER_LEFT)));
-  return told.some((t) => (t.key ?? "").split(":")[1] === input.interviewId);
+  return (await interviewsThatReachedThem(q, { applicationIds: [input.applicationId] })).has(input.interviewId);
+}
+
+/** `interviewReachedThem` for every interview of these applications at once: the ids an email about has left us for. */
+export async function interviewsThatReachedThem(q: Queryable, input: { applicationIds: readonly string[] }): Promise<Set<string>> {
+  if (!input.applicationIds.length) return new Set();
+  const told = await q.select({ key: communications.idempotencyKey }).from(communications).where(and(inArray(communications.applicationId, [...input.applicationIds]), inArray(communications.templateKey, ABOUT_AN_INTERVIEW), notInArray(communications.status, NEVER_LEFT)));
+  return new Set(told.map((t) => (t.key ?? "").split(":")[1] ?? "").filter(Boolean));
 }
 
 /**

@@ -1,7 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { and, desc, eq, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, NO_WORK_WHILE_LOCKED, RecordInterviewDecision, RequestInterviewWithLine, RescheduleInterview, SetInterviewTime, type Actor, type CandidateNotice, type HireFollowUp, type InterviewDraft, type InterviewFollowUpRef, type OfferedSlot } from "@ros/contracts";
-import { NEVER_LEFT, checkPersonalLine, clashesWithBookings, interviewHasNoHours, interviewReachedThem, onItsWay, participantsOf, sendInterviewMoved, type InvitationNote } from "@ros/agents";
+import { NEVER_LEFT, checkPersonalLine, clashesWithBookings, interviewHasNoHours, interviewReachedThem, interviewsThatReachedThem, onItsWay, participantsOf, sendInterviewMoved, type InvitationNote } from "@ros/agents";
 import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, canTransition, defaultSchedulingWindow, emit, endMarkOnMove, formatInZone, freshSchedulingWindow, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, slotStillAhead, transition, upsertAvailability, visibleTo, type FollowUpView } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Container } from "../container";
@@ -9,7 +9,7 @@ import { cancelNewTimesRuns } from "@ros/workflows";
 import { actorOf, applicationScopeGuard, isCanonicalId, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { TERMINAL_STAGES } from "../services/application-actions";
-import { cancelInterviewInTx } from "../services/interview-cancel";
+import { cancelInterviewInTx, candidateHeardOf } from "../services/interview-cancel";
 import { BOOKED_RUN_STARTS_AT, INTERVIEW_ALREADY_OPEN, INTERVIEW_FROM, NO_HOURS, OPEN_INTERVIEW, bookingFields, candidateEmailStates, candidateNoticeOfBooking, createApprovedInterview, placeOnInterview, refuseClash, refuseClosedRole, slotFromPerson } from "../services/interview-create";
 import { exitCleanup } from "../services/exit-cleanup";
 import { interviewBriefFor } from "../services/interviewer-view";
@@ -57,7 +57,10 @@ async function summaries(tx: Q, rows: readonly InterviewRow[], followUps?: Map<s
   const views = followUps ?? (await activeFollowUpsFor(tx, appIds));
   // What became of the email about each one (one read for the whole list): the page's word for it is worked out from it.
   const emails = await candidateEmailStates(tx, { interviews: rows.map((r) => ({ id: r.id, attempt: r.attempt, status: r.status, offeredSlots: r.offeredSlots, hasEmail: !!cands.get(apps.get(r.applicationId)!.candidateId)?.email })) });
-  return rows.map((row) => ({ ...summaryOf(row, apps.get(row.applicationId)!, cands.get(apps.get(row.applicationId)!.candidateId), titles.get(apps.get(row.applicationId)!.roleId), partsOf.get(row.id) ?? [], views), candidateEmail: emails.get(row.id) ?? null }));
+  // Whether they heard of each one, as a cancellation decides whom to tell (`candidateHeardOf`), so the sheet never says the
+  // candidate sees a reason no note will carry (the release review, 11 November 2026).
+  const reached = await interviewsThatReachedThem(tx, { applicationIds: appIds });
+  return rows.map((row) => ({ ...summaryOf(row, apps.get(row.applicationId)!, cands.get(apps.get(row.applicationId)!.candidateId), titles.get(apps.get(row.applicationId)!.roleId), partsOf.get(row.id) ?? [], views), candidateEmail: emails.get(row.id) ?? null, candidateHeard: candidateHeardOf(row, reached.has(row.id)) }));
 }
 
 function summaryOf(

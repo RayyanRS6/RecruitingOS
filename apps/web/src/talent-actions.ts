@@ -215,12 +215,29 @@ export function briefDecisionToast(action: { label: string; body?: Record<string
   return { title: "Approved.", detail: "Recorded with your name." };
 }
 
-/** An interview a decision would call off: its title, when it is, its state, and the times offered to the candidate. */
-export type InterviewRef = { title: string; startsAt: string | null; timezone: string | null; status: string; offeredSlots?: readonly unknown[] };
+/**
+ * An interview a decision would call off: its title, when it is, its state, and the times offered to the candidate.
+ * `candidateHeard` (the API, 11 November 2026): whether an email about it reached them, as the cancellation decides whom to tell.
+ */
+export type InterviewRef = { title: string; startsAt: string | null; timezone: string | null; status: string; offeredSlots?: readonly unknown[]; candidateHeard?: boolean };
 
-/** Whether the candidate knows about the interview: a booked time, or times offered to pick from. */
-export function candidateKnowsOf(iv: InterviewRef): boolean {
+/** A booked time, or times on offer to pick from: what the candidate would know of, once an email about it reached them. */
+function bookedOrOffered(iv: InterviewRef): boolean {
   return (iv.status === "scheduled" && !!iv.startsAt) || (iv.status === "scheduling" && (iv.offeredSlots?.length ?? 0) > 0);
+}
+
+/**
+ * Whether the candidate knows about the interview, so calling it off tells them: what the API says (`candidateHeard`: an email
+ * about it reached them), never the booking alone, which is booked before any email leaves, or with one held or failed (the
+ * release review, 11 November 2026). An older answer without it reads a booked time or times offered.
+ */
+export function candidateKnowsOf(iv: InterviewRef): boolean {
+  return iv.candidateHeard ?? bookedOrOffered(iv);
+}
+
+/** The Interviews sheet's cancel reason: the candidate reads it only in the note, which goes only to someone who heard of the interview. */
+export function cancelReasonLabel(iv: Pick<InterviewRef, "candidateHeard">): string {
+  return iv.candidateHeard === false ? "Reason (only the team sees it)" : "Reason (the candidate sees it)";
 }
 
 /**
@@ -228,16 +245,19 @@ export function candidateKnowsOf(iv: InterviewRef): boolean {
  * candidate will hear it under the company's settings, and the interviews it calls off, by name and time. One they knew
  * about (a booked time, times to pick from) is cancelled and the candidate is told at once, in a short note with no
  * reason, that it is off, so nobody turns up for it; the decision itself is sent only when someone chooses to send it.
- * One never offered to them is simply stopped.
+ * One never offered to them is simply stopped, and so is one booked or offered that no email about reached them.
  */
 export function declineConfirmText(policy: DeclineMessagePolicy, input: { hasEmail: boolean; eligibility?: boolean; interviews?: readonly InterviewRef[] }): string {
   const known = (input.interviews ?? []).filter(candidateKnowsOf);
-  const unknown = (input.interviews ?? []).filter((iv) => !candidateKnowsOf(iv));
+  // Booked or on offer, but no email about it reached them (not left yet, waiting for the ITS check, or not delivered).
+  const unheard = (input.interviews ?? []).filter((iv) => !candidateKnowsOf(iv) && bookedOrOffered(iv));
+  const unknown = (input.interviews ?? []).filter((iv) => !candidateKnowsOf(iv) && !bookedOrOffered(iv));
   // With an interview to call off something does go now (the short note), so the private sentence is about the decision.
   const sendable = policy !== "not_sent" && input.hasEmail;
   const privacy = !known.length ? "nothing is sent to the candidate now" : sendable ? "the decision itself is only sent to the candidate when you choose to send it" : "the decision itself is not sent to the candidate";
   const parts = [`Not moving forward is your decision, recorded with your reason. It is private: ${privacy}.`];
   if (known.length) parts.push(`This cancels ${listWords(known.map(interviewWords))}, and the candidate is told now, in a short note that gives no reason, that ${known.length === 1 ? "it is" : "they are"} off.`);
+  if (unheard.length) parts.push(`It also stops ${listWords(unheard.map(interviewWords))}; no email about ${unheard.length === 1 ? "it" : "them"} reached the candidate, so nothing is sent about ${unheard.length === 1 ? "it" : "them"}.`);
   if (unknown.length) parts.push(`It also stops ${listWords(unknown.map(interviewWords))}; no times had gone to the candidate.`);
   if (policy === "not_sent") parts.push("Under your settings no decision messages are sent, so tell them yourself and record it on their page.");
   else if (!input.hasEmail) parts.push("There is no email address on file, so tell them yourself and record it on their page.");
@@ -291,7 +311,7 @@ export function interviewWords(iv: InterviewRef): string {
     const when = new Date(iv.startsAt).toLocaleString("en-US", { timeZone: iv.timezone ?? undefined, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
     return `the ${iv.title} on ${when}`;
   }
-  return candidateKnowsOf(iv) ? `the ${iv.title} (times offered, none chosen yet)` : `the ${iv.title} (times not offered yet)`;
+  return bookedOrOffered(iv) ? `the ${iv.title} (times offered, none chosen yet)` : `the ${iv.title} (times not offered yet)`;
 }
 
 /**
