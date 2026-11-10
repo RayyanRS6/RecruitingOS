@@ -1369,6 +1369,41 @@ describe("a person sets the date and time", () => {
       await container.drain();
     });
 
+    /**
+     * The release review (11 November 2026, L4-4): before the hiring build a re-offer after a cancel reopened the same row, so
+     * what the candidate told us stayed. A person now sets a new date and time as a new interview, which started empty: the
+     * sheet showed no accommodation, the new booked page's field was blank, and their zone and note were gone.
+     */
+    it("what they told us carries to the interview a person books after they cancel: the accommodation, their zone and their note", async () => {
+      const { cand, booked, token } = await book("Yara", "West");
+      await form(`/c/schedule/${token}/accommodation`, { accessibilityNote: "Captions on, please." });
+      await form(`/c/schedule/${token}/timezone`, { timezone: "America/New_York" });
+      await form(`/c/schedule/${token}/reschedule`, { note: "Mornings suit me better." });
+      expect((await form(`/c/schedule/${token}/cancel`, { confirm: "yes", next: "new_times" })).status).toBe(302);
+      await container.drain();
+      expect((await interview(booked.id)).status).toBe("cancelled");
+      // a person sets a new date and time from their Cancelled card: a new interview
+      const again = await routeA(cand.id);
+      expect(again.status, await again.clone().text()).toBe(201);
+      const next = (await again.json()) as Booked;
+      expect(next.id).not.toBe(booked.id);
+      await container.drain();
+      const row = await interview(next.id);
+      expect(row.candidateAvailability).toMatchObject({ accessibilityNote: "Captions on, please.", note: "Mornings suit me better." });
+      expect(row.schedulingWindow.candidateTimezone).toBe("America/New_York");
+      // the sheet reads it, and their new booked page shows it filled in, in their own zone
+      const sheet = (await (await json(owner, "GET", `/api/v1/interviews/${next.id}`)).json()) as { candidateAvailability: { accessibilityNote: string; note: string } };
+      expect(sheet.candidateAvailability).toMatchObject({ accessibilityNote: "Captions on, please.", note: "Mornings suit me better." });
+      const page = await confirmedPage(row.scheduleToken!);
+      expect(page).toContain('value="Captions on, please."');
+      expect(page).toMatch(/E[DS]T/);
+      // an interview booked for someone who never told us anything starts empty, as before
+      const other = await book("Zed", "West");
+      expect((await interview(other.booked.id)).candidateAvailability).toBeNull();
+      for (const id of [next.id, other.booked.id]) await json(owner, "POST", `/api/v1/interviews/${id}/cancel`, { reason: "test cleanup" });
+      await container.drain();
+    });
+
     it("asking for a different time leaves the time standing and tells the team; twice, then a person; a move answers it; the candidate's cancel is unchanged", async () => {
       const { cand, booked, row, token } = await book("Wes", "Asker");
       const before = mailTo(cand.email).length;

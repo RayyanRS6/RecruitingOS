@@ -104,6 +104,24 @@ export async function candidateEmailStates(tx: Tx, input: { interviews: Readonly
   return out;
 }
 
+type Availability = NonNullable<(typeof interviews.$inferSelect)["candidateAvailability"]>;
+
+/**
+ * What the candidate told us on an earlier interview of this application, for the next one (the release review, 11 November
+ * 2026): their accommodation (counsel register item 12: it reaches the team, and asking for a different time keeps it), the
+ * zone they chose and what suits them better. Before the hiring build a re-offer after a cancel reopened the same row, so it
+ * stayed; a person now books a new interview after a cancel, a no-show or our interviewer missing it, which must not start
+ * empty. The newest of each wins.
+ */
+async function toldOnEarlierInterviews(tx: Tx, applicationId: string): Promise<{ availability: Availability | null; candidateTimezone: string | null }> {
+  const earlier = await tx.select({ availability: interviews.candidateAvailability, window: interviews.schedulingWindow }).from(interviews).where(eq(interviews.applicationId, applicationId)).orderBy(desc(interviews.createdAt));
+  const latest = earlier.find((e) => e.availability)?.availability ?? null;
+  const accessibilityNote = earlier.map((e) => e.availability?.accessibilityNote?.trim()).find((n) => !!n) ?? null;
+  const note = earlier.map((e) => e.availability?.note?.trim()).find((n) => !!n) ?? null;
+  const availability = latest || accessibilityNote || note ? { ...(latest ?? {}), ...(accessibilityNote ? { accessibilityNote } : {}), ...(note ? { note } : {}) } : null;
+  return { availability, candidateTimezone: earlier.map((e) => e.window?.candidateTimezone).find((z) => !!z) ?? null };
+}
+
 export type ApproveInterviewInput = {
   companyId: string;
   applicationId: string;
@@ -180,7 +198,8 @@ export async function createApprovedInterview(tx: Tx, container: Container, inpu
   const slot = input.setTime && place ? slotFromPerson(input.setTime, { companyTimezone: company.timezone, interviewerUserIds: input.interviewerUserIds, address: place.address, now }) : null;
   const clashes = input.setTime && slot ? await refuseClash(tx, { companyId, userIds: input.interviewerUserIds, slot, allowClash: input.setTime.allowClash }) : [];
   const booking = input.setTime && slot && place ? bookingFields(slot, place, { durationMinutes: input.setTime.durationMinutes, companyTimezone: company.timezone }) : null;
-  const [iv] = await tx.insert(interviews).values({ companyId, applicationId: app.id, roundKey: round.key, title: round.title, format: round.format, durationMinutes: round.durationMinutes, status: "proposed", linkSource: input.linkSource, meetingUrl: input.linkSource === "pasted" ? input.meetingUrl ?? null : null, schedulingWindow: window, createdBy: actor, timezone: company.timezone, ...(booking ?? {}) }).returning();
+  const told = await toldOnEarlierInterviews(tx, app.id);
+  const [iv] = await tx.insert(interviews).values({ companyId, applicationId: app.id, roundKey: round.key, title: round.title, format: round.format, durationMinutes: round.durationMinutes, status: "proposed", linkSource: input.linkSource, meetingUrl: input.linkSource === "pasted" ? input.meetingUrl ?? null : null, schedulingWindow: { ...window, ...(told.candidateTimezone ? { candidateTimezone: told.candidateTimezone } : {}) }, candidateAvailability: told.availability, createdBy: actor, timezone: company.timezone, ...(booking ?? {}) }).returning();
   for (const uid of input.interviewerUserIds) await tx.insert(interviewParticipants).values({ companyId, interviewId: iv.id, userId: uid, role: "interviewer", status: booking ? "confirmed" : "invited" });
   const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName, email: candidates.email }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   // Each interviewer is told the moment they are put on the interview ("invited"); the booking confirms them later. A time
