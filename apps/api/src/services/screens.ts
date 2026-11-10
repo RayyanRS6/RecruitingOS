@@ -53,6 +53,19 @@ export async function stopScreenInvitation(tx: Tx, container: Container, input: 
 
 /** Statuses a recruiter's call notes can be added to: everything except a conversation that is already complete, withdrawn or stopped. */
 const NOTES_ALLOWED: readonly string[] = ["invited", "reminded", "in_progress", "paused", "human_requested", "unfinished", "expired", "declined_by_candidate"];
+/** The stages a recruiter's call notes go on the AI interview at: past screening the route answers `not_screening`. */
+const NOTES_STAGES: readonly string[] = ["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"];
+
+/**
+ * Whether a recruiter's notes from a call go on the candidate's AI interview tab now, by the rules `addRecruiterCallNotes`
+ * applies (10 November 2026): someone locked always (they are kept on the recruiter's own note), anyone else at a screening
+ * stage whose newest conversation, if any, still takes them. Otherwise what the call taught goes on their Notes tab, as the
+ * route's own refusal says. The recruiter queue reads it, so its hint never sends anyone to a form that is not there.
+ */
+export function callNotesGoOnAiInterview(app: { stage: string; lockedAt: string | null }, latest: { status: string } | null | undefined): boolean {
+  if (app.lockedAt) return true;
+  return NOTES_STAGES.includes(app.stage) && (!latest || NOTES_ALLOWED.includes(latest.status));
+}
 
 /**
  * A recruiter's notes from a call (plan E3, Q16): when a candidate asked for a person, the recruiter who called them
@@ -67,7 +80,7 @@ export async function addRecruiterCallNotes(tx: Tx, container: Container, input:
   if (app.lockedAt) return keepCallNotesAsNote(tx, container, input);
   const [latest] = await tx.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1);
   if (latest && !NOTES_ALLOWED.includes(latest.status)) throw new HttpError(409, "screen_closed", latest.status === "completed" ? "This AI interview is already complete. Add what you learned as a note on the candidate instead." : "This AI interview is closed.");
-  if (!["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"].includes(app.stage)) throw new HttpError(409, "not_screening", "This candidate is past the screening step.");
+  if (!NOTES_STAGES.includes(app.stage)) throw new HttpError(409, "not_screening", "This candidate is past the screening step.");
   // With no conversation yet, the notes are the screening: they finish it, or there would be an invitation nobody sent,
   // waiting for good, that no scorecard ever follows.
   if (!latest && !input.complete) throw new HttpError(409, "no_conversation", "This candidate has no AI interview to keep open. Tick \"Finish the AI interview with these notes\" to record the call as their AI interview.");

@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, notInArray, sql } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, LOCKED_REQUEST_LINE, NO_WORK_WHILE_LOCKED, PLAN_REQUEST_EXPERTISE, PLAN_REQUEST_OPEN_LINE, PLAN_REQUEST_SUMMARY, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
 import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, applicationLocked, assertCan, audit, can, companyHasLocked, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, hiddenAmong, isBoardChannel, isPlanRequest, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, openPlanRequests, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
-import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
+import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Tenant, type Vars } from "../middleware/session";
@@ -22,6 +22,7 @@ import { approverRolesOf, mayDecideByRole } from "../services/approvers";
 import { attachBoardSnapshot, emailItsQueue, sendToIts } from "../services/escalation-queue";
 import { interviewDraftFor } from "./interviews";
 import { assertNoNewWork } from "../services/trial";
+import { callNotesGoOnAiInterview } from "../services/screens";
 
 export const approvalRoutes = new Hono<Vars>();
 
@@ -517,7 +518,10 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
     const thread = escalationThread({ ...e, question }, messages, actor.name, { forRecruiter: true });
     // Whether the company can read this person (Rule 3): the queue says so, because words cannot be checked by a machine.
     const lockedForCompany = await aboutLockedApplicant(tx, e);
-    const full = { companyId: e.companyId, roleId: e.roleId, applicationId: e.applicationId, lockedForCompany, firstResponseAt: e.firstResponseAt, accessExpiresAt: e.accessExpiresAt, resolution: e.resolution, resolvedAt: e.resolvedAt, minutesSpent: e.minutesSpent, question, contextSnapshot: withoutUnsentInContext(e.contextSnapshot), thread, reopenedCount: messages.filter((m) => m.kind === "reopen").length, planRequest, grant: grant ? { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } : null };
+    // Where the notes from a call with a candidate who asked for a person go now (10 November 2026, additive): their AI interview
+    // tab, or their Notes tab once they are past screening. The queue's hint and button follow it.
+    const callNotesOnAiInterview = e.kind === "candidate_issue" && e.applicationId ? await callNotesOnAiInterviewOf(tx, e.applicationId) : null;
+    const full = { companyId: e.companyId, roleId: e.roleId, applicationId: e.applicationId, lockedForCompany, callNotesOnAiInterview, firstResponseAt: e.firstResponseAt, accessExpiresAt: e.accessExpiresAt, resolution: e.resolution, resolvedAt: e.resolvedAt, minutesSpent: e.minutesSpent, question, contextSnapshot: withoutUnsentInContext(e.contextSnapshot), thread, reopenedCount: messages.filter((m) => m.kind === "reopen").length, planRequest, grant: grant ? { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } : null };
     return { previewRow, full, why: null as string | null };
   });
   if (!row) throw new HttpError(404, "not_found", "Escalation not found.");
@@ -603,6 +607,14 @@ async function requestReaders(tx: Tx, e: Pick<EscalationRow, "companyId" | "requ
 /** Whether a request is about someone the team cannot read: a candidate who asked for a person while locked. */
 async function aboutLockedApplicant(tx: Tx, e: Pick<EscalationRow, "applicationId">): Promise<boolean> {
   return !!e.applicationId && applicationLocked(tx, e.applicationId);
+}
+
+/** Whether a call's notes about this candidate go on their AI interview tab now (`callNotesGoOnAiInterview`); null when they are gone. */
+async function callNotesOnAiInterviewOf(tx: Tx, applicationId: string): Promise<boolean | null> {
+  const [app] = await tx.select({ stage: applications.stage, lockedAt: applications.lockedAt }).from(applications).where(eq(applications.id, applicationId)).limit(1);
+  if (!app) return null;
+  const [latest] = await tx.select({ status: screens.status }).from(screens).where(eq(screens.applicationId, applicationId)).orderBy(desc(screens.createdAt)).limit(1);
+  return callNotesGoOnAiInterview(app, latest);
 }
 
 /** What a request is about, for a notice's title: never a candidate's name. */

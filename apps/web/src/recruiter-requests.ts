@@ -123,10 +123,12 @@ export type HandedOverDraft = {
  * screening conversation, where the call notes go; plan E3), the role's candidates when it is about a role, and Today
  * otherwise. `message`: "Write to the candidate", their panel with its message box open.
  */
-export function workspaceHref(e: { roleId?: string | null; applicationId?: string | null; kind?: string; contextSnapshot?: Record<string, unknown>; message?: boolean }): string {
+export function workspaceHref(e: { roleId?: string | null; applicationId?: string | null; kind?: string; contextSnapshot?: Record<string, unknown>; message?: boolean; callNotesOnAiInterview?: boolean | null }): string {
   const draft = (e.contextSnapshot as { intakeSession?: { id?: unknown } | null } | undefined)?.intakeSession;
   if (draft && typeof draft.id === "string") return `/roles/new?session=${encodeURIComponent(draft.id)}`;
-  if (e.roleId && e.applicationId) return `/roles/${e.roleId}/talent?open=${encodeURIComponent(e.applicationId)}${e.message ? "&message=1" : e.kind === CANDIDATE_ASKED_FOR_PERSON ? "&tab=screen" : ""}`;
+  // Past screening the AI interview tab takes no notes: the call's notes go on the Notes tab (10 November 2026).
+  const callTab = e.callNotesOnAiInterview === false ? "&tab=notes" : "&tab=screen";
+  if (e.roleId && e.applicationId) return `/roles/${e.roleId}/talent?open=${encodeURIComponent(e.applicationId)}${e.message ? "&message=1" : e.kind === CANDIDATE_ASKED_FOR_PERSON ? callTab : ""}`;
   return e.roleId ? `/roles/${e.roleId}/talent` : "/";
 }
 
@@ -138,6 +140,27 @@ export const CALL_NOTES_HINT = "The candidate asked to talk to a person instead 
 
 /** The same, about someone the company cannot read: they never had the assistant, and nothing is scored or started while locked. */
 export const LOCKED_CALL_NOTES_HINT = "This candidate wrote to us or asked for a person, and the company cannot read them. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the AI interview tab. Your notes are kept on their Notes tab as yours, never as the candidate's own words. Nothing scores them, and no AI interview or interview starts, while they are locked.";
+
+/**
+ * The same once the candidate is past screening, or their AI interview is closed (10 November 2026): the AI interview tab
+ * has no notes form then (the route answers `not_screening` or `screen_closed`), so the call goes on the Notes tab.
+ */
+export const NOTES_TAB_CALL_HINT = "The candidate asked to talk to a person instead of the assistant. Call or email them, then open the candidate in the customer's workspace and add what you learned on their Notes tab. It is kept as your note, never as the candidate's own words.";
+
+/**
+ * The hint on a request from a candidate who asked for a person, true wherever they are: someone locked has their own, and
+ * one past screening (`callNotesOnAiInterview` false, GET /escalations/:id) is sent to the Notes tab, never to a form that is
+ * not there. An older answer without the field reads as before.
+ */
+export function callNotesHint(e: { lockedForCompany?: boolean; callNotesOnAiInterview?: boolean | null }): string {
+  if (e.lockedForCompany) return LOCKED_CALL_NOTES_HINT;
+  return e.callNotesOnAiInterview === false ? NOTES_TAB_CALL_HINT : CALL_NOTES_HINT;
+}
+
+/** The button under that hint: the tab the hint names. */
+export function callNotesButton(e: { lockedForCompany?: boolean; callNotesOnAiInterview?: boolean | null }): string {
+  return !e.lockedForCompany && e.callNotesOnAiInterview === false ? "Open the candidate's Notes tab" : "Open the candidate's AI interview tab";
+}
 
 /**
  * The answer on a request about someone the company cannot read: nobody there reads it while the candidate is locked (the API

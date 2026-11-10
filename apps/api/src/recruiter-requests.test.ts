@@ -95,6 +95,21 @@ describe("what a recruiter request covers, and saying so", () => {
     expect(grant).toMatchObject({ roleId, applicationId });
   });
 
+  it("tells the queue where a call's notes go: the AI interview tab while the candidate is at screening, their Notes tab once past it, as the notes route rules (10 November 2026)", async () => {
+    const [esc] = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, applicationId), eq(recruiterEscalations.kind, "candidate_issue")));
+    const detail = async () => (await (await json(recruiter, "GET", `/api/v1/escalations/${esc.id}`)).json()) as { accessGranted: boolean; callNotesOnAiInterview?: boolean | null };
+    expect(await detail()).toMatchObject({ accessGranted: true, callNotesOnAiInterview: true });
+    const [before] = await container.db.select({ stage: applications.stage }).from(applications).where(eq(applications.id, applicationId));
+    try {
+      // a person booked an interview since: the AI interview tab takes no notes (the route answers not_screening)
+      await container.db.update(applications).set({ stage: "interview_scheduled" }).where(eq(applications.id, applicationId));
+      expect((await detail()).callNotesOnAiInterview).toBe(false);
+    } finally {
+      await container.db.update(applications).set({ stage: before.stage }).where(eq(applications.id, applicationId));
+    }
+    expect((await detail()).callNotesOnAiInterview).toBe(true);
+  });
+
   it("a recruiter brought in for one candidate can ask about that candidate only, never the whole role or all of the hiring", async () => {
     expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
     const asKai = (body: Record<string, unknown>) => json(recruiter, "POST", "/api/v1/escalations", { question: "Could someone else look at this too?", ...body });

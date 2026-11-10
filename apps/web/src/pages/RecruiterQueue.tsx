@@ -7,7 +7,7 @@ import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, Ico
 import type { EscalationThreadEntry } from "@ros/contracts";
 import { api, ApiError, type Me, type PostingTaskDetail } from "../api/client";
 import { POSTING_TASK_BEFORE_ACCEPT, isPostingTaskKind, queueKindLabel } from "../publishing";
-import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, LOCKED_ANSWER_LABEL, LOCKED_CALL_NOTES_HINT, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
+import { CANDIDATE_ASKED_FOR_PERSON, LOCKED_ANSWER_LABEL, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST, callNotesButton, callNotesHint, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
 import { toast } from "../toast";
 import { BoardSnapshotCard } from "./board/BoardSnapshot";
 import { snapshotOf } from "./board/board-model";
@@ -15,7 +15,7 @@ import { snapshotOf } from "./board/board-model";
 /** Exactly what a recruiter sees before accepting (correction 11): no customer words, nothing from a candidate record. */
 type Preview = { id: string; status: string; kind: string; urgency: "low" | "normal" | "high" | "critical"; requiredExpertise: string; summary: string; companyName: string; roleTitle: string | null; slaDueAt: string | null; slaRemainingMinutes: number | null; businessMinutesRemaining: number | null; overdue: boolean; createdAt: string; claimedByMe: boolean; claimed: boolean };
 /** `postingTask`: an accepted ITS posting task (plan D3), the job ad and the board only; it never opens anything about candidates. */
-type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; lockedForCompany?: boolean; /** A talk about the plan: what they wrote opens, with no grant and no access to their hiring. */ planRequest?: boolean; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } } | null; postingTask?: PostingTaskDetail };
+type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; lockedForCompany?: boolean; /** A candidate who asked for a person: whether the call's notes go on their AI interview tab now, or (false) on their Notes tab. */ callNotesOnAiInterview?: boolean | null; /** A talk about the plan: what they wrote opens, with no grant and no access to their hiring. */ planRequest?: boolean; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } } | null; postingTask?: PostingTaskDetail };
 
 const URGENCY_TONE: Record<Preview["urgency"], Tone> = { low: "neutral", normal: "accent", high: "caution", critical: "critical" };
 /** Urgency in plain words (Wave S6): the API's "critical" is what the customer chose as "Urgent". */
@@ -510,8 +510,9 @@ function EscalationDetail({ id }: { id: string }) {
           {/* A candidate who chose a person over the assistant (plan E3, Q16): the call, then the notes on their AI interview tab. */}
           {e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId && e.status !== "resolved" ? (
             <Card needsYou title="After you talk with them">
-              <p className="small text-ink-2">{e.lockedForCompany ? LOCKED_CALL_NOTES_HINT : CALL_NOTES_HINT}</p>
-              {e.grant ? <div className="row mt-4"><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open the candidate's AI interview tab</Button></div> : null}
+              {/* true wherever they are: past screening the call's notes go on their Notes tab (10 November 2026) */}
+              <p className="small text-ink-2">{callNotesHint(e)}</p>
+              {e.grant ? <div className="row mt-4"><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>{callNotesButton(e)}</Button></div> : null}
             </Card>
           ) : null}
           {aboutCount ? (
