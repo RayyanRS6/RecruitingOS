@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { createApplicationLink, entitlements, findPostingLink, groupFor, openFollowUp, ownerGroup, setAutoState } from "@ros/core";
-import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, interviews, jobs, postings, recruiterEscalations, users, withTenant } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, hiringOutcomes, interviews, jobs, postings, recruiterEscalations, roles, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { SEND_MAX_ATTEMPTS, TRIAGE_READINGS } from "@ros/agents";
 import { localDays } from "@ros/workflows";
@@ -366,6 +366,10 @@ describe("role report", () => {
       if (rows.some((a) => !marks.has(a.id) && ((ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "ineligible" && a.stage !== "interview_complete") || a.stage === "eligible"))) needsMe += 1;
       if (rows.some((a) => a.stage === "ineligible")) needsMe += 1;
       if (rows.some((a) => ["rejected", "talent_pool"].includes(a.stage) && a.toldState === "not_told")) needsMe += 1;
+      // and "Close this job?" (6 November 2026, HF-16): a job still open or paused whose every standing hire has started
+      const [job] = await container.db.select({ status: roles.status }).from(roles).where(eq(roles.id, rid));
+      const hires = (await container.db.select({ hireDate: hiringOutcomes.hireDate, stage: applications.stage }).from(hiringOutcomes).innerJoin(applications, eq(applications.id, hiringOutcomes.applicationId)).where(and(eq(hiringOutcomes.roleId, rid), eq(hiringOutcomes.outcome, "hired_externally"), isNull(hiringOutcomes.correctedAt)))).filter((h) => h.stage === "hired" && h.hireDate);
+      if (["open", "paused"].includes(job.status) && hires.length && hires.every((h) => h.hireDate!.slice(0, 10) < new Date().toISOString().slice(0, 10))) needsMe += 1;
     }
     expect(Number(m![1])).toBe(needsMe);
     // strong in the same word the list shows beside each number (6 November 2026), never a reading's stored word
