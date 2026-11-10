@@ -95,8 +95,9 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect(row(ids.ada)).toMatchObject({ score: 100, band: "very_high", bandLabel: "Very high", fit: "strong", missingMustHave: [], placement: { column: "shortlist", confident: true }, mustHaves: { words: "Must-haves: 2 of 2 shown" } });
       expect(row(ids.ada).coverage).toMatchObject({ known: 2 + packet.competencies.length, total: 2 + packet.competencies.length });
       // the licence (4), half the perio work (2), one skill against him and three not shown: 6 of 18 points. Low, and the 7 still
-      // open could lift him out of it, so the board asks a person to read him and never ticks a decline
-      expect(row(ids.ben)).toMatchObject({ score: 33, band: "low", fit: "weak" });
+      // open could lift him out of it, so the board asks a person to read him and never ticks a decline, and the word beside the
+      // number says the same, "Not enough evidence", never "Weak match" (one rule for both, the release review of 11 November 2026)
+      expect(row(ids.ben)).toMatchObject({ score: 33, band: "low", fit: "insufficient" });
       expect(row(ids.ben).placement).toMatchObject({ column: "longlist", confident: false });
       expect(row(ids.ben).coverage!.words).toBe(`Based on 3 of ${2 + packet.competencies.length} requirements`);
       expect(row(ids.cy)).toMatchObject({ band: "low", fit: "missing_must_have", missingMustHave: [{ key: must(0).key, label: "active CA RDH license", quote: "RDH license CA expired in 2021" }], placement: { column: "not_moving_forward", suggestedAction: "not_moving_forward" }, nextStep: { kind: "not_moving_forward", label: "Not moving forward" } });
@@ -438,16 +439,17 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect(where(strong).placement.column).toBe("shortlist");
       expect(where(strong).score?.band).toMatch(/high/);
       // "possible" shows the licence, half the perio work and half of one skill, and nothing of three more. A low number the
-      // reading itself leaned against, so the board asks a person to read them; it never ticks a decline
+      // reading itself leaned against, so the board asks a person to read them; it never ticks a decline. What is still open
+      // could lift it out of Low, so its word is "Not enough evidence", never "Weak match" (the release review, 11 November 2026)
       expect(where(possible).placement).toMatchObject({ column: "longlist", confident: false, declineReason: null, nextStep: { kind: "read_yourself" } });
       expect(where(possible).placement.needsYourEye).toMatch(/but the score puts them lower/);
-      expect(where(possible).score).toMatchObject({ band: "low", fit: "weak" });
+      expect(where(possible).score).toMatchObject({ band: "low", fit: "insufficient" });
       expect(where(possible).score?.breakdown.some((c) => c.mustHave && c.pctMet === 50)).toBe(true);
       expect(where(weak).placement.column).toBe("not_moving_forward");
       expect(where(weak).score?.missingMustHave.map((m) => m.quote)).toEqual(["I do not hold a CA RDH license"]);
       // the card's word is the one the list shows
       expect(where(strong).reading).toBe("Strong match");
-      expect(where(possible).reading).toBe("Weak match");
+      expect(where(possible).reading).toBe("Not enough evidence");
       expect(where(weak).reading).toBe("Missing a must-have");
       for (const id of [strong, possible, weak]) expect(where(id).score).toMatchObject({ interview: "done", basis: "From the résumé and the AI interview" });
     });

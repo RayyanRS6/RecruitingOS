@@ -411,8 +411,21 @@ describe("the one verdict word (fit)", () => {
 
   it("says Weak match for a low number once the must-haves are known and most of the points are spoken to", () => {
     expect(one({ rdh_license: "partly", perio: "partly", chairside: "no", patients: "no", software: "no" })).toMatchObject({ score: 29, openPoints: 0, fit: "weak" });
-    // a skill against them and two partly: every must-have known, with under half the points open
-    expect(one({ rdh_license: "partly", perio: "yes", chairside: "no", patients: "unknown", software: "unknown" })).toMatchObject({ band: "low", fit: "weak" });
+    // a skill against them, one not shown: every must-have known, and too few points open to lift it out of Low (43 + 7)
+    expect(one({ rdh_license: "partly", perio: "yes", chairside: "no", patients: "no", software: "unknown" })).toMatchObject({ score: 43, openPoints: 7, band: "low", fit: "weak" });
+  });
+
+  /**
+   * The release review (11 November 2026): the panel read "50/100 · Weak match" right above the board's own "Only 4 of 6
+   * requirements could be judged; a low score from so little is not enough to go on." One rule decides both now.
+   */
+  it("says Not enough evidence wherever the board says a low score is not enough to go on: points open that could lift it out of Low", () => {
+    // two skills not shown: 43 with 21 points still open, which could lift it to 64
+    expect(one({ rdh_license: "partly", perio: "yes", chairside: "no", patients: "unknown", software: "unknown" })).toMatchObject({ score: 43, openPoints: 21, band: "low", fit: "insufficient" });
+    // the review's office job: one must-have shown, one partly, two of four skills not shown
+    const office = { requirements: { mustHaves: [{ key: "m1", text: "Runs an office", rationale: "r", evidencedBy: ["resume", "screen"] }, { key: "m2", text: "QuickBooks or similar", rationale: "r", evidencedBy: ["resume", "screen"] }] }, competencies: [["s1", 5], ["s2", 3], ["s3", 3], ["s4", 1]].map(([key, weight]) => ({ key, name: `Skill ${key}`, definition: "d", weight, evaluatedIn: "both", indicators: ["x"] })) } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+    const cv = reading("triage", [must("m1", "yes", "ran the front office"), must("m2", "partially", "some invoicing")], [skill("s1", "not_evidenced"), skill("s2", "not_evidenced"), skill("s3", "partially_evidenced", "answered phones"), skill("s4", "evidenced", "kept the files")]);
+    expect(matchScore(pair(cv), office)).toMatchObject({ score: 50, openPoints: 31, fit: "insufficient" });
   });
 
   it("says Strong match from 70 only with every must-have fully shown, and Potential match otherwise from 55", () => {

@@ -174,20 +174,38 @@ export function matchBand(score: number | null | undefined): { band: MatchBand; 
   return { band: b.band, label: b.label };
 }
 
+/** Where the Low band ends (`MATCH_SCORE_BANDS`). */
+const LOW_BELOW = 55;
+/** Below this share of the requirements judged, a low score is too little to go on. */
+export const MIN_COVERAGE_TO_JUDGE = 0.5;
+
 /**
  * The one verdict word, from the same numbers as the score (the owner, 6 November 2026), so a word and a number can never
  * disagree: a must-have their own words show is not met; then nothing to go on; under 55 the word says whether that is too
- * little evidence (a must-have not known, or half the points still open) or what the evidence shows; from 70 with every
+ * little evidence (`tooLittleToGoOn`, the board's own rule: a must-have not known, half the points still open, enough open
+ * to lift it out of Low, or under half the requirements judged) or what the evidence shows; from 70 with every
  * must-have fully shown it is strong; anything else from 55 is potential. A must-have the role checks only in the team's own
  * interviews (`checkInInterview`) is not known until a reading shows it in full, though it is never in the number. The stored
  * `overall` of a reading stays for the audit trail and the board's own checks, and no longer speaks beside the number.
  */
-export function fitOf(m: { score: number | null; missingMustHave: readonly unknown[]; openPoints: number; breakdown: ReadonlyArray<Pick<MatchCriterion, "mustHave" | "pctMet">>; unknown: ReadonlyArray<Pick<MatchUnknown, "mustHave">>; checkInInterview?: readonly unknown[] }): MatchFit {
+export function fitOf(m: { score: number | null; missingMustHave: readonly unknown[]; openPoints: number; coverage: Pick<MatchScore["coverage"], "known" | "total">; breakdown: ReadonlyArray<Pick<MatchCriterion, "mustHave" | "pctMet">>; unknown: ReadonlyArray<Pick<MatchUnknown, "mustHave">>; checkInInterview?: readonly unknown[] }): MatchFit {
   if (m.missingMustHave.length) return "missing_must_have";
   if (m.score === null) return "insufficient";
   const mustOpen = m.unknown.some((u) => u.mustHave) || !!m.checkInInterview?.length;
-  if (m.score < 55) return mustOpen || m.openPoints >= 50 ? "insufficient" : "weak";
+  if (m.score < LOW_BELOW) return tooLittleToGoOn(m) ? "insufficient" : "weak";
   return m.score >= 70 && !mustOpen && m.breakdown.every((c) => !c.mustHave || c.pctMet === 100) ? "strong" : "potential";
+}
+
+/**
+ * Whether a low number rests on too little to go on: one rule for the verdict word and the pool board (the release review,
+ * 11 November 2026, after the panel read "Weak match" over the board's own "a low score from so little is not enough to go
+ * on"). No number; a must-have not known yet, or one still to check in the team's own interviews; half the points still
+ * open; enough points still open to lift it out of Low; or fewer than half the requirements judged. `fitOf` then says "Not
+ * enough evidence", never "Weak match", and the board never starts a decline ticked on it (`boardPlacement`).
+ */
+export function tooLittleToGoOn(m: { score: number | null; openPoints: number; coverage: Pick<MatchScore["coverage"], "known" | "total">; unknown: ReadonlyArray<Pick<MatchUnknown, "mustHave">>; checkInInterview?: readonly unknown[] }): boolean {
+  if (m.score === null) return true;
+  return m.unknown.some((u) => u.mustHave) || !!m.checkInInterview?.length || m.openPoints >= 50 || m.score + m.openPoints >= LOW_BELOW || m.coverage.known < m.coverage.total * MIN_COVERAGE_TO_JUDGE;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

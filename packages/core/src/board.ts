@@ -1,4 +1,4 @@
-import { NEXT_STEP_LABEL, type ApplicationStage, type BoardColumn, type BoardPlacement, type InterviewInScore, type MarkKind, type MatchCriterion, type MatchScore, type MustHaveSummary, type NextStep, type NextStepKind, type OwnerStage, type ReadingVersion, type RejectReason } from "@ros/contracts";
+import { MIN_COVERAGE_TO_JUDGE, NEXT_STEP_LABEL, tooLittleToGoOn, type ApplicationStage, type BoardColumn, type BoardPlacement, type InterviewInScore, type MarkKind, type MatchCriterion, type MatchScore, type MustHaveSummary, type NextStep, type NextStepKind, type OwnerStage, type ReadingVersion, type RejectReason } from "@ros/contracts";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, LOW_CONFIDENCE_TEXT, RESUME_UNREADABLE_TEXT, insufficientEvidence, type AssessmentLike, type EvidenceView } from "./evidence";
 
 /**
@@ -18,8 +18,8 @@ import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, LOW_CONFIDENCE_TEXT, RE
  * - A must-have the role checks only in the team's own interviews is out of the number, and not known until a reading
  *   shows it in full (`checkInInterview`): on the Shortlist the next step is the interview, saying to check it there.
  * - A decline never starts ticked on thin or moving ground: a low score with must-haves not yet known (one checked only in
- *   the team's own interviews included), from under half
- *   the requirements, or that the points still open could lift out of Low (a requirement not shown is never a decline), an
+ *   the team's own interviews included), from under half the requirements, or with half the points, or enough to lift it out
+ *   of Low, still open (`tooLittleToGoOn`, the rule the verdict word reads too: a requirement not shown is never a decline), an
  *   open screening conversation whose answers would count most, a reading made against an older version of the role whose
  *   must-haves have changed, or a reading that itself suggested a step forward. The same goes for the Shortlist when the
  *   reading itself suggested holding back.
@@ -51,10 +51,8 @@ export type PlacementInput = {
   readingVersion?: Pick<ReadingVersion, "readAgainst" | "mustHavesChanged"> | null;
 };
 
-/** Below this share of the requirements judged, a low score alone is too little to suggest a decline on. */
-export const MIN_COVERAGE_TO_DECLINE = 0.5;
-/** Where the Low band ends (`MATCH_SCORE_BANDS`). */
-const LOW_SCORE_BELOW = 55;
+/** Below this share of the requirements judged, a low score alone is too little to suggest a decline on (`tooLittleToGoOn`). */
+export const MIN_COVERAGE_TO_DECLINE = MIN_COVERAGE_TO_JUDGE;
 
 /** Days without a decision after which a person shows up under "Who might I be overlooking?". */
 export const OVERLOOKED_AFTER_DAYS = 7;
@@ -165,9 +163,10 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
   const unquotedNo = unknownMust.filter((u) => u.unquotedNo);
   const leans = readingLeans(latest);
   const coverage = match?.coverage ?? { known: 0, total: 0 };
-  // Low, and what nothing has been said about yet could still lift them out of Low: too little to go on, never a ticked decline.
-  const couldLeaveLow = (score ?? 0) + (match?.openPoints ?? 0) >= LOW_SCORE_BELOW;
-  const thin = column === "not_moving_forward" && !missing.length && (unknownMust.length > 0 || toCheck.length > 0 || coverage.known < coverage.total * MIN_COVERAGE_TO_DECLINE || couldLeaveLow);
+  // Low on too little to go on (`tooLittleToGoOn`, the rule the verdict word reads too, so "Weak match" never sits beside
+  // it): a must-have not known yet, half the points open or enough to lift them out of Low, or under half judged. Never a
+  // ticked decline.
+  const thin = column === "not_moving_forward" && !missing.length && !!match && tooLittleToGoOn(match);
   // Where to ask: in the AI interview while it can still be done, on a call once it has been (a second one is never offered).
   const askWhere = latest.kind === "screen" ? "on a call" : "in the AI interview";
   const readYourself = (why: string, reasonForStep: string) => ({ why, next: step("read_yourself", reasonForStep) });

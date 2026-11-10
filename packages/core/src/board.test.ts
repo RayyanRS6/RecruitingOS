@@ -203,6 +203,44 @@ describe("boardPlacement", () => {
     }
   });
 
+  /**
+   * The release review (11 November 2026): the verdict word and the board's tick read two rules, so "Weak match" sat over
+   * "a low score from so little is not enough to go on". One rule (`tooLittleToGoOn`) decides both now.
+   */
+  it("ticks a decline on a low score exactly when the verdict word is Weak match, over many random cases", () => {
+    let seed = 20261111;
+    const rand = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296);
+    const levels = ["yes", "partly", "no", "unknown"] as const;
+    const pick = () => levels[Math.floor(rand() * levels.length)]!;
+    let low = 0;
+    let weak = 0;
+    for (let n = 0; n < 1500; n++) {
+      const mustKeys = Array.from({ length: Math.floor(rand() * 3) }, (_, i) => `m${i}`);
+      const skillKeys = Array.from({ length: 1 + Math.floor(rand() * 4) }, (_, i) => `s${i}`);
+      const role = {
+        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: rand() < 0.2 ? ["interview"] : ["resume"] })) },
+        competencies: skillKeys.map((key) => ({ key, name: `Skill ${key}`, definition: "d", weight: 1 + Math.floor(rand() * 5), evaluatedIn: "both", indicators: ["x"] })),
+      } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+      const met = { yes: "yes", partly: "partially", no: "no", unknown: "unknown" } as const;
+      const finding = { yes: "evidenced", partly: "partially_evidenced", no: "contradicted", unknown: "not_evidenced" } as const;
+      const r: EvidenceAssessment = {
+        ...result,
+        requirementFindings: mustKeys.map((k) => { const l = pick(); return { requirementKey: k, met: met[l], ...(l === "unknown" ? {} : { evidence: { source: "resume" as const, quote: `${k} in their words` } }) }; }),
+        competencyFindings: skillKeys.map((k) => { const l = pick(); return { competencyKey: k, finding: finding[l], ...(l === "unknown" ? {} : { evidence: { source: "resume" as const, quote: `${k} in their words` } }) }; }),
+      };
+      const pair = { resume: { kind: "triage", confidence: "medium", result: r }, screen: null };
+      const match = matchScore(pair, role)!;
+      if (match.band !== "low" || match.missingMustHave.length) continue;
+      low += 1;
+      const p = boardPlacement({ stage: "screen_complete", base: "new", stageLabel: "AI interview done", latest: holding, evidence: quiet, match, mustHaves: mustHaveSummary(pair, role) });
+      if (match.fit === "weak") weak += 1;
+      expect(p.confident, JSON.stringify([match.score, match.openPoints, match.coverage, match.fit, p.needsYourEye])).toBe(match.fit === "weak");
+      expect(p.column).toBe(match.fit === "weak" ? "not_moving_forward" : "longlist");
+    }
+    expect(low).toBeGreaterThan(300);
+    expect(weak).toBeGreaterThan(30);
+  });
+
   it("holds an eligibility answer for a person, with nothing to apply", () => {
     expect(place({ stage: "ineligible" })).toMatchObject({ column: "longlist", confident: false, suggestedAction: null, nextStep: { kind: "check_eligibility", label: "Check eligibility" } });
   });

@@ -196,12 +196,13 @@ export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirem
   const basedOn = sources.size === 2 || (!sources.size && pair.resume && pair.screen) ? "resume_and_screen" : sources.has("screen") || (!sources.size && pair.screen) ? "screen" : "resume";
   const latest = latestOf(pair);
   const interview = interviewFor(pair, opts.interview);
+  const coverage = { known: known.length, total: all.length, words: coverageWords(known.length, all.length) };
   return {
     score,
     band: band?.band ?? null,
     bandLabel: band?.label ?? null,
-    fit: fitOf({ score, missingMustHave, openPoints, breakdown, unknown, checkInInterview }),
-    coverage: { known: known.length, total: all.length, words: coverageWords(known.length, all.length) },
+    fit: fitOf({ score, missingMustHave, openPoints, coverage, breakdown, unknown, checkInInterview }),
+    coverage,
     breakdown,
     unknown,
     openPoints,
