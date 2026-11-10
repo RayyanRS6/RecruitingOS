@@ -405,7 +405,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
   const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review" || c.kind === "unreached").length;
   // Strong in the same word the list shows beside their number (`fit`, 6 November 2026): worked out from both readings, never
-  // from one reading's stored word. A reading of a conversation the candidate never sent is never counted (9 October 2026).
+  // from one reading's stored word, and never someone the list shows as "Needs a closer look" (11 November 2026). A reading of
+  // a conversation the candidate never sent is never counted (9 October 2026).
   const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage, packetVersion: applications.packetVersion, latestAssessmentId: applications.latestAssessmentId }).from(applications).where(and(eq(applications.companyId, companyId), notLocked()))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
   const companyMarks = await activeMarksFor(tx, companyApps.map((a) => a.id));
   const companyFollowUps = await activeFollowUpsFor(tx, companyApps.map((a) => a.id));

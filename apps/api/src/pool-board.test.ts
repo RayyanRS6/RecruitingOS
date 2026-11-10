@@ -184,6 +184,19 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       await container.db.update(applications).set({ latestAssessmentId: silent }).where(eq(applications.id, ids.ada));
       await container.db.delete(assessments).where(eq(assessments.id, quotedNo));
       expect(await adaRow()).toMatchObject({ score: 100, fit: "strong" });
+      // a reading the software holds for a person (its own word says weak, yet it suggests a step forward): the list reads "Needs
+      // a closer look" whatever her number, and its Strong filter leaves her out, so Today does not count her as a strong
+      // candidate ready either (the release review, 11 November 2026)
+      const held = await withTenant(container.db, companyId, async (tx) => {
+        const [r] = await tx.insert(assessments).values({ companyId, applicationId: ids.ada, kind: "triage", packetVersion: 1, result: resultOf([yes(0, "RDH license CA active"), yes(1, "Periodontal charting daily")], { overall: "weak" }), overall: "weak", confidence: "medium", createdAt: new Date(Date.now() + 60_000).toISOString() }).returning();
+        await tx.update(applications).set({ latestAssessmentId: r.id }).where(eq(applications.id, ids.ada));
+        return r.id;
+      });
+      expect(await adaRow()).toMatchObject({ score: 100, fit: "strong", evidence: { needsCloserLook: true } });
+      expect((await get<{ summary: string }>("/api/v1/brief")).summary).toMatch(/· 0 strong candidates ready ·/);
+      await container.db.update(applications).set({ latestAssessmentId: silent }).where(eq(applications.id, ids.ada));
+      await container.db.delete(assessments).where(eq(assessments.id, held));
+      expect((await get<{ summary: string }>("/api/v1/brief")).summary).toMatch(/· 1 strong candidate ready ·/);
     });
 
     it("adds how the pool meets each must-have to the role report, counts only", async () => {

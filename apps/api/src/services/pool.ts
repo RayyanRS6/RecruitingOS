@@ -110,13 +110,15 @@ export function scoreFields(match: MatchScore | null) {
 }
 
 /**
- * The one verdict word of each application given, for counts over many people (Home's "N strong candidates ready"): worked
- * out as the list works it out, from the readings the team may see (never one of a conversation the candidate did not send)
- * against the version of the role they were read against. One query per kind of fact. An application with no reading, or no
- * packet to read it against, is left out.
+ * The one word the list shows for each application given, for counts over many people (Home's "N strong candidates ready"):
+ * worked out as the list works it out, from the readings the team may see (never one of a conversation the candidate did not
+ * send) against the version of the role they were read against. "closer_look" first, as the list puts "Needs a closer look"
+ * before the verdict word and its Strong filter leaves such a person out (the release review, 11 November 2026: Home counted
+ * a strong candidate the owner could not find). One query per kind of fact. An application with no reading, or no packet to
+ * read it against, is left out.
  */
-export async function fitsOf(tx: Tx, apps: ReadonlyArray<Pick<AppRow, "id" | "roleId" | "packetVersion" | "latestAssessmentId">>): Promise<Map<string, MatchFit>> {
-  const out = new Map<string, MatchFit>();
+export async function fitsOf(tx: Tx, apps: ReadonlyArray<Pick<AppRow, "id" | "roleId" | "stage" | "packetVersion" | "latestAssessmentId">>): Promise<Map<string, MatchFit | "closer_look">> {
+  const out = new Map<string, MatchFit | "closer_look">();
   if (!apps.length) return out;
   const appIds = apps.map((a) => a.id);
   const asmts = await tx.select().from(assessments).where(inArray(assessments.applicationId, appIds)).orderBy(desc(assessments.createdAt));
@@ -130,7 +132,8 @@ export async function fitsOf(tx: Tx, apps: ReadonlyArray<Pick<AppRow, "id" | "ro
     const latest = own.find((x) => x.id === app.latestAssessmentId) ?? null;
     const packet = packetOf(app.roleId, latest?.packetVersion ?? app.packetVersion) ?? packetOf(app.roleId, app.packetVersion);
     const match = packet ? matchScore(readingPair(own), packet) : null;
-    if (match) out.set(app.id, match.fit);
+    // the list's own rule (`readingOf` in apps/web/src/talent-list.ts): a reading held for a person's eye reads so, whatever the number
+    if (match) out.set(app.id, evidenceView({ stage: app.stage, latest, resumeUnreadable: false, packet }).needsCloserLook ? "closer_look" : match.fit);
   }
   return out;
 }
