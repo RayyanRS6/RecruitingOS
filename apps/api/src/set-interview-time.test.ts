@@ -874,7 +874,9 @@ describe("a person sets the date and time", () => {
       const again = await routeA(noShow.cand.id);
       expect(again.status, await again.clone().text()).toBe(201);
       await container.drain();
-      expect(await interview(noShow.booked.id)).toMatchObject({ status: "no_show", decision: "new_times" });
+      // what the Interviews page keeps about the missed one says what a person did: set a date and time, never "New times sent"
+      // (the release review, 11 November 2026)
+      expect(await interview(noShow.booked.id)).toMatchObject({ status: "no_show", decision: "new_times", decisionNote: "A new date and time was set after the candidate did not attend" });
       expect((await followUpOf(noShow.cand.id)).resolvedHow).toBe("rebooked");
       const mail = mailTo(noShow.cand.email).slice(before);
       expect(mail).toHaveLength(1);

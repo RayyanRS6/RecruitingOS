@@ -198,6 +198,8 @@ describe("where an interview stands, in one word worked out from facts", () => {
     expect(interviewLine({ status: "scheduled", offeredSlots: [], startsAt: "2026-11-10T20:00:00.000Z", timezone: "America/Chicago", candidateEmail: "failed" })).toBe("Scheduled · Tue, Nov 10, 2:00 PM · Email not delivered");
     expect(interviewLine({ status: "scheduling", offeredSlots: slots, startsAt: null }, "confirmed")).toBe("Waiting on the candidate · 3 times offered");
     expect(interviewLine({ status: "completed", outcome: "happened", offeredSlots: [], startsAt: "2026-11-10T20:00:00.000Z", timezone: "America/Chicago", decision: "next_round" })).toBe("Took place · Tue, Nov 10, 2:00 PM · Decision: Next round");
-    expect(DECISION_WORDS.new_times).toBe("New times sent");
+    // a new interview followed the missed one: times sent to pick from, or a date and time a person set (the release review,
+    // 11 November 2026: "New times sent" was false for the second)
+    expect(DECISION_WORDS.new_times).toBe("New interview set up");
   });
 });

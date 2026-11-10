@@ -202,10 +202,11 @@ export async function createApprovedInterview(tx: Tx, container: Container, inpu
   const carries = followUp && CANCEL_STAGES.includes(app.stage) ? followUp : null;
   let newTimes: { offerKind: NewTimesOfferKind; followUpId: string; via: NewTimesVia } | null = null;
   if (carries) {
-    // The interview they did not come to is decided: new times went. The decision card and the report stop asking about
-    // it; it stays a no-show on record.
+    // The interview they did not come to is decided: a new one followed, times to pick from or a date and time a person set,
+    // and the note says which (the release review, 11 November 2026). The decision card and the report stop asking about it;
+    // it stays a no-show on record.
     const [missed] = await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), eq(interviews.status, "no_show"), eq(interviews.outcome, "no_show_candidate"), isNull(interviews.decision))).orderBy(desc(interviews.createdAt)).limit(1);
-    if (missed) await tx.update(interviews).set({ decision: "new_times", decisionNote: "New times sent after the candidate did not attend" }).where(eq(interviews.id, missed.id));
+    if (missed) await tx.update(interviews).set({ decision: "new_times", decisionNote: input.setTime ? "A new date and time was set after the candidate did not attend" : "New times sent after the candidate did not attend" }).where(eq(interviews.id, missed.id));
     newTimes = { offerKind: carries.choice === "new_times" ? "new_times_asked" : "new_times_team", followUpId: carries.id, via: input.via ?? "person" };
     await setCurrentInterview(tx, { followUpId: carries.id, interviewId: iv.id });
     // A person took it from here: the automatic set waiting for its day does not go.

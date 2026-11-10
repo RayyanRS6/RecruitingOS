@@ -254,8 +254,11 @@ export function interviewWord(i: InterviewFacts, check: CompanyCheck = "unknown"
   }
 }
 
-/** The decision recorded after an interview, in words. `new_times`: the candidate did not come, and the team sent new times for the same round. */
-export const DECISION_WORDS: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired", new_times: "New times sent" };
+/**
+ * The decision recorded after an interview, in words. `new_times`: the candidate or our interviewer did not come, and a new
+ * interview followed for the same round: times sent to pick from, or a date and time a person set (the note says which).
+ */
+export const DECISION_WORDS: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired", new_times: "New interview set up" };
 
 /** "Tue, Nov 10, 2:00 PM": a booked time on the company's clock (the interview's zone), for a list. */
 export function shortWhen(iso: string | null | undefined, timeZone: string | null | undefined): string | null {

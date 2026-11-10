@@ -513,7 +513,8 @@ describe("the Interviews page for someone under Cancelled (founder decisions 1A 
 
   it("names the decision a team send records on a missed interview", () => {
     const sent = sheet(iv({ status: "no_show", outcome: "no_show_candidate", decision: "new_times", decisionNote: "New times sent after the candidate did not attend", candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Interview to set up" }, followUp: null }));
-    expect(sent).toContain("Decision: New times sent");
+    // in words true whether times went to pick from or a person set the date and time (11 November 2026)
+    expect(sent).toContain("Decision: New interview set up");
     expect(sent).not.toContain("new_times");
   });
 });
