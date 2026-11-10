@@ -130,7 +130,7 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
         await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor: actorOf(c), reason: body.note ?? "approved the recommendation" });
         await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { by: "approval", approvalRequestId: req.id } });
       }
-      // "Yes, interview" (plan H4): the answer carries the interview approval card filled in, so the next click books it.
+      // "Yes, interview" (plan H4): the answer carries the "Set a date and time" form's defaults, so the next click books it.
       if (app && req.actionType === "application.recommend_interview" && can(t.role, "interview.request")) interviewDraft = await interviewDraftFor(tx, { app, now: container.engine.clock() });
     }
     return { ok: true, status, ...(decisionMessage ?? {}), ...(messageStatus ? { messageStatus } : {}), ...(closing ? { closingMessage: closing } : {}), ...(interviewDraft ? { interviewDraft } : {}) };

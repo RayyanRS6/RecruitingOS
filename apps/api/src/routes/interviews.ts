@@ -546,7 +546,7 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
 });
 
 /**
- * The interview approval card filled in (plan H4): the next round of the approved plan (the first, or the one after the
+ * The "Set a date and time" form's defaults (plan H4; a person books the time directly since 6 November 2026): the next round of the approved plan (the first, or the one after the
  * newest interview that is over), the plan's interviewers who are still active members (the role's current plan when it
  * still has the round, as the page's own defaults do), the calendar link and the company's scheduling window. Null when
  * no interview can be approved now (their step, or one already being set up) or the plan has no round left. Posting it
@@ -585,7 +585,7 @@ export async function interviewDraftFor(tx: Tx, input: { app: Pick<typeof applic
 }
 
 /**
- * GET /applications/:id/interview-draft: the approval card filled in, for those who approve interviews. 409 with the
+ * GET /applications/:id/interview-draft: the "Set a date and time" form's defaults, for those who approve interviews. 409 with the
  * reason when no interview can be approved now, 404 when the plan has no round left.
  */
 applicationInterviewRoutes.get("/:id/interview-draft", requireTenant, async (c) => {
