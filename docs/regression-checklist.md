@@ -231,7 +231,7 @@ The required check on `main` is the job named **`verify`** (`.github/workflows/c
   9. The Next.js production build.
   10. The browser journeys with accessibility (axe) checks (the Playwright projects `chromium` and `phone`), in **four passes, each with its own dev server**: shard 1/2 and shard 2/2 (without the route inventory), then `specs/routes.spec.ts` alone, then `specs/access-approval.spec.ts` alone with `SIGNUP_MODE=approval`.
 - **`flows`** (60-minute limit for each part): the whole flows, `tests/e2e/specs/flow-*.spec.ts` (the projects `flows` and `flows-phone`), the owner's "please test it thoroughly ... test both these flows" of 6 November 2026. Five parts, each a job with its own dev server: the whole hire and sign-up by approval (`SIGNUP_MODE=approval`), the rest in three shards, and email that never arrives (`E2E_EMAIL_PROVIDER=postmark`, with no token). A spec that needs another server's mode skips itself in the others, with the reason on the report.
-- **`verify`**: waits for both, and fails unless both passed. It runs when either failed, so the check reads failed and never skipped.
+- **`verify`**: waits for both, and fails unless both passed. It runs whatever became of them, a cancelled run included (`if: ${{ always() }}`), so the check reads failed and never skipped: GitHub counts a job skipped by its condition as a success (L5-3).
 
 In `checks`, the browser passes take about 50 minutes, after about 20 minutes of other checks. CI allows **one retry per test**, so a flaky journey can pass. Each job uploads its own HTML report (`playwright-report`, `playwright-report-flows-<n>`), kept 7 days.
 

@@ -202,9 +202,10 @@ jobs:
   verify:
     name: verify # the required status check on main: green only when `checks` and every part of `flows` passed
     needs: [checks, flows]
-    # Runs when either failed, so the check reads failed rather than skipped (a skipped required check would let a merge
-    # through); not when the run itself was cancelled by a newer push.
-    if: ${{ !cancelled() }}
+    # Runs whatever became of the jobs it waits for, a cancelled run included, so the check reads failed and never skipped:
+    # GitHub counts a job skipped by its condition as a success, so a skipped required check would let a merge through with no
+    # test run (the release review, 11 November 2026). It only reads the two results, so it cannot hang.
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
