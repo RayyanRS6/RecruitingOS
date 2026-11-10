@@ -164,10 +164,13 @@ describe("the application record (status page) after sending", () => {
     const must = packet.requirements.mustHaves[0];
     expect(score).toContain(`<li class="strong"><div class="bar-head"><span>${must.text}</span><span>100% met · Shown</span></div><progress max="100" value="100" aria-label="${must.text}: 100% met">100%</progress></li>`);
     if (packet.competencies.length) {
-      // the skills the team looks for are not on the job page: one line, never a skill's name, so bars and number agree
+      // the skills the team looks for are not on the job page: one line, never a skill's name, so bars and number agree. What
+      // nothing showed counts there at no points, so the line says how much was shown, never "met" (the release review, 11
+      // November 2026: "0% met" in red read as "you meet none of what they look for")
       const shown = Number(score.match(/<span class="score-num">(\d{1,3})</)?.[1]);
-      expect(score).toMatch(/<span>Other things the team looks for<\/span><span>\d{1,3}% met<\/span>/);
-      if (shown === 100) expect(score).toContain("<span>Other things the team looks for</span><span>100% met</span>");
+      expect(score).toMatch(/<span>Other things the team looks for<\/span><span>\d{1,3}% shown<\/span><\/div><progress max="100" value="\d{1,3}" aria-label="Other things the team looks for: \d{1,3}% shown">/);
+      expect(score).not.toMatch(/Other things the team looks for(<\/span><span>|: )\d{1,3}% met/);
+      if (shown === 100) expect(score).toContain("<span>Other things the team looks for</span><span>100% shown</span>");
       for (const c of packet.competencies) expect(score).not.toContain(c.name);
     }
     // a must-have nothing showed is listed as not shown yet; skills nothing showed are private and stay unnamed
@@ -191,6 +194,26 @@ describe("the application record (status page) after sending", () => {
     for (const kept of ["<h2>What happens next</h2>", '<div class="card status">', "No longer interested?", "Ask for a copy, a fix, deletion, or a person's review", "Shared this link by mistake?", "How AI is used", "make every decision about your application"]) expect(html).toContain(kept);
     expect(html).not.toMatch(/ style="/);
     expect(html).not.toContain("<script");
+  });
+
+  it("names a folded line nothing in it showed '0% shown', in the bar and to a screen reader, never '0% met' (the release review, 11 November 2026)", async () => {
+    expect(packet.competencies.length).toBeGreaterThan(0);
+    const a = await applyAs("Bea", "bea.record@example.com");
+    await withoutChat(a);
+    const [must, ...rest] = packet.requirements.mustHaves;
+    const result = {
+      overall: "potential", confidence: "high", summary: "Reads well.", strengths: [], concerns: [], unknowns: [], anomalies: [], recommendation: "screen", rationale: "r",
+      requirementFindings: [{ requirementKey: must.key, met: "yes", evidence: { quote: "Registered Dental Hygienist at Coastal Family Dentistry", source: "resume" } }, ...rest.map((m) => ({ requirementKey: m.key, met: "unknown" }))],
+      competencyFindings: packet.competencies.map((c) => ({ competencyKey: c.key, finding: "not_evidenced" })),
+    };
+    const [row] = await withTenant(container.db, companyId, (tx) => tx.insert(assessments).values({ companyId, applicationId: a.id, kind: "triage", packetVersion: a.packetVersion, result: result as never, overall: "potential", confidence: "high", createdAt: at(60) }).returning());
+    await container.db.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, a.id));
+    const { html } = await page(`/c/status/${a.statusToken}`);
+    const score = html.slice(html.indexOf('<section class="card" id="score"'), html.indexOf("</section>", html.indexOf('id="score"')));
+    expect(score).toContain('<span>Other things the team looks for</span><span>0% shown</span></div><progress max="100" value="0" aria-label="Other things the team looks for: 0% shown">0%</progress>');
+    expect(score).not.toMatch(/(^|[^\d])0% met/);
+    // the must-have their résumé shows still reads as met, with its finding
+    expect(score).toContain(`<span>${must.text}</span><span>100% met · Shown</span>`);
   });
 
   it("while the reading is worked out: 'Working out your match score…' with a plain Check again link (never a timed reload, WCAG 2.2.1), then 'Not ready yet'", async () => {

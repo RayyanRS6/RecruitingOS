@@ -443,13 +443,19 @@ function DecisionCard(props: { headline: string; since: string; messages: boolea
   );
 }
 
-/** One bar of the breakdown: the requirement's public name, how much of it was met in words and as a bar, its colour band. */
+/**
+ * One bar of the breakdown: the requirement's public name, how much of it was met in words and as a bar, its colour band.
+ * The folded line ("Other things the team looks for") counts what nothing showed at no points, so it carries the view's own
+ * words, "55% shown" (`candidateScoreView`, under counsel with this block), in the bar and to a screen reader: never "met",
+ * which read a requirement nothing showed as not met (the release review, 11 November 2026).
+ */
 function ScoreBar(props: { row: CandidateScoreRow }) {
   const { row } = props;
+  const figure = row.key === "other" ? row.words : `${row.pctMet}% met`;
   return (
     <li class={row.tone}>
-      <div class="bar-head"><span>{row.label}</span><span>{row.key === "other" ? `${row.pctMet}% met` : `${row.pctMet}% met · ${row.words}`}</span></div>
-      <progress max="100" value={row.pctMet} aria-label={`${row.label}: ${row.pctMet}% met`}>{row.pctMet}%</progress>
+      <div class="bar-head"><span>{row.label}</span><span>{row.key === "other" ? figure : `${figure} · ${row.words}`}</span></div>
+      <progress max="100" value={row.pctMet} aria-label={`${row.label}: ${figure}`}>{row.pctMet}%</progress>
     </li>
   );
 }
@@ -466,7 +472,9 @@ function ScoreBar(props: { row: CandidateScoreRow }) {
  * is outside the fewer-words pass (23 October 2026). That pass had cut two of its lines; both are back, word for word. Two
  * sentences changed on 6 November 2026 because the score changed and they would have become false, and the register's items
  * 20 and 21 carry the new words. They are still drafts. So is the line added on 10 November 2026 for a score that will not come
- * by itself (`not_coming`), in place of "Not ready yet" for ever; register item 21 carries it.
+ * by itself (`not_coming`), in place of "Not ready yet" for ever; register item 21 carries it. Since 11 November 2026 the folded
+ * line shows the view's own words ("55% shown", `ScoreBar`), which were drafted with it and never reached the page; register
+ * item 21 says so.
  */
 function ScoreSection(props: { score: RecordScore; companyName: string; chatSent: boolean; statusPath: string }) {
   const { score } = props;
