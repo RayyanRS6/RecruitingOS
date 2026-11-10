@@ -37,6 +37,26 @@ describe("the setup documents", () => {
   });
 });
 
+describe("the release runbook", () => {
+  /**
+   * The release review (11 November 2026, L1-6 and L5-2): between the migrate step and the new worker, the worker already live
+   * still moved people to "Interview to set up" under the old default, after 0037 had run once, and knew nothing of locked
+   * applicants. The release stops it before the migrations, and 0037 says what it covers.
+   */
+  it("stops the old worker before the migrations that change its rules, and 0037 says it puts back only the moves made before it runs", () => {
+    const runbook = read("docs/runbooks/production-setup.md");
+    const release = runbook.slice(runbook.indexOf("### The release (migrations 0036 and 0037"), runbook.indexOf("**The plans check**"));
+    const stop = release.indexOf("**Stop the old worker first.**");
+    expect(stop).toBeGreaterThan(-1);
+    expect(release.indexOf("**Actions**, **migrate**, **Run workflow**")).toBeGreaterThan(stop);
+    // the first release's note no longer says an older worker running beside the new app makes nothing fail
+    expect(runbook).not.toContain("an older worker leaves work it does not know in the queue, and nothing fails");
+    const later = runbook.slice(runbook.indexOf("## Every later release"), runbook.indexOf("## Rollback"));
+    expect(later).toContain("stop the old worker first");
+    expect(read("packages/db/migrations/0037_person_decides_who_to_interview.sql")).toContain("It puts back only the moves made before it runs");
+  });
+});
+
 describe("the API contracts", () => {
   it("say GET /applications/:id/interview-draft gives the \"Set a date and time\" form's defaults, not an approval card", () => {
     const draft = row(read("docs/12-api-contracts.md"), "GET", "/applications/:id/interview-draft");

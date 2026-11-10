@@ -5,6 +5,8 @@
 -- open follow-up, at a company whose rule for this job does not still say "Do it" or "Do it and tell me": a company that chose
 -- that keeps it. Someone a person moved there stays. stage_changed_at stays too, so nobody's waiting time starts again.
 -- Each person moved is recorded once in their history (as 0035 records its changes).
+-- It puts back only the moves made before it runs: the worker live before this release still moves people under the old
+-- default, so the release stops that worker before it migrates (docs/runbooks/production-setup.md, "The release", item 3).
 WITH moved AS (
   UPDATE applications a SET stage = 'screen_complete'
   WHERE a.stage = 'interview_recommended'

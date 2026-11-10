@@ -418,8 +418,9 @@ Order: migrate, then the worker, then the app.
    and `https://<host>/healthz?strict=1` answers the same with status 200.
 
 The merge starts both deployments. If the app is live first, any new kind of work it queues waits for the new worker
-(for up to a day): an older worker leaves work it does not know in the queue, and nothing fails. The console alert "An
-older worker build is running" resolves itself once the new worker has run that work.
+(for up to a day): an older worker leaves work it does not know in the queue. Work it does know it still runs by its own
+rules, so when a release changes those rules, stop the older worker before migrating, as "The release" does (item 3). The
+console alert "An older worker build is running" resolves itself once the new worker has run that work.
 
 If a process refuses to start, its log says why (Vercel, **Logs**; Railway, the deployment's log):
 
@@ -608,13 +609,19 @@ already leaves out. Order, as in "Every later release":
    run of the workflow against production. Never use `scripts\db-setup.ps1` for this release: a full run sets new passwords,
    and the strings already in Vercel and Railway would stop working.
 2. The latest commit on `main` has a green `verify`, and nothing else merges into it until the release is live.
-3. **Actions**, **migrate**, **Run workflow**: **Use workflow from** `main`, environment **production-database**. The log says
+3. **Stop the old worker first.** Railway, `recruiting-os-production`, the worker, **Deployments**, the **Active** deployment's
+   three-dot menu, **Remove**. The worker live now still runs the old rules: it moves anyone who finishes an AI interview to
+   "Interview to set up" under the old default, and it knows nothing of locked applicants. A move it made after 0037 ran would
+   never be put back, and it would read a locked applicant's résumé with AI and name them to the team. While no worker runs,
+   work waits in the database, emails too, and the console's "The background worker has stopped polling" is expected until
+   item 4. Then **Actions**, **migrate**, **Run workflow**: **Use workflow from** `main`, environment **production-database**. The log says
    `status: migrations applied: 36 (last: 0035_interview_followups.sql)` and
    `status: migrations pending: 2 (next: 0036_application_locked_at.sql)`, then `applied: 0036_application_locked_at.sql` and
    `applied: 0037_person_decides_who_to_interview.sql`, and **Confirm no migration is pending** is green. Until this has run, a new build refuses to start (step 6's table).
-4. The release pull request, merged with a merge commit (step 6, item 3). The worker, then the app (step 6, items 4 and 5).
-   The first boot of either writes the plans: there is no SQL to run and nothing to press. Trial, Core, Growth and Company
-   stop being offered, and their rows stay.
+4. The release pull request, merged with a merge commit (step 6, item 3). The worker, then the app (step 6, items 4 and 5):
+   Railway builds the merge commit by itself; if no new deployment starts, the command palette (Ctrl+K), **Deploy Latest
+   Commit**. The new worker runs the work that waited. The first boot of either writes the plans: there is no SQL to run and
+   nothing to press. Trial, Core, Growth and Company stop being offered, and their rows stay.
 5. **Console, Customers**, the test company, **Plan**: the list reads Free, Basic, Pro, Ultra and Design Partner, each with its
    price and limits. The test company stays on Design Partner. Every existing company keeps what it had until someone changes
    its plan.
@@ -729,7 +736,9 @@ The Anthropic workspace's monthly limit (step 1) stays the guard over the whole 
 1. `main` is green; nothing else merges into it until the release is live.
 2. The **migrate** workflow from `main` with **production-database** (step 6, item 2). A pending migration is expected;
    the run ends with "Confirm no migration is pending" green. Migrations work with the code already live, so
-   production keeps running meanwhile.
+   production keeps running meanwhile. When the release changes how the worker treats work it already knows (a default, a
+   rule about who is read, moved or told, or a data repair like 0037), stop the old worker first, as in "The release", item 3:
+   otherwise it goes on with its old rules between the migration and the new worker.
 3. The release pull request, merged with a merge commit (step 6, item 3).
 4. The worker, then the app (step 6, items 4 and 5); Railway now deploys by itself. If the console shows "An older
    worker build is running" for more than a few minutes, see `docs/runbooks/railway-worker.md`.
