@@ -1791,6 +1791,8 @@ describe("taking an accepted company's access away", () => {
     const keep = await w.openDirect("pat.keep@listed-domain.test", "Keep Dental");
     const gone = await inUse("pat.gone@listed-domain.test", "Gone Dental", "both.companies@stranger.test");
     await w.addMember(keep.id, "both.companies@stranger.test", "interviewer");
+    // the other company's owner is on this one's team too
+    await w.addMember(gone.id, "pat.keep@listed-domain.test", "interviewer");
     // their session working in the other company
     const there = await w.google("both.companies@stranger.test");
     expect((await w.json(there, "POST", "/api/v1/auth/switch", { companyId: keep.id })).status).toBe(200);
@@ -1804,5 +1806,11 @@ describe("taking an accepted company's access away", () => {
     expect((await w.meOf(await w.google("both.companies@stranger.test"))).activeCompanyId).toBe(keep.id);
     // and the other company's own people are untouched
     expect(await w.statusesOf(keep.id)).toEqual(["active", "active"]);
+    // Home there says nothing of the company taken away (the merge's check of 10 November 2026): it was not their request,
+    // and Home's line would call it "your own company" in the one they are in, and look again every minute. Whatever their
+    // role, the other company's owner too.
+    for (const cookie of [there, await w.google("pat.keep@listed-domain.test")]) expect((await w.signupOf(cookie)).request).toBeUndefined();
+    // its own owner, with no other company, still reads the declined screen
+    expect(await w.signupOf(await w.google("pat.gone@listed-domain.test"))).toMatchObject({ allowed: false, request: { status: "declined", companyName: "Gone Dental" } });
   });
 });

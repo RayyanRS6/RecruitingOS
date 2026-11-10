@@ -130,21 +130,34 @@ export async function signupConfigFor(container: Container, user: { id: string; 
   const door = user ? signupDoor(env, user) : "none";
   const base: SignupConfig = { mode: env.SIGNUP_MODE, allowed: user ? door !== "none" : env.SIGNUP_MODE === "open", contact: env.EMAIL_REPLY_TO, ...(env.SIGNUP_MODE === "approval" ? { door } : {}) };
   if (!user) return base;
-  const [row] = await withPlatform(container.db, (tx) =>
-    tx
-      .select({ status: memberships.status, companyName: companies.name, settings: companies.settings })
-      .from(memberships)
-      .innerJoin(companies, eq(companies.id, memberships.companyId))
-      .where(and(eq(memberships.userId, user.id), inArray(memberships.status, [...ACCESS_REQUEST_STATUSES])))
-      .orderBy(desc(memberships.createdAt))
-      .limit(1),
-  );
+  const row = await withPlatform(container.db, (tx) => ownRequestOf(tx, user.id));
   if (!row) return base;
   // "We will email you when it is decided" holds only while we still may: once the address is stopped (a hard bounce, a
   // complaint), no email goes to it, so the screen claims none and says to keep the page open (the review of 6 November 2026)
   const emailed = row.settings.accessRequestEmailedAt ?? null;
   const emailedAt = emailed && !(await withPlatform(container.db, (tx) => activeSuppression(tx, user.email))) ? emailed : null;
   return { ...base, allowed: false, request: { status: row.status as SignupRequest["status"], companyName: row.companyName, email: user.email, emailedAt } };
+}
+
+/**
+ * This person's own request for access: their newest membership waiting or declined. Take away access (6 November 2026)
+ * declines everyone on a company, the people it invited too, who never asked for anything. That counts only for someone
+ * with no other company to work in, as it draws their declined screen. Someone who still works in another company is told
+ * nothing of it (the merge's check of 10 November 2026): Home's line there (OwnRequest) would call it "your own company"
+ * in the company they are in, and look again every minute until someone accepts it.
+ */
+async function ownRequestOf(q: Queryable, userId: string) {
+  const rows = await q
+    .select({ status: memberships.status, companyId: memberships.companyId, companyName: companies.name, settings: companies.settings })
+    .from(memberships)
+    .innerJoin(companies, eq(companies.id, memberships.companyId))
+    .where(and(eq(memberships.userId, userId), inArray(memberships.status, [...ACCESS_REQUEST_STATUSES])))
+    .orderBy(desc(memberships.createdAt));
+  if (!rows.some((r) => r.status === "declined")) return rows[0];
+  const [works] = await q.select({ id: memberships.id }).from(memberships).where(and(eq(memberships.userId, userId), eq(memberships.status, "active"))).limit(1);
+  if (!works) return rows[0];
+  for (const r of rows) if (r.status !== "declined" || !(await accessWasTakenAway(q, r.companyId))) return r;
+  return undefined;
 }
 
 /** What is left to do once a Decline has committed: the direct email, because a declined person is not an active member. */

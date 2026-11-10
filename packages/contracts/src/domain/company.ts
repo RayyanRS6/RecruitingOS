@@ -130,7 +130,8 @@ export type SignupRequest = { status: AccessRequestStatus; companyName: string; 
  * The `signup` part of GET /api/v1/auth/config. `mode`: SIGNUP_MODE. `allowed`: whether this person may send the company
  * form now. `contact`: the ITS inbox to ask. `door`, only under `approval`: `direct` for a platform administrator or an
  * address on the allow-list, `request` for anyone else signed in (the form sends a request), `none` signed out. `request`,
- * in any mode: this person's own request, waiting or declined; with one, `allowed` is false.
+ * in any mode: this person's own request, waiting or declined; with one, `allowed` is false. A company whose access was
+ * taken away is one only for someone with no other company to work in, as it draws their declined screen.
  */
 export type SignupConfig = { mode: "open" | "invite" | "approval"; allowed: boolean; contact: string; door?: "direct" | "request" | "none"; request?: SignupRequest };
 
