@@ -148,6 +148,14 @@ export function hireFollowUpView(hire: HireFollowUp, name: string, now: Date = n
   };
 }
 
+/**
+ * The line beside a recorded outcome on the candidate panel: who recorded it and when, and a hire's start day the way the
+ * app says days ("Monday, November 30", `plainDayWords`), never the stored "2026-11-30".
+ */
+export function recordedOutcomeLine(o: { recordedBy: { name?: string }; recordedAt: string; hireDate: string | null; correctionOf: string | null }): string {
+  return `Recorded by ${o.recordedBy.name ?? "a team member"} on ${new Date(o.recordedAt).toLocaleDateString()}${o.hireDate ? `, hire date ${plainDayWords(o.hireDate)}` : ""}${o.correctionOf ? " (a correction by an ITS administrator)" : ""}.`;
+}
+
 /** The toast after "Keep them warm" (or "Leave it open": once the start date has passed, or with nobody to keep warm, `backups` 0). */
 export function keepWarmToast(name: string, startDate: string | null, now: Date = new Date(), backups = 1): ToastParts {
   if (hireStarted(startDate, now)) return { title: "The role stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." };

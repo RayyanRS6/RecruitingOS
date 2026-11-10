@@ -1,8 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { HireFollowUp, TimelineEvent } from "../../apps/web/src/api/client";
 import {
   daysAgoWords, hireConfirmText, hireFollowUpView, hireToast, interviewDraftLine, interviewDraftPath, keepWarmToast, offerAnswerToast, offerDateBounds, offerMadeOn, offerMadeToast, offerNote, offerStepText,
-  plainDayWords, waitingOnCandidateRow, waitingOnCandidateText,
+  plainDayWords, recordedOutcomeLine, waitingOnCandidateRow, waitingOnCandidateText,
 } from "../../apps/web/src/hiring";
 import { historyItem, panelSearch, resumeToShow, resumeView, whoDecides, PANEL_TABS } from "../../apps/web/src/pages/candidate-panel/helpers";
 import { hireSheetLead, panelStepFrom } from "../../apps/web/src/talent-actions";
@@ -42,6 +43,19 @@ describe("Offer made (Q29)", () => {
     expect(waitingOnCandidateRow({ group: "waiting_on_you", daysInStage: 3 })).toBeNull();
     expect(offerAnswerToast("declined", {})).toEqual({ title: "Recorded: they declined the offer.", detail: "Recorded with your name. Nothing was sent to them." });
     expect(offerAnswerToast("withdrew", { interviewsCancelled: 1, interviewOffNotes: 1 }).detail).toMatch(/they were sent a short note now saying only that it is off\.$/);
+  });
+});
+
+describe("a recorded outcome on the panel", () => {
+  it("says a hire's start day the way the app says days, never the stored 2026-11-30 (10 November 2026)", () => {
+    const line = recordedOutcomeLine({ recordedBy: { name: "Dana Whitfield" }, recordedAt: "2026-11-10T18:00:00.000Z", hireDate: "2026-11-30", correctionOf: null });
+    expect(line).toMatch(/^Recorded by Dana Whitfield on .+, hire date Monday, November 30\.$/);
+    expect(line).not.toContain("2026-11-30");
+    expect(recordedOutcomeLine({ recordedBy: {}, recordedAt: "2026-11-10T18:00:00.000Z", hireDate: null, correctionOf: "o1" })).toMatch(/^Recorded by a team member on .+ \(a correction by an ITS administrator\)\.$/);
+    // the panel's line is this one
+    const panel = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/sections.tsx", import.meta.url), "utf8");
+    expect(panel).toContain("{recordedOutcomeLine(recorded)} {outcomes.data?.statement}");
+    expect(panel).not.toContain("hire date ${recorded.hireDate}");
   });
 });
 

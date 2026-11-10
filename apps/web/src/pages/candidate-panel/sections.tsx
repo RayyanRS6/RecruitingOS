@@ -12,7 +12,7 @@ import { useCompanyCheck } from "../../components/use-company-check";
 import { interviewLine } from "../../interview-time";
 import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { openScreenOf } from "../../evidence";
-import { offerMadeOn, plainDayWords } from "../../hiring";
+import { offerMadeOn, plainDayWords, recordedOutcomeLine } from "../../hiring";
 import { aiInterviewCard, callNotesState, noScreenWords, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
 import { HIDDEN_LINK_NOTE, sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft, type ThreadPart } from "../../telling";
@@ -126,7 +126,7 @@ function WhereTheyAre({ a }: { a: ApplicationDetail }) {
       {recorded ? (
         <p className="small">
           <Chip tone={recorded.outcome === "hired_externally" ? "good" : "neutral"}>{OUTCOME_WORDS[recorded.outcome] ?? recorded.outcome.replace(/_/g, " ")}</Chip>{" "}
-          <span className="muted">Recorded by {recorded.recordedBy.name ?? "a team member"} on {new Date(recorded.recordedAt).toLocaleDateString()}{recorded.hireDate ? `, hire date ${recorded.hireDate}` : ""}{recorded.correctionOf ? " (a correction by an ITS administrator)" : ""}. {outcomes.data?.statement}</span>
+          <span className="muted">{recordedOutcomeLine(recorded)} {outcomes.data?.statement}</span>
         </p>
       ) : null}
     </Card>
