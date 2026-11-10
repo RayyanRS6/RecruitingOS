@@ -122,7 +122,8 @@ function recruiterAsksOf(row: { used: number; limit: number | null } | undefined
  * later is the undo. Two presses at once make one change, and the second reads `changed: false` with what happened.
  * Accepting a company with nobody waiting changes nothing and says so; declining one answers 409 `already_accepted`. The
  * first press wins: an Accept from a row that still showed the request, once it was declined, answers 409 `access_decided`
- * with who declined it and when, and only the declined company's own Accept (`from: "declined"`) undoes a Decline.
+ * with who declined it and when (or who took its access away, once it was accepted and taken away), and only the declined
+ * company's own Accept (`from: "declined"`) undoes a Decline.
  * `remove` (6 November 2026) takes an accepted company's access away: everyone on it is declined, its confirmation taken
  * back and their sessions in it ended, in one transaction; then one email to the owners (`emailed` says whether it left).
  * On a request, a declined company or one with nobody active it answers 409 `no_access`, and changes nothing. It sends no

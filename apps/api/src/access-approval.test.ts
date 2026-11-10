@@ -523,6 +523,39 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.statusOf(waiting.id)).toBe("requested");
   });
 
+  it("the first press wins over Take away access too: an Accept from a row that still showed the request says the access was taken away, by whom and when, never an older Decline", async () => {
+    const shown = { from: "requested", confirm: true };
+    const refusal = async (r: Response) => ((await r.json()) as { error: { code: string; message: string; details: unknown } }).error;
+    // one console accepts the request and later takes its access away; another, not looked at again, still shows the request
+    const asker = await w.ask("stale.removed@stranger.test", "Stale Removed");
+    expect((await w.decide(adminCookie, asker.id, "accept", shown)).status).toBe(200);
+    expect((await w.decide(adminCookie, asker.id, "remove")).status).toBe(200);
+    const [removed] = await w.eventsOf(asker.id, "company.access_removed");
+    const stale = await w.decide(adminCookie, asker.id, "accept", shown);
+    expect(stale.status).toBe(409);
+    const error = await refusal(stale);
+    expect(error.code).toBe("access_decided");
+    expect(error.message).toBe("Stale Removed's access was taken away a moment ago by Ada Admin. Nothing changed. To let them in again, accept it under Declined.");
+    expect(error.details).toEqual({ status: "declined", decidedAt: removed.occurredAt, decidedBy: "Ada Admin" });
+    // nothing moved: still declined, one Accept on the record, the first
+    expect(await w.statusOf(asker.id)).toBe("declined");
+    expect(await w.eventsOf(asker.id, "company.access_accepted")).toHaveLength(1);
+    // declined once as a request three days ago, accepted under Declined, then taken away: the removal is what it says
+    const twice = await w.ask("declined.then.removed@stranger.test", "Declined Then Removed");
+    expect((await w.decide(adminCookie, twice.id, "decline", shown)).status).toBe(200);
+    const daysAgo = new Date(w.container.engine.clock().getTime() - 3 * 86_400_000 - 60_000).toISOString();
+    await withPlatform(w.container.db, (tx) => tx.update(events).set({ occurredAt: daysAgo }).where(and(eq(events.companyId, twice.id), eq(events.type, "company.access_declined"))));
+    expect((await w.decide(adminCookie, twice.id, "accept", { from: "declined", confirm: true })).status).toBe(200);
+    expect((await w.decide(adminCookie, twice.id, "remove")).status).toBe(200);
+    const [taken] = await w.eventsOf(twice.id, "company.access_removed");
+    const late = await refusal(await w.decide(adminCookie, twice.id, "accept", shown));
+    expect(late.message).toBe("Declined Then Removed's access was taken away a moment ago by Ada Admin. Nothing changed. To let them in again, accept it under Declined.");
+    expect(late.details).toEqual({ status: "declined", decidedAt: taken.occurredAt, decidedBy: "Ada Admin" });
+    // the declined company's own Accept, under Declined, is still the undo
+    const undone = await w.decide(adminCookie, twice.id, "accept", { from: "declined", confirm: true });
+    expect(await w.read<CustomerAccessAnswer>(undone)).toMatchObject({ status: "active", changed: true, message: "Declined Then Removed has access again." });
+  });
+
   it("a decision holds the company's row until it commits, which is what makes the second press wait and then read the first", async () => {
     // PGlite runs one connection, so it cannot show a second transaction waiting (on Postgres, the presses above race for
     // real). What it can show is the row lock itself: a row locked FOR UPDATE carries the locking transaction's id in xmax.

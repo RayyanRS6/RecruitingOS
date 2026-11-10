@@ -191,10 +191,11 @@ type RemovedPeople = { companyId: string; companyName: string; userIds: string[]
  *   changes nothing and says so. Take away access of a company with none (a request, a declined company, nobody active)
  *   answers a calm 409.
  * - The first press wins (the review of 6 November 2026): `from` is where the request stood on the row that was pressed. An
- *   Accept from a row that still showed the request, once someone declined it, answers 409 `access_decided` with who and
- *   when, and changes nothing; only the declined company's own Accept (`from: "declined"`) is the undo. A press from a
- *   declined row on a request still waiting is refused the same way. Two presses for the same outcome stay as above. Take
- *   away access reads no `from`: it acts only on a company with access, and a second press is the calm 409 above.
+ *   Accept from a row that still showed the request, once someone declined it (or accepted it and took its access away),
+ *   answers 409 `access_decided` with who and when, and changes nothing; only the declined company's own Accept
+ *   (`from: "declined"`) is the undo. A press from a declined row on a request still waiting is refused the same way. Two
+ *   presses for the same outcome stay as above. Take away access reads no `from`: it acts only on a company with access,
+ *   and a second press is the calm 409 above.
  */
 export async function decideAccess(tx: Queryable, container: Container, input: { companyId: string; decision: CustomerAccessChange["decision"]; from?: CustomerAccessChange["from"]; actor: Actor; now: Date }): Promise<{ answer: CustomerAccessAnswer; declined: DeclinedNotice | null; removed?: RemovedPeople | null }> {
   const { companyId, decision, actor, now } = input;
@@ -277,13 +278,17 @@ async function takeAccessAway(tx: Queryable, input: { company: { id: string; nam
 
 /**
  * The calm refusal of a press that came second and would undo what was decided first: who declined it and how long ago (the
- * console shows the API's words as they are, in any time zone), and the way to accept it still.
+ * console shows the API's words as they are, in any time zone), and the way to accept it still. Read from the newest of a
+ * Decline and a Take away access, as the console's row reads it (`customerAccessRequests`): a company accepted and then
+ * taken away meanwhile says that, with whose press and when, never an older Decline (the merge's check of 10 November 2026).
  */
 async function decidedFirst(tx: Queryable, co: { id: string; name: string }, status: string, now: Date): Promise<HttpError> {
   if (status !== "declined") return new HttpError(409, "access_decided", `${co.name} is still waiting for a decision. Nothing changed.`, { status });
-  const [last] = await tx.select({ at: events.occurredAt, actor: events.actor }).from(events).where(and(eq(events.companyId, co.id), eq(events.type, "company.access_declined"))).orderBy(desc(events.occurredAt)).limit(1);
+  const [last] = await tx.select({ at: events.occurredAt, actor: events.actor, type: events.type }).from(events).where(and(eq(events.companyId, co.id), inArray(events.type, ["company.access_declined", "company.access_removed"]))).orderBy(desc(events.occurredAt), desc(events.id)).limit(1);
   const by = last?.actor.name ?? null;
-  return new HttpError(409, "access_decided", `${co.name} was declined${last ? ` ${agoWords(last.at, now)}` : ""}${by ? ` by ${by}` : ""}. Nothing changed. To let them in, accept it under Declined.`, { status, decidedAt: last?.at ?? null, decidedBy: by });
+  const when = `${last ? ` ${agoWords(last.at, now)}` : ""}${by ? ` by ${by}` : ""}`;
+  const message = last?.type === "company.access_removed" ? `${co.name}'s access was taken away${when}. Nothing changed. To let them in again, accept it under Declined.` : `${co.name} was declined${when}. Nothing changed. To let them in, accept it under Declined.`;
+  return new HttpError(409, "access_decided", message, { status, decidedAt: last?.at ?? null, decidedBy: by });
 }
 
 /** "a moment ago", "5 minutes ago", "3 hours ago", "2 days ago". */
