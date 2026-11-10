@@ -2148,12 +2148,47 @@ describe("locked candidates", () => {
       const recorded = await json(job.cookie, "POST", `/api/v1/applications/${hired.id}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: new Date(Date.now() + 14 * DAY).toISOString().slice(0, 10), offerAcceptedAt: new Date().toISOString().slice(0, 10) });
       const text = await recorded.text();
       expect(recorded.status, text).toBe(201);
-      const { hire } = JSON.parse(text) as { hire: { backups: { count: number; locked?: number } } };
+      const { hire } = JSON.parse(text) as { hire: { backups: { count: number; locked?: number }; closeRole: { words: string } | null } };
       expect(hire.backups).toMatchObject({ count: 1, locked: 1 });
+      // the close words count them too, after the people the team can see (the release review, L3-1)
+      expect(hire.closeRole!.words).toMatch(/^Close the job as filled\. The 1 person still in process moves to your talent pool, privately: .+ The closing message goes by itself, within 5 working days, to the 1 more person you cannot see yet\.$/);
 
       // Nobody else in the running: the line goes.
       await container.db.update(applications).set({ stage: "rejected" }).where(eq(applications.id, stillIn.id));
       expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/applications?counts=1`))).toMatchObject({ lockedInProcess: 0 });
+    }, 120_000);
+
+    /**
+     * The release review (11 November 2026, L3-1): a Free owner hires the one person they could see; three more applied past the
+     * plan. "Close the job as filled. Nobody else is still in process." and the toast's "Nobody else was still in the process."
+     * were false: the close moves all three, and the closing message goes to them by itself. A count, never who.
+     */
+    it("after a hire with only locked people left, the close words and the close's answer count them, never 'Nobody else is still in process'", async () => {
+      const job = await openJob(2);
+      const [hired, other] = await fill(job, 2);
+      await container.db.update(applications).set({ stage: "interview_complete" }).where(eq(applications.id, hired.id));
+      await container.db.update(applications).set({ stage: "rejected" }).where(eq(applications.id, other.id));
+      const locked = [await apply(job, person("Lia")), await apply(job, person("Lou")), await apply(job, person("Lyn"))];
+      await container.drain();
+      for (const l of locked) expect((await applicationOf(l.id)).lockedAt).not.toBeNull();
+
+      const recorded = await json(job.cookie, "POST", `/api/v1/applications/${hired.id}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: new Date(Date.now() + 14 * DAY).toISOString().slice(0, 10) });
+      const text = await recorded.text();
+      expect(recorded.status, text).toBe(201);
+      const { hire } = JSON.parse(text) as { hire: { closeRole: { stillInProcess: number; words: string } | null } };
+      expect(hire.closeRole).toMatchObject({ stillInProcess: 0 });
+      expect(hire.closeRole!.words).toBe("Close the job as filled. Nobody you can see is still in process. The closing message goes by itself, within 5 working days, to the 3 more people you cannot see yet.");
+      // the job page's close card reads the same number from the list
+      expect(await read(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/applications?counts=1`))).toMatchObject({ lockedInProcess: 3 });
+
+      // closed: none of the team's own moved, but the three did, and the answer counts them for the toast
+      const closed = await json(job.cookie, "POST", `/api/v1/roles/${job.roleId}/outcome`, { outcome: "filled", confirm: true });
+      const closedText = await closed.text();
+      expect(closed.status, closedText).toBe(200);
+      expect(JSON.parse(closedText)).toMatchObject({ movedToTalentPool: 0, lockedInProcess: 3 });
+      for (const l of locked) expect((await applicationOf(l.id)).stage).toBe("talent_pool");
+      // a number, never who
+      for (const said of [text, closedText]) for (const l of ["Lia", "Lou", "Lyn"]) expect(said).not.toContain(l);
     }, 120_000);
 
     it("each job is counted apart: the oldest on each is opened, up to the new limit, and each new arrival takes the place their own job has", async () => {

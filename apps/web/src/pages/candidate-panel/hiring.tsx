@@ -163,7 +163,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
     onError: (e) => { setConfirming(false); toast(e instanceof ApiError ? e.message : "Could not record the hire."); },
   });
   const close = useMutation({
-    mutationFn: (path: string) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: ClosingMessagePreview | null }>(path, { outcome: "filled", confirm: true }),
+    mutationFn: (path: string) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: ClosingMessagePreview | null }>(path, { outcome: "filled", confirm: true }),
     onSuccess: async (r) => {
       const t = closeRoleToast(r, undefined, mayTell);
       toast(t.title, t.detail);

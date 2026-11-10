@@ -334,6 +334,16 @@ describe("a person past the plan's candidates per job", () => {
     const close = (lockedInProcess: number) => text(render(client([[["applications", "r1"], { applications: [vera], counts: counts(3), locked: { count: 2, cards }, lockedInProcess }]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled", mayTell: true, onClose: () => undefined })));
     expect(close(1)).toContain("and 1 more you cannot see yet");
     expect(close(0)).not.toContain("you cannot see yet");
+    // and what the close does for them: the closing message goes to them by itself
+    expect(close(1)).toContain("The closing message goes by itself, within 5 working days, to the 1 more person you cannot see yet.");
+  });
+
+  it("with nobody the team can see still in process, the close card counts who it cannot see, never 'Nobody is still in process' (the release review, L3-1)", () => {
+    const close = (lockedInProcess: number) => text(render(client([[["applications", "r1"], { applications: [], counts: counts(3), locked: { count: 2, cards }, lockedInProcess }]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled", mayTell: true, onClose: () => undefined })));
+    expect(close(2)).toContain("Nobody you can see is still in process. The closing message goes by itself, within 5 working days, to the 2 more people you cannot see yet.");
+    expect(close(2)).not.toContain("Nobody is still in process.");
+    expect(close(0)).toContain("Nobody is still in process.");
+    expect(close(0)).not.toContain("you cannot see yet");
   });
 
   it("a direct link to them shows the same card in the panel, not an error, with no name and no way to read them", () => {

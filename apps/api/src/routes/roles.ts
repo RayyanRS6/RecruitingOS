@@ -1047,6 +1047,10 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
       // approving a request still waiting, and its 14 days cannot run out and turn it back into a draft. On every plan.
       // Before the role itself: a step opening the role holds the run and then the role, so this takes its turn behind it.
       await cancelPendingPacketApprovals(tx, container, { companyId: t.companyId, roleId, actor, reason: "the job was closed" });
+      // The people the team cannot see yet who were still in process: the close moves them too, and the toast counts them (a
+      // number, never who), as the close card and the hire sheet did (the release review, 11 November 2026). None for a
+      // recruiter given one candidate, who reads about nobody else.
+      const lockedInProcess = staffScopeOf(t)?.applicationId ? 0 : await lockedStillInProcess(tx, roleId);
       const closed = await recordRoleOutcome(tx, { companyId: t.companyId, roleId, outcome: body.outcome, by: t.role, actor, reason: body.reason, now: container.engine.clock() });
       // Everyone still in the process left it with the role: their interviews and screens end. The decision stays private
       // (founder decision B6) until someone sends the decision message, but a candidate who held a booked time or was
@@ -1060,7 +1064,7 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
       }
       // They stay in the talent pool unless they asked not to be kept (founder decision Q30).
       const pool = await keepInTalentPool(tx, closed.movedCandidateIds);
-      return { ...closed, interviewsCancelled, interviewOffNotes, keptInTalentPool: pool.kept.length, talentPoolOptOuts: pool.optedOut.length };
+      return { ...closed, interviewsCancelled, interviewOffNotes, keptInTalentPool: pool.kept.length, talentPoolOptOuts: pool.optedOut.length, lockedInProcess };
     } catch (e) { outcomeHttpError(e); }
   });
   const label: Record<string, string> = { filled: "closed the role as filled", filled_outside_platform: "closed the role: filled outside the platform", role_cancelled: "cancelled the role", no_hire: "closed the role without a hire" };
@@ -1072,5 +1076,5 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   // nothing is sent until someone presses Send on it. Only for someone who may send it (application.reject): HR may close
   // a role but not tell candidates, so they get no Send that the closing-message route would refuse.
   const closingMessage: ClosingMessagePreview | null = can(t.role, "application.reject") ? await withTenant(container.db, t.companyId, (tx) => closingMessagePreview(tx, container, result.role.id)).catch(() => null) : null;
-  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, keptInTalentPool: result.keptInTalentPool, talentPoolOptOuts: result.talentPoolOptOuts, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes, closingMessage, statement: OUTCOME_STATEMENT });
+  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, keptInTalentPool: result.keptInTalentPool, talentPoolOptOuts: result.talentPoolOptOuts, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes, lockedInProcess: result.lockedInProcess, closingMessage, statement: OUTCOME_STATEMENT });
 });

@@ -208,6 +208,9 @@ describe("the private decline step", () => {
     expect(closeRoleToast({ movedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 0 }).detail).toMatch(/1 interview was cancelled; no times had gone to the candidate, so nothing was sent about it\.$/);
     expect(closeRoleToast({ movedToTalentPool: 1 }).detail).toMatch(/^The one person still in the process moved/);
     expect(closeRoleToast({}).detail).toBe("Nobody else was still in the process.");
+    // people the team cannot see yet moved with it: a count, never "Nobody else" (the release review, L3-1)
+    expect(closeRoleToast({ lockedInProcess: 7 }).detail).toBe("Nobody you could see was still in the process. The closing message goes by itself, within 5 working days, to the 7 more people you cannot see yet.");
+    expect(closeRoleToast({ movedToTalentPool: 1, lockedInProcess: 1, closingMessage: { policy: "sends" } }, undefined, true, NOW).detail).toBe("The one person still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. If nobody tells them first, the closing message goes by itself on Wednesday, October 21. The closing message goes by itself, within 5 working days, to the 1 more person you cannot see yet.");
     // the job page closes with any outcome, under its own title
     expect(closeRoleToast({ movedToTalentPool: 2 }, "Job closed; the outcome is recorded with your name.").title).toBe("Job closed; the outcome is recorded with your name.");
   });

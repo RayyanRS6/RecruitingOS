@@ -166,6 +166,16 @@ export const MORE_CANDIDATES_UPGRADE_QUESTION = "We would like to view more cand
 export const LOCKED_REQUEST_LINE = "An ITS recruiter is helping a candidate you cannot see yet.";
 
 /**
+ * What closing a job does for the people past the plan's candidates per job still in process (Rule 2), a number and never who:
+ * it moves them too, and the closing message goes to them by itself, at the latest five working days on, whatever the settings
+ * say (`runUntoldSafetyNet`), or when someone sends it to the others. They are not kept in the talent pool, so it never says
+ * they move there. On the hire sheet, the close card and the toast after a close (the release review, 11 November 2026).
+ */
+export function lockedClosingLine(n: number): string {
+  return `The closing message goes by itself, within 5 working days, to the ${n === 1 ? "1 more person" : `${n} more people`} you cannot see yet.`;
+}
+
+/**
  * Why nothing starts for someone locked: on the button, and in the route's refusal. Only ITS staff who may read them see it
  * (a grant naming them, or break glass); the team is refused at the door and never reads it.
  */

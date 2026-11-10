@@ -1,4 +1,4 @@
-import { OWNER_STAGE_LABEL, titleMidSentence, type MarkKind, type OwnerStage } from "@ros/contracts";
+import { OWNER_STAGE_LABEL, lockedClosingLine, titleMidSentence, type MarkKind, type OwnerStage } from "@ros/contracts";
 import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, SendNewTimesBatchResult, SendNewTimesResult, StageMove } from "./api/client";
 import { shortWhen } from "./interview-time";
 import { safetyNetDate, safetyNetShort } from "./telling";
@@ -393,14 +393,18 @@ export const CLOSING_SENDERS = "An owner, admin, hiring manager or recruiter";
  * carries it, says which way the safety net goes. `mayTell` is false for someone who may close a role but not tell
  * candidates a decision (HR): they are told who sends the message instead of being asked to send it.
  */
-export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Job closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
+export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Job closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
   const moved = Math.max(0, (r.movedToTalentPool ?? 0) - (r.heldEmailsAddedToTalentPool ?? 0));
   const policy = r.closingMessage?.policy ?? null;
   const net = safetyNetShort({ policy, on: safetyNetDate(now.toISOString()), what: "the closing message" });
   const tell = !mayTell ? `${CLOSING_SENDERS} sends them the closing message; it waits on their Home page. ${net}`
     : policy === "not_sent" ? `Under your settings no message is sent: tell each of them yourself, then record it on their page. ${net}`
     : `Send the closing message when you are ready. ${net}`;
-  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told yet. ${tell}` : "Nobody else was still in the process.";
+  // The people the team cannot see yet moved with it: a count, never who; the closing message goes to them by itself (the
+  // release review, 11 November 2026). Never "Nobody else was still in the process" while they were.
+  const locked = r.lockedInProcess ?? 0;
+  const theLocked = locked ? ` ${lockedClosingLine(locked)}` : "";
+  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told yet. ${tell}${theLocked}` : locked ? `Nobody you could see was still in the process.${theLocked}` : "Nobody else was still in the process.";
   return { title, detail: `${who}${closedInterviewsText(r.interviewsCancelled ?? 0, r.interviewOffNotes ?? 0)}` };
 }
 

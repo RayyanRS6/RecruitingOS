@@ -1,5 +1,5 @@
 import { and, count, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
-import type { ApplicationStage, HireFollowUp, MembershipRole } from "@ros/contracts";
+import { lockedClosingLine, type ApplicationStage, type HireFollowUp, type MembershipRole } from "@ros/contracts";
 import { STAGE_LABEL, activeMarksFor, can, closingDayWords, companyToday, lockedAndWaiting, notLocked } from "@ros/core";
 import { applications, candidates, companies, hiringOutcomes, roles, type Tx } from "@ros/db";
 import { inStaffScope, type StaffScope } from "./staff-scope";
@@ -58,6 +58,8 @@ export async function backupsOn(tx: Tx, input: { roleId: string; hiredApplicatio
 export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplicationId: string; startDate: string | null; role: MembershipRole; scope?: StaffScope | null }): Promise<HireFollowUp> {
   const backups = await backupsOn(tx, { roleId: input.roleId, hiredApplicationId: input.hiredApplicationId, scope: input.scope });
   const [role] = await tx.select({ status: roles.status }).from(roles).where(eq(roles.id, input.roleId)).limit(1);
+  // A recruiter given one candidate reads about nobody else.
+  const locked = input.scope?.applicationId ? 0 : await lockedStillInProcess(tx, input.roleId);
   let closeRole: HireFollowUp["closeRole"] = null;
   if (role && role.status !== "closed" && can(input.role, "outcome.record")) {
     // Who would move to the team's talent pool: someone locked moves with them, but is not the team's to keep (`recordRoleOutcome`).
@@ -67,14 +69,15 @@ export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplica
     // five working days, or, under settings that keep these messages with a person, an ITS recruiter is brought in.
     const then = can(input.role, "application.reject") ? "and you see the closing message before it goes." : "and an owner, admin, hiring manager or recruiter sends them the closing message from their Home page.";
     const net = "If nobody tells them within 5 working days of closing, the closing message goes by itself (or an ITS recruiter is brought in, if your settings say so).";
+    // The people the team cannot see yet move with the close too: a count, never who, and the closing message goes to them by
+    // itself. Never "Nobody else is still in process" while they are (the release review, 11 November 2026).
+    const theLocked = locked ? ` ${lockedClosingLine(locked)}` : "";
     // In job words, like every other button (the lead's D1, 11 November 2026).
     const words = others
-      ? `Close the job as filled. The ${others === 1 ? "1 person" : `${others} people`} still in process ${others === 1 ? "moves" : "move"} to your talent pool, privately: nobody is told at once, ${then} ${net}`
-      : "Close the job as filled. Nobody else is still in process.";
+      ? `Close the job as filled. The ${others === 1 ? "1 person" : `${others} people`} still in process ${others === 1 ? "moves" : "move"} to your talent pool, privately: nobody is told at once, ${then} ${net}${theLocked}`
+      : locked ? `Close the job as filled. Nobody you can see is still in process.${theLocked}` : "Close the job as filled. Nobody else is still in process.";
     closeRole = { path: `/api/v1/roles/${input.roleId}/outcome`, outcome: "filled", stillInProcess: others, words };
   }
-  // A recruiter given one candidate reads about nobody else.
-  const locked = input.scope?.applicationId ? 0 : await lockedStillInProcess(tx, input.roleId);
   return { startDate: input.startDate, backups: { count: backups.length, people: backups, ...(locked ? { locked } : {}) }, closeRole };
 }
 

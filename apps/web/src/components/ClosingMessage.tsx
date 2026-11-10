@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { lockedClosingLine } from "@ros/contracts";
 import { Alert, Avatar, Button, Card, Chip, cn, ErrorState, Eyebrow, Field, Skeleton } from "@ros/ui";
 import { api, ApiError, type ApplicationsWithCounts, type ClosingMessagePreview, type ClosingMessageResult } from "../api/client";
 import { toast } from "../toast";
@@ -20,7 +21,7 @@ import { useBulkTakeBack, useBulkUndoToast } from "./use-undo";
  */
 
 /** What POST /roles/:id/outcome answers that the close card reads. */
-type RoleClosed = { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: ClosingMessagePreview | null };
+type RoleClosed = { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: ClosingMessagePreview | null };
 
 /** The people a close would move: everyone still in process (not hired, not already decided). */
 const STILL_IN_PROCESS = (a: ApplicationsWithCounts["applications"][number]) => !["hired", "not_moving_forward"].includes(a.ownerStage) && !["withdrawn", "declined"].includes(a.stage);
@@ -82,8 +83,11 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
                 ))}
               </ul>
               {apps.data?.lockedInProcess ? <p className="small muted mt-2">{cannotSeeYetWords(apps.data.lockedInProcess)}</p> : null}
-              <p className="small muted mt-2.5">{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. {safetyNetShort({ policy: null, on: safetyNetDate(new Date().toISOString()), what: "the closing message" })} Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Home page.`}</p>
+              <p className="small muted mt-2.5">{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. {safetyNetShort({ policy: null, on: safetyNetDate(new Date().toISOString()), what: "the closing message" })} Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Home page.`}{apps.data?.lockedInProcess ? ` ${lockedClosingLine(apps.data.lockedInProcess)}` : ""}</p>
             </>
+          ) : apps.data?.lockedInProcess ? (
+            // the people the team cannot see yet move with the close too: a count, never who (the release review, 11 November 2026)
+            <p className="small muted">Nobody you can see is still in process. {lockedClosingLine(apps.data.lockedInProcess)}</p>
           ) : <p className="small muted">Nobody is still in process.</p>}
         </div>
         <div className="row pt-1"><Button variant="destructive" loading={close.isPending} onClick={() => close.mutate()}>Confirm and close the job</Button><Button variant="quiet" onClick={onClose}>Keep it open</Button></div>
