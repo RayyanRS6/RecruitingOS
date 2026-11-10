@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as React from "react";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -25,7 +26,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 vi.mock("@ros/web/src/components/use-is-client", () => ({ useIsClient: () => true }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { AfterApproval, StatusPill } = await import("@ros/web/src/pages/AfterApproval");
+const { AfterApproval, StatusPill, placesBusy } = await import("@ros/web/src/pages/AfterApproval");
 const { PacketApprovalCard } = await import("@ros/web/src/pages/RolePlan");
 const { BOARDS_ON_THE_CARD, PostingTab, acceptingMode, postingNeedsTeam } = await import("@ros/web/src/pages/RolePosting");
 const { BoardTicks } = await import("@ros/web/src/components/BoardTicks");
@@ -104,6 +105,25 @@ describe("the status chips", () => {
     expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Up and checked", tone: "good", done: true, working: true } }))).not.toContain("spinner");
     expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Checking it is up", tone: "neutral", done: false, working: true } }))).toContain('<span class="spinner" aria-hidden="true"></span>Checking it is up');
     expect(renderToStaticMarkup(createElement(StatusPill, { s: { label: "Waiting for ITS", tone: "neutral", done: false, working: false } }))).toContain('<span class="dot" aria-hidden="true"></span>Waiting for ITS');
+  });
+
+  /**
+   * The release review (11 November 2026, L3-7): after two minutes the screen after approving says "This is taking longer than
+   * it should…", but each place kept its spinner, and the list stayed aria-busy, for as long as the screen was open.
+   */
+  it("nothing spins once the words say it is taking longer than it should, and the list is no longer busy", () => {
+    const working = { label: "Getting it ready", tone: "neutral" as const, done: false, working: true };
+    expect(renderToStaticMarkup(createElement(StatusPill, { s: working }))).toContain('<span class="spinner" aria-hidden="true"></span>Getting it ready');
+    const stuck = renderToStaticMarkup(createElement(StatusPill, { s: working, stuck: true }));
+    expect(stuck).not.toContain("spinner");
+    expect(stuck).toContain('<span class="dot" aria-hidden="true"></span>Getting it ready');
+    expect(placesBusy(true, false)).toBe(true);
+    expect(placesBusy(true, true)).toBeUndefined();
+    expect(placesBusy(false, false)).toBeUndefined();
+    // the screen hands its two-minute state to both
+    const screen = readFileSync(new URL("../../web/src/pages/AfterApproval.tsx", import.meta.url), "utf8");
+    expect(screen).toContain("aria-busy={placesBusy(preparing, slow)}");
+    expect(screen).toContain("<DestinationRow key={x.key} d={x} stuck={slow} />");
   });
 });
 

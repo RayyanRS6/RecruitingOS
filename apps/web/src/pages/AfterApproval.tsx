@@ -22,17 +22,23 @@ function copy(text: string, what: string) {
 
 /**
  * A status chip: the kit's Pill with a tick only once it was checked, its spinner (`busy`) while something is under way,
- * otherwise its dot. `className` places it.
+ * otherwise its dot. `stuck`: it has taken longer than it should, so nothing spins once the words say so (the release
+ * review, 11 November 2026). `className` places it.
  */
-export function StatusPill({ s, className }: { s: StatusChip; className?: string }) {
-  return <Pill size="sm" tone={s.tone} icon={s.done ? "check" : undefined} busy={!s.done && s.working} className={className}>{s.label}</Pill>;
+export function StatusPill({ s, className, stuck }: { s: StatusChip; className?: string; stuck?: boolean }) {
+  return <Pill size="sm" tone={s.tone} icon={s.done ? "check" : undefined} busy={!s.done && s.working && !stuck} className={className}>{s.label}</Pill>;
+}
+
+/** Whether the list of places reads as busy to a screen reader: while it is got ready, and never once that is taking too long. */
+export function placesBusy(preparing: boolean, slow: boolean): true | undefined {
+  return preparing && !slow ? true : undefined;
 }
 
 /**
  * One place the job goes, as a row of the side card in screenshot 7: an icon chip, the place and what happens there (with
  * Copy and Open when it has an address), and its status on the right; on a narrow screen the status moves under it.
  */
-function DestinationRow({ d }: { d: Destination }) {
+function DestinationRow({ d, stuck }: { d: Destination; stuck: boolean }) {
   return (
     <li className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-line py-3.5 first:border-t-0">
       <IconChip icon={d.icon} size="sm" />
@@ -47,7 +53,7 @@ function DestinationRow({ d }: { d: Destination }) {
         ) : null}
       </div>
       {/* under the words on a phone: the chip's 32px and the 12px gap */}
-      <StatusPill s={d.status} className="flex-none max-sm:ml-11" />
+      <StatusPill s={d.status} stuck={stuck} className="flex-none max-sm:ml-11" />
     </li>
   );
 }
@@ -122,11 +128,11 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
         ) : null}
         <section aria-label="Where it is going" className="stack gap-2">
           <Eyebrow as="h3">{props.editWhileOpen ? "Where the job is" : "Where it is going"}</Eyebrow>
-          {/* each place's status says where it stands (a tick only once checked, a spinner while under way); the list
-              asks again by itself while it is open */}
+          {/* each place's status says where it stands (a tick only once checked, a spinner while under way, never once it is
+              taking longer than it should); the list asks again by itself while it is open */}
           {q.isLoading || !d ? <Skeleton lines={4} /> : (
-            <ul className="rounded-2xl border border-line bg-surface px-4" aria-busy={preparing || undefined}>
-              {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} />)}
+            <ul className="rounded-2xl border border-line bg-surface px-4" aria-busy={placesBusy(preparing, slow)}>
+              {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} stuck={slow} />)}
             </ul>
           )}
           {noBoards ? <p className="small muted">{noBoards}</p> : null}
