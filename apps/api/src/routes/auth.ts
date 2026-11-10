@@ -16,6 +16,7 @@ import { activeStaffGrant } from "@ros/core";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
+import { refusalCode } from "../signin-refusal";
 
 export const authRoutes = new Hono<Vars>();
 
@@ -57,46 +58,11 @@ authRoutes.get("/start/:provider", async (c) => {
 });
 
 /**
- * Microsoft's refusals that wait on the person's company IT approving the app once (Entra AADSTS numbers): 65001 (nobody
- * has consented to the app yet), 90093, 90094 and 90095 (an administrator must approve, or the person may only ask for
- * it), 900941 and 900981 (an administrator must approve an app Microsoft counts as risky).
- */
-const NEEDS_APPROVAL = ["AADSTS65001", "AADSTS90093", "AADSTS90094", "AADSTS90095", "AADSTS900941", "AADSTS900981"];
-
-/**
- * The service's refusals of an address the provider has not verified (Microsoft: xms_edov false). With Confirm email on,
- * the service mails that address a confirmation and refuses with provider_email_needs_verification; when the mail cannot
- * go, the mailer's own refusal comes back instead: email_address_not_authorized (Supabase's built-in mailer writes only
- * to its organization's members, and no custom SMTP is set up), over_email_send_rate_limit (a second try within the mail
- * interval) or email_address_invalid. That confirmation is the only mail on the way back from a provider.
- */
-const EMAIL_UNVERIFIED = ["provider_email_needs_verification", "email_address_not_authorized", "over_email_send_rate_limit", "email_address_invalid"];
-
-/**
- * A refusal the identity service brings back, as a code the sign-in page has words for. Supabase Auth sends the browser
- * to redirect_to with `error` and `error_description` (Microsoft's own, or the service's) and, for the service's own
- * refusals only, `error_code`, in the query and again in the fragment, and no code. Microsoft's reason is the AADSTS
- * number its description starts with; Microsoft also sends error_subcode=cancel, which the service does not pass on.
- * The microsoft_* codes name Microsoft on the sign-in page, so only a flow that started with Microsoft gets them
- * (`provider`, the PKCE cookie's: 10 November 2026); any other reads as `signin_incomplete`, never as Microsoft's.
- */
-function refusalCode(q: { error?: string; errorCode?: string; errorSubcode?: string; description?: string; provider?: string | null }): { code: string; aadsts: string | null } {
-  const numbers: string[] = q.description?.match(/AADSTS\d+/g) ?? [];
-  const aadsts = numbers[0] ?? null;
-  if (q.errorCode && EMAIL_UNVERIFIED.includes(q.errorCode)) return { code: "email_unverified", aadsts };
-  if (q.provider !== "azure") return { code: "signin_incomplete", aadsts };
-  // Cancel pressed on Microsoft's permissions screen, or Back to the app after asking IT for approval.
-  if (numbers.includes("AADSTS65004") || q.errorSubcode === "cancel") return { code: "microsoft_declined", aadsts };
-  if (numbers.some((n) => NEEDS_APPROVAL.includes(n)) || q.error === "consent_required") return { code: "microsoft_needs_approval", aadsts };
-  if (/Error getting user email from external provider/i.test(q.description ?? "")) return { code: "microsoft_no_email", aadsts };
-  return { code: "signin_incomplete", aadsts };
-}
-
-/**
  * The identity service returns here with a single-use code; the code is exchanged server-side and the token verified
  * before a session opens. The provider this browser started with (the PKCE cookie) is this sign-in's provider when the
  * account holds it; otherwise the sign-in is refused (identityForSignIn in packages/core). A refusal comes back with an
- * error instead of a code (refusalCode above): the sign-in page says what it means, or "Confirm it's you" says it failed.
+ * error instead of a code (`refusalCode` in signin-refusal.ts, the rule the shell's middleware maps a refusal at the
+ * address's root by): the sign-in page says what it means, or "Confirm it's you" says it failed.
  */
 authRoutes.get("/callback", async (c) => {
   const container = c.get("container");

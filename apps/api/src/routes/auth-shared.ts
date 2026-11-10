@@ -4,6 +4,7 @@ import { INVITE_COOKIE_TTL_MS, InvitationRefused, audit, holdsOtherThanStaffProv
 import { users, withPlatform } from "@ros/db";
 import type { VerifiedIdentity } from "@ros/integrations";
 import type { Container } from "../container";
+import { PKCE_COOKIE } from "../cookie-names";
 import { clearAppCookie, readAppCookie, setAppCookie, type CookiePlace } from "../cookies";
 import { SESSION_COOKIE, SESSION_PLACE, clientIp, type Vars } from "../middleware/session";
 
@@ -19,9 +20,9 @@ export function clearSessionCookie(c: Context<Vars>): void {
 
 /**
  * The PKCE verifier, the state and the provider the browser started with ride in this cookie for ten minutes, from
- * /start (or /reauth/start) to the callback. Path=/ and shared like the session cookie.
+ * /start (or /reauth/start) to the callback. Path=/ and shared like the session cookie. Named in cookie-names.ts, which the
+ * shell's middleware reads too (a refusal at the address's root).
  */
-const PKCE_COOKIE = "ros_pkce";
 const PKCE_PLACE: CookiePlace = { path: "/", shared: true };
 export type PkceStart = { verifier: string; state: string; provider: string };
 export function setPkceCookie(c: Context<Vars>, start: PkceStart): void {
