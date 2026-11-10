@@ -124,6 +124,54 @@ describe("matchScore", () => {
     expect(checked).toBeGreaterThan(500);
   });
 
+  /**
+   * The release review (11 November 2026): the property above read one résumé against must-haves the résumé can speak to,
+   * so it could not see a must-have checked only in the team's own interviews, nor an AI interview's scorecard beside the
+   * résumé. Partly showing such a must-have scored a cook 85 against 100 for saying nothing about it.
+   */
+  it("stays monotonic with must-haves checked only in the team's own interviews, and with a scorecard beside the résumé", () => {
+    const rand = seeded(20261111);
+    type Level = "no" | "unknown" | "partly" | "yes";
+    const ORDER: Level[] = ["no", "unknown", "partly", "yes"];
+    const pickLevel = (): Level => ORDER[Math.floor(rand() * ORDER.length)]!;
+    const MUST: Record<Level, (k: string) => Req> = { no: (k) => must(k, "no", `I have never done ${k}`), unknown: (k) => must(k, "unknown"), partly: (k) => must(k, "partially", `some ${k} work`), yes: (k) => must(k, "yes", `${k} every day`) };
+    const SKILL: Record<Level, (k: string) => Comp> = { no: (k) => skill(k, "contradicted", `I avoid ${k}`), unknown: (k) => skill(k, "not_evidenced"), partly: (k) => skill(k, "partially_evidenced", `some ${k}`), yes: (k) => skill(k, "evidenced", `${k} daily`) };
+    let checked = 0;
+    let ownOnlyMoves = 0;
+    for (let n = 0; n < 300; n++) {
+      const mustKeys = Array.from({ length: 1 + Math.floor(rand() * 3) }, (_, i) => `m${i}`);
+      const skillKeys = Array.from({ length: Math.floor(rand() * 4) }, (_, i) => `s${i}`);
+      // the first must-have, and now and then another, is checked only in the team's own interviews
+      const ownOnly = new Set(mustKeys.filter((_, i) => i === 0 || rand() < 0.3));
+      const role = {
+        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: ownOnly.has(key) ? ["interview"] : ["resume", "screen"] })) },
+        competencies: skillKeys.map((key) => ({ key, name: `Skill ${key}`, definition: "d", weight: 1 + Math.floor(rand() * 5), evaluatedIn: "both", indicators: ["x"] })),
+      } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+      const keys = [...mustKeys, ...skillKeys];
+      const resume = new Map<string, Level>(keys.map((k) => [k, pickLevel()]));
+      const card = rand() < 0.6 ? new Map<string, Level>(keys.map((k) => [k, pickLevel()])) : null;
+      const readingOf = (kind: "triage" | "screen", ls: Map<string, Level>) => reading(kind, mustKeys.map((k) => MUST[ls.get(k)!](k)), skillKeys.map((k) => SKILL[ls.get(k)!](k)), kind === "screen" ? { createdAt: "2026-10-02T10:00:00Z" } : {});
+      const scoreOf = (r: Map<string, Level>, s: Map<string, Level> | null) => matchScore(pair(readingOf("triage", r), s ? readingOf("screen", s) : null), role)!.score;
+      const before = scoreOf(resume, card);
+      for (const which of ["resume", "screen"] as const) {
+        const ls = which === "resume" ? resume : card;
+        if (!ls) continue;
+        for (const key of keys) {
+          for (const up of ORDER.slice(ORDER.indexOf(ls.get(key)!) + 1)) {
+            const moved = new Map(ls).set(key, up);
+            const after = which === "resume" ? scoreOf(moved, card) : scoreOf(resume, moved);
+            if (before === null || after === null) continue;
+            expect(after, `${which} ${JSON.stringify([...ls])}${which === "resume" && card ? ` with the scorecard ${JSON.stringify([...card])}` : ""}: ${key}${ownOnly.has(key) ? " (only in their own interviews)" : ""} ${ls.get(key)} → ${up}`).toBeGreaterThanOrEqual(before);
+            checked += 1;
+            if (ownOnly.has(key)) ownOnlyMoves += 1;
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(1500);
+    expect(ownOnlyMoves).toBeGreaterThan(300);
+  });
+
   it("gives a requirement nothing was said about no points, never calls it not met, and shows it as coverage", () => {
     const s = matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "unknown")], [skill("chairside", "not_evidenced"), skill("patients", "evidenced", "calm")])), packet)!;
     // 6 of 14 points, with 8 still open
@@ -233,7 +281,7 @@ describe("matchScore", () => {
     expect(matchScore(pair(resume, addsAnything), packet)!.score!).toBeGreaterThan(without);
   });
 
-  it("keeps a must-have checked only in the team's own interviews out of the sum while it is not known, and counts it once it is", () => {
+  it("keeps a must-have checked only in the team's own interviews out of the sum whatever a reading found, and counts only their own quoted no", () => {
     const role = { ...packet, requirements: { mustHaves: [...packet.requirements.mustHaves, { key: "panel", text: "A strong teaching demo", rationale: "r", evidencedBy: ["interview"] }] } } as unknown as Pick<RolePacket, "requirements" | "competencies">;
     const shown = [must("rdh_license", "yes", "RDH license"), must("perio", "yes", "perio")];
     const skillsShown = [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")];
@@ -243,11 +291,18 @@ describe("matchScore", () => {
     expect(m.unknown).toEqual([]);
     // the must-have line still says it is not known: nobody has asked yet
     expect(mustHaveSummary(pair(reading("triage", shown, skillsShown)), role)!.words).toBe("Must-haves: 2 of 3 shown, 1 not yet known");
-    // once someone's own words speak to it, it counts like any other
-    const known = matchScore(pair(reading("triage", [...shown, must("panel", "partially", "I taught once")], skillsShown)), role)!;
-    expect(known).toMatchObject({ score: 89, fit: "potential" });
-    expect(known.coverage.total).toBe(6);
-    expect(matchScore(pair(reading("triage", [...shown, must("panel", "no", "I have never taught")], skillsShown)), role)).toMatchObject({ score: 54, capped: true, fit: "missing_must_have" });
+    // a reading that speaks to it leaves the number where it was: showing part of it, or all of it, never costs points
+    // (the release review, 11 November 2026: counted once known, "I taught once" took this 100 down to 89)
+    for (const finding of [must("panel", "partially", "I taught once"), must("panel", "yes", "I taught for six years"), must("panel", "yes")]) {
+      const known = matchScore(pair(reading("triage", [...shown, finding], skillsShown)), role)!;
+      expect(known, finding.met).toMatchObject({ score: 100, missingMustHave: [], capped: false });
+      expect(known.coverage.total, finding.met).toBe(5);
+      expect([...known.breakdown, ...known.unknown].map((c) => c.key), finding.met).not.toContain("panel");
+    }
+    // only their own quoted no counts, as for any must-have: it earns nothing, holds the score at 54 and is named
+    expect(matchScore(pair(reading("triage", [...shown, must("panel", "no", "I have never taught")], skillsShown)), role)).toMatchObject({ score: 54, capped: true, fit: "missing_must_have", missingMustHave: [{ key: "panel", label: "A strong teaching demo", quote: "I have never taught" }] });
+    // a "no" with nothing quoted is not known, like any other
+    expect(matchScore(pair(reading("triage", [...shown, must("panel", "no")], skillsShown)), role)).toMatchObject({ score: 100, missingMustHave: [] });
     // a must-have the AI interview or the résumé can speak to stays in the sum
     const asked = { ...packet, requirements: { mustHaves: [...packet.requirements.mustHaves, { key: "panel", text: "A strong teaching demo", rationale: "r", evidencedBy: ["resume", "interview"] }] } } as unknown as Pick<RolePacket, "requirements" | "competencies">;
     expect(matchScore(pair(reading("triage", shown, skillsShown)), asked)).toMatchObject({ score: 78, fit: "potential", coverage: { total: 6 } });

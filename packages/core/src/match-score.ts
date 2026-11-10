@@ -22,7 +22,9 @@ import { MATCH_WEIGHT, SCORE_BASIS_INTERVIEW_ONLY, SCORE_BASIS_WORDS, fitOf, imp
  * - A skill the role checks only in the team's own interviews (`evaluatedIn: "interview"`; the editor says "Only in your
  *   own interviews", so it is never read as "the AI interview does not count") is not part of the score: the owner was
  *   told it is judged there, so no reading of a résumé or an AI interview moves the number with it. A must-have checked
- *   only there is asked by nobody here, so while it is not known it stays out of the sum too.
+ *   only there is asked by nobody here, so no reading moves the number with it either, whatever it found: only their own
+ *   quoted "no" counts, as for any must-have (it earns nothing and holds the score at 54). Counting it once a reading spoke
+ *   to it scored someone who showed part of it below someone who said nothing (the release review, 11 November 2026).
  * - Doing the AI interview never costs points. Per requirement its checked "no" wins (their own latest words); otherwise
  *   the better of the two checked findings counts, the AI interview's on a tie; a finding with nothing quoted counts only
  *   when neither reading has a checked one (the AI interview's first).
@@ -129,7 +131,9 @@ function onlyInOwnInterviews(m: { evidencedBy?: readonly string[] | null }): boo
 }
 
 function requirementsOf(pair: ReadingPair, packet: Pick<RolePacket, "requirements" | "competencies">): Requirement[] {
-  const must = packet.requirements.mustHaves.map((m): Requirement => ({ key: m.key, label: m.text, mustHave: true, importance: null, weight: MATCH_WEIGHT.must_have, found: resolve(pair, mustHaveFound(m)) })).filter((r, i) => r.found.status !== "unknown" || !onlyInOwnInterviews(packet.requirements.mustHaves[i]));
+  // A must-have checked only in the team's own interviews joins the sum only on their own quoted "no": not known, partly
+  // shown and shown all leave the number where it is, so showing more of it never lowers it.
+  const must = packet.requirements.mustHaves.map((m): Requirement => ({ key: m.key, label: m.text, mustHave: true, importance: null, weight: MATCH_WEIGHT.must_have, found: resolve(pair, mustHaveFound(m)) })).filter((r, i) => r.found.status === "no" || !onlyInOwnInterviews(packet.requirements.mustHaves[i]));
   const skills = packet.competencies.filter(scoredSkill).map((c): Requirement => {
     const importance = importanceOf(c);
     return {

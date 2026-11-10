@@ -848,28 +848,45 @@ const LEVELS: readonly Level[] = ["no", "unknown", "partly", "yes"];
 const MUST_AT: Record<Level, ReqF["met"]> = { no: "no", unknown: "unknown", partly: "partially", yes: "yes" };
 const SKILL_AT: Record<Level, CompF["finding"]> = { no: "contradicted", unknown: "not_evidenced", partly: "partially_evidenced", yes: "evidenced" };
 
-/** Every combination of findings on the board's role, each moved up one requirement at a time: the score must never drop. */
+/**
+ * The board's role with a must-have checked only in the team's own interviews (the release review, 11 November 2026: the
+ * property could not see one, and partly showing it lowered the score).
+ */
+const MONOTONIC_PACKET = { ...BOARD_PACKET, requirements: { ...BOARD_PACKET.requirements, mustHaves: [...BOARD_PACKET.requirements.mustHaves, { key: "practical", text: "Passes our practical test", rationale: "the work", evidencedBy: ["interview"] }] } } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+/** A fixed scorecard or résumé reading beside the one that moves, one level of each kind among its findings. */
+const BESIDE: readonly Level[] = ["partly", "yes", "no", "unknown", "yes", "partly"];
+
+/**
+ * Every combination of findings on that role, each moved up one requirement at a time: the score must never drop. Once as
+ * the résumé reading alone, then as the résumé beside a fixed scorecard, then as the scorecard beside a fixed résumé.
+ */
 function monotonicFailures(): string[] {
-  const mustKeys = BOARD_PACKET.requirements.mustHaves.map((m) => m.key);
-  const skillKeys = BOARD_PACKET.competencies.map((c) => c.key);
+  const mustKeys = MONOTONIC_PACKET.requirements.mustHaves.map((m) => m.key);
+  const skillKeys = MONOTONIC_PACKET.competencies.map((c) => c.key);
   const keys = [...mustKeys, ...skillKeys];
   const readingAt = (levels: readonly Level[]) =>
     boardReading(
       mustKeys.map((k, i) => mustHaveFinding(k, MUST_AT[levels[i] ?? "unknown"], levels[i] === "unknown" ? undefined : `${k} in their own words`)),
       skillKeys.map((k, i) => skillFinding(k, SKILL_AT[levels[mustKeys.length + i] ?? "unknown"])),
     );
-  const scoreAt = (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", result: readingAt(levels) }, screen: null }, BOARD_PACKET)?.score ?? null;
+  const ways = [
+    { name: "résumé", scoreAt: (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", result: readingAt(levels) }, screen: null }, MONOTONIC_PACKET)?.score ?? null },
+    { name: "résumé beside a scorecard", scoreAt: (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", createdAt: "2026-10-01T10:00:00Z", result: readingAt(levels) }, screen: { kind: "screen", createdAt: "2026-10-02T10:00:00Z", result: readingAt(BESIDE) } }, MONOTONIC_PACKET)?.score ?? null },
+    { name: "scorecard beside a résumé", scoreAt: (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", createdAt: "2026-10-01T10:00:00Z", result: readingAt(BESIDE) }, screen: { kind: "screen", createdAt: "2026-10-02T10:00:00Z", result: readingAt(levels) } }, MONOTONIC_PACKET)?.score ?? null },
+  ];
   const f: string[] = [];
   const total = LEVELS.length ** keys.length;
-  for (let n = 0; n < total && f.length < 5; n++) {
-    const levels = keys.map((_, i) => LEVELS[Math.floor(n / LEVELS.length ** i) % LEVELS.length] ?? "unknown");
-    const before = scoreAt(levels);
-    keys.forEach((key, i) => {
-      for (const up of LEVELS.slice(LEVELS.indexOf(levels[i] ?? "unknown") + 1)) {
-        const after = scoreAt(levels.map((l, j) => (j === i ? up : l)));
-        if (before !== null && after !== null && after < before) f.push(`${levels.join(",")}: ${key} ${levels[i]} → ${up} lowered the score ${before} → ${after}`);
-      }
-    });
+  for (const way of ways) {
+    for (let n = 0; n < total && f.length < 5; n++) {
+      const levels = keys.map((_, i) => LEVELS[Math.floor(n / LEVELS.length ** i) % LEVELS.length] ?? "unknown");
+      const before = way.scoreAt(levels);
+      keys.forEach((key, i) => {
+        for (const up of LEVELS.slice(LEVELS.indexOf(levels[i] ?? "unknown") + 1)) {
+          const after = way.scoreAt(levels.map((l, j) => (j === i ? up : l)));
+          if (before !== null && after !== null && after < before) f.push(`${way.name} ${levels.join(",")}: ${key} ${levels[i]} → ${up} lowered the score ${before} → ${after}`);
+        }
+      });
+    }
   }
   return f;
 }
