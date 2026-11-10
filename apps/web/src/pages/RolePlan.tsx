@@ -540,8 +540,8 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
   const toggle = (id: string, on: boolean) => setPicked((p) => (on ? [...new Set([...p, id])] : p.filter((x) => x !== id)));
   return (
     <Card title="Interview rounds" aside={<Chip>Version {d.version}</Chip>}>
-      {/* each person's pill says whether times can be offered to them; someone who cannot assign is told who does, and
-          an editor reads what saving does beside Save */}
+      {/* each person's pill says whether their free times are known (only the folded "let them pick" needs them); someone who
+          cannot assign is told who does, and an editor reads what saving does beside Save */}
       {canEdit ? null : <p className="small muted mb-4">An owner, an admin or a hiring manager assigns the interviewers.</p>}
       {/* The rounds in order, one row each (screenshot 6's team rows): the number, the round and its people, then Change.
           Nothing is clipped (the rows have no fill), and a long interviewer pill wraps on a phone rather than run out. */}
@@ -553,22 +553,24 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
               <p><strong>{r.title}</strong> <span className="text-ink-2">· {r.durationMinutes} min · {ROUND_FORMAT[r.format] ?? r.format}</span></p>
               <p className="small muted">{r.purpose}</p>
               <div className="row mt-2.5">
+                {/* anyone can be booked: a person sets the date and time, no hours needed (6 November 2026), so no hours is a
+                    neutral word, as on the Interviews sheet, never a caution or "can be scheduled" (the release review, L3-6) */}
                 {r.interviewers.length
-                  ? r.interviewers.map((i) => <Pill key={i.userId} size="sm" tone={i.schedulable ? "good" : "caution"} className="wrap">{i.name} · {i.schedulable ? "can be scheduled" : "no calendar or hours yet"}</Pill>)
+                  ? r.interviewers.map((i) => <Pill key={i.userId} size="sm" tone={i.schedulable ? "good" : "neutral"} className="wrap">{i.name} · {i.schedulable ? "availability known" : "no hours set"}</Pill>)
                   : <span className="small muted">Nobody assigned yet{r.interviewerRoles.length ? ` (planned: ${roleWords(r.interviewerRoles)})` : ""}.</span>}
                 {canEdit && editingKey !== r.key ? <span className="sm:ml-auto"><Button size="sm" onClick={() => { setEditingKey(r.key); setPicked(r.interviewers.map((i) => i.userId)); }}>{r.interviewers.length ? "Change" : "Assign interviewers"}</Button></span> : null}
               </div>
               {canEdit && editingKey === r.key ? (
                 <div className="stack mt-3 gap-3">
                   {d.team.length ? (
-                    // the team as rows to tick: the person, their role and whether times can be offered to them
+                    // the team as rows to tick: the person, their role and whether their free times are known
                     <div className="overflow-hidden rounded-xl border border-line bg-surface">
                       {d.team.map((m) => (
                         <label key={m.userId} className="flex min-h-14 cursor-pointer flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line px-3.5 py-2.5 first:border-t-0 hover:bg-surface-2/60 has-[:checked]:bg-tint">
                           <input type="checkbox" checked={picked.includes(m.userId)} onChange={(e) => toggle(m.userId, e.target.checked)} />
                           <Avatar name={m.name} size="sm" />
                           <span className="min-w-0 flex-1">{m.name} <span className="small muted">({m.role.replace(/_/g, " ")})</span></span>
-                          <Pill size="sm" tone={m.schedulable ? "good" : "caution"} className="wrap">{m.schedulable ? "availability known" : "no calendar or hours yet"}</Pill>
+                          <Pill size="sm" tone={m.schedulable ? "good" : "neutral"} className="wrap">{m.schedulable ? "availability known" : "no hours set"}</Pill>
                         </label>
                       ))}
                     </div>

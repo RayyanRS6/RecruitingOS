@@ -25,6 +25,7 @@ const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/Cand
 const { Interviews } = await import("@ros/web/src/pages/Interviews");
 const { SetTimeForm } = await import("@ros/web/src/components/SetTimeForm");
 const { freshForm } = await import("@ros/web/src/interview-time");
+const { InterviewPlanTab } = await import("@ros/web/src/pages/RolePlan");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
@@ -250,5 +251,23 @@ describe("the Interviews page", () => {
     const t = text(page(base({ status: "cancelled", cancelReason: "Clash" })));
     expect(t).toContain("Interview again? This interview was cancelled. Set a new date and time");
     expect(t).not.toMatch(/approve a new interview|fresh times go out/i);
+  });
+});
+
+/**
+ * The release review (11 November 2026, L3-6): anyone can be booked now, so the job's Interview plan tab marked an
+ * interviewer with no hours in amber ("no calendar or hours yet") beside "can be scheduled" for one with hours, which said
+ * the opposite of the Interviews sheet's neutral "no hours set".
+ */
+describe("the job's Interview plan tab", () => {
+  it("calls nobody unbookable: no hours is a neutral word, as on the Interviews sheet, and never 'can be scheduled'", () => {
+    const people = [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", role: "owner", schedulable: false }, { userId: "u2", name: "Lea Hart", email: "lea@bright.test", role: "hiring_manager", schedulable: true }];
+    const planned = { version: 2, status: "approved", rounds: [{ key: "r1", title: "Working interview", purpose: "", durationMinutes: 30, format: "video", interviewerRoles: [], interviewers: people }], team: people };
+    const html = render(client([[["interview-plan", "r1"], planned]]), createElement(InterviewPlanTab, { roleId: "r1", canEdit: true }));
+    const t = text(html);
+    expect(html).toMatch(/<span class="pill neutral sm wrap"><span class="dot" aria-hidden="true"><\/span>Dana Whitfield · no hours set<\/span>/);
+    expect(html).toMatch(/<span class="pill good sm wrap"><span class="dot" aria-hidden="true"><\/span>Lea Hart · availability known<\/span>/);
+    expect(t).not.toMatch(/can be scheduled|no calendar or hours yet/);
+    expect(html).not.toContain("pill caution");
   });
 });
