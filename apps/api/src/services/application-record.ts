@@ -36,7 +36,8 @@ export const REVIEWING_REFRESH_SECONDS = 15;
  * - `not_coming`: nothing will work a number out by itself (10 November 2026): no reading gives one, the résumé's could not be
  *   made or AI does not read it (`readingWontCome`), and no AI interview is open, being written up or still on its way. Said at
  *   once, never "Working out…" or "Not ready yet" for ever. Since 11 November 2026 (the lead's D2) also a finished AI interview
- *   whose scorecard could not be written, for good: the résumé's number never stands in for it.
+ *   whose scorecard could not be written, for good: the résumé's number never stands in for it. And readings that are in and
+ *   judged nothing (every requirement not known, so no number), with no scorecard due, no call and no AI interview still on.
  * - `ready`: the score and its breakdown (`view`).
  */
 export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "not_coming" | "ready"; view: CandidateScoreView | null };
@@ -115,6 +116,10 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   const callComing = last?.status === "human_requested";
   // Nothing will give a number by itself (10 November 2026): said at once, a moment after applying too.
   if (!view && !scorecardDue && !callComing && (await readingWontCome(tx, app.id)) && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
+  // The readings are in and judged nothing (every requirement not known: no number at all), and nothing else will give one by
+  // itself: no sent chat's scorecard is due, no call is coming, no automatic AI interview is still on. Fix A's words at once,
+  // never "Not ready yet" for ever, and the chat's closing page promises no score (the release review, 11 November 2026).
+  if (match && match.score === null && !scorecardDue && !callComing && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
   const since = Date.parse(sent?.completedAt ?? app.createdAt);
   const recent = input.now.getTime() - since < REVIEWING_WINDOW_MS;
   if ((scorecardDue || !view) && recent) return { state: "reviewing", view: null };

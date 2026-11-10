@@ -554,4 +554,68 @@ describe("the application record (status page) after sending", () => {
     expect(await scoreCard(ivy.statusToken)).toContain(NO_SCORE);
     expect((await panel(ivy.id)).noReading).toBe("could_not_read");
   });
+
+  /**
+   * The release review (11 November 2026, L4-2): a wrong-trade CV, read, where every requirement is not known gives no number at
+   * all, and nothing else will give one by itself. Their page read "Not ready yet ... shows here once it is ready" for ever, and
+   * the AI interview's closing page promised a score. Fix A's words now, as for a reading that could not be made.
+   */
+  it("a reading that judged nothing, with nothing else to give a number, says 'Could not be worked out', never 'Not ready yet' for ever", async () => {
+    const NO_SCORE = '<p class="eyebrow">Your match score</p><h2 id="score-h">Could not be worked out</h2><p>The hiring team reads your application themselves.</p>';
+    const scoreCard = async (token: string) => {
+      const { html } = await page(`/c/status/${token}`);
+      const from = html.indexOf('<section class="card" id="score"');
+      expect(from, "the score card").toBeGreaterThan(-1);
+      return html.slice(from, html.indexOf("</section>", from));
+    };
+    /** A reading as the triage writes one when nothing in the CV speaks to the job: every requirement and skill not known. */
+    const nothingJudged = async (a: typeof applications.$inferSelect, kind: "triage" | "screen", createdAt = at(60)) => {
+      const result = {
+        overall: "insufficient_evidence", confidence: "low", summary: "Nothing in it speaks to this job.", strengths: [], concerns: [], unknowns: [], anomalies: [], recommendation: "screen", rationale: "PRIVATE",
+        requirementFindings: packet.requirements.mustHaves.map((m) => ({ requirementKey: m.key, met: "unknown" })),
+        competencyFindings: packet.competencies.map((c) => ({ competencyKey: c.key, finding: "not_evidenced", note: "" })),
+      };
+      const [row] = await withTenant(container.db, companyId, (tx) => tx.insert(assessments).values({ companyId, applicationId: a.id, kind, packetVersion: a.packetVersion, result: result as never, overall: "insufficient_evidence", confidence: "low", createdAt }).returning());
+      await container.db.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, a.id));
+      return row;
+    };
+    const onlyThis = async (a: typeof applications.$inferSelect) => withTenant(container.db, companyId, async (tx) => {
+      await tx.update(applications).set({ latestAssessmentId: null }).where(eq(applications.id, a.id));
+      await tx.delete(assessments).where(eq(assessments.applicationId, a.id));
+    });
+    const runEnded = (a: typeof applications.$inferSelect) => container.db.update(workflowRuns).set({ status: "completed" }).where(and(eq(workflowRuns.workflowKey, "screen"), sql`${workflowRuns.subject}->>'id' = ${a.id}`));
+
+    // they sent the application without the AI interview, long ago: nothing will give a number
+    const ben = await applyAs("Bea", "bea.record@example.com");
+    await onlyThis(ben);
+    await nothingJudged(ben, "triage");
+    await withoutChat(ben);
+    await runEnded(ben);
+    await container.db.update(applications).set({ createdAt: at(-20 * 60) }).where(eq(applications.id, ben.id));
+    let card = await scoreCard(ben.statusToken);
+    expect(card).toContain(NO_SCORE);
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready/);
+    // a moment after sending too: nothing is being worked out
+    await container.db.update(applications).set({ createdAt: at(0) }).where(eq(applications.id, ben.id));
+    expect(await scoreCard(ben.statusToken)).toContain(NO_SCORE);
+
+    // they did the AI interview, and its scorecard judged nothing either: the same, and its closing page promises no score
+    const cy = await applyAs("Cyd", "cyd.record@example.com");
+    await onlyThis(cy);
+    await nothingJudged(cy, "triage");
+    const sent = await addScreen(cy, { status: "completed", progress: progressOf({ submittedAt: at(-30 * 60) }), completedAt: at(-30 * 60), createdAt: at(30) });
+    await container.db.update(screens).set({ status: "declined_by_candidate" }).where(and(eq(screens.applicationId, cy.id), sql`${screens.id} <> ${sent.id}`));
+    await runEnded(cy);
+    await container.db.update(screens).set({ assessmentId: (await nothingJudged(cy, "screen", at(90))).id }).where(eq(screens.id, sent.id));
+    card = await scoreCard(cy.statusToken);
+    expect(card).toContain(NO_SCORE);
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready/);
+    expect((await page(`/c/screen/${sent.token}`)).html).not.toMatch(/match score/i);
+
+    // a reading that judged something still shows its number, as before
+    const dee = await applyAs("Dee", "dee.record@example.com");
+    await withoutChat(dee);
+    await readingFor(dee);
+    expect((await page(`/c/status/${dee.statusToken}`)).html).toContain("Your match score is ready");
+  });
 });
