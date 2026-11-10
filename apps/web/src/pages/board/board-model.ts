@@ -58,12 +58,14 @@ export function sortedText(generatedAt: string | null | undefined): string {
 
 /**
  * The three columns, in our words, with the line under each title. The lines say what puts someone there, no more: a
- * low score from too little evidence, or anything the board is unsure of, waits on the Longlist for a person's eye.
+ * low score from too little evidence, or anything the board is unsure of, waits on the Longlist for a person's eye. A low
+ * score may still have requirements not shown (the release review, 11 November 2026: "nothing left to find out" was not
+ * true), only never enough of them to lift it out of Low (`tooLittleToGoOn`).
  */
 export const BOARD_COLUMNS: ReadonlyArray<{ id: BoardColumn; title: string; sub: string }> = [
   { id: "shortlist", title: BOARD_COLUMN_LABEL.shortlist, sub: "Good evidence on the must-haves" },
   { id: "longlist", title: BOARD_COLUMN_LABEL.longlist, sub: "Some evidence, or more to find out" },
-  { id: "not_moving_forward", title: BOARD_COLUMN_LABEL.not_moving_forward, sub: "A must-have shown missing, or a low score with nothing left to find out" },
+  { id: "not_moving_forward", title: BOARD_COLUMN_LABEL.not_moving_forward, sub: "A must-have shown missing, or a low score that what is still unknown could not lift" },
 ];
 
 /** "3 shortlist · 1 longlist · 2 not moving forward". */

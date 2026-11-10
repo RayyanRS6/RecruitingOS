@@ -130,7 +130,7 @@ describe("the pool board on the Candidates page", () => {
     // three columns with their counts; what puts someone in each is its heading's title, not a line under it (23 Oct 2026)
     expect(html).toMatch(/<h3 id="board-col-shortlist" class="[^"]*" title="Good evidence on the must-haves">Shortlist(<!-- -->)? <span[^>]*>2<\/span><\/h3>/);
     expect(html).toMatch(/<h3 id="board-col-longlist" class="[^"]*" title="Some evidence, or more to find out">Longlist(<!-- -->)? <span[^>]*>1<\/span><\/h3>/);
-    expect(html).toMatch(/<h3 id="board-col-not_moving_forward" class="[^"]*" title="A must-have shown missing, or a low score with nothing left to find out">Not moving forward(<!-- -->)? <span[^>]*>1<\/span><\/h3>/);
+    expect(html).toMatch(/<h3 id="board-col-not_moving_forward" class="[^"]*" title="A must-have shown missing, or a low score that what is still unknown could not lift">Not moving forward(<!-- -->)? <span[^>]*>1<\/span><\/h3>/);
     expect(words).toContain("Shortlist 2 MR Maria Reyes");
     expect(words).not.toContain("Good evidence on the must-haves");
     // Maria: initials, name, the one verdict word and score, Ready to apply and the confidence apart, the reason, the facts, two strengths and the gap with sources, the next step

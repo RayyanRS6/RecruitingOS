@@ -81,7 +81,7 @@ describe("the board's address and strip", () => {
 
 describe("the board", () => {
   it("names the columns in our words, with a line under each", () => {
-    expect(BOARD_COLUMNS.map((c) => `${c.title}: ${c.sub}`)).toEqual(["Shortlist: Good evidence on the must-haves", "Longlist: Some evidence, or more to find out", "Not moving forward: A must-have shown missing, or a low score with nothing left to find out"]);
+    expect(BOARD_COLUMNS.map((c) => `${c.title}: ${c.sub}`)).toEqual(["Shortlist: Good evidence on the must-haves", "Longlist: Some evidence, or more to find out", "Not moving forward: A must-have shown missing, or a low score that what is still unknown could not lift"]);
   });
 
   it("counts each column in the header line: the people still to sort, then everyone already sorted or decided", () => {
