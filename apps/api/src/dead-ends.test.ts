@@ -283,6 +283,11 @@ describe("the dead ends a first-time owner met", () => {
       expect(await askedAt(evening)).toBe(true);
       // an interviewer, who cannot close a job, is never asked
       expect((await brief(await member("interviewer", "ivy2@deadends.test"))).cards.some((c) => c.title.startsWith("Close this job?"))).toBe(false);
+      // HR may close it but not tell candidates: told who sends the closing message, never that they will see it (L3-3)
+      expect(card.body).toMatch(/and you see the closing message before it goes\.$/);
+      const forHr = (await brief(await member("hr", "hana2@deadends.test"))).cards.find((c) => c.title.startsWith("Close this job?") && c.actions.some((a) => a.path === `/roles/${jobB}?close=1`));
+      expect(forHr?.body).toMatch(/privately, and an owner, admin, hiring manager or recruiter sends them the closing message from their Home page\.$/);
+      expect(forHr?.body).not.toContain("you see the closing message");
       // closed as filled: the question goes
       expect((await json(owner, "POST", `/api/v1/roles/${jobB}/outcome`, { outcome: "filled", confirm: true })).status).toBe(200);
       expect(await closeCard()).toBeUndefined();

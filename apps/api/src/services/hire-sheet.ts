@@ -115,10 +115,13 @@ export async function closeAfterHireCards(tx: Tx, input: { companyId: string; vi
     const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, last.candidateId)).limit(1);
     const name = `${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "Your new hire";
     const still = role.status === "paused" ? "paused, and still open" : role.acceptingApplications ? "still live and taking applications" : "still open";
+    // Who sends the closing message, as the hire sheet says it (`hireFollowUp`): HR may close a job but not tell candidates (the
+    // release review, 11 November 2026).
+    const then = can(input.viewer.role, "application.reject") ? "and you see the closing message before it goes" : "and an owner, admin, hiring manager or recruiter sends them the closing message from their Home page";
     cards.push({
       kind: "needs_review",
       title: `Close this job? ${role.title}`,
-      body: `${name} started on ${closingDayWords(last.hireDate!)}, and ${role.title} is ${still}. Close it if the job is filled: anyone still in process moves to your talent pool, privately, and you see the closing message before it goes.`,
+      body: `${name} started on ${closingDayWords(last.hireDate!)}, and ${role.title} is ${still}. Close it if the job is filled: anyone still in process moves to your talent pool, privately, ${then}.`,
       roleId: role.id,
       applicationId: last.applicationId!,
       actions: [{ label: "Close the job", method: "GET", path: `/roles/${role.id}?close=1` }],
