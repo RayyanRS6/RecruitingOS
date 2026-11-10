@@ -63,7 +63,7 @@ describe("the ITS company check and getting started", () => {
     expect(current.settings.verifiedAt).toBeUndefined();
     const notice = mail().sent.find((m) => m.to === container.env.ITS_QUEUE_EMAIL && m.subject.includes("[company check]"));
     expect(notice?.subject).toBe("[company check] Check Dental is waiting for the ITS check");
-    // the address their sign-in proved, then the name they typed, as the request's email says it (AP-9, 9 November 2026)
+    // the address their sign-in proved, then the name they typed, as the request's email says it (AP-10, 9 November 2026)
     expect(notice?.text).toContain("Owner: owner@check.test (Olive Owner)");
     expect(notice?.text).toContain("Only the email address is proved; the rest is what they typed.");
     expect(notice?.text).toContain("Website: checkdental.example");
