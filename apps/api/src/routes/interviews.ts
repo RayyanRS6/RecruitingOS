@@ -87,6 +87,20 @@ function summaryOf(
 }
 
 /**
+ * Why an interview cannot be changed now, in words: never its raw status ("This interview is no_show."; the release review,
+ * 11 November 2026). The screens show the message as it is.
+ */
+const NOT_CHANGEABLE: Record<string, string> = {
+  cancelled: "This interview was cancelled.",
+  completed: "This interview took place: record what comes next on their page.",
+  no_show: "This interview did not take place: record what comes next on their page.",
+  proposed: "This interview has no time booked yet.",
+  scheduling: "This interview has no time booked yet.",
+  offer_expired: "This interview's offered times lapsed, and no time is booked.",
+};
+const notChangeable = (status: string) => new HttpError(409, "interview_not_schedulable", NOT_CHANGEABLE[status] ?? "This interview cannot be changed now.");
+
+/**
  * The interview, read again once its application is locked. Every path that changes an interview and its application
  * takes the application first (a team cancel, the candidate's own cancel, a booking, a send of new times), so two changes
  * at the same moment take turns instead of deadlocking, and the interview read here is the one the other left behind.
@@ -113,7 +127,7 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
   const now = container.engine.clock();
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const { iv, app } = await lockedInterview(tx, { companyId: t.companyId, interviewId: input.interviewId });
-    if (["cancelled", "completed", "no_show"].includes(iv.status)) throw new HttpError(409, "interview_not_schedulable", `This interview is ${iv.status}.`);
+    if (["cancelled", "completed", "no_show"].includes(iv.status)) throw notChangeable(iv.status);
     const hadEvents = Object.keys((iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
     const actor = actorOf(c);
     if (input.mode === "cancel") {
@@ -293,7 +307,7 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
     const { iv } = await lockedInterview(tx, { companyId: t.companyId, interviewId: c.req.param("id") });
     const parts = await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
     if (!can(t.role, "interview.manage") && !parts.some((p) => p.userId === t.userId)) throw new HttpError(403, "forbidden", "Only a participant or someone who manages interviews can record what happened.");
-    if (!["scheduled", "completed"].includes(iv.status)) throw new HttpError(409, "interview_not_schedulable", `This interview is ${iv.status}.`);
+    if (!["scheduled", "completed"].includes(iv.status)) throw notChangeable(iv.status);
     // Answered once, as the screen asks it once (audit 06, bug 98): a "took place" is never overwritten later, as a no-show never was.
     if (iv.outcome) throw new HttpError(409, "already_recorded", "What happened at this interview is already recorded.");
     const ended = body.outcome === "happened" ? "completed" : "no_show";
@@ -469,7 +483,7 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     // Someone locked is refused first, as setting up an interview refuses them (`createApprovedInterview`): the booking would
     // give its interviewers their name by email and calendar, under a grant naming them or break glass alike.
     if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
-    if (!["proposed", "scheduling", "scheduled", "offer_expired"].includes(iv.status)) throw new HttpError(409, "interview_not_schedulable", `This interview is ${iv.status}.`);
+    if (!["proposed", "scheduling", "scheduled", "offer_expired"].includes(iv.status)) throw notChangeable(iv.status);
     const [role] = await tx.select({ status: roles.status }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
     refuseClosedRole(role?.status);
     if (iv.status === "scheduled" && iv.startsAt && Date.parse(iv.startsAt) <= now.getTime()) throw new HttpError(409, "interview_started", "It has started. Record what happened instead.");

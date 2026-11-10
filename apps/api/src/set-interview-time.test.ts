@@ -559,7 +559,10 @@ describe("a person sets the date and time", () => {
       expect((await json(owner, "POST", `/api/v1/interviews/${booked.id}/cancel`, { reason: "A clash at our end." })).status).toBe(200);
       const off = await routeB(booked.id);
       expect(off.status).toBe(409);
-      expect((await errorOf(off)).code).toBe("interview_not_schedulable");
+      // in words, never the raw status ("This interview is cancelled.", "… no_show."): the release review, 11 November 2026
+      expect(await errorOf(off)).toMatchObject({ code: "interview_not_schedulable", message: "This interview was cancelled." });
+      expect(await errorOf(await json(owner, "POST", `/api/v1/interviews/${booked.id}/cancel`, { reason: "Again." }))).toMatchObject({ code: "interview_not_schedulable", message: "This interview was cancelled." });
+      expect(await errorOf(await json(owner, "POST", `/api/v1/interviews/${booked.id}/outcome`, { outcome: "happened" }))).toMatchObject({ code: "interview_not_schedulable", message: "This interview was cancelled." });
       // and a new interview is route A again
       const again = await routeA(cand.id);
       expect(again.status, await again.clone().text()).toBe(201);
@@ -568,7 +571,15 @@ describe("a person sets the date and time", () => {
       // over
       const done = await book("Quin", "Stone");
       expect((await json(owner, "POST", `/api/v1/interviews/${done.booked.id}/outcome`, { outcome: "happened" })).status).toBe(200);
-      expect((await errorOf(await routeB(done.booked.id))).code).toBe("interview_not_schedulable");
+      expect(await errorOf(await routeB(done.booked.id))).toMatchObject({ code: "interview_not_schedulable", message: "This interview took place: record what comes next on their page." });
+      // the candidate did not come: said as it is, with where to go
+      const missed = await book("Ros", "Stone");
+      expect((await json(owner, "POST", `/api/v1/interviews/${missed.booked.id}/outcome`, { outcome: "no_show_candidate" })).status).toBe(200);
+      for (const r of [await routeB(missed.booked.id), await json(owner, "POST", `/api/v1/interviews/${missed.booked.id}/cancel`, { reason: "Off." })]) {
+        const e = await errorOf(r);
+        expect(e).toMatchObject({ code: "interview_not_schedulable", message: "This interview did not take place: record what comes next on their page." });
+        expect(e.message).not.toMatch(/no_show|_/);
+      }
 
       // left the process: the row left behind for someone hired is refused in plain words
       await container.db.update(applications).set({ stage: "hired" }).where(eq(applications.id, cand.id));
