@@ -222,11 +222,11 @@ describe("the application record (status page) after sending", () => {
     expect((await page(`/c/status/${a.statusToken}`)).html).toContain("Your match score is ready");
   });
 
-  it("while an AI interview they sent has no scorecard, never a résumé-only number: 'Working out…', then 'Not ready yet', for as long as it takes (6 November 2026)", async () => {
+  it("while an AI interview they sent has no scorecard, never a résumé-only number: 'Working out…', then 'Not ready yet', for as long as it takes (6 November 2026); while that scorecard waits for the AI credit, nothing about a score at all", async () => {
     const a = await applyAs("Noor", "noor.record@example.com");
     await readingFor(a);
-    // it was sent, and its scorecard waits (the company's AI credit ran out): the résumé's number would read low for someone who did what was asked
-    const sent = await addScreen(a, { status: "completed", progress: progressOf({ submittedAt: at(1), scoreWaitsForCredit: at(1) }), completedAt: at(1) });
+    // it was sent, and its scorecard is not written yet: the résumé's number would read low for someone who did what was asked
+    const sent = await addScreen(a, { status: "completed", progress: progressOf({ submittedAt: at(1) }), completedAt: at(1) });
     const scoreOf = async () => (await page(`/c/status/${a.statusToken}`)).html;
     let html = await scoreOf();
     expect(html).toContain('<h2 id="score-h">Working out your match score…</h2>');
@@ -242,6 +242,15 @@ describe("the application record (status page) after sending", () => {
     const scoreCard = html.slice(html.indexOf('<section class="card" id="score"'), html.indexOf("</section>", html.indexOf('<section class="card" id="score"')));
     expect(scoreCard).toContain("Not ready yet");
     expect(scoreCard).not.toMatch(/\b(credit|upgrade|plan)\b/i);
+    // the scorecard waits for the company's AI credit (PL-10): nothing will work it out for now, so "Working out…" would not be
+    // true, and the résumé's number still never stands in for it. Nothing is said about a score, a moment after sending or long after.
+    for (const completedAt of [at(1), at(-30 * 60)]) {
+      await container.db.update(screens).set({ completedAt, progress: progressOf({ submittedAt: completedAt, scoreWaitsForCredit: completedAt }) }).where(eq(screens.id, sent.id));
+      html = await scoreOf();
+      expect(html).not.toContain('id="score"');
+      expect(html).not.toMatch(/match score|Not ready yet/i);
+      expect(html).not.toContain("From your résumé only");
+    }
   });
 
   it("S7-2: 'Your answers' reads back exactly what was sent: the form's questions in sentences and the sent chat, the assistant's note apart; an unsent chat shows nothing and holds the score back", async () => {

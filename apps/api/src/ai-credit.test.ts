@@ -1016,7 +1016,7 @@ describe("the AI credit", () => {
       expect(await record()).toContain("Your match score is ready");
     });
 
-    it("someone whose résumé was read before the credit ran out keeps their score and its promise, and it is never 'working out' while the scorecard waits", async () => {
+    it("someone whose résumé was read before the credit ran out, and who sent the AI interview: while its scorecard waits nothing promises a score, the résumé's number never stands in for it, and it is never 'working out'; once the credit is back the score is there", async () => {
       const job = await openJob();
       const a = await apply(job, { first: "Rae", last: "Inge", email: "rae@ai-credit.test" });
       const ref = await interviewOf(a.id);
@@ -1028,12 +1028,22 @@ describe("the AI credit", () => {
       expect(await conversationSubmit(container, ref)).toBe(true);
       await container.drain();
       expect((await screenOf(a.id)).progress.scoreWaitsForCredit).toBeTruthy();
-      const closed = (await (await app.request(`/c/screen/${ref.token}`)).text()).replace(/&#39;/g, "'");
-      expect(closed).toContain(SENT_RECORD_LINE);
-      const record = (await (await app.request(`/c/status/${a.statusToken}`)).text()).replace(/&#39;/g, "'");
-      expect(record).toContain("Your match score is ready");
-      expect(record).toContain("From your résumé only");
+      const decoded = async (path: string) => (await (await app.request(path)).text()).replace(/&#39;/g, "'");
+      // the résumé's number would read low for someone who did what was asked (6 November 2026), and no other can come for now
+      const closed = await decoded(`/c/screen/${ref.token}`);
+      expect(closed).toContain(SENT_RECORD_NO_SCORE_LINE);
+      expect(closed).not.toContain("match score");
+      const record = await decoded(`/c/status/${a.statusToken}`);
+      expect(record).not.toMatch(/match score|Not ready yet/i);
+      expect(record).not.toContain("From your résumé only");
       expect(record).not.toContain("Working out your match score");
+      // after an upgrade the scorecard is written, and the score they read counts their AI interview
+      await upgrade(job.id);
+      expect((await screenOf(a.id)).assessmentId).toBeTruthy();
+      expect(await decoded(`/c/screen/${ref.token}`)).toContain(SENT_RECORD_LINE);
+      const scored = await decoded(`/c/status/${a.statusToken}`);
+      expect(scored).toContain("Your match score is ready");
+      expect(scored).toContain("From your résumé and your AI interview");
     });
 
     /** A chat sent on a Basic job, its résumé read and $19.06 of the $20 settled, with `inFlight` held by a draft still running, its hold taken `heldAgoMs` ago. */

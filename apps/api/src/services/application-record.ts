@@ -27,7 +27,8 @@ export const REVIEWING_REFRESH_SECONDS = 15;
  *   never counts). A chat a private decision cancelled reads the same as before, so nothing hints at the decision.
  * - `reviewing`: sent a moment ago and the reading is not written yet: "Working out your match score…", with "Check again".
  * - `not_ready`: no score after the reviewing window (the reading failed, a résumé could not be read), or a sent AI interview
- *   whose scorecard is not written yet, for as long as that takes: never a résumé-only number for someone who did it.
+ *   whose scorecard is not written yet, for as long as that takes: never a résumé-only number for someone who did it. One
+ *   waiting for the plan's AI help is `off` instead.
  * - `ready`: the score and its breakdown (`view`).
  */
 export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "ready"; view: CandidateScoreView | null };
@@ -48,6 +49,8 @@ export async function packetOf(tx: Tx, roleId: string, version: number): Promise
  * about a score for someone locked (Rule 2): nothing works one out while they are, and nobody on the team sees them, so the
  * block, which says the team sees it and is under counsel word for word, stays away whole. The same while there is no reading
  * and what would write one waits for the plan's AI help (PL-10): nobody is told that, and "under a minute" would not be true.
+ * And the same while a sent AI interview's scorecard waits for it, reading or not: the résumé's number never stands in for that
+ * scorecard (6 November 2026).
  */
 export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; now: Date }): Promise<RecordScore> {
   if (!candidateScoreShown(input.companySettings) || input.app.lockedAt) return { state: "off", view: null };
@@ -65,11 +68,14 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   // Labelled with where their AI interview stands (R20-9): "From your résumé only" until its scorecard is in.
   const match = packet && own.length ? matchScore(readingPair(own), packet, { packetVersion: readAgainst, interview: interviewInScore(input.screens, app.stage) }) : null;
   const view = packet ? candidateScoreView(match, packet) : null;
-  // A chat they sent whose scorecard is not written yet (a moment ago, or waiting for the company's AI credit): the score is
-  // about to change, and the résumé's number would read low for someone who did what was asked, so it waits for it.
+  // A chat they sent whose scorecard is not written yet: the score is about to change, and the résumé's number would read low
+  // for someone who did what was asked, so it waits for it (6 November 2026).
   const sent = last && screenAnswersSent(last) ? last : null;
-  // Not about to change if it waits for the plan's AI help: what they have from their résumé stands for now.
-  const scorecardDue = !!sent && !sent.assessmentId && !sent.progress.scoreWaitsForCredit;
+  // Unless that scorecard waits for the plan's AI help (PL-10): then nothing is about to change, so "Working out…" would not
+  // be true, and the résumé's number still never stands in for it. Nothing is said about a score, as with no reading at all,
+  // and it shows once the credit is back.
+  if (sent && !sent.assessmentId && sent.progress.scoreWaitsForCredit) return { state: "off", view: null };
+  const scorecardDue = !!sent && !sent.assessmentId;
   const since = Date.parse(sent?.completedAt ?? app.createdAt);
   const recent = input.now.getTime() - since < REVIEWING_WINDOW_MS;
   if ((scorecardDue || !view) && recent) return { state: "reviewing", view: null };
