@@ -687,7 +687,7 @@ emails go offline at once. The owner gets one email with the declined email's wo
 when it really left, and a failed email changes nothing. From then on it is a declined company: they read "We can't offer access
 right now" when they sign in, the row has the **Declined** pill, and every other console action refuses it. Someone who also works
 for another company keeps that one. **Accept** is the undo: it brings everyone back on the same plan, confirms the company again
-and tells each of them. Their company and its records stay either way. It is offered only on a company that has access; on a
+at the careers address it had, and tells each of them. Their company and its records stay either way. It is offered only on a company that has access; on a
 request or a declined company the API answers 409 and changes nothing.
 
 ### How ITS changes a plan
