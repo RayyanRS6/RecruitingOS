@@ -62,6 +62,7 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
 
 - Where: https://entra.microsoft.com → Identity → Applications → App registrations → New registration, in ITS's existing Microsoft 365 tenant.
 - Who: Paul or Nadine (tenant administrator). Owners of the registration: Nadine and Paul.
+- Name: `Recruiting OS`, the same as the product name the sign-in page uses (`PRODUCT` in `apps/web/src/pages/Login.tsx`), since IT sees it on Microsoft's consent screen (renamed so on 10 November 2026).
 - One registration serves both Supabase projects (10 November 2026). Supported account types: "Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant)", with "Allow all tenants", so customers' work accounts on Microsoft can sign in as well as ITS staff (tenant-only would block customers). No personal Microsoft accounts: those people use Google.
 - Redirect URIs (Web): `https://<project-ref>.supabase.co/auth/v1/callback` for each Supabase project, both on the one registration.
 - Permissions: delegated `openid`, `profile`, `email`, `User.Read` only. **No calendar permission.**

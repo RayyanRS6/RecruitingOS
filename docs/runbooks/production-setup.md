@@ -137,6 +137,8 @@ Report back: `<prod-ref>`, the region, the endpoint and region the S3 screen sho
 registration in the ITS tenant (Entra admin center, **App registrations**) serves both Supabase projects, staging and
 production. Background in `docs/spec/13` section 4a.
 
+- Name: `Recruiting OS`, the product name the sign-in page uses (`PRODUCT` in `apps/web/src/pages/Login.tsx`), since IT
+  sees it on Microsoft's consent screen (renamed so on 10 November 2026).
 - Supported accounts: **Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant)**, with
   **Allow all tenants**. Work and school accounts only: Microsoft's own page refuses a personal Microsoft account
   (outlook.com, hotmail.com), by design, and those people use **Continue with Google**. Redirect URIs (Web): each
