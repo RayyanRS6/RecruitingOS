@@ -76,6 +76,8 @@ const HEADLINES: Record<string, string> = {
   "company.unverified": "Your careers page is offline while ITS checks your company again",
   // First sign-in asks for approval (6 November 2026).
   "company.access_accepted": "Your request was approved",
+  // Accept after Take away access: nobody made a request, so the email says what the notice says (11 November 2026).
+  "company.access_restored": "Your access is back",
   // The Trial plan's 30 days (founder decision L-02 B).
   "company.trial_started": "Your 30-day trial has started",
   "company.trial_ending": "Your trial ends soon",

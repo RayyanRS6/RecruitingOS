@@ -1743,15 +1743,24 @@ describe("taking an accepted company's access away", () => {
   it("Accept brings everyone back, confirms the company again, tells each of them, and keeps everything they had", async () => {
     const co = await inUse("pat.undo@listed-domain.test", "Undo Dental", "una.mate@stranger.test");
     expect((await w.decide(adminCookie, co.id, "remove")).status).toBe(200);
+    const mailsBefore = w.mail().sent.length;
     const undone = await w.decide(adminCookie, co.id, "accept");
     expect(await w.read<CustomerAccessAnswer>(undone)).toMatchObject({ status: "active", changed: true, message: "Undo Dental has access again." });
     await w.container.drain();
     expect(await w.statusesOf(co.id)).toEqual(["active", "active"]);
     expect((await w.rowOf(co.id)).settings.verifiedAt).toEqual(expect.any(String));
     expect((await w.app.request(`/careers/${co.slug}`)).status).toBe(200);
-    // each of them hears their access is back, in those words
-    const back = (await w.noticesOf(co.id)).filter((n) => n.kind === "company.access_accepted");
+    // each of them hears their access is back, in those words: the notice has a kind of its own, so its email says the same
+    const back = (await w.noticesOf(co.id)).filter((n) => n.kind === "company.access_restored");
     expect(back.map((n) => n.title)).toEqual(["Your access is back", "Your access is back"]);
+    expect((await w.noticesOf(co.id)).filter((n) => n.kind === "company.access_accepted")).toEqual([]);
+    // the email too, to the owner and the teammate alike: nobody made a request (the release review, 11 November 2026, L3-4)
+    const told = w.mail().sent.slice(mailsBefore).filter((m) => ["pat.undo@listed-domain.test", "una.mate@stranger.test"].includes(m.to) && /^Your (access is back|request was approved)/.test(m.subject));
+    expect(told.map((m) => [m.to, m.subject]).sort()).toEqual([["pat.undo@listed-domain.test", "Your access is back"], ["una.mate@stranger.test", "Your access is back"]]);
+    for (const m of told) {
+      expect(m.text).toContain("Your access is back.");
+      expect(m.text).not.toContain("Your request was approved");
+    }
     // they sign in to it as before, and what they had is there
     const owner = await w.google("pat.undo@listed-domain.test");
     expect((await w.meOf(owner)).activeCompanyId).toBe(co.id);

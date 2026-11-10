@@ -242,7 +242,9 @@ export async function decideAccess(tx: Queryable, container: Container, input: {
   for (const m of waiting) await emit(tx, { type: "membership.changed", companyId: co.id, actor, subject: { type: "user", id: m.userId }, payload: { role: m.role, status: "active" } });
   await audit(tx, { companyId: co.id, actor, action: "company.access_accepted", target: company, reason: ACCEPTED_REASON, details: { from: owner.status, ...(restoring ? { restored: waiting.length } : {}) } });
   await container.engine.start(tx, { workflowKey: "stuck_role_detector", companyId: co.id, subject: company, state: { companyId: co.id }, idempotencyKey: `stuck_role_detector:${co.id}`, actor });
-  await notify(tx, { companyId: co.id, kind: "company.access_accepted", ...(restoring ? { title: "Your access is back", body: "You can sign in and pick up where you left off." } : { title: "Your request was approved", body: "You can start now." }), action: { label: "Open Home", href: "/" }, userIds: waiting.map((m) => m.userId) });
+  // The undo of a removal has a kind of its own, so its email says what the notice says ("Your access is back"): nobody in it
+  // made a request, and a teammate never asked for anything (the release review, 11 November 2026).
+  await notify(tx, { companyId: co.id, ...(restoring ? { kind: "company.access_restored", title: "Your access is back", body: "You can sign in and pick up where you left off." } : { kind: "company.access_accepted", title: "Your request was approved", body: "You can start now." }), action: { label: "Open Home", href: "/" }, userIds: waiting.map((m) => m.userId) });
   return { answer: answer("active", true, restoring ? `${co.name} has access again.` : `${co.name} was accepted.`), declined: null };
 }
 

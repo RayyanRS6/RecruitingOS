@@ -32,6 +32,8 @@ export const NOTIFY_ALWAYS: ReadonlyMap<string, { label: string; why: string }> 
   ["company.verified", { label: "ITS confirms your company, or takes the confirmation back", why: "It decides whether your careers page and job pages are public, so you always hear about it." }],
   ["company.unverified", { label: "ITS confirms your company, or takes the confirmation back", why: "It decides whether your careers page and job pages are public, so you always hear about it." }],
   ["company.access_accepted", { label: "ITS confirms your company, or takes the confirmation back", why: "It decides whether your careers page and job pages are public, so you always hear about it." }],
+  // Accept after Take away access gives everyone their access back, and confirms the company again: the same line.
+  ["company.access_restored", { label: "ITS confirms your company, or takes the confirmation back", why: "It decides whether your careers page and job pages are public, so you always hear about it." }],
   ["screen.human_requested", { label: "A candidate asks to talk to a person", why: "A person is waiting for one of you to reply." }],
   ["application.ineligible_hold", { label: "Someone waits for your eligibility decision", why: "Their application is on hold until a person decides." }],
   ["application.ineligible_review_due", { label: "Someone waits for your eligibility decision", why: "Their application is on hold until a person decides." }],
@@ -42,7 +44,7 @@ export const NOTIFY_ALWAYS: ReadonlyMap<string, { label: string; why: string }> 
  * writes). A person's request for access being accepted: email is not live on production yet, the person's screen moves on
  * by itself, and an alert that outlives the decision would only be noise (first sign-in asks for approval, 6 November 2026).
  */
-export const NOTIFY_QUIET_ON_FAILURE: ReadonlySet<string> = new Set(["company.access_accepted"]);
+export const NOTIFY_QUIET_ON_FAILURE: ReadonlySet<string> = new Set(["company.access_accepted", "company.access_restored"]);
 
 /**
  * Updates that never go out on their own email, only in summaries: the people involved already get an email of their
