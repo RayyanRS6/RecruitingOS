@@ -729,9 +729,16 @@ describe("a person sets the date and time", () => {
       const cancelMail = mailTo(cand.email).find((m) => m.subject.startsWith("Cancelled:"))!;
       expect(cancelMail.text).toContain("You asked for new times, so someone from the team will be in touch about them.");
       // the panel's reason, and "Send new times", which cannot work with nobody's hours: one person, and many at once
-      const panel = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { ownerStage: string; cancelled: { auto: { reasonText: string } } };
+      const panel = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { ownerStage: string; cancelled: { auto: { reasonText: string }; noHours?: boolean }; allowedActions: string[]; blockedReasons: Record<string, string> };
       expect(panel.ownerStage).toBe("cancelled");
       expect(panel.cancelled.auto.reasonText).toBe("Nobody on the interview has hours to offer, so nothing goes automatically: set a date and time from their page.");
+      // the panel and the Interviews page are told, so neither offers "Send new times"; "Set a date and time" alone is the way on (10 November 2026)
+      expect(panel.cancelled.noHours).toBe(true);
+      expect(panel.allowedActions).not.toContain("send_new_times");
+      expect(panel.allowedActions).toContain("interview");
+      expect(panel.blockedReasons.send_new_times).toBe("Nobody on this interview has hours to offer. Set a date and time instead.");
+      const sheet = (await (await json(owner, "GET", `/api/v1/interviews/${booked.id}`)).json()) as { followUp: { reason: string; noHours?: boolean } | null };
+      expect(sheet.followUp).toMatchObject({ reason: "asked_new_times", noHours: true });
       const send = await json(owner, "POST", `/api/v1/applications/${cand.id}/new-times`, {});
       expect(send.status).toBe(409);
       expect(await errorOf(send)).toMatchObject({ code: "no_hours", message: "Nobody on this interview has hours to offer. Set a date and time instead." });
@@ -768,6 +775,11 @@ describe("a person sets the date and time", () => {
       await container.drain();
       const armed = await followUpOf(cand.id);
       expect(armed).toMatchObject({ autoState: "waiting", resolvedAt: null });
+      // someone on it has hours: "Send new times" is offered as ever, on the panel and the Interviews page
+      const panel = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { cancelled: { noHours?: boolean }; allowedActions: string[] };
+      expect(panel.cancelled.noHours).toBe(false);
+      expect(panel.allowedActions).toContain("send_new_times");
+      expect(((await (await json(owner, "GET", `/api/v1/interviews/${id}`)).json()) as { followUp: { noHours?: boolean } | null }).followUp?.noHours).toBe(false);
       const r = await json(wes, "POST", `/api/v1/applications/${cand.id}/interviews`, { roundKey, interviewerUserIds: [wesId], setTime: setTime() });
       expect(r.status, await r.clone().text()).toBe(201);
       const { id: newId } = (await r.json()) as Booked;

@@ -62,36 +62,45 @@ export function cancelledTitle(firstName: string, reason: CancelledReason): stri
 const AFTER_CHECK = "You can send new times once ITS confirms your company, or decide.";
 
 /**
+ * Said in place of "send new times" when someone on the interview has no hours to offer (`noHours`, 10 November 2026): the
+ * send would be refused with `no_hours`, so a person sets the date and time, whether or not ITS has confirmed the company.
+ */
+const NO_HOURS_NEXT = "Nobody on the interview has hours to offer, so set a date and time, or decide.";
+
+/**
  * The card's sentence, first match wins: where new times stand once an interview carries them, then the automatic set
  * waiting for its day or for the ITS check, then what the person chose. `round` is the interview's title, said in lower
  * case mid-sentence as the candidate's emails say it. `companyConfirmed` (GET /companies/current/new-times): while ITS
  * has not confirmed the company (false), nothing goes to anyone automatically and the team's send is refused, so the
  * card says that instead of offering either; unknown (undefined) says what it always did. `decideBelow`: the decision
  * card shows under this one (the missed interview is still undecided); otherwise a no-show's card points to the stage at
- * the top.
+ * the top. `c.noHours`: someone on the interview has no hours to offer, so wherever the card would offer new times it says
+ * to set a date and time instead (10 November 2026); the rest is as before.
  */
-export function cancelledBody(input: { firstName: string; round: string; c: Pick<CancelledView, "reason" | "auto" | "times" | "lastSentAt">; companyConfirmed?: boolean | null; decideBelow?: boolean }): string {
+export function cancelledBody(input: { firstName: string; round: string; c: Pick<CancelledView, "reason" | "auto" | "times" | "lastSentAt" | "noHours">; companyConfirmed?: boolean | null; decideBelow?: boolean }): string {
   const { firstName, c } = input;
   const round = titleMidSentence(input.round);
   const unconfirmed = input.companyConfirmed === false;
+  const noHours = !!c.noHours;
   if (c.times === "preparing") return `Getting new times ready. ${firstName} gets them by email as soon as there are times to offer from the interviewers' calendars.`;
   if (c.times === "held") return "New times are ready. The email waits until ITS confirms your company.";
   if (c.times === "out") return `New times went out${c.lastSentAt ? ` on ${shortDay(c.lastSentAt)}` : ""}. They stay under Cancelled until they pick one.`;
   if (c.times === "not_reached") return "The email with new times did not reach them. Offer the times by phone, or pick one for them from the interview page.";
-  if (c.times === "expired") return unconfirmed ? `The new times passed without a pick. Nothing more goes to them until ITS confirms your company. ${AFTER_CHECK}` : "The new times passed without a pick. Send new times again, or decide.";
+  if (c.times === "expired") return noHours ? "The new times passed without a pick. Set a date and time, or decide." : unconfirmed ? `The new times passed without a pick. Nothing more goes to them until ITS confirms your company. ${AFTER_CHECK}` : "The new times passed without a pick. Send new times again, or decide.";
   if (c.auto.state === "waiting") {
     return unconfirmed
       ? `New times are due to go to them automatically on ${promisedDay(c.auto)}, but nothing goes until ITS confirms your company again, so they may go later than that. You can stop the automatic set.`
-      : `New times go to them automatically on ${promisedDay(c.auto)}, as your settings say. Send them now instead, or stop the automatic set.`;
+      : `New times go to them automatically on ${promisedDay(c.auto)}, as your settings say. ${noHours ? "Set a date and time instead" : "Send them now instead"}, or stop the automatic set.`;
   }
   if (c.auto.state === "waiting_check") return `New times were due on ${promisedDay(c.auto)}. They wait until ITS confirms your company again.`;
-  if (c.reason === "not_interested") return `They told us they are no longer interested in this interview. Nothing goes to them automatically. ${unconfirmed ? AFTER_CHECK : "You can still send new times, or decide."}`;
+  if (c.reason === "not_interested") return `They told us they are no longer interested in this interview. Nothing goes to them automatically. ${noHours ? "You can still set a date and time, or decide." : unconfirmed ? AFTER_CHECK : "You can still send new times, or decide."}`;
   if (c.reason === "no_show") {
     const decide = input.decideBelow ? "decide below" : "choose their next stage at the top";
-    return `The ${round} was booked and they did not come. Nothing goes to them automatically. ${unconfirmed ? `You can send new times for the same round once ITS confirms your company, or ${decide}.` : `Send new times for the same round, or ${decide}.`}`;
+    return `The ${round} was booked and they did not come. Nothing goes to them automatically. ${noHours ? `Set a date and time for the same round, or ${decide}.` : unconfirmed ? `You can send new times for the same round once ITS confirms your company, or ${decide}.` : `Send new times for the same round, or ${decide}.`}`;
   }
   // Nobody has hours to offer times from, so the team's send is refused: it never invites one. A person sets the time.
   if (c.auto.reason === "no_hours") return `${c.auto.reasonText} Or decide.`;
+  if (noHours) return [c.auto.reasonText, NO_HOURS_NEXT].filter(Boolean).join(" ");
   if (unconfirmed) return c.auto.reasonText ? `${c.auto.reasonText} ${AFTER_CHECK}` : "Nothing goes to them automatically until ITS confirms your company. You can send new times after that, or decide.";
   return [c.auto.reasonText, "Send new times when you are ready, or decide."].filter(Boolean).join(" ");
 }
@@ -111,11 +120,12 @@ export const HOLD_ENDS_CANCELLED = "Putting them on hold takes them out of Cance
 
 /**
  * The Interviews page's "Send new times" card: why they are under Cancelled, and what a send does. While ITS has not
- * confirmed the company (`companyConfirmed` false) the send is refused, so the card says when it can go instead.
+ * confirmed the company (`companyConfirmed` false) the send is refused, so the card says when it can go instead. With nobody's
+ * hours to offer (`noHours`) no send can work, so the card says to set a date and time, and offers only that (10 November 2026).
  */
-export function interviewNewTimesText(firstName: string, reason: CancelledReason, companyConfirmed?: boolean | null): string {
+export function interviewNewTimesText(firstName: string, reason: CancelledReason, companyConfirmed?: boolean | null, noHours?: boolean): string {
   const why = reason === "asked_new_times" ? "cancelled and asked for new times" : reason === "not_interested" ? "cancelled and is no longer interested" : "did not come";
-  return `${firstName} ${why}. ${companyConfirmed === false ? AFTER_CHECK : "New times go out for the same round."}`;
+  return `${firstName} ${why}. ${noHours ? "Nobody on the interview has hours to offer, so set a date and time." : companyConfirmed === false ? AFTER_CHECK : "New times go out for the same round."}`;
 }
 
 /**

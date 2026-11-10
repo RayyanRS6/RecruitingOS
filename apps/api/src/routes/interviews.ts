@@ -228,8 +228,12 @@ interviewRoutes.get("/:id", requireTenant, async (c) => {
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [iv] = await tx.select().from(interviews).where(and(eq(interviews.id, c.req.param("id")), eq(interviews.companyId, t.companyId))).limit(1);
     if (!iv) return null;
-    const s = await summary(tx, iv);
+    const followUps = await activeFollowUpsFor(tx, [iv.applicationId]);
+    const s = await summary(tx, iv, followUps);
     if (t.role === "interviewer" && !s.participants.some((p) => p.userId === t.userId)) return null;
+    // Under Cancelled with someone on the interview who has no hours: "Send new times" would be refused (10 November 2026).
+    const view = followUps.get(iv.applicationId);
+    const followUp = s.followUp && view ? { ...s.followUp, noHours: await interviewHasNoHours(tx, { companyId: t.companyId, interviewId: view.currentInterviewId ?? view.interviewId }) } : s.followUp;
     const timeline = await tx.select().from(events).where(and(eq(events.subjectType, "interview"), eq(events.subjectId, iv.id))).orderBy(desc(events.occurredAt)).limit(100);
     const sources = [];
     for (const p of s.participants) {
@@ -240,7 +244,7 @@ interviewRoutes.get("/:id", requireTenant, async (c) => {
     // The interviewer's brief (F7): the round, what it covers, what the evidence says so far; pay only for roles that may see it.
     const brief = await interviewBriefFor(tx, { interview: iv, viewerRole: t.role });
     // `candidateEmail` (on every summary): what became of the email about it, so the sheet says when they have not been told.
-    return { ...s, timeline, availabilitySources: sources, brief };
+    return { ...s, followUp, timeline, availabilitySources: sources, brief };
   });
   if (!row) throw new HttpError(404, "not_found", "Interview not found.");
   return c.json(row);

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, DecisionMessagePreviewRequest, SendClosingMessage, RecordOfferMade, AiInterviewGroup, importanceOf, scoreRank, type ActiveMark, type AssessmentFlagKind, type CancelledReason, type CandidateNotice, type ClosingMessagePreview, type DecisionMessagePreview, type PoolAnswer } from "@ros/contracts";
-import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, applicationAnswerSentences, createEscalation, hiddenTextNoteOf, maskCandidateLinks, poolQuestions, resolveApplyMode, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents, writtenQuestionsOf } from "@ros/core";
+import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, applicationAnswerSentences, createEscalation, hiddenTextNoteOf, inCancelled, maskCandidateLinks, poolQuestions, resolveApplyMode, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents, writtenQuestionsOf } from "@ros/core";
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { aiInterviewsFor } from "../services/screens";
@@ -13,7 +13,7 @@ import { applyBatch, previewBatch } from "../services/review-apply";
 import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
 import { COMPARE_MAX, compareCandidates } from "./compare";
 import { armClosingDate, interviewsBeingPrepared, interviewsLapsedOnAllowance } from "@ros/workflows";
-import { readingRunIds, untoldFallbackAt, workingDayRulesFor } from "@ros/agents";
+import { interviewHasNoHours, readingRunIds, untoldFallbackAt, workingDayRulesFor } from "@ros/agents";
 import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/publishing";
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
@@ -736,7 +736,9 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const now = c.get("container").engine.clock();
     // Under "No AI interview yet" (R20-7): where they stand with it, and whether "Send a reminder" is offered now.
     const aiInterview = (await aiInterviewsFor(tx, [app], now)).get(app.id) ?? null;
-    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, followUp, interviewPreparing: (await interviewsBeingPrepared(tx, [app.id])).has(app.id), aiInterview, ...(await undoFacts(tx, app)) });
+    // Under Cancelled with someone on the interview who has no hours to offer: "Send new times" would be refused (10 November 2026).
+    const noHours = !!followUp && inCancelled(app.stage, followUp) && (await interviewHasNoHours(tx, { companyId: t.companyId, interviewId: followUp.currentInterviewId ?? followUp.interviewId }));
+    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, followUp, interviewPreparing: (await interviewsBeingPrepared(tx, [app.id])).has(app.id), aiInterview, noHours, ...(await undoFacts(tx, app)) });
     // What became of the email about a booked time: the panel says when they have not been told.
     const emailStates = await candidateEmailStates(tx, { interviews: ivs, hasEmail: !!cand?.email });
     const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
@@ -749,7 +751,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     // its working days and the ITS holidays, as the daily check counts them: from the unlock, for someone a change of plan opened.
     const untoldFallbackOn = DECISION_STAGES.includes(app.stage) && app.toldState === "not_told" && !decisionMessageWaiting && !cand?.anonymizedAt ? untoldFallbackAt(new Date(waitingSince(app.rejectedAt ?? app.stageChangedAt, (await unlockedAtFor(tx, [app.id])).get(app.id))), await workingDayRulesFor(tx, app.companyId, now)).day : null;
     const strip = ownerStage(app, mark, followUp);
-    const cancelled = strip === "cancelled" && followUp ? cancelledView(followUp, { timeZone: await companyTimeZone(tx, app.companyId) }) : null;
+    const cancelled = strip === "cancelled" && followUp ? { ...cancelledView(followUp, { timeZone: await companyTimeZone(tx, app.companyId) }), noHours } : null;
     // The match score with its breakdown (founder decision B2), the must-have line, where the pool board puts them and
     // the version label, from the same assessments and rules as the list and the board.
     const [roleRow] = await tx.select({ id: roles.id, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, app.roleId)).limit(1);

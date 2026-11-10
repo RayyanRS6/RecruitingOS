@@ -587,9 +587,10 @@ function CancelledCard({ a, c, roleId, onSetTime }: { a: ApplicationDetail; c: C
     },
   });
   const can = (x: ApplicationDetail["allowedActions"][number]) => a.allowedActions.includes(x);
-  // Before ITS confirms the company nothing goes automatically and a send is refused, so the card says so and offers no send.
+  // Before ITS confirms the company nothing goes automatically and a send is refused, so the card says so and offers no send;
+  // nor with nobody's hours to offer (`noHours`, 10 November 2026): "Set a date and time" is the way on.
   const companyConfirmed = setting.data?.companyConfirmed;
-  const maySend = can("send_new_times") && companyConfirmed !== false;
+  const maySend = can("send_new_times") && companyConfirmed !== false && !c.noHours;
   // Waits on the team only when nothing is on its way to them: no set waiting for its day, no times being prepared or out.
   const parked = c.auto.state === "waiting" || c.auto.state === "waiting_check";
   const needsYou = !parked && (c.times === "none" || c.times === "expired" || c.times === "not_reached");

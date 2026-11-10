@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { titleMidSentence } from "../../packages/contracts/src/domain/interview";
 import { autoReasonText } from "../../packages/core/src/interview-followups";
@@ -152,6 +153,32 @@ describe("the candidate panel's card", () => {
     // before ITS confirms the company the send is refused, so the Interviews page never offers it
     expect(interviewNewTimesText("Ana", "asked_new_times", false)).toBe("Ana cancelled and asked for new times. You can send new times once ITS confirms your company, or decide.");
     expect(interviewNewTimesText("Cleo", "no_show", true)).toBe("Cleo did not come. New times go out for the same round.");
+  });
+
+  it("when nobody on the interview has hours, never offers new times, which would be refused: it says to set a date and time (10 November 2026)", () => {
+    const noHours = (over: Parameters<typeof view>[0] = {}) => view({ ...over, noHours: true });
+    expect(body(noHours())).toBe("Nobody on the interview has hours to offer, so set a date and time, or decide.");
+    expect(body(noHours({ auto: { state: "none", reason: "switched_off", reasonText: "Automatic new times are off in Settings." } }))).toBe("Automatic new times are off in Settings. Nobody on the interview has hours to offer, so set a date and time, or decide.");
+    // the reason the automatic set never armed says it already
+    expect(body(noHours({ auto: { state: "none", reason: "no_hours", reasonText: "Nobody on the interview has hours to offer, so nothing goes automatically: set a date and time from their page." } }))).toBe("Nobody on the interview has hours to offer, so nothing goes automatically: set a date and time from their page. Or decide.");
+    expect(body(noHours({ reason: "not_interested", auto: { reason: "not_asked" } }))).toBe("They told us they are no longer interested in this interview. Nothing goes to them automatically. You can still set a date and time, or decide.");
+    expect(cancelledBody({ firstName: "Ana", round: "Working interview", c: noHours({ reason: "no_show", auto: { reason: "no_show" } }), decideBelow: true })).toBe("The working interview was booked and they did not come. Nothing goes to them automatically. Set a date and time for the same round, or decide below.");
+    expect(body(noHours({ times: "expired" }))).toBe("The new times passed without a pick. Set a date and time, or decide.");
+    expect(body(noHours({ auto: { state: "waiting", dueAt: "2026-10-15T16:00:00.000Z", dueDay: "2026-10-15" } }))).toBe("New times go to them automatically on Thursday, October 15, as your settings say. Set a date and time instead, or stop the automatic set.");
+    // before ITS confirms the company too: new times would still find nobody's hours
+    expect(cancelledBody({ firstName: "Ana", round: "Working interview", c: noHours(), companyConfirmed: false })).toBe("Nobody on the interview has hours to offer, so set a date and time, or decide.");
+    for (const reason of ["asked_new_times", "not_interested", "no_show"] as const) {
+      for (const c of [noHours({ reason }), noHours({ reason, times: "expired" })]) expect(body(c), reason).not.toMatch(/send new times|Send new times|Send them now|New times go out/);
+    }
+    // the Interviews page's card: the same, and never "New times go out for the same round."
+    expect(interviewNewTimesText("Ana", "asked_new_times", true, true)).toBe("Ana cancelled and asked for new times. Nobody on the interview has hours to offer, so set a date and time.");
+    expect(interviewNewTimesText("Cleo", "no_show", undefined, true)).toBe("Cleo did not come. Nobody on the interview has hours to offer, so set a date and time.");
+    expect(interviewNewTimesText("Ana", "asked_new_times", false, true)).toBe("Ana cancelled and asked for new times. Nobody on the interview has hours to offer, so set a date and time.");
+    // the page offers "Set a date and time" alone then: no "Send new times" button, as on the panel
+    const sheet = readFileSync(new URL("../../apps/web/src/pages/Interviews.tsx", import.meta.url), "utf8");
+    expect(sheet).toContain("companyConfirmed === false || i.followUp.noHours ? null : <Button");
+    const panel = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/needs-you.tsx", import.meta.url), "utf8");
+    expect(panel).toContain('const maySend = can("send_new_times") && companyConfirmed !== false && !c.noHours;');
   });
 
   it("says an interview's title mid-sentence in lower case, keeping names, places and acronyms", () => {

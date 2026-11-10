@@ -44,8 +44,11 @@ export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "intervi
  * reminder" (`remind_screen`) follows its `canRemind`.
  * `lockedAt`: they are past the plan's candidates per job (the plans of 5 November 2026, Rule 2): `NOT_WHILE_LOCKED` waits
  * for an upgrade, whoever is reading.
+ * `noHours`: under Cancelled, someone on the interview has no hours to offer (`interviewHasNoHours`), so "Send new times"
+ * would be refused with `no_hours` and is not offered; a person sets a date and time (10 November 2026). Read only where the
+ * panel is drawn (GET /applications/:id); the send itself checks it again.
  */
-export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean; aiInterview?: AiInterviewView | null; lockedAt?: string | null };
+export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean; aiInterview?: AiInterviewView | null; lockedAt?: string | null; noHours?: boolean };
 
 /** Why a choice is not available right now, in the reader's words; the page puts it on the disabled button. */
 export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
@@ -93,6 +96,8 @@ const CAPABILITIES = Object.keys(CAPABILITY) as ApplicationCapability[];
 const TEAM_ROLES: MembershipRole[] = ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"];
 const ROLE_WORDS: Record<MembershipRole, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "HR", recruiter: "a recruiter", interviewer: "an interviewer" };
 const CHECK_ELIGIBILITY_FIRST = "Check their eligibility answer first: keep them in or decline.";
+/** Why "Send new times" is not offered with nobody's hours: the send's own refusal (`NO_HOURS` in interview-create.ts, which this file cannot import without a cycle). */
+const NO_HOURS = "Nobody on this interview has hours to offer. Set a date and time instead.";
 const INTERVIEW_PREPARING = "Their AI interview is being prepared, and its link goes to them by itself.";
 
 /**
@@ -152,7 +157,7 @@ function allowedByState(f: ApplicationFacts): ApplicationCapability[] {
   if (decided(f) && untold(f) && !f.decisionMessagePending && !f.roleClosed && !eligibilityDecline(f) && reopensAt(f)) out.push("undo_decision");
   // Under Cancelled (founder decisions 1A to 4A): new times while nothing is being prepared or out to them, and stopping
   // an automatic set still waiting for its day. Whether ITS has confirmed the company is checked by the send itself.
-  if (f.followUp && !terminal && CANCEL_STAGES.includes(f.stage as ApplicationStage) && !f.followUp.interviewOpen) out.push("send_new_times");
+  if (f.followUp && !terminal && CANCEL_STAGES.includes(f.stage as ApplicationStage) && !f.followUp.interviewOpen && !f.noHours) out.push("send_new_times");
   if (f.followUp && followUpParked(f.followUp)) out.push("stop_new_times");
   // "Send a reminder" under "No AI interview yet" (R20-7): an open link, nothing sent about it in the last day.
   if (!terminal && f.aiInterview?.canRemind) out.push("remind_screen");
@@ -206,7 +211,7 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
         : eligibilityDecline(f) ? "Use Review anyway: it reads their application again."
         : "This decision can't be taken back here.";
     case "send_new_times":
-      return f.followUp?.interviewOpen && CANCEL_STAGES.includes(f.stage as ApplicationStage) ? "New times are already being prepared or are out to them." : "Only for someone under Cancelled.";
+      return f.followUp?.interviewOpen && CANCEL_STAGES.includes(f.stage as ApplicationStage) ? "New times are already being prepared or are out to them." : f.noHours && f.followUp && CANCEL_STAGES.includes(f.stage as ApplicationStage) ? NO_HOURS : "Only for someone under Cancelled.";
     case "stop_new_times":
       return "Nothing is due to go to them automatically.";
     case "remind_screen":
@@ -303,11 +308,12 @@ export function applicationFactsFrom(
   interviewRows: Array<{ status: string; decision: string | null }>,
   role?: MembershipRole | null,
   triage?: { result: { unknowns: unknown[] } } | null,
-  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean; aiInterview?: AiInterviewView | null } = {},
+  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean; interviewPreparing?: boolean; aiInterview?: AiInterviewView | null; noHours?: boolean } = {},
 ): ApplicationFacts {
   return {
     ...(extra.decidedFrom !== undefined ? { decidedFrom: extra.decidedFrom } : {}),
     ...(extra.undoToCancelled ? { undoToCancelled: true } : {}),
+    ...(extra.noHours ? { noHours: true } : {}),
     ...(extra.interviewPreparing ? { interviewPreparing: true } : {}),
     ...(extra.aiInterview ? { aiInterview: extra.aiInterview } : {}),
     ...(app.lockedAt ? { lockedAt: app.lockedAt } : {}),
