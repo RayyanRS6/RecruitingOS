@@ -13,7 +13,7 @@ import { interviewNewTimesText } from "../cancelled";
 import { DECISION_WORDS, candidateEmailLine, formFromBooked, freshForm, interviewWord, shortWhen, type SetTimeForm as SetTimeFormState } from "../interview-time";
 import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
-import { cancelReasonLabel, interviewCancelToast, newTimesToast } from "../talent-actions";
+import { bookOnBehalfToast, cancelReasonLabel, interviewCancelToast, newTimesToast } from "../talent-actions";
 import { againChoice, tookPlaceCard } from "../interview-defaults";
 import { MyNote, useNotes } from "./candidate-panel/notes";
 
@@ -160,7 +160,7 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
   const cancel = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean; interviewersTold?: boolean; candidateNotice?: string }>(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async (r) => { const t = interviewCancelToast(r); toast(t.title, t.detail); setChanging(null); setReason(""); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
   const outcome = useMutation({ mutationFn: (o: string) => api.post(`/api/v1/interviews/${id}/outcome`, { outcome: o }), onSuccess: async () => { toast("Recorded."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
   // A time that clashes with another interview booked since is refused with a plain message (409 slot_taken).
-  const book = useMutation({ mutationFn: (slotId: string) => api.post<{ status?: string }>(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async (r) => { toast(r?.status === "scheduled" ? "Booked on the candidate's behalf." : "Booking that time for them.", r?.status === "scheduled" ? undefined : "It shows here as booked in a moment."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
+  const book = useMutation({ mutationFn: (slotId: string) => api.post<{ status?: string; booking?: string }>(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async (r) => { const t = bookOnBehalfToast(r); toast(t.title, t.detail); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
   // Someone under Cancelled (founder decision 2A): the same interview reopened for new times, or a new one for the same round after a no-show.
   const newTimes = useMutation({
     mutationFn: (applicationId: string) => api.post<SendNewTimesResult>(`/api/v1/applications/${applicationId}/new-times`, {}),

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SetInterviewTime } from "../../packages/contracts/src/domain/interview";
 import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
 import { DECISION_WORDS, bookLabel, candidateEmailLine, defaultDuration, durationChoices, durationWords, formFromBooked, freshForm, interviewLine, interviewNeedingTime, interviewWord, placeKindFor, setTimeBody, setTimeMissing, timeLabel, todayIn, whenLine, type SetTimeForm } from "../../apps/web/src/interview-time";
-import { interviewSetToast, pickTimesToast } from "../../apps/web/src/talent-actions";
+import { bookOnBehalfToast, interviewSetToast, pickTimesToast } from "../../apps/web/src/talent-actions";
 
 /**
  * "Set a date and time" (the owner's words, 6 November 2026: "nadine sets date and time from the shortlisted candidates
@@ -135,6 +135,13 @@ describe("what the screen says about the email: never that it left", () => {
     // 11 November 2026: it said "Moved. The email to Maria is on its way.")
     expect(interviewSetToast({ unchanged: true, startsAt: "2026-11-17T22:30:00.000Z", timezone: "America/Los_Angeles" }, "Maria", { moving: true })).toEqual({ title: "Nothing changed.", detail: "It is still booked for Tue, Nov 17, 2:30 PM. No email was sent." });
     expect(interviewSetToast({ unchanged: true }, "Maria", { moving: true })).toEqual({ title: "Nothing changed.", detail: "It is still booked as it was. No email was sent." });
+  });
+
+  it("toasts a time booked for them in the API's own word: booked, being booked, or waiting for the ITS check (the release review, 11 November 2026)", () => {
+    expect(bookOnBehalfToast({ status: "scheduled", booking: "direct" })).toEqual({ title: "Booked on the candidate's behalf." });
+    expect(bookOnBehalfToast({ status: "scheduling", booking: "workflow" })).toEqual({ title: "Booking that time for them.", detail: "It shows here as booked in a moment." });
+    // nothing books it until ITS confirms the company: never "in a moment"
+    expect(bookOnBehalfToast({ status: "scheduling", booking: "held" })).toEqual({ title: "Saved.", detail: "It is booked as soon as ITS confirms your company." });
     expect(pickTimesToast("Maria", "confirmed")).toEqual({ title: "Times are being worked out.", detail: "Maria gets them by email to pick one." });
     expect(pickTimesToast("Maria", "waiting").detail).toBe("They go to Maria by email once ITS confirms your company.");
   });

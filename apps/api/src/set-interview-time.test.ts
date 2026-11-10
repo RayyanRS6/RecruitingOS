@@ -1544,6 +1544,35 @@ describe("a person sets the date and time", () => {
       }
     });
 
+    /**
+     * The release review (11 November 2026, L2-8): on the folded pick-a-time path, times worked out while ITS has not confirmed
+     * the company wait with their email, and the run books nothing until ITS confirms. "Book this for them" then answered as if
+     * a run would book it in a moment.
+     */
+    it("a time booked for them while the times wait for the ITS check is saved, says it waits for ITS, and is booked once ITS confirms", async () => {
+      const kai = await signInAs(container, app, { companyId, role: "hiring_manager", email: "kai@settime.test", name: "Kai Moss" });
+      const kaiId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "kai@settime.test")))[0].id;
+      expect((await json(kai, "PUT", "/api/v1/me/availability", { timezone: TZ, windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 12 })).status).toBe(200);
+      const eve = await apply("Eve", "Held");
+      await its(false);
+      try {
+        const { id } = await approveFor(eve, { interviewerUserIds: [kaiId] });
+        const offered = await interview(id);
+        expect(offered.status).toBe("scheduling");
+        expect((await emailOf(`slots:${id}:${offered.attempt}`)).status).toBe("held");
+        const r = await json(owner, "POST", `/api/v1/interviews/${id}/book-on-behalf`, { slotId: offered.offeredSlots[0]!.id, note: "chosen with the candidate by phone" });
+        expect(r.status, await r.clone().text()).toBe(200);
+        expect(await r.json()).toMatchObject({ status: "scheduling", booking: "held" });
+        await container.drain();
+        expect(await interview(id)).toMatchObject({ status: "scheduling", selectedSlot: { id: offered.offeredSlots[0]!.id } });
+      } finally {
+        await its(true);
+      }
+      // ITS confirms: the times' email goes, and the time chosen with them is booked
+      const booked = await interview((await container.db.select({ id: interviews.id }).from(interviews).where(eq(interviews.applicationId, eve.id)))[0].id);
+      expect(booked).toMatchObject({ status: "scheduled" });
+    });
+
     it("the old path's held offer is withdrawn when a person sets the time instead; a held reminder of a moved time, and a time that has passed, go nowhere", async () => {
       const wes = await signInAs(container, app, { companyId, role: "hiring_manager", email: "wes@settime.test", name: "Wes Park" });
       const wesId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "wes@settime.test")))[0].id;

@@ -350,11 +350,12 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
 const BOOKS_A_PICK = ["offer_slots", "after_offer", "remind", "expire_offer", "book"];
 
 /**
- * Where a picked time goes: "workflow" (a run books it), "direct" (booked straight away by a new run), "taken" (it
- * clashes with another interview booked meanwhile), "stale" (it has passed, or starts within the hour). For the last
- * two nothing is written and the caller says so plainly.
+ * Where a picked time goes: "workflow" (a run books it), "held" (the run waiting with the times for ITS to confirm the
+ * company books it once ITS does, and not before: the release review, 11 November 2026), "direct" (booked straight away by
+ * a new run), "taken" (it clashes with another interview booked meanwhile), "stale" (it has passed, or starts within the
+ * hour). For the last two nothing is written and the caller says so plainly.
  */
-export type PickRoute = "workflow" | "direct" | "taken" | "stale";
+export type PickRoute = "workflow" | "held" | "direct" | "taken" | "stale";
 
 /**
  * The scheduling run working on this interview's current attempt, found by what it is about and the attempt in its
@@ -387,6 +388,8 @@ export async function routePick(tx: Tx, input: { iv: typeof interviews.$inferSel
   const keys = (run?.wait as { keys?: unknown } | null)?.keys;
   const wokenNow = input.woken > 0 && run?.status === "waiting" && Array.isArray(keys) && keys.includes(key);
   if (wokenNow) return "workflow";
+  // The times wait with their email for the ITS check: the run reads the pick once ITS confirms, and books nothing before.
+  if (run?.status === "waiting" && run.currentStep === "offer_slots" && (run.state as { heldForCheck?: boolean } | null)?.heldForCheck) return "held";
   if (run && ((run.status === "waiting" && run.currentStep === "offer_slots") || (run.status === "running" && BOOKS_A_PICK.includes(run.currentStep ?? "")))) return "workflow";
   if (await slotTakenSince(tx, input.iv, input.slot)) return "taken";
   return "direct";
@@ -423,8 +426,8 @@ export async function bookPickNow(tx: Tx, container: Container, input: { iv: typ
  * The owner picks a time for the candidate after a phone call; recorded as a human action and audited as a booking.
  * Booked by the run that waits for a pick, or straight away when none does (`routePick`); a time that clashes with
  * another interview booked since is refused with a plain message, before any run is told, so the person on the phone
- * hears it at once (a run would find it only as it books, and offer the times again). `booking` says which ("workflow"
- * or "direct").
+ * hears it at once (a run would find it only as it books, and offer the times again). `booking` says which ("workflow",
+ * "direct", or "held": saved, and booked once ITS confirms the company).
  */
 interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
   const t = c.get("tenant")!;

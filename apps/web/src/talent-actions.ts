@@ -334,6 +334,17 @@ export function interviewSetToast(r: { candidateNotice?: "queued" | "held" | "no
 }
 
 /**
+ * The toast after "Book this for them" (a time chosen with the candidate by phone, on the folded pick-a-time path), in the
+ * API's own word (`booking`): booked now, booked by the run in a moment, or saved while the times wait for the ITS check,
+ * which books nothing until ITS confirms the company (the release review, 11 November 2026).
+ */
+export function bookOnBehalfToast(r: { status?: string; booking?: string } | null | undefined): ToastParts {
+  if (r?.status === "scheduled") return { title: "Booked on the candidate's behalf." };
+  if (r?.booking === "held") return { title: "Saved.", detail: "It is booked as soon as ITS confirms your company." };
+  return { title: "Booking that time for them.", detail: "It shows here as booked in a moment." };
+}
+
+/**
  * The toast after "Offer times to pick from" (the old path, folded under "Or let them pick from your free times"): the
  * times are worked out from the interviewers' hours or calendars, then emailed; while ITS has not confirmed the company the
  * email waits for it.
