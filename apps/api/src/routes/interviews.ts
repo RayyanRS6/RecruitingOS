@@ -414,6 +414,9 @@ interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
   const done = await withTenant(container.db, t.companyId, async (tx) => {
     // the application, then the interview itself, locked: a new set of times or a booking committed meanwhile is seen
     const { iv, app } = await lockedInterview(tx, { companyId: t.companyId, interviewId: c.req.param("id") });
+    // Someone locked, under a grant naming them or break glass, however the interview got there: the booking would give its
+    // interviewers their name by email and calendar, as setting one up would (`createApprovedInterview`).
+    if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
     if (iv.status !== "scheduling") throw new HttpError(409, "interview_not_schedulable", "Times are not being offered right now.");
     const slot = iv.offeredSlots.find((s) => s.id === body.slotId);
     if (!slot) throw new HttpError(400, "slot_unknown", "That time is not one of the offered slots.");
@@ -456,6 +459,9 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
   const actor = actorOf(c);
   const done = await withTenant(container.db, t.companyId, async (tx) => {
     const { iv, app } = await lockedInterview(tx, { companyId: t.companyId, interviewId: c.req.param("id") });
+    // Someone locked is refused first, as setting up an interview refuses them (`createApprovedInterview`): the booking would
+    // give its interviewers their name by email and calendar, under a grant naming them or break glass alike.
+    if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
     if (!["proposed", "scheduling", "scheduled", "offer_expired"].includes(iv.status)) throw new HttpError(409, "interview_not_schedulable", `This interview is ${iv.status}.`);
     const [role] = await tx.select({ status: roles.status }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
     refuseClosedRole(role?.status);

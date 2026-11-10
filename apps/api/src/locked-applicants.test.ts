@@ -3,7 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
 import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
 import { CANDIDATE_WROTE_BACK, CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileNoDateLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
-import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, inboundEmails, interviews, jobs, lowercaseToken, notifications, plans, policies, postings, randomToken, recruiterEscalations, roles, rowsOf, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
+import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, inboundEmails, interviewParticipants, interviews, jobs, lowercaseToken, notifications, plans, policies, postings, randomToken, recruiterEscalations, roles, rowsOf, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider, type MemoryStorageAdapter } from "@ros/integrations";
 import { DISCARD_OBJECT_JOB_KIND, UNLOCK_INTERVIEW_DAYS, discardUnusedObject, startInterviewAgain, unlockApplicants } from "@ros/workflows";
 import { createApp } from "./app";
@@ -1050,6 +1050,34 @@ describe("locked candidates", () => {
       expect(await container.db.select().from(interviews).where(eq(interviews.applicationId, row.id))).toEqual([]);
       expect((await runsOf(job.id)).length).toBe(aiBefore);
       expect((await applicationOf(row.id)).stage).toBe(row.stage);
+    }, 120_000);
+
+    it("an interview on them, however it got there, is not booked under the grant either: setting its date and time, or booking an offered time for them, answers 409 not_while_locked, and nothing is booked or sent", async () => {
+      const { job, row, recruiter } = await underGrant("Ivo");
+      const owner = await read<{ user: { id: string } }>(await json(job.cookie, "GET", "/api/v1/auth/me"));
+      // What a locked person cannot have by the rules, but a route must not trust: a step a booking moves on from, and an
+      // interview with a time offered and an interviewer on it.
+      await container.db.update(applications).set({ stage: "screen_complete" }).where(eq(applications.id, row.id));
+      const startsAt = Date.now() + 3 * DAY;
+      const slot = { id: "planted-slot", startsAt: new Date(startsAt).toISOString(), endsAt: new Date(startsAt + 30 * 60_000).toISOString(), interviewerUserIds: [owner.user.id], source: "declared" as const };
+      const [iv] = await container.db.insert(interviews).values({ companyId: job.id, applicationId: row.id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 30, status: "scheduling", offeredSlots: [slot], timezone: "America/Los_Angeles" }).returning();
+      await container.db.insert(interviewParticipants).values({ companyId: job.id, interviewId: iv.id, userId: owner.user.id, role: "interviewer", status: "invited" });
+      const scheduling = async () => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "schedule_interview"))).filter((r) => r.subject.id === iv.id);
+      // whatever the grant's own steps left queued goes first, so what is counted below is only what the presses send
+      await container.drain();
+      const mail = (container.integrations.email as FakeEmailAdapter).sent.length;
+      const setTime = { date: new Date(Date.now() + 30 * DAY).toISOString().slice(0, 10), time: "14:00", durationMinutes: 30, place: { kind: "phone" } };
+      for (const [path, body] of [[`/api/v1/interviews/${iv.id}/set-time`, setTime], [`/api/v1/interviews/${iv.id}/book-on-behalf`, { slotId: slot.id, note: "Booked on the phone." }]] as const) {
+        const refused = await json(recruiter, "POST", path, body);
+        expect(refused.status, `${path}: ${await refused.clone().text()}`).toBe(409);
+        expect((await read<{ error: { code: string; message: string } }>(refused)).error, path).toMatchObject({ code: "not_while_locked", message: NO_WORK_WHILE_LOCKED });
+      }
+      await container.drain();
+      const [after] = await container.db.select().from(interviews).where(eq(interviews.id, iv.id));
+      expect(after).toMatchObject({ status: "scheduling", attempt: iv.attempt, startsAt: null, selectedSlot: null });
+      expect((await applicationOf(row.id)).stage).toBe("screen_complete");
+      expect(await scheduling()).toEqual([]);
+      expect((container.integrations.email as FakeEmailAdapter).sent.length).toBe(mail);
     }, 120_000);
 
     it("a recruiter's notes from a call are kept as their own note with no screen, no scorecard and no AI, whatever the form says; the team reads them after an upgrade, which still starts the interview by itself", async () => {
