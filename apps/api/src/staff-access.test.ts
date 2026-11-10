@@ -322,4 +322,34 @@ describe("ITS recruiter access is explicit, scoped, time-limited and audited", (
     // a real id still reads as before
     expect((await json(owner, "GET", `/api/v1/roles/${roleInScope}`)).status).toBe(200);
   });
+
+  /**
+   * The release review (11 November 2026, L5-4): the role guard checked the id only for an interviewer's GET, so a malformed id on
+   * the new benefits route and the other /roles/:id/* routes reached a query and answered 500 "Something went wrong" with an
+   * error report. Every reader, every method, every router under /roles/:id now answers 404 first.
+   */
+  it("a malformed role id is a plain not-found on every route under /roles/:id, the new benefits route among them, never a 500", async () => {
+    for (const bad of ["not-a-uuid", "12345", `${roleInScope}x`, roleInScope.toUpperCase()]) {
+      const answers: Record<string, Response> = {
+        benefits: await json(owner, "POST", `/api/v1/roles/${bad}/packets/1/benefits`, { text: "Health, dental and vision." }),
+        approve: await json(owner, "POST", `/api/v1/roles/${bad}/approve`, { version: 1 }),
+        outcome: await json(owner, "POST", `/api/v1/roles/${bad}/outcome`, { outcome: "filled", confirm: true }),
+        applications: await json(owner, "GET", `/api/v1/roles/${bad}/applications`),
+        packets: await json(owner, "POST", `/api/v1/roles/${bad}/packets`, {}),
+        closingDate: await json(owner, "POST", `/api/v1/roles/${bad}/closing-date`, { closesOn: null }),
+        board: await json(owner, "GET", `/api/v1/roles/${bad}/board`),
+        interviewPlan: await json(owner, "GET", `/api/v1/roles/${bad}/interview-plan`),
+        postings: await json(owner, "GET", `/api/v1/roles/${bad}/postings`),
+        report: await json(owner, "GET", `/api/v1/roles/${bad}/report`),
+        compare: await json(owner, "GET", `/api/v1/roles/${bad}/compare`),
+        interviews: await json(owner, "GET", `/api/v1/roles/${bad}/interviews`),
+        newTimes: await json(owner, "POST", `/api/v1/roles/${bad}/new-times`, {}),
+        screening: await json(owner, "GET", `/api/v1/roles/${bad}/screening`),
+      };
+      for (const [route, r] of Object.entries(answers)) {
+        expect(r.status, `${route} ${bad}`).toBe(404);
+        expect(((await r.json()) as { error: { code: string; message: string } }).error, `${route} ${bad}`).toMatchObject({ code: "not_found", message: "Role not found." });
+      }
+    }
+  });
 });

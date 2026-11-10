@@ -135,6 +135,10 @@ const interviewerOnRole = new WeakMap<Request, Promise<boolean>>();
 export const roleScopeGuard: MiddlewareHandler<Vars> = async (c, next) => {
   const t = c.get("tenant");
   const roleId = c.req.param("id");
+  // An id not written the database's way names no role, for every reader and every method: a plain 404 before any query, never
+  // the database refusing the cast as a 500 (the release review, 11 November 2026; the rule app.ts mounts for
+  // /applications/:id and /interviews/:id). Nobody signed in to a company is left to `requireTenant`.
+  if (t && roleId && !isCanonicalId(roleId)) throw new HttpError(404, "not_found", "Role not found.");
   if (t?.staff) {
     if (roleId && !scopeAllows({ roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId }, { roleId })) throw scopeError();
   } else if (t?.role === "interviewer" && roleId && (c.req.method === "GET" || c.req.method === "HEAD")) {
