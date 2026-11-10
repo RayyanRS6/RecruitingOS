@@ -201,14 +201,15 @@ describe("the private decline step", () => {
   });
 
   it("closing a role says who moved privately, which interviews ended, and who was told only that theirs is off", () => {
-    expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 1, closingMessage: { policy: "sends" } }, undefined, true, NOW)).toEqual({ title: "Role closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. If nobody tells them first, the closing message goes by itself on Wednesday, October 21. 1 interview was cancelled; the candidate was sent a short note now saying only that it is off." });
+    // in job words, like every other button (the lead's D1, 11 November 2026)
+    expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 1, closingMessage: { policy: "sends" } }, undefined, true, NOW)).toEqual({ title: "Job closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. If nobody tells them first, the closing message goes by itself on Wednesday, October 21. 1 interview was cancelled; the candidate was sent a short note now saying only that it is off." });
     expect(closeRoleToast({ movedToTalentPool: 2, interviewsCancelled: 2, interviewOffNotes: 2 }).detail).toMatch(/2 interviews were cancelled; each candidate was sent a short note now saying only that their interview is off\.$/);
     expect(closeRoleToast({ movedToTalentPool: 3, interviewsCancelled: 3, interviewOffNotes: 2 }).detail).toMatch(/3 interviews were cancelled; the 2 candidates who had a time booked or offered were sent a short note now saying only that their interview is off\.$/);
     expect(closeRoleToast({ movedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 0 }).detail).toMatch(/1 interview was cancelled; no times had gone to the candidate, so nothing was sent about it\.$/);
     expect(closeRoleToast({ movedToTalentPool: 1 }).detail).toMatch(/^The one person still in the process moved/);
     expect(closeRoleToast({}).detail).toBe("Nobody else was still in the process.");
-    // the role page closes with any outcome, under its own title
-    expect(closeRoleToast({ movedToTalentPool: 2 }, "Role closed; the outcome is recorded with your name.").title).toBe("Role closed; the outcome is recorded with your name.");
+    // the job page closes with any outcome, under its own title
+    expect(closeRoleToast({ movedToTalentPool: 2 }, "Job closed; the outcome is recorded with your name.").title).toBe("Job closed; the outcome is recorded with your name.");
   });
 
   it("closing a role never says nothing will go by itself: the safety net (Q27) is named the way the settings run it, with its day (D-03 A)", () => {
@@ -221,7 +222,7 @@ describe("the private decline step", () => {
   });
 
   it("HR, who may close a role but not tell candidates, is told who sends the closing message instead of being asked to", () => {
-    const hr = closeRoleToast({ movedToTalentPool: 2, closingMessage: null }, "Role closed; the outcome is recorded with your name.", false, NOW).detail!;
+    const hr = closeRoleToast({ movedToTalentPool: 2, closingMessage: null }, "Job closed; the outcome is recorded with your name.", false, NOW).detail!;
     expect(hr).toBe("The 2 people still in the process moved to your talent pool, privately: nobody is told yet. An owner, admin, hiring manager or recruiter sends them the closing message; it waits on their Home page. If nobody tells them first, the closing message goes by itself on Wednesday, October 21 (or an ITS recruiter is brought in, if your settings say so).");
     expect(hr).not.toMatch(/you send/i);
   });

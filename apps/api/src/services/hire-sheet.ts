@@ -67,9 +67,10 @@ export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplica
     // five working days, or, under settings that keep these messages with a person, an ITS recruiter is brought in.
     const then = can(input.role, "application.reject") ? "and you see the closing message before it goes." : "and an owner, admin, hiring manager or recruiter sends them the closing message from their Home page.";
     const net = "If nobody tells them within 5 working days of closing, the closing message goes by itself (or an ITS recruiter is brought in, if your settings say so).";
+    // In job words, like every other button (the lead's D1, 11 November 2026).
     const words = others
-      ? `Close the role as filled. The ${others === 1 ? "1 person" : `${others} people`} still in process ${others === 1 ? "moves" : "move"} to your talent pool, privately: nobody is told at once, ${then} ${net}`
-      : "Close the role as filled. Nobody else is still in process.";
+      ? `Close the job as filled. The ${others === 1 ? "1 person" : `${others} people`} still in process ${others === 1 ? "moves" : "move"} to your talent pool, privately: nobody is told at once, ${then} ${net}`
+      : "Close the job as filled. Nobody else is still in process.";
     closeRole = { path: `/api/v1/roles/${input.roleId}/outcome`, outcome: "filled", stillInProcess: others, words };
   }
   // A recruiter given one candidate reads about nobody else.

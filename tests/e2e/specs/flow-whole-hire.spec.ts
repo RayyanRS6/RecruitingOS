@@ -217,14 +217,16 @@ test.describe("the whole hire", () => {
 
     // what about the job: close it now and tell the one still in process (Ben applied, never interviewed, so he is not a
     // backup to keep warm), or leave it open; the closing message names him before anything goes
-    const after = anaPanel.locator(".card", { has: page.getByRole("heading", { name: "Ana Holt is hired: what about the role?" }) });
+    // (in job words, like every other button: the lead's D1, 11 November 2026)
+    const after = anaPanel.locator(".card", { has: page.getByRole("heading", { name: "Ana Holt is hired: what about the job?" }) });
     await expect(after).toBeVisible({ timeout: 30_000 });
     await expect(after.getByText(/^Ana starts on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}\.$/)).toBeVisible();
-    await expect(after.getByText(/^Close the role as filled\. The 1 person still in process moves to your talent pool, privately: nobody is told at once, and you see the closing message before it goes\./)).toBeVisible();
+    await expect(after.getByText("Close the job now and tell them")).toBeVisible();
+    await expect(after.getByText(/^Close the job as filled\. The 1 person still in process moves to your talent pool, privately: nobody is told at once, and you see the closing message before it goes\./)).toBeVisible();
     await expect(after.getByRole("button", { name: "Leave it open" })).toBeVisible();
     await expectAccessible(page, "the hire's next step");
     await after.getByRole("button", { name: "Close it now" }).click();
-    await expect(toast(page, /Role closed as filled\./)).toBeVisible({ timeout: 30_000 });
+    await expect(toast(page, /Job closed as filled\./)).toBeVisible({ timeout: 30_000 });
     const closing = anaPanel.locator(".card", { has: page.getByRole("heading", { name: `Tell the people ${title} left in process` }) });
     await expect(closing).toBeVisible({ timeout: 30_000 });
     await expect(closing.getByRole("list", { name: "Who gets the closing message" }).getByText("Ben Ortiz")).toBeVisible();

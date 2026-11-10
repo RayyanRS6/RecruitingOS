@@ -393,7 +393,7 @@ export const CLOSING_SENDERS = "An owner, admin, hiring manager or recruiter";
  * carries it, says which way the safety net goes. `mayTell` is false for someone who may close a role but not tell
  * candidates a decision (HR): they are told who sends the message instead of being asked to send it.
  */
-export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Role closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
+export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Job closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
   const moved = Math.max(0, (r.movedToTalentPool ?? 0) - (r.heldEmailsAddedToTalentPool ?? 0));
   const policy = r.closingMessage?.policy ?? null;
   const net = safetyNetShort({ policy, on: safetyNetDate(now.toISOString()), what: "the closing message" });

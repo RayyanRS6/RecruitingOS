@@ -171,6 +171,9 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       const active = (await container.db.select({ id: applications.id, stage: applications.stage }).from(applications).where(eq(applications.roleId, roleId))).filter((a) => !["hired", "declined", "rejected", "withdrawn", "talent_pool"].includes(a.stage));
       expect(body.hire.closeRole).toMatchObject({ path: `/api/v1/roles/${roleId}/outcome`, outcome: "filled", stillInProcess: active.length });
       expect(body.hire.closeRole!.words).toMatch(/privately: nobody is told/);
+      // in job words, like every other button (the lead's D1, 11 November 2026)
+      expect(body.hire.closeRole!.words).toMatch(/^Close the job as filled\. /);
+      expect(body.hire.closeRole!.words).not.toMatch(/\brole\b/);
       const [offer] = await container.db.select().from(offers).where(eq(offers.applicationId, cara));
       expect(offer.status).toBe("accepted");
     });

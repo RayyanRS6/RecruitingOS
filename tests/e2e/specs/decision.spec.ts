@@ -127,11 +127,13 @@ test.describe("decision after an interview", () => {
     await expectAccessible(page, "candidate panel hire sheet");
     await candidate.getByRole("button", { name: "Yes, record the hire" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Maria Reyes is hired\./ })).toBeVisible();
-    // nobody else is in the running here: the sheet offers to close the role now, and nobody is told anything by it
-    await expect(candidate.getByRole("heading", { name: "Maria Reyes is hired: what about the role?" })).toBeVisible({ timeout: 30_000 });
-    await expect(candidate.getByText("Close the job now and tell them")).toBeVisible();
+    // nobody else is in process here: the sheet offers to close the job now, in job words, and promises nobody a message
+    // ("and tell them" only when someone is left to tell: the release review, 11 November 2026)
+    await expect(candidate.getByRole("heading", { name: "Maria Reyes is hired: what about the job?" })).toBeVisible({ timeout: 30_000 });
+    await expect(candidate.getByText("Close the job now", { exact: true })).toBeVisible();
+    await expect(candidate.getByText("Close the job now and tell them")).toHaveCount(0);
     await candidate.getByRole("button", { name: "Close it now" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Role closed as filled\./ })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: /Job closed as filled\./ })).toBeVisible();
     await expect(candidate.getByRole("button", { name: /^Stage: Hired/ })).toBeVisible({ timeout: 30_000 });
 
     // closing the sheet clears the deep link from the address

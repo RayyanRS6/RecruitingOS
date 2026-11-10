@@ -443,7 +443,7 @@ function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZo
       out.push({
         kind: "closing_date",
         title: `${role.title} stopped taking applications`,
-        body: `Its closing date${closesOn ? `, ${closingDayWords(closesOn)},` : ""} has passed. Nobody was turned away: people who had started could finish, and everyone who applied is where they were. ${closes ? "Extend the date to take applications again, or close the role when you are ready." : "Extend the date to take applications again. Closing the role is up to the company's owner, an admin, the hiring manager or HR."}`,
+        body: `Its closing date${closesOn ? `, ${closingDayWords(closesOn)},` : ""} has passed. Nobody was turned away: people who had started could finish, and everyone who applied is where they were. ${closes ? "Extend the date to take applications again, or close the job when you are ready." : "Extend the date to take applications again. Closing the job is up to the company's owner, an admin, the hiring manager or HR."}`,
         roleId: role.id,
         actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(today, 14) } }, pickDate, ...(closes ? [{ label: "Close the job", method: "GET" as const, path: `/roles/${role.id}?close=1` }] : [])],
       });

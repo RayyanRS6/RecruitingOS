@@ -655,7 +655,7 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onSameRound, onHire, onN
           {sameRoundFirst && last ? <Button size="sm" variant="primary" onClick={() => onSameRound(last.roundKey)}>Set the same round again</Button> : null}
           {hasNextRound ? <Button size="sm" variant={sameRoundFirst ? undefined : "primary"} loading={record.isPending} onClick={() => record.mutate({ decision: "next_round" })}>Next round</Button> : null}
           <Button size="sm" variant={hasNextRound || sameRoundFirst ? undefined : "primary"} onClick={() => setDecision("finalist")}>Finalist</Button>
-          {a.allowedActions.includes("record_outcome") ? <Button size="sm" onClick={onHire} title="Opens the hire sheet: the start date, then what to do with the role">Hire</Button> : null}
+          {a.allowedActions.includes("record_outcome") ? <Button size="sm" onClick={onHire} title="Opens the hire sheet: the start date, then what to do with the job">Hire</Button> : null}
           <Button size="sm" variant="destructive" onClick={() => setDecision("not_moving_forward")}>Not moving forward</Button>
           <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
         </div>

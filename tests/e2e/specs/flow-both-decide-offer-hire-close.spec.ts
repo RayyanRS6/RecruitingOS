@@ -134,12 +134,13 @@ test.describe("deciding, the offer, the hire and closing the job", () => {
     await hire.getByRole("button", { name: "Yes, record the hire" }).click();
     await expect(toast(page, /Ben Ortiz is hired\..*Their interview still to come is called off; the interviewers were told\./)).toBeVisible({ timeout: 30_000 });
     // Cleo applied and is still in process: leave the job open for now; Home will keep asking
-    const after = panel.locator(".card", { has: page.getByRole("heading", { name: "Ben Ortiz is hired: what about the role?" }) });
+    // (in job words, like every other button: the lead's D1, 11 November 2026)
+    const after = panel.locator(".card", { has: page.getByRole("heading", { name: "Ben Ortiz is hired: what about the job?" }) });
     await expect(after.getByText(/^Ben started on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}\.$/)).toBeVisible({ timeout: 30_000 });
     await expect(after.getByText(/The 1 person still in process moves to your talent pool/)).toBeVisible();
-    await expect(after.getByText("Leave the role open for now. Nobody is told anything. Ben has already started, so Home asks you to close the role until you do.")).toBeVisible();
+    await expect(after.getByText("Leave the job open for now. Nobody is told anything. Ben has already started, so Home asks you to close the job until you do.")).toBeVisible();
     await after.getByRole("button", { name: "Leave it open" }).click();
-    await expect(toast(page, /The role stays open\..*Home asks you to close it until you do\./)).toBeVisible({ timeout: 30_000 });
+    await expect(toast(page, /The job stays open\..*Home asks you to close it until you do\./)).toBeVisible({ timeout: 30_000 });
 
     // the interview is off: not coming up any more, and Ben was sent nothing about it or the hire
     await page.goto("/interviews");

@@ -53,7 +53,7 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
     mutationFn: () => api.post<RoleClosed>(`/api/v1/roles/${roleId}/outcome`, { outcome, confirm: true, reason: reason.trim() || undefined }),
     // says who moved to the talent pool privately, which interviews ended, and who was told only that theirs is off (founder decision B6)
     onSuccess: async (res) => {
-      const t = closeRoleToast(res, "Role closed; the outcome is recorded with your name.", mayTell);
+      const t = closeRoleToast(res, "Job closed; the outcome is recorded with your name.", mayTell);
       toast(t.title, t.detail);
       await Promise.all([qc.invalidateQueries({ queryKey: ["role", roleId] }), qc.invalidateQueries({ queryKey: ["roles"] }), qc.invalidateQueries({ queryKey: ["applications", roleId] }), qc.invalidateQueries({ queryKey: ["brief"] })]);
       if (mayTell && res.closingMessage && (res.closingMessage.count > 0 || res.closingMessage.waitingApprovalId)) setClosed(res.closingMessage);

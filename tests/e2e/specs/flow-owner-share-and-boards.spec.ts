@@ -90,7 +90,7 @@ test.describe("sharing a job and posting it on a board", () => {
     const card = page.locator("section.card").filter({ has: page.getByRole("heading", { name: "Close this job" }) });
     await card.getByLabel("Outcome").selectOption("no_hire");
     await card.getByRole("button", { name: "Confirm and close the job" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Role closed/ })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("status").filter({ hasText: /Job closed/ })).toBeVisible({ timeout: 30_000 });
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Still posted on Indeed" })).toBeVisible({ timeout: 30_000 });
     await page.getByRole("link", { name: "Open the Share tab" }).click();
