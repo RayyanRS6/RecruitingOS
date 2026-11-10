@@ -120,9 +120,12 @@ roleRoutes.get("/", requireTenant, async (c) => {
 roleRoutes.get("/:id", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
+  // An id that is not one names no role: a plain 404, never a database error (an interviewer's is answered by roleScopeGuard).
+  const id = c.req.param("id");
+  if (!UUID.test(id)) throw new HttpError(404, "not_found", "Role not found.");
   const canSeeComp = can(t.role, "compensation.read");
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
+    const [role] = await tx.select().from(roles).where(eq(roles.id, id)).limit(1);
     if (!role) return null;
     const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
     const current = currentVersionOf(role, packets);

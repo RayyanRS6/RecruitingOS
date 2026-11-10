@@ -305,4 +305,21 @@ describe("ITS recruiter access is explicit, scoped, time-limited and audited", (
     expect(alerts.length).toBe(1);
     expect(JSON.stringify(alerts)).not.toMatch(/candidate|Reyes/);
   });
+
+  it("a malformed id is a plain not-found, never a database error: an approval's decision, a request's detail and its claim, and a role read by someone on the team (10 November 2026)", async () => {
+    for (const bad of ["not-a-uuid", "12345", `${escalationId}x`]) {
+      const answers = {
+        decide: await json(owner, "POST", `/api/v1/approvals/${bad}/decide`, { decision: "approve" }),
+        detail: await json(recruiter, "GET", `/api/v1/escalations/${bad}`),
+        claim: await json(recruiter, "POST", `/api/v1/escalations/${bad}/claim`),
+        role: await json(owner, "GET", `/api/v1/roles/${bad}`),
+      };
+      for (const [route, r] of Object.entries(answers)) {
+        expect(r.status, `${route} ${bad}`).toBe(404);
+        expect(((await r.json()) as { error: { code: string } }).error.code, `${route} ${bad}`).toBe("not_found");
+      }
+    }
+    // a real id still reads as before
+    expect((await json(owner, "GET", `/api/v1/roles/${roleInScope}`)).status).toBe(200);
+  });
 });

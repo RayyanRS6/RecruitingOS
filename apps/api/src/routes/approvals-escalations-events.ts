@@ -25,6 +25,9 @@ import { assertNoNewWork } from "../services/trial";
 
 export const approvalRoutes = new Hono<Vars>();
 
+/** An id in a path that is not a uuid names nothing: a plain 404 in the route's words, never a database error (10 November 2026). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * The approval requests themselves. A request's proposal can carry a candidate's name and a message written to them
  * (F11), so the list needs application.read (an interviewer sees only their own interviews, F9), and ITS staff under a
@@ -56,8 +59,9 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
   const container = c.get("container");
   // Stamped on the engine's clock, the one the waiting workflow compares against (expiry, the decision after the request).
   const decidedAt = container.engine.clock().toISOString();
+  const id = c.req.param("id");
   const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [req] = await tx.select().from(approvalRequests).where(eq(approvalRequests.id, c.req.param("id"))).limit(1);
+    const [req] = UUID.test(id) ? await tx.select().from(approvalRequests).where(eq(approvalRequests.id, id)).limit(1) : [];
     if (!req) throw new HttpError(404, "not_found", "Approval request not found.");
     // The approval's id is in the path, not the person's: nobody decides about someone they cannot read (Rule 3).
     await assertNotLocked(tx, t, req.applicationId);
@@ -135,8 +139,6 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
 });
 
 export const escalationRoutes = new Hono<Vars>();
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** What the recruiter sees, in the words every message about their access uses (Q31: say the real access). */
 function accessWords(scope: EscalationScope): string {
@@ -489,8 +491,9 @@ escalationRoutes.get("/", requireRecruiterOrAdmin, async (c) => {
 escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
   const s = c.get("session")!;
   const container = c.get("container");
+  const id = c.req.param("id");
   const row = await withPlatform(container.db, async (tx) => {
-    const [e] = await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, c.req.param("id"))).limit(1);
+    const [e] = UUID.test(id) ? await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id)).limit(1) : [];
     if (!e) return null;
     const [co] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, e.companyId)).limit(1);
     const role = e.roleId ? (await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, e.roleId)).limit(1))[0] : null;
@@ -537,8 +540,9 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
   const s = c.get("session")!;
   const container = c.get("container");
   const now = new Date();
+  const id = c.req.param("id");
   const row = await withPlatform(container.db, async (tx) => {
-    const [e] = await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, c.req.param("id"))).limit(1);
+    const [e] = UUID.test(id) ? await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id)).limit(1) : [];
     if (!e) throw new HttpError(404, "not_found", "Escalation not found.");
     if (e.status === "resolved" || e.status === "cancelled") throw new HttpError(409, "closed", `This request is already ${e.status}.`);
     if (e.assignedToUserId && e.assignedToUserId !== s.user.id) throw new HttpError(409, "claimed", "Another recruiter has this request.");
