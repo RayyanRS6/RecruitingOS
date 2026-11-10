@@ -206,6 +206,8 @@ describe("the candidate panel's card", () => {
       expect(notSentReasonText(reason), reason).toBe(autoReasonText(reason, { state: "not_sent", resolved: true }));
     }
     for (const reason of ["left_process", "details_deleted", "not_asked", "no_show", undefined]) expect(notSentReasonText(reason)).toBeNull();
+    // two "Ask for a different time" presses: true whether they moved a time they picked or a person's time stood (L4-5)
+    expect(notSentReasonText("reschedules_used")).toBe("They had already asked twice for a different time, so a person arranges the next time.");
   });
 });
 

@@ -190,7 +190,9 @@ const PlaceRow = ({ b }: { b: Bundle }) => {
 /** The sentence under "Send me new times later": what will happen for this candidate now, with the day when there is one. */
 function newTimesHint(plan: AutoPlan, b: Bundle): string {
   if (plan.arm) return `We will email you new times on ${newTimesDayWords(plan.dueAt, tzOf(b))}, unless the team gets in touch first.`;
-  if (plan.reason === "reschedules_used") return "You have moved this interview twice, so someone from the team will be in touch to arrange a time.";
+  // Both presses were "Ask for a different time", which moves a time they picked and leaves one a person set standing: the
+  // words are true either way (the release review, 11 November 2026).
+  if (plan.reason === "reschedules_used") return "You have asked for a different time twice, so someone from the team will be in touch to arrange a time.";
   return "Someone from the team will be in touch about new times.";
 }
 
@@ -559,7 +561,7 @@ function teamCancelNote(next: CancelNext, plan: AutoPlan | { arm: false; reason:
     case "already_used":
       return "They asked for new times. They already had their one automatic set, so nothing more goes automatically: send new times or decide.";
     case "reschedules_used":
-      return "They asked for new times after moving this interview twice, so a person should arrange the time with them. Nothing goes to them automatically.";
+      return "They asked for new times after asking twice for a different time, so a person should arrange the time with them. Nothing goes to them automatically.";
     case "takeover":
       return "They asked for new times. An ITS recruiter is running this role, so nothing goes automatically: you or the recruiter decide.";
     case "was_on_hold":

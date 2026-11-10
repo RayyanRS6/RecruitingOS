@@ -1438,6 +1438,9 @@ describe("a person sets the date and time", () => {
       const third = await confirmedPage(token);
       expect(third).toContain("You have asked for a different time twice. Reply to any of our emails and a person will arrange a time with you.");
       expect(third).not.toContain('name="note"');
+      // and the cancel choice says what they did, never that they moved it: the time stood both times (the release review, L4-5)
+      expect(third).toContain("You have asked for a different time twice, so someone from the team will be in touch to arrange a time.");
+      expect(third).not.toMatch(/You have moved this interview/);
       const last = await form(`/c/schedule/${token}/reschedule`);
       expect(last.headers.get("location")).toBe(`/c/schedule/${token}/confirmed`);
       expect((await interview(booked.id)).rescheduleCountCandidate).toBe(2);

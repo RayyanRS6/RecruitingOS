@@ -467,7 +467,7 @@ export function newTimesSettingOf(settings: CompanySettings | null | undefined):
 const REASON_TEXT: Partial<Record<AutoNewTimesReason, string>> = {
   switched_off: "Automatic new times are off in Settings.",
   already_used: "They already had their one automatic set of new times.",
-  reschedules_used: "They had already moved this interview twice, so a person arranges the next time.",
+  reschedules_used: "They had already asked twice for a different time, so a person arranges the next time.",
   takeover: "An ITS recruiter is running this role, so nothing was sent automatically.",
   was_on_hold: "You had put them on hold, so nothing goes automatically.",
   stopped_by_team: "Someone on your team stopped the automatic new times.",

@@ -346,10 +346,11 @@ describe("candidate cancels an interview", () => {
     const twice = await book("Elena", "Costa");
     await container.db.update(interviews).set({ rescheduleCountCandidate: 2 }).where(eq(interviews.id, twice.id));
     const twiceHtml = await (await app.request(`/c/schedule/${twice.token}/confirmed`)).text();
-    expect(twiceHtml).toContain("You have moved this interview twice, so someone from the team will be in touch to arrange a time.");
+    // in words true on either path: a time they picked and moved, or one a person set that stood (the release review, L4-5)
+    expect(twiceHtml).toContain("You have asked for a different time twice, so someone from the team will be in touch to arrange a time.");
     await cancelAsking(twice.token);
     expect((await followUps(twice.cand.id))[0]).toMatchObject({ autoState: "none", autoReason: "reschedules_used" });
-    expect((await teamNote("Elena Costa"))[0].body).toBe("They asked for new times after moving this interview twice, so a person should arrange the time with them. Nothing goes to them automatically.");
+    expect((await teamNote("Elena Costa"))[0].body).toBe("They asked for new times after asking twice for a different time, so a person should arrange the time with them. Nothing goes to them automatically.");
 
     // an ITS recruiter runs the role (founder question 7)
     const taken = await book("Ivo", "Novak");
