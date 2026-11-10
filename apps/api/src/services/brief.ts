@@ -144,7 +144,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // posting route refuses anyone else, so a hiring manager or HR never gets a card they cannot act on.
   const managesPostings = !viewer || can(viewer.role, "role.manage");
   // Closing a role records its outcome (outcome.record): an owner, an admin, the hiring manager or HR. A recruiter, an
-  // ITS recruiter under a grant among them, manages the closing date but is never offered "Close the role".
+  // ITS recruiter under a grant among them, manages the closing date but is never offered "Close the job".
   const closesRoles = !viewer || can(viewer.role, "outcome.record");
   // "Bring in a recruiter" about a whole role is offered only to someone POST /escalations accepts it from: an ITS recruiter
   // given one candidate may not ask about the whole role (staff-scope.ts, staffMayAsk).
@@ -427,7 +427,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
  * The closing-date cards (founder decision Q12, plan D7), for those who manage postings: a role whose date stopped
  * applications (extend it, choose another date, or close the role, which stays a person's decision), and a role whose
  * date ends tonight or tomorrow night. "Extend by two weeks" posts the new date straight to the closing-date route.
- * "Close the role" goes only to those who may close one (`closes`: outcome.record); the others are told who can.
+ * "Close the job" (a job word, like every other button: 10 November 2026) goes only to those who may close one (`closes`:
+ * outcome.record); the others are told who can.
  */
 function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZone: string | null, now: Date, manages: boolean, closes: boolean): BriefCard[] {
   if (!manages) return [];
@@ -443,7 +444,7 @@ function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZo
         title: `${role.title} stopped taking applications`,
         body: `Its closing date${closesOn ? `, ${closingDayWords(closesOn)},` : ""} has passed. Nobody was turned away: people who had started could finish, and everyone who applied is where they were. ${closes ? "Extend the date to take applications again, or close the role when you are ready." : "Extend the date to take applications again. Closing the role is up to the company's owner, an admin, the hiring manager or HR."}`,
         roleId: role.id,
-        actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(today, 14) } }, pickDate, ...(closes ? [{ label: "Close the role", method: "GET" as const, path: `/roles/${role.id}?close=1` }] : [])],
+        actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(today, 14) } }, pickDate, ...(closes ? [{ label: "Close the job", method: "GET" as const, path: `/roles/${role.id}?close=1` }] : [])],
       });
     } else if (closesOn && role.acceptingApplications && closesOn >= today && closesOn <= addCalendarDays(today, 1)) {
       out.push({

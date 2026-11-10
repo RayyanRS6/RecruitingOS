@@ -265,7 +265,7 @@ describe("the closing date (D7, founder decision Q12)", () => {
     expect(todayIn("Not/AZone", new Date("2026-10-09T03:00:00Z"))).toBe("2026-10-09");
   });
 
-  it("Today's 'Extend' posts the date as the card has it; 'Close the role' opens the close form, nothing more", () => {
+  it("Today's 'Extend' posts the date as the card has it; 'Close the job' opens the close form, nothing more", () => {
     expect(isClosingDateAction({ method: "POST", path: "/api/v1/roles/r1/closing-date" })).toBe(true);
     expect(isClosingDateAction({ method: "GET", path: "/roles/r1?tab=posting#closing-date" })).toBe(false);
     const home = read("../../apps/web/src/pages/Home.tsx");

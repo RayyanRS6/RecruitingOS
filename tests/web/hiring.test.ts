@@ -121,6 +121,12 @@ describe("the hire sheet (plan H1)", () => {
     expect(keepWarmToast("Maria", "2026-11-02", after)).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." });
   });
 
+  it("names closing in job words, like every other button (10 November 2026)", () => {
+    const sheet = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/hiring.tsx", import.meta.url), "utf8");
+    expect(sheet).toContain('{mayTell ? "Close the job now and tell them" : "Close the job now"}');
+    expect(sheet).not.toContain("Close the role now");
+  });
+
   // Found by the whole-hire walk of 9 November 2026: hired with only people who applied still in process (not backups:
   // never interviewed, never shortlisted), the sheet offered "Close it now" and nothing else.
   it("with nobody to keep warm but the role still open, it is never only Close: leaving it open is offered, saying what Home does", () => {

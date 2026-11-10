@@ -124,7 +124,7 @@ export function RoleDetail() {
   const [afterApproval, setAfterApproval] = useState<{ editWhileOpen: boolean } | null>(null);
 
   const [closing, setClosing] = useState<{ outcome: string } | null>(null);
-  // "Close the role" on Home's closing-date card links here with `?close=1`: the close form opens, nothing is closed yet.
+  // "Close the job" on Home's closing-date card links here with `?close=1`: the close form opens, nothing is closed yet.
   const wantsClose = search.get("close") === "1";
   const closeAsked = useRef(false);
   useEffect(() => {

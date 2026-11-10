@@ -192,7 +192,8 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(220px,100%),1fr))] gap-3">
           {v.mayClose && after.closeRole ? (
             <div className={CHOICE}>
-              <strong className="text-[15px]">{mayTell ? "Close the role now and tell them" : "Close the role now"}</strong>
+              {/* job words, like every other button (10 November 2026) */}
+              <strong className="text-[15px]">{mayTell ? "Close the job now and tell them" : "Close the job now"}</strong>
               <p className="small muted">{v.closeWords}</p>
               <Button size="sm" variant="primary" loading={close.isPending} onClick={() => close.mutate(after.closeRole!.path)}>Close it now</Button>
             </div>

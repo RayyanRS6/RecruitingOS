@@ -129,7 +129,7 @@ test.describe("decision after an interview", () => {
     await expect(page.getByRole("status").filter({ hasText: /Maria Reyes is hired\./ })).toBeVisible();
     // nobody else is in the running here: the sheet offers to close the role now, and nobody is told anything by it
     await expect(candidate.getByRole("heading", { name: "Maria Reyes is hired: what about the role?" })).toBeVisible({ timeout: 30_000 });
-    await expect(candidate.getByText("Close the role now and tell them")).toBeVisible();
+    await expect(candidate.getByText("Close the job now and tell them")).toBeVisible();
     await candidate.getByRole("button", { name: "Close it now" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Role closed as filled\./ })).toBeVisible();
     await expect(candidate.getByRole("button", { name: /^Stage: Hired/ })).toBeVisible({ timeout: 30_000 });

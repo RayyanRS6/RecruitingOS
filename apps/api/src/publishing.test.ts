@@ -467,13 +467,15 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
     await expect(withTenant(container.db, companyId, (tx) => createApplication(tx, container, late, { kind: "candidate", id: "applicant" }))).rejects.toThrow(/not accepting/);
     const admitted = await withTenant(container.db, companyId, (tx) => createApplication(tx, container, late, { kind: "candidate", id: "applicant" }, { closingGrace: true }));
     expect(admitted.application.roleId).toBe(roleC);
-    // Today: extend by two weeks, choose another date, or close the role (a person's decision)
+    // Today: extend by two weeks, choose another date, or close the job (a person's decision), its button in job words like every other (10 November 2026)
     const card = (await brief(owner)).find((c) => c.kind === "closing_date" && c.roleId === roleC)!;
     expect(card.title).toContain("stopped taking applications");
-    expect(card.actions.map((a) => a.label)).toEqual(["Extend by two weeks", "Choose another date", "Close the role"]);
+    expect(card.actions.map((a) => a.label)).toEqual(["Extend by two weeks", "Choose another date", "Close the job"]);
+    expect(card.actions.map((a) => a.label)).not.toContain("Close the role");
+    expect(card.actions[2]).toMatchObject({ method: "GET", path: `/roles/${roleC}?close=1` });
     expect(card.actions[0]).toMatchObject({ method: "POST", path: `/api/v1/roles/${roleC}/closing-date` });
     expect(card.body).toContain("close the role when you are ready");
-    // a recruiter manages the date but may not close a role (outcome.record): no "Close the role", and the card says who can
+    // a recruiter manages the date but may not close a role (outcome.record): no "Close the job", and the card says who can
     const recruiterMember = await signInAs(container, app, { companyId, role: "recruiter", email: "rory@publish.test" });
     const theirs = (await brief(recruiterMember)).find((c) => c.kind === "closing_date" && c.roleId === roleC)!;
     expect(theirs.actions.map((a) => a.label)).toEqual(["Extend by two weeks", "Choose another date"]);
