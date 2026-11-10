@@ -39,8 +39,9 @@ export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?:
   const missing = m ? missingMustHaves(m) : [];
   // An older answer without the score: the AI review's own words stand in for it.
   const fallback = state.kind === "hidden" && latest ? latest : null;
-  // When the AI review could not be made at all, the card above the verdict says so; the line never promises one soon.
-  const line = !m && look.assessmentUnavailable ? NO_REVIEW_LINE
+  // When the AI review could not be made at all, the card above the verdict says so; the line never promises one soon, and
+  // says why when AI never reads them (`noReading`).
+  const line = !m && look.assessmentUnavailable && a.noReading !== "no_ai_notice" ? NO_REVIEW_LINE
     : state.kind === "unread" ? state.text
     : m ? verdictLine(a) ?? (state.kind === "nothing" ? state.text : null)
     : fallback ? firstSentence(fallback.result.summary).line

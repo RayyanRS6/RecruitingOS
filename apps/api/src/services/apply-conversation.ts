@@ -784,7 +784,7 @@ export async function conversationView(db: Db, ref: ConversationRef, now: Date =
     if (ref.kind === "screen") {
       const b = await loadScreenBundle(tx, ref.id);
       if (!b) return null;
-      const scoreComes = b.screen.status === "completed" && (await recordScoreFor(tx, { app: b.app, companySettings: b.company.settings, screens: await screensOf(tx, b.app.id), hiddenDecision: false, now })).state !== "off";
+      const scoreComes = b.screen.status === "completed" && !["off", "not_coming"].includes((await recordScoreFor(tx, { app: b.app, companySettings: b.company.settings, screens: await screensOf(tx, b.app.id), hiddenDecision: false, now })).state);
       return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, rolePacket: b.rolePacket, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null, formAnswers: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia)?.formAnswers ?? [], scoreComes });
     }
     const d = await loadDetached(tx, ref.id);

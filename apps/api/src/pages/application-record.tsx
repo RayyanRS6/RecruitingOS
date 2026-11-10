@@ -465,7 +465,8 @@ function ScoreBar(props: { row: CandidateScoreRow }) {
  * Every word here, the eyebrows included, stays exactly as drafted until counsel signs off: a block under counsel review
  * is outside the fewer-words pass (23 October 2026). That pass had cut two of its lines; both are back, word for word. Two
  * sentences changed on 6 November 2026 because the score changed and they would have become false, and the register's items
- * 20 and 21 carry the new words. They are still drafts.
+ * 20 and 21 carry the new words. They are still drafts. So is the line added on 10 November 2026 for a score that will not come
+ * by itself (`not_coming`), in place of "Not ready yet" for ever; register item 21 carries it.
  */
 function ScoreSection(props: { score: RecordScore; companyName: string; chatSent: boolean; statusPath: string }) {
   const { score } = props;
@@ -476,6 +477,15 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
         <p class="eyebrow">Your match score</p>
         <h2 id="score-h">Working out your match score…</h2>
         <p>This usually takes under a minute. <a href={`${props.statusPath}#score`}>Check again</a> in a moment, or come back to it later from the link in your email.</p>
+      </section>
+    );
+  }
+  if (score.state === "not_coming") {
+    return (
+      <section class="card" id="score" aria-labelledby="score-h">
+        <p class="eyebrow">Your match score</p>
+        <h2 id="score-h">Could not be worked out</h2>
+        <p>The hiring team reads your application themselves.</p>
       </section>
     );
   }

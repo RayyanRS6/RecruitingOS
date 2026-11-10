@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { ApplicationStage, RolePacket, ScreenProgress, ScreenTranscriptEntry, ToldState } from "@ros/contracts";
-import { applications, assessments, auditRecords, communications, screens, withTenant } from "@ros/db";
+import { TRIAGE_READINGS } from "@ros/agents";
+import { suppressAddress } from "@ros/core";
+import { applications, assessments, auditRecords, communications, screens, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { decisionHeadline } from "./pages/application-record";
 import { otherApplicationState, sentChatAnswers } from "./services/application-record";
+import { createApplication } from "./services/applications";
 import { signInStaff, statusTokenFor } from "./test-helpers";
 
 /**
@@ -381,5 +384,74 @@ describe("the application record (status page) after sending", () => {
     const job = await page(`/careers/${slug}/jobs/${roleId}`);
     expect(job.html).toContain('<a href="/c/link-request">Already applied? See your application</a>');
     expect((await page(`/careers/${slug}`)).html).toContain('<a href="/c/link-request">Already applied? See your application</a>');
+  });
+
+  /**
+   * A score that never comes (10 November 2026): once nothing will work a number out by itself, the record says so at once in
+   * short true words, never "Working out…" or "Not ready yet" for ever. Two ways: the résumé reading could not be made (the
+   * assistant's answer unusable every time), or AI never reads an emailed-in applicant's résumé because our email with the AI
+   * notice did not reach them (known-bugs row 16). While their AI interview is open its scorecard can still give one, so that
+   * line stays. The team's panel says it in its own words (`noReading`), instead of a review "a minute or two" away.
+   */
+  it("a score that will not come by itself says so at once: the reading could not be made, or AI does not read their résumé (row 16); the team's panel is told why", async () => {
+    const scoreCard = async (token: string) => {
+      const { html } = await page(`/c/status/${token}`);
+      const from = html.indexOf('<section class="card" id="score"');
+      expect(from, "the score card").toBeGreaterThan(-1);
+      return html.slice(from, html.indexOf("</section>", from));
+    };
+    const panel = async (id: string) => (await (await json("GET", `/api/v1/applications/${id}`)).json()) as { noReading?: string | null; assessments: unknown[] };
+    /** Their AI interview link closed unused: its run ended with it, as the run itself ends it. */
+    const chatClosed = async (a: typeof applications.$inferSelect, status: string) => {
+      await container.db.update(screens).set({ status }).where(eq(screens.applicationId, a.id));
+      await container.db.update(workflowRuns).set({ status: "completed" }).where(and(eq(workflowRuns.workflowKey, "screen"), sql`${workflowRuns.subject}->>'id' = ${a.id}`));
+    };
+    const NO_SCORE = '<p class="eyebrow">Your match score</p><h2 id="score-h">Could not be worked out</h2><p>The hiring team reads your application themselves.</p>';
+
+    // every résumé reading unusable (each with the runner's one retry): the reading cannot be made
+    for (let i = 0; i < TRIAGE_READINGS * 2; i++) container.fake!.failNext("triage.assess", "invalid");
+    const gil = await applyAs("Gil", "gil.record@example.com");
+    expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, gil.id))).toHaveLength(0);
+    // their AI interview is open, and its scorecard can still give a number: the line stays as it was
+    expect(await scoreCard(gil.statusToken)).toContain('<h2 id="score-h">Shown once your AI interview is sent</h2>');
+    // they sent the application without it: nothing will work one out, so the record says so at once, a moment after applying too
+    await chatClosed(gil, "declined_by_candidate");
+    let card = await scoreCard(gil.statusToken);
+    expect(card).toContain(NO_SCORE);
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready|Check again/);
+    expect(card).not.toMatch(/\b(credit|upgrade|plan)\b/i);
+    // the team's panel is told the review could not be made, never that one comes in a minute or two
+    expect((await panel(gil.id)).noReading).toBe("could_not_read");
+
+    // an emailed-in applicant whose email with the AI notice could not go: AI never reads their résumé (row 16)
+    await suppressAddress(container.db, { address: "hal.record@example.com", reason: "hard_bounce", source: "admin", actor: { kind: "system", id: "test" } });
+    const made = await withTenant(container.db, companyId, (tx) => createApplication(tx, container, { companyId, roleId, source: "email_in", firstName: "Hal", lastName: "Record", email: "hal.record@example.com", phone: null, smsConsent: false, consentSource: "email_in", noticeVersionsShown: [], eligibilityAnswers: Object.fromEntries(packet.requirements.eligibility.map((r) => [r.key, "yes"])), noResumeAnswers: { summary: "Registered dental hygienist, eight years of perio work." } }, { kind: "system", id: "email_in" }));
+    await container.drain();
+    const [hal] = await container.db.select().from(applications).where(eq(applications.id, made.application.id));
+    expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, hal.id))).toHaveLength(0);
+    expect((await panel(hal.id)).noReading).toBe("no_ai_notice");
+    // the link in that email closed unused: no reading and no AI interview will give a number
+    await chatClosed(hal, "expired");
+    card = await scoreCard(hal.statusToken);
+    expect(card).toContain(NO_SCORE);
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready/);
+    // the required notices stay on the page around it
+    const { html } = await page(`/c/status/${hal.statusToken}`);
+    for (const kept of ["How AI is used", "make every decision about your application"]) expect(html).toContain(kept);
+
+    // a reading that is only late keeps the words that promise it: nothing has given up on it
+    const ivy = await applyAs("Ivy", "ivy.record@example.com");
+    await chatClosed(ivy, "declined_by_candidate");
+    await withTenant(container.db, companyId, async (tx) => {
+      await tx.update(applications).set({ latestAssessmentId: null, createdAt: at(-20 * 60) }).where(eq(applications.id, ivy.id));
+      await tx.delete(assessments).where(eq(assessments.applicationId, ivy.id));
+    });
+    await container.db.update(workflowRuns).set({ status: "waiting" }).where(eq(workflowRuns.idempotencyKey, `application_intake:${ivy.id}`));
+    expect(await scoreCard(ivy.statusToken)).toContain('<h2 id="score-h">Not ready yet</h2><p>Your match score shows here once it is ready.');
+    expect((await panel(ivy.id)).noReading ?? null).toBeNull();
+    // and one whose intake stopped for good, a request raised to ITS, says the reading could not be made
+    await container.db.update(workflowRuns).set({ status: "failed" }).where(eq(workflowRuns.idempotencyKey, `application_intake:${ivy.id}`));
+    expect(await scoreCard(ivy.statusToken)).toContain(NO_SCORE);
+    expect((await panel(ivy.id)).noReading).toBe("could_not_read");
   });
 });

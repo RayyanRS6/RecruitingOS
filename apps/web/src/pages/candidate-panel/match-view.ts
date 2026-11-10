@@ -18,6 +18,9 @@ export const MATCH_PROMISE = "A match score worked out from checked evidence, wi
 /** The verdict's line when the AI review could not be made at all (the card above the verdict says what to do). */
 export const NO_REVIEW_LINE = "No match score: the AI review could not be made, so read this one yourself.";
 
+/** The verdict's line when AI never reads their résumé: our email with the AI notice did not reach an emailed-in applicant (known-bugs row 16). */
+export const NO_AI_NOTICE_LINE = "No match score: our email with the AI notice did not reach them, so the assistant does not read their résumé.";
+
 /** What GET /applications/:id carries since Wave F; an older answer leaves it out, and the panel then shows nothing for it. */
 type ScoredDetail = { matchScore?: MatchScore | null; readingVersion?: ReadingVersion | null; mustHaves?: MustHaveSummary | null; placement?: BoardPlacement | null };
 
@@ -110,13 +113,15 @@ export function skillLabels(a: Pick<ApplicationDetail, "packetLabels">): Labelle
 
 /**
  * What the match card shows: nothing for an answer from before the score existed (`hidden`), a line when there is no
- * reading yet (`unread`) or when the reading does not speak to any requirement (`nothing`), otherwise the score.
+ * reading yet (`unread`) or when the reading does not speak to any requirement (`nothing`), otherwise the score. A review
+ * that will not come by itself (`noReading`, 10 November 2026) is said as it is, never as one a minute or two away.
  */
 export type MatchCardState = { kind: "hidden" } | { kind: "unread"; text: string } | { kind: "nothing"; text: string; m: MatchScore } | { kind: "scored"; score: number; m: MatchScore };
 
 export function matchCardState(a: ApplicationDetail): MatchCardState {
   const m = matchOf(a);
   if (m === undefined) return { kind: "hidden" };
+  if (!m && a.noReading) return { kind: "unread", text: a.noReading === "no_ai_notice" ? NO_AI_NOTICE_LINE : NO_REVIEW_LINE };
   if (!m) return { kind: "unread", text: a.assessments.length ? "No match score yet: there is no AI review of this application against the job's requirements." : a.stage === "ineligible" ? "No match score yet. It comes from the AI review, which starts once someone keeps them in." : "No match score yet. It comes from the AI review, which usually comes a minute or two after they apply." };
   if (m.score === null) return { kind: "nothing", text: m.coverage.words, m };
   return { kind: "scored", score: m.score, m };

@@ -40,6 +40,18 @@ describe("the match card", () => {
     expect(matchCardState(detail())).toEqual({ kind: "hidden" });
   });
 
+  it("never promises a review that will not come by itself: one that could not be made, or one AI never makes because the AI notice did not reach them (10 November 2026)", () => {
+    expect(matchCardState(detail({ matchScore: null, noReading: "could_not_read" }))).toEqual({ kind: "unread", text: "No match score: the AI review could not be made, so read this one yourself." });
+    expect(matchCardState(detail({ matchScore: null, noReading: "no_ai_notice" }))).toEqual({ kind: "unread", text: "No match score: our email with the AI notice did not reach them, so the assistant does not read their résumé." });
+    for (const noReading of ["could_not_read", "no_ai_notice"]) expect(JSON.stringify(matchCardState(detail({ matchScore: null, noReading }))), noReading).not.toMatch(/minute or two|starts once/);
+    // a score from their AI interview still shows: the line is only for no score at all
+    const m = score(null, reading("screen", [must("rdh_license", "yes", "I hold an active CA RDH license")]));
+    expect(matchCardState(detail({ matchScore: m, noReading: "could_not_read" }))).toMatchObject({ kind: "scored", score: m.score });
+    // the panel's verdict says why AI never read them, rather than that the review could not be made
+    const verdict = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/match.tsx", import.meta.url), "utf8");
+    expect(verdict).toContain('!m && look.assessmentUnavailable && a.noReading !== "no_ai_notice" ? NO_REVIEW_LINE');
+  });
+
   it("says plainly when there is no reading yet, or when the reading speaks to no requirement", () => {
     expect(matchCardState(detail({ matchScore: null }))).toMatchObject({ kind: "unread", text: expect.stringContaining("usually comes a minute or two") });
     const nothing = score(reading("triage", [must("rdh_license", "unknown")]));

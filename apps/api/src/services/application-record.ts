@@ -2,7 +2,8 @@ import { and, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { candidateScoreShown, type ApplicationStage, type CandidateScoreView, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type WriteupAnswer } from "@ros/contracts";
 import { DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
 import { chatPacket } from "@ros/agents";
-import { applications, assessments, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
+import { applications, assessments, events, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
+import { interviewRunOn } from "@ros/workflows";
 
 /**
  * What the candidate's application record shows beyond its steps (Wave S7, slice S7-E; spec-s7-apply-flow.md steps 8, 9
@@ -26,12 +27,36 @@ export const REVIEWING_REFRESH_SECONDS = 15;
  * - `after_chat`: a screening chat is open or paused: the score waits until they send it (a reading of an unsent chat
  *   never counts). A chat a private decision cancelled reads the same as before, so nothing hints at the decision.
  * - `reviewing`: sent a moment ago and the reading is not written yet: "Working out your match score…", with "Check again".
- * - `not_ready`: no score after the reviewing window (the reading failed, a résumé could not be read), or a sent AI interview
- *   whose scorecard is not written yet, for as long as that takes: never a résumé-only number for someone who did it. One
- *   waiting for the plan's AI help is `off` instead.
+ * - `not_ready`: no score after the reviewing window while a reading may still come (one late, a résumé that could not be
+ *   read), or a sent AI interview whose scorecard is not written yet, for as long as that takes: never a résumé-only number
+ *   for someone who did it. One waiting for the plan's AI help is `off` instead.
+ * - `not_coming`: nothing will work a number out by itself (10 November 2026): no reading gives one, the résumé's could not be
+ *   made or AI does not read it (`readingWontCome`), and no AI interview is open, being written up or still on its way. Said at
+ *   once, never "Working out…" or "Not ready yet" for ever.
  * - `ready`: the score and its breakdown (`view`).
  */
-export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "ready"; view: CandidateScoreView | null };
+export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "not_coming" | "ready"; view: CandidateScoreView | null };
+
+/**
+ * Why no résumé reading will come by itself, or null while one is written or may still come (10 November 2026), from the
+ * application's newest intake run: `no_ai_notice` when our email with the AI notice never reached an emailed-in applicant, so
+ * AI does not read their résumé (known-bugs row 16); `could_not_read` when the reading could not be made: the assistant's
+ * answer was unusable every time (`ai.output_invalid`), or the run stopped for good and raised a request to ITS. Any other
+ * end (the application moved on before the reading, an older application with no run) says nothing.
+ */
+export type NoReading = "could_not_read" | "no_ai_notice";
+
+export async function readingWontCome(tx: Tx, applicationId: string): Promise<NoReading | null> {
+  const [triage] = await tx.select({ id: assessments.id }).from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "triage"))).limit(1);
+  if (triage) return null;
+  const [run] = await tx.select({ id: workflowRuns.id, status: workflowRuns.status, state: workflowRuns.state }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, "application_intake"), sql`${workflowRuns.subject}->>'id' = ${applicationId}`)).orderBy(desc(workflowRuns.startedAt), desc(workflowRuns.id)).limit(1);
+  if (!run) return null;
+  if ((run.state as { noAiReading?: boolean }).noAiReading) return "no_ai_notice";
+  if (run.status === "failed") return "could_not_read";
+  if (run.status !== "completed") return null;
+  const [invalid] = await tx.select({ id: events.id }).from(events).where(and(eq(events.type, "ai.output_invalid"), eq(events.subjectType, "application"), eq(events.subjectId, applicationId), eq(events.correlationId, run.id))).limit(1);
+  return invalid ? "could_not_read" : null;
+}
 
 const OPEN_SCREEN = ["invited", "reminded", "in_progress", "paused"];
 
@@ -76,6 +101,8 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   // and it shows once the credit is back.
   if (sent && !sent.assessmentId && sent.progress.scoreWaitsForCredit) return { state: "off", view: null };
   const scorecardDue = !!sent && !sent.assessmentId;
+  // Nothing will give a number by itself (10 November 2026): said at once, a moment after applying too.
+  if (!view && !scorecardDue && (await readingWontCome(tx, app.id)) && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
   const since = Date.parse(sent?.completedAt ?? app.createdAt);
   const recent = input.now.getTime() - since < REVIEWING_WINDOW_MS;
   if ((scorecardDue || !view) && recent) return { state: "reviewing", view: null };

@@ -126,7 +126,8 @@ export function NoAssessmentCard({ detail }: { detail: ApplicationDetail }) {
       <div className="row"><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></div>
       <p>{ASSESSMENT_UNAVAILABLE_TEXT}</p>
       {resumeUnreadable(detail) ? <p className="small text-caution">{RESUME_UNREADABLE_TEXT}</p> : null}
-      <Why>Nothing is hidden: the résumé, the answers and the messages are on this panel. The assistant's answer was not usable after two tries; ITS has the details.</Why>
+      {/* AI never read them (`noReading`): the verdict below says why, so no word here about tries */}
+      <Why>{detail.noReading === "no_ai_notice" ? "Nothing is hidden: the résumé, the answers and the messages are on this panel." : "Nothing is hidden: the résumé, the answers and the messages are on this panel. The assistant's answer was not usable after two tries; ITS has the details."}</Why>
     </Card>
   );
 }
