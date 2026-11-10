@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SetInterviewTime } from "../../packages/contracts/src/domain/interview";
 import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
-import { DECISION_WORDS, bookLabel, candidateEmailLine, defaultDuration, durationChoices, durationWords, formFromBooked, freshForm, interviewLine, interviewNeedingTime, interviewWord, placeKindFor, setTimeBody, setTimeMissing, timeLabel, todayIn, whenLine, type SetTimeForm } from "../../apps/web/src/interview-time";
+import { DECISION_WORDS, bookLabel, candidateEmailLine, clashKey, clashShown, defaultDuration, durationChoices, durationWords, formFromBooked, freshForm, interviewLine, interviewNeedingTime, interviewWord, placeKindFor, setTimeBody, setTimeMissing, timeLabel, todayIn, whenLine, type SetTimeForm } from "../../apps/web/src/interview-time";
 import { bookOnBehalfToast, interviewSetToast, pickTimesToast } from "../../apps/web/src/talent-actions";
 
 /**
@@ -135,6 +135,17 @@ describe("what the screen says about the email: never that it left", () => {
     // 11 November 2026: it said "Moved. The email to Maria is on its way.")
     expect(interviewSetToast({ unchanged: true, startsAt: "2026-11-17T22:30:00.000Z", timezone: "America/Los_Angeles" }, "Maria", { moving: true })).toEqual({ title: "Nothing changed.", detail: "It is still booked for Tue, Nov 17, 2:30 PM. No email was sent." });
     expect(interviewSetToast({ unchanged: true }, "Maria", { moving: true })).toEqual({ title: "Nothing changed.", detail: "It is still booked as it was. No email was sent." });
+  });
+
+  it("shows a clash only for the interviewers and round it was found for: changing who interviews or the round takes it away (the release review, 11 November 2026)", () => {
+    const dana = { text: "Dana already has an interview at that time.", key: clashKey("first", ["u-dana"]) };
+    expect(clashShown(dana, clashKey("first", ["u-dana"]))).toBe("Dana already has an interview at that time.");
+    // the same people in another order are the same choice
+    expect(clashKey("first", ["u-lea", "u-dana"])).toBe(clashKey("first", ["u-dana", "u-lea"]));
+    // Lea instead of Dana, or another round: the alert and its "Book anyway" go, so nobody is booked over a clash nobody saw
+    expect(clashShown(dana, clashKey("first", ["u-lea"]))).toBeNull();
+    expect(clashShown(dana, clashKey("second", ["u-dana"]))).toBeNull();
+    expect(clashShown(null, clashKey("first", ["u-dana"]))).toBeNull();
   });
 
   it("toasts a time booked for them in the API's own word: booked, being booked, or waiting for the ITS check (the release review, 11 November 2026)", () => {

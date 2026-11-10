@@ -13,7 +13,7 @@ import { AskRecruiter } from "../../components/AskRecruiter";
 import { SetTimeForm } from "../../components/SetTimeForm";
 import { useCompanyCheck, useCompanyTimezone } from "../../components/use-company-check";
 import { defaultInterviewers } from "../../interview-defaults";
-import { candidateEmailLine, defaultDuration, freshForm, interviewNeedingTime, meetingLinkFor, placeKindFor, type SetTimeForm as SetTimeFormState } from "../../interview-time";
+import { candidateEmailLine, clashKey, defaultDuration, freshForm, interviewNeedingTime, meetingLinkFor, placeKindFor, type SetTimeForm as SetTimeFormState } from "../../interview-time";
 import { interviewDraftLine } from "../../hiring";
 import { canDecline, canManageInterviews, canReadNotes } from "../../roles";
 import { callNotesState, declineReasonFor } from "../../screen-view";
@@ -297,6 +297,7 @@ function InterviewStep({ a, roleId, initialRoundKey, myUserId, onClose }: { a: A
           calendarLive={calendarLive}
           // the team, the plan and who is pressing, all read before anyone can be ticked (the person pressing is the default)
           interviewers={membersKnown && myUserId ? chosenInterviewers.length : undefined}
+          clashKey={clashKey(chosenRoundKey, chosenInterviewers)}
           teamLoading={!membersKnown || !myUserId}
           onMissingInterviewers={openWith}
           autoFocus

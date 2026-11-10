@@ -5,7 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import type { SetInterviewTime } from "@ros/contracts";
 import { Alert, Button, Field } from "@ros/ui";
 import { ApiError, type InterviewBooked } from "../api/client";
-import { PLACE_LABEL, bookLabel, durationChoices, durationWords, meetingLinkFor, setTimeBody, setTimeMissing, timeLabel, todayIn, whenLine, type LinkChoice, type MissingField, type PlaceKind, type SetTimeForm as Form } from "../interview-time";
+import { PLACE_LABEL, bookLabel, clashShown, durationChoices, durationWords, meetingLinkFor, setTimeBody, setTimeMissing, timeLabel, todayIn, whenLine, type LinkChoice, type MissingField, type PlaceKind, type SetTimeForm as Form } from "../interview-time";
 import { interviewSetToast } from "../talent-actions";
 import { toast } from "../toast";
 import { useCompanyCheck } from "./use-company-check";
@@ -40,6 +40,8 @@ export function SetTimeForm(p: {
   moving?: boolean;
   /** How many people interview, when the form asks (the panel); left out on an interview that already has them. */
   interviewers?: number;
+  /** Who interviews and the round, as one key (`clashKey`), when the panel can change them: a clash shows only for the choice it was found for. */
+  clashKey?: string;
   /** The panel's team is still loading, so nobody can be ticked yet: Book waits, saying so. */
   teamLoading?: boolean;
   onMissingInterviewers?: () => void;
@@ -54,7 +56,9 @@ export function SetTimeForm(p: {
   const check = useCompanyCheck();
   const id = (x: string) => `${p.idBase}-${x}`;
   const first = p.firstName || "the candidate";
-  const [clash, setClash] = useState<string | null>(null);
+  // The clash found, with the choice it was found for: changing who interviews or the round on the panel takes it away.
+  const [found, setClash] = useState<{ text: string; key: string } | null>(null);
+  const clash = clashShown(found, p.clashKey ?? "");
   const dateRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (p.autoFocus) dateRef.current?.focus();
@@ -77,7 +81,7 @@ export function SetTimeForm(p: {
       await p.onDone(r);
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.code === "interviewer_busy") setClash(e.message);
+      if (e instanceof ApiError && e.code === "interviewer_busy") setClash({ text: e.message, key: p.clashKey ?? "" });
       else toast(e instanceof ApiError ? e.message : "Could not book it. Try again.");
     },
   });

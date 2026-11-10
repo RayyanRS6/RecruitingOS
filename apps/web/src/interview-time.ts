@@ -260,6 +260,20 @@ export function interviewWord(i: InterviewFacts, check: CompanyCheck = "unknown"
  */
 export const DECISION_WORDS: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired", new_times: "New interview set up" };
 
+/** Who interviews and in which round, as one key: a clash found for one choice says nothing about another. */
+export function clashKey(roundKey: string | null | undefined, interviewerUserIds: readonly string[]): string {
+  return `${roundKey ?? ""}|${[...interviewerUserIds].sort().join(",")}`;
+}
+
+/**
+ * The clash to show beside "Book anyway": only the one found for the interviewers and round chosen now. Changing who
+ * interviews, or the round, takes it away, so "Book anyway" never books someone over a clash nobody was shown (the release
+ * review, 11 November 2026: Dana's alert stayed while Lea, booked then too, was ticked instead).
+ */
+export function clashShown(clash: { text: string; key: string } | null, key: string): string | null {
+  return clash && clash.key === key ? clash.text : null;
+}
+
 /** "Tue, Nov 10, 2:00 PM": a booked time on the company's clock (the interview's zone), for a list. */
 export function shortWhen(iso: string | null | undefined, timeZone: string | null | undefined): string | null {
   if (!iso || Number.isNaN(Date.parse(iso))) return null;
