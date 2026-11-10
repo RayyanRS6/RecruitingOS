@@ -123,9 +123,12 @@ describe("the screen right after approval (D2)", () => {
     expect(words).not.toContain("Applications by email");
   });
 
-  it("notes that nobody is set to interview, and offers 'Share it now' and 'Go to your job'", () => {
-    expect(words).toContain("Nobody is set to interview yet.");
-    expect(words).toContain("Choose interviewers");
+  it("notes that nobody is named to interview, as a plain line and never a caution, and offers 'Share it now' and 'Go to your job'", () => {
+    // whoever sets a date and time chooses who interviews (6 November 2026): no amber nag in the old flow's words (L3-2)
+    expect(words).toMatch(/Nobody is named to interview yet\. Whoever sets a date and time chooses who interviews\. You can name them on the Interview plan tab ?\./);
+    expect(html).toContain('<button type="button" class="link-btn">Interview plan tab</button>');
+    expect(words).not.toContain("offered times straight away");
+    expect(html).not.toContain('class="alert caution"');
     expect(html).toMatch(/<div class="dialog-foot"><button[^>]*>.*Share it now<\/button><button type="button" class="btn primary"[^>]*>Go to your job<\/button><\/div>/);
   });
 });

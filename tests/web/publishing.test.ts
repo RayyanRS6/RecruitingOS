@@ -114,9 +114,13 @@ describe("the screen right after approval (D2)", () => {
     expect(noBoardsLine(view().boards.map((b) => ({ ...b, chosen: false })))).toBe("No job boards were chosen for this job. You can add LinkedIn or Indeed from the Share tab at any time.");
   });
 
-  it("says when no interviewers are set, and which boards still show the earlier version after an approved change", () => {
-    expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: 2 })).toMatch(/^Nobody is set to interview yet\./);
-    expect(interviewersNote({ rounds: 3, roundsWithoutInterviewers: 1 })).toMatch(/^1 of the 3 interview rounds have nobody/);
+  it("says when no interviewers are named, and which boards still show the earlier version after an approved change", () => {
+    // a plain fact in the new flow's words: whoever sets a date and time chooses who interviews, and no times are promised
+    // (the release review, 11 November 2026, L3-2)
+    expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: 2 })).toBe("Nobody is named to interview yet. Whoever sets a date and time chooses who interviews.");
+    expect(interviewersNote({ rounds: 3, roundsWithoutInterviewers: 1 })).toBe("1 of the 3 interview rounds has nobody named to interview yet. Whoever sets a date and time chooses who interviews.");
+    expect(interviewersNote({ rounds: 3, roundsWithoutInterviewers: 2 })).toMatch(/^2 of the 3 interview rounds have nobody named/);
+    for (const n of [1, 2]) expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: n })).not.toMatch(/offered times|straight away|Choose who interviews now/);
     expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: 0 })).toBeNull();
     expect(outdatedBoardsLine(["indeed"], "its")).toBe("Indeed still shows the earlier version. ITS has a task to update it from your company's account.");
     expect(outdatedBoardsLine(["linkedin_basic", "indeed"], "self")).toBe("LinkedIn, Indeed still show the earlier version. Update them from your own account, then confirm on the Share tab.");

@@ -56,7 +56,7 @@ function DestinationRow({ d }: { d: Destination }) {
  * The screen right after approval (plan D2): a calm confirmation with a tick for what is done (the approval), then
  * where the job is going, each place with a status that ticks only once it was checked: the careers page ("checking it
  * is up"), Google (marked found once someone sees it there), the email address for applications only while it works,
- * and each chosen board with who posts it. A note when no interviewers are set. "Share it now" opens the share block at
+ * and each chosen board with who posts it. A plain line when no interviewers are named. "Share it now" opens the share block at
  * the top; "Go to your job" closes the screen. It asks the server again while publishing is under way (with the
  * worker separate from the web server, opening and preparing the channels takes a moment).
  *
@@ -132,13 +132,9 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
           {noBoards ? <p className="small muted">{noBoards}</p> : null}
           {outdated ? <Alert tone="info">{outdated}</Alert> : null}
         </section>
+        {/* a plain fact, not a caution: nobody needs naming before a date and time is set (the release review, 11 November 2026) */}
         {note ? (
-          <Alert tone="caution">
-            <div className="stack gap-1.5">
-              <span>{note}</span>
-              {props.canEditPacket ? <div className="row"><Button size="sm" onClick={() => goTo("plan")}>Choose interviewers</Button></div> : <span className="small">An owner, an admin or a hiring manager chooses them on the Interview plan tab.</span>}
-            </div>
-          </Alert>
+          <p className="small muted">{note}{props.canEditPacket ? <> You can name them on the <button type="button" className="link-btn" onClick={() => goTo("plan")}>Interview plan tab</button>.</> : null}</p>
         ) : null}
         {q.error ? <Alert tone="critical">Could not read where the job stands. The Share tab shows it too.</Alert> : null}
         {/* the way to change where it goes, for those who may; nobody else is offered anything to change here */}
