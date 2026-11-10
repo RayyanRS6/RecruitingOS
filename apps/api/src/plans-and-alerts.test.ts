@@ -176,8 +176,16 @@ describe("allowances, plans and alerts", () => {
     // the worker is still down an hour later and someone acknowledged it: no second alert, no second email
     const [stale] = await container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "worker.stale"), eq(adminAlerts.status, "open")));
     await acknowledgeAlert(container.db, { id: stale.id, actor: { kind: "user", id: "00000000-0000-0000-0000-000000000001", name: "Ada" } });
-    expect((await checkOperationalHealth(container.db, new Date(now.getTime() + 61 * 60_000), { workerInline: false, emailCritical: (id) => container.emailCritical(id) })).raised).toBe(0);
+    // a timer that comes due in that hour makes the queue stale as well (the company's 8:00 summary does, once a
+    // morning): that is the queue's own alert, never emailed, so the worker's alerts are counted on their own and the
+    // test holds at any time of day
+    const [timer] = await container.db.insert(jobs).values({ kind: "workflow.tick", status: "queued", runAt: new Date(now.getTime() + 10 * 60_000).toISOString() }).returning({ id: jobs.id });
+    const later = await checkOperationalHealth(container.db, new Date(now.getTime() + 61 * 60_000), { workerInline: false, emailCritical: (id) => container.emailCritical(id) });
+    expect(later).toMatchObject({ workerStale: true, queueStale: true, raised: 1 });
+    expect(await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "worker.stale"))).toHaveLength(1);
     expect(mail().slice(before).filter((m) => m.subject === subject)).toHaveLength(1);
+    await container.db.delete(jobs).where(eq(jobs.id, timer.id));
+    await container.db.update(adminAlerts).set({ status: "resolved" }).where(eq(adminAlerts.kind, "queue.stale"));
     // a resolved alert is never emailed
     const gone = await withPlatform(container.db, (tx) => raiseAlert(tx, { kind: "test.critical_gone", severity: "critical", title: "Over already", body: "x" }));
     await container.db.update(adminAlerts).set({ status: "resolved" }).where(eq(adminAlerts.id, gone.id));
