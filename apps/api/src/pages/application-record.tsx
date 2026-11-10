@@ -13,6 +13,7 @@ import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { OTHER_APPLICATION_LABEL, otherApplicationsFor, packetOf, recordScoreFor, screensOf, sentAnswersFor, type OtherApplication, type RecordScore, type SentAnswers } from "../services/application-record";
 import { queueLinkRequest, recordWithdrawal, rotateStatusLink } from "../services/applications";
 import { exitCleanup } from "../services/exit-cleanup";
+import { candidateEmailStates } from "../services/interview-create";
 import { learnedFactsFor } from "../services/profile-facts";
 import { optBackIntoTalentPool, optOutOfTalentPool } from "../services/talent-pool";
 import { CORRECTION_LINE, anonymizedFor, linkGone, maskEmail } from "./candidate-shared";
@@ -309,7 +310,7 @@ function onFileLine(onFile: OnFile, companyName: string): string {
  * The line under the steps, in the candidate's words: what is happening now and what they can do. `unreviewed`: they
  * reached the decision before anyone at the company could read them, so nobody kept them, whatever has opened them since.
  */
-function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string; coming?: InterviewComing; onFile?: OnFile | null; unreviewed?: boolean }): string {
+function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string; coming?: InterviewComing; onFile?: OnFile | null; unreviewed?: boolean; noBookedEmail?: boolean }): string {
   const { step, stage, poolOptOut } = input;
   if (input.onFile && (step === "received" || step === "under_review")) return onFileLine(input.onFile, input.companyName);
   const news = input.news ?? {};
@@ -329,7 +330,9 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
     return "The hiring team is reviewing your application. You will hear from them either way.";
   }
   if (step === "interview") {
-    if (input.interview === "booked") return "Your interview is booked. The details are below and in your email.";
+    // Their email about it waits for the ITS check, could not be delivered, or there is no address: the page never points
+    // them to an email that never came (known-bugs row 149; the release review, 11 November 2026).
+    if (input.interview === "booked") return input.noBookedEmail ? "Your interview is booked. The details are below." : "Your interview is booked. The details are below and in your email.";
     if (input.interview === "offered") return "The team would like to interview you. Pick a time below.";
     if (news.lapsed) return "The interview times we sent have passed. The hiring team will be in touch.";
     if (news.noShow) return "The hiring team will be in touch about next steps.";
@@ -671,6 +674,8 @@ candidatePages.get("/c/status/:token", async (c) => {
   // New times whose email waits for the ITS check (founder decision B7) are not offered here either: the times are not out yet.
   const offered = !!iv && iv.status === "scheduling" && !!iv.scheduleToken && iv.offeredSlots.length > 0 && !news.held;
   const booked = !!iv && iv.status === "scheduled" && !!iv.startsAt && !!iv.scheduleToken && Date.parse(iv.endsAt ?? iv.startsAt) > Date.now();
+  // What became of the email about the booked time, as the team's screens read it (`candidateEmailStates`): held, not delivered, or no address.
+  const noBookedEmail = booked && !!(await withTenant(container.db, app.companyId, (tx) => candidateEmailStates(tx, { interviews: [{ id: iv!.id, attempt: iv!.attempt, status: iv!.status, offeredSlots: iv!.offeredSlots, hasEmail: !!cand?.email }] }))).get(iv!.id);
   // What to prepare (D15): the purpose of the booked round, from the packet version this application runs on.
   const prepare = booked ? await withTenant(container.db, app.companyId, async (tx) => (await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1))[0]?.packet.interviews.plan.find((r) => r.key === iv!.roundKey)?.purpose ?? null) : null;
   const smsEnabled = container.env.SMS_ENABLED;
@@ -735,7 +740,7 @@ candidatePages.get("/c/status/:token", async (c) => {
           drawn together as the "your next step" card (`next-step`, October 2026 redesign). */}
       <div class="next-step">
         <h2>What happens next</h2>
-        <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming, onFile, unreviewed })}</p>
+        <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming, onFile, unreviewed, noBookedEmail })}</p>
         {/* The choice the decision message points to (Q30), one click away from the decision itself. Someone locked when they
             reached it was not offered it: nobody kept them, and their closing message says nothing about it. The button stays below. */}
         {told && !poolOptOut && !unreviewed ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}

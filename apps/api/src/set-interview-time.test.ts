@@ -1415,10 +1415,16 @@ describe("a person sets the date and time", () => {
     it("an email that could not be delivered shows on the sheet and the panel; one on its way, or gone, says nothing", async () => {
       const { cand, booked, row } = await book("Zia", "Bounce");
       expect(((await (await json(owner, "GET", `/api/v1/interviews/${booked.id}`)).json()) as { candidateEmail: string | null }).candidateEmail).toBeNull();
+      const statusPage = async () => await (await app.request(`/c/status/${cand.statusToken}`)).text();
+      expect(await statusPage()).toContain("Your interview is booked. The details are below and in your email.");
       const key = `confirm:${booked.id}:${row.attempt}`;
       expect((await emailOf(key)).status).toBe("sent");
       await container.db.update(communications).set({ status: "failed", error: "provider refused" }).where(eq(communications.idempotencyKey, key));
       expect(((await (await json(owner, "GET", `/api/v1/interviews/${booked.id}`)).json()) as { candidateEmail: string }).candidateEmail).toBe("failed");
+      // their status page no longer points them to an email that never came (the release review, 11 November 2026)
+      const page = await statusPage();
+      expect(page).toContain("Your interview is booked. The details are below.");
+      expect(page).not.toContain("and in your email");
       const panel = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { interviews: Array<{ id: string; candidateEmail: string }> };
       expect(panel.interviews.find((i) => i.id === booked.id)?.candidateEmail).toBe("failed");
       // the email that did not reach them never told them, so a move is their first time too
@@ -1500,8 +1506,12 @@ describe("a person sets the date and time", () => {
         expect((await emailOf(`confirm:${out.id}:1`)).status).toBe("held");
         expect(((await (await json(owner, "GET", `/api/v1/interviews/${out.id}`)).json()) as { candidateEmail: string }).candidateEmail).toBe("held");
         expect(mailTo(cand.email).filter((m) => m.subject.startsWith("Your interview:"))).toHaveLength(0);
-        // the booking stands and shows, and their status page has it
+        // the booking stands and shows, and their status page has it, without pointing them to an email that waits for the ITS
+        // check (known-bugs row 149, fixed on 11 November 2026)
         expect((await application(cand.id)).stage).toBe("interview_scheduled");
+        const status = await (await app.request(`/c/status/${cand.statusToken}`)).text();
+        expect(status).toContain("Your interview is booked. The details are below.");
+        expect(status).not.toContain("and in your email");
         // a move, while they have heard nothing: not "moved"
         const chosen = fresh();
         const m = await routeB(out.id, { ...chosen, place: { kind: "link", url: "https://meet.example/new" }, reason: "A clash at our end." });
