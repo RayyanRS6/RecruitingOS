@@ -90,7 +90,7 @@ test.describe("first sign-in asks for approval", () => {
     // the copy the screen promises, by its words, and the one to the ITS queue
     await waitForEmail(page.request, baseURL!, { to: me.email, subject: "Your request has been sent", says: [`Your request for ${company} has been sent.`, "Please wait for approval. ITS reviews each company, usually within one business day, and we will email you when it is decided."] });
     await exactlyOneEmail(page.request, baseURL!, { to: me.email, subject: "Your request has been sent" });
-    await waitForEmail(page.request, baseURL!, { to: "recruiters@its.localhost", subject: `[access request] ${company} is asking for access`, says: [`Company: ${company}`, `Person: Sam Asker <${me.email}>`, "Accept or decline it in the admin console, on the Overview:"] });
+    await waitForEmail(page.request, baseURL!, { to: "recruiters@its.localhost", subject: `[access request] ${company} is asking for access`, says: [`Company: ${company}`, `Person: ${me.email} (Sam Asker)`, "Only the email address is proved; the rest is what they typed.", "Accept or decline it in the admin console, on the Overview:"] });
 
     // Reloading, any signed-in address, and signing out and in again all land here, with no error and no loop
     await page.reload();
