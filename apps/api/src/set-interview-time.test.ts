@@ -388,6 +388,23 @@ describe("a person sets the date and time", () => {
       expect(track(booked)).toContain('<li class="current" aria-current="step"><span class="dot" aria-hidden="true"></span><span>Interview</span></li>');
       expect(track(booked)).toContain('<span>Review</span><span class="sr-only"> (done)</span>');
       expect((await app.request(`/c/screen/${scr.token}`)).status).toBe(200);
+      // the AI interview's own reminder and closing note never come while the interview is theirs: "in a few days your
+      // application goes to the hiring team without it" and "nothing else is needed from you" would not be true (the release
+      // review, 11 November 2026, L4-6); its link still closes on time
+      const NUDGES = ["screen_not_started_reminder", "screen_not_started", "screen_reminder", "screen_expired", "screen_idle_reminder", "screen_review_reminder", "screen_unfinished"];
+      const nudges = async () => (await container.db.select({ key: communications.templateKey }).from(communications).where(eq(communications.applicationId, cand.id))).filter((m) => NUDGES.includes(m.key ?? ""));
+      try {
+        setClock(BASE + 49 * H);
+        await container.drain();
+        expect(await nudges()).toEqual([]);
+        setClock(BASE + 8 * DAY);
+        await container.drain();
+        expect(await nudges()).toEqual([]);
+        expect((await container.db.select().from(screens).where(eq(screens.id, scr.id)))[0].status).toBe("expired");
+        expect(mailTo(cand.email).some((m) => /your AI interview is still open|without the AI interview|nothing else is needed/i.test(`${m.subject} ${m.text}`))).toBe(false);
+      } finally {
+        setClock(BASE);
+      }
     });
 
     it("who may press: an owner, an admin, a hiring manager and an ITS recruiter's roles hold it; HR and an interviewer see the time and cannot set it", async () => {

@@ -3,7 +3,7 @@ import type { ScreenAssessment, ScreenChannel, ScreenTurn } from "@ros/contracts
 import type { RunOutcome } from "@ros/ai";
 import { outOfCredit, runPromptDetached, screenTurnPrompt } from "@ros/ai";
 import { audit, emit, entitlements, evaluateEligibility, gate, humanResponseExpectation, isOneVisitFlow, loadBusinessCalendar, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
-import { applications, assessments, candidates, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
+import { applications, assessments, candidates, companies, interviews, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
   HELD_REASON, answersOf, applyScreenOpening, assessScreen, chatFactsFor, createScreen, finishScreenTurn, focusQuestionsFrom, linkEmailWaiting, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
   sendConversationNotOfferedNote, sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, type FocusQuestion, type ScreenDeps,
@@ -24,7 +24,11 @@ import { HELD_DECISION_EVENT, aiNoticeSentSignal } from "./application-intake";
  * `mode` "with_application" (20 Oct 2026, R20-4): every applicant's AI interview, started by the intake; `readingDeadline`
  * is when it stops waiting for the résumé reading, `heldSince` when a must-have "No" started holding it (R20-10).
  */
-type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns"; invitedVia?: "apply" | "confirmed_repeat" | "recruiter_call" | "with_application"; waitingForAllowance?: string; flow?: "one_visit"; mode?: "with_application"; readingDeadline?: string; heldSince?: string; creditWaitSince?: string } & SuggestionState;
+/**
+ * `idleQuietAt`: when an idle reminder was due but not sent because a person had set up an interview for them; the close
+ * counts from it as from a reminder that went (the release review, 11 November 2026).
+ */
+type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns"; invitedVia?: "apply" | "confirmed_repeat" | "recruiter_call" | "with_application"; waitingForAllowance?: string; flow?: "one_visit"; mode?: "with_application"; readingDeadline?: string; heldSince?: string; creditWaitSince?: string; idleQuietAt?: string } & SuggestionState;
 
 /** A screen that is over without a scorecard: handed to a person, left, stopped by the team or closed with the application. Nothing more is sent. */
 const ENDED = ["human_requested", "abandoned", "cancelled", "expired"];
@@ -229,11 +233,13 @@ export const screen: WorkflowDefinition<State> = {
       if (scr.status === "paused") return { kind: "next", step: "retry_paused" };
       if (scr.status === "in_progress") {
         // E4: no longer a 72-hour wait repeated for ever. A day without an answer brings one reminder; two more days close it.
-        const lastActive = Math.max(Date.parse(scr.lastCandidateMessageAt ?? scr.startedAt ?? ctx.now.toISOString()), scr.idleRemindedAt ? Date.parse(scr.idleRemindedAt) : 0);
+        // A reminder held back because an interview is set up for them counts as one (`idleQuietAt`).
+        const reminded = scr.idleRemindedAt ?? ctx.state.idleQuietAt ?? null;
+        const lastActive = Math.max(Date.parse(scr.lastCandidateMessageAt ?? scr.startedAt ?? ctx.now.toISOString()), reminded ? Date.parse(reminded) : 0);
         // A person's "Send a reminder" (R20-7) keeps it open at least until `keptOpenUntil` too.
         const kept = scr.idleRemindedAt && scr.progress.keptOpenUntil ? Date.parse(scr.progress.keptOpenUntil) : 0;
-        const due = Math.max(lastActive + (scr.idleRemindedAt ? IDLE_CLOSE_HOURS : IDLE_REMIND_HOURS) * HOUR, kept);
-        if (ctx.now.getTime() >= due) return { kind: "next", step: scr.idleRemindedAt ? "close_unfinished" : "idle_remind" };
+        const due = Math.max(lastActive + (reminded ? IDLE_CLOSE_HOURS : IDLE_REMIND_HOURS) * HOUR, kept);
+        if (ctx.now.getTime() >= due) return { kind: "next", step: reminded ? "close_unfinished" : "idle_remind" };
         return { kind: "wait", wait: { kind: "event", eventTypes: ["completed", "human", "paused"], subjectId: `screen:${scr.id}`, until: new Date(due).toISOString(), reason: "conversation under way" }, resumeStep: "after_invite" };
       }
       // B7: the one email with the link was held for the ITS company check. The link's five days, the 48-hour reminder and
@@ -260,6 +266,12 @@ export const screen: WorkflowDefinition<State> = {
       if (scr.channel === "sms") {
         const allowed = nextContactWindow(ctx.now, b.company.timezone, b.company.settings.businessHours);
         if (allowed.getTime() > ctx.now.getTime()) return { kind: "wait", wait: { kind: "timer", until: allowed.toISOString(), reason: "quiet hours" }, resumeStep: "remind" };
+      }
+      // A person set up an interview for them: no reminder, since "in a few days your application goes to the hiring team
+      // without it" is no longer true. The link stays open to its own end, then closes as usual, quietly.
+      if (await quietForInterview(ctx, b.app.id)) {
+        const until = scr.expiresAt && Date.parse(scr.expiresAt) > ctx.now.getTime() ? scr.expiresAt : new Date(ctx.now.getTime() + REMIND_WAIT_HOURS * HOUR).toISOString();
+        return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until, reason: "an interview is set up for them, so no reminder" }, resumeStep: "expire" };
       }
       // The conversation that goes with the application (E4): leaving it costs nothing, and the reminder says so.
       if (isOneVisitFlow(scr.progress)) {
@@ -299,6 +311,9 @@ export const screen: WorkflowDefinition<State> = {
       const oneVisit = isOneVisitFlow(scr.progress) && !byPerson(ctx.state);
       await ctx.q.update(screens).set({ status: "expired" }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.expired", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, remindedAt: scr.remindedAt, ...(oneVisit ? { oneVisit: true } : {}) }, correlationId: ctx.run.id });
+      // An interview is set up for them: no note, since "nothing else is needed from you" and "the team decides on next steps"
+      // are no longer true while an interview is theirs (the release review, 11 November 2026).
+      if (await quietForInterview(ctx, b.app.id)) return { kind: "complete" };
       // Since Step 3 (R20-7) they stay where they are, under "No AI interview yet" as "Link expired": the column and the
       // one line per job on Home replace the per-person alerts, and the team can remind, send a new link or decline there.
       if (oneVisit) {
@@ -322,6 +337,8 @@ export const screen: WorkflowDefinition<State> = {
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
       if (!scr || !b) return { kind: "fail", error: "screen missing", retryable: false };
       if (scr.status !== "in_progress" || scr.idleRemindedAt) return { kind: "next", step: "after_invite" };
+      // An interview is set up for them: no reminder, but the close counts from now as if one had gone (`idleQuietAt`).
+      if (await quietForInterview(ctx, b.app.id)) return { kind: "wait", wait: { kind: "event", eventTypes: ["completed", "human", "paused"], subjectId: `screen:${scr.id}`, until: new Date(ctx.now.getTime() + IDLE_CLOSE_HOURS * HOUR).toISOString(), reason: "an interview is set up for them, so no reminder" }, state: { idleQuietAt: ctx.now.toISOString() }, resumeStep: "after_invite" };
       const packet = (await loadScreenBundle(ctx.q, scr.id))?.packet ?? b.packet;
       const link = { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token }, questions: packet.screening.questions.length, minutes: packet.screening.maxMinutes };
       if (scr.progress.phase === "review") await sendConversationReviewReminder(ctx.q, ctx.services.integrations, { ...link, closesOn: dayWords(new Date(ctx.now.getTime() + IDLE_CLOSE_HOURS * HOUR), b.company.timezone) });
@@ -349,6 +366,8 @@ export const screen: WorkflowDefinition<State> = {
       const answered = Object.keys(answersOf(scr)).length;
       await ctx.q.update(screens).set({ status: "unfinished", completedAt: ctx.now.toISOString() }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.unfinished", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, answered, questions: b.packet.screening.questions.length, stoppedAt: scr.progress.currentQuestionKey ?? null }, correlationId: ctx.run.id });
+      // An interview is set up for them: no "Nothing else is needed from you" note (the release review, 11 November 2026).
+      if (await quietForInterview(ctx, b.app.id)) return { kind: "complete" };
       await sendConversationUnfinishedNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
       return { kind: "complete" };
     },
@@ -533,6 +552,18 @@ export const screen: WorkflowDefinition<State> = {
  */
 function byPerson(state: State): boolean {
   return !!state.invitedBy && state.invitedBy !== "system" && state.invitedBy !== "apply";
+}
+
+/**
+ * Whether the AI interview's own reminders and closing notes stay unsent because a person set up an interview for them (the
+ * release review, 11 November 2026): their words ("in a few days your application goes to the hiring team without it",
+ * "nothing else is needed from you") are not true once an interview is theirs. The link still works (aea3aee), and the run
+ * closes it on time as before. A link a person sent keeps its reminders: they asked for it.
+ */
+async function quietForInterview(ctx: StepContext<State>, applicationId: string): Promise<boolean> {
+  if (byPerson(ctx.state)) return false;
+  const [iv] = await ctx.q.select({ id: interviews.id }).from(interviews).where(eq(interviews.applicationId, applicationId)).limit(1);
+  return !!iv;
 }
 
 /** The stages of someone no longer in the process. */
