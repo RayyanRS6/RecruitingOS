@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { PROVIDER_REFUSED_ALERT, detectStuckRoles, queueCommunication } from "@ros/agents";
-import { entitlements, findInvitationByToken } from "@ros/core";
-import { adminAlerts, applications, candidates, communications, hiringOutcomes as hiringOutcomesTable, interviews as interviewsTable, notifications, users, withPlatform, withTenant } from "@ros/db";
+import { addCalendarDays, companyToday, entitlements, findInvitationByToken } from "@ros/core";
+import { adminAlerts, applications, candidates, communications, companies, hiringOutcomes as hiringOutcomesTable, interviews as interviewsTable, notifications, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, SendResult } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { APPLY_WAIT_JS, WAIT_GAVE_UP_LINE, WAIT_GAVE_UP_MORE } from "./pages/apply-form";
 import { QUIET_DAY_LINE } from "./services/brief";
+import { closeAfterHireCards } from "./services/hire-sheet";
 import { signInAs } from "./test-helpers";
 
 /**
@@ -205,7 +206,10 @@ describe("the dead ends a first-time owner met", () => {
   describe("rank 14: a hire ends that person's interviews still to come, and the job asks to be closed", () => {
     let jobB = "";
     let roundKey = "";
-    const dayFromNow = (days: number) => new Date(Date.now() + days * DAY).toISOString().slice(0, 10);
+    // On the company's own day, as Home counts it (America/Los_Angeles, the company's zone): a UTC date is already tomorrow there
+    // every US evening (00:00 to 08:00 UTC), when "yesterday" by UTC is the company's today (the release review, 11 November 2026).
+    const TZ = "America/Los_Angeles";
+    const dayFromNow = (days: number) => addCalendarDays(companyToday(new Date(), TZ), days);
     const book = async (applicationId: string, days: number) => {
       const r = await json(owner, "POST", `/api/v1/applications/${applicationId}/interviews`, { roundKey, interviewerUserIds: [ownerId], setTime: { date: dayFromNow(days), time: "10:00", durationMinutes: 45, place: { kind: "phone" } } });
       expect(r.status, await r.clone().text()).toBe(201);
@@ -263,6 +267,20 @@ describe("the dead ends a first-time owner met", () => {
       expect(card.actions).toEqual([{ label: "Close the job", method: "GET", path: `/roles/${jobB}?close=1` }]);
       // it asks again the next time Home is read: there is no way to wave it off but closing
       expect(await closeCard()).toBeTruthy();
+      // the same question in a US evening, when the UTC date is already tomorrow: Home counts the company's own day, so the
+      // card is there whatever hour CI runs at, and a start on the company's today has not passed yet (L5-1)
+      const [company] = await container.db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId));
+      expect(company.timezone).toBe(TZ);
+      const today = dayFromNow(0);
+      const evening = new Date(`${addCalendarDays(today, 1)}T03:30:00.000Z`);
+      expect(companyToday(evening, TZ)).toBe(today);
+      expect(evening.toISOString().slice(0, 10)).not.toBe(today);
+      const askedAt = async (now: Date) => (await withTenant(container.db, companyId, (tx) => closeAfterHireCards(tx, { companyId, viewer: { role: "owner" }, now }))).some((c) => c.roleId === jobB);
+      expect(await askedAt(evening)).toBe(true);
+      await container.db.update(hiringOutcomesTable).set({ hireDate: today }).where(and(eq(hiringOutcomesTable.roleId, jobB), eq(hiringOutcomesTable.applicationId, ned.id)));
+      expect(await askedAt(evening)).toBe(false);
+      await container.db.update(hiringOutcomesTable).set({ hireDate: dayFromNow(-1) }).where(eq(hiringOutcomesTable.roleId, jobB));
+      expect(await askedAt(evening)).toBe(true);
       // an interviewer, who cannot close a job, is never asked
       expect((await brief(await member("interviewer", "ivy2@deadends.test"))).cards.some((c) => c.title.startsWith("Close this job?"))).toBe(false);
       // closed as filled: the question goes
