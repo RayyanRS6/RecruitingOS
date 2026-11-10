@@ -279,6 +279,42 @@ describe("the application record (status page) after sending", () => {
     }
   });
 
+  /**
+   * The release review (11 November 2026, L1-4): someone who asked for a person in the AI interview has a recruiter's call to
+   * come, whose notes write the scorecard, and so has an AI interview a recruiter finished on a call until that scorecard is
+   * written. The team reads their number as still to come, so their own page never shows the résumé's alone as ready.
+   */
+  it("someone who asked for a person, or whose AI interview a recruiter finished on a call, reads 'Not ready yet' until its scorecard is in, never a résumé-only number", async () => {
+    const a = await applyAs("Kai", "kai.record@example.com");
+    await readingFor(a);
+    const scr = await addScreen(a, { status: "human_requested" });
+    const scoreOf = async () => (await page(`/c/status/${a.statusToken}`)).html;
+    // a moment after applying and long after: the call is a person's, so never "under a minute", and never the résumé's number
+    for (const createdAt of [at(0), at(-20 * 60)]) {
+      await container.db.update(applications).set({ createdAt }).where(eq(applications.id, a.id));
+      const html = await scoreOf();
+      expect(html).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Not ready yet</h2><p>Your match score shows here once it is ready. The hiring team reads every application themselves either way.</p>');
+      expect(html).not.toContain("Your match score is ready");
+      expect(html).not.toContain("From your résumé only");
+    }
+    // the team reads the same: their AI interview is still to come
+    expect(((await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { matchScore: { interview: string } }).matchScore.interview).toBe("not_done_yet");
+    // a recruiter called and finished it with their notes: its scorecard is being written, as after the candidate's own Send
+    await container.db.update(screens).set({ status: "completed", completedAt: at(0), progress: progressOf({ completedBy: "recruiter_call" }) }).where(eq(screens.id, scr.id));
+    let html = await scoreOf();
+    expect(html).toContain('<h2 id="score-h">Working out your match score…</h2>');
+    expect(html).not.toContain("From your résumé only");
+    await container.db.update(screens).set({ completedAt: at(-30 * 60) }).where(eq(screens.id, scr.id));
+    html = await scoreOf();
+    expect(html).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Not ready yet</h2>');
+    expect(html).not.toContain("From your résumé only");
+    // once that scorecard is in, the number shows, counting both
+    await container.db.update(screens).set({ assessmentId: (await readingFor(a, at(90), "screen")).id }).where(eq(screens.id, scr.id));
+    html = await scoreOf();
+    expect(html).toContain("Your match score is ready");
+    expect(html).toMatch(/<p class="meta">From your résumé and your AI interview\. Based on /);
+  });
+
   it("S7-2: 'Your answers' reads back exactly what was sent: the form's questions in sentences and the sent chat, the assistant's note apart; an unsent chat shows nothing and holds the score back", async () => {
     const a = await applyAs("Cleo", "cleo.record@example.com");
     await readingFor(a);

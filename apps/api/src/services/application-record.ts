@@ -29,7 +29,9 @@ export const REVIEWING_REFRESH_SECONDS = 15;
  * - `reviewing`: sent a moment ago and the reading is not written yet: "Working out your match score…", with "Check again".
  * - `not_ready`: no score after the reviewing window while a reading may still come (one late, a résumé that could not be
  *   read), or a sent AI interview whose scorecard is not written yet, for as long as that takes: never a résumé-only number
- *   for someone who did it. One waiting for the plan's AI help is `off` instead.
+ *   for someone who did it. One waiting for the plan's AI help is `off` instead. The same for an AI interview a recruiter
+ *   finished on a call until its scorecard is written, and while the call someone asked for in the AI interview is still to
+ *   come (11 November 2026): the team reads both as still to come.
  * - `not_coming`: nothing will work a number out by itself (10 November 2026): no reading gives one, the résumé's could not be
  *   made or AI does not read it (`readingWontCome`), and no AI interview is open, being written up or still on its way. Said at
  *   once, never "Working out…" or "Not ready yet" for ever.
@@ -93,20 +95,25 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   // Labelled with where their AI interview stands (R20-9): "From your résumé only" until its scorecard is in.
   const match = packet && own.length ? matchScore(readingPair(own), packet, { packetVersion: readAgainst, interview: interviewInScore(input.screens, app.stage) }) : null;
   const view = packet ? candidateScoreView(match, packet) : null;
-  // A chat they sent whose scorecard is not written yet: the score is about to change, and the résumé's number would read low
-  // for someone who did what was asked, so it waits for it (6 November 2026).
-  const sent = last && screenAnswersSent(last) ? last : null;
+  // An AI interview whose scorecard is not written yet: the score is about to change, and the résumé's number would read low
+  // for someone who did what was asked, so it waits for it (6 November 2026). One they sent, or one a recruiter finished on a
+  // call, whose notes write the scorecard (the release review, 11 November 2026).
+  const sent = last && last.status === "completed" ? last : null;
   // Unless that scorecard waits for the plan's AI help (PL-10): then nothing is about to change, so "Working out…" would not
   // be true, and the résumé's number still never stands in for it. Nothing is said about a score, as with no reading at all,
   // and it shows once the credit is back.
   if (sent && !sent.assessmentId && sent.progress.scoreWaitsForCredit) return { state: "off", view: null };
   const scorecardDue = !!sent && !sent.assessmentId;
+  // They asked for a person in the AI interview: a recruiter's call is still to come, and its notes write the scorecard, so the
+  // résumé's number is only a floor, as the team reads it ("Résumé only: AI interview not done yet"). "Not ready yet", never
+  // "under a minute": the call is a person's (the release review, 11 November 2026).
+  const callComing = last?.status === "human_requested";
   // Nothing will give a number by itself (10 November 2026): said at once, a moment after applying too.
-  if (!view && !scorecardDue && (await readingWontCome(tx, app.id)) && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
+  if (!view && !scorecardDue && !callComing && (await readingWontCome(tx, app.id)) && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
   const since = Date.parse(sent?.completedAt ?? app.createdAt);
   const recent = input.now.getTime() - since < REVIEWING_WINDOW_MS;
   if ((scorecardDue || !view) && recent) return { state: "reviewing", view: null };
-  return view && !scorecardDue ? { state: "ready", view } : { state: "not_ready", view: null };
+  return view && !scorecardDue && !callComing ? { state: "ready", view } : { state: "not_ready", view: null };
 }
 
 /** Whether what would write a reading waits for AI credit: a sent chat's scorecard (its mark), or the résumé's reading (its intake's run, however it started). */
