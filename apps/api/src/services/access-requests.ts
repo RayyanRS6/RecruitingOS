@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { ACCESS_REQUEST_STATUSES, oneLine, typedName, visibleLength, type Actor, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
-import { activeSuppression, audit, emit, errorForLog, notify, revokeInvitation, revokeSessionsForCompany } from "@ros/core";
-import { companies, events, invitations, memberships, users, withPlatform, type Db, type Queryable } from "@ros/db";
+import { BOARD_UP_STATES, activeSuppression, audit, cancelPostingTasks, emit, errorForLog, notify, revokeInvitation, revokeSessionsForCompany } from "@ros/core";
+import { companies, events, invitations, memberships, postings, roles, users, withPlatform, type Db, type Queryable } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
@@ -238,6 +238,8 @@ export async function decideAccess(tx: Queryable, container: Container, input: {
   // links are out there, and a name changed since, or one that needed four characters more, would move it.
   if (!restoring) await tx.update(companies).set({ slug: await freeSlug(tx, slugify(co.name), co.id) }).where(eq(companies.id, co.id));
   await verifyCompany(tx, container, { companyId: co.id, actor, reason: ACCEPTED_REASON, now, quiet: true });
+  // Read before the acceptance is on record: the removal's own record names the board listings it closed.
+  if (restoring) await putBackBoardsClosedByRemoval(tx, { companyId: co.id, actor, now });
   await emit(tx, { type: "company.access_accepted", companyId: co.id, actor, subject: company, payload: { from: owner.status, ...(restoring ? { restored: waiting.length } : {}) } });
   for (const m of waiting) await emit(tx, { type: "membership.changed", companyId: co.id, actor, subject: { type: "user", id: m.userId }, payload: { role: m.role, status: "active" } });
   await audit(tx, { companyId: co.id, actor, action: "company.access_accepted", target: company, reason: ACCEPTED_REASON, details: { from: owner.status, ...(restoring ? { restored: waiting.length } : {}) } });
@@ -246,6 +248,33 @@ export async function decideAccess(tx: Queryable, container: Container, input: {
   // made a request, and a teammate never asked for anything (the release review, 11 November 2026).
   await notify(tx, { companyId: co.id, ...(restoring ? { kind: "company.access_restored", title: "Your access is back", body: "You can sign in and pick up where you left off." } : { kind: "company.access_accepted", title: "Your request was approved", body: "You can start now." }), action: { label: "Open Home", href: "/" }, userIds: waiting.map((m) => m.userId) });
   return { answer: answer("active", true, restoring ? `${co.name} has access again.` : `${co.name} was accepted.`), declined: null };
+}
+
+/**
+ * The undo of Take away access puts back the job-board listings taking it away closed (the release review, 11 November 2026).
+ * Nobody at the company could take one down meanwhile: they had no access, and the notice saying so reached nobody. So each
+ * is still up on its board, and its apply link works again with the careers page; Home and the Share tab must not tell the
+ * team to take down a job they want up. Each goes back to the state it was in, as the removal recorded it. A listing someone
+ * confirmed taken down stays closed, as does one whose job closed since, and a "take it down" task ITS was given for it is
+ * withdrawn. Answers how many were put back.
+ */
+async function putBackBoardsClosedByRemoval(tx: Queryable, input: { companyId: string; actor: Actor; now: Date }): Promise<number> {
+  const [removal] = await tx.select({ payload: events.payload }).from(events).where(and(eq(events.companyId, input.companyId), eq(events.type, "company.access_removed"))).orderBy(desc(events.occurredAt), desc(events.id)).limit(1);
+  const closed = ((removal?.payload ?? {}) as { boardsClosed?: Array<{ postingId: string; from: string }> }).boardsClosed ?? [];
+  let back = 0;
+  for (const c of closed) {
+    const from = BOARD_UP_STATES.find((s) => s === c.from);
+    if (!from) continue;
+    const [p] = await tx.select().from(postings).where(and(eq(postings.id, c.postingId), eq(postings.companyId, input.companyId))).limit(1);
+    if (!p || p.status !== "closed" || !p.closureRequired || p.closureConfirmedAt) continue;
+    const [role] = await tx.select({ status: roles.status }).from(roles).where(eq(roles.id, p.roleId)).limit(1);
+    if (role?.status !== "open" && role?.status !== "paused") continue;
+    await tx.update(postings).set({ status: from, closedAt: null, closureRequired: false }).where(eq(postings.id, p.id));
+    await emit(tx, { type: `posting.${from}`, companyId: input.companyId, actor: input.actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: p.roleId, from: "closed", to: from, url: p.externalUrl ?? null, reason: "access given back", putBack: true } });
+    await cancelPostingTasks(tx, { companyId: input.companyId, postingId: p.id, kinds: ["take_down_job"], reason: "Access was given back, so the listing stays up.", actor: input.actor, now: input.now });
+    back += 1;
+  }
+  return back;
 }
 
 /** Whether the newest decision about this company's access took an accepted company's access away, rather than declining a request. */
@@ -269,11 +298,13 @@ async function takeAccessAway(tx: Queryable, input: { company: { id: string; nam
   // An invitation accepted later would make an active membership again: none is left open.
   const open = await tx.select({ id: invitations.id }).from(invitations).where(and(eq(invitations.companyId, co.id), eq(invitations.status, "pending")));
   for (const inv of open) await revokeInvitation(tx, { invitationId: inv.id, companyId: co.id, actor, now });
-  await emit(tx, { type: "company.access_removed", companyId: co.id, actor, subject: company, payload: { people: active.length, invitationsWithdrawn: open.length } });
-  await audit(tx, { companyId: co.id, actor, action: "company.access_removed", target: company, reason: REMOVED_REASON, details: { people: active.length, invitationsWithdrawn: open.length } });
   // The public side goes offline and candidate emails wait, exactly as "Take back the confirmation" does it. Its notice to
-  // the team reaches nobody now, which is right: nobody there can read it.
-  await unverifyCompany(tx, { companyId: co.id, actor, reason: REMOVED_REASON, now });
+  // the team reaches nobody now, which is right: nobody there can read it. The board listings it closed are kept on the
+  // removal's own record, so the undo puts them back (`putBackBoardsClosedByRemoval`).
+  const unverified = await unverifyCompany(tx, { companyId: co.id, actor, reason: REMOVED_REASON, now });
+  const boardsClosed = unverified?.boardsClosed ?? [];
+  await emit(tx, { type: "company.access_removed", companyId: co.id, actor, subject: company, payload: { people: active.length, invitationsWithdrawn: open.length, boardsClosed } });
+  await audit(tx, { companyId: co.id, actor, action: "company.access_removed", target: company, reason: REMOVED_REASON, details: { people: active.length, invitationsWithdrawn: open.length, boardsClosed: boardsClosed.length } });
   for (const m of active) await revokeSessionsForCompany(tx, m.userId, co.id, { now });
   return { companyId: co.id, companyName: co.name, userIds: active.map((m) => m.userId), owners: [...new Set(active.filter((m) => m.role === "owner").map((m) => m.email))], at: now.toISOString() };
 }

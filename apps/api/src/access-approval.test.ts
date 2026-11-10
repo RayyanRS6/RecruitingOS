@@ -4,7 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, SPAM_ALERT_WINDOW_MS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
 import { CreateCompany, FREE_PLAN_KEY, oneLine, typedName, visibleLength, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
 import { createApplicationLink, createInvitation, renderAlertEmail } from "@ros/core";
-import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns, type Tx } from "@ros/db";
+import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, postings, rolePackets, roles, sessions, users, withPlatform, workflowRuns, type Tx } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -1770,6 +1770,31 @@ describe("taking an accepted company's access away", () => {
     // their own history says both, in plain words
     const history = await w.read<Array<{ action: string; description: string }>>(await w.json(owner, "GET", "/api/v1/companies/current/audit?actions=company.access_removed,company.access_accepted"));
     expect(history.map((h) => h.description).sort()).toEqual(["ITS gave your company its access back.", "ITS took your company's access away: nobody on it could sign in to it, and its careers page and job pages were offline."]);
+  });
+
+  /**
+   * The release review (11 November 2026, L3-9): taking access away closes every job-board listing that was up, as taking the
+   * confirmation back does, but its notice reached nobody, so nobody took one down. After Accept the job was live again while
+   * the listing stayed closed here, and Home said "Take it down from your own account" about a job the team wants up.
+   */
+  it("Accept puts back the job-board listings taking access away closed: the job is live again and Home asks nobody to take it down", async () => {
+    const co = await inUse("pat.boards@listed-domain.test", "Boards Dental", "bo.mate@stranger.test");
+    const indeed = async () => (await w.container.db.select().from(postings).where(and(eq(postings.roleId, co.roleId), eq(postings.channel, "indeed"))))[0];
+    const url = "https://www.indeed.com/viewjob?jk=boards123";
+    const before = await indeed();
+    if (before) await w.container.db.update(postings).set({ status: "posted_manually", externalUrl: url, closureRequired: false, closedAt: null }).where(eq(postings.id, before.id));
+    else await withPlatform(w.container.db, (tx) => tx.insert(postings).values({ companyId: co.id, roleId: co.roleId, channel: "indeed", status: "posted_manually", externalUrl: url }));
+    expect((await w.decide(adminCookie, co.id, "remove")).status).toBe(200);
+    // taken away: closed and named for taking down, as when the confirmation is taken back
+    expect(await indeed()).toMatchObject({ status: "closed", closureRequired: true, closureConfirmedAt: null });
+    expect((await w.decide(adminCookie, co.id, "accept")).status).toBe(200);
+    await w.container.drain();
+    // given back: up as it was, at the same address, with nothing to take down
+    expect(await indeed()).toMatchObject({ status: "posted_manually", externalUrl: url, closureRequired: false, closedAt: null });
+    const owner = await w.google("pat.boards@listed-domain.test");
+    const home = await w.read<{ cards: Array<{ title: string; body: string }> }>(await w.json(owner, "GET", "/api/v1/brief"));
+    expect(home.cards.filter((c) => c.title.startsWith("Still posted on") || /Take (it|the posting) down/.test(c.body))).toEqual([]);
+    expect((await w.app.request(`/careers/${co.slug}`)).status).toBe(200);
   });
 
   it("a second press changes nothing; a request, a declined company and one with nobody active are told calmly, and nothing moves", async () => {

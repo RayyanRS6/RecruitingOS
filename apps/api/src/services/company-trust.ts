@@ -22,7 +22,8 @@ export function autoVerification(now: Date): { verifiedAt: string; verifiedBy: A
   return { verifiedAt: now.toISOString(), verifiedBy: AUTO_CHECK_ACTOR };
 }
 
-export type VerificationResult = { companyId: string; name: string; changed: boolean; verifiedAt: string | null; released: number };
+/** `boardsClosed`: the job-board listings a taking back closed, each with the state it was in, so the undo of a removal can put them back. */
+export type VerificationResult = { companyId: string; name: string; changed: boolean; verifiedAt: string | null; released: number; boardsClosed?: Array<{ postingId: string; from: string }> };
 
 /**
  * ITS confirms the company: from now on its careers page, job pages, Google listing and feeds are public, approved roles
@@ -119,7 +120,7 @@ export async function unverifyCompany(tx: Queryable, input: { companyId: string;
     action: { label: "Open Home", href: "/" },
     roles: ["owner", "admin", "hiring_manager"],
   });
-  return { companyId: co.id, name: co.name, changed: true, verifiedAt: null, released: 0 };
+  return { companyId: co.id, name: co.name, changed: true, verifiedAt: null, released: 0, boardsClosed: up.map((p) => ({ postingId: p.id, from: p.status })) };
 }
 
 /** Merges keys into companies.settings.onboarding (null removes a key), in one statement. */
