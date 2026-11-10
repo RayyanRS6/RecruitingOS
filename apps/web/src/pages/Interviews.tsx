@@ -284,7 +284,7 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
               <p className="small text-ink-2">{interviewNewTimesText(i.candidate.firstName, i.followUp.reason, companyConfirmed, i.followUp.noHours)}</p>
               <div className="row mt-3">
                 {/* a time a person sets needs no hours, and takes them out of Cancelled once booked: it comes first, and alone
-                    when nobody on the interview has hours (`noHours`), where a send would be refused */}
+                    when someone on the interview has no hours (`noHours`), where a send would be refused */}
                 {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&step=interview`} className="btn primary sm">Set a date and time</Link> : null}
                 {companyConfirmed === false || i.followUp.noHours ? null : <Button size="sm" variant={canSeeTalent(role) ? undefined : "primary"} icon="send" loading={newTimes.isPending} onClick={() => newTimes.mutate(i.applicationId)}>Send new times</Button>}
               </div>

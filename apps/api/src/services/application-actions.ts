@@ -97,7 +97,7 @@ const TEAM_ROLES: MembershipRole[] = ["owner", "admin", "hiring_manager", "hr", 
 const ROLE_WORDS: Record<MembershipRole, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "HR", recruiter: "a recruiter", interviewer: "an interviewer" };
 const CHECK_ELIGIBILITY_FIRST = "Check their eligibility answer first: keep them in or decline.";
 /** Why "Send new times" is not offered with nobody's hours: the send's own refusal (`NO_HOURS` in interview-create.ts, which this file cannot import without a cycle). */
-const NO_HOURS = "Nobody on this interview has hours to offer. Set a date and time instead.";
+const NO_HOURS = "Not everyone on this interview has hours to offer. Set a date and time instead.";
 const INTERVIEW_PREPARING = "Their AI interview is being prepared, and its link goes to them by itself.";
 
 /**

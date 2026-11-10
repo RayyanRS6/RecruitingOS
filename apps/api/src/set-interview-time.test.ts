@@ -459,7 +459,7 @@ describe("a person sets the date and time", () => {
       const before = mailTo(cand.email).length;
       const r = await json(owner, "POST", `/api/v1/interviews/${booked.id}/reschedule`, { reason: "A clash at our end." });
       expect(r.status).toBe(409);
-      expect(await errorOf(r)).toMatchObject({ code: "no_hours", message: "Nobody on this interview has hours to offer. Set a date and time instead." });
+      expect(await errorOf(r)).toMatchObject({ code: "no_hours", message: "Not everyone on this interview has hours to offer. Set a date and time instead." });
       await container.drain();
       expect(await interview(booked.id)).toMatchObject({ status: "scheduled", attempt: row.attempt, scheduleToken: token });
       expect((await application(cand.id)).stage).toBe("interview_scheduled");
@@ -742,20 +742,20 @@ describe("a person sets the date and time", () => {
       // the panel's reason, and "Send new times", which cannot work with nobody's hours: one person, and many at once
       const panel = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { ownerStage: string; cancelled: { auto: { reasonText: string }; noHours?: boolean }; allowedActions: string[]; blockedReasons: Record<string, string> };
       expect(panel.ownerStage).toBe("cancelled");
-      expect(panel.cancelled.auto.reasonText).toBe("Nobody on the interview has hours to offer, so nothing goes automatically: set a date and time from their page.");
+      expect(panel.cancelled.auto.reasonText).toBe("Not everyone on the interview has hours to offer, so nothing goes automatically: set a date and time from their page.");
       // the panel and the Interviews page are told, so neither offers "Send new times"; "Set a date and time" alone is the way on (10 November 2026)
       expect(panel.cancelled.noHours).toBe(true);
       expect(panel.allowedActions).not.toContain("send_new_times");
       expect(panel.allowedActions).toContain("interview");
-      expect(panel.blockedReasons.send_new_times).toBe("Nobody on this interview has hours to offer. Set a date and time instead.");
+      expect(panel.blockedReasons.send_new_times).toBe("Not everyone on this interview has hours to offer. Set a date and time instead.");
       const sheet = (await (await json(owner, "GET", `/api/v1/interviews/${booked.id}`)).json()) as { followUp: { reason: string; noHours?: boolean } | null };
       expect(sheet.followUp).toMatchObject({ reason: "asked_new_times", noHours: true });
       const send = await json(owner, "POST", `/api/v1/applications/${cand.id}/new-times`, {});
       expect(send.status).toBe(409);
-      expect(await errorOf(send)).toMatchObject({ code: "no_hours", message: "Nobody on this interview has hours to offer. Set a date and time instead." });
+      expect(await errorOf(send)).toMatchObject({ code: "no_hours", message: "Not everyone on this interview has hours to offer. Set a date and time instead." });
       const batch = (await (await json(owner, "POST", `/api/v1/roles/${roleId}/new-times`, { applicationIds: [cand.id] })).json()) as { sent: number; results: Array<{ code: string; message: string }> };
       expect(batch.sent).toBe(0);
-      expect(batch.results[0]).toMatchObject({ code: "no_hours", message: "Nobody on this interview has hours to offer. Set a date and time instead." });
+      expect(batch.results[0]).toMatchObject({ code: "no_hours", message: "Not everyone on this interview has hours to offer. Set a date and time instead." });
       expect((await interview(booked.id)).status).toBe("cancelled");
       // the way on: route A, one new interview, out of Cancelled
       const before = mailTo(cand.email).length;

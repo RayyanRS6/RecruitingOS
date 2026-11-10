@@ -65,7 +65,7 @@ const AFTER_CHECK = "You can send new times once ITS confirms your company, or d
  * Said in place of "send new times" when someone on the interview has no hours to offer (`noHours`, 10 November 2026): the
  * send would be refused with `no_hours`, so a person sets the date and time, whether or not ITS has confirmed the company.
  */
-const NO_HOURS_NEXT = "Nobody on the interview has hours to offer, so set a date and time, or decide.";
+const NO_HOURS_NEXT = "Not everyone on the interview has hours to offer, so set a date and time, or decide.";
 
 /**
  * The card's sentence, first match wins: where new times stand once an interview carries them, then the automatic set
@@ -125,7 +125,7 @@ export const HOLD_ENDS_CANCELLED = "Putting them on hold takes them out of Cance
  */
 export function interviewNewTimesText(firstName: string, reason: CancelledReason, companyConfirmed?: boolean | null, noHours?: boolean): string {
   const why = reason === "asked_new_times" ? "cancelled and asked for new times" : reason === "not_interested" ? "cancelled and is no longer interested" : "did not come";
-  return `${firstName} ${why}. ${noHours ? "Nobody on the interview has hours to offer, so set a date and time." : companyConfirmed === false ? AFTER_CHECK : "New times go out for the same round."}`;
+  return `${firstName} ${why}. ${noHours ? "Not everyone on the interview has hours to offer, so set a date and time." : companyConfirmed === false ? AFTER_CHECK : "New times go out for the same round."}`;
 }
 
 /**
@@ -146,7 +146,7 @@ const NOT_SENT_TEXT: Record<string, string> = {
   no_interviewers: "Nobody who ran the interview is still on your team.",
   no_email: "We have no email address for them, or the email did not reach them.",
   interview_changed: "The interview changed in the meantime.",
-  no_hours: "Nobody on the interview has hours to offer, so nothing goes automatically: set a date and time from their page.",
+  no_hours: "Not everyone on the interview has hours to offer, so nothing goes automatically: set a date and time from their page.",
 };
 export function notSentReasonText(reason: unknown): string | null {
   return typeof reason === "string" ? (NOT_SENT_TEXT[reason] ?? null) : null;
