@@ -1,5 +1,5 @@
-import { inArray } from "drizzle-orm";
-import { workflowRuns, type Tx } from "@ros/db";
+import { desc, inArray, sql } from "drizzle-orm";
+import { screens as screensTable, workflowRuns, type Tx } from "@ros/db";
 
 /**
  * Where a screen's scorecard stands, for the candidate page (plan 0.9): `ready` once written, `writing` between the
@@ -22,4 +22,25 @@ export async function screenScorecards(tx: Tx, screens: ScreenLike[]): Promise<M
     out.set(s.id, { scorecard, recruiterAsked: scorecard === "unavailable" && !!run?.escalationId });
   }
   return out;
+}
+
+/** The ids of the finished screens among these whose scorecard could not be written, for good (`unavailable` above). */
+export async function failedScorecards(tx: Tx, screens: ReadonlyArray<Pick<ScreenLike, "id" | "status" | "assessmentId" | "workflowRunId">>): Promise<Set<string>> {
+  const waiting = screens.filter((s) => s.status === "completed" && !s.assessmentId && s.workflowRunId);
+  if (!waiting.length) return new Set();
+  const runs = await tx.select({ id: workflowRuns.id, status: workflowRuns.status }).from(workflowRuns).where(inArray(workflowRuns.id, waiting.map((s) => s.workflowRunId!)));
+  const failed = new Set(runs.filter((r) => r.status === "failed").map((r) => r.id));
+  return new Set(waiting.filter((s) => failed.has(s.workflowRunId!)).map((s) => s.id));
+}
+
+/**
+ * The screens of these applications as the score's label reads them (`interviewInScore`), newest first: with
+ * `scoreWaitsForCredit` (its scorecard waits for the company's AI credit) and `scoreFailed` (it could not be written, for
+ * good: the lead's D2, 11 November 2026), so the list, the board, Compare and the panel all label it the same way.
+ */
+export async function screensForScore(tx: Tx, applicationIds: readonly string[]) {
+  if (!applicationIds.length) return [];
+  const rows = await tx.select({ id: screensTable.id, applicationId: screensTable.applicationId, status: screensTable.status, assessmentId: screensTable.assessmentId, workflowRunId: screensTable.workflowRunId, scoreWaitsForCredit: sql<string | null>`${screensTable.progress}->>'scoreWaitsForCredit'` }).from(screensTable).where(inArray(screensTable.applicationId, [...applicationIds])).orderBy(desc(screensTable.createdAt));
+  const failed = await failedScorecards(tx, rows);
+  return rows.map((s) => ({ ...s, scoreFailed: failed.has(s.id) }));
 }

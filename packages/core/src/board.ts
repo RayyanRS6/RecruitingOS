@@ -27,7 +27,7 @@ import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, LOW_CONFIDENCE_TEXT, RE
  *   → a read-only lane of its own, never placed and never suggested: scored after the AI interview. A person's mark
  *   still sorts them (below).
  * - Like with like (R20-9): anyone else whose score does not count an AI interview they were offered (`interview`: not
- *   done yet, being scored, or closed without being sent, as after "Stop this AI interview", or never sent because the
+ *   done yet, being scored, not scored, its scorecard could not be written, or closed without being sent, as after "Stop this AI interview", or never sent because the
  *   month's AI interviews stayed used up, Q17) joins that lane too, so a résumé-only number is never ranked or
  *   suggested beside interviewed people (B4 is narrowed to match). Marks and decisions still show where they are; never
  *   offered one (`none`: an application from before 20 October 2026) keeps the rules above.
@@ -62,10 +62,11 @@ export const NO_AI_INTERVIEW_LANE = { label: "No AI interview yet", reason: "Sco
  * The same lane's words for someone out of that column whose score still has no AI interview in it (R20-9), by where it
  * stands. Neutral like the column's: never how far anyone got or what closed it.
  */
-export const INTERVIEW_APART: Record<"not_done_yet" | "being_scored" | "not_scored" | "not_done", { label: string; reason: string }> = {
+export const INTERVIEW_APART: Record<"not_done_yet" | "being_scored" | "not_scored" | "scoring_failed" | "not_done", { label: string; reason: string }> = {
   not_done_yet: { label: "AI interview not done yet", reason: NO_AI_INTERVIEW_LANE.reason },
   being_scored: { label: "AI interview being scored", reason: "Their AI interview is in and being scored: they join the board when it is." },
   not_scored: { label: "AI interview not scored", reason: "Their AI interview is in, but your plan's AI help is used up, so it was not scored. Read their answers and decide from their own page." },
+  scoring_failed: { label: "AI interview could not be scored", reason: "Their AI interview is in, but its AI review could not be written, so it was not scored. Read their answers and decide from their own page." },
   not_done: { label: "No AI interview", reason: "Their score is from the résumé only, so the board keeps them apart from interviewed people and suggests nothing. Decide from their own page." },
 };
 
@@ -144,7 +145,7 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
     return { column: "longlist", state: "suggested", doneLabel: null, confident: false, needsYourEye: "Held on an eligibility answer: keep them in or decline from their page.", reason: "An eligibility answer did not match the role's rule.", nextStep: step("check_eligibility", "Only a person can keep them in or decline them."), suggestedAction: null, declineReason: null };
   }
   const interview = input.interview ?? input.match?.interview ?? null;
-  if (interview === "not_done_yet" || interview === "being_scored" || interview === "not_scored" || interview === "not_done") return done(null, INTERVIEW_APART[interview].label, INTERVIEW_APART[interview].reason, "waiting");
+  if (interview === "not_done_yet" || interview === "being_scored" || interview === "not_scored" || interview === "scoring_failed" || interview === "not_done") return done(null, INTERVIEW_APART[interview].label, INTERVIEW_APART[interview].reason, "waiting");
   if (!latest) {
     return { column: "longlist", state: "suggested", doneLabel: null, confident: false, needsYourEye: ASSESSMENT_UNAVAILABLE_TEXT, reason: "No AI review to go on.", nextStep: step("read_yourself", "Open the résumé and answers; nothing was read for you."), suggestedAction: "longlist", declineReason: null };
   }

@@ -315,6 +315,47 @@ describe("the application record (status page) after sending", () => {
     expect(html).toMatch(/<p class="meta">From your résumé and your AI interview\. Based on /);
   });
 
+  /**
+   * The lead's D2 (11 November 2026): an AI interview they sent whose scorecard could not be written, for good (the screen's run
+   * gave up and asked ITS to look), read "Not ready yet" for ever, and the team's label said "being scored" beside a card that
+   * said its review could not be written. Both are true now: fix A's words for the candidate, and a label that says so.
+   */
+  it("a sent AI interview whose scorecard could not be written says 'Could not be worked out' at once, and the team's label says it could not be scored", async () => {
+    const a = await applyAs("Lou", "lou.record@example.com");
+    await readingFor(a);
+    const [run] = await container.db.insert(workflowRuns).values({ companyId, workflowKey: "screen", subject: { type: "application", id: a.id }, status: "running", currentStep: "assess", state: {} }).returning();
+    const sent = await addScreen(a, { status: "completed", progress: progressOf({ submittedAt: at(-30 * 60) }), completedAt: at(-30 * 60) });
+    await container.db.update(screens).set({ workflowRunId: run.id }).where(eq(screens.id, sent.id));
+    await container.db.update(applications).set({ stage: "screen_complete" }).where(eq(applications.id, a.id));
+    const scoreCard = async () => {
+      const { html } = await page(`/c/status/${a.statusToken}`);
+      const from = html.indexOf('<section class="card" id="score"');
+      expect(from, "the score card").toBeGreaterThan(-1);
+      return html.slice(from, html.indexOf("</section>", from));
+    };
+    const team = async () => (await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { matchScore: { interview: string; basis: string }; screens: Array<{ id: string; scorecard?: string }> };
+    // while it is being written: "Not ready yet", and the team's "being scored"
+    expect(await scoreCard()).toContain('<h2 id="score-h">Not ready yet</h2>');
+    expect((await team()).matchScore).toMatchObject({ interview: "being_scored" });
+    // the run gave up for good: nothing will write it by itself
+    await container.db.update(workflowRuns).set({ status: "failed" }).where(eq(workflowRuns.id, run.id));
+    const card = await scoreCard();
+    expect(card).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Could not be worked out</h2><p>The hiring team reads your application themselves.</p>');
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready|From your résumé only/);
+    expect(card).not.toMatch(/\b(credit|upgrade|plan)\b/i);
+    // the page the chat closes on promises no score either
+    expect((await page(`/c/screen/${sent.token}`)).html).not.toMatch(/match score/i);
+    // the team: the scorecard card says it could not be written, and the label beside the number says the same, on the panel and the list
+    const detail = await team();
+    expect(detail.screens.find((s) => s.id === sent.id)?.scorecard).toBe("unavailable");
+    expect(detail.matchScore).toMatchObject({ interview: "scoring_failed", basis: "Résumé only: AI interview could not be scored" });
+    const rows = (await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; interview: string | null; basis: string | null }>;
+    expect(rows.find((r) => r.id === a.id)).toMatchObject({ interview: "scoring_failed", basis: "Résumé only: AI interview could not be scored" });
+    // the board keeps them apart, in words that say so
+    const board = (await (await json("GET", `/api/v1/roles/${roleId}/board`)).json()) as { noAiInterview: Array<{ applicationId: string; placement: { doneLabel: string | null } }> };
+    expect(board.noAiInterview.find((c) => c.applicationId === a.id)?.placement.doneLabel).toBe("AI interview could not be scored");
+  });
+
   it("S7-2: 'Your answers' reads back exactly what was sent: the form's questions in sentences and the sent chat, the assistant's note apart; an unsent chat shows nothing and holds the score back", async () => {
     const a = await applyAs("Cleo", "cleo.record@example.com");
     await readingFor(a);

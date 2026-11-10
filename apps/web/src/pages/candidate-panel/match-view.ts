@@ -212,9 +212,12 @@ export function cappedLine(m: MatchScore): string | null {
   return m.capped ? `A must-have their own words show is not met holds the score at ${MISSING_MUST_HAVE_CAP} at most.` : null;
 }
 
+/** Where the AI interview was sent, scored or not: no second one is offered. */
+const SENT_INTERVIEW: ReadonlyArray<MatchScore["interview"]> = ["done", "being_scored", "not_scored", "scoring_failed"];
+
 /**
  * The requirements the evidence says nothing about: no points so far, and never read as a no. Where to ask follows where the
- * AI interview stands: once it is done no second one is offered, so it is a call.
+ * AI interview stands: once they sent it no second one is offered, so it is a call (scored or not: D2, 11 November 2026).
  */
 export function leftOut(m: MatchScore): { heading: string; items: Array<{ key: string; label: string; tag: string }>; note: string } | null {
   if (!m.unknown.length) return null;
@@ -222,7 +225,7 @@ export function leftOut(m: MatchScore): { heading: string; items: Array<{ key: s
   return {
     heading: n === 1 ? "1 requirement not known yet" : `${n} requirements not known yet`,
     items: m.unknown.map((u) => ({ key: u.key, label: u.label, tag: criterionTag(u) })),
-    note: `Not shown yet: no points so far, never counted as a no. Ask about ${n === 1 ? "it" : "them"} ${m.interview === "done" ? "on a call" : "in the AI interview or a call"}.`,
+    note: `Not shown yet: no points so far, never counted as a no. Ask about ${n === 1 ? "it" : "them"} ${SENT_INTERVIEW.includes(m.interview) ? "on a call" : "in the AI interview or a call"}.`,
   };
 }
 

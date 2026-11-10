@@ -28,7 +28,7 @@ import { SCREEN_OPEN_STATUSES, applicationActionState, applicationFactsFrom, dec
 import { exitCleanup, type ExitCandidateEmail } from "../services/exit-cleanup";
 import { closingMessagePreview, sendClosingMessage } from "../services/closing-messages";
 import { keepInTalentPool } from "../services/talent-pool";
-import { screenScorecards } from "../services/screen-scorecards";
+import { screenScorecards, screensForScore } from "../services/screen-scorecards";
 import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
 import { candidateEmailStates } from "../services/interview-create";
 import { interviewerApplicationView } from "../services/interviewer-view";
@@ -464,7 +464,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const marks = await activeMarksFor(tx, appIds);
     const followUps = await activeFollowUpsFor(tx, appIds);
     const timeZone = followUps.size ? await companyTimeZone(tx, t.companyId) : "UTC";
-    const scr = appIds.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId, scoreWaitsForCredit: sql<string | null>`${screens.progress}->>'scoreWaitsForCredit'` }).from(screens).where(inArray(screens.applicationId, appIds)) : [];
+    // With whether each sent one's scorecard waits for the AI credit or could not be written (`screensForScore`), for the score's label.
+    const scr = await screensForScore(tx, appIds);
     // Never a reading of a conversation the candidate did not send ("hide them until they send", 9 October 2026).
     const hiddenReadings = unsentScreenReadings(scr, asmts);
     const ivs = appIds.length ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, decision: interviews.decision }).from(interviews).where(inArray(interviews.applicationId, appIds)) : [];
@@ -757,7 +758,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const [roleRow] = await tx.select({ id: roles.id, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
     const packets = roleRow ? await packetsOf(tx, roleRow) : { byVersion: new Map(), currentVersion: null };
     const resumeDoc = docs.find((d) => d.id === app.resumeDocumentId);
-    const scored = scorePerson({ app: shown.app, assessments: asmts, screens: scr, allowanceLapsed: !scr.length && (await interviewsLapsedOnAllowance(tx, [app.id])).has(app.id), packets: packets.byVersion, currentVersion: packets.currentVersion, mark, resumeUnreadable: !!resumeDoc && resumeDoc.status === "clean" && !resumeDoc.hasText && !app.extraction, openScreen: scr.some((s) => SCREEN_OPEN_STATUSES.includes(s.status)) });
+    const scored = scorePerson({ app: shown.app, assessments: asmts, screens: scr.map((s) => ({ ...s, scoreFailed: scorecards.get(s.id)?.scorecard === "unavailable" })), allowanceLapsed: !scr.length && (await interviewsLapsedOnAllowance(tx, [app.id])).has(app.id), packets: packets.byVersion, currentVersion: packets.currentVersion, mark, resumeUnreadable: !!resumeDoc && resumeDoc.status === "clean" && !resumeDoc.hasText && !app.extraction, openScreen: scr.some((s) => SCREEN_OPEN_STATUSES.includes(s.status)) });
     // L-08 B (founder, 16 Oct 2026): one neutral line when the résumé or the written answers the reading used held text aimed at the AI. Worked out from the stored words on every read; never stored, never given to the reading or the score, never sent to the candidate.
     const hiddenTextNote = hiddenTextNoteOf({ resumeText: resumeDoc?.status === "clean" ? resumeDoc.hasText : null, answers: shown.app.answers, extraction: shown.app.extraction, readings: asmts });
     // `noReading` (10 November 2026, additive): why no AI review of the résumé will come by itself, so the panel never promises one.

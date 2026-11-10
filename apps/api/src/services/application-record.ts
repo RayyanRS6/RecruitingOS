@@ -4,6 +4,7 @@ import { DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candid
 import { chatPacket } from "@ros/agents";
 import { applications, assessments, events, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import { interviewRunOn } from "@ros/workflows";
+import { failedScorecards } from "./screen-scorecards";
 
 /**
  * What the candidate's application record shows beyond its steps (Wave S7, slice S7-E; spec-s7-apply-flow.md steps 8, 9
@@ -34,7 +35,8 @@ export const REVIEWING_REFRESH_SECONDS = 15;
  *   come (11 November 2026): the team reads both as still to come.
  * - `not_coming`: nothing will work a number out by itself (10 November 2026): no reading gives one, the résumé's could not be
  *   made or AI does not read it (`readingWontCome`), and no AI interview is open, being written up or still on its way. Said at
- *   once, never "Working out…" or "Not ready yet" for ever.
+ *   once, never "Working out…" or "Not ready yet" for ever. Since 11 November 2026 (the lead's D2) also a finished AI interview
+ *   whose scorecard could not be written, for good: the résumé's number never stands in for it.
  * - `ready`: the score and its breakdown (`view`).
  */
 export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "not_coming" | "ready"; view: CandidateScoreView | null };
@@ -104,6 +106,9 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   // and it shows once the credit is back.
   if (sent && !sent.assessmentId && sent.progress.scoreWaitsForCredit) return { state: "off", view: null };
   const scorecardDue = !!sent && !sent.assessmentId;
+  // That scorecard could not be written, for good (the screen's run gave up and asked ITS to look): nothing will give the number
+  // by itself, so the record says so at once, in fix A's words, never "Not ready yet" for ever (the lead's D2, 11 November 2026).
+  if (sent && scorecardDue && (await failedScorecards(tx, [sent])).size) return { state: "not_coming", view: null };
   // They asked for a person in the AI interview: a recruiter's call is still to come, and its notes write the scorecard, so the
   // résumé's number is only a floor, as the team reads it ("Résumé only: AI interview not done yet"). "Not ready yet", never
   // "under a minute": the call is a person's (the release review, 11 November 2026).

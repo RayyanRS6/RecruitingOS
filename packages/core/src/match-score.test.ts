@@ -467,6 +467,8 @@ describe("the one verdict word (fit)", () => {
 describe("the groups of Sort: Score", () => {
   it("ranks a final number first, an AI interview still coming next, and no score last", () => {
     for (const interview of ["done", "not_done", "none", null, undefined] as const) expect(scoreRank({ score: 16, interview }), String(interview)).toBe(0);
+    // a scorecard that could not be written is not coming by itself: the number is final (D2, 11 November 2026)
+    expect(scoreRank({ score: 16, interview: "scoring_failed" })).toBe(0);
     for (const interview of ["not_done_yet", "being_scored", "not_scored"] as const) expect(scoreRank({ score: 88, interview }), interview).toBe(1);
     expect(scoreRank({ score: null, interview: "done" })).toBe(2);
     expect(scoreRank({ interview: "not_done_yet" })).toBe(2);
@@ -484,6 +486,7 @@ describe("whether the AI interview is in the score (20 October 2026, R20-9)", ()
     expect(words(matchScore(pair(resume), packet, { interview: "being_scored" })!)).toEqual(["being_scored", "Résumé only for now: AI interview done, being scored"]);
     expect(words(matchScore(pair(resume), packet, { interview: "not_done" })!)).toEqual(["not_done", "Résumé only: no AI interview"]);
     expect(words(matchScore(pair(resume), packet, { interview: "not_scored" })!)).toEqual(["not_scored", "Résumé only: AI interview done, not scored"]);
+    expect(words(matchScore(pair(resume), packet, { interview: "scoring_failed" })!)).toEqual(["scoring_failed", "Résumé only: AI interview could not be scored"]);
     // a caller's "done" with no scorecard among the readings is still being scored
     expect(matchScore(pair(resume), packet, { interview: "done" })!.interview).toBe("being_scored");
   });
@@ -518,6 +521,12 @@ describe("interviewInScore: where the AI interview stands, from the screens in a
     expect(interviewInScore([{ status: "completed", progress: { scoreWaitsForCredit: "2026-11-05T10:00:00Z" } }])).toBe("not_scored");
     expect(interviewInScore([{ status: "expired" }, { status: "completed", scoreWaitsForCredit: "2026-11-05T10:00:00Z" }])).toBe("not_scored");
     expect(interviewInScore([{ status: "completed", scoreWaitsForCredit: null }])).toBe("being_scored");
+    // a sent one whose scorecard could not be written, for good (its run gave up, as the caller read it): never "being scored"
+    // for ever either (the lead's D2, 11 November 2026); another sent one still being scored, or waiting for the credit, says so
+    expect(interviewInScore([{ status: "completed", scoreFailed: true }])).toBe("scoring_failed");
+    expect(interviewInScore([{ status: "expired" }, { status: "completed", scoreFailed: true }])).toBe("scoring_failed");
+    expect(interviewInScore([{ status: "completed", scoreFailed: true }, { status: "completed" }])).toBe("being_scored");
+    expect(interviewInScore([{ status: "completed", scoreFailed: true }, { status: "completed", scoreWaitsForCredit: "2026-11-05T10:00:00Z" }])).toBe("not_scored");
     for (const open of ["invited", "reminded", "in_progress", "paused", "human_requested"]) expect(interviewInScore([{ status: "expired" }, { status: open }]), open).toBe("not_done_yet");
     for (const closed of ["expired", "unfinished", "declined_by_candidate", "abandoned", "cancelled"]) expect(interviewInScore([{ status: closed }]), closed).toBe("not_done");
     expect(interviewInScore([], "eligible")).toBe("not_done_yet");
