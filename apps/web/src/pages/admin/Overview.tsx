@@ -1,13 +1,14 @@
 "use client";
 
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, Button, Card, ErrorState, Icon, IconChip, PageHeader, Skeleton, StatCell, StatStrip } from "@ros/ui";
-import { api, ApiError, type Me } from "../../api/client";
+import { api, type Me } from "../../api/client";
 import { allowanceAlerts, allowanceChip } from "../../allowance";
 import { useIsClient } from "../../components/use-is-client";
 import { focusLost } from "../../focus-after";
 import { Link } from "../../nav";
+import { sessionEnded, useSignInWhenSessionEnds } from "../../session-ended";
 import { TODAY_REFRESH, firstName } from "../../today";
 import { adminKeys, adminReason, type AlertRow, type CustomerRow, type DataRequest } from "./admin-api";
 import { activityWords, money, planWords, severityWords } from "./admin-words";
@@ -284,14 +285,8 @@ const CUSTOMERS_SHOWN = 5;
 export const OVERVIEW_REFRESH = TODAY_REFRESH;
 export const ESCALATIONS_REFRESH = { refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 } as const;
 
-/**
- * Whether the staff session ended under a tab left open (the review of 9 November 2026): a look answered 401. The session
- * slides only while the tab looks, so a hidden or sleeping tab outlives it; then every look fails and each source keeps
- * what it read before, so the page goes to sign in instead.
- */
-export function sessionEnded(errors: readonly unknown[]): boolean {
-  return errors.some((e) => e instanceof ApiError && e.status === 401);
-}
+/** Whether the staff session ended under a tab left open (the review of 9 November 2026): session-ended.ts, shared with Home and Customers. */
+export { sessionEnded };
 
 export function Overview() {
   const why = adminReason("overview");
@@ -311,10 +306,7 @@ export function Overview() {
   const since = monthStart(calendar.data?.current.timeZone);
   const costs = useQuery({ queryKey: costsSinceKey(since), queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
   const isClient = useIsClient();
-  const ended = sessionEnded([me, customers, alerts, failures, privacy, failedEmail, csp, escalations, calendar, queue, costs].map((q) => q.error));
-  useEffect(() => {
-    if (ended) window.location.assign("/login");
-  }, [ended]);
+  useSignInWhenSessionEnds([me, customers, alerts, failures, privacy, failedEmail, csp, escalations, calendar, queue, costs].map((q) => q.error));
 
   // A source whose latest look failed counts as failed even while it still holds an earlier answer (the review of 9
   // November 2026), so "Nothing needs you right now." never stands over a look that failed.

@@ -101,8 +101,9 @@ vi.mock("@ros/web/src/toast", () => ({ toast: (title: string, more?: unknown) =>
 vi.mock("next/navigation", () => ({ usePathname: () => "/admin", useRouter: () => ({ push: () => undefined, replace: () => undefined, refresh: () => undefined }), useParams: () => ({}), useSearchParams: () => new URLSearchParams("") }));
 vi.mock("next/link", () => ({ default: () => null }));
 
-const { AccessButtons, AccessChoice, CandidateScorePanel, CompanyCheckPanel, PlanPanel, TrialExtensionCard, companyCheckToast } = await import("@ros/web/src/pages/admin/customers");
+const { AccessButtons, AccessChoice, CandidateScorePanel, CompanyCheckPanel, Customers, PlanPanel, TrialExtensionCard, companyCheckToast } = await import("@ros/web/src/pages/admin/customers");
 const { Overview } = await import("@ros/web/src/pages/admin/Overview");
+const { Home } = await import("@ros/web/src/pages/Home");
 const { ApiError } = await import("@ros/web/src/api/client");
 const { Button, Field, Segmented } = await import("@ros/ui");
 
@@ -406,5 +407,31 @@ describe("the console's Overview left open", () => {
     expect(comeBack(new ApiError(500, "error", "Something went wrong. It has been logged."))).toEqual([]);
     expect(comeBack(new ApiError(403, "mfa_required", "Confirm it's you."))).toEqual([]);
     expect(comeBack(new TypeError("Failed to fetch"))).toEqual([]);
+  });
+});
+
+describe("Home and the console's Customers page left open (10 November 2026)", () => {
+  /** Draws the page with this look's failure on one of its sources, then runs what it does once drawn. */
+  const comeBack = (page: (props: Record<string, never>) => unknown, key: unknown[], error: unknown) => {
+    ui.fresh();
+    ui.answers.set(JSON.stringify(key), { error });
+    const assign = vi.fn();
+    vi.stubGlobal("window", { location: { assign, pathname: "/" } });
+    ui.draw(page, {});
+    for (const effect of ui.effects) effect();
+    return assign.mock.calls;
+  };
+  const ended = new ApiError(401, "unauthorized", "Sign in to continue.");
+
+  it("Home goes to sign in once a look answers 401, the way the console's Overview does", () => {
+    expect(comeBack(Home, ["brief"], ended)).toEqual([["/login"]]);
+    expect(comeBack(Home, ["me"], ended)).toEqual([["/login"]]);
+    for (const other of [new ApiError(500, "error", "Something went wrong. It has been logged."), new ApiError(403, "mfa_required", "Confirm it's you."), new TypeError("Failed to fetch")]) expect(comeBack(Home, ["brief"], other)).toEqual([]);
+  });
+
+  it("so does the console's Customers page, and it stays on any other failure", () => {
+    expect(comeBack(Customers, ["admin", "customers"], ended)).toEqual([["/login"]]);
+    expect(comeBack(Customers, ["admin", "alerts"], ended)).toEqual([["/login"]]);
+    for (const other of [new ApiError(500, "error", "Something went wrong. It has been logged."), new TypeError("Failed to fetch")]) expect(comeBack(Customers, ["admin", "customers"], other)).toEqual([]);
   });
 });

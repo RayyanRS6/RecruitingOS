@@ -19,6 +19,7 @@ import { closingDateToast, isClosingDateAction } from "../publishing";
 import { railListsRoles } from "../rail";
 import { roleStatus } from "../role-status";
 import { canChangeCompany, canStartHire } from "../roles";
+import { useSignInWhenSessionEnds } from "../session-ended";
 import { presetOf, requestSentText } from "../recruiter-access";
 import { START_HIRE_HREF } from "../start-hire";
 import { briefDecisionToast } from "../talent-actions";
@@ -69,6 +70,8 @@ export function Home() {
   // browser's (use-is-client.ts), "Your jobs" waits, so the first draw matches the server's (Wave S2).
   const isClient = useIsClient();
   const jobs = listsRoles && isClient ? homeJobs(roles.data ?? [], { role: myRole }) : [];
+  // A tab left open past the session goes to sign in, as the console's pages do (10 November 2026), instead of "Could not load".
+  useSignInWhenSessionEnds([brief.error, me.error, company.error, roles.error]);
 
   // Old links and bookmarks to "/?start=1" (before the job builder had a page of its own) go to the job builder.
   const [params] = useSearchParams();
