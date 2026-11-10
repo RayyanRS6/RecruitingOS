@@ -335,7 +335,7 @@ export type CandidateEmailState = "held" | "failed" | "no_email" | null;
  * The answer to setting a date and time (POST /applications/:id/interviews with `setTime`, POST /interviews/:id/set-time):
  * the interview, what may be said about the email (never that it left), and whether that email says the time moved.
  */
-export type InterviewBooked = InterviewSummary & { candidateNotice?: "queued" | "held" | "not_sent_no_email"; moved?: boolean };
+export type InterviewBooked = InterviewSummary & { candidateNotice?: "queued" | "held" | "not_sent_no_email" | null; moved?: boolean; /** The same day, time, length and place again: nothing changed and no email goes (11 November 2026). */ unchanged?: boolean };
 /** The interviewer's brief (F7, F8): what the round is for, what it covers, what the evidence says so far. `pay` is present only for roles that may see it (packages/agents/src/interviewer-brief.ts). */
 export type InterviewerBrief = {
   candidateFirstName: string;

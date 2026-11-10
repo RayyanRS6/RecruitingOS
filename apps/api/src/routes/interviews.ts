@@ -482,8 +482,10 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     if (!interviewerUserIds.length) throw new HttpError(409, "no_interviewers", "Nobody is on this interview. Cancel it and set up a new one.");
     const place = placeOnInterview(body.place, iv.format);
     const slot = slotFromPerson(body, { companyTimezone: company.timezone, interviewerUserIds, address: place.address, now });
-    // The same time and place again (a second press, or two people at once): nothing changes, and nobody is emailed twice.
-    if (iv.status === "scheduled" && iv.selectedSlot?.id === slot.id && iv.selectedSlot.address === slot.address && iv.durationMinutes === body.durationMinutes && iv.format === place.format && (place.linkSource === "calendar" || iv.meetingUrl === place.meetingUrl)) return { id: iv.id, moved: false };
+    // The same time and place again (a second press, or two people at once): nothing changes, and nobody is emailed twice. The
+    // answer says so (`unchanged`, with no `candidateNotice`), so the screen never says an email is on its way; a reason typed
+    // with it goes nowhere, since nothing moved (the release review, 11 November 2026).
+    if (iv.status === "scheduled" && iv.selectedSlot?.id === slot.id && iv.selectedSlot.address === slot.address && iv.durationMinutes === body.durationMinutes && iv.format === place.format && (place.linkSource === "calendar" || iv.meetingUrl === place.meetingUrl)) return { id: iv.id, moved: false, unchanged: true };
     const clashes = await refuseClash(tx, { companyId: t.companyId, interviewId: iv.id, userIds: interviewerUserIds, slot, allowClash: body.allowClash });
 
     // The run that was working on it stops, wherever it was: one waiting for hours, for a pick, or for the ITS check.
@@ -510,11 +512,12 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     // The personal line they have not read yet comes along (Q28); one already in an email they got is not said again.
     const note = !moved ? ((run?.state ?? {}) as { invitationNote?: InvitationNote | null }).invitationNote ?? null : null;
     await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: iv.roundKey, attempt, setByPerson: true, bookedAt: now.toISOString(), ...(wasBooked ? { wasBooked: true } : {}), ...(moved ? { moved: { reason: body.reason?.trim() || null } } : {}), ...(note ? { invitationNote: note } : {}), ...(carried ? { offerKind: carried } : {}) }, idempotencyKey: `schedule:${iv.id}:${attempt}`, actor, startStep: BOOKED_RUN_STARTS_AT });
-    return { id: iv.id, moved };
+    return { id: iv.id, moved, unchanged: false };
   });
   await container.kick();
   const answer = await withTenant(container.db, t.companyId, async (tx) => {
     const row = await summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, done.id)))[0]);
+    if (done.unchanged) return { ...row, candidateNotice: null, moved: false, unchanged: true };
     return { ...row, candidateNotice: await candidateNoticeOfBooking(tx, { companyId: t.companyId, hasEmail: row.candidate.hasEmail }), moved: done.moved };
   });
   return c.json(answer);

@@ -131,6 +131,10 @@ describe("what the screen says about the email: never that it left", () => {
     expect(interviewSetToast({ candidateNotice: "not_sent_no_email" }, "Maria")).toEqual({ title: "Booked.", detail: "There is no email address on file: tell them yourself." });
     expect(interviewSetToast({ candidateNotice: "queued" }, "Maria", { moving: true }).title).toBe("Moved.");
     for (const n of ["queued", "held", "not_sent_no_email"] as const) expect(JSON.stringify(interviewSetToast({ candidateNotice: n }, "Maria"))).not.toMatch(/\bsent\b|\bleft\b|delivered/i);
+    // the same day, time, length and place again: nothing moved and nothing goes, and the toast says so (the release review,
+    // 11 November 2026: it said "Moved. The email to Maria is on its way.")
+    expect(interviewSetToast({ unchanged: true, startsAt: "2026-11-17T22:30:00.000Z", timezone: "America/Los_Angeles" }, "Maria", { moving: true })).toEqual({ title: "Nothing changed.", detail: "It is still booked for Tue, Nov 17, 2:30 PM. No email was sent." });
+    expect(interviewSetToast({ unchanged: true }, "Maria", { moving: true })).toEqual({ title: "Nothing changed.", detail: "It is still booked as it was. No email was sent." });
     expect(pickTimesToast("Maria", "confirmed")).toEqual({ title: "Times are being worked out.", detail: "Maria gets them by email to pick one." });
     expect(pickTimesToast("Maria", "waiting").detail).toBe("They go to Maria by email once ITS confirms your company.");
   });

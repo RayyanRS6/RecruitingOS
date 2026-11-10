@@ -954,7 +954,14 @@ describe("a person sets the date and time", () => {
       const first = mailTo(cand.email).length;
       const again = await routeB(booked.id, chosen);
       expect(again.status, await again.clone().text()).toBe(200);
-      expect(((await again.json()) as Booked)).toMatchObject({ attempt: 1, moved: false, status: "scheduled" });
+      // the answer says nothing changed and promises no email (the release review, 11 November 2026: it said the email was on
+      // its way); a reason typed with the same time changes nothing either
+      const same = (await again.json()) as Booked & { unchanged?: boolean };
+      expect(same).toMatchObject({ attempt: 1, moved: false, status: "scheduled", unchanged: true });
+      expect(same.candidateNotice ?? null).toBeNull();
+      const withReason = (await (await routeB(booked.id, { ...chosen, reason: "Did the first email arrive?" })).json()) as Booked & { unchanged?: boolean };
+      expect(withReason).toMatchObject({ attempt: 1, unchanged: true });
+      expect(withReason.candidateNotice ?? null).toBeNull();
       await container.drain();
       expect(mailTo(cand.email)).toHaveLength(first);
       expect((await runs(booked.id)).filter((x) => x.status === "cancelled")).toHaveLength(0);
