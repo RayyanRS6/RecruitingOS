@@ -320,13 +320,14 @@ export function interviewWords(iv: InterviewRef): string {
  * /interviews/:id/set-time): booked or moved, then what may be said about the email, from the API's `candidateNotice`.
  * Never that it left: the worker sends it after the press, it waits for ITS to confirm the company, or there is no address.
  */
-export function interviewSetToast(r: { candidateNotice?: "queued" | "held" | "not_sent_no_email" | null; unchanged?: boolean; startsAt?: string | null; timezone?: string | null }, firstName: string, opts: { moving?: boolean } = {}): ToastParts {
+export function interviewSetToast(r: { candidateNotice?: "queued" | "held" | "not_sent_no_email" | null; unchanged?: boolean; changed?: boolean; startsAt?: string | null; timezone?: string | null }, firstName: string, opts: { moving?: boolean } = {}): ToastParts {
   // The same day, time, length and place again: nothing moved and no email goes (the release review, 11 November 2026).
   if (r.unchanged) {
     const when = shortWhen(r.startsAt, r.timezone);
     return { title: "Nothing changed.", detail: `It is still booked ${when ? `for ${when}` : "as it was"}. No email was sent.` };
   }
-  const title = opts.moving ? "Moved." : "Booked.";
+  // The same time with new details (a link, the address, how long): updated, not moved, as the email says.
+  const title = r.changed ? "Updated." : opts.moving ? "Moved." : "Booked.";
   const first = firstName || "the candidate";
   if (r.candidateNotice === "not_sent_no_email") return { title, detail: "There is no email address on file: tell them yourself." };
   if (r.candidateNotice === "held") return { title, detail: `${first.charAt(0).toUpperCase()}${first.slice(1)} has not been told: the email waits for ITS to confirm your company.` };

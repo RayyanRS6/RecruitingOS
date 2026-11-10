@@ -978,10 +978,55 @@ describe("a person sets the date and time", () => {
       await container.drain();
       expect(mailTo(cand.email)).toHaveLength(first);
       expect((await runs(booked.id)).filter((x) => x.status === "cancelled")).toHaveLength(0);
+      // a change of place alone is a change, at the same time: the email says the details changed, never that it moved (L4-3)
       const elsewhere = await routeB(booked.id, { ...chosen, place: { kind: "address", text: "45 Elm St, Irvine" } });
-      expect(((await elsewhere.json()) as Booked)).toMatchObject({ attempt: 2, moved: true });
+      expect(((await elsewhere.json()) as Booked)).toMatchObject({ attempt: 2, moved: false, changed: true });
       await container.drain();
-      expect(mailTo(cand.email).at(-1)!.text).toContain("Where: 45 Elm St, Irvine");
+      const updated = mailTo(cand.email).at(-1)!;
+      expect(updated.subject).toMatch(/^Your interview has changed: /);
+      expect(updated.text).toMatch(new RegExp(`${companyName} has changed the details of your [^.]+\\.`));
+      expect(updated.text).not.toMatch(/has moved your|New time/);
+      expect(updated.text).toContain("Where: 45 Elm St, Irvine");
+      expect(updated.text).toContain("Need a different time?");
+    });
+
+    /**
+     * The release review (11 November 2026, L4-3): the video link pasted later, at the same day and time, emailed "New time for
+     * your interview: ..." and "Harbor Dental has moved your ...", so the candidate could not tell whether it moved, and the
+     * interviewers were told "Interview moved".
+     */
+    it("the same day and time with a new link or a longer slot is an update: never 'New time for your interview' or 'has moved', and the interviewers hear 'Interview updated'", async () => {
+      const chosen = { ...fresh(), durationMinutes: 30, place: { kind: "link" } };
+      const { cand, booked, token } = await book("Ola", "Moore", chosen);
+      const first = mailTo(cand.email).find((m) => m.subject.startsWith("Your interview:"))!;
+      expect(first.text).not.toContain("Join:");
+      const before = mailTo(cand.email).length;
+      const linked = await routeB(booked.id, { ...chosen, place: { kind: "link", url: "https://meet.example/ola" }, reason: "Here is the video link." });
+      expect(linked.status, await linked.clone().text()).toBe(200);
+      expect((await linked.json()) as Booked).toMatchObject({ attempt: 2, moved: false, changed: true, candidateNotice: "queued" });
+      await container.drain();
+      const mail = mailTo(cand.email).slice(before);
+      expect(mail).toHaveLength(1);
+      expect(mail[0].subject).toMatch(/^Your interview has changed: /);
+      expect(mail[0].text).toMatch(new RegExp(`${companyName} has changed the details of your [^.]+\\. ${companyName} said: "Here is the video link\\."`));
+      expect(mail[0].text).toContain("Join: https://meet.example/ola");
+      expect(mail[0].text).not.toMatch(/has moved your|New time for your interview/);
+      // the calendar file replaces the entry in place, as for a move
+      expect(/UID:(.+)/.exec(icsOf(mail[0]))![1].trim()).toBe(/UID:(.+)/.exec(icsOf(first))![1].trim());
+      expect(Number(/SEQUENCE:(\d+)/.exec(icsOf(mail[0]))![1])).toBe(2);
+      // the interviewers: updated, not moved
+      expect((await noticesAbout("interview.confirmed", "Ola Moore")).filter((x) => x.title.startsWith("Interview updated:")).length).toBeGreaterThanOrEqual(1);
+      expect((await noticesAbout("interview.confirmed", "Ola Moore")).some((x) => x.title.startsWith("Interview moved:"))).toBe(false);
+      expect(mailTo("owner@settime.test").filter((m) => m.subject.startsWith("Interview updated: Ola Moore"))).toHaveLength(1);
+      expect((await eventsOf(booked.id, "interview.rescheduled")).at(-1)?.payload).toMatchObject({ setByPerson: true, wasBooked: true, moved: false, changed: true });
+      // a longer slot at the same start: an update too
+      const longer = await routeB(booked.id, { ...chosen, durationMinutes: 45, place: { kind: "link", url: "https://meet.example/ola" } });
+      expect((await longer.json()) as Booked).toMatchObject({ attempt: 3, moved: false, changed: true, durationMinutes: 45 });
+      await container.drain();
+      expect(mailTo(cand.email).at(-1)!.subject).toMatch(/^Your interview has changed: /);
+      expect(mailTo(cand.email).at(-1)!.text).toContain("How long: 45 minutes");
+      // and the page their link opens still shows the one booked time
+      expect(await confirmedPage(token)).toContain("Your interview is booked");
     });
 
     it("with no reason given, it says only that it moved; the same person can be moved again", async () => {

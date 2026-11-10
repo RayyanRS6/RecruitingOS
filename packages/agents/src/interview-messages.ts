@@ -181,10 +181,12 @@ export function interviewPlaceLine(input: Pick<InterviewMessageInput, "interview
  * What differs when a person set the time (`setByPerson`) rather than the candidate picking it: they did not confirm
  * anything, so the email says what was booked for them and how to ask for another time. `moved`: it replaces a time they
  * were told, in one email, with the team's reason when they gave one; its calendar file replaces the old entry in place.
+ * `changed`: the same time they were told, with new details (a link, the address, how long): the email says the details
+ * changed, never that it moved (11 November 2026); its calendar file replaces the old entry in place too.
  * `newTimeAfterCancel`: they cancelled, or did not come, and a person set a new time. `missedByUs`: the same round again
  * after our interviewer missed it (founder decision L-12). `note`: the personal line (Q28).
  */
-export type ConfirmationInput = InterviewMessageInput & { roundPurpose: string; setByPerson?: boolean; moved?: { reason: string | null } | null; newTimeAfterCancel?: boolean; missedByUs?: boolean; note?: InvitationNote | null };
+export type ConfirmationInput = InterviewMessageInput & { roundPurpose: string; setByPerson?: boolean; moved?: { reason: string | null } | null; changed?: { reason: string | null } | null; newTimeAfterCancel?: boolean; missedByUs?: boolean; note?: InvitationNote | null };
 
 /** The confirmation, written but not sent: one template and one key per interview and attempt in every variant, so the outbox's rules hold for all of them. */
 export function interviewConfirmationMessage(input: ConfirmationInput): { subject: string; text: string } {
@@ -217,16 +219,19 @@ ${ACCOMMODATION_LINE}
 ${footer(packet, company)}`,
     };
   }
-  const reason = input.moved?.reason?.trim();
+  const reason = (input.moved ?? input.changed)?.reason?.trim();
+  const said = reason ? ` ${company.name} said: "${reason}"` : "";
   const opening = input.moved
-    ? `${company.name} has moved your ${title}.${reason ? ` ${company.name} said: "${reason}"` : ""}`
+    ? `${company.name} has moved your ${title}.${said}`
+    : input.changed
+      ? `${company.name} has changed the details of your ${title}.${said}`
     : input.missedByUs
       ? `We are sorry: the interviewer from ${company.name} could not join your last interview for the ${position} position. Here is a new time for your ${title}.`
       : input.newTimeAfterCancel
         ? `${company.name} has set a new time for your ${title} for the ${position} position.`
         : `Good news: ${company.name} would like to interview you for the ${position} position.`;
   return {
-    subject: `${input.moved ? "New time for your interview" : "Your interview"}: ${interview.title} at ${company.name}, ${when}`,
+    subject: `${input.moved ? "New time for your interview" : input.changed ? "Your interview has changed" : "Your interview"}: ${interview.title} at ${company.name}, ${when}`,
     text: `Hi ${candidate.firstName},
 
 ${opening}

@@ -40,12 +40,15 @@ import type { StepContext, WorkflowDefinition } from "../types";
  *   on calendars (only the worker may read a connection's credential), emails the candidate, reminds and closes, so it never
  *   reaches `propose_slots` or `book`, and no calendar or declared hours are needed.
  * - `moved`: it replaces a time the candidate was told; the one email says so, with the team's reason when they gave one.
+ * - `changed`: the same start the candidate was told, with new details (a link, the address, how long, the format): the one
+ *   email says the details changed, never "New time for your interview" (the release review, 11 November 2026).
  * - `wasBooked`: it replaces a booked time, told to the candidate or not. The interviewers hear "Interview moved" either way:
- *   team mail is never held, so they were told of the old time even when the candidate was not.
+ *   team mail is never held, so they were told of the old time even when the candidate was not. `sameTime`: only its details
+ *   changed, so they hear "Interview updated".
  * - `bookedAt`: when the person pressed. Reminder moments already past by then are skipped, so a time set for this
  *   afternoon never gets "Your interview is tomorrow".
  */
-type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; availabilityWaits?: number; availabilityEscalated?: boolean; noNewTimesTold?: boolean; noCommonTimesKey?: string; heldForCheck?: boolean; setByPerson?: boolean; moved?: { reason: string | null }; wasBooked?: boolean; bookedAt?: string };
+type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; availabilityWaits?: number; availabilityEscalated?: boolean; noNewTimesTold?: boolean; noCommonTimesKey?: string; heldForCheck?: boolean; setByPerson?: boolean; moved?: { reason: string | null }; changed?: { reason: string | null }; wasBooked?: boolean; sameTime?: boolean; bookedAt?: string };
 
 const OFFER_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 48;
@@ -441,11 +444,11 @@ export const scheduleInterview: WorkflowDefinition<State> = {
     async confirm(ctx) {
       const b = await load(ctx);
       if (!b || stale(b, ctx) || b.iv.status !== "scheduled") return { kind: "complete" };
-      const byPerson = ctx.state.setByPerson ? { setByPerson: true, moved: ctx.state.moved ?? null, newTimeAfterCancel: !!ctx.state.offerKind, missedByUs: await missedByUsBefore(ctx, b), note: ctx.state.invitationNote ?? null } : {};
+      const byPerson = ctx.state.setByPerson ? { setByPerson: true, moved: ctx.state.moved ?? null, changed: ctx.state.changed ?? null, newTimeAfterCancel: !!ctx.state.offerKind, missedByUs: await missedByUsBefore(ctx, b), note: ctx.state.invitationNote ?? null } : {};
       const sent = await sendInterviewConfirmation(ctx.q, ctx.services.integrations, { ...messageInput(b, ctx), roundPurpose: b.round?.purpose ?? "Come ready to talk about your experience.", ...byPerson });
       if (sent.status === "failed" && sent.retryable) return { kind: "fail", error: `confirmation failed: ${sent.error}`, retryable: true };
       if (!(await ctx.alreadyDone("confirm"))) {
-        const word = ctx.state.wasBooked ? "Interview moved" : "Interview booked";
+        const word = ctx.state.wasBooked ? (ctx.state.sameTime ? "Interview updated" : "Interview moved") : "Interview booked";
         const when = new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
         const place = placeForTheTeam(b);
         await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `${word}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${when} (${b.company.timezone}).${place ? ` ${place}` : ""}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });

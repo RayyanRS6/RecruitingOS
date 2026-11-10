@@ -166,6 +166,16 @@ ${footer}`);
     expect(interviewConfirmationMessage({ ...booked(), setByPerson: true, moved: { reason: null } }).text).toContain("Harbor Dental has moved your conversation with the dentist.\n\nWhen:");
   });
 
+  it("the same time with new details: says the details changed, never 'New time' or 'has moved' (the release review, 11 November 2026)", () => {
+    const m = interviewConfirmationMessage({ ...booked(), setByPerson: true, changed: { reason: "  Here is the link.  " } });
+    expect(m.subject).toBe(`Your interview has changed: Conversation with the dentist at Harbor Dental, ${when}`);
+    expect(m.text).toContain('Harbor Dental has changed the details of your conversation with the dentist. Harbor Dental said: "Here is the link."\n\nWhen:');
+    expect(m.text).not.toMatch(/New time|has moved|Good news/);
+    expect(interviewConfirmationMessage({ ...booked(), setByPerson: true, changed: { reason: null } }).text).toContain("Harbor Dental has changed the details of your conversation with the dentist.\n\nWhen:");
+    // the accommodation line is whole in it too
+    expect(m.text).toContain(ACCOMMODATION_LINE);
+  });
+
   it("after a cancel or a no-show: a new time was set, with no hint why; after our interviewer missed it: sorry; a move says only that it moved", () => {
     const again = interviewConfirmationMessage({ ...booked(), setByPerson: true, newTimeAfterCancel: true });
     expect(again.subject).toBe(`Your interview: Conversation with the dentist at Harbor Dental, ${when}`);

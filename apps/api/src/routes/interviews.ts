@@ -472,7 +472,8 @@ interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
  * right at once. The run that was working on it stops (one parked on the ITS check too), and a new one puts it on calendars,
  * emails the candidate, reminds and closes. Moving a booked time is one email, whose calendar file replaces the old entry in
  * place (same UID, higher SEQUENCE); no email is written here, and a times email still waiting from the old attempt is
- * withdrawn by the outbox. `candidateNotice` says what the screen may say about that email; `moved`: the email says it moved.
+ * withdrawn by the outbox. `candidateNotice` says what the screen may say about that email; `moved`: the email says it moved;
+ * `changed`: the same start with new details (a link, the address, how long), so the email says the details changed.
  */
 interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -502,7 +503,7 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     // The same time and place again (a second press, or two people at once): nothing changes, and nobody is emailed twice. The
     // answer says so (`unchanged`, with no `candidateNotice`), so the screen never says an email is on its way; a reason typed
     // with it goes nowhere, since nothing moved (the release review, 11 November 2026).
-    if (iv.status === "scheduled" && iv.selectedSlot?.id === slot.id && iv.selectedSlot.address === slot.address && iv.durationMinutes === body.durationMinutes && iv.format === place.format && (place.linkSource === "calendar" || iv.meetingUrl === place.meetingUrl)) return { id: iv.id, moved: false, unchanged: true };
+    if (iv.status === "scheduled" && iv.selectedSlot?.id === slot.id && iv.selectedSlot.address === slot.address && iv.durationMinutes === body.durationMinutes && iv.format === place.format && (place.linkSource === "calendar" || iv.meetingUrl === place.meetingUrl)) return { id: iv.id, moved: false, changed: false, unchanged: true };
     const clashes = await refuseClash(tx, { companyId: t.companyId, interviewId: iv.id, userIds: interviewerUserIds, slot, allowClash: body.allowClash });
 
     // The run that was working on it stops, wherever it was: one waiting for hours, for a pick, or for the ITS check.
@@ -512,6 +513,11 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
     // not left) is the first time to them: that email is withdrawn, and "has moved your interview" would mean nothing.
     const wasBooked = iv.status === "scheduled";
     const [told] = wasBooked ? await tx.select({ id: communications.id }).from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.templateKey, "interview_confirmation"), sql`${communications.idempotencyKey} like ${`confirm:${iv.id}:%`}`, notInArray(communications.status, NEVER_LEFT))).limit(1) : [];
+    // The same start with new details (a link pasted, the address fixed, a longer slot) is not a move: the one email says the
+    // details changed, never "New time for your interview", and the interviewers hear "Interview updated" (the release review,
+    // 11 November 2026).
+    const sameStart = wasBooked && !!iv.startsAt && Date.parse(iv.startsAt) === Date.parse(slot.startsAt);
+    const heard = wasBooked && !!told;
     // Read before the booking takes them out of Cancelled: someone there hears that a new time was set, not "Good news".
     const followUp = await openFollowUpOf(tx, app.id, { lock: true });
     const carried = followUp && CANCEL_STAGES.includes(app.stage) ? (followUp.choice === "new_times" ? ("new_times_asked" as const) : ("new_times_team" as const)) : null;
@@ -523,19 +529,22 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
       await endMarkOnMove(tx, { applicationId: app.id, companyId: t.companyId, actor, to: "interview_scheduled" });
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_scheduled", by: t.role, actor, reason: "a person set the date and time", now });
     }
-    const moved = wasBooked && !!told;
-    await emit(tx, { type: wasBooked ? "interview.rescheduled" : "interview.booked", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { setByPerson: true, slotId: slot.id, startsAt: slot.startsAt, endsAt: slot.endsAt, attempt, clashAllowed: clashes.length > 0, ...(wasBooked ? { wasBooked: true, byCandidate: false, reason: body.reason ?? null, moved } : {}) } });
+    const moved = heard && !sameStart;
+    const changed = heard && sameStart;
+    await emit(tx, { type: wasBooked ? "interview.rescheduled" : "interview.booked", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { setByPerson: true, slotId: slot.id, startsAt: slot.startsAt, endsAt: slot.endsAt, attempt, clashAllowed: clashes.length > 0, ...(wasBooked ? { wasBooked: true, byCandidate: false, reason: body.reason ?? null, moved, ...(changed ? { changed } : {}) } : {}) } });
     await audit(tx, { companyId: t.companyId, actor, action: "interview.booked_on_behalf", target: { type: "interview", id: iv.id }, reason: "a person set the date and time", details: { applicationId: app.id, slotId: slot.id, startsAt: slot.startsAt, moved: wasBooked } });
     // The personal line they have not read yet comes along (Q28); one already in an email they got is not said again.
-    const note = !moved ? ((run?.state ?? {}) as { invitationNote?: InvitationNote | null }).invitationNote ?? null : null;
-    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: iv.roundKey, attempt, setByPerson: true, bookedAt: now.toISOString(), ...(wasBooked ? { wasBooked: true } : {}), ...(moved ? { moved: { reason: body.reason?.trim() || null } } : {}), ...(note ? { invitationNote: note } : {}), ...(carried ? { offerKind: carried } : {}) }, idempotencyKey: `schedule:${iv.id}:${attempt}`, actor, startStep: BOOKED_RUN_STARTS_AT });
-    return { id: iv.id, moved, unchanged: false };
+    const note = !heard ? ((run?.state ?? {}) as { invitationNote?: InvitationNote | null }).invitationNote ?? null : null;
+    const why = { reason: body.reason?.trim() || null };
+    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: iv.roundKey, attempt, setByPerson: true, bookedAt: now.toISOString(), ...(wasBooked ? { wasBooked: true, ...(sameStart ? { sameTime: true } : {}) } : {}), ...(moved ? { moved: why } : {}), ...(changed ? { changed: why } : {}), ...(note ? { invitationNote: note } : {}), ...(carried ? { offerKind: carried } : {}) }, idempotencyKey: `schedule:${iv.id}:${attempt}`, actor, startStep: BOOKED_RUN_STARTS_AT });
+    return { id: iv.id, moved, changed, unchanged: false };
   });
   await container.kick();
   const answer = await withTenant(container.db, t.companyId, async (tx) => {
     const row = await summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, done.id)))[0]);
     if (done.unchanged) return { ...row, candidateNotice: null, moved: false, unchanged: true };
-    return { ...row, candidateNotice: await candidateNoticeOfBooking(tx, { companyId: t.companyId, hasEmail: row.candidate.hasEmail }), moved: done.moved };
+    // `changed`: the same start with new details, so the email says the details changed (11 November 2026).
+    return { ...row, candidateNotice: await candidateNoticeOfBooking(tx, { companyId: t.companyId, hasEmail: row.candidate.hasEmail }), moved: done.moved, ...(done.changed ? { changed: true } : {}) };
   });
   return c.json(answer);
 });
