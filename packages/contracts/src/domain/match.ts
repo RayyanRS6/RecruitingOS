@@ -142,6 +142,13 @@ export type MatchScore = {
   unknown: MatchUnknown[];
   /** The points still open: the share of the score that nothing has been said about yet. */
   openPoints: number;
+  /**
+   * The must-haves the role checks only in the team's own interviews that no reading shows in full yet (not known, partly
+   * shown, or claimed with nothing quoted): never part of the number, but not known either, so the verdict word is never
+   * Strong match beside one, the board never starts a decline ticked on a low score while one is open, and on the Shortlist
+   * it says to check it in the interview (the release review, 11 November 2026). An older answer leaves it out.
+   */
+  checkInInterview?: Array<{ key: string; label: string }>;
   /** How many judged requirements are fully met ("N more at full marks"). */
   fullMarks: number;
   missingMustHave: Array<{ key: string; label: string; quote: string }>;
@@ -171,13 +178,14 @@ export function matchBand(score: number | null | undefined): { band: MatchBand; 
  * The one verdict word, from the same numbers as the score (the owner, 6 November 2026), so a word and a number can never
  * disagree: a must-have their own words show is not met; then nothing to go on; under 55 the word says whether that is too
  * little evidence (a must-have not known, or half the points still open) or what the evidence shows; from 70 with every
- * must-have fully shown it is strong; anything else from 55 is potential. The stored `overall` of a reading stays for the
- * audit trail and the board's own checks, and no longer speaks beside the number.
+ * must-have fully shown it is strong; anything else from 55 is potential. A must-have the role checks only in the team's own
+ * interviews (`checkInInterview`) is not known until a reading shows it in full, though it is never in the number. The stored
+ * `overall` of a reading stays for the audit trail and the board's own checks, and no longer speaks beside the number.
  */
-export function fitOf(m: { score: number | null; missingMustHave: readonly unknown[]; openPoints: number; breakdown: ReadonlyArray<Pick<MatchCriterion, "mustHave" | "pctMet">>; unknown: ReadonlyArray<Pick<MatchUnknown, "mustHave">> }): MatchFit {
+export function fitOf(m: { score: number | null; missingMustHave: readonly unknown[]; openPoints: number; breakdown: ReadonlyArray<Pick<MatchCriterion, "mustHave" | "pctMet">>; unknown: ReadonlyArray<Pick<MatchUnknown, "mustHave">>; checkInInterview?: readonly unknown[] }): MatchFit {
   if (m.missingMustHave.length) return "missing_must_have";
   if (m.score === null) return "insufficient";
-  const mustOpen = m.unknown.some((u) => u.mustHave);
+  const mustOpen = m.unknown.some((u) => u.mustHave) || !!m.checkInInterview?.length;
   if (m.score < 55) return mustOpen || m.openPoints >= 50 ? "insufficient" : "weak";
   return m.score >= 70 && !mustOpen && m.breakdown.every((c) => !c.mustHave || c.pctMet === 100) ? "strong" : "potential";
 }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { EvidenceAssessment, MatchScore, MustHaveSummary } from "@ros/contracts";
+import type { EvidenceAssessment, MatchScore, MustHaveSummary, RolePacket } from "@ros/contracts";
 import { boardPlacement, declineReasonFor, type PlacementInput } from "./board";
 import type { AssessmentLike } from "./evidence";
+import { matchScore, mustHaveSummary } from "./match-score";
 
 /**
  * The board's placement (plan F6): every rule, in our words. Pure over the score and the evidence view, so the board,
@@ -157,6 +158,49 @@ describe("boardPlacement", () => {
     const thin = place({ latest: holding, match: score(33, { breakdown: [], unknown: [open, { ...open, key: "t" }], openPoints: 67, coverage: { known: 2, total: 4, words: "Based on 2 of 4 requirements" } }) });
     expect(thin.reason).toBe("Match score 33: 2 of 4 requirements not shown yet.");
     expect(thin.reason).not.toContain("A skill");
+  });
+
+  /**
+   * The release review (11 November 2026): a must-have the role checks only in the team's own interviews is out of the
+   * number, but it is not known until a reading shows it, so the board never ticks a decline on a low score while it is
+   * open, and on the Shortlist it says to check it in the interview, never "Strong evidence on every must-have".
+   */
+  it("keeps a must-have checked only in the team's own interviews open: no ticked decline beside it, and the Shortlist says to check it", () => {
+    const cooking = [{ key: "cook", label: "Passes our practical cooking test" }];
+    const strong = place({ match: score(100, { breakdown: [], confidence: "high", checkInInterview: cooking }) });
+    expect(strong).toMatchObject({ column: "shortlist", confident: true, needsYourEye: null, nextStep: { kind: "interview", label: "Interview", reason: "Check Passes our practical cooking test in your interview." } });
+    expect(place({ match: score(80, { checkInInterview: cooking }) }).nextStep).toMatchObject({ kind: "interview", reason: "Check Passes our practical cooking test in your interview." });
+    const low = place({ latest: holding, match: score(50, { checkInInterview: cooking }) });
+    expect(low).toMatchObject({ column: "longlist", confident: false, suggestedAction: "longlist", declineReason: null, nextStep: { kind: "read_yourself", reason: "Read their application, then decide whether to check Passes our practical cooking test in an interview." } });
+    expect(low.needsYourEye).toBe("A must-have is still to be checked in your own interviews: Passes our practical cooking test. A low score without it is not enough to go on.");
+    // with none open, the same low score stands
+    expect(place({ latest: holding, match: score(50) })).toMatchObject({ column: "not_moving_forward", confident: true });
+  });
+
+  it("places the review's two cooks alike, whether their résumé says nothing about the practical test or partly shows it", () => {
+    const role = {
+      requirements: { mustHaves: [{ key: "kitchen", text: "Two years in a commercial kitchen", rationale: "r", evidencedBy: ["resume", "screen"] }, { key: "cook", text: "Passes our practical cooking test", rationale: "r", evidencedBy: ["interview"] }] },
+      competencies: [{ key: "knife", name: "Knife work", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "safety", name: "Food safety", definition: "d", weight: 3, evaluatedIn: "both", indicators: ["x"] }],
+    } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+    const cv = (rest: "yes" | "partially", cook: "unknown" | "partially") => {
+      const r: EvidenceAssessment = { ...result, requirementFindings: [{ requirementKey: "kitchen", met: rest, evidence: { source: "resume", quote: "four years at a bistro" } }, { requirementKey: "cook", met: cook, ...(cook === "unknown" ? {} : { evidence: { source: "resume", quote: "I passed a stage at a bistro" } }) }], competencyFindings: [{ competencyKey: "knife", finding: rest === "yes" ? "evidenced" : "partially_evidenced", evidence: { source: "resume", quote: "julienne daily" } }, { competencyKey: "safety", finding: rest === "yes" ? "evidenced" : "partially_evidenced", evidence: { source: "resume", quote: "ServSafe 2025" } }] };
+      return { kind: "triage", confidence: "high", createdAt: "2026-11-01T10:00:00Z", packetVersion: 1, result: r };
+    };
+    const placed = (rest: "yes" | "partially", cook: "unknown" | "partially", latest: AssessmentLike) => {
+      const pair = { resume: cv(rest, cook), screen: null };
+      const match = matchScore(pair, role)!;
+      return { score: match.score, fit: match.fit, placement: boardPlacement({ stage: "screen_complete", base: "new", stageLabel: "AI interview done", latest, evidence: quiet, match, mustHaves: mustHaveSummary(pair, role) }) };
+    };
+    const strongLatest: AssessmentLike = { kind: "triage", overall: "strong", confidence: "high", result };
+    const ana = placed("yes", "unknown", strongLatest);
+    const ben = placed("yes", "partially", strongLatest);
+    expect(ana).toEqual(ben);
+    expect(ana).toMatchObject({ score: 100, fit: "potential", placement: { column: "shortlist", nextStep: { kind: "interview", reason: "Check Passes our practical cooking test in your interview." } } });
+    // a thin résumé on the same job: never a decline ticked while the test is still to come
+    for (const cook of ["unknown", "partially"] as const) {
+      const cara = placed("partially", cook, holding);
+      expect(cara, cook).toMatchObject({ score: 50, fit: "insufficient", placement: { column: "longlist", confident: false, declineReason: null } });
+    }
   });
 
   it("holds an eligibility answer for a person, with nothing to apply", () => {

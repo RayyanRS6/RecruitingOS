@@ -24,7 +24,8 @@ import { MATCH_WEIGHT, SCORE_BASIS_INTERVIEW_ONLY, SCORE_BASIS_WORDS, fitOf, imp
  *   told it is judged there, so no reading of a résumé or an AI interview moves the number with it. A must-have checked
  *   only there is asked by nobody here, so no reading moves the number with it either, whatever it found: only their own
  *   quoted "no" counts, as for any must-have (it earns nothing and holds the score at 54). Counting it once a reading spoke
- *   to it scored someone who showed part of it below someone who said nothing (the release review, 11 November 2026).
+ *   to it scored someone who showed part of it below someone who said nothing (the release review, 11 November 2026). Until
+ *   a reading shows it in full it is still not known (`checkInInterview`): the verdict word and the board treat it so.
  * - Doing the AI interview never costs points. Per requirement its checked "no" wins (their own latest words); otherwise
  *   the better of the two checked findings counts, the AI interview's on a tie; a finding with nothing quoted counts only
  *   when neither reading has a checked one (the AI interview's first).
@@ -189,6 +190,8 @@ export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirem
   const band = matchBand(score);
   const unknown: MatchUnknown[] = open.map(({ r, part }) => ({ key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(part.share), pointsLost: Math.round(part.lost), ...(r.found.unquotedNo ? { unquotedNo: true } : {}) }));
   const openPoints = Math.round(Number(open.reduce((n, { part }) => n + part.lost, 0).toFixed(6)));
+  // Out of the number, but not known until a reading shows it in full: still to check in the team's own interview.
+  const checkInInterview = packet.requirements.mustHaves.filter(onlyInOwnInterviews).filter((m) => { const s = resolve(pair, mustHaveFound(m)).status; return s === "unknown" || s === "partly"; }).map((m) => ({ key: m.key, label: m.text }));
   const sources = new Set(known.map(({ r }) => r.found.source));
   const basedOn = sources.size === 2 || (!sources.size && pair.resume && pair.screen) ? "resume_and_screen" : sources.has("screen") || (!sources.size && pair.screen) ? "screen" : "resume";
   const latest = latestOf(pair);
@@ -197,11 +200,12 @@ export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirem
     score,
     band: band?.band ?? null,
     bandLabel: band?.label ?? null,
-    fit: fitOf({ score, missingMustHave, openPoints, breakdown, unknown }),
+    fit: fitOf({ score, missingMustHave, openPoints, breakdown, unknown, checkInInterview }),
     coverage: { known: known.length, total: all.length, words: coverageWords(known.length, all.length) },
     breakdown,
     unknown,
     openPoints,
+    checkInInterview,
     fullMarks: breakdown.filter((c) => c.pctMet === 100).length,
     missingMustHave,
     capped,

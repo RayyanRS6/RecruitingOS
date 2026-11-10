@@ -286,7 +286,8 @@ describe("matchScore", () => {
     const shown = [must("rdh_license", "yes", "RDH license"), must("perio", "yes", "perio")];
     const skillsShown = [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")];
     const m = matchScore(pair(reading("triage", shown, skillsShown)), role)!;
-    expect(m).toMatchObject({ score: 100, fit: "strong", openPoints: 0 });
+    // still open, though out of the sum: never Strong match beside a must-have nobody has shown (the release review, 11 November 2026)
+    expect(m).toMatchObject({ score: 100, fit: "potential", openPoints: 0, checkInInterview: [{ key: "panel", label: "A strong teaching demo" }] });
     expect(m.coverage.total).toBe(5);
     expect(m.unknown).toEqual([]);
     // the must-have line still says it is not known: nobody has asked yet
@@ -299,8 +300,12 @@ describe("matchScore", () => {
       expect(known.coverage.total, finding.met).toBe(5);
       expect([...known.breakdown, ...known.unknown].map((c) => c.key), finding.met).not.toContain("panel");
     }
+    // partly shown, or claimed with nothing quoted, it is still to check in their own interview; shown on a quote, it is not
+    expect(matchScore(pair(reading("triage", [...shown, must("panel", "partially", "I taught once")], skillsShown)), role)).toMatchObject({ fit: "potential", checkInInterview: [{ key: "panel", label: "A strong teaching demo" }] });
+    expect(matchScore(pair(reading("triage", [...shown, must("panel", "yes")], skillsShown)), role)).toMatchObject({ fit: "potential", checkInInterview: [{ key: "panel" }] });
+    expect(matchScore(pair(reading("triage", [...shown, must("panel", "yes", "I taught for six years")], skillsShown)), role)).toMatchObject({ fit: "strong", checkInInterview: [] });
     // only their own quoted no counts, as for any must-have: it earns nothing, holds the score at 54 and is named
-    expect(matchScore(pair(reading("triage", [...shown, must("panel", "no", "I have never taught")], skillsShown)), role)).toMatchObject({ score: 54, capped: true, fit: "missing_must_have", missingMustHave: [{ key: "panel", label: "A strong teaching demo", quote: "I have never taught" }] });
+    expect(matchScore(pair(reading("triage", [...shown, must("panel", "no", "I have never taught")], skillsShown)), role)).toMatchObject({ score: 54, capped: true, fit: "missing_must_have", missingMustHave: [{ key: "panel", label: "A strong teaching demo", quote: "I have never taught" }], checkInInterview: [] });
     // a "no" with nothing quoted is not known, like any other
     expect(matchScore(pair(reading("triage", [...shown, must("panel", "no")], skillsShown)), role)).toMatchObject({ score: 100, missingMustHave: [] });
     // a must-have the AI interview or the résumé can speak to stays in the sum

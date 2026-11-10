@@ -15,7 +15,10 @@ import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, LOW_CONFIDENCE_TEXT, RE
  *   disagrees with its findings or says too little (a résumé reading or a scorecard, at any stage), low confidence, no
  *   reading, nothing to score, an unreadable résumé, a must-have said to be missing with nothing quoted, held on an
  *   eligibility answer, or a must-have not yet known on an otherwise strong reading.
- * - A decline never starts ticked on thin or moving ground: a low score with must-haves not yet known, from under half
+ * - A must-have the role checks only in the team's own interviews is out of the number, and not known until a reading
+ *   shows it in full (`checkInInterview`): on the Shortlist the next step is the interview, saying to check it there.
+ * - A decline never starts ticked on thin or moving ground: a low score with must-haves not yet known (one checked only in
+ *   the team's own interviews included), from under half
  *   the requirements, or that the points still open could lift out of Low (a requirement not shown is never a decline), an
  *   open screening conversation whose answers would count most, a reading made against an older version of the role whose
  *   must-haves have changed, or a reading that itself suggested a step forward. The same goes for the Shortlist when the
@@ -157,12 +160,14 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
 
   // What sends them to the Longlist for a person's eye instead, unticked: the first that applies says why.
   const unknownMust = match?.unknown.filter((u) => u.mustHave) ?? [];
+  // A must-have the role checks only in the team's own interviews, not shown in full yet: out of the number, still not known.
+  const toCheck = (match?.checkInInterview ?? []).map((m) => m.label);
   const unquotedNo = unknownMust.filter((u) => u.unquotedNo);
   const leans = readingLeans(latest);
   const coverage = match?.coverage ?? { known: 0, total: 0 };
   // Low, and what nothing has been said about yet could still lift them out of Low: too little to go on, never a ticked decline.
   const couldLeaveLow = (score ?? 0) + (match?.openPoints ?? 0) >= LOW_SCORE_BELOW;
-  const thin = column === "not_moving_forward" && !missing.length && (unknownMust.length > 0 || coverage.known < coverage.total * MIN_COVERAGE_TO_DECLINE || couldLeaveLow);
+  const thin = column === "not_moving_forward" && !missing.length && (unknownMust.length > 0 || toCheck.length > 0 || coverage.known < coverage.total * MIN_COVERAGE_TO_DECLINE || couldLeaveLow);
   // Where to ask: in the AI interview while it can still be done, on a call once it has been (a second one is never offered).
   const askWhere = latest.kind === "screen" ? "on a call" : "in the AI interview";
   const readYourself = (why: string, reasonForStep: string) => ({ why, next: step("read_yourself", reasonForStep) });
@@ -182,9 +187,9 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
     if (column === "not_moving_forward" && leans === "forward") return readYourself(`The assistant suggested ${latest.kind === "screen" ? "an interview" : "an AI interview"}, but the score puts them lower. Read before deciding.`, "The AI review and the score disagree; your own read decides.");
     if (column === "shortlist" && leans === "back") return readYourself(`The assistant suggested ${latest.kind === "screen" ? "not moving forward" : "holding back"}, but the score puts them higher. Read before deciding.`, "The AI review and the score disagree; your own read decides.");
     if (thin) {
-      return unknownMust.length
-        ? { why: `${mustHavesNotKnown(unknownMust.map((u) => u.label))} A low score without them is not enough to go on.`, next: step("ask_more", `Their application does not say whether they have ${unknownMust[0].label}.`) }
-        : { why: `Only ${coverage.known} of ${coverage.total} requirements could be judged; a low score from so little is not enough to go on.`, next: step("ask_more", `Ask them about the role's requirements ${askWhere}.`) };
+      if (unknownMust.length) return { why: `${mustHavesNotKnown(unknownMust.map((u) => u.label))} A low score without them is not enough to go on.`, next: step("ask_more", `Their application does not say whether they have ${unknownMust[0].label}.`) };
+      if (toCheck.length) return readYourself(`${toCheck.length === 1 ? "A must-have is" : `${toCheck.length} must-haves are`} still to be checked in your own interviews: ${listOf(toCheck)}. A low score without ${toCheck.length === 1 ? "it" : "them"} is not enough to go on.`, `Read their application, then decide whether to check ${toCheck[0]} in an interview.`);
+      return { why: `Only ${coverage.known} of ${coverage.total} requirements could be judged; a low score from so little is not enough to go on.`, next: step("ask_more", `Ask them about the role's requirements ${askWhere}.`) };
     }
     if (column === "shortlist" && unknownMust.length) return { why: mustHavesNotKnown(unknownMust.map((u) => u.label)), next: step("ask_more", `Their application does not say whether they have ${unknownMust[0].label}.`) };
     return null;
@@ -203,7 +208,8 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
   if (!next) {
     if (column === "shortlist") {
       const screened = latest.kind === "screen";
-      next = screened || (band === "very_high" && match?.confidence === "high") ? step("interview", screened ? "Good evidence on every must-have, and the AI interview is done." : "Strong evidence on every must-have.") : step("phone_call", "Good evidence on the must-haves; a short call would confirm it.");
+      // A must-have only their own interview checks is not shown yet: that interview is the next step, and it says what to check.
+      next = toCheck.length ? step("interview", `Check ${listOf(toCheck)} in your interview.`) : screened || (band === "very_high" && match?.confidence === "high") ? step("interview", screened ? "Good evidence on every must-have, and the AI interview is done." : "Strong evidence on every must-have.") : step("phone_call", "Good evidence on the must-haves; a short call would confirm it.");
     } else if (column === "not_moving_forward") {
       next = step("not_moving_forward", missing.length ? `Their own words show they do not meet ${missing[0].label}.` : reason);
     } else {
