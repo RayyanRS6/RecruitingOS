@@ -77,11 +77,14 @@ const EMAIL_UNVERIFIED = ["provider_email_needs_verification", "email_address_no
  * to redirect_to with `error` and `error_description` (Microsoft's own, or the service's) and, for the service's own
  * refusals only, `error_code`, in the query and again in the fragment, and no code. Microsoft's reason is the AADSTS
  * number its description starts with; Microsoft also sends error_subcode=cancel, which the service does not pass on.
+ * The microsoft_* codes name Microsoft on the sign-in page, so only a flow that started with Microsoft gets them
+ * (`provider`, the PKCE cookie's: 10 November 2026); any other reads as `signin_incomplete`, never as Microsoft's.
  */
-function refusalCode(q: { error?: string; errorCode?: string; errorSubcode?: string; description?: string }): { code: string; aadsts: string | null } {
+function refusalCode(q: { error?: string; errorCode?: string; errorSubcode?: string; description?: string; provider?: string | null }): { code: string; aadsts: string | null } {
   const numbers: string[] = q.description?.match(/AADSTS\d+/g) ?? [];
   const aadsts = numbers[0] ?? null;
   if (q.errorCode && EMAIL_UNVERIFIED.includes(q.errorCode)) return { code: "email_unverified", aadsts };
+  if (q.provider !== "azure") return { code: "signin_incomplete", aadsts };
   // Cancel pressed on Microsoft's permissions screen, or Back to the app after asking IT for approval.
   if (numbers.includes("AADSTS65004") || q.errorSubcode === "cancel") return { code: "microsoft_declined", aadsts };
   if (numbers.some((n) => NEEDS_APPROVAL.includes(n)) || q.error === "consent_required") return { code: "microsoft_needs_approval", aadsts };
@@ -106,7 +109,7 @@ authRoutes.get("/callback", async (c) => {
   const description = c.req.query("error_description");
   if (!code && (error || errorCode || description)) {
     // Microsoft's description is never shown, kept or put in an address: the log has the code and the bare AADSTS number.
-    const refusal = refusalCode({ error, errorCode, errorSubcode: c.req.query("error_subcode"), description });
+    const refusal = refusalCode({ error, errorCode, errorSubcode: c.req.query("error_subcode"), description, provider: pkce?.provider });
     console.warn(`[sign-in] the identity service sent back a refusal: ${refusal.code}${refusal.aadsts ? ` (${refusal.aadsts})` : ""}`);
     const reauth = readReauthMarker(c, container);
     if (reauth && pkce && returnedState === pkce.state && returnedState.endsWith(REAUTH_STATE_SUFFIX)) return refusedReauth(c, container, reauth);

@@ -164,6 +164,42 @@ describe("sign-in through the identity service's return trip", () => {
     }
   });
 
+  /**
+   * The microsoft_* codes name Microsoft on the sign-in page, so only a flow that started with Microsoft gets them: the
+   * provider the PKCE cookie holds (10 November 2026). A Google sign-in refused for having no email, say, reads as
+   * "The sign-in did not complete." and never "Microsoft did not share…"; so does a refusal with no flow behind it.
+   */
+  it.each([
+    { said: "the service got no email address from the provider", refusal: { error: "server_error", error_code: "unexpected_failure", error_description: "Error getting user email from external provider" }, code: "signin_incomplete" },
+    { said: "consent_required", refusal: { error: "consent_required", error_description: "The Authorization Server requires End-User consent." }, code: "signin_incomplete" },
+    { said: "a cancel subcode", refusal: { error: "access_denied", error_subcode: "cancel", error_description: "The user canceled the sign-in." }, code: "signin_incomplete" },
+    // the service's own refusal of an unverified address names no provider: it reads the same from either
+    { said: "an unverified address (provider_email_needs_verification)", refusal: { error: "access_denied", error_code: "provider_email_needs_verification", error_description: "Unverified email with google. A confirmation email has been sent to your google email" }, code: "email_unverified" },
+  ])("a sign-in started with Google never reads as Microsoft's refusal: $said", async ({ refusal, code }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const start = await app.request("/api/v1/auth/start/google");
+      const back = serviceRefuses(start.headers.get("location")!, refusal);
+      const refused = await app.request(`${back.pathname}${back.search}`, { headers: { cookie: cookieOf(start) } });
+      expect(refused.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/login?error=${code}#`);
+      expect(refused.headers.get("set-cookie") ?? "").not.toContain("ros_session=");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a refusal with no sign-in of this browser's behind it (no PKCE cookie) never names Microsoft either", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const start = await app.request("/api/v1/auth/start/azure");
+      const back = serviceRefuses(start.headers.get("location")!, { error: "access_denied", error_description: microsoftSays("AADSTS90094", "Admin consent is required for the permissions requested by this application.") });
+      const refused = await app.request(`${back.pathname}${back.search}`);
+      expect(refused.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/login?error=signin_incomplete#`);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("a refusal during \"Confirm it's you\" goes back where it started with reauth=failed, as its other failures do, both of its cookies cleared", async () => {
     const start = await app.request("/api/v1/auth/start/google");
     const returned = serviceReturns(start.headers.get("location")!, "code-4");
