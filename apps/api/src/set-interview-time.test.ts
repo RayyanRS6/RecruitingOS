@@ -1661,6 +1661,41 @@ describe("a person sets the date and time", () => {
       expect(((await r.json()) as Booked & { candidateEmail: string | null }).candidateEmail).toBeNull();
       expect(await groupOf(rex.id)).toBe("in_process");
     });
+
+    /**
+     * The release review's second reading (11 November 2026, S-2): times whose email soft-bounced and then arrived on its retry
+     * reached them after all. The sheet and the panel say nothing about the email once the retry arrives, and the list's
+     * grouping reads the retry as the panel does, so they wait on nobody, on the list as on the panel.
+     */
+    it("times whose email soft-bounced and then arrived on its retry reached them: nothing said about the email, and the list and the panel agree they wait on nobody", async () => {
+      const pia = await signInAs(container, app, { companyId, role: "hiring_manager", email: "pia@settime.test", name: "Pia Moss" });
+      const piaId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "pia@settime.test")))[0].id;
+      expect((await json(pia, "PUT", "/api/v1/me/availability", { timezone: TZ, windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 12 })).status).toBe(200);
+      const { cand: uma, id } = await approveFor(await apply("Uma", "Retried"), { interviewerUserIds: [piaId] });
+      const offered = await interview(id);
+      const times = await emailOf(`slots:${id}:${offered.attempt}`);
+      expect(times.status).toBe("sent");
+      const seen = async () => {
+        const sheet = (await (await json(owner, "GET", `/api/v1/interviews/${id}`)).json()) as { candidateEmail: string | null };
+        const panel = (await (await json(owner, "GET", `/api/v1/applications/${uma.id}`)).json()) as { group: string; interviews: Array<{ id: string; candidateEmail: string | null }> };
+        const rows = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; group: string }>;
+        return { sheet: sheet.candidateEmail, panel: panel.interviews.find((i) => i.id === id)?.candidateEmail, panelGroup: panel.group, listGroup: rows.find((x) => x.id === uma.id)?.group };
+      };
+      expect(await seen()).toEqual({ sheet: null, panel: null, panelGroup: "in_process", listGroup: "in_process" });
+      // a full mailbox: the times email soft-bounces, so for now nothing reached them and they wait on a person
+      await withPlatform(container.db, (tx) => handleEmailEvent(tx, container.integrations, { event: { provider: "postmark", recordType: "Bounce", externalId: `Bounce:${times.providerMessageId}`, messageId: times.providerMessageId, email: uma.email, type: "SoftBounce", description: "The mailbox is full.", at: container.engine.clock().toISOString(), hard: false, complaint: false, soft: true, metadata: {} }, appBaseUrl: "http://localhost:3000", now: container.engine.clock() }));
+      expect(await seen()).toEqual({ sheet: "failed", panel: "failed", panelGroup: "waiting_on_you", listGroup: "waiting_on_you" });
+      // four hours later the retry arrives: they have the times after all
+      setClock(BASE + 5 * H);
+      try {
+        await container.drain();
+      } finally {
+        setClock(BASE);
+      }
+      const [retry] = await container.db.select().from(communications).where(eq(communications.retryOf, times.id));
+      expect(retry?.status).toBe("sent");
+      expect(await seen()).toEqual({ sheet: null, panel: null, panelGroup: "in_process", listGroup: "in_process" });
+    });
   });
 
   describe("a company ITS has not confirmed", () => {

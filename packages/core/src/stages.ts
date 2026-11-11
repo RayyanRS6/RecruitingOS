@@ -335,7 +335,8 @@ export function groupFor(app: { stage: ApplicationStage }, mark?: MarkView, now:
  * Which of these applications have an open interview in motion: a time booked, or times offered to pick from whose email
  * did not fail (it is on its way, delivered, or waiting for the ITS check). The fact `groupFor` takes; one read for a whole
  * list. Times whose email could not be delivered, or that had no address to go to, reached nobody: a person sets the time,
- * so they still wait on the team. The same condition, in SQL, for a count that groups rows itself (`IN_MOTION_SQL`).
+ * so they still wait on the team, unless the email bounced softly and a retry of it arrived. The same condition, in SQL, for
+ * a count that groups rows itself (`IN_MOTION_SQL`).
  */
 export async function interviewsInMotionFor(q: Queryable, applicationIds: readonly string[]): Promise<Set<string>> {
   if (!applicationIds.length) return new Set();
@@ -345,10 +346,14 @@ export async function interviewsInMotionFor(q: Queryable, applicationIds: readon
 
 /**
  * Times offered whose email can reach them: there is an address on file, and the email with them (`slots:<id>:<attempt>`)
- * did not fail. Only whether an address exists is read, never the address or the person.
+ * did not fail, or it bounced softly and a retry of it arrived (a soft bounce is tried twice, packages/agents email-failures.ts;
+ * the second retry is a retry of the first), as the panel reads it (`reachedOnRetry`; the release review's second reading,
+ * 11 November 2026). A retry in one of `DID_NOT_REACH`'s statuses (packages/agents outbox.ts) reached nobody. Only whether an
+ * address exists is read, never the address or the person.
  */
 function TIMES_REACH_THEM(id: ReturnType<typeof sql>, attempt: ReturnType<typeof sql>, applicationId: ReturnType<typeof sql>) {
-  return sql`(NOT EXISTS (SELECT 1 FROM communications c WHERE c.idempotency_key = 'slots:' || ${id}::text || ':' || ${attempt}::text AND c.status IN ('failed', 'bounced', 'unknown')) AND EXISTS (SELECT 1 FROM applications a2 JOIN candidates p2 ON p2.id = a2.candidate_id WHERE a2.id = ${applicationId} AND p2.email IS NOT NULL))`;
+  const notReached = sql`('queued', 'held', 'failed', 'cancelled', 'bounced')`;
+  return sql`(NOT EXISTS (SELECT 1 FROM communications c WHERE c.idempotency_key = 'slots:' || ${id}::text || ':' || ${attempt}::text AND c.status IN ('failed', 'bounced', 'unknown') AND NOT EXISTS (SELECT 1 FROM communications r1 LEFT JOIN communications r2 ON r2.retry_of = r1.id WHERE r1.retry_of = c.id AND (r1.status NOT IN ${notReached} OR r2.status NOT IN ${notReached}))) AND EXISTS (SELECT 1 FROM applications a2 JOIN candidates p2 ON p2.id = a2.candidate_id WHERE a2.id = ${applicationId} AND p2.email IS NOT NULL))`;
 }
 
 /** `interviewsInMotionFor` for one application row in a grouped count: true when it has an open interview in motion. */
