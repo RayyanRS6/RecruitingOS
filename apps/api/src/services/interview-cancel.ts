@@ -27,9 +27,9 @@ function candidateKnows(iv: Pick<InterviewRow, "status" | "startsAt" | "schedule
 
 /**
  * Whether the candidate heard of this interview, so a cancellation tells them it is off: a time they picked themselves, or a
- * booked time or times on offer that an email about has left us for (`reached`, from `interviewReachedThem`). The decline and
- * "Record what happened" steps read it before the press, so they never promise a note that will not go (the release review,
- * 11 November 2026).
+ * booked time or times on offer that an email about reached them for (`reached`, from `interviewReachedThem`: it left us and
+ * did not come back, or a retry of it arrived). The decline and "Record what happened" steps read it before the press, so they
+ * never promise a note that will not go (the release review, 11 November 2026), nor one to an address it bounced from.
  */
 export function candidateHeardOf(iv: Pick<InterviewRow, "status" | "startsAt" | "scheduleToken" | "offeredSlots" | "selectedSlot">, reached: boolean): boolean {
   const knows = candidateKnows(iv);
@@ -59,8 +59,8 @@ export async function candidatesHeard(tx: Tx, applicationId: string): Promise<Ma
  * reopen at the same moment take turns.
  *
  * Nobody hears of a cancellation of something they never heard of. A time they picked, they know of. Times on offer, or a time
- * a person set, they know of only once an email about it has left: called off before that (the worker had not got to it, it
- * waited for the ITS check, or it could not be delivered), no note is written, the waiting email is withdrawn by the outbox,
+ * a person set, they know of only once an email about it reached them: called off before that (the worker had not got to it, it
+ * waited for the ITS check, it could not be delivered, or it bounced), no note is written, the waiting email is withdrawn by the outbox,
  * and the decision message leaves it out (`neverHeard` on the event). `candidateTold` answers the screen: a note is really on
  * its way, so it may say so. `held`: a note waits for the ITS check.
  */

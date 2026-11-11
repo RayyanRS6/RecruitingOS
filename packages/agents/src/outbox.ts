@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, isCompanyVerified, type Actor } from "@ros/contracts";
 import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, lockedAmong, nextContactWindow, notify, raiseAlert, raiseAlertOnce, zonedParts } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviews, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
@@ -203,7 +203,7 @@ function bookedTimeStale(message: { attempt: number; which: string | null }, iv:
  * request, an invitation to a next step whose person has since left the process (a closing message, such as the
  * decision or a cancellation, still goes), a link to a step that has ended since (a screening conversation no longer
  * open, interview times no longer on offer: the closing note of the step still goes), a confirmation or reminder of a
- * time that no longer stands (`bookedTimeStale`), the times of an automatic set of new times for a role an ITS recruiter
+ * time that no longer stands (`bookedTimeStale`; a retry of one after a soft bounce too), the times of an automatic set of new times for a role an ITS recruiter
  * took over meanwhile, a decision message whose decision no longer applies, or a close-out note to someone a change of
  * plan has opened since: it says nobody has reviewed them, and the team can now. Read again just before a release and
  * just before a send, because a message can wait for days. The answer to a privacy request always goes.
@@ -224,7 +224,10 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
   const takenOver = await autoTimesUnderTakeover(q, relevant.filter((r) => r.templateKey === "interview_slots").map((r) => r.idempotencyKey).filter((k): k is string => !!k));
   const closeOuts = appsWith(new Set(["close_out"]));
   const stillLocked = await lockedAmong(q, closeOuts);
-  const bookedTimes = new Map(relevant.flatMap((r) => { const t = bookedTimeOf(r); return t ? [[r.id, t] as const] : []; }));
+  // A retry of a confirmation or a reminder (a soft bounce tried again) is about the same booked time as the message it repeats,
+  // so a time called off or moved since stops it too (the second reading of the release review, 11 November 2026).
+  const firstKeys = await firstKeysOfRetries(q, relevant.map((r) => r.idempotencyKey));
+  const bookedTimes = new Map(relevant.flatMap((r) => { const t = bookedTimeOf({ templateKey: r.templateKey, idempotencyKey: (r.idempotencyKey ? firstKeys.get(r.idempotencyKey) : undefined) ?? r.idempotencyKey }); return t ? [[r.id, t] as const] : []; }));
   const bookedIds = [...new Set([...bookedTimes.values()].map((t) => t.interviewId))];
   const booked = new Map((bookedIds.length ? await q.select({ id: interviews.id, status: interviews.status, attempt: interviews.attempt, startsAt: interviews.startsAt, timezone: interviews.timezone }).from(interviews).where(inArray(interviews.id, bookedIds)) : []).map((i) => [i.id, i]));
   for (const r of relevant) {
@@ -340,8 +343,66 @@ export async function undoQueuedMessage(q: Queryable, input: { communicationId: 
 
 /** What told them about an interview, by template: a time to pick from, or a booked time. */
 const ABOUT_AN_INTERVIEW = ["interview_slots", "interview_slots_reminder", "interview_confirmation"];
+/** The interview a message about one is keyed by (`slots:<id>:<attempt>`, `slots_reminder:<id>:<attempt>`, `confirm:<id>:<attempt>`). */
+const ABOUT_AN_INTERVIEW_KEY = /^(?:slots|slots_reminder|confirm):([^:]+):\d+$/;
 /** A message in one of these never left us, so nothing it says has reached them. */
 export const NEVER_LEFT = ["queued", HELD_STATUS, "failed", "cancelled"];
+/**
+ * A message in one of these did not reach them: it never left us, or it came back (`bounced`, from the provider's webhook,
+ * email-failures.ts). A soft bounce is tried again as a new message (`retryOf`); one of those that arrives reached them.
+ * `unknown` (a send cut off) and `sending` may have reached them, so they count as reached: the safe side for a cancellation.
+ */
+export const DID_NOT_REACH: readonly string[] = [...NEVER_LEFT, "bounced"];
+/** A retry's key (`retryCommunication` in email-failures.ts): the id of the message it tries again, then `:retry:<attempt>`. */
+const RETRY_KEY = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):retry:\d+$/i;
+/** How many retries of retries are followed back; a soft bounce is tried twice (`RETRY_DELAYS_MS`), so a few is plenty. */
+const RETRY_DEPTH = 5;
+
+/**
+ * For each key of a retry among these, the key of the first message it tries again, followed back through retries of retries,
+ * so a retry is read as the message it repeats: a confirmation's retry is about the same booked time. One read per level, and
+ * none at all when no key is a retry's.
+ */
+export async function firstKeysOfRetries(q: Queryable, keys: ReadonlyArray<string | null | undefined>): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  let level = [...new Set(keys.filter((k): k is string => !!k && RETRY_KEY.test(k)))].map((key) => ({ key, id: RETRY_KEY.exec(key)![1] }));
+  for (let depth = 0; level.length && depth < RETRY_DEPTH; depth += 1) {
+    const rows = await q.select({ id: communications.id, key: communications.idempotencyKey }).from(communications).where(inArray(communications.id, [...new Set(level.map((l) => l.id))]));
+    const keyOf = new Map(rows.map((r) => [r.id, r.key ?? ""]));
+    const next: typeof level = [];
+    for (const l of level) {
+      const key = keyOf.get(l.id);
+      if (!key) continue;
+      const again = RETRY_KEY.exec(key);
+      if (again) next.push({ key: l.key, id: again[1] });
+      else out.set(l.key, key);
+    }
+    level = next;
+  }
+  return out;
+}
+
+/**
+ * Of these messages, the ones a retry of which arrived (left us and did not come back), retries of retries too: a soft bounce
+ * that reached them after all, read where the first message's own status still says `bounced`.
+ */
+export async function reachedOnRetry(q: Queryable, ids: readonly string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  let level = [...new Set(ids)].map((id) => ({ root: id, id }));
+  for (let depth = 0; level.length && depth < RETRY_DEPTH; depth += 1) {
+    const rows = await q.select({ id: communications.id, retryOf: communications.retryOf, status: communications.status }).from(communications).where(inArray(communications.retryOf, level.map((l) => l.id)));
+    const rootOf = new Map(level.map((l) => [l.id, l.root]));
+    const next: typeof level = [];
+    for (const r of rows) {
+      const root = r.retryOf ? rootOf.get(r.retryOf) : undefined;
+      if (!root) continue;
+      if (!DID_NOT_REACH.includes(r.status)) out.add(root);
+      else next.push({ root, id: r.id });
+    }
+    level = next;
+  }
+  return out;
+}
 
 /** Whether a message is really on its way: it did not fail, and it does not wait for the ITS check. What a screen may say "was sent" about. */
 export function onItsWay(result: SendResult): boolean {
@@ -349,19 +410,31 @@ export function onItsWay(result: SendResult): boolean {
 }
 
 /**
- * Whether any email about this interview has left us: what the candidate can know of it. Someone a person booked hears of it
+ * Whether any email about this interview reached them: what the candidate can know of it. Someone a person booked hears of it
  * only by email, which goes a moment after the press, or once ITS confirms the company, so a time called off before that is
- * one they never heard of. Read by the interview's id in each email's key (`slots:<id>:<attempt>`, `confirm:<id>:<attempt>`).
+ * one they never heard of. An email that came back (`bounced`: a mistyped address, a full mailbox) told them nothing either,
+ * unless a retry of it arrived (the second reading of the release review, 11 November 2026). Read by the interview's id in
+ * each email's key (`slots:<id>:<attempt>`, `confirm:<id>:<attempt>`; a retry's is read through the message it repeats).
  */
 export async function interviewReachedThem(q: Queryable, input: { applicationId: string; interviewId: string }): Promise<boolean> {
   return (await interviewsThatReachedThem(q, { applicationIds: [input.applicationId] })).has(input.interviewId);
 }
 
-/** `interviewReachedThem` for every interview of these applications at once: the ids an email about has left us for. */
+/** `interviewReachedThem` for every interview of these applications at once: the ids an email about reached them for. */
 export async function interviewsThatReachedThem(q: Queryable, input: { applicationIds: readonly string[] }): Promise<Set<string>> {
   if (!input.applicationIds.length) return new Set();
-  const told = await q.select({ key: communications.idempotencyKey }).from(communications).where(and(inArray(communications.applicationId, [...input.applicationIds]), inArray(communications.templateKey, ABOUT_AN_INTERVIEW), notInArray(communications.status, NEVER_LEFT)));
-  return new Set(told.map((t) => (t.key ?? "").split(":")[1] ?? "").filter(Boolean));
+  // Every email about an interview, the retries of one that soft-bounced among them (same template and application).
+  const rows = await q.select({ id: communications.id, key: communications.idempotencyKey, status: communications.status, retryOf: communications.retryOf }).from(communications).where(and(inArray(communications.applicationId, [...input.applicationIds]), inArray(communications.templateKey, ABOUT_AN_INTERVIEW)));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (DID_NOT_REACH.includes(r.status)) continue;
+    let first = r;
+    for (let depth = 0; first.retryOf && byId.has(first.retryOf) && depth < RETRY_DEPTH; depth += 1) first = byId.get(first.retryOf)!;
+    const id = ABOUT_AN_INTERVIEW_KEY.exec(first.key ?? "")?.[1];
+    if (id) out.add(id);
+  }
+  return out;
 }
 
 /**
@@ -376,8 +449,8 @@ async function newsOfAnUnknownInterview(q: Queryable, rows: readonly WaitingRow[
     return m && r.applicationId ? [{ id: r.id, interviewId: m[1], applicationId: r.applicationId }] : [];
   });
   if (!news.length) return [];
-  const told = await q.select({ key: communications.idempotencyKey }).from(communications).where(and(inArray(communications.applicationId, [...new Set(news.map((n) => n.applicationId))]), inArray(communications.templateKey, ABOUT_AN_INTERVIEW), notInArray(communications.status, NEVER_LEFT)));
-  const heardOf = new Set(told.map((t) => (t.key ?? "").split(":")[1]));
+  // The same rule as the cancellation's own (`interviewsThatReachedThem`): an email that came back told them nothing.
+  const heardOf = await interviewsThatReachedThem(q, { applicationIds: [...new Set(news.map((n) => n.applicationId))] });
   return news.filter((n) => !heardOf.has(n.interviewId)).map((n) => n.id);
 }
 

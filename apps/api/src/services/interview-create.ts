@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { NO_WORK_WHILE_LOCKED, type Actor, type CandidateNotice, type InterviewPlace, type MembershipRole, type OfferedSlot, type SetInterviewTime } from "@ros/contracts";
 import { CANCEL_STAGES, STAGE_LABEL, audit, defaultSchedulingWindow, emit, endMarkOnMove, followUpParked, notify, openFollowUpOf, personSetSlot, setAutoState, setCurrentInterview, transition } from "@ros/core";
-import { clashingInterviewers, companyConfirmed, type InvitationNote } from "@ros/agents";
+import { clashingInterviewers, companyConfirmed, reachedOnRetry, type InvitationNote } from "@ros/agents";
 import { applications, approvalRequests, candidates, communications, companies, interviewParticipants, interviews, memberships, randomToken, rolePackets, roles, type Tx } from "@ros/db";
 import { cancelNewTimesRuns, type NewTimesOfferKind, type NewTimesVia } from "@ros/workflows";
 import type { Container } from "../container";
@@ -78,7 +78,8 @@ export async function candidateNoticeOfBooking(tx: Tx, input: { companyId: strin
  * ITS confirms the company, `failed` when it could not be delivered, `no_email` when there is no address to send it to,
  * null when nothing needs saying. Read off the current attempt's own email: a booked time's confirmation, or the times
  * offered to pick from (still offered, or lapsed), so a screen never says "Waiting on the candidate" when nothing reached
- * them. `hasEmail` on an interview (a list of several people) wins over the one given for all of them.
+ * them. `hasEmail` on an interview (a list of several people) wins over the one given for all of them. One that bounced
+ * softly and whose retry arrived reached them after all (`reachedOnRetry`), as a cancellation reads it (11 November 2026).
  */
 export type CandidateEmailState = "held" | "failed" | "no_email" | null;
 const NOT_DELIVERED = new Set(["failed", "bounced", "unknown"]);
@@ -95,11 +96,14 @@ export async function candidateEmailStates(tx: Tx, input: { interviews: Readonly
   const reachable = due.filter(({ i }) => i.hasEmail ?? input.hasEmail ?? true);
   for (const { i } of due) if (!(i.hasEmail ?? input.hasEmail ?? true)) out.set(i.id, "no_email");
   if (!reachable.length) return out;
-  const rows = await tx.select({ key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, reachable.map((x) => x.key)));
+  const rows = await tx.select({ id: communications.id, key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, reachable.map((x) => x.key)));
   const statusOf = new Map(rows.map((r) => [r.key, r.status]));
+  // Read only for one that came back: whether a retry of it arrived (a soft bounce is tried again after four hours and a day).
+  const arrivedLater = await reachedOnRetry(tx, rows.filter((r) => r.status === "bounced").map((r) => r.id));
+  const retried = new Set(rows.filter((r) => arrivedLater.has(r.id)).map((r) => r.key));
   for (const { i, key } of reachable) {
     const status = statusOf.get(key);
-    out.set(i.id, status === "held" ? "held" : status && NOT_DELIVERED.has(status) ? "failed" : null);
+    out.set(i.id, status === "held" ? "held" : status && NOT_DELIVERED.has(status) && !retried.has(key) ? "failed" : null);
   }
   return out;
 }

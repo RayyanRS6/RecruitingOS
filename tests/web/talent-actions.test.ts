@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveMark, ApplicationDetail, CandidateNotice, StageMove } from "../../apps/web/src/api/client";
 import { LOW_CONFIDENCE_LABEL, NO_QUOTE_LABEL, closerLook, competencyUnquoted, isUnquoted, lowConfidence, requirementUnquoted, scorecardUnavailable } from "../../apps/web/src/evidence";
+import { candidateEmailLine } from "../../apps/web/src/interview-time";
 import { NOT_NOW_TOAST, NOT_TOLD, PRIVATE_DECISION, actionToast, batches, briefDecisionToast, bulkSendToast, cancelReasonLabel, closeRoleToast, declineConfirmText, declineSummary, decisionToast, interviewCancelToast, interviewWords, mergeDecisionResults, newTimesToast, noticeText, outcomeNoticeText, outcomeToast, safetyNetAfterDecision, sendDecisionToast, stageBlocked, stageIntent } from "../../apps/web/src/talent-actions";
 
 /**
@@ -177,6 +178,21 @@ describe("the private decline step", () => {
     expect(cancelReasonLabel({ candidateHeard: false })).toBe("Reason (only the team sees it)");
     expect(cancelReasonLabel({ candidateHeard: true })).toBe("Reason (the candidate sees it)");
     expect(cancelReasonLabel({})).toBe("Reason (the candidate sees it)");
+  });
+
+  /**
+   * The release review's second reading (11 November 2026, S-2): a confirmation that bounced came back, so the server says
+   * nobody heard of the interview (`candidateHeard: false`, `candidateEmail: "failed"`), and every line beside it agrees: the
+   * panel's email line, the decline and outcome steps, and the sheet's cancel field. None promises a note to that address.
+   */
+  it("a booking whose confirmation bounced: the email line, the decline and outcome steps and the cancel field all say nothing reached them", () => {
+    const bounced = { title: "Phone screen", startsAt: "2026-10-14T18:00:00.000Z", timezone: "America/New_York", status: "scheduled", offeredSlots: [], candidateHeard: false };
+    expect(candidateEmailLine("failed", "Maria")).toBe("The email to Maria could not be delivered. Tell them yourself.");
+    expect(declineSummary("sends", { hasEmail: true, interviews: [bounced], now: NOW })[0]).toBe("Private: nothing is sent to them now.");
+    expect(declineConfirmText("sends", { hasEmail: true, interviews: [bounced] })).toContain(`It also stops ${interviewWords(bounced)}; no email about it reached the candidate, so nothing is sent about it.`);
+    expect(declineConfirmText("sends", { hasEmail: true, interviews: [bounced] })).not.toMatch(/short note|told now/);
+    expect(outcomeNoticeText([bounced])).toBe("Nothing is sent to the candidate.");
+    expect(cancelReasonLabel(bounced)).toBe("Reason (only the team sees it)");
   });
 
   it("the decline's toast says the interview was called off and the candidate was told only that it is off", () => {

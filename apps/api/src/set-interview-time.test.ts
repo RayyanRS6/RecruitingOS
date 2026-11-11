@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { INTERVIEW_CHANGED_SINCE, NEVER_HEARD_OF_IT, REMINDER_TOO_LATE, interviewsCalledOff } from "@ros/agents";
+import { INTERVIEW_CHANGED_SINCE, NEVER_HEARD_OF_IT, REMINDER_TOO_LATE, handleEmailEvent, interviewsCalledOff } from "@ros/agents";
 import { anonymizeCandidate, entitlements, zonedParts, zonedToUtc } from "@ros/core";
 import { applications, auditRecords, candidates, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, roles, screens, users, withPlatform, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, FakeGoogleCalendarProvider } from "@ros/integrations";
@@ -1163,6 +1163,74 @@ describe("a person sets the date and time", () => {
       // it could not be delivered: never heard
       await container.db.update(communications).set({ status: "failed", error: "provider refused" }).where(eq(communications.idempotencyKey, `confirm:${booked.id}:1`));
       expect(await heardOn(cand.id, booked.id)).toEqual({ panel: false, sheet: false });
+    });
+
+    /**
+     * The release review's second reading (11 November 2026, S-2): an email that bounced came back, so it told them nothing.
+     * Bea's address has a typo and the confirmation hard-bounces: the panel says it could not be delivered, and the decline step
+     * promised "a short note saying so" to an address that takes nothing. A soft bounce is tried again after four hours: once a
+     * retry arrives they have heard of it, and a time called off before that is one they never heard of, so the retry of its
+     * confirmation never goes either (it would be the only word they got, about an interview that is off).
+     */
+    it("a confirmation that bounced told them nothing: no note promised or written, the panel says so; a retry that arrived did tell them, and one still to come never goes once it is off", async () => {
+      const bounce = (providerMessageId: string, email: string, hard: boolean) => withPlatform(container.db, (tx) => handleEmailEvent(tx, container.integrations, { event: { provider: "postmark", recordType: "Bounce", externalId: `Bounce:${providerMessageId}`, messageId: providerMessageId, email, type: hard ? "HardBounce" : "SoftBounce", description: hard ? "The mailbox does not exist." : "The mailbox is full.", at: container.engine.clock().toISOString(), hard, complaint: false, soft: !hard, metadata: {} }, appBaseUrl: "http://localhost:3000", now: container.engine.clock() }));
+      const seen = async (applicationId: string, interviewId: string) => {
+        const detail = (await (await json(owner, "GET", `/api/v1/applications/${applicationId}`)).json()) as { interviews: Array<{ id: string; candidateHeard?: boolean; candidateEmail: string | null }> };
+        const sheet = (await (await json(owner, "GET", `/api/v1/interviews/${interviewId}`)).json()) as { candidateHeard?: boolean; candidateEmail: string | null };
+        const row = detail.interviews.find((i) => i.id === interviewId);
+        return { heard: row?.candidateHeard, email: row?.candidateEmail, sheetHeard: sheet.candidateHeard, sheetEmail: sheet.candidateEmail };
+      };
+
+      // a typo in the address: the confirmation hard-bounces, and the address takes nothing more
+      const typo = await book("Bea", "Bounce");
+      const confirm = await emailOf(`confirm:${typo.booked.id}:1`);
+      expect(confirm.status).toBe("sent");
+      await bounce(confirm.providerMessageId!, typo.cand.email, true);
+      expect(await seen(typo.cand.id, typo.booked.id)).toEqual({ heard: false, email: "failed", sheetHeard: false, sheetEmail: "failed" });
+      // Not moving forward: no note is written to it, and none is counted
+      const before = mailTo(typo.cand.email).length;
+      const declined = await json(owner, "POST", `/api/v1/applications/${typo.cand.id}/actions`, { action: "reject", reason: "not_a_match_experience" });
+      expect(declined.status, await declined.clone().text()).toBe(200);
+      expect(await declined.json()).toMatchObject({ interviewsCancelled: 1, interviewOffNotes: 0 });
+      await container.drain();
+      expect(await emailOf(`iv_cancel:${typo.booked.id}:1`)).toBeUndefined();
+      expect(mailTo(typo.cand.email)).toHaveLength(before);
+      expect((await eventsOf(typo.booked.id, "interview.cancelled"))[0].payload).toMatchObject({ candidateTold: false, neverHeard: true });
+
+      // a full mailbox: a soft bounce, tried again after four hours; the retry arrives, so they heard of it after all
+      const full = await book("Cal", "Bounce");
+      const fullConfirm = await emailOf(`confirm:${full.booked.id}:1`);
+      await bounce(fullConfirm.providerMessageId!, full.cand.email, false);
+      expect(await seen(full.cand.id, full.booked.id)).toEqual({ heard: false, email: "failed", sheetHeard: false, sheetEmail: "failed" });
+      setClock(BASE + 5 * H);
+      try {
+        await container.drain();
+      } finally {
+        setClock(BASE);
+      }
+      const [fullRetry] = await container.db.select().from(communications).where(eq(communications.retryOf, fullConfirm.id));
+      expect(fullRetry?.status).toBe("sent");
+      expect(await seen(full.cand.id, full.booked.id)).toEqual({ heard: true, email: null, sheetHeard: true, sheetEmail: null });
+      const fullOff = await json(owner, "POST", `/api/v1/interviews/${full.booked.id}/cancel`, { reason: "A clash at our end." });
+      expect(await fullOff.json()).toMatchObject({ candidateTold: true });
+
+      // called off while the retry still waits: nothing about it reached them, so no note, and the retry never goes
+      const late = await book("Dot", "Bounce");
+      const lateConfirm = await emailOf(`confirm:${late.booked.id}:1`);
+      await bounce(lateConfirm.providerMessageId!, late.cand.email, false);
+      const lateOff = await json(owner, "POST", `/api/v1/interviews/${late.booked.id}/cancel`, { reason: "A clash at our end." });
+      expect(await lateOff.json()).toMatchObject({ candidateTold: false });
+      const sentBefore = mailTo(late.cand.email).length;
+      setClock(BASE + 5 * H);
+      try {
+        await container.drain();
+      } finally {
+        setClock(BASE);
+      }
+      expect(await emailOf(`iv_cancel:${late.booked.id}:1`)).toBeUndefined();
+      const [lateRetry] = await container.db.select().from(communications).where(eq(communications.retryOf, lateConfirm.id));
+      expect(lateRetry).toMatchObject({ status: "cancelled", error: INTERVIEW_CHANGED_SINCE });
+      expect(mailTo(late.cand.email)).toHaveLength(sentBefore);
     });
 
     it("told of it and then declined: the short note goes, and the decision message leaves it out as before", async () => {
