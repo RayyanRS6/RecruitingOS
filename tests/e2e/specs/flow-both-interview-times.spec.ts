@@ -14,7 +14,7 @@ import {
  * through the API: the interview is the subject here, not the application.
  */
 const run = Date.now().toString(36);
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toast = (page: Page, words: string | RegExp) => page.getByRole("status").filter({ hasText: words });
 
 async function aCompanyWithAJob(page: Page, base: string, tag: string) {
@@ -96,7 +96,7 @@ test.describe("setting interview times", () => {
     // one email, the booking, with the phone line; nothing ever asked her to pick
     const booked = await waitForEmail(page.request, base, {
       to: ana.email,
-      subject: new RegExp(`^Your interview: .+ at ${escape(job.company)}, .+ (AM|PM)`),
+      subject: new RegExp(`^Your interview: .+ at ${escapeRegExp(job.company)}, .+ (AM|PM)`),
       // she gave no phone number on the form, so the email asks for one rather than naming a number
       says: ["Hi Ana,", `Good news: ${job.company} would like to interview you for the ${job.title} position.`, "When: ", "How long: ", `By phone: ${job.company} will call you. Reply with the best number to reach you.`, "Need a different time?", "Need an adjustment, such as captions or a phone call instead of video?"],
     });
@@ -165,7 +165,7 @@ test.describe("setting interview times", () => {
     }).toPass({ timeout: 60_000 });
     const confirmed = await waitForEmail(page.request, base, {
       to: ben.email,
-      subject: new RegExp(`^Confirmed: .+ at ${escape(job.company)}, `),
+      subject: new RegExp(`^Confirmed: .+ at ${escapeRegExp(job.company)}, `),
       says: ["Hi Ben,", `You are confirmed: `, `for the ${job.title} position at ${job.company}.`, "What to prepare:", "A calendar invitation is attached. Need to change it?", "Need an adjustment, such as captions or a phone call instead of video?"],
     });
     expect(confirmed.attachments?.map((x) => [x.filename, x.contentType])).toEqual([["interview.ics", "text/calendar; method=REQUEST"]]);
@@ -197,7 +197,7 @@ test.describe("setting interview times", () => {
     // the last of her times, well away from Ben's, books
     await offered.locator("li").filter({ hasNotText: bensTime }).last().getByRole("button", { name: "Book this for them" }).click();
     await expect(toast(page, /Booked on the candidate's behalf\.|Booking that time for them\./)).toBeVisible({ timeout: 30_000 });
-    await waitForEmail(page.request, base, { to: cleo.email, subject: new RegExp(`^Confirmed: .+ at ${escape(job.company)}, `), says: ["Hi Cleo,", "You are confirmed: ", "What to prepare:"] });
+    await waitForEmail(page.request, base, { to: cleo.email, subject: new RegExp(`^Confirmed: .+ at ${escapeRegExp(job.company)}, `), says: ["Hi Cleo,", "You are confirmed: ", "What to prepare:"] });
     await exactlyOneEmail(page.request, base, { to: cleo.email, subject: /^Confirmed: / });
     await page.goto("/interviews");
     await expect(interviewRow(page, "Cleo Park").getByText("Scheduled", { exact: true })).toBeVisible({ timeout: 30_000 });
@@ -228,7 +228,7 @@ test.describe("setting interview times", () => {
         await form.getByRole("button", { name: "Book anyway" }).click();
       }
       await expect(toast(page, new RegExp(`Booked\\..*The email to ${who.first} is on its way\\.`))).toBeVisible({ timeout: 30_000 });
-      await waitForEmail(page.request, base, { to: who.email, subject: new RegExp(`^Your interview: .+ at ${escape(job.company)}, `), says: [`Hi ${who.first},`, "Need a different time?"] });
+      await waitForEmail(page.request, base, { to: who.email, subject: new RegExp(`^Your interview: .+ at ${escapeRegExp(job.company)}, `), says: [`Hi ${who.first},`, "Need a different time?"] });
       await page.keyboard.press("Escape");
     }
     await page.goto("/interviews");

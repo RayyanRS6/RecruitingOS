@@ -13,7 +13,7 @@ import {
  * decisions are the subject here.
  */
 const run = Date.now().toString(36);
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toast = (page: Page, words: string | RegExp) => page.getByRole("status").filter({ hasText: words });
 const person = (first: string, last: string, tag: string): Applicant => ({ first, last, email: `${first.toLowerCase()}.${last.toLowerCase()}+${tag}@example.com`, resume: PERSONAS.strong.resume });
 
@@ -63,7 +63,7 @@ test.describe("deciding, the offer, the hire and closing the job", () => {
     await expect(second.getByLabel("Round")).toHaveValue("working");
     await setADateAndTime(second, { first: "Ana", daysAhead: 4, time: "09:30", place: "Address", address: "200 Bay Street, Tustin" });
     await expect(toast(page, /Booked\..*The email to Ana is on its way\./)).toBeVisible({ timeout: 30_000 });
-    await waitForEmail(page.request, base, { to: ana.email, subject: new RegExp(`^Your interview: ${escape(job.rounds[1].title)} at ${escape(job.company)}, `), says: ["Hi Ana,", "Where: 200 Bay Street, Tustin"] });
+    await waitForEmail(page.request, base, { to: ana.email, subject: new RegExp(`^Your interview: ${escapeRegExp(job.rounds[1].title)} at ${escapeRegExp(job.company)}, `), says: ["Hi Ana,", "Where: 200 Bay Street, Tustin"] });
 
     // round two held; Finalist
     sheet = await recordTookPlace(page, "Ana Holt", job.rounds[1].title);
@@ -126,7 +126,7 @@ test.describe("deciding, the offer, the hire and closing the job", () => {
     const hire = panel.locator(".card", { has: page.getByRole("heading", { name: "Hire Ben Ortiz" }) });
     await expect(hire).toBeVisible();
     // the sheet names the interview it calls off, and says nothing goes to Ben
-    await expect(hire.getByText(new RegExp(`^Recorded with your name\\. Nothing is sent to Ben\\. The ${escape(job.rounds[0].title)} on .+ is called off, and the interviewers are told\\.$`))).toBeVisible();
+    await expect(hire.getByText(new RegExp(`^Recorded with your name\\. Nothing is sent to Ben\\. The ${escapeRegExp(job.rounds[0].title)} on .+ is called off, and the interviewers are told\\.$`))).toBeVisible();
     // he started yesterday: a hire recorded after the start
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
     await hire.getByLabel("Start date (agreed with them)").fill(yesterday);

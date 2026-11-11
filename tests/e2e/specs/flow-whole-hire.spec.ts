@@ -25,7 +25,7 @@ const ITS_QUEUE = "recruiters@its.localhost";
 const A_LOOK = 45_000;
 /** A decision or closing message waits out its 30-second Undo window before it leaves. */
 const AFTER_UNDO = 90_000;
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const toast = (page: Page, words: string | RegExp) => page.getByRole("status").filter({ hasText: words });
 
@@ -167,7 +167,7 @@ test.describe("the whole hire", () => {
 
     const booked = await waitForEmail(page.request, base, {
       to: ana.email,
-      subject: new RegExp(`^Your interview: .+ at ${escape(company)}, `),
+      subject: new RegExp(`^Your interview: .+ at ${escapeRegExp(company)}, `),
       says: ["Hi Ana,", `Good news: ${company} would like to interview you for the ${title} position.`, /When: .+ (AM|PM)/, "Where: 120 Main Street, Tustin", "Who: Dana", "What to prepare:", "A calendar invitation is attached. Need a different time?", "Need an adjustment, such as captions or a phone call instead of video? Tell us on the same page, or reply to this email."],
     });
     expect(booked.attachments?.map((x) => [x.filename, x.contentType])).toEqual([["interview.ics", "text/calendar; method=REQUEST"]]);
@@ -247,7 +247,7 @@ test.describe("the whole hire", () => {
     });
     await exactlyOneEmail(page.request, base, { to: ben.email, subject: `Your application to ${company}` });
     await b.page.goto(benStatus);
-    await expect(b.page.getByText(new RegExp(`${escape(company)} has closed this position`)).first()).toBeVisible({ timeout: 30_000 });
+    await expect(b.page.getByText(new RegExp(`${escapeRegExp(company)} has closed this position`)).first()).toBeVisible({ timeout: 30_000 });
     // Ana got the thank-you and the booking, and nothing about the offer or the hire
     expect((await emailsTo(page.request, base, ana.email)).map((m) => m.subject).sort()).toEqual([`Thank you for applying: your next step for ${title} at ${company}`, booked.subject].sort());
     await a.page.goto(anaStatus);

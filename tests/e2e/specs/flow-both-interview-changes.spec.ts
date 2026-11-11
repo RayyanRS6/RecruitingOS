@@ -13,7 +13,7 @@ import {
  * words. The applicants apply through the API: the interview is the subject here.
  */
 const run = Date.now().toString(36);
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toast = (page: Page, words: string | RegExp) => page.getByRole("status").filter({ hasText: words });
 const person = (first: string, last: string, tag: string): Applicant => ({ first, last, email: `${first.toLowerCase()}.${last.toLowerCase()}+${tag}@example.com`, resume: PERSONAS.strong.resume });
 
@@ -74,7 +74,7 @@ test.describe("when a booked interview changes", () => {
     await expect(toast(page, /Moved\..*The email to Ana is on its way\./)).toBeVisible({ timeout: 30_000 });
     const moved = await waitForEmail(page.request, base, {
       to: ana.email,
-      subject: new RegExp(`^New time for your interview: ${escape(job.round)} at ${escape(job.company)}, .+ 2:00 PM P[SD]T$`),
+      subject: new RegExp(`^New time for your interview: ${escapeRegExp(job.round)} at ${escapeRegExp(job.company)}, .+ 2:00 PM P[SD]T$`),
       says: ["Hi Ana,", `${job.company} has moved your `, `${job.company} said: "The dentist is away that morning."`, "Where: 9 Cove Road, Tustin", "A calendar invitation is attached. Need a different time?"],
     });
     expect(moved.attachments?.map((x) => [x.filename, x.contentType])).toEqual([["interview.ics", "text/calendar; method=REQUEST"]]);
