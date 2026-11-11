@@ -446,7 +446,7 @@ The review fixes were merged into `plans` (`f708bdf`) and the lead of that work 
 
 ## 11 November 2026: the release review's fixes
 
-An independent review of `plans` before production read the score, the board, the candidate's own page and the interview life cycle (findings L1 and L2) and found sentences and numbers that were not true. These are the calls made in fixing them, on the owner's standing instruction ("Think for yourself what is best and implement"). Each fix came with a test that failed without it; tested against fake providers only, and nothing here has run on production. What was found and not fixed is in `docs/audit/known-bugs.md`, rows 153 to 158 (row 149 is fixed with RR-11).
+An independent review of `plans` before production read the score, the board, the candidate's own page and the interview life cycle (findings L1 and L2), then the owner's path and ITS's console, the candidate's path, and security, privacy and release safety (L3 to L5), and found sentences and numbers that were not true. These are the calls made in fixing them, on the owner's standing instruction ("Think for yourself what is best and implement"), with the lead's D1 to D4. Each fix came with a test that failed without it; tested against fake providers only, and nothing here has run on production. What was found and not fixed is in `docs/audit/known-bugs.md`, rows 153 to 160 (row 149 is fixed with RR-11).
 
 | Id | Decision | Source | Where it is built |
 |---|---|---|---|

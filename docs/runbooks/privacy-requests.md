@@ -42,6 +42,10 @@ An application past a plan's candidates per job is locked: the hiring team canno
 - **What ITS may say.** If they ask why: "The employer did not review your application." Never name the plan, the limit or the money, on any channel. Do not say or hint how many applied or where they came in. Do not tell the employer who asked. If someone keeps asking for the reason, or the candidate is in Colorado, escalate to the founder and counsel before answering (register item 30).
 - **An employer's legal need.** If an agency or a lawsuit asks an employer for applicant records, it is never told "upgrade first": ITS produces locked records for a recorded legal reason, and a litigation hold stops deletion as above. Record the reason and who asked in the request's notes, and tell the founder.
 
+## What we cannot reach (11 November 2026)
+
+- **The hosting provider's request logs.** Vercel records the full address of every request before our code runs. When someone's sign-in is refused (an outside Microsoft account with an unverified address), the address can carry their email address in `error_description`; our own logs cut it, but Vercel's copy stays for as long as the plan keeps request logs (`docs/readiness/09-data-retention-matrix.md`, row 16; known-bugs row 159). We cannot delete one person's lines there. If an access or deletion request comes from someone who was refused at sign-in, say so plainly in the answer from `privacy@`, with how long the provider keeps those logs, and tell the founder.
+
 ## Restrictions
 
 - Only the privacy handler and the platform administrators see privacy requests. Customer users see only that a request was fulfilled on a candidate's record ("data request fulfilled"), never its content.
