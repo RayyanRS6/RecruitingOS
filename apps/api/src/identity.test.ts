@@ -133,7 +133,7 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
     const page = await app.request(`${authorize.pathname}?${authorize.searchParams.toString()}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("Development only");
-    const form = new URLSearchParams({ provider: "azure", redirect_to: `${container.env.APP_BASE_URL}/api/v1/auth/callback`, code_challenge: authorize.searchParams.get("code_challenge")!, state: authorize.searchParams.get("state")!, email: "paul@identifiedtalent.com", name: "Paul", aal2: "1", email_verified: "1" });
+    const form = new URLSearchParams({ provider: "azure", redirect_to: `${container.env.APP_BASE_URL}/api/v1/auth/callback`, code_challenge: authorize.searchParams.get("code_challenge")!, state: authorize.searchParams.get("state")!, email: "pat.staff@identifiedtalent.com", name: "Pat", aal2: "1", email_verified: "1" });
     const consent = await app.request("/api/v1/auth/fake/authorize", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form.toString() });
     expect(consent.status).toBe(302);
     const cb = new URL(consent.headers.get("location")!);
