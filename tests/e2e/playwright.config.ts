@@ -16,6 +16,8 @@ const port = Number(process.env.E2E_PORT ?? 3010);
 const remote = process.env.E2E_BASE_URL?.trim().replace(/\/+$/, "");
 if (remote && !/^https?:\/\//.test(remote)) throw new Error(`E2E_BASE_URL must be a full address such as https://staging.example.com, not "${remote}"`);
 const base = remote ?? `http://localhost:${port}`;
+/** The whole-flow specs (specs/flow-*.spec.ts): their own projects, so the journeys' runs leave them to the flows job. */
+const FLOWS = /flow-[a-z-]+\.spec\.ts/;
 
 export default defineConfig({
   testDir: "./specs",
@@ -30,9 +32,16 @@ export default defineConfig({
   reporter: [[process.env.CI ? "line" : "list"], ["html", { open: "never", outputFolder: process.env.E2E_REPORT_DIR ?? "report" }]],
   use: { baseURL: base, trace: "retain-on-failure", screenshot: "only-on-failure", video: "off" },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /candidate-phone\.spec\.ts/ },
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: [/candidate-phone\.spec\.ts/, FLOWS] },
     // The candidate journey (apply with the acknowledgment, the screen, the schedule page) runs on the phone only: that is where candidates are (docs/spec/20 item 3).
     { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium" }, testMatch: /routes\.spec\.ts|candidate-phone\.spec\.ts/ },
+    // The whole flows (the owner, 6 November 2026: "please test it thoroughly so the complete process of making a job
+    // hiring and then the complete process of applying test both these flows"). They are long, so on CI they run in a job
+    // of their own, in parts with a server each (.github/workflows/ci.yml, "flows"), which `verify` waits for.
+    // A press that finds nothing to press fails within a minute, not at the end of a ten-minute journey.
+    { name: "flows", use: { ...devices["Desktop Chrome"], actionTimeout: 60_000 }, testMatch: FLOWS },
+    // The candidate's whole application again on a phone, where candidates are.
+    { name: "flows-phone", use: { ...devices["iPhone 13"], browserName: "chromium", actionTimeout: 60_000 }, testMatch: /flow-candidate-apply-whole\.spec\.ts/ },
   ],
   // A deployed address is already running; a local run starts the shell itself.
   webServer: remote ? undefined : {
@@ -51,12 +60,20 @@ export default defineConfig({
       // runner's memory, so the runner itself is never starved.
       NODE_OPTIONS: "--max-old-space-size=6144",
       NODE_ENV: "development", PGLITE_DIR: "memory://", APP_BASE_URL: base,
-      AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", AUTH_PROVIDER: "fake", CALENDAR_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
+      // E2E_EMAIL_PROVIDER=postmark (with no token) is email that never arrives: every send fails at once, and
+      // specs/flow-email-down.spec.ts walks what the owner sees then. Every other run uses the fake adapter.
+      AI_PROVIDER: "fake", EMAIL_PROVIDER: process.env.E2E_EMAIL_PROVIDER || "fake", SMS_PROVIDER: "fake", AUTH_PROVIDER: "fake", CALENDAR_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
       SECRET_STORE: "memory", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", COMP_BLS_ENABLED: "false", MAGIC_LINK_ENABLED: "true",
       BOOTSTRAP_ADMIN_EMAILS: "admin-e2e@identifiedtalent.com",
       // New companies are confirmed at sign-up so the journeys have public pages; company-check.spec.ts takes a
       // confirmation back and gives it again through the admin console (founder decision B7).
       COMPANY_CHECK: "auto",
+      // Sign-up is open for the journeys. access-approval.spec.ts runs on a server of its own, with SIGNUP_MODE=approval in
+      // the environment (the last end-to-end step of .github/workflows/ci.yml), and is skipped in any other run.
+      ...(process.env.SIGNUP_MODE ? { SIGNUP_MODE: process.env.SIGNUP_MODE } : {}),
+      // Every person in these journeys asks for access from this one machine, a retry and a reused server included: the
+      // request door's five an hour per address is for the public, and apps/api/src/access-approval.test.ts proves it.
+      RATE_LIMIT_OVERRIDES: JSON.stringify({ "access.request": 1000 }),
     },
   },
 });

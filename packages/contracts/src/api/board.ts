@@ -90,6 +90,8 @@ export type BoardView = {
   noAiInterview: BoardCard[];
   stillApplying: BoardCard[];
   summary: PoolSummary;
+  /** How many applied past the plan's candidates per job: a number, never who (Rule 3). */
+  lockedCount: number;
   generatedAt: string;
 };
 

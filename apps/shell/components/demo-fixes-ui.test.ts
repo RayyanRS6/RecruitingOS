@@ -72,13 +72,34 @@ describe("the approval card while the worker catches up", () => {
     // the same answer after "Request approval again" (not sent back from here) is the approval on its way
     expect(text(render(client(), createElement(CatchingUpCard, { latest: rejected, sentBackHere: false })))).toContain("Getting the approval ready");
   });
+
+  it("once the page has waited as long as it reads the role again, it stops the spinner and says so, with Reload and Bring in a recruiter (6 November 2026)", () => {
+    const html = render(client(), createElement(CatchingUpCard, { latest: null, sentBackHere: false, roleId: "r1", stalled: true }));
+    const words = text(html);
+    expect(words).toContain("This is taking longer than it should");
+    expect(words).toContain("It usually takes a few seconds. Reload the page in a minute; if it still shows this, bring in a recruiter.");
+    expect(words).not.toContain("updates on its own");
+    expect(html).not.toContain('class="spinner"');
+    expect(html).toContain('role="status"');
+    expect(html).toMatch(/<button type="button" class="btn secondary sm"[^>]*>.*Reload the page<\/button>/);
+    expect(words).toContain("Bring in a recruiter");
+    // before the two minutes the card still says the approval is on its way, with its spinner
+    expect(render(client(), createElement(CatchingUpCard, { latest: null, sentBackHere: false, roleId: "r1" }))).toContain('<span class="spinner" aria-hidden="true"></span>');
+  });
+
+  it("a job closed while it waited, and reopened by ITS, can ask for approval again: closing withdrew the request", () => {
+    const words = text(card(role("draft", { id: "ap1", status: "cancelled", version: 1, decisionNote: "the job was closed", decidedAt: daysAgo(1), decidedBy: null })));
+    expect(words).toContain("The approval was withdrawn");
+    expect(words).toContain("The job was closed while it waited. ITS has reopened it, so it is a draft again.");
+    expect(words).toContain("Request approval again");
+  });
 });
 
 describe("an interview's Link line", () => {
   const interview = (over: Record<string, unknown> = {}) => ({
     id: "iv1", applicationId: "a1", roleId: "r1", roleTitle: "Dental Hygienist", roundKey: "r1", title: "Conversation with the office manager", format: "video", durationMinutes: 30, status: "scheduling", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, linkSource: "calendar", attempt: 1,
     offeredSlots: [], selectedSlot: null, candidateAvailability: null, schedulingWindow: { fromDate: "2026-10-14", toDate: "2026-10-23" }, rescheduleCountCandidate: 0, outcome: null, decision: null, decisionNote: null, reminders: {}, cancelReason: null, scheduleTokenExpiresAt: null, createdAt: daysAgo(1),
-    candidate: { firstName: "Maria", lastName: "Reyes", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, participants: [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", status: "invited" }], calendarRefs: {}, followUp: null,
+    candidate: { firstName: "Maria", lastName: "Reyes", timezone: null, stage: "interview_recommended", stageLabel: "Interview to set up" }, participants: [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", status: "invited" }], calendarRefs: {}, followUp: null,
     timeline: [], availabilitySources: [{ userId: "u1", source: "declared" as "calendar" | "declared" | "none", calendarStatus: null as string | null }], brief: null,
     ...over,
   });
@@ -116,6 +137,13 @@ describe("Setup's calendar line", () => {
     expect(words).not.toContain("We ask only for events on your calendar");
   });
 
+  it("never shows the suggested weekday hours as saved when nothing is (6 November 2026: hours are optional)", () => {
+    expect(page({ connection: null, availability: null, providers: [{ key: "google", status: "fake" }] })).toContain("Declared hours Not saved yet");
+    const saved = page({ connection: null, availability: { timezone: "America/Los_Angeles", windows: [{ day: 1, start: "09:00", end: "17:00" }], bufferMinutes: 15, maxPerDay: 3 }, providers: [{ key: "google", status: "fake" }] });
+    expect(saved).toContain("Declared hours");
+    expect(saved).not.toContain("Not saved yet");
+  });
+
   it("offers Connect Google Calendar once the real Google provider is set up", () => {
     const words = page({ connection: null, availability: null, providers: [{ key: "google", status: "live" }] });
     expect(words).toContain("Connect Google Calendar");
@@ -126,7 +154,7 @@ describe("Setup's calendar line", () => {
 
 describe("the interview approval's meeting link", () => {
   const maria = {
-    id: "a1", roleId: "r1", stage: "interview_recommended", stageLabel: "Recommended for interview", group: "waiting_on_you", source: "careers_page", createdAt: daysAgo(4), ownerStage: "interviewing", ownerStageLabel: "Interviewing", mark: null, tags: [], stageMoves: [], toldState: null, cancelled: null, score: null,
+    id: "a1", roleId: "r1", stage: "interview_recommended", stageLabel: "Interview to set up", group: "waiting_on_you", source: "careers_page", createdAt: daysAgo(4), ownerStage: "interviewing", ownerStageLabel: "Interviewing", mark: null, tags: [], stageMoves: [], toldState: null, cancelled: null, score: null,
     eligibility: { passed: true, failedRules: [], unverifiable: [] }, evidence: { needsCloserLook: false, reason: null, assessmentUnavailable: false, resumeUnreadable: false, unknowns: [], unknownCount: 0, topStrength: null, topConcern: null, confidenceReasons: [] },
     candidateToldAt: null, rejectReason: null, rejectNote: null, declineMessage: "sends", allowedActions: ["interview", "reject", "record_outcome", "set_mark"], blockedReasons: {}, interviews: [],
     interviewPlan: [{ key: "r1", title: "Conversation with the office manager", durationMinutes: 30, format: "video", interviewerUserIds: ["u1"], purpose: "" }],
@@ -142,7 +170,7 @@ describe("the interview approval's meeting link", () => {
 
   it("without a working calendar, asks for the link instead of promising one the calendar cannot make", () => {
     const words = step(null);
-    expect(words).toContain("Approve an interview");
+    expect(words).toContain("Set a date and time");
     expect(words).not.toContain("Create it with the calendar event");
     expect(words).toContain("Meeting link (optional)");
     // "(optional)" says it may stay empty, and the video-call line below says what an empty one means: no hint repeats it

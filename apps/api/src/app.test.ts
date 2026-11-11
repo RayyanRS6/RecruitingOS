@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, entitlements, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { TRIAGE_READINGS } from "@ros/agents";
@@ -78,20 +78,20 @@ describe("Slice 1 API", () => {
     expect(attempts.map((r) => r.status).sort()).toEqual([200, 401, 401]);
   });
 
-  it("creates the company with trial entitlements", async () => {
+  it("creates the company on the Free plan, with no clock", async () => {
     const r = await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(r.status).toBe(201);
     const co = (await r.json()) as { id: string; slug: string; planKey: string };
     companySlug = co.slug;
-    expect(co.planKey).toBe("trial");
+    expect(co.planKey).toBe("free");
     // This suite follows the later path: the form now, the screening invitation by email after the résumé is read (plan Wave E).
     await useLaterApplyFlow(container, co.id);
     const cur = await json("GET", "/api/v1/companies/current");
     expect(cur.status).toBe(200);
-    // the Trial plan's 3 people, counted live: the owner is the one in use (founder decision L-02 B, known bug 128)
+    // the Free plan's 2 people, counted live: the owner is the one in use (known bug 128)
     const body = (await cur.json()) as { usage: Record<string, { used: number; limit: number | null }>; trial: { started: boolean; ended: boolean } | null };
-    expect(body.usage.seats).toEqual({ used: 1, limit: 3 });
-    expect(body.trial).toMatchObject({ started: true, ended: false });
+    expect(body.usage.seats).toEqual({ used: 1, limit: 2 });
+    expect(body.trial).toBeNull();
   });
 
   it("runs the intake conversation and compiles a role packet", async () => {
@@ -132,8 +132,8 @@ describe("Slice 1 API", () => {
     // the compiled session no longer resumes
     const none = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: null | { id: string } };
     expect(none.session).toBeNull();
-    // the trial's one place is taken by the role above: room for a second draft here, put back at the end (plan C13)
-    await container.db.update(entitlements).set({ limit: 2 }).where(eq(entitlements.key, "active_roles"));
+    // Free's one job is the role above: room for a second draft here, put back at the end (plan C13)
+    await container.db.update(entitlements).set({ limit: 2 }).where(inArray(entitlements.key, ["active_roles", "jobs_total"]));
     const r1 = await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time." });
     const { intakeSessionId } = (await r1.json()) as { intakeSessionId: string };
     const cur = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: { id: string; messages: Array<{ role: string }>; missingFacts: string[] } };
@@ -149,7 +149,7 @@ describe("Slice 1 API", () => {
     expect((await json("POST", `/api/v1/intake/sessions/${intakeSessionId}/messages`, { message: "It's a replacement." })).status).toBe(409);
     const evs = await container.db.select().from(events).where(eq(events.type, "intake.abandoned"));
     expect(evs).toHaveLength(1);
-    await container.db.update(entitlements).set({ limit: 1 }).where(eq(entitlements.key, "active_roles"));
+    await container.db.update(entitlements).set({ limit: 1 }).where(inArray(entitlements.key, ["active_roles", "jobs_total"]));
   });
 
   it("approval opens the role and publishes to its channels: the careers page, Google, email and the boards the role plan names", async () => {
@@ -472,15 +472,16 @@ describe("Slice 1 API", () => {
     expect(detail.timeline.some((e) => e.type === "human.override")).toBe(true);
   });
 
-  it("enforces the trial's one-active-role entitlement before any draft or assistant run (plan C13)", async () => {
+  it("enforces the Free plan's one job before any draft or assistant run (plan C13)", async () => {
     const runsBefore = (await container.db.select().from(aiRuns)).length;
     const r = await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. Just draft it." });
     expect(r.status).toBe(402);
-    const err = ((await r.json()) as { error: { code: string; message: string; details: { room: { holding: Array<{ title: string }> } } } }).error;
+    const err = ((await r.json()) as { error: { code: string; message: string; details: { upgrade: boolean; room: { holding: Array<{ title: string }> } } } }).error;
     expect(err.code).toBe("limit_reached");
-    // the role using the place is named, and the message says plainly that closing a role frees its place (polish list)
-    expect(err.details.room.holding.map((h) => h.title)).toEqual(["Registered Dental Hygienist"]);
-    expect(err.message).toMatch(/A role uses a place while it is open, paused or waiting for approval, and closing a role gives its place back/);
+    // a job that went live counts for good, so no role is named to close, and the message says what to do instead
+    expect(err.details.upgrade).toBe(true);
+    expect(err.details.room.holding).toEqual([]);
+    expect(err.message).toBe("Your Free plan includes one job. Upgrade to post more.");
     expect((await container.db.select().from(aiRuns)).length).toBe(runsBefore);
   });
 

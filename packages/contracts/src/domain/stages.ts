@@ -80,9 +80,14 @@ export type CancelledView = {
   auto: { state: "none" | "waiting" | "waiting_check" | "preparing" | "sent" | "not_sent"; reason: string | null; reasonText: string | null; dueAt: string | null; dueDay: string | null; sentAt: string | null };
   times: NewTimesProgress; lastSentAt: string | null; lastSentVia: "auto" | "person" | "batch" | null;
   status: string;
+  /**
+   * Someone on the interview has no hours to offer now (10 November 2026, additive; GET /applications/:id only), so "Send new
+   * times" would be refused with `no_hours`: a person sets a date and time instead. Left out on the list.
+   */
+  noHours?: boolean;
 };
-/** The follow-up an interview summary carries: enough for the Interviews page to offer "Send new times". */
-export type InterviewFollowUpRef = { id: string; reason: CancelledReason; times: NewTimesProgress };
+/** The follow-up an interview summary carries: enough for the Interviews page to offer "Send new times". `noHours` as on `CancelledView`, on GET /interviews/:id only. */
+export type InterviewFollowUpRef = { id: string; reason: CancelledReason; times: NewTimesProgress; noHours?: boolean };
 
 /**
  * Where someone under "No AI interview yet" stands with it (R20-7), in neutral words: never a count, an answer or where

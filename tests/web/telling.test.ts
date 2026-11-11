@@ -162,6 +162,16 @@ describe("the closing message of a closed role (Q30)", () => {
     expect(closingSheetLines({ ...p, count: 0 }).lead).toMatch(/told already/);
   });
 
+  it("counts the people the team has not unlocked and never names them (the plans, Rule 2)", () => {
+    expect(closingSheetLines({ ...p, locked: 0 }).notes).toEqual(closingSheetLines(p).notes);
+    expect(closingSheetLines({ ...p, locked: 1 }).notes).toContain("1 more person you have not unlocked gets the same message.");
+    expect(closingSheetLines({ ...p, locked: 4 }).notes).toContain("4 more people you have not unlocked get the same message.");
+    // and nothing was told of someone with nobody to send it to
+    const event = (payload: Record<string, unknown>) => [{ type: "application.untold_fallback", occurredAt: "2026-10-12T14:00:00.000Z", actor: { kind: "system", id: "candidate_lock" }, payload }];
+    expect(safetyNetActed(event({ action: "not_sent", locked: true }))).toBeNull();
+    expect(safetyNetActed(event({ action: "sent", locked: true }))).toEqual({ action: "sent", at: "2026-10-12T14:00:00.000Z" });
+  });
+
   it("counts every outcome of the Send", () => {
     expect(closingResultToast({ status: "sent", queued: 3, held: 0, notSent: 0 })).toEqual({ title: "3 closing messages on their way." });
     expect(closingResultToast({ status: "sent", queued: 2, held: 1, notSent: 1 })).toEqual({ title: "2 closing messages on their way.", detail: "1 saved; saved messages go out as soon as ITS confirms your company; 1 not sent." });

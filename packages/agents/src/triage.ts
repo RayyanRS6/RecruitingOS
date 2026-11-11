@@ -1,6 +1,6 @@
 import { inArray, eq } from "drizzle-orm";
 import { importanceOf, type CompanyQuestions, type Confidence, type EligibilityResult, type Evidence, type EvidenceAssessment, type EvidenceSource, type Overall, type ResumeExtraction, type RolePacket } from "@ros/contracts";
-import { resumeExtractPrompt, runPromptDetached, triageAssessPrompt, type AiRuntime, type RunOutcome, type TriageInput } from "@ros/ai";
+import { outOfCredit, resumeExtractPrompt, runPromptDetached, runPromptsDetached, triageAssessPrompt, type AiRuntime, type RunMeta, type RunOutcome, type TriageInput } from "@ros/ai";
 import { applicationAnswerSentences, errorForLog, matchScore, quickQuestionsOf, scoredSkill } from "@ros/core";
 import { aiRuns, withTenant, type Db, type Queryable } from "@ros/db";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
@@ -191,17 +191,21 @@ export function assessmentSources(input: SourcesInput): Partial<Record<EvidenceS
 /**
  * Evidence-based assessment (Triage agent, Slice 2). The model reads the application `TRIAGE_READINGS` times; code
  * verifies every quote against the source text and discards any claim whose quote cannot be found, so nothing invented
- * reaches the owner, then keeps the middle answer of the readings for each finding.
+ * reaches the owner, then keeps the middle answer of the readings for each finding. The readings ask the AI credit together
+ * (`runPromptsDetached`): with no room for all of them none is made, and the caller waits for credit, rather than leaving
+ * this applicant with fewer readings than the next.
  */
 export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInput): Promise<RunOutcome<EvidenceAssessment>> {
   const { promptInput, view } = scoringInput(input);
   // The record says which view the reading used and how many details it hid: counts only, never the values.
   const inputRef = { applicationId: input.applicationId, resumeChars: input.resumeText?.length ?? 0, hasExtraction: !!input.extraction, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() };
-  const read = (reading: number) => runPromptDetached(db, ai, triageAssessPrompt, promptInput, { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { ...inputRef, reading } });
-  const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => read(i + 1)));
+  const meta = (reading: number): RunMeta => ({ companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { ...inputRef, reading } });
+  const runs = await runPromptsDetached(db, ai, triageAssessPrompt, promptInput, Array.from({ length: TRIAGE_READINGS }, (_, i) => meta(i + 1)));
   // A reading lost to an outage is asked once more; one still lost fails the step, which the engine retries, rather than
   // leaving this applicant with fewer readings than the next.
-  const settled = await Promise.all(runs.map((r, i) => (!r.ok && r.reason === "error" ? read(i + 1) : r)));
+  const settled = await Promise.all(runs.map((r, i) => (!r.ok && r.reason === "error" ? runPromptDetached(db, ai, triageAssessPrompt, promptInput, meta(i + 1)) : r)));
+  const noCredit = settled.find(outOfCredit);
+  if (noCredit) return noCredit;
   const outage = settled.find((r) => !r.ok && r.reason === "error");
   if (outage) return outage;
   const out = readingsOutcome(settled, view, input);

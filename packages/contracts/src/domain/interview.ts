@@ -7,8 +7,13 @@ export const OfferedSlot = z.object({
   startsAt: z.string(),
   endsAt: z.string(),
   interviewerUserIds: z.array(z.string()),
-  /** Where the free time came from: a connected calendar's free/busy or declared windows. */
-  source: z.enum(["calendar", "declared"]),
+  /**
+   * Where the time came from: a connected calendar's free/busy, declared windows, or "person": someone on the team set this
+   * date and time themselves (`SetInterviewTime`), with no calendar or hours behind it. Only a booked `selectedSlot` says "person".
+   */
+  source: z.enum(["calendar", "declared", "person"]),
+  /** The street address a person set as the place. It lives here so no schema changes for it. */
+  address: z.string().optional(),
 });
 export type OfferedSlot = z.infer<typeof OfferedSlot>;
 
@@ -28,14 +33,50 @@ export type InterviewerAvailabilityInput = z.infer<typeof InterviewerAvailabilit
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "use YYYY-MM-DD");
 export const SchedulingWindow = z.object({ fromDate: IsoDate.optional(), toDate: IsoDate.optional(), businessDaysOnly: z.boolean().default(true) });
 
-/** The human's approval of an interview round (policy `interview.request`, approval level; the click is the approval). */
+const MeetingUrl = z.string().url().refine((u) => /^https?:\/\//i.test(u), "The meeting link must start with http:// or https://");
+/** A day that exists on the calendar: 2026-02-30 is refused here, before anything reads it as March 2. */
+const isRealDay = (day: string) => {
+  const [y, m, d] = day.split("-").map(Number);
+  const at = new Date(Date.UTC(y, m - 1, d));
+  return at.getUTCFullYear() === y && at.getUTCMonth() === m - 1 && at.getUTCDate() === d;
+};
+
+/** Where an interview a person set takes place: a link (or one a live calendar makes, when left empty), an address, or by phone. */
+export const InterviewPlace = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("link"), url: MeetingUrl.optional() }),
+  z.object({ kind: z.literal("address"), text: z.string().trim().min(3).max(300) }),
+  z.object({ kind: z.literal("phone") }),
+]);
+export type InterviewPlace = z.infer<typeof InterviewPlace>;
+
+/**
+ * A date and time a person set for an interview (the owner's words, 6 November 2026: "nadine sets date and time"). `date`
+ * and `time` are on the company's clock, never the browser's. `reason`: moving a booked time, said to the candidate.
+ * `allowClash`: "Book anyway" after an interviewer was found booked then; recorded on the event.
+ */
+export const SetInterviewTime = z.object({
+  date: IsoDate.refine(isRealDay, "That date does not exist."),
+  time: ClockTime,
+  durationMinutes: z.number().int().min(15).max(240),
+  place: InterviewPlace,
+  reason: z.string().max(500).optional(),
+  allowClash: z.boolean().optional(),
+});
+export type SetInterviewTime = z.infer<typeof SetInterviewTime>;
+
+/**
+ * The human's approval of an interview round (policy `interview.request`, approval level; the click is the approval).
+ * `setTime`: the person also set the date and time, so it is booked there and then, with no calendar or hours needed.
+ * Without it the times are worked out from calendars or declared hours and the candidate picks ("Or let them pick").
+ */
 export const RequestInterview = z.object({
   roundKey: z.string().min(1),
   interviewerUserIds: z.array(z.string().min(1)).min(1).max(6),
   linkSource: z.enum(["calendar", "pasted"]).default("calendar"),
-  meetingUrl: z.string().url().refine((u) => /^https?:\/\//i.test(u), "The meeting link must start with http:// or https://").optional(),
+  meetingUrl: MeetingUrl.optional(),
   window: SchedulingWindow.optional(),
   note: z.string().max(2000).optional(),
+  setTime: SetInterviewTime.optional(),
 });
 export type RequestInterview = z.infer<typeof RequestInterview>;
 
@@ -88,7 +129,7 @@ export type AutoNewTimesState = z.infer<typeof AutoNewTimesState>;
 export const AutoNewTimesReason = z.enum([
   "not_asked", "no_show", "switched_off", "already_used", "reschedules_used", "takeover", "was_on_hold",
   "stopped_by_team", "team_acted", "left_process", "interview_changed", "company_not_checked", "no_interviewers", "no_email", "details_deleted",
-  "candidate_replied",
+  "candidate_replied", "no_hours",
 ]);
 export type AutoNewTimesReason = z.infer<typeof AutoNewTimesReason>;
 /** How someone left the Cancelled column. */

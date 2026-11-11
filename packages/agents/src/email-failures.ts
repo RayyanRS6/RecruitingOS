@@ -1,10 +1,10 @@
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
-import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, emit, nextContactWindow, notify, raiseAlert, suppressAddress } from "@ros/core";
-import { applications, candidates, communications, companies, events, jobs, rolePackets, roles, users, type Queryable } from "@ros/db";
+import { ACCESS_REQUEST_STATUSES, type Actor } from "@ros/contracts";
+import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, nextContactWindow, notify, onlyLockedApplications, raiseAlert, raiseAlertOnce, suppressAddress } from "@ros/core";
+import { applications, candidates, communications, companies, events, jobs, memberships, rolePackets, roles, users, type Queryable } from "@ros/db";
 import { mailbox, type EmailEvent, type Integrations } from "@ros/integrations";
 import { deliverSms } from "./coordinator";
-import { queueCommunication } from "./outbox";
+import { QUIET_ON_FAILURE_TAG, queueCommunication } from "./outbox";
 
 /**
  * What happens when an email fails after we sent it (founder instruction of 18 September 2026, item 5).
@@ -14,6 +14,9 @@ import { queueCommunication } from "./outbox";
  * alerted. Every outcome is an event on the communication; nothing is silent.
  */
 export type EmailFailureOutcome = { handled: boolean; communicationId: string | null; action: "suppressed" | "retry_scheduled" | "recorded" | "unmatched"; suppressionReason?: string };
+
+/** A spam complaint raises one alert for its message (or, with none recorded, one for all such) while it stands, and at most one in this time. */
+export const SPAM_ALERT_WINDOW_MS = 60 * 60_000;
 
 export async function handleEmailEvent(q: Queryable, integrations: Integrations, input: { event: EmailEvent; appBaseUrl: string; now: Date }): Promise<EmailFailureOutcome> {
   const { event, now } = input;
@@ -50,12 +53,15 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
     if (cand) {
       const cid = companyId ?? cand.companyId;
       const fallback = event.complaint ? null : await smsFallback(q, integrations, { candidateId: cand.id, companyId: cid, communication: comm ?? null, appBaseUrl: input.appBaseUrl, now });
-      await notify(q, { companyId: cid, kind: "candidate.unreachable", title: event.complaint ? `${cand.firstName} ${cand.lastName} marked our email as spam` : `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: event.complaint ? "We will not email them again. If you still want to talk with them, call them; nothing further goes out automatically." : `Their address bounced (${event.description}). ${fallback === "sent" ? "We texted them a link to their status page." : fallback === "scheduled" ? "A text with their status link goes out when contact hours open." : cand.phone ? "They did not agree to texts; please call them." : "There is no phone number on file; please reach them another way."}`, action: { label: "Open the candidate", href: comm?.applicationId ? `/roles/${(await roleOf(q, comm.applicationId)) ?? ""}/talent` : "/talent" } });
+      if (!(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId: cid, about: comm?.applicationId, kind: "candidate.unreachable", title: event.complaint ? `${cand.firstName} ${cand.lastName} marked our email as spam` : `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: event.complaint ? "We will not email them again. If you still want to talk with them, call them; nothing further goes out automatically." : `Their address bounced (${event.description}). ${fallback === "sent" ? "We texted them a link to their status page." : fallback === "scheduled" ? "A text with their status link goes out when contact hours open." : cand.phone ? "They did not agree to texts; please call them." : "There is no phone number on file; please reach them another way."}`, action: { label: "Open the candidate", href: await candidateHref(q, comm?.applicationId) } });
     }
-    if (user) {
+    if (user && !(await onlyAskedForAccess(q, user.id))) {
       await raiseAlert(q, { kind: "email.person_unreachable", severity: event.complaint ? "critical" : "high", title: event.complaint ? `A team member's address complained: ${address}` : `A team member's address bounces: ${address}`, body: `${event.description} Sign-in links and notifications to this address will not be delivered until an administrator releases the suppression after confirming the address.`, companyId, details: { userId: user.id, type: event.type } });
     }
-    if (event.complaint) await raiseAlert(q, { kind: "email.spam_complaint", severity: "critical", title: `Spam complaint from ${address}`, body: `Message: ${comm?.subject ?? "unknown"} (${comm?.templateKey ?? "unknown template"}). The address is suppressed. Review the message and the sending pattern before anything else goes to similar recipients.`, companyId, target: comm ? { type: "communication", id: comm.id } : null, details: { type: event.type, description: event.description } });
+    // one alert while one stands and at most one an hour (the review of 6 November 2026): every complaint is a critical alert
+    // emailed to the administrators, and complaints about mail with no message of ours recorded (a request's copy, a sign-in
+    // link) could come from as many accounts as someone makes. Each address is suppressed whatever is raised.
+    if (event.complaint) await raiseAlertOnce(q, { kind: "email.spam_complaint", severity: "critical", title: `Spam complaint from ${address}`, body: `Message: ${comm?.subject ?? "unknown"} (${comm?.templateKey ?? "unknown template"}). The address is suppressed. Review the message and the sending pattern before anything else goes to similar recipients.`, companyId, target: comm ? { type: "communication", id: comm.id } : null, details: { type: event.type, description: event.description } }, { withinMs: SPAM_ALERT_WINDOW_MS, now });
     return { handled: true, communicationId: comm?.id ?? null, action: "suppressed", suppressionReason: reason };
   }
 
@@ -67,7 +73,7 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
     if (comm) await emit(q, { type: "message.suppressed", companyId: comm.companyId, actor, subject: { type: "communication", id: comm.id }, payload: { reason: "soft_bounce_repeated", address } });
     // a decision message that will not be tried again, since the address is now stopped, never reached them
     if (comm) await untellDecision(q, comm);
-    if (cand && companyId) await notify(q, { companyId, kind: "candidate.unreachable", title: `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: "Their mailbox keeps rejecting messages. Please call them or reach them another way.", action: { label: "Open talent", href: "/talent" } });
+    if (cand && companyId && !(await nobodyMayBeTold(q, comm, cand.id))) await notify(q, { companyId, about: comm?.applicationId, kind: "candidate.unreachable", title: `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: "Their mailbox keeps rejecting messages. Please call them or reach them another way.", action: { label: "Open the candidate", href: await candidateHref(q, comm?.applicationId) } });
     return { handled: true, communicationId: comm?.id ?? null, action: "suppressed", suppressionReason: "soft_bounce_repeated" };
   }
   if (comm && comm.retryAttempt < RETRY_DELAYS_MS.length) {
@@ -77,6 +83,25 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
   // no retries left: a decision message among them never reached them
   if (comm) await untellDecision(q, comm);
   return { handled: true, communicationId: comm?.id ?? null, action: "recorded" };
+}
+
+/**
+ * Whether the person behind an address has only asked for access, waiting or declined (SIGNUP_MODE=approval). They are on
+ * nobody's team yet and nothing waits on their mailbox: the address stops as any other, and no alert about a team member is
+ * raised, because a failed email in that path never raises one. Once they are on a team this says no.
+ */
+async function onlyAskedForAccess(q: Queryable, userId: string): Promise<boolean> {
+  const rows = await q.select({ status: memberships.status }).from(memberships).where(and(eq(memberships.userId, userId), inArray(memberships.status, ["active", ...ACCESS_REQUEST_STATUSES])));
+  return rows.length > 0 && rows.every((r) => r.status !== "active");
+}
+
+/**
+ * Whether this failure is about someone the team may not read (the plans of 5 November 2026, Rule 2): the message was about a
+ * locked application, or, with no such message, everything the person has here is locked. A notice would name them; the
+ * record of what happened stays. ITS hears of a failed delivery by its own alert, whoever it was to.
+ */
+async function nobodyMayBeTold(q: Queryable, comm: { applicationId: string | null } | undefined, candidateId: string): Promise<boolean> {
+  return comm?.applicationId ? applicationLocked(q, comm.applicationId) : onlyLockedApplications(q, candidateId);
 }
 
 /**
@@ -114,9 +139,11 @@ async function decisionGoneSince(q: Queryable, orig: Pick<typeof communications.
 /** Why a retry of a decision message was not sent. */
 export const DECISION_NO_LONGER_APPLIES = "the decision no longer applies";
 
-async function roleOf(q: Queryable, applicationId: string): Promise<string | null> {
+/** Where a notice about one application leads (6 November 2026): that candidate's page on their job, or the Candidates list when no application is known. */
+async function candidateHref(q: Queryable, applicationId: string | null | undefined): Promise<string> {
+  if (!applicationId) return "/talent";
   const [a] = await q.select({ roleId: applications.roleId }).from(applications).where(eq(applications.id, applicationId)).limit(1);
-  return a?.roleId ?? null;
+  return a ? `/roles/${a.roleId}/talent?open=${applicationId}` : "/talent";
 }
 
 /** A text with the status link when the candidate agreed to texts; outside contact hours it is queued for the next window. */
@@ -176,7 +203,7 @@ export async function retryCommunication(q: Queryable, integrations: Integration
     html: orig.bodyHtml,
     templateKey: orig.templateKey ?? "retry",
     idempotencyKey: `${orig.id}:retry:${input.attempt}`,
-    tags: { template: orig.templateKey ?? "retry", retryOf: orig.id },
+    tags: { template: orig.templateKey ?? "retry", retryOf: orig.id, ...(orig.tags?.[QUIET_ON_FAILURE_TAG] ? { [QUIET_ON_FAILURE_TAG]: orig.tags[QUIET_ON_FAILURE_TAG] } : {}) },
     attachments: orig.attachments,
     actor,
     disclosureIncluded: orig.disclosureIncluded,

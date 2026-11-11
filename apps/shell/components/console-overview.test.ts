@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as React from "react";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -20,8 +21,10 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { Overview, attentionRows, costSummary, customerLine, customerMatches, dueWords, monthStart, waitedWords } = await import("@ros/web/src/pages/admin/Overview");
+const { ACCESS_ROWS_EACH, Overview, attentionCount, attentionRows, costSummary, customerLine, customerMatches, dueWords, monthStart, sessionEnded, waitedWords } = await import("@ros/web/src/pages/admin/Overview");
 const { Console, viewSearch } = await import("@ros/web/src/pages/admin/Console");
+const { ApiError } = await import("@ros/web/src/api/client");
+const { watchForEndedSession } = await import("@ros/web/src/session-ended");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const DAY = 86_400_000;
@@ -88,6 +91,13 @@ function client(data: Array<[unknown[], unknown]>) {
 }
 function failed(qc: QueryClient, queryKey: unknown[]) {
   qc.getQueryCache().build(qc, { queryKey }).setState({ status: "error", error: new Error("The server did not answer."), fetchStatus: "idle" });
+  return qc;
+}
+/** A look that failed after an earlier one answered: TanStack keeps the earlier answer beside the error. */
+function failedAgain(qc: QueryClient, queryKey: unknown[], error: Error) {
+  const query = qc.getQueryCache().find({ queryKey, exact: true });
+  expect(query?.state.data, queryKey.join(" ")).toBeDefined();
+  query?.setState({ status: "error", error, fetchStatus: "idle" });
   return qc;
 }
 const render = (qc: QueryClient, node: ReactNode = createElement(Overview)) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
@@ -157,6 +167,50 @@ describe("the console's Overview", () => {
     expect(t).toContain("7 things need you.");
   });
 
+  it("counts a source whose latest look failed as failed while it still holds an earlier answer, so 'Nothing needs you right now.' never stands over it (the review of 9 November 2026)", () => {
+    // left open overnight with nothing waiting: this morning's looks failed, and each source kept yesterday's answer
+    const qc = client(NOTHING);
+    failedAgain(qc, ["admin", "customers"], new ApiError(500, "error", "Something went wrong. It has been logged."));
+    failedAgain(qc, ["escalations"], new TypeError("Failed to fetch"));
+    const html = render(qc);
+    const t = text(html);
+    expect(t).toContain("Could not check the companies waiting for the ITS check.");
+    expect(html).toContain('aria-label="Try again: the companies waiting for the ITS check">Try again</button>');
+    expect(t).toContain("Could not check recruiter requests.");
+    expect(t).not.toContain("Nothing needs you right now.");
+    // the other sources, which answered, add no row of their own
+    expect(t).not.toContain("Could not check alerts.");
+  });
+
+  it("goes to sign in once a look answers 401, as when the staff session ended while the tab was hidden or asleep; any other failure is a row", () => {
+    expect(sessionEnded([null, undefined, new ApiError(401, "unauthorized", "Sign in to continue.")])).toBe(true);
+    expect(sessionEnded([null, new ApiError(500, "error", "Something went wrong. It has been logged."), new ApiError(403, "mfa_required", "Confirm it's you."), new TypeError("Failed to fetch"), new Error("401")])).toBe(false);
+    expect(sessionEnded([])).toBe(false);
+  });
+
+  /**
+   * The release review (11 November 2026, L3-8): only Home, the Overview and Customers went to sign in on a 401; a job page,
+   * Candidates, Interviews or Settings left open after Take away access said "Could not load…" with a Try again that failed.
+   * The signed-in frame watches every page's looks.
+   */
+  it("the signed-in frame sends any page whose look answers 401 to sign in, once; any other failure stays on the page", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const sent: string[] = [];
+    const stop = watchForEndedSession(qc, () => sent.push("/login"));
+    const look = (key: string, error: unknown) => qc.fetchQuery({ queryKey: [key], queryFn: () => Promise.reject(error) }).catch(() => undefined);
+    await look("role", new ApiError(500, "error", "Something went wrong. It has been logged."));
+    await look("settings", new ApiError(403, "mfa_required", "Confirm it's you."));
+    await look("interviews", new TypeError("Failed to fetch"));
+    expect(sent).toEqual([]);
+    await look("applications", new ApiError(401, "unauthorized", "Sign in to continue."));
+    await look("company", new ApiError(401, "unauthorized", "Sign in to continue."));
+    expect(sent).toEqual(["/login"]);
+    stop();
+    // the frame every signed-in page sits in mounts it
+    const shell = readFileSync(new URL("./AppShell.tsx", import.meta.url), "utf8");
+    expect(shell).toContain('useEffect(() => watchForEndedSession(qc, () => window.location.assign("/login")), [qc]);');
+  });
+
   it("waits quietly while nothing has been read yet", () => {
     const html = render(client([]));
     expect(html).toContain("<h2>Needs attention</h2>");
@@ -197,6 +251,18 @@ describe("the console's Overview", () => {
     expect(t).toContain("Cara Dental $0.88");
     expect(t).not.toContain("Zeta Dental $0.40");
     expect(html).toContain('<a href="/admin/system?view=costs" class="console-more">See all costs</a>');
+  });
+
+  it("a tab left open stays true: every source behind Needs attention is asked again on focus and every minute while visible, never in a hidden tab; the recruiter requests less often", () => {
+    // the review of 6 November 2026: left open at 9:00, it said "Nothing needs you right now." at 15:00 with someone waiting
+    const qc = client(ALL);
+    render(qc);
+    const options = (queryKey: unknown[]) => qc.getQueryCache().find({ queryKey, exact: true })?.options as Record<string, unknown> | undefined;
+    for (const key of [["admin", "customers"], ["admin", "alerts"], ["admin", "failures"], ["admin", "privacy"], ["admin", "failed-email-applications"], ["admin", "csp"]]) {
+      expect(options(key), key.join(" ")).toMatchObject({ refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: false });
+    }
+    // each read of the recruiter requests is recorded per customer: every five minutes, and on focus only once two have passed
+    expect(options(["escalations"])).toMatchObject({ refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 });
   });
 
   it("sums up the system in one line, and says when it could not check the queue", () => {
@@ -270,6 +336,138 @@ describe("Overview's rules", () => {
     expect(customerMatches(customers as never, "  BRIGHT ").map((c) => c.id)).toEqual(["co-bright"]);
     expect(customerMatches(customers as never, "nobody")).toEqual([]);
     expect(customerLine({ ...customers[0], lastActivityAt: null } as never)).toBe("Core · No activity yet");
+  });
+});
+
+describe("first sign-in asks for approval, on the Overview", () => {
+  // the page draws on today's clock, so the requests are dated from it too: the suite does not depend on the day it runs
+  const now = Date.now();
+  const asker = (id: string, called: string, days: number, over: Record<string, unknown> = {}) => customer(id, called, { verifiedAt: null, verifiedBy: null, createdAt: new Date(now - days * DAY).toISOString(), locations: [{ city: "Austin", region: "TX", country: "US" }], settings: { website: "https://asker.example" }, accessRequest: { status: "requested", person: { name: "Sam Asker", email: "sam@stranger.test" }, declined: null }, ...over });
+  const declined = (id: string, called: string, days: number) => asker(id, called, days, { accessRequest: { status: "declined", person: { name: "Dee Clined", email: "dee@stranger.test" }, declined: { at: new Date(now - DAY).toISOString(), by: "Ada Admin" } } });
+  const ordinary = (id: string, called: string, days: number) => customer(id, called, { verifiedAt: null, verifiedBy: null, createdAt: new Date(now - days * DAY).toISOString() });
+  const confirmed = customer("co-ok", "Open Dental");
+
+  it("gives each request its own row at the very top, the longest waiting first, naming the company", () => {
+    const rows = attentionRows({ customers: [confirmed, ordinary("co-w", "Wren Dental", 9), asker("co-new", "New Dental", 1), asker("co-old", "Old Dental", 4)] as never, alerts: [alertRow("al1", "credential.delete_failed", "critical", "Credential delete failed")] as never }, now);
+    expect(rows.map((r) => r.text)).toEqual(["Old Dental is asking for access", "New Dental is asking for access", "1 company waits for the ITS check", "1 alert needs a person: “Credential delete failed”"]);
+    expect(rows.slice(0, 2).map((r) => r.urgent)).toEqual([true, true]);
+    expect(rows[0].access?.company.id).toBe("co-old");
+    // the row's facts: the person's email, which their sign-in proved, then the name they typed (so a name cannot pass for
+    // someone else's address), kind of business, size, city and state, website, how long
+    expect(rows[0].sub).toBe("sam@stranger.test · Sam Asker · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example · Waiting 4 days");
+    expect(rows[1].sub).toContain("Waiting 1 day");
+    expect(rows[0].access?.facts.filter((f) => f.href)).toEqual([{ text: "https://asker.example", href: "https://asker.example/" }]);
+  });
+
+  it("leaves out what a request does not have: no name, no place, no website", () => {
+    const [row] = attentionRows({ customers: [asker("co-a", "Bare Dental", 0, { locations: [], settings: {}, accessRequest: { status: "requested", person: { name: null, email: "bare@stranger.test" }, declined: null } })] as never }, now);
+    expect(row.sub).toBe("bare@stranger.test · Dental practice or group · 20-49 employees · Waiting since today");
+  });
+
+  it("shows up to five rows, then one row linking to the rest, and counts each request as one thing", () => {
+    const asking = ["A", "B", "C", "D", "E", "F", "G", "H"].map((l, i) => asker(`co-${l}`, `${l} Dental`, 20 - i));
+    expect(ACCESS_ROWS_EACH).toBe(5);
+    const rows = attentionRows({ customers: asking as never }, now);
+    expect(rows.map((r) => r.text)).toEqual(["A Dental is asking for access", "B Dental is asking for access", "C Dental is asking for access", "D Dental is asking for access", "E Dental is asking for access", "3 more companies are asking for access"]);
+    expect(rows[5].access).toBeUndefined();
+    expect(rows[5].sub).toBe("F Dental, G Dental, H Dental");
+    expect(rows[5].action).toEqual({ label: "Open", href: "/admin/customers?show=waiting" });
+    expect(attentionCount(rows)).toBe(8);
+    const six = attentionRows({ customers: asking.slice(0, 6) as never }, now);
+    expect(six[5].text).toBe("1 more company is asking for access");
+    expect(attentionCount(six)).toBe(6);
+    // five is exactly five rows: no row for a rest that is not there
+    expect(attentionRows({ customers: asking.slice(0, 5) as never }, now).map((r) => r.key)).not.toContain("access-more");
+    // a flood of requests (the review of 6 November 2026): still five rows, in the order they came, and one line for the rest
+    const flood = Array.from({ length: 60 }, (_, i) => asker(`co-f${i}`, `Flood ${i} Dental`, 90 - i));
+    const many = attentionRows({ customers: flood as never }, now);
+    expect(many.map((r) => r.text)).toEqual([...[0, 1, 2, 3, 4].map((i) => `Flood ${i} Dental is asking for access`), "55 more companies are asking for access"]);
+    expect(many[5].sub).toBe("Flood 5 Dental, Flood 6 Dental, Flood 7 Dental and 52 more");
+    expect(attentionCount(many)).toBe(60);
+  });
+
+  it("leaves requests and declined companies out of the waiting companies' row, and a declined company out of everything", () => {
+    const rows = attentionRows({ customers: [asker("co-a", "Asking Dental", 2), declined("co-d", "Declined Dental", 7), ordinary("co-w", "Wren Dental", 3), ordinary("co-x", "Xen Dental", 5)] as never }, now);
+    expect(rows.map((r) => r.text)).toEqual(["Asking Dental is asking for access", "2 companies wait for the ITS check"]);
+    expect(rows[1].sub).toBe("Xen Dental (5 days), Wren Dental (3 days)");
+    expect(rows[1].action.href).toBe("/admin/customers?open=co-x&tab=check");
+    // only requests or only declined companies: no row about the ITS check at all, and nothing at all for a declined one
+    expect(attentionRows({ customers: [asker("co-a", "Asking Dental", 2)] as never }, now).map((r) => r.key)).toEqual(["access-co-a"]);
+    expect(attentionRows({ customers: [declined("co-d", "Declined Dental", 7)] as never }, now)).toEqual([]);
+    expect(attentionCount(attentionRows({ customers: [declined("co-d", "Declined Dental", 7)] as never }, now))).toBe(0);
+  });
+
+  const withRequests = (rows: unknown[]): Array<[unknown[], unknown]> => NOTHING.map(([key, value]) => (key[1] === "customers" ? [key, rows] : [key, value]));
+
+  it("the stat cells: Waiting counts requests and ordinary waiting alike and never a declined one; Customers leaves both out; Needs attention counts each request", () => {
+    const html = render(client(withRequests([customers[0], asker("co-a", "Asking Dental", 2), asker("co-b", "Bay Dental", 1), ordinary("co-w", "Wren Dental", 3), declined("co-d", "Declined Dental", 7)])));
+    expect(html).toContain('<span class="stat-cell-label">Waiting for the ITS check</span><span class="stat-cell-value">3</span>');
+    expect(html).toContain('<span class="stat-cell-label">Customers</span><span class="stat-cell-value">2</span>');
+    expect(html).toContain('<span class="stat-cell-label">Needs attention</span><span class="stat-cell-value">3</span>');
+    expect(html).toContain("3 things need you.");
+    // past five rows the count still counts the rest
+    const many = render(client(withRequests(["A", "B", "C", "D", "E", "F", "G"].map((l, i) => asker(`co-${l}`, `${l} Dental`, 20 - i)))));
+    expect(many).toContain('<span class="stat-cell-label">Needs attention</span><span class="stat-cell-value">7</span>');
+    expect(many).toContain("7 things need you.");
+    expect(many).toContain('<a href="/admin/customers?show=waiting" class="btn secondary sm" aria-label="Open: 2 more companies are asking for access">Open</a>');
+  });
+
+  it("the Customers card leaves requests and declined companies out, and says none yet when they are all there is", () => {
+    const html = render(client(withRequests([customers[0], asker("co-a", "Asking Dental", 2), declined("co-d", "Declined Dental", 7), ordinary("co-w", "Wren Dental", 3)])));
+    const card = html.slice(html.indexOf("<h2>Customers</h2>"), html.indexOf("<h2>Costs this month</h2>"));
+    expect(card).toContain("Bright Dental");
+    expect(card).toContain("Wren Dental");
+    expect(card).not.toContain("Asking Dental");
+    expect(card).not.toContain("Declined Dental");
+    expect(card).toContain("See all 2 customers");
+    expect(render(client(withRequests([customers[0], asker("co-a", "Asking Dental", 2)])))).toContain("See all 1 customer<");
+    const onlyAsking = render(client(withRequests([asker("co-a", "Asking Dental", 2), declined("co-d", "Declined Dental", 7)])));
+    expect(onlyAsking).toContain("No customers yet.");
+    expect(onlyAsking).toContain('<span class="stat-cell-label">Customers</span><span class="stat-cell-value">0</span>');
+  });
+
+  it("draws the row: Accept the primary button and Decline a quiet one, the facts in one wrapping line, and no button to open it elsewhere", () => {
+    // The page counts the wait on the real clock, so the request is two days old by that clock, not by `now` above.
+    const html = render(client(withRequests([asker("co-a", "Harbor Dental", 2, { createdAt: daysAgo(2) })])));
+    const row = html.slice(html.indexOf("<h2>Needs attention</h2>"), html.indexOf("<h2>Customers</h2>"));
+    expect(text(row)).toContain("Harbor Dental is asking for access");
+    expect(text(row)).toContain("sam@stranger.test · Sam Asker · Dental practice or group · 20-49 employees · Austin, TX · https://asker.example (opens in a new tab) · Waiting 2 days");
+    expect(row).toContain('<button type="button" class="btn primary sm" aria-label="Accept Harbor Dental">Accept</button>');
+    expect(row).toContain('<button type="button" class="btn quiet sm" aria-label="Decline Harbor Dental">Decline</button>');
+    expect(row).not.toContain("Review");
+    // the row wraps on a phone, and from a tablet up the buttons take a line of their own rather than crush the facts
+    expect(row).toMatch(/<li class="list-row motion-safe:animate-enter flex-wrap"/);
+    expect(row).toContain('<span class="list-row-main sm:basis-80">');
+    expect(row).toContain('<span class="list-row-end max-w-full">');
+  });
+
+  it("makes the website a link only for http and https, with the brief's rel and target; anything else is plain text", () => {
+    const rowOf = (website: unknown) => render(client(withRequests([asker("co-a", "Harbor Dental", 2, { createdAt: daysAgo(2), settings: { website } })])));
+    expect(rowOf("https://asker.example")).toContain('<a href="https://asker.example/" target="_blank" rel="noopener noreferrer nofollow">https://asker.example<span class="sr-only"> (opens in a new tab)</span></a>');
+    expect(rowOf("HTTP://Asker.Example/a")).toContain('<a href="http://asker.example/a" target="_blank" rel="noopener noreferrer nofollow">');
+    for (const typed of ["javascript:alert(1)", "asker.example", "data:text/html,x", "https://good.example@evil.example"]) {
+      const html = rowOf(typed);
+      expect(html, typed).not.toContain("noopener noreferrer nofollow");
+      expect(html, typed).not.toMatch(/href="(?:javascript|data):/);
+      expect(text(html), typed).toContain(`20-49 employees · Austin, TX · ${typed} · Waiting 2 days`);
+    }
+    // no website: nothing in its place
+    expect(text(rowOf(undefined))).toContain("Austin, TX · Waiting 2 days");
+  });
+
+  it("shows a company name, a website and a person's name safely, and a very long one breaks anywhere", () => {
+    const evil = "<img src=x onerror=alert(1)>";
+    const html = render(client(withRequests([asker("co-a", evil, 2, { accessRequest: { status: "requested", person: { name: `<b>${evil}</b>`, email: "x@stranger.test" }, declined: null }, settings: { website: evil } })])));
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<b>");
+    expect(text(html)).toContain("&lt;img src=x onerror=alert(1)&gt; is asking for access");
+    const long = "L".repeat(120);
+    const longRow = render(client(withRequests([asker("co-a", long, 2, { accessRequest: { status: "requested", person: { name: long, email: `${long}@stranger.test` }, declined: null }, settings: { website: `https://${long.toLowerCase()}.example/${long}` } })])));
+    // the title is the kit's whole sentence; the facts' one line, and the row's end, cannot hold a word wider than the row
+    expect(longRow).toContain(`<span class="list-row-title wrap">${long} is asking for access</span>`);
+    expect(longRow).toMatch(new RegExp(`<span class="list-row-meta"><span class="min-w-0 wrap-anywhere">${long}`));
+    // the waiting companies' names on their row too
+    expect(render(client(withRequests([ordinary("co-w", long, 3)])))).toMatch(new RegExp(`<span class="list-row-meta wrap-anywhere">${long}`));
   });
 });
 

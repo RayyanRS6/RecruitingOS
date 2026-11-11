@@ -171,6 +171,9 @@ export type IntakeAnswersRequest = z.infer<typeof IntakeAnswersRequest>;
 /** Keep a flagged phrase in a draft, with the reason (C1); the approver sees who kept it and why. */
 export const KeepPacketFlag = z.object({ flagId: z.string().min(1).max(300), reason: z.string().trim().min(5).max(500) });
 export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
+/** The benefits, written on the approval card onto the version waiting. The same limit as the company's text. */
+export const DescribeBenefits = z.object({ text: z.string().trim().min(2).max(2000) }).strict();
+export type DescribeBenefits = z.infer<typeof DescribeBenefits>;
 
 // Roles
 export const CreatePacketVersion = z.object({ packet: RolePacket, changeSummary: z.string().min(1).max(500) });
@@ -267,11 +270,12 @@ export type SendClosingMessage = z.infer<typeof SendClosingMessage>;
  * The closing message's preview (GET /roles/:id/closing-message; also `closingMessage` on POST /roles/:id/outcome):
  * who it goes to (`people`, with `hasEmail` and `optedOut`), the words for one of them with "[first name]" in place of
  * the name, those left out because they were already told or a message waits for approval, and what Send does.
- * `waitingApprovalId` names the one approval request when the batch already waits for it.
+ * `waitingApprovalId` names the one approval request when the batch already waits for it. `locked`: how many past the plan's
+ * candidates per job get the same news as well, a count and nothing else: they are never among `people`.
  */
 export type ClosingMessagePreview = {
   roleId: string; roleTitle: string; count: number; people: Array<{ applicationId: string; name: string; hasEmail: boolean; optedOut: boolean }>;
-  subject: string; text: string; alreadyTold: number; waitingApproval: number; noEmail: number; optedOut: number;
+  subject: string; text: string; alreadyTold: number; waitingApproval: number; noEmail: number; optedOut: number; locked: number;
   policy: "sends" | "needs_approval" | "not_sent"; waitingApprovalId: string | null; sendPath: string;
 };
 /**
@@ -437,7 +441,8 @@ export const EscalationEstimateQuery = z.object({ kind: CreateEscalation.shape.k
 /**
  * One entry in a request's thread as the team reads it: what they asked, every note, every answer, every reopening.
  * `raisedBy` is on the opening question only when nobody on the team or at ITS raised the request: Recruiting OS on its
- * own ("system"), or a candidate (15 October 2026). It names nobody.
+ * own ("system"), or a candidate (15 October 2026). It names nobody. It is also on the wordless line saying the candidate wrote
+ * back to a request a recruiter holds ("candidate", 6 November 2026), whose words stay on the application's thread.
  */
 export type EscalationThreadEntry = { id: string; side: "customer" | "recruiter"; kind: "question" | "reply" | "answer" | "reopen"; body: string; by: string | null; at: string; raisedBy?: "system" | "candidate" };
 /**
@@ -450,6 +455,10 @@ export type RecruiterRequestView = {
   askedBy: { kind: "you" | "team" | "recruiter" | "system" | "candidate"; name: string | null };
   createdAt: string; slaDueAt: string | null; firstResponseAt: string | null; resolvedAt: string | null; resolution: string | null; accessExpiresAt: string | null;
   recruiterName: string | null; reopenedCount: number; thread: EscalationThreadEntry[];
+  /** About someone past the plan's candidates per job (Rule 3): their name, the words and the thread stay with ITS, and the team can add nothing to it. */
+  locked?: boolean;
+  /** A talk about the plan itself: it gives ITS no access to anything, so nothing on the page speaks of access. */
+  topic?: "plan";
 };
 
 // Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.

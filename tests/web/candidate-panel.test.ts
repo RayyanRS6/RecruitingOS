@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, Screen, TimelineEvent } from "../../apps/web/src/api/client";
 import { screenQuestionText } from "../../apps/web/src/evidence";
-import { ASSISTANT_NOTE_LABEL, DECLINE_REASONS, DRAFTED_WORDS, NO_COMPOSE, OWN_WORDS, activeInterviews, chatGapLines, composeFor, dayKey, hasUnsent, historyItem, historyItems, holdDateBounds, latestByTab, markSeen, neighbours, panelQuestions, panelSearch, panelTabFrom, recruiterEventsFor, suggestionAndDecision, unreadTabs, whoDid, writeupLines, writeupOverviewLine, writeupSummary } from "../../apps/web/src/pages/candidate-panel/helpers";
+import { ASSISTANT_NOTE_LABEL, DECLINE_REASONS, DRAFTED_WORDS, NO_COMPOSE, OWN_WORDS, activeInterviews, chatGapLines, composeFor, dayKey, hasUnsent, historyItem, historyItems, holdDateBounds, latestByTab, markSeen, neighbours, offersNewInterviewLink, panelQuestions, panelSearch, panelTabFrom, recruiterEventsFor, suggestionAndDecision, unreadTabs, whoDid, writeupLines, writeupOverviewLine, writeupSummary } from "../../apps/web/src/pages/candidate-panel/helpers";
 
 /**
  * The candidate panel's rules (plan A10): its address, next and previous, the unread markers, the hold's dates, the
@@ -9,6 +9,16 @@ import { ASSISTANT_NOTE_LABEL, DECLINE_REASONS, DRAFTED_WORDS, NO_COMPOSE, OWN_W
  */
 const at = (iso: string) => iso;
 const ev = (type: string, payload: Record<string, unknown> = {}, actor: TimelineEvent["actor"] = { kind: "user", id: "u1", name: "Dana Whitfield" }, occurredAt = "2026-10-08T10:00:00.000Z"): TimelineEvent => ({ type, payload, actor, occurredAt });
+
+describe("More on the panel", () => {
+  it("offers a new AI interview link until they have sent one, and never after (the owner: \"it can interview again\")", () => {
+    const withScreens = (...statuses: string[]) => ({ screens: statuses.map((status) => ({ status })) }) as unknown as Pick<ApplicationDetail, "screens">;
+    expect(offersNewInterviewLink(withScreens())).toBe(true);
+    for (const closed of ["invited", "in_progress", "expired", "unfinished", "cancelled"]) expect(offersNewInterviewLink(withScreens(closed)), closed).toBe(true);
+    expect(offersNewInterviewLink(withScreens("completed"))).toBe(false);
+    expect(offersNewInterviewLink(withScreens("expired", "completed"))).toBe(false);
+  });
+});
 
 describe("the panel's place in the address", () => {
   it("opens on the Overview unless a known section is asked for", () => {
@@ -113,6 +123,8 @@ describe("History: who did what, why, and what the candidate was told", () => {
     const item = historyItem(ev("candidate.recommended", { by: "approval", approvalRequestId: "p1" }));
     expect(item).toMatchObject({ what: "Moved to Interviewing", who: "Suggested by the assistant, approved by Dana Whitfield" });
     expect(historyItem(ev("candidate.recommended", { by: "human" }))?.what).toBe("Marked for interview");
+    // the assistant's own suggestion after the AI interview moves nobody by default (6 November 2026): it is only a suggestion
+    expect(historyItem(ev("candidate.recommended", { recommendation: "interview", assessmentId: "a1" }, { kind: "agent", id: "screening" }))).toMatchObject({ what: "The assistant suggested an interview", who: "The assistant" });
     expect(historyItem(ev("application.triaged", { recommendation: "screen" }, { kind: "agent", id: "triage" }))).toMatchObject({ what: "AI review of the résumé: Worth an AI interview", who: "The assistant" });
     // the assistant's "hold" is thin evidence, never the On hold mark
     expect(historyItem(ev("application.triaged", { recommendation: "hold" }, { kind: "agent", id: "triage" }))?.what).toBe("AI review of the résumé: Thin evidence: your call");
@@ -127,6 +139,14 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(hold).toMatchObject({ why: "Second chair", told: "Private: the candidate was not told." });
     expect(historyItem(ev("application.told", { how: "in_person", note: "By phone" }))).toMatchObject({ what: "Recorded telling the candidate in person", told: "Told in person." });
     expect(historyItem(ev("application.told", { how: "message" }, { kind: "system", id: "outbox" }))?.told).toBe("Told by the decision message.");
+  });
+
+  it("reads someone a plan's limit kept from the team, once a change of plan opened them (the plans, Rule 2)", () => {
+    const system = { kind: "system", id: "candidate_lock" };
+    expect(historyItem(ev("application.locked", { position: 6, limit: 5, plan: "free" }, system))).toMatchObject({ what: "Applied past the plan's candidates per job", who: "The system" });
+    expect(historyItem(ev("application.unlocked", { cause: "plan_changed", plan: "pro", limit: 100, interview: true }))?.what).toBe("Opened by a change of plan");
+    expect(historyItem(ev("application.untold_fallback", { action: "sent", locked: true }, system))).toMatchObject({ what: "The job closed while the team could not open them, so the closing message went by itself", told: "Told by the decision message." });
+    expect(historyItem(ev("application.untold_fallback", { action: "not_sent", locked: true }, system))?.what).toBe("The job closed while the team could not open them, and there is no address on file to tell them");
   });
 
   it("explains a mark that ended, and leaves out records that only repeat another", () => {
@@ -186,7 +206,7 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("screen.question_skipped", { questionKey: "q_pay" }, cand))).toMatchObject({ what: "Chose not to answer a screening question", who: "The candidate" });
     expect(historyItem(ev("screen.answer_edited", { questionKey: "q_start" }, cand))?.what).toBe("Changed an answer before sending");
     expect(historyItem(ev("screen.answer_tapped", { questionKey: "q_days" }, cand))).toBeNull();
-    expect(historyItem(ev("screen.declined_by_candidate", { answered: 0, questions: 5 }, cand))).toMatchObject({ what: "Sent the application without the AI interview", why: "Their own choice; it is never held against them." });
+    expect(historyItem(ev("screen.declined_by_candidate", { answered: 0, questions: 5 }, cand))).toMatchObject({ what: "Sent the application without the AI interview", why: "Their own choice. Nobody is declined for it; their score is from the résumé alone." });
     expect(historyItem(ev("screen.idle_reminded", { answered: 2 }, { kind: "system", id: "wf" }))?.what).toBe("Reminded once to finish the AI interview");
     // never how far they got: they did not send their answers (founder decision of 9 October 2026)
     expect(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Didn't finish the AI interview; it closed after one reminder", why: "They never sent their answers, so they are not shown." });
@@ -280,6 +300,15 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(suggestionAndDecision(timeline)).toEqual({ suggested: "Worth an AI interview", decided: "Shortlist", decidedBy: "Dana Whitfield" });
     expect(suggestionAndDecision(timeline.slice(0, 2))).toEqual({ suggested: "Worth an AI interview", decided: null, decidedBy: null });
     expect(suggestionAndDecision([])).toEqual({ suggested: null, decided: null, decidedBy: null });
+    // once the AI interview is read the card says what it leaned to, never "Worth an AI interview" after they did it
+    const read = (recommendation: string) => ev("screen.assessed", { recommendation, assessmentId: "a2" }, { kind: "agent", id: "screening" }, "2026-10-03T10:00:00.000Z");
+    expect(suggestionAndDecision([...timeline.slice(0, 2), read("strong_interview")])).toEqual({ suggested: "an interview", decided: null, decidedBy: null });
+    expect(suggestionAndDecision([...timeline.slice(0, 2), read("hold")]).suggested).toBe("a closer look before deciding");
+    expect(suggestionAndDecision([...timeline.slice(0, 2), read("decline_recommended")]).suggested).toBe("not moving forward");
+    // what a person decided before the AI interview came in still counts: nobody says "Nobody has decided yet" of a shortlisted person
+    expect(suggestionAndDecision([...timeline, read("interview")])).toEqual({ suggested: "an interview", decided: "Shortlist", decidedBy: "Dana Whitfield" });
+    // the record itself has no line of its own: "AI review of the AI interview written" says it
+    expect(historyItem(read("interview"))).toBeNull();
   });
 });
 

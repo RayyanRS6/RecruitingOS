@@ -1,11 +1,14 @@
 import { Hono, type Context } from "hono";
 import { desc, eq } from "drizzle-orm";
-import { CreateCompany, InviteMember, UpdateMember, trialStanding } from "@ros/contracts";
-import { assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
+import { CreateCompany, InviteMember, UpdateMember, limitsForCustomers, trialStanding } from "@ros/contracts";
+import { aiCreditView, assertCan, audit, entitlements, hiddenAmong, planIncludesItsPosting, raiseAlert, setActiveCompany, revokeStaffGrant, whoPostsBoards } from "@ros/core";
 import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { mailbox } from "@ros/integrations";
+import { POLICIES, checkRateLimits } from "../middleware/rate-limit";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
-import { INVITE_ONLY_MESSAGE, createCompany, maySignUp } from "../services/companies";
+import { sendAccessRequest } from "../services/access-requests";
+import { INVITE_ONLY_MESSAGE, createCompany, signupDoor } from "../services/companies";
+import { candidateEmailHealth } from "../services/email-health";
 import { tellItsAboutNewCompany } from "../services/company-trust";
 import { sendToIts } from "../services/escalation-queue";
 import { inviteMember, leaveCompany, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
@@ -24,12 +27,24 @@ export const companyRoutes = new Hono<Vars>();
  * By invitation (GATE-V2, SIGNUP_MODE=invite) only a platform admin or an address on SIGNUP_ALLOWED_EMAILS may create a
  * company: anyone else is refused with 403 `signup_invite_only` before the body is read. Signing in and joining a
  * company by invitation are untouched.
+ *
+ * By approval (SIGNUP_MODE=approval) those two still go in directly; anyone else signed in sends a request
+ * (services/access-requests.ts): no active company, no workflow and no public side until a platform administrator
+ * accepts. The answer is the company with `accessRequest`, and a body that is bad, or a second request, answers as above.
+ * One address sends five requests an hour at most (429 `rate_limited`), whichever accounts it signs in with.
  */
 companyRoutes.post("/", requireUser, async (c) => {
   const s = c.get("session")!;
   const container = c.get("container");
-  if (!maySignUp(container.env, s.user)) throw new HttpError(403, "signup_invite_only", INVITE_ONLY_MESSAGE);
+  const door = signupDoor(container.env, s.user);
+  if (door === "none") throw new HttpError(403, "signup_invite_only", INVITE_ONLY_MESSAGE);
   const body = CreateCompany.parse(await c.req.json());
+  if (door === "request") {
+    // five requests an hour from one address, whoever is signed in: the door's own limit (POLICIES.accessRequest)
+    const refused = await checkRateLimits(c, [POLICIES.accessRequest]);
+    if (refused) return refused;
+    return c.json(await sendAccessRequest(container, { body, user: s.user, actor: actorOf(c) }), 201);
+  }
   const autoVerify = container.env.COMPANY_CHECK === "auto";
   const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock(), mayOpenAnother: s.user.platformRole === "platform_admin" });
   await setActiveCompany(container.db, s.sessionId, company.id);
@@ -48,10 +63,19 @@ companyRoutes.get("/current", requireTenant, async (c) => {
     const [co] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
     const [plan] = await tx.select().from(plans).where(eq(plans.key, co.planKey)).limit(1);
     // Roles are counted from the roles using a place now, so closing one shows its place free again (polish list); people
-    // from the members and the invitations not yet answered (known bug 128).
+    // from the members and the invitations not yet answered (known bug 128). The AI credit is money: a percentage in the
+    // usage and nothing in the limits, because customers never read it in dollars.
     const usage = await entitlements.usageOf(tx, t.companyId, { now });
+    // Home's row about the AI credit: its level, its percentage and its words; null when the plan puts no limit on it.
+    const aiCredit = await aiCreditView(tx, t.companyId, { now, timeZone: co.timezone, planKey: co.planKey });
+    // Who really posts on the boards (Rule 6), and whether the plan leaves that choice to the company at all.
+    const itsPosting = await planIncludesItsPosting(tx, t.companyId);
+    const whoPosts = await whoPostsBoards(tx, t.companyId, co.settings);
+    // Whether email to candidates is really arriving, from the last week's sends (6 November 2026): what Settings says beside
+    // the email service, instead of "connected" because a key exists. Counts only, never anyone the team may not read.
+    const candidateEmail = await candidateEmailHealth(tx, { companyId: t.companyId, now });
     // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
-    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: plan.limits } : null, usage, trial: trialStanding(co, now) };
+    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, aiCredit, itsPosting, whoPosts, trial: trialStanding(co, now), candidateEmail };
   });
   // `production`: NODE_ENV is production (staging too), where a service running without a provider ("fake") is a
   // deliberate default rather than a development stand-in, and Settings says what it does instead (audit MAIL-18).
@@ -102,10 +126,15 @@ async function invite(c: Context<Vars>) {
 companyRoutes.post("/current/members/invite", requireTenant, invite);
 companyRoutes.post("/current/invites", requireTenant, invite);
 
+/**
+ * A fresh link and the email again; with `{ email: false }` the fresh link alone (6 November 2026), answered for the person
+ * to copy and send themselves, because the email did not arrive. Either way the old link stops working.
+ */
 companyRoutes.post("/current/invitations/:id/resend", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "members.manage");
-  return c.json(await resendMemberInvitation(teamOf(c), { invitationId: idParam(c, "id", "No open invitation with that id."), inviterName: inviterNameOf(c) }));
+  const body = (await c.req.json().catch(() => ({}))) as { email?: unknown };
+  return c.json(await resendMemberInvitation(teamOf(c), { invitationId: idParam(c, "id", "No open invitation with that id."), inviterName: inviterNameOf(c), email: body.email !== false }));
 });
 
 companyRoutes.post("/current/invitations/:id/revoke", requireTenant, async (c) => {
@@ -143,10 +172,12 @@ companyRoutes.get("/current/staff-access", requireTenant, async (c) => {
   const grants = await withTenant(container.db, t.companyId, async (tx) => {
     const list = await tx.select({ id: staffAccessGrants.id, userId: staffAccessGrants.userId, kind: staffAccessGrants.kind, purpose: staffAccessGrants.purpose, escalationId: staffAccessGrants.escalationId, roleId: staffAccessGrants.roleId, applicationId: staffAccessGrants.applicationId, startsAt: staffAccessGrants.startsAt, expiresAt: staffAccessGrants.expiresAt, endedAt: staffAccessGrants.endedAt, revokedAt: staffAccessGrants.revokedAt, revokeReason: staffAccessGrants.revokeReason })
       .from(staffAccessGrants).where(eq(staffAccessGrants.companyId, t.companyId)).orderBy(desc(staffAccessGrants.createdAt)).limit(100);
+    // A grant about someone the reader cannot read (Rule 3 of the plans) still says it covers one candidate, and not which one.
+    const hidden = await hiddenAmong(tx, t, list.flatMap((g) => (g.applicationId ? [g.applicationId] : [])));
     const out = [];
     for (const g of list) {
       const role = g.roleId ? (await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, g.roleId)).limit(1))[0] : null;
-      out.push({ ...g, roleTitle: role?.title ?? null, active: !g.endedAt && Date.parse(g.expiresAt) > Date.now() });
+      out.push({ ...g, applicationId: g.applicationId && hidden.has(g.applicationId) ? null : g.applicationId, oneCandidate: !!g.applicationId, roleTitle: role?.title ?? null, active: !g.endedAt && Date.parse(g.expiresAt) > Date.now() });
     }
     return out;
   });

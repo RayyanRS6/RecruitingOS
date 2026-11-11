@@ -2,17 +2,22 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
-import { api, ApiError, type ActionResult, type ApplicationDetail, type CancelledView, type InterviewDraft, type InterviewPlanView, type NewTimesSettingView, type SendNewTimesResult, type SuggestedLine } from "../../api/client";
+import { titleMidSentence, type SetInterviewTime } from "@ros/contracts";
+import { Alert, Button, Card, ErrorState, Field, Skeleton } from "@ros/ui";
+import { api, ApiError, type ActionResult, type ApplicationDetail, type CancelledView, type InterviewBooked, type InterviewDraft, type InterviewPlanView, type NewTimesSettingView, type SendNewTimesResult, type SuggestedLine } from "../../api/client";
 import { HOLD_ENDS_CANCELLED, cancelledBody, cancelledTitle, sendNewTimesQuestion, stopNewTimesQuestion } from "../../cancelled";
 import { PERSONAL_LINE_MAX, suggestedLineNote } from "../../telling";
 import { toast } from "../../toast";
+import { Link } from "../../nav";
 import { AskRecruiter } from "../../components/AskRecruiter";
+import { SetTimeForm } from "../../components/SetTimeForm";
+import { useCompanyCheck, useCompanyTimezone } from "../../components/use-company-check";
 import { defaultInterviewers } from "../../interview-defaults";
+import { candidateEmailLine, clashKey, defaultDuration, freshForm, interviewNeedingTime, meetingLinkFor, placeKindFor, type SetTimeForm as SetTimeFormState } from "../../interview-time";
 import { interviewDraftLine } from "../../hiring";
-import { canDecline, canReadNotes } from "../../roles";
+import { canDecline, canManageInterviews, canReadNotes } from "../../roles";
 import { callNotesState, declineReasonFor } from "../../screen-view";
-import { NOT_NOW_TOAST, declineConfirmText, declineSummary, decisionToast, holdDay, newTimesToast, outcomeNoticeText, outcomeToast, safetyNetAfterDecision, type InterviewRef, type PanelStep } from "../../talent-actions";
+import { NOT_NOW_TOAST, declineConfirmText, declineSummary, decisionToast, holdDay, newTimesToast, outcomeNoticeText, outcomeToast, pickTimesToast, safetyNetAfterDecision, type InterviewRef, type PanelStep } from "../../talent-actions";
 import { CallNotesCard } from "./call-notes";
 import { DECLINE_REASONS, activeInterviews, eligibilityAnswerWords, firstSentence, holdDateBounds, whoDecides, type PanelTab } from "./helpers";
 import { FinalistCard, HireStep, OfferStep, WaitingOnCandidateCard } from "./hiring";
@@ -54,24 +59,28 @@ export function NeedsYou(props: Props) {
   const finalist = FINALIST.includes(a.stage) && can("record_outcome") && !step && !can("record_decision");
   const waitingOnCandidate = a.stage === "offer_sent" && step !== "hire";
   // Already at the interview step with nothing in motion (an interview cancelled, times that expired, "Next round", the
-  // approval set aside with "Not now", or the assistant's recommendation after a screen): the approval stays one click away.
-  // Someone under Cancelled has their own card instead, with "Send new times" (founder decisions 1A to 4A).
+  // step set aside with "Not now", or the assistant's suggestion after a screen), or on the shortlist (the owner's words, 6
+  // November 2026: "nadine sets date and time from the shortlisted candidates"): "Set a date and time" is the main button.
+  // Someone under Cancelled has their own card instead (founder decisions 1A to 4A).
   const cancelled = a.ownerStage === "cancelled" ? a.cancelled : null;
-  const readyToInterview = !step && can("interview") && !can("record_decision") && INTERVIEW_READY.includes(a.stage)
+  const readyToInterview = !step && can("interview") && !can("record_decision") && (INTERVIEW_READY.includes(a.stage) || a.mark?.mark === "shortlist")
     && !suggestions.some((p) => p.actionType === "application.recommend_interview") && a.mark?.mark !== "on_hold" && a.mark?.mark !== "not_a_fit_for_now" && !cancelled;
+  // An interview set up with no time, or times that never reached them: nobody is left on it with nothing to press.
+  const noTime = !step && canManageInterviews(props.myRole) ? interviewNeedingTime(a.interviews) : null;
   const cards = [
     callNotes.prominent ? <CallNotesCard key="call-notes" a={a} roleId={roleId} prominent /> : null,
     step === "hold" ? <HoldStep key="hold" a={a} roleId={roleId} cancelled={!!cancelled} onClose={() => setStep(null)} /> : null,
     step === "decline" ? <DeclineStep key="decline" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
-    step === "interview" ? <InterviewStep key="interview" a={a} roleId={roleId} initialRoundKey={props.roundKey} onClose={() => setStep(null)} /> : null,
+    step === "interview" ? <InterviewStep key="interview" a={a} roleId={roleId} initialRoundKey={props.roundKey} myUserId={props.myUserId} onClose={() => setStep(null)} /> : null,
+    noTime ? <NoTimeCard key={`no-time-${noTime.id}`} a={a} roleId={roleId} iv={noTime} /> : null,
     step === "offer" ? <OfferStep key="offer" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
     step === "hire" ? <HireStep key="hire" a={a} roleId={roleId} mayTell={canDecline(props.myRole)} onClose={() => setStep(null)} /> : null,
     step === "outcome" ? <OutcomeStep key="outcome" a={a} roleId={roleId} onClose={() => setStep(null)} onHire={() => setStep("hire")} /> : null,
     ...suggestions.map((p) => <SuggestionCard key={p.id} a={a} roleId={roleId} p={p} onInterview={(roundKey) => setStep("interview", { roundKey })} />),
     // under Cancelled: above the decision card, which an undecided no-show also has ("Send new times …, or decide below")
-    cancelled && step !== "interview" ? <CancelledCard key="cancelled" a={a} c={cancelled} roleId={roleId} onChooseInterviewers={() => setStep("interview")} /> : null,
+    cancelled && step !== "interview" ? <CancelledCard key="cancelled" a={a} c={cancelled} roleId={roleId} onSetTime={() => setStep("interview")} /> : null,
     can("record_decision") && step !== "interview" && step !== "hire" ? <DecisionCard key="decision" a={a} roleId={roleId} myRole={props.myRole} onNextRound={(key) => setStep("interview", { roundKey: key })} onSameRound={(key) => setStep("interview", { roundKey: key })} onHire={() => setStep("hire")} onNotes={() => props.onTab?.("notes")} /> : null,
-    readyToInterview ? <ReadyToInterviewCard key="ready-to-interview" a={a} onApprove={() => setStep("interview")} /> : null,
+    readyToInterview ? <ReadyToInterviewCard key="ready-to-interview" a={a} onSetTime={() => setStep("interview")} /> : null,
     finalist ? <FinalistCard key="finalist" a={a} setStep={(s) => setStep(s)} /> : null,
     waitingOnCandidate ? <WaitingOnCandidateCard key="waiting-on-candidate" a={a} roleId={roleId} onAccepted={() => setStep("hire")} /> : null,
     a.stage === "ineligible" ? <EligibilityCard key="eligibility" a={a} roleId={roleId} /> : null,
@@ -175,31 +184,28 @@ function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: str
   );
 }
 
-type LinkChoice = "calendar" | "pasted";
+/** The meeting link's rules (decision D3) live with the form's other pure parts; kept here too for the pages that read them. */
+export { meetingLinkFor } from "../../interview-time";
 
-/**
- * The meeting link on the interview approval (decision D3). The calendar makes the link only when an interviewer has a
- * connected, working calendar: the event it books carries the video link. With none (the development stand-in, or nobody
- * connected), "Create it with the calendar event" recorded no link at all, so it is not offered: the box for a link is
- * shown instead, and left empty the invitation names the format (in person, by phone) and the team gives any details.
- * `picked` is what the person chose in the menu when it is offered; typing a link first counts as choosing to paste one.
- * `ready` is false while a link that is needed is missing; `body` is what the approval sends.
- */
-export function meetingLinkFor(input: { calendarLive: boolean; picked: LinkChoice | null; url: string }): { offerCalendar: boolean; mode: LinkChoice; urlRequired: boolean; ready: boolean; body: { linkSource: LinkChoice; meetingUrl?: string } } {
-  const url = input.url.trim();
-  if (!input.calendarLive) return { offerCalendar: false, mode: "pasted", urlRequired: false, ready: true, body: url ? { linkSource: "pasted", meetingUrl: url } : { linkSource: "calendar" } };
-  const mode = input.picked ?? (url ? "pasted" : "calendar");
-  if (mode === "calendar") return { offerCalendar: true, mode, urlRequired: false, ready: true, body: { linkSource: "calendar" } };
-  return { offerCalendar: true, mode, urlRequired: true, ready: !!url, body: url ? { linkSource: "pasted", meetingUrl: url } : { linkSource: "pasted" } };
+/** "Dana Whitfield", "Dana Whitfield and Wes Park": who interviews, on the fold that holds the ticks. */
+function namesWords(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "");
 }
 
 /**
- * Approve an interview: the round and the interviewers; a person's approval is what starts scheduling. It opens filled
- * in from the interview plan (plan H4: the next round, its interviewers who are still on the team, the scheduling
- * window), so "Yes, interview" on a suggestion is one more look and one click, never a second approval.
+ * Set a date and time (the owner's words, 6 November 2026: "nadine sets date and time from the shortlisted candidates and
+ * he/she will get the mail"): the round only when the plan has more than one, then the day, the time on the company's
+ * clock, how long and where; who interviews and a personal line are folded. One press books it, with no calendar and no
+ * hours needed, and the candidate gets one email. The press is the approval (AC10.1): nobody else is asked. It opens filled
+ * in from the interview plan (plan H4: the next round, its interviewers still on the team, else the person pressing), so
+ * "Yes, interview" on a suggestion is one more look and one press. Where every interviewer has hours or a calendar, the old
+ * way stays one fold away, under the button: "Or let them pick from your free times".
  */
-function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: ApplicationDetail; roleId: string; initialRoundKey?: string; onClose: () => void }) {
+function InterviewStep({ a, roleId, initialRoundKey, myUserId, onClose }: { a: ApplicationDetail; roleId: string; initialRoundKey?: string; myUserId: string | null; onClose: () => void }) {
   const refresh = useRefreshCandidate(a.id, roleId);
+  const check = useCompanyCheck();
+  // Always the company's clock, said by name (never the browser's): the API reads the day and time in it.
+  const timeZone = useCompanyTimezone() ?? a.interviews.find((i) => i.timezone)?.timezone ?? null;
   // `calendar`: each person's calendar connection, if any; a working one ("live") is what can make the meeting link.
   const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Array<{ userId: string; name: string | null; email: string; role: string; status: string; schedulable: boolean; calendar?: { status: string } | null }>>("/api/v1/companies/current/members") });
   // The role's current plan names who interviews in each round now, so assignments made on the Interview plan tab reach candidates who applied before them.
@@ -209,24 +215,35 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
   const nextRound = a.interviewPlan.find((r) => !a.interviews.some((i) => i.roundKey === r.key && ["completed"].includes(i.status))) ?? a.interviewPlan[0];
   const [roundKey, setRoundKey] = useState<string | null>(initialRoundKey ?? null);
   const [interviewers, setInterviewers] = useState<string[] | null>(null);
-  const [linkPicked, setLinkPicked] = useState<LinkChoice | null>(null);
-  const [meetingUrl, setMeetingUrl] = useState("");
-  const first = useFocusOnMount<HTMLSelectElement>();
+  const [withOpen, setWithOpen] = useState(false);
   const activeMembers = (members.data ?? []).filter((m) => m.status === "active");
   const filled = draft.data && a.interviewPlan.some((r) => r.key === draft.data.roundKey) ? draft.data : null;
   const chosenRoundKey = roundKey ?? filled?.roundKey ?? nextRound?.key;
+  const round = a.interviewPlan.find((r) => r.key === chosenRoundKey) ?? null;
   const fromDraft = filled && filled.roundKey === chosenRoundKey && filled.interviewerUserIds.length ? filled.interviewerUserIds : null;
+  const membersKnown = !!members.data && !currentPlan.isLoading;
   const chosenInterviewers = defaultInterviewers({
     roundKey: chosenRoundKey,
     applicationPlan: a.interviewPlan,
     currentPlan: currentPlan.data?.rounds.map((r) => ({ key: r.key, interviewerUserIds: r.interviewers.map((i) => i.userId) })) ?? null,
     picked: interviewers ?? fromDraft,
-    activeMemberIds: members.data && !currentPlan.isLoading ? new Set(activeMembers.map((m) => m.userId)) : null,
+    activeMemberIds: membersKnown ? new Set(activeMembers.map((m) => m.userId)) : null,
+    fallbackUserId: myUserId,
   });
   // The calendar can make the meeting link only through an interviewer's working calendar connection (see meetingLinkFor).
   const calendarLive = activeMembers.some((m) => chosenInterviewers.includes(m.userId) && m.calendar?.status === "live");
-  const link = meetingLinkFor({ calendarLive, picked: linkPicked, url: meetingUrl });
-  const videoRound = a.interviewPlan.find((r) => r.key === chosenRoundKey)?.format === "video";
+  // The form follows the round: its length and the place its format suggests, keeping the day and time already chosen.
+  const [form, setForm] = useState<SetTimeFormState>(() => freshForm(round));
+  const [formRound, setFormRound] = useState(chosenRoundKey);
+  if (formRound !== chosenRoundKey) {
+    setFormRound(chosenRoundKey);
+    setForm((f) => ({ ...f, durationMinutes: defaultDuration(round?.durationMinutes), place: placeKindFor(round?.format) }));
+  }
+  const link = meetingLinkFor({ calendarLive, picked: form.linkPicked ?? null, url: form.place === "link" ? form.url : "" });
+  // The old way, folded: offered only when every interviewer has hours or a calendar, the one case it can work in.
+  const everyoneHasHours = membersKnown && chosenInterviewers.length > 0 && chosenInterviewers.every((id) => activeMembers.some((m) => m.userId === id && m.schedulable));
+  const names = activeMembers.filter((m) => chosenInterviewers.includes(m.userId)).map((m) => m.name ?? m.email);
+  const nobody = membersKnown && !chosenInterviewers.length;
   // An optional personal line on the invitation (Q28): the person's own, or one the assistant suggested and they kept, in
   // which case the invitation says the assistant helped. Checked by the API like a decision message's line.
   const [line, setLine] = useState("");
@@ -238,77 +255,153 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
     mutationFn: () => api.post<SuggestedLine>(`/api/v1/applications/${a.id}/messages/suggest`, { purpose: "interview_invite", roundKey: chosenRoundKey }),
     onError: (e) => toast(e instanceof ApiError ? e.message : "The assistant could not suggest a line just now."),
   });
-  const request = useMutation({
-    mutationFn: () => api.post(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, ...link.body, ...(line.trim() ? { invitationLine: { text: line.trim(), aiHelped: lineAiHelped, ...(kept?.runId ? { suggestionRunId: kept.runId } : {}) } } : {}) }),
-    onSuccess: async () => { toast("Interview approved.", "Times go out to the candidate as soon as they exist."); onClose(); await refresh(); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not start the interview."),
+  const invitationLine = line.trim() ? { invitationLine: { text: line.trim(), aiHelped: lineAiHelped, ...(kept?.runId ? { suggestionRunId: kept.runId } : {}) } } : {};
+  // One press books it: the date and time a person set (POST /applications/:id/interviews with `setTime`). A press before
+  // the team has loaded (nobody can be ticked yet) says what is missing instead of sending nobody.
+  const book = async (setTime: SetInterviewTime) => {
+    if (!chosenInterviewers.length) throw new ApiError(400, "no_interviewers", "Tick who will interview.");
+    return api.post<InterviewBooked>(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, setTime, ...invitationLine });
+  };
+  // The old way: the times are worked out from the interviewers' hours or calendars and emailed for the candidate to pick.
+  const offer = useMutation({
+    mutationFn: () => api.post(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, ...link.body, ...invitationLine }),
+    onSuccess: async () => { const t = pickTimesToast(a.candidate.firstName, check); toast(t.title, t.detail); await refresh(); onClose(); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not set up the interview."),
   });
   const suggestion = suggest.data;
   // The same round again after our interviewer missed it (founder decision L-12): the card says why it proposes it.
   const missedByUs = !!filled && filled.roundKey === chosenRoundKey && (filled as InterviewDraft & { sameRoundAgain?: string }).sameRoundAgain === "missed_by_us";
+  const openWith = () => {
+    setWithOpen(true);
+    document.getElementById("iv-with")?.focus();
+  };
   return (
-    <Card needsYou lift title="Approve an interview" className={STEP}>
+    <Card needsYou lift title="Set a date and time" className={STEP}>
       {missedByUs ? <p className="small">{MISSED_BY_US_LINE}</p> : null}
-      {/* what the plan filled in is said once, under "Why" (`interviewDraftLine`), not again on this line */}
-      <p className={LEAD}>Times go out to {a.candidate.firstName} once you approve.</p>
-      <Why>
-        <span>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</span>
-        {filled && filled.roundKey === chosenRoundKey ? <span className="rounded-xl bg-surface-2 px-3 py-2 text-ink-2">{interviewDraftLine(filled)}</span> : null}
-      </Why>
-      {a.interviewPlan.length === 0 ? <Alert tone="caution">This job has no interview rounds yet. Add them on the job's Interview plan tab.</Alert> : (
+      {a.interviewPlan.length === 0 ? (
         <>
-          <Field label="Round" htmlFor="iv-round"><select ref={first} id="iv-round" className="select" value={chosenRoundKey ?? ""} onChange={(e) => { setRoundKey(e.target.value); setInterviewers(null); }}>{a.interviewPlan.map((r) => <option key={r.key} value={r.key}>{r.title} · {r.durationMinutes} min · {r.format.replace("_", " ")}</option>)}</select></Field>
-          {/* each interviewer the kit's option row (tinted once ticked, ringed under the keyboard), their calendar's state at its end */}
-          <fieldset className="grid gap-2">
-            <legend className="small muted mb-2">Interviewers</legend>
-            {members.isLoading || currentPlan.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team, so nobody can be picked yet." onRetry={() => members.refetch()} /> : activeMembers.map((m) => (
-              <label key={m.userId} className="option-row flex-wrap">
-                <input type="checkbox" checked={chosenInterviewers.includes(m.userId)} onChange={(e) => setInterviewers(e.target.checked ? [...chosenInterviewers, m.userId] : chosenInterviewers.filter((x) => x !== m.userId))} />
-                <span className="min-w-0 wrap-anywhere">{m.name ?? m.email}</span>
-                <Chip tone={m.schedulable ? "good" : "caution"} className="ml-auto">{m.schedulable ? "availability known" : "no calendar or hours yet"}</Chip>
-              </label>
-            ))}
-          </fieldset>
-          {chosenInterviewers.length && (members.data ?? []).some((m) => chosenInterviewers.includes(m.userId) && !m.schedulable) ? <Alert tone="caution">An interviewer has neither a connected calendar nor declared hours. Times cannot be offered until they add one in Settings; they will be asked.</Alert> : null}
-          {link.offerCalendar ? <Field label="Meeting link" htmlFor="iv-link"><select id="iv-link" className="select" value={link.mode} onChange={(e) => setLinkPicked(e.target.value as LinkChoice)}><option value="calendar">Create it with the calendar event</option><option value="pasted">I'll paste a link</option></select></Field> : null}
-          {/* "(optional)" says it may stay empty; a video round without a link says what that means on the line below */}
-          {link.mode === "pasted" ? (
-            <Field label={link.urlRequired ? "Link" : "Meeting link (optional)"} htmlFor="iv-url">
-              <input id="iv-url" className="input" type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" />
-            </Field>
-          ) : null}
-          {!link.offerCalendar && videoRound && !meetingUrl.trim() ? <p className="small muted">This round is a video call. Without a link here, the invitation names the format only, so send {a.candidate.firstName} the link yourself.</p> : null}
-          {!link.offerCalendar ? <Why label="Why no calendar link?">A link is made with the calendar event only for an interviewer who connected their calendar in Settings.</Why> : null}
-          {/* The personal line is optional and rarely used: one click away (the assistant's suggestion is asked for inside it). */}
-          <details className="more">
-            <summary>{line.trim() ? "Your personal line (it goes with the times)" : "Add a personal line (optional)"}</summary>
-            <div className="stack gap-3">
-              {/* the hint states the length the box stops at (else typing stops without a word) and the rule the line is checked against */}
-              <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`One or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
-                <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => { setLine(e.target.value); if (!e.target.value.trim()) setKept(null); }} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
-              </Field>
-              {suggestion?.line && !kept ? (
-                <div className={SUGGESTED}>
-                  <p className="small"><q>{suggestion.line}</q></p>
-                  <p className="small muted">{suggestion.note}</p>
-                  <div className="row"><Button size="sm" onClick={() => { setLine(suggestion.line!); setKept({ line: suggestion.line!, runId: suggestion.suggestionRunId }); }}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
-                </div>
-              ) : suggestion && !suggestion.line ? <p className="small muted">{suggestion.note}</p> : null}
-              {!kept ? <div className="row"><Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} disabled={!chosenRoundKey} onClick={() => suggest.mutate()} title="The assistant suggests one friendly line; if you keep it, the invitation says the assistant helped">Suggest a line</Button></div> : null}
-              {lineAiHelped ? (
-                <div className="row gap-2">
-                  <p className="small muted">{suggestedLineNote(lineStillWhole, "invitation")}</p>
-                  {lineStillWhole ? <Button size="sm" variant="quiet" onClick={() => { setLine(line.replace(kept!.line, "").trim()); setKept(null); }}>Take out the assistant's line</Button> : null}
-                </div>
-              ) : null}
-            </div>
-          </details>
+          <Alert tone="caution">This job has no interview rounds yet. Add them on the job's Interview plan tab.</Alert>
+          <div className="row"><Button size="sm" variant="quiet" onClick={onClose}>Not now</Button></div>
         </>
+      ) : (
+        <SetTimeForm
+          idBase="iv"
+          firstName={a.candidate.firstName}
+          hasEmail={!!a.candidate.email}
+          phone={a.candidate.phone}
+          timeZone={timeZone}
+          form={form}
+          onChange={setForm}
+          roundMinutes={round?.durationMinutes}
+          videoRound={round?.format === "video"}
+          calendarLive={calendarLive}
+          // the team, the plan and who is pressing, all read before anyone can be ticked (the person pressing is the default)
+          interviewers={membersKnown && myUserId ? chosenInterviewers.length : undefined}
+          clashKey={clashKey(chosenRoundKey, chosenInterviewers)}
+          teamLoading={!membersKnown || !myUserId}
+          onMissingInterviewers={openWith}
+          autoFocus
+          before={a.interviewPlan.length > 1 ? <Field label="Round" htmlFor="iv-round"><select id="iv-round" className="select" value={chosenRoundKey ?? ""} onChange={(e) => { setRoundKey(e.target.value); setInterviewers(null); }}>{a.interviewPlan.map((r) => <option key={r.key} value={r.key}>{r.title}</option>)}</select></Field> : null}
+          after={
+            <>
+              {/* who interviews: ticked from the plan, else the person pressing; folded, and open while nobody is ticked */}
+              <details className="more" open={withOpen || nobody} onToggle={(e) => setWithOpen(e.currentTarget.open)}>
+                <summary id="iv-with">{names.length ? `With ${namesWords(names)}` : membersKnown ? "Choose who interviews" : "Who interviews"}</summary>
+                <fieldset className="grid gap-2">
+                  <legend className="sr-only">Interviewers</legend>
+                  {members.isLoading || currentPlan.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team, so nobody can be picked yet." onRetry={() => members.refetch()} /> : activeMembers.map((m) => (
+                    <label key={m.userId} className="option-row flex-wrap">
+                      <input type="checkbox" checked={chosenInterviewers.includes(m.userId)} onChange={(e) => setInterviewers(e.target.checked ? [...chosenInterviewers, m.userId] : chosenInterviewers.filter((x) => x !== m.userId))} />
+                      <span className="min-w-0 wrap-anywhere">{m.name ?? m.email}</span>
+                    </label>
+                  ))}
+                </fieldset>
+              </details>
+              {/* The personal line is optional and rarely used: one click away (the assistant's suggestion is asked for inside it). */}
+              <details className="more">
+                <summary>{line.trim() ? "Your personal line (it goes with the invitation)" : "Add a personal line (optional)"}</summary>
+                <div className="stack gap-3">
+                  {/* the hint states the length the box stops at (else typing stops without a word) and the rule the line is checked against */}
+                  <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`One or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
+                    <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => { setLine(e.target.value); if (!e.target.value.trim()) setKept(null); }} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
+                  </Field>
+                  {suggestion?.line && !kept ? (
+                    <div className={SUGGESTED}>
+                      <p className="small"><q>{suggestion.line}</q></p>
+                      <p className="small muted">{suggestion.note}</p>
+                      <div className="row"><Button size="sm" onClick={() => { setLine(suggestion.line!); setKept({ line: suggestion.line!, runId: suggestion.suggestionRunId }); }}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
+                    </div>
+                  ) : suggestion && !suggestion.line ? <p className="small muted">{suggestion.note}</p> : null}
+                  {!kept ? <div className="row"><Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} disabled={!chosenRoundKey} onClick={() => suggest.mutate()} title="The assistant suggests one friendly line; if you keep it, the invitation says the assistant helped">Suggest a line</Button></div> : null}
+                  {lineAiHelped ? (
+                    <div className="row gap-2">
+                      <p className="small muted">{suggestedLineNote(lineStillWhole, "invitation")}</p>
+                      {lineStillWhole ? <Button size="sm" variant="quiet" onClick={() => { setLine(line.replace(kept!.line, "").trim()); setKept(null); }}>Take out the assistant's line</Button> : null}
+                    </div>
+                  ) : null}
+                </div>
+              </details>
+              {/* what the plan filled in, said once, one click away */}
+              {filled && filled.roundKey === chosenRoundKey ? <Why>{interviewDraftLine(filled)}</Why> : null}
+            </>
+          }
+          footer={everyoneHasHours ? (
+            <details className="more">
+              <summary>Or let them pick from your free times</summary>
+              <div className="stack gap-2">
+                <p className="small muted">{a.candidate.firstName} gets times from the interviewers' hours by email and picks one.</p>
+                <div className="row"><Button size="sm" loading={offer.isPending} disabled={!chosenRoundKey || !link.ready} onClick={() => offer.mutate()}>Offer times to pick from</Button></div>
+              </div>
+            </details>
+          ) : null}
+          submit={book}
+          // the panel is read again before the form closes, so what shows next is the booking, never the card it came from
+          onDone={async () => { await refresh(); onClose(); }}
+          onCancel={onClose}
+        />
       )}
-      <div className="row">
-        <Button variant="primary" size="sm" loading={request.isPending} disabled={!chosenRoundKey || !chosenInterviewers.length || !link.ready} onClick={() => request.mutate()}>Approve and offer times</Button>
-        <Button size="sm" variant="quiet" onClick={onClose}>Not now</Button>
-      </div>
+    </Card>
+  );
+}
+
+/**
+ * An interview set up with no time (being prepared, reopened with nothing to offer) or with times that never reached them
+ * (the email failed, or there is no address): for those who manage interviews, "Set a date and time" on the panel, posting
+ * to that same interview (POST /interviews/:id/set-time). Nobody is left on it with nothing to press (6 November 2026).
+ */
+function NoTimeCard({ a, roleId, iv }: { a: ApplicationDetail; roleId: string; iv: ApplicationDetail["interviews"][number] }) {
+  const refresh = useRefreshCandidate(a.id, roleId);
+  const timeZone = useCompanyTimezone() ?? iv.timezone;
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<SetTimeFormState>(() => freshForm({ durationMinutes: iv.durationMinutes, format: iv.format }));
+  const first = a.candidate.firstName;
+  const round = titleMidSentence(iv.title);
+  const reached = iv.status === "scheduling" && iv.offeredSlots.length ? candidateEmailLine(iv.candidateEmail, first) : null;
+  return (
+    <Card needsYou lift title={reached ? `The times did not reach ${first}` : `The ${round} has no time yet`} className={STEP}>
+      {reached ? <p className={LEAD}>{reached}</p> : null}
+      {open ? (
+        <SetTimeForm
+          idBase={`set-${iv.id}`}
+          firstName={first}
+          hasEmail={!!a.candidate.email}
+          phone={a.candidate.phone}
+          timeZone={timeZone}
+          form={form}
+          onChange={setForm}
+          roundMinutes={iv.durationMinutes}
+          videoRound={iv.format === "video"}
+          autoFocus
+          submit={(body) => api.post<InterviewBooked>(`/api/v1/interviews/${iv.id}/set-time`, body)}
+          onDone={async () => { await refresh(); setOpen(false); }}
+          onCancel={() => setOpen(false)}
+        />
+      ) : (
+        <div className="row">
+          <Button variant="primary" size="sm" onClick={() => setOpen(true)}>Set a date and time</Button>
+          <Link to={`/interviews/${iv.id}`} className="btn quiet sm">Open the interview</Link>
+        </div>
+      )}
     </Card>
   );
 }
@@ -390,7 +483,7 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
     onSuccess: async (r, input) => {
       if (input.decision === "reject") toast(NOT_NOW_TOAST.title, NOT_NOW_TOAST.detail);
       else {
-        toast("Moved to Interviewing.", "Check the interview below and approve it; times go out to the candidate from there.");
+        toast("Moved to Interviewing.", "Set the date and time below.");
         if (r.interviewDraft) qc.setQueryData(["interview-draft", a.id], r.interviewDraft);
         onInterview(r.interviewDraft?.roundKey);
       }
@@ -423,29 +516,32 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
 }
 
 /**
- * Someone already at the interview step with no interview in motion and no decision waiting: the way to approve one.
- * The stage button has nothing to open here (they are in Interviewing already), so this card is how a cancelled
- * interview, times that expired, a "Next round" decision or an approval set aside with "Not now" gets going again. The
- * approval it opens is filled in from the plan, so the right round is already chosen.
+ * Someone on the shortlist, or already at the interview step with no interview in motion and no decision waiting: "Set a
+ * date and time" is the one button (the owner's words, 6 November 2026). For someone in Interviewing the stage button has
+ * nothing to open, so this card is how a cancelled interview, times that lapsed, a "Next round" decision or a step set
+ * aside with "Not now" gets going again. The form it opens is filled in from the plan, so the right round is chosen.
+ * Times that lapsed because their email never reached them say that, never that the candidate did not pick one.
  */
-function readyToInterviewWords(a: Pick<ApplicationDetail, "candidate" | "interviews">): { title: string; body: string; button: string } {
+export function readyToInterviewWords(a: Pick<ApplicationDetail, "candidate" | "interviews" | "mark">): { title: string; body: string; button: string } {
   const first = a.candidate.firstName;
   const latest = a.interviews[0]; // newest first
-  if (latest?.status === "cancelled") return { title: "The interview was cancelled", body: `The ${latest.title} with ${first} was cancelled. Approve a new interview and fresh times go out to them.`, button: "Approve an interview" };
-  if (latest?.status === "offer_expired") return { title: "No time was picked", body: `${first} did not pick a time for the ${latest.title}. Approve it again and new times go out to them.`, button: "Approve an interview" };
-  if (latest?.decision === "next_round") return { title: "Set up the next round", body: `You chose the next round after the ${latest.title}. Approve it and times go out to ${first}.`, button: "Approve the next round" };
-  return { title: "Ready to interview", body: `${first} is ready to interview. Choose the round and the interviewers; times go out to them from there.`, button: "Approve an interview" };
+  const button = "Set a date and time";
+  if (latest?.status === "cancelled") return { title: "The interview was cancelled", body: `The ${latest.title} with ${first} was cancelled.`, button };
+  if (latest?.status === "offer_expired" && (latest.candidateEmail === "failed" || latest.candidateEmail === "no_email")) return { title: "The times never reached them", body: `The email with times for the ${latest.title} did not reach ${first}.`, button };
+  if (latest?.status === "offer_expired") return { title: "No time was picked", body: `${first} did not pick a time for the ${latest.title}.`, button };
+  if (latest?.decision === "next_round") return { title: "Set up the next round", body: `You chose the next round after the ${latest.title}.`, button };
+  if (a.mark?.mark === "shortlist") return { title: "Ready to interview", body: `${first} is on your shortlist.`, button };
+  return { title: "Ready to interview", body: `${first} is ready to interview.`, button };
 }
 
-function ReadyToInterviewCard({ a, onApprove }: { a: ApplicationDetail; onApprove: () => void }) {
+function ReadyToInterviewCard({ a, onSetTime }: { a: ApplicationDetail; onSetTime: () => void }) {
   const w = readyToInterviewWords(a);
   return (
     <Card needsYou title={w.title} className={STEP}>
       <p className={LEAD}>{w.body}</p>
       <div className="row">
-        <Button variant="primary" size="sm" onClick={onApprove}>{w.button}</Button>
+        <Button variant="primary" size="sm" onClick={onSetTime}>{w.button}</Button>
       </div>
-      <Why>Nothing is sent until you approve it. The approval opens filled in from your interview plan.</Why>
     </Card>
   );
 }
@@ -455,12 +551,12 @@ function ReadyToInterviewCard({ a, onApprove }: { a: ApplicationDetail; onApprov
  * and where their new times stand, in the words of the state the API reports. "Send new times" reopens the interview
  * they cancelled for the same round (after a no-show, it sets up a new one for that round); "Don't send automatically"
  * stops a set still waiting for its day. Both ask first. They stay under Cancelled until they book or someone decides.
- * When nobody who ran the interview is still on the team, "Choose interviewers" opens the interview approval instead.
+ * "Set a date and time" comes first (6 November 2026): it books a time a person chooses, with no hours needed, and takes
+ * them out of Cancelled; it is also the way on when nobody who ran the interview is still on the team.
  */
-function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationDetail; c: CancelledView; roleId: string; onChooseInterviewers: () => void }) {
+function CancelledCard({ a, c, roleId, onSetTime }: { a: ApplicationDetail; c: CancelledView; roleId: string; onSetTime: () => void }) {
   const refresh = useRefreshCandidate(a.id, roleId);
   const [asking, setAsking] = useState<"send" | "stop" | null>(null);
-  const [noInterviewers, setNoInterviewers] = useState(false);
   // the company's setting and whether ITS has confirmed the company; shared with the Talent page and Setup
   const setting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), retry: false });
   const first = a.candidate.firstName;
@@ -471,12 +567,10 @@ function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationD
       const t = newTimesToast({ kind: "sent", via: r.via, firstName: first, round });
       toast(t.title, t.detail);
       setAsking(null);
-      setNoInterviewers(false);
       await refresh();
     },
     onError: (e) => {
       setAsking(null);
-      if (e instanceof ApiError && e.code === "no_interviewers") setNoInterviewers(true);
       toast(e instanceof ApiError ? e.message : "Could not send new times.");
     },
   });
@@ -494,9 +588,10 @@ function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationD
     },
   });
   const can = (x: ApplicationDetail["allowedActions"][number]) => a.allowedActions.includes(x);
-  // Before ITS confirms the company nothing goes automatically and a send is refused, so the card says so and offers no send.
+  // Before ITS confirms the company nothing goes automatically and a send is refused, so the card says so and offers no send;
+  // nor with nobody's hours to offer (`noHours`, 10 November 2026): "Set a date and time" is the way on.
   const companyConfirmed = setting.data?.companyConfirmed;
-  const maySend = can("send_new_times") && companyConfirmed !== false;
+  const maySend = can("send_new_times") && companyConfirmed !== false && !c.noHours;
   // Waits on the team only when nothing is on its way to them: no set waiting for its day, no times being prepared or out.
   const parked = c.auto.state === "waiting" || c.auto.state === "waiting_check";
   const needsYou = !parked && (c.times === "none" || c.times === "expired" || c.times === "not_reached");
@@ -507,11 +602,11 @@ function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationD
         <Alert tone="caution"><div className="row justify-between"><span>{sendNewTimesQuestion(first, round)}</span><span className="row"><Button size="sm" variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>Yes, send</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Cancel</Button></span></div></Alert>
       ) : asking === "stop" ? (
         <Alert tone="caution"><div className="row justify-between"><span>{stopNewTimesQuestion(first)}</span><span className="row"><Button size="sm" variant="primary" loading={stop.isPending} onClick={() => stop.mutate()}>Yes, stop</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Keep it</Button></span></div></Alert>
-      ) : maySend || can("stop_new_times") || noInterviewers ? (
+      ) : can("interview") || maySend || can("stop_new_times") ? (
         <div className="row">
-          {maySend ? <Button size="sm" variant="primary" icon="send" onClick={() => setAsking("send")}>Send new times</Button> : null}
+          {can("interview") ? <Button size="sm" variant="primary" onClick={onSetTime}>Set a date and time</Button> : null}
+          {maySend ? <Button size="sm" variant={can("interview") ? undefined : "primary"} icon="send" onClick={() => setAsking("send")}>Send new times</Button> : null}
           {can("stop_new_times") ? <Button size="sm" variant="quiet" onClick={() => setAsking("stop")}>Don't send automatically</Button> : null}
-          {noInterviewers ? <Button size="sm" variant="quiet" onClick={onChooseInterviewers}>Choose interviewers</Button> : null}
         </div>
       ) : null}
     </Card>
@@ -557,10 +652,10 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onSameRound, onHire, onN
       {canReadNotes(myRole) ? <NotesSummary applicationId={a.id} onOpen={onNotes} /> : null}
       {!decision ? (
         <div className="row">
-          {sameRoundFirst && last ? <Button size="sm" variant="primary" onClick={() => onSameRound(last.roundKey)}>Approve the same round again</Button> : null}
+          {sameRoundFirst && last ? <Button size="sm" variant="primary" onClick={() => onSameRound(last.roundKey)}>Set the same round again</Button> : null}
           {hasNextRound ? <Button size="sm" variant={sameRoundFirst ? undefined : "primary"} loading={record.isPending} onClick={() => record.mutate({ decision: "next_round" })}>Next round</Button> : null}
           <Button size="sm" variant={hasNextRound || sameRoundFirst ? undefined : "primary"} onClick={() => setDecision("finalist")}>Finalist</Button>
-          {a.allowedActions.includes("record_outcome") ? <Button size="sm" onClick={onHire} title="Opens the hire sheet: the start date, then what to do with the role">Hire</Button> : null}
+          {a.allowedActions.includes("record_outcome") ? <Button size="sm" onClick={onHire} title="Opens the hire sheet: the start date, then what to do with the job">Hire</Button> : null}
           <Button size="sm" variant="destructive" onClick={() => setDecision("not_moving_forward")}>Not moving forward</Button>
           <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
         </div>

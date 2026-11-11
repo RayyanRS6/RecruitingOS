@@ -21,6 +21,16 @@ describe("secret redaction and the outbound guard", () => {
     expect(redactText('{"refresh_token":"abc","name":"ok"}')).toBe('{"refresh_token":"[redacted]","name":"ok"}');
   });
 
+  it("cuts the identity service's own words from a logged query, which can hold the person's address, and keeps the codes (10 November 2026)", () => {
+    // the request log's line for a refused sign-in, as Hono's logger writes it
+    const line = "<-- GET /api/v1/auth/callback?error=invalid_request&error_code=email_address_not_authorized&error_description=Email+address+%22pat%40another-company.example%22+cannot+be+used+as+it+is+not+authorized&state=abc";
+    const out = redactString(line);
+    expect(out).not.toMatch(/pat%40another-company|another-company\.example|cannot\+be\+used/);
+    expect(out).toBe("<-- GET /api/v1/auth/callback?error=invalid_request&error_code=email_address_not_authorized&error_description=[redacted]&state=abc");
+    // at the address's root too (a refusal the service could not tie to a sign-in), and in any letter case
+    expect(redactString("--> GET /?error=invalid_request&error_code=bad_oauth_state&Error_Description=OAuth+state+parameter+is+invalid 307 3ms")).toBe("--> GET /?error=invalid_request&error_code=bad_oauth_state&Error_Description=[redacted] 307 3ms");
+  });
+
   it("redacts by key inside objects and leaves ordinary fields alone", () => {
     const out = redactObject({ refresh_token: "plain-value-that-looks-normal", apiKey: "k", nested: { password: "p", note: "keep me", token: "short" }, list: [{ client_secret: "s" }] });
     expect(out).toEqual({ refresh_token: "[redacted]", apiKey: "[redacted]", nested: { password: "[redacted]", note: "keep me", token: "[redacted]" }, list: [{ client_secret: "[redacted]" }] });

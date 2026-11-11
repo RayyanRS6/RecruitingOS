@@ -94,9 +94,11 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
     // a score with no AI interview in it yet says so beside the header's number, the full label on hover (R20-9)
     expect(html).toMatch(/<span title="Résumé only: AI interview not done yet"><span class="chip[^"]*"[^>]*>(<[^>]+>)*Résumé only/);
     expect(t).toContain("1 of 2 must-haves shown · 1 not known yet");
-    // the next step: one line, its one button (the stage button's own step), the rest under "Why"
+    // the next step: one line, Shortlist first and then "Set a date and time" quieter beside it (the stage button's own
+    // steps, 6 November 2026: Nadine reads, shortlists, then sets the time), the rest under "Why"
     expect(t).toContain("Interview them · Strong on every must-have shown.");
-    expect(html).toMatch(/<button[^>]*>Approve an interview<\/button>/);
+    expect(html).toMatch(/<span class="row"><button type="button" class="btn secondary sm">Move to Shortlist<\/button><button type="button" class="btn quiet sm">Set a date and time<\/button><\/span>/);
+    expect(t).not.toContain("Approve an interview");
     expect(t).toContain("Why Ask about Saturdays.");
     // three strengths at most, each with their words one click away; the rest counted
     expect(t).toContain("Strength 3");
@@ -338,7 +340,7 @@ describe("interviews to hire (Wave H)", () => {
     expect(t).toMatch(/Sam Doyle · After the interview ?: Explained perio charting clearly\./);
     expect(t).toContain("Add your note");
     expect(t).toMatch(/Finalist Hire Not moving forward/);
-    expect(t).not.toContain("Approve the same round again");
+    expect(t).not.toContain("Set the same round again");
   });
 
   it("after our interviewer missed it, the same round again comes first, with the apology line (founder decision L-12)", () => {
@@ -348,8 +350,10 @@ describe("interviews to hire (Wave H)", () => {
     expect(t).toContain("Working interview (the interviewer did not attend).");
     expect(t).toContain("Our interviewer missed it. The new invitation says sorry.");
     // the primary button, first; next round and the other choices stay, second
-    expect(t).toMatch(/Approve the same round again Next round Finalist Hire Not moving forward/);
-    expect(html).toMatch(/<button type="button" class="btn primary sm"[^>]*>Approve the same round again<\/button>/);
+    expect(t).toMatch(/Set the same round again Next round Finalist Hire Not moving forward/);
+    expect(html).toMatch(/<button type="button" class="btn primary sm"[^>]*>Set the same round again<\/button>/);
+    // the interview line says what happened in words, the same as on the Interviews page
+    expect(t).toContain("Working interview · Interviewer did not come");
     expect(html).not.toMatch(/class="btn primary sm"[^>]*>Next round</);
   });
 
@@ -471,7 +475,7 @@ describe("the Interviews page for someone under Cancelled (founder decisions 1A 
   const iv = (over: Record<string, unknown> = {}) => ({
     id: "iv1", applicationId: "a1", roleId: "r1", roleTitle: "Dental Hygienist", roundKey: "working", title: "Working interview", format: "in_person", durationMinutes: 45, status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, linkSource: "calendar", attempt: 2,
     offeredSlots: [], selectedSlot: null, candidateAvailability: null, schedulingWindow: { fromDate: "2026-10-12", toDate: "2026-10-23" }, rescheduleCountCandidate: 0, outcome: null, decision: null, decisionNote: null, reminders: {}, cancelReason: "cancelled by the candidate", scheduleTokenExpiresAt: null, createdAt: daysAgo(3),
-    candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, participants: [], calendarRefs: {}, followUp: { id: "f1", reason: "asked_new_times", times: "none" },
+    candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Interview to set up" }, participants: [], calendarRefs: {}, followUp: { id: "f1", reason: "asked_new_times", times: "none" },
     ...over,
   });
   const sheet = (i: ReturnType<typeof iv>, extra: Array<[unknown[], unknown]> = []) => {
@@ -508,8 +512,9 @@ describe("the Interviews page for someone under Cancelled (founder decisions 1A 
   });
 
   it("names the decision a team send records on a missed interview", () => {
-    const sent = sheet(iv({ status: "no_show", outcome: "no_show_candidate", decision: "new_times", decisionNote: "New times sent after the candidate did not attend", candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, followUp: null }));
-    expect(sent).toContain("Decision: New times sent");
+    const sent = sheet(iv({ status: "no_show", outcome: "no_show_candidate", decision: "new_times", decisionNote: "New times sent after the candidate did not attend", candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Interview to set up" }, followUp: null }));
+    // in words true whether times went to pick from or a person set the date and time (11 November 2026)
+    expect(sent).toContain("Decision: New interview set up");
     expect(sent).not.toContain("new_times");
   });
 });

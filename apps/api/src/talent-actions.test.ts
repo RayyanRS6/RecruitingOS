@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, like } from "drizzle-orm";
-import type { ApplicationStage, MembershipRole } from "@ros/contracts";
+import { NO_WORK_WHILE_LOCKED, type ApplicationStage, type MembershipRole } from "@ros/contracts";
 import { entitlements, openFollowUp, type FollowUpStrip } from "@ros/core";
 import { SCORECARD_READINGS, newTimesDayWords } from "@ros/agents";
 import { applications, candidates, communications, companies, events, interviewFollowups, interviews, policies, randomToken, recruiterEscalations, screens, users, withTenant, workflowRuns } from "@ros/db";
@@ -21,6 +21,22 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
   const facts = (over: Partial<ApplicationFacts> = {}): ApplicationFacts => ({ stage: "triaged", rejectReason: null, hasOpenScreen: false, hasActiveInterview: false, hasUndecidedInterview: false, role: "owner", openUnknowns: 0, ...over });
 
   describe("the rule itself", () => {
+    it("offers nothing that spends AI on someone locked or starts an interview, whatever their step, and says why", () => {
+      const open = applicationActionState(facts({ openUnknowns: 2 }));
+      expect(open.allowed).toEqual(expect.arrayContaining(["invite_screen", "ask_in_screen", "interview", "advance_to_interview"]));
+      const locked = applicationActionState(facts({ openUnknowns: 2, lockedAt: "2026-11-01T00:00:00.000Z", role: "recruiter" }));
+      for (const cap of ["invite_screen", "ask_in_screen", "interview", "advance_to_interview"] as const) {
+        expect(locked.allowed).not.toContain(cap);
+        expect(locked.blockedReasons[cap]).toBe(NO_WORK_WHILE_LOCKED);
+      }
+      // The reason holds over any other a state would give, and everything else stays as it was.
+      expect(applicationActionState(facts({ lockedAt: "2026-11-01T00:00:00.000Z", hasOpenScreen: true })).blockedReasons.invite_screen).toBe(NO_WORK_WHILE_LOCKED);
+      expect(locked.allowed).toEqual(expect.arrayContaining(["hold", "move_to_talent_pool", "reject", "set_mark"]));
+      const moves = Object.fromEntries(stageMoves(facts({ lockedAt: "2026-11-01T00:00:00.000Z" })).map((m) => [m.to, m]));
+      expect(moves.interviewing).toMatchObject({ allowed: false, blockedReason: NO_WORK_WHILE_LOCKED });
+      expect(moves.longlist).toMatchObject({ allowed: true });
+    });
+
     it("gives each tenant role only the choices its permissions allow, and names who can do the rest", () => {
       const owner = applicationActionState(facts());
       expect(owner.allowed).toEqual(["invite_screen", "interview", "advance_to_interview", "hold", "move_to_talent_pool", "reject", "record_outcome", "set_mark"]);
@@ -28,7 +44,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       const hr = applicationActionState(facts({ role: "hr" }));
       expect(hr.allowed).toEqual(["invite_screen", "advance_to_interview", "hold", "move_to_talent_pool", "record_outcome", "set_mark"]);
       expect(hr.blockedReasons.reject).toBe("Your role can't decline candidates; ask an owner, an admin, a hiring manager or a recruiter.");
-      expect(hr.blockedReasons.interview).toBe("Your role can't approve interviews; ask an owner, an admin, a hiring manager or a recruiter.");
+      expect(hr.blockedReasons.interview).toBe("Your role can't set up interviews; ask an owner, an admin, a hiring manager or a recruiter.");
       expect(applicationActionState(facts({ role: "hr", stage: "rejected" })).blockedReasons.send_decision).toBe("Your role can't tell candidates about a decision; ask an owner, an admin, a hiring manager or a recruiter.");
       // a recruiter declines and interviews, but recording a hiring outcome is the customer's
       const recruiter = applicationActionState(facts({ role: "recruiter" }));
@@ -97,7 +113,10 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(owner.hired).toMatchObject({ allowed: true, via: "record_hire" });
       expect(owner.not_moving_forward).toMatchObject({ allowed: true, via: "decline" });
       // Offer opens the record-only "Offer made" (plan H2): for a finalist, by those who record outcomes; before that, why not
-      expect(owner.offer).toMatchObject({ allowed: false, via: "offer", blockedReason: 'Record an offer once they are a finalist (they are at "Ready for your review").' });
+      // the way on in plain words (6 November 2026): interview first, or Hired for someone already agreed outside the app
+      expect(owner.offer).toMatchObject({ allowed: false, via: "offer", blockedReason: "Interview them first, or mark them Hired." });
+      expect(moves({ stage: "interview_scheduled" }).offer).toMatchObject({ allowed: false, blockedReason: "Finish the interview first, or mark them Hired." });
+      expect(moves({ stage: "interview_complete" }).offer).toMatchObject({ allowed: false, blockedReason: "Record Finalist as the interview's decision first, or mark them Hired." });
       expect(moves({ stage: "finalist" }).offer).toMatchObject({ allowed: true, via: "offer" });
       expect(moves({ stage: "reference_check" }).offer).toMatchObject({ allowed: true, via: "offer" });
       expect(moves({ stage: "finalist", role: "recruiter" }).offer).toMatchObject({ allowed: false, blockedReason: "Your role can't record that an offer was made; ask an owner, an admin, a hiring manager or HR." });
@@ -177,7 +196,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       const moves = Object.fromEntries(stageMoves(under()).map((m) => [m.to, m]));
       expect(Object.keys(moves)).toHaveLength(10);
       expect(moves.cancelled).toMatchObject({ current: true, allowed: false, via: "none" });
-      expect(moves.interviewing).toMatchObject({ allowed: false, via: "none", blockedReason: "They move back to Interviewing when they book a time. Send them new times from their page." });
+      expect(moves.interviewing).toMatchObject({ allowed: false, via: "none", blockedReason: "They move back to Interviewing when a time is booked. Set a date and time from their page." });
       // a hold takes them out of Cancelled; a decline is the private decline; the earlier steps keep their reasons
       expect(moves.on_hold).toMatchObject({ allowed: true, via: "set_mark", mark: "on_hold" });
       expect(moves.not_moving_forward).toMatchObject({ allowed: true, via: "decline" });
@@ -362,7 +381,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(before.cancelled!.status).toMatch(/^New times go out automatically /);
       expect(before.allowedActions).toEqual(expect.arrayContaining(["send_new_times", "stop_new_times"]));
       expect(before.stageMoves.find((m) => m.to === "cancelled")).toMatchObject({ current: true, allowed: false });
-      expect(before.stageMoves.find((m) => m.to === "interviewing")).toMatchObject({ allowed: false, blockedReason: "They move back to Interviewing when they book a time. Send them new times from their page." });
+      expect(before.stageMoves.find((m) => m.to === "interviewing")).toMatchObject({ allowed: false, blockedReason: "They move back to Interviewing when a time is booked. Set a date and time from their page." });
       // HR may not send or stop new times, and is told who can
       const asHr = (await (await json(hr, "GET", `/api/v1/applications/${ana}`)).json()) as Row;
       expect(asHr.allowedActions).not.toContain("send_new_times");

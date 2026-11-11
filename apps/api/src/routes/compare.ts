@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings } from "@ros/core";
-import { applications, assessments, candidates, rolePackets, roles, screens, withTenant, type Tx } from "@ros/db";
+import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, interviewsInMotionFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings, visibleTo } from "@ros/core";
+import { applications, assessments, candidates, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { notesForApplications } from "../services/notes";
 import { currentVersionOf } from "../services/packet-versions";
+import { screensForScore } from "../services/screen-scorecards";
 
 /**
  * The comparison view (docs/spec/21 F10): up to five candidates of one role side by side, each must-have and
@@ -61,7 +62,8 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const ids = input.ids.filter((s) => UUID.test(s));
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) return null;
-  const apps = ids.length ? (await tx.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.id, ids)))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId) : [];
+  // Someone past the plan's candidates per job (Rule 3) is skipped like an id that is not in the role: read by nobody, audited as viewed by nobody.
+  const apps = ids.length ? (await tx.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.id, ids), visibleTo(t)))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId) : [];
   const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
   const currentRow = currentVersionOf(role, packets) ?? packets[0] ?? null;
   const packet = currentRow?.packet ?? null;
@@ -71,8 +73,9 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const cands = apps.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId))) : [];
   // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026).
   const all = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];
-  // Their screens, in any order: also where each one's AI interview stands, for the score's label (R20-9).
-  const scr = apps.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id))) : [];
+  // Their screens, in any order: also where each one's AI interview stands, for the score's label (R20-9), its scorecard
+  // waiting for the AI credit or failed for good included (`screensForScore`).
+  const scr = await screensForScore(tx, apps.map((a) => a.id));
   const hidden = unsentScreenReadings(scr, all);
   const asmts = all.filter((x) => !hidden.has(x.id));
   // An AI interview that never came for want of allowance (Q17) reads as not done, as on the list and the board.
@@ -80,6 +83,8 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const marks = await activeMarksFor(tx, apps.map((a) => a.id));
   // Under Cancelled (founder decisions 1A to 4A), as on the Talent list.
   const followUps = await activeFollowUpsFor(tx, apps.map((a) => a.id));
+  // An interview booked or with times out waits on nobody at the company (6 November 2026), as on the Talent list.
+  const inMotion = await interviewsInMotionFor(tx, apps.map((a) => a.id));
   const notes = await notesForApplications(tx, { applicationIds: apps.map((a) => a.id), tenant: t });
   const rows: CompareCandidate[] = [];
   for (const id of ids) {
@@ -113,9 +118,9 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
       name: `${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "Unknown",
       stage: a.stage,
       stageLabel: STAGE_LABEL[a.stage],
-      group: groupFor(a, mark, input.now, followUp),
+      group: groupFor(a, mark, input.now, followUp, inMotion.has(a.id)),
       ownerStage: strip,
-      ownerStageLabel: ownerStageLabel(strip, mark, followUp),
+      ownerStageLabel: ownerStageLabel(strip, mark, followUp, null, a.stage),
       mustHaves: mh,
       competencies: comp,
       screen: screen ? { recommendation: screen.result.recommendation, summary: screen.result.summary } : null,

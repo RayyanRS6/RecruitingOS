@@ -8,10 +8,10 @@ export type TenantRole = "owner" | "admin" | "hiring_manager" | "hr" | "intervie
 /** interview.request, interview.manage and interview.decide: the same four roles hold all three. */
 const INTERVIEW_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "recruiter"]);
 
-/** Approve an interview round and pick the interviewers. */
+/** Set up an interview round: set its date and time (the press is the approval), and pick the interviewers. */
 export const canRequestInterviews = (role: string | null | undefined): boolean => !!role && INTERVIEW_ROLES.has(role);
 
-/** Re-offer times, cancel, book on the candidate's behalf, record whether any interview took place. */
+/** Set or move a date and time, re-offer times, cancel, book on the candidate's behalf, record whether any interview took place. */
 export const canManageInterviews = (role: string | null | undefined): boolean => !!role && INTERVIEW_ROLES.has(role);
 
 /** Record the decision after an interview. */

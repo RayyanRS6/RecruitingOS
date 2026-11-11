@@ -4,7 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import { applications, candidates, communications, companies, createDb, interviews, migrate, roles, withTenant, type DbHandle } from "@ros/db";
 import { createIntegrations } from "@ros/integrations";
 import { samplePacket } from "./fixtures/sample-packet";
-import { interviewCancelledMessage, interviewIcs, interviewMovedMessage, sendSlotsOffered, slotsOfferedMessage, type InterviewMessageInput } from "./interview-messages";
+import { ACCOMMODATION_LINE, interviewCancelledMessage, interviewConfirmationMessage, interviewIcs, interviewMovedMessage, interviewPlaceLine, interviewReminderMessage, sendSlotsOffered, slotsOfferedMessage, type InterviewMessageInput } from "./interview-messages";
 import { HELD_REASON } from "./outbox";
 
 /**
@@ -105,6 +105,132 @@ describe("the times email", () => {
     const named = { ...base, interview: { ...interview, title: "Call with Paul" } } as InterviewMessageInput;
     expect(slotsOfferedMessage({ ...named, variant: "new_times_team" }).text).toContain("a new time for your call with Paul for the");
     expect(slotsOfferedMessage({ ...base, variant: "new_times_asked", note: { text: "Looking forward to it.", aiHelped: false, senderName: "Dana" } }).text).toContain("with Grace and Ben.\n\nA note from Dana: Looking forward to it.");
+  });
+});
+
+describe("the confirmation", () => {
+  const start = "2026-11-10T22:00:00.000Z"; // Tuesday 2:00 PM in Los Angeles
+  const person = { ...slot, id: "s2", startsAt: start, endsAt: "2026-11-10T22:30:00.000Z", source: "person" as const };
+  const booked = (over: Record<string, unknown> = {}) => ({ ...base, roundPurpose: "Your experience with patients.", interview: { ...interview, startsAt: start, endsAt: "2026-11-10T22:30:00.000Z", meetingUrl: "https://meet.example/room", selectedSlot: person, status: "scheduled", ...over } }) as unknown as Parameters<typeof interviewConfirmationMessage>[0];
+  const when = "Tuesday, November 10, 2026 at 2:00 PM PST";
+  const page = "https://app.example/c/schedule/tok-1/confirmed";
+
+  it("a person set it: says who would like to interview them, the date and time with its zone, where, and how to ask for a change; nothing says they confirmed", () => {
+    const m = interviewConfirmationMessage({ ...booked(), setByPerson: true });
+    expect(m.subject).toBe(`Your interview: Conversation with the dentist at Harbor Dental, ${when}`);
+    expect(m.text).toBe(`Hi Ana,
+
+Good news: Harbor Dental would like to interview you for the Dental Assistant position.
+
+When: ${when}
+How long: 30 minutes
+Join: https://meet.example/room
+Who: Grace, Ben
+
+What to prepare: Your experience with patients.
+
+A calendar invitation is attached. Need a different time? ${page}
+
+${ACCOMMODATION_LINE}
+
+${footer}`);
+  });
+
+  it("the accommodation line is on every variant, and the footer's disclosure and way to a person with it", () => {
+    const variants = [
+      interviewConfirmationMessage(booked()),
+      interviewConfirmationMessage({ ...booked(), setByPerson: true }),
+      interviewConfirmationMessage({ ...booked(), setByPerson: true, moved: { reason: "A clash." } }),
+      interviewConfirmationMessage({ ...booked(), setByPerson: true, newTimeAfterCancel: true }),
+      interviewConfirmationMessage({ ...booked(), setByPerson: true, missedByUs: true }),
+    ];
+    expect(ACCOMMODATION_LINE).toBe("Need an adjustment, such as captions or a phone call instead of video? Tell us on the same page, or reply to this email.");
+    for (const m of variants) {
+      expect(m.text).toContain(ACCOMMODATION_LINE);
+      expect(m.text.endsWith(footer)).toBe(true);
+    }
+  });
+
+  it("the candidate's own pick keeps its words", () => {
+    const m = interviewConfirmationMessage(booked());
+    expect(m.subject).toBe(`Confirmed: Conversation with the dentist at Harbor Dental, ${when}`);
+    expect(m.text).toContain("You are confirmed: Conversation with the dentist for the Dental Assistant position at Harbor Dental.");
+    expect(m.text).toContain(`A calendar invitation is attached. Need to change it? ${page} lets you reschedule or cancel.`);
+  });
+
+  it("moved: says so in one email, with the team's reason when they gave one", () => {
+    const m = interviewConfirmationMessage({ ...booked(), setByPerson: true, moved: { reason: "  The dentist is away.  " } });
+    expect(m.subject).toBe(`New time for your interview: Conversation with the dentist at Harbor Dental, ${when}`);
+    expect(m.text).toContain('Harbor Dental has moved your conversation with the dentist. Harbor Dental said: "The dentist is away."\n\nWhen:');
+    expect(m.text).not.toContain("Good news");
+    expect(interviewConfirmationMessage({ ...booked(), setByPerson: true, moved: { reason: null } }).text).toContain("Harbor Dental has moved your conversation with the dentist.\n\nWhen:");
+  });
+
+  it("the same time with new details: says the details changed, never 'New time' or 'has moved' (the release review, 11 November 2026)", () => {
+    const m = interviewConfirmationMessage({ ...booked(), setByPerson: true, changed: { reason: "  Here is the link.  " } });
+    expect(m.subject).toBe(`Your interview has changed: Conversation with the dentist at Harbor Dental, ${when}`);
+    expect(m.text).toContain('Harbor Dental has changed the details of your conversation with the dentist. Harbor Dental said: "Here is the link."\n\nWhen:');
+    expect(m.text).not.toMatch(/New time|has moved|Good news/);
+    expect(interviewConfirmationMessage({ ...booked(), setByPerson: true, changed: { reason: null } }).text).toContain("Harbor Dental has changed the details of your conversation with the dentist.\n\nWhen:");
+    // the accommodation line is whole in it too
+    expect(m.text).toContain(ACCOMMODATION_LINE);
+  });
+
+  it("after a cancel or a no-show: a new time was set, with no hint why; after our interviewer missed it: sorry; a move says only that it moved", () => {
+    const again = interviewConfirmationMessage({ ...booked(), setByPerson: true, newTimeAfterCancel: true });
+    expect(again.subject).toBe(`Your interview: Conversation with the dentist at Harbor Dental, ${when}`);
+    expect(again.text).toContain("Harbor Dental has set a new time for your conversation with the dentist for the Dental Assistant position.\n\nWhen:");
+    expect(again.text).not.toMatch(/Good news|did not|missed|cancel|decid/i);
+    const sorry = interviewConfirmationMessage({ ...booked(), setByPerson: true, missedByUs: true });
+    expect(sorry.text).toContain("We are sorry: the interviewer from Harbor Dental could not join your last interview for the Dental Assistant position. Here is a new time for your conversation with the dentist.\n\nWhen:");
+    expect(interviewConfirmationMessage({ ...booked(), setByPerson: true, missedByUs: true, moved: { reason: null } }).text).not.toContain("sorry");
+  });
+
+  it("names both zones when the candidate saved another, and the personal line sits after what to prepare, saying so when the assistant helped", () => {
+    const m = interviewConfirmationMessage({ ...booked(), candidateTimezone: "America/New_York", setByPerson: true, note: { text: "See you then.", aiHelped: true, senderName: "Dana" } });
+    expect(m.text).toContain(`When: Tuesday, November 10, 2026 at 5:00 PM EST (${when} for the team)`);
+    expect(m.subject).toContain("5:00 PM EST");
+    expect(m.text).toContain("What to prepare: Your experience with patients.\n\nA note from Dana: See you then. (Dana wrote this note with help from an AI assistant.)\n\nA calendar invitation");
+  });
+
+  it("the place line: a link, an address, by phone with and without their number, and nothing more known", () => {
+    const lineOf = (over: Record<string, unknown>, phone: string | null = null) => interviewPlaceLine({ ...base, candidate: { ...base.candidate, phone }, interview: { ...interview, meetingUrl: null, selectedSlot: person, format: "video", ...over } } as never);
+    expect(lineOf({ meetingUrl: "https://meet.example/x" })).toBe("Join: https://meet.example/x");
+    expect(lineOf({ format: "onsite", selectedSlot: { ...person, address: "12 Main St" } })).toBe("Where: 12 Main St");
+    expect(lineOf({ format: "phone" }, "+17145550100")).toBe("By phone: Harbor Dental will call you at +17145550100");
+    expect(lineOf({ format: "phone" })).toBe("By phone: Harbor Dental will call you. Reply with the best number to reach you.");
+    // a video link left empty with no calendar to make one, and the candidate's own pick of a phone round: the Format line says what is known
+    expect(lineOf({})).toBeNull();
+    expect(lineOf({ format: "phone", selectedSlot: { ...person, source: "declared" } })).toBeNull();
+    expect(interviewConfirmationMessage({ ...booked({ meetingUrl: null }), setByPerson: true }).text).toContain("Format: video; details from the team follow if anything else is needed.");
+  });
+
+  it("the calendar file: LOCATION is the address or by phone, and the same UID with a higher SEQUENCE replaces an entry in place", () => {
+    const ics = (over: Record<string, unknown>) => interviewIcs({ interview: { ...interview, startsAt: start, endsAt: person.endsAt, meetingUrl: null, selectedSlot: person, ...over } as never, company: base.company, packet, candidate: base.candidate, fromAddress: "x@example.com", method: "REQUEST", appBaseUrl: "https://app.example" }).replace(/\r\n /g, "");
+    expect(ics({ format: "onsite", selectedSlot: { ...person, address: "12 Main St, Tustin" } })).toContain("LOCATION:12 Main St\\, Tustin");
+    expect(ics({ format: "phone" })).toContain("LOCATION:By phone");
+    expect(ics({ format: "video" })).not.toContain("LOCATION:");
+    const first = ics({ attempt: 1, format: "video" });
+    const moved = ics({ attempt: 2, format: "video" });
+    const uid = (s: string) => /UID:(.+)/.exec(s)![1];
+    const seq = (s: string) => Number(/SEQUENCE:(\d+)/.exec(s)![1]);
+    expect(uid(moved)).toBe(uid(first));
+    expect(seq(moved)).toBeGreaterThan(seq(first));
+    expect(moved).toContain("METHOD:REQUEST");
+  });
+
+  it("a reminder carries the same place line, and nothing when nothing more is known", () => {
+    const visit = interviewReminderMessage({ ...booked({ meetingUrl: null, format: "onsite", selectedSlot: { ...person, address: "12 Main St" } }), which: "before24h" });
+    expect(visit.subject).toBe("Tomorrow: Conversation with the dentist at Harbor Dental");
+    expect(visit.text).toContain(`Your interview is tomorrow. Conversation with the dentist at Harbor Dental: ${when}.\nWhere: 12 Main St\n`);
+    expect(visit.text).toContain(`Need to change it? ${page}`);
+    const call = interviewReminderMessage({ ...booked({ meetingUrl: null, format: "phone" }), which: "before2h" });
+    expect(call.subject).toBe("Soon: Conversation with the dentist at Harbor Dental");
+    expect(call.text).toContain("Your interview starts in about two hours.");
+    expect(call.text).toContain("By phone: Harbor Dental will call you. Reply with the best number to reach you.");
+    const video = interviewReminderMessage({ ...booked(), which: "before2h" });
+    expect(video.text).toContain("Join: https://meet.example/room");
+    expect(interviewReminderMessage({ ...booked({ meetingUrl: null }), which: "before2h" }).text).not.toMatch(/Join:|Where:|By phone:/);
   });
 });
 

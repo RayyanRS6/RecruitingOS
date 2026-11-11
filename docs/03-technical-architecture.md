@@ -117,7 +117,7 @@ The product shows adapter status in Setup and in the admin console. A `pending_*
 
 ## Billing and entitlements
 
-`plans` (key, name, prices, limits) and `entitlements` (company, key, limit, used, period) with `usage_events`. Checks are `entitlements.check(companyId, 'active_roles', +1)`; meters are `usage.record(companyId, 'sms_segments', 3, ref)`. Stripe is an integration that syncs subscription state into entitlements. Trials are entitlements with an expiry. Nothing in product code compares plan names.
+`plans` (key, name, prices, limits) and `entitlements` (company, key, limit, used, period) with `usage_events`. Checks are `entitlements.check(companyId, 'active_roles', +1)`; meters are `usage.record(companyId, 'sms_segments', 3, ref)`. Stripe is an integration that syncs subscription state into entitlements. Trials are entitlements with an expiry. Nothing in product code compares plan names (`tests/policy/plan-names.test.ts`). Since 5 November 2026: every plan names every limit key, a company with no row for a key is unmetered, `jobs_total` and the AI credit are counted live and never stored in `used`, the AI credit's gate is `runPromptDetached` (`packages/core/src/ai-credit.ts`), and `applications.locked_at` holds who is past `candidates_per_job`.
 
 ## Development environment
 

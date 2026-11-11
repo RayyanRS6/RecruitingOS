@@ -4,8 +4,8 @@ import { Hono } from "hono";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { CandidatePrivacyRequest, CandidateSmsPreference, isCompanyVerified, type ApplicationStage, type CandidateScoreRow, type CandidateStep, type DecisionWording, type RolePacket } from "@ros/contracts";
-import { newTimesDayWords, sendPrivacyAcknowledgment } from "@ros/agents";
-import { DECISION_STAGES, audit, candidateNewTimesPromise, candidateStep, createDataRequest, decisionTold, emit, fulfilSmsOptOut, mayWithdraw, notify, openFollowUpOf, openHumanReview, transition, type NewTimesPromise } from "@ros/core";
+import { CLOSE_OUT_TEMPLATE, newTimesDayWords, sendPrivacyAcknowledgment } from "@ros/agents";
+import { CLOSED_OUT_STATUS_LINE, DECISION_STAGES, audit, candidateNewTimesPromise, candidateStep, closeOutDayWords, closeOutDueAt, createDataRequest, decisionTold, emit, fulfilSmsOptOut, mayWithdraw, notify, onFileNoDateLine, onFileStatusLine, openFollowUpOf, openHumanReview, transition, unlockedAtFor, type NewTimesPromise } from "@ros/core";
 import { applications, candidates, communications, companies, dataRequests, events, interviewFollowups, interviews, rolePackets, roles, screens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
@@ -13,6 +13,7 @@ import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { OTHER_APPLICATION_LABEL, otherApplicationsFor, packetOf, recordScoreFor, screensOf, sentAnswersFor, type OtherApplication, type RecordScore, type SentAnswers } from "../services/application-record";
 import { queueLinkRequest, recordWithdrawal, rotateStatusLink } from "../services/applications";
 import { exitCleanup } from "../services/exit-cleanup";
+import { candidateEmailStates } from "../services/interview-create";
 import { learnedFactsFor } from "../services/profile-facts";
 import { optBackIntoTalentPool, optOutOfTalentPool } from "../services/talent-pool";
 import { CORRECTION_LINE, anonymizedFor, linkGone, maskEmail } from "./candidate-shared";
@@ -158,6 +159,8 @@ div.card.status { display: grid; grid-template-columns: repeat(auto-fit, minmax(
 .bars .partial progress::-moz-progress-bar { background: var(--caution); }
 .bars .short progress::-webkit-progress-value { background: var(--critical); }
 .bars .short progress::-moz-progress-bar { background: var(--critical); }
+.bars .shown progress::-webkit-progress-value { background: var(--primary); }
+.bars .shown progress::-moz-progress-bar { background: var(--primary); }
 .said { display: grid; gap: 14px; margin: 10px 0 0; padding: 0; list-style: none; }
 .said > li + li { padding-top: 14px; border-top: 1px solid var(--line); }
 .said-q { margin: 0 0 4px; color: var(--ink); font-weight: 600; }
@@ -209,23 +212,24 @@ async function visibleStage(container: Container, app: typeof applications.$infe
  * A decision in the words of the message that told it (plan G6): the closing message of a closed role (Q30), a filled
  * position, a decline after an interview or on an eligibility answer. Any other approved wording, and a decision a
  * person told them themselves, read the standard way. Never a reason beyond the eligibility answer, which the candidate
- * can correct, and never before they were told (founder decision B6).
+ * can correct, and never before they were told (founder decision B6). `locked`: they reached this while nobody at the
+ * company could read them (Rule 2), and nobody kept them, so the page says nothing about keeping them, whichever decision it was.
  */
-function decisionLine(input: { stage: ApplicationStage; wording: DecisionWording | null; poolOptOut: boolean; companyName: string }): string {
+function decisionLine(input: { stage: ApplicationStage; wording: DecisionWording | null; poolOptOut: boolean; companyName: string; locked?: boolean }): string {
   const { wording, poolOptOut, companyName } = input;
   if (input.stage === "talent_pool") {
-    const pool = poolOptOut ? "As you asked, nobody will contact you about future openings." : "We are keeping you in mind for future openings.";
-    if (wording === "role_closed") return `${companyName} has closed this position, so your application for it will not go any further. ${pool}`;
-    if (wording === "position_filled") return `The position has been filled, so this role is not moving forward for you. ${pool}`;
-    if (wording === "after_interview") return `Thank you for meeting the team. This role is not moving forward for you. ${pool}`;
-    return `This role is not moving forward for you. ${pool}`;
+    const pool = input.locked ? "" : poolOptOut ? " As you asked, nobody will contact you about future openings." : " We are keeping you in mind for future openings.";
+    if (wording === "role_closed") return `${companyName} has closed this position, so your application for it will not go any further.${pool}`;
+    if (wording === "position_filled") return `The position has been filled, so this role is not moving forward for you.${pool}`;
+    if (wording === "after_interview") return `Thank you for meeting the team. This role is not moving forward for you.${pool}`;
+    return `This role is not moving forward for you.${pool}`;
   }
-  const keep = poolOptOut ? "" : " We will keep you in mind for future openings unless you ask us not to.";
+  const keep = poolOptOut || input.locked ? "" : " We will keep you in mind for future openings unless you ask us not to.";
   if (wording === "eligibility") return `Based on your answers to the eligibility questions, this role needs something you said you do not have right now. If that has changed, or you answered in error, reply to our email and a person will take a look.${keep}`;
   if (wording === "role_closed") return `${companyName} has closed this position, so your application for it will not go any further.${keep}`;
   if (wording === "position_filled") return `The position has been filled, so your application for this role will not go any further. Thank you for applying.${keep}`;
   if (wording === "after_interview") return `Thank you for meeting the team. They have decided not to move forward with your application for this role.${keep}`;
-  return poolOptOut ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.";
+  return poolOptOut || input.locked ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.";
 }
 
 /**
@@ -288,9 +292,29 @@ async function interviewComing(tx: Tx, app: { id: string; stage: string }): Prom
   return (run.state as { waitingForAllowance?: string }).waitingForAllowance ? "later" : "soon";
 }
 
-/** The line under the steps, in the candidate's words: what is happening now and what they can do. */
-function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string; coming?: InterviewComing }): string {
+/**
+ * Someone past their plan's candidates per job (the plans of 5 November 2026, Rule 2): `byDay`, the day they hear by,
+ * `closedOut`, that they have had the close-out note, `datePassed`, that the day has gone by, and `jobClosed`, that the job has
+ * closed. Their page never says the team is reviewing them, and promises no email or date once that may not be true: a note or
+ * a closing message that bounced is not sent again. The moment they are unlocked the page goes back to its usual words by itself.
+ * DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts).
+ */
+type OnFile = { byDay: string; closedOut: boolean; datePassed: boolean; jobClosed: boolean };
+
+/** Their line while the page stands before any decision they were told. */
+function onFileLine(onFile: OnFile, companyName: string): string {
+  if (onFile.closedOut) return CLOSED_OUT_STATUS_LINE;
+  if (onFile.jobClosed) return onFileNoDateLine(companyName);
+  return onFile.datePassed ? CLOSED_OUT_STATUS_LINE : onFileStatusLine(companyName, onFile.byDay);
+}
+
+/**
+ * The line under the steps, in the candidate's words: what is happening now and what they can do. `unreviewed`: they
+ * reached the decision before anyone at the company could read them, so nobody kept them, whatever has opened them since.
+ */
+function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string; coming?: InterviewComing; onFile?: OnFile | null; unreviewed?: boolean; noBookedEmail?: boolean }): string {
   const { step, stage, poolOptOut } = input;
+  if (input.onFile && (step === "received" || step === "under_review")) return onFileLine(input.onFile, input.companyName);
   const news = input.news ?? {};
   const coming = input.coming === "soon" ? "We are reading your application. Your AI interview link arrives by email within about 10 minutes." : input.coming === "later" ? "Your application is in. Your AI interview link follows by email as soon as it is ready." : null;
   if (step === "received") return coming ?? (stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.");
@@ -308,12 +332,16 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
     return "The hiring team is reviewing your application. You will hear from them either way.";
   }
   if (step === "interview") {
-    if (input.interview === "booked") return "Your interview is booked. The details are below and in your email.";
+    // Their email about it waits for the ITS check, could not be delivered, or there is no address: the page never points
+    // them to an email that never came (known-bugs row 149; the release review, 11 November 2026).
+    if (input.interview === "booked") return input.noBookedEmail ? "Your interview is booked. The details are below." : "Your interview is booked. The details are below and in your email.";
     if (input.interview === "offered") return "The team would like to interview you. Pick a time below.";
     if (news.lapsed) return "The interview times we sent have passed. The hiring team will be in touch.";
     if (news.noShow) return "The hiring team will be in touch about next steps.";
     if (news.missedByUs) return "We are sorry: the interviewer could not join your interview. The hiring team will be in touch about what happens next.";
-    if (stage === "interview_complete" || stage === "debrief") return "Thanks for interviewing. The team is deciding, and you will hear from them either way.";
+    // After a real interview, whatever the team decided meanwhile (a finalist, references): the same words, so nothing
+    // private is hinted at (6 November 2026).
+    if (["interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval"].includes(stage)) return "Thanks for interviewing. The team is deciding, and you will hear from them either way.";
     return "The hiring team will be in touch about next steps.";
   }
   if (stage === "hired") return "You are on the team.";
@@ -322,7 +350,7 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
   if (stage === "offer_sent" || stage === "negotiation") return "The team has made you an offer. They will go through it with you directly. If you have a question, reply to any of our emails.";
   if (stage === "declined") return "You turned down the offer. Thank you for your time with us.";
   if (stage === "withdrawn") return "You withdrew this application. Thank you for your time.";
-  return decisionLine({ stage, wording: input.wording, poolOptOut, companyName: input.companyName });
+  return decisionLine({ stage, wording: input.wording, poolOptOut, companyName: input.companyName, locked: input.unreviewed });
 }
 
 /** The steps of the progress line the status page leads with (Wave S2, slice K4), in the candidate's words. */
@@ -334,11 +362,12 @@ export const PROGRESS_STEP_LABEL: Record<ProgressStep, string> = { applied: "App
  * step (`candidateStep`, which never shows a private decision): Received is Applied; Under review is the AI interview
  * while one is open or paused, else Review. The AI interview is a step only for an application that has, or had, one
  * (so an eligibility answer that did not match is never hinted at, E7); at the decision, the interview is a step only
- * when there was one. Every step before the current one is done.
+ * when there was one. Every step before the current one is done. `unreviewed`: nobody at the company could read them (Rule 2),
+ * so Review is never where they are, and it is not on the line once they reached a decision, where it would read as done.
  */
-export function progressLine(input: { step: CandidateStep; hasChat: boolean; chatOpen: boolean; hadInterview: boolean }): { steps: ProgressStep[]; current: ProgressStep } {
-  const current: ProgressStep = input.step === "received" ? "applied" : input.step === "under_review" ? (input.hasChat && input.chatOpen ? "screening" : "review") : input.step;
-  const steps: ProgressStep[] = ["applied", ...(input.hasChat ? (["screening"] as const) : []), "review", ...(current !== "decision" || input.hadInterview ? (["interview"] as const) : []), "decision"];
+export function progressLine(input: { step: CandidateStep; hasChat: boolean; chatOpen: boolean; hadInterview: boolean; unreviewed?: boolean }): { steps: ProgressStep[]; current: ProgressStep } {
+  const current: ProgressStep = input.step === "received" ? "applied" : input.step === "under_review" ? (input.hasChat && input.chatOpen ? "screening" : input.unreviewed ? "applied" : "review") : input.step;
+  const steps: ProgressStep[] = ["applied", ...(input.hasChat ? (["screening"] as const) : []), ...(input.unreviewed && current === "decision" ? [] : (["review"] as const)), ...(current !== "decision" || input.hadInterview ? (["interview"] as const) : []), "decision"];
   return { steps, current };
 }
 
@@ -419,13 +448,20 @@ function DecisionCard(props: { headline: string; since: string; messages: boolea
   );
 }
 
-/** One bar of the breakdown: the requirement's public name, how much of it was met in words and as a bar, its colour band. */
+/**
+ * One bar of the breakdown: the requirement's public name, how much of it was met in words and as a bar, its colour band.
+ * The folded line ("Other things the team looks for") counts what nothing showed at no points, so it carries the view's own
+ * words, "55% shown" (`candidateScoreView`, under counsel with this block), in the bar and to a screen reader: never "met",
+ * which read a requirement nothing showed as not met (the release review, 11 November 2026). Its bar is one neutral colour
+ * (`shown`, the brand's own) at any share, never the red a must-have not met gets (the review's second reading, the same day).
+ */
 function ScoreBar(props: { row: CandidateScoreRow }) {
   const { row } = props;
+  const figure = row.key === "other" ? row.words : `${row.pctMet}% met`;
   return (
     <li class={row.tone}>
-      <div class="bar-head"><span>{row.label}</span><span>{row.key === "other" ? `${row.pctMet}% met` : `${row.pctMet}% met · ${row.words}`}</span></div>
-      <progress max="100" value={row.pctMet} aria-label={`${row.label}: ${row.pctMet}% met`}>{row.pctMet}%</progress>
+      <div class="bar-head"><span>{row.label}</span><span>{row.key === "other" ? figure : `${figure} · ${row.words}`}</span></div>
+      <progress max="100" value={row.pctMet} aria-label={`${row.label}: ${figure}`}>{row.pctMet}%</progress>
     </li>
   );
 }
@@ -435,11 +471,16 @@ function ScoreBar(props: { row: CandidateScoreRow }) {
  * review before real candidates in NYC, IL, CA or CO). While it is worked out: "Working out your match score…", with a
  * plain "Check again" link (never a timed reload: the page holds forms a candidate may be typing in, WCAG 2.2.1). Then the number, its band, what it rests
  * on ("From your résumé and your AI interview", or "From your résumé only" until the AI interview is in it; R20-9) and the bars: only the
- * job page's must-haves by name, every other requirement in one line; what nothing showed yet is listed as not shown,
- * never held against them. Nothing at all when ITS switched it off for the company.
+ * job page's must-haves by name, every other requirement in one line; what nothing showed yet is listed as not shown: it
+ * earns no points yet, and is never read as a no. Nothing at all when ITS switched it off for the company.
  *
  * Every word here, the eyebrows included, stays exactly as drafted until counsel signs off: a block under counsel review
- * is outside the fewer-words pass (23 October 2026). That pass had cut two of its lines; both are back, word for word.
+ * is outside the fewer-words pass (23 October 2026). That pass had cut two of its lines; both are back, word for word. Two
+ * sentences changed on 6 November 2026 because the score changed and they would have become false, and the register's items
+ * 20 and 21 carry the new words. They are still drafts. So is the line added on 10 November 2026 for a score that will not come
+ * by itself (`not_coming`), in place of "Not ready yet" for ever; register item 21 carries it. Since 11 November 2026 the folded
+ * line shows the view's own words ("55% shown", `ScoreBar`), which were drafted with it and never reached the page; register
+ * item 21 says so.
  */
 function ScoreSection(props: { score: RecordScore; companyName: string; chatSent: boolean; statusPath: string }) {
   const { score } = props;
@@ -450,6 +491,15 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
         <p class="eyebrow">Your match score</p>
         <h2 id="score-h">Working out your match score…</h2>
         <p>This usually takes under a minute. <a href={`${props.statusPath}#score`}>Check again</a> in a moment, or come back to it later from the link in your email.</p>
+      </section>
+    );
+  }
+  if (score.state === "not_coming") {
+    return (
+      <section class="card" id="score" aria-labelledby="score-h">
+        <p class="eyebrow">Your match score</p>
+        <h2 id="score-h">Could not be worked out</h2>
+        <p>The hiring team reads your application themselves.</p>
       </section>
     );
   }
@@ -467,14 +517,14 @@ function ScoreSection(props: { score: RecordScore; companyName: string; chatSent
     <section class="card" id="score" aria-labelledby="score-h">
       <p class="eyebrow">Your match score is ready</p>
       <h2 id="score-h" class="score-head"><span class="score-num">{v.score}<small>/100</small></span><span>{v.bandLabel} match</span></h2>
-      <p class="meta">{v.basis ? `${v.basis}. ` : ""}{v.coverage}. Anything the team could not see in what you sent is left out of the number, never held against you.</p>
+      <p class="meta">{v.basis ? `${v.basis}. ` : ""}{v.coverage}. Anything the team could not see in what you sent earns no points yet, and is never read as a no.</p>
       {v.capped ? <p>What you sent shows a must-have from the job page as not met, so the score stays below 55 however much else is shown.</p> : null}
       <h3>How it breaks down</h3>
       <ul class="bars">
         {v.rows.map((row) => <ScoreBar row={row} />)}
         {v.other ? <ScoreBar row={v.other} /> : null}
       </ul>
-      {v.notYetShown.length ? <p><strong>Not shown yet:</strong> {v.notYetShown.join("; ")}. Nothing you sent says either way, so these are left out.</p> : null}
+      {v.notYetShown.length ? <p><strong>Not shown yet:</strong> {v.notYetShown.join("; ")}. Nothing you sent says either way, so these earn no points yet.</p> : null}
       <p>The hiring team at {props.companyName} sees this score with your application{props.chatSent ? " and your chat" : ""}.</p>
       <p class="meta">The team sees what you sent; their private notes are never shared with you. A person makes every decision: the score never decides anything on its own.</p>
     </section>
@@ -586,8 +636,8 @@ function OtherApplications(props: { others: OtherApplication[]; companyName: str
 /**
  * The candidate's status page (plan A1). It leads with the progress line (Wave S2, slice K4) and the one line on what
  * happens next; its status card speaks in the four candidate steps (Received, Under review, Interview, Decision). Never
- * the team's stage names: the assistant's suggestions, an eligibility hold and "finalist" read as Under
- * review. A decision shows only once the candidate was told (founder decision B6), in the words of the message that
+ * the team's stage names: the assistant's suggestions and an eligibility hold read as Under review, and "finalist" reads
+ * as the interview they had (6 November 2026). A decision shows only once the candidate was told (founder decision B6), in the words of the message that
  * told it (plan G6); until then the page stands where it was and withdrawing stays open. The messages about the
  * application read as a conversation (plan G7): only messages that actually reached them, and their own replies. A line
  * says a person decides.
@@ -603,10 +653,16 @@ candidatePages.get("/c/status/:token", async (c) => {
   const [company] = await db.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
   const view = await visibleStage(container, app);
   const told = !view.hidden && DECISION_STAGES.includes(app.stage);
-  const { thread, wording } = await withTenant(container.db, app.companyId, async (tx) => ({
+  const { thread, wording, closedOut, unlockedAt } = await withTenant(container.db, app.companyId, async (tx) => ({
     thread: await threadOf(tx, app.id),
     wording: told ? await toldWording(tx, { applicationId: app.id, decidedAt: app.stageChangedAt }) : null,
+    // Only what left us: a note still waiting has told them nothing yet.
+    closedOut: !!app.lockedAt && (await tx.select({ id: communications.id }).from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.templateKey, CLOSE_OUT_TEMPLATE), inArray(communications.status, ["sent", "delivered", "opened", "clicked"]))).limit(1)).length > 0,
+    unlockedAt: told && !app.lockedAt ? (await unlockedAtFor(tx, [app.id])).get(app.id) ?? null : null,
   }));
+  // Nobody at the company could read them when they reached this: still locked, or opened by a change of plan only after it.
+  // Nobody reviewed them and nobody kept them, so the page says neither (Rule 2).
+  const unreviewed = !!app.lockedAt || (!!unlockedAt && Date.parse(unlockedAt) >= Date.parse(app.stageChangedAt));
   // Nothing about a private decision shows, and nothing it closed is offered (its screens and interviews were cancelled with it).
   // A conversation paused while the assistant is down (plan E5) is mentioned, without a link: an email brings it back.
   // Whether there ever was one only decides whether the progress line has an AI interview step, the same before and after a private decision.
@@ -621,6 +677,8 @@ candidatePages.get("/c/status/:token", async (c) => {
   // New times whose email waits for the ITS check (founder decision B7) are not offered here either: the times are not out yet.
   const offered = !!iv && iv.status === "scheduling" && !!iv.scheduleToken && iv.offeredSlots.length > 0 && !news.held;
   const booked = !!iv && iv.status === "scheduled" && !!iv.startsAt && !!iv.scheduleToken && Date.parse(iv.endsAt ?? iv.startsAt) > Date.now();
+  // What became of the email about the booked time, as the team's screens read it (`candidateEmailStates`): held, not delivered, or no address.
+  const noBookedEmail = booked && !!(await withTenant(container.db, app.companyId, (tx) => candidateEmailStates(tx, { interviews: [{ id: iv!.id, attempt: iv!.attempt, status: iv!.status, offeredSlots: iv!.offeredSlots, hasEmail: !!cand?.email }] }))).get(iv!.id);
   // What to prepare (D15): the purpose of the booked round, from the packet version this application runs on.
   const prepare = booked ? await withTenant(container.db, app.companyId, async (tx) => (await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1))[0]?.packet.interviews.plan.find((r) => r.key === iv!.roundKey)?.purpose ?? null) : null;
   const smsEnabled = container.env.SMS_ENABLED;
@@ -632,9 +690,12 @@ candidatePages.get("/c/status/:token", async (c) => {
   const step: CandidateStep = baseStep === "under_review" && (offered || booked) ? "interview" : baseStep;
   // An interview counts on the line once times were offered to them or one was booked, never one still waiting for approval.
   const invitedToInterview = (!!iv && iv.status !== "proposed" && (!!iv.startsAt || iv.offeredSlots.length > 0)) || wording === "after_interview";
-  // A private decision cancels an open chat: the line keeps its step as it was, so nothing hints at the decision.
-  const chatStep = chatCounts(lastScreen, !!(openScreen_ ?? pausedScreen) || (view.hidden && lastScreen?.status === "cancelled"));
-  const progress = progressLine({ step, hasChat: chatStep, chatOpen: !!(openScreen_ ?? pausedScreen), hadInterview: invitedToInterview });
+  // A private decision cancels an open chat: the line keeps its step as it was, so nothing hints at the decision. An
+  // interview set up while their AI interview is still open or paused (a person booked them first): that chat never
+  // happened, so it is no step behind them and never ticked as done. Its link keeps working.
+  const chatOpenNow = !!(openScreen_ ?? pausedScreen);
+  const chatStep = chatOpenNow && step === "interview" ? false : chatCounts(lastScreen, chatOpenNow || (view.hidden && lastScreen?.status === "cancelled"));
+  const progress = progressLine({ step, hasChat: chatStep, chatOpen: chatOpenNow, hadInterview: invitedToInterview, unreviewed });
   // The AI interview still being prepared (20 Oct 2026): its run waits for the reading, or for more interviews (Q17).
   const coming = !lastScreen && !view.hidden ? await withTenant(container.db, app.companyId, (tx) => interviewComing(tx, app)) : null;
   // "Don't keep me for future roles", from the decision message's link (#future-roles) or the button: it says it was saved.
@@ -642,6 +703,7 @@ candidatePages.get("/c/status/:token", async (c) => {
   const poolSaved = (pool === "out" && poolOptOut) || (pool === "in" && !poolOptOut);
   // Dates on the page are the company's days, never the server's (known-bugs row 73).
   const companyZone = company?.timezone ?? "America/Los_Angeles";
+  const onFile: OnFile | null = app.lockedAt ? { byDay: closeOutDayWords(closeOutDueAt(app.createdAt), companyZone), closedOut, datePassed: container.engine.clock().getTime() >= closeOutDueAt(app.createdAt).getTime(), jobClosed: ["closed", "filled"].includes(role?.status ?? "") } : null;
   // The record's own parts (Wave S7, S7-E): the score, what they sent, the job, their other applications here, and what
   // their sent chats taught their record. All read in the company's transaction, from what the team may see.
   const companyName = company?.name ?? "the company";
@@ -650,7 +712,7 @@ candidatePages.get("/c/status/:token", async (c) => {
     const packet = await packetOf(tx, app.roleId, app.packetVersion);
     return {
       packet,
-      score: await recordScoreFor(tx, { app, companySettings: company?.settings, screens: all, hiddenDecision: view.hidden, now: container.engine.clock() }),
+      score: await recordScoreFor(tx, { app, companySettings: company?.settings, screens: all, hiddenDecision: view.hidden, stageShown: shownStage, now: container.engine.clock() }),
       sent: sentAnswersFor({ app, packet, screens: all }),
       others: await otherApplicationsFor(tx, { companyId: app.companyId, candidateId: app.candidateId, exceptId: app.id }),
       facts: await learnedFactsFor(tx, { companyId: app.companyId, candidateId: app.candidateId }),
@@ -681,14 +743,16 @@ candidatePages.get("/c/status/:token", async (c) => {
           drawn together as the "your next step" card (`next-step`, October 2026 redesign). */}
       <div class="next-step">
         <h2>What happens next</h2>
-        <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming })}</p>
-        {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
-        {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
-        {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
+        <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming, onFile, unreviewed, noBookedEmail })}</p>
+        {/* The choice the decision message points to (Q30), one click away from the decision itself. Someone locked when they
+            reached it was not offered it: nobody kept them, and their closing message says nothing about it. The button stays below. */}
+        {told && !poolOptOut && !unreviewed ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
+        {/* A person booked them before they did the AI interview: the booked time is what happens next, so no button says otherwise. Its link keeps working. */}
+        {openScreen_ && !booked ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
         {/* The line above already says the team would like to interview them: the card is the time to pick and its button. */}
         {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
         {/* "What to prepare:" names the round's topics (its purpose); the sentence after it is the one thing to bring, kept. */}
-        {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
+        {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : iv!.selectedSlot?.address ? <span> · {iv!.selectedSlot.address}</span> : iv!.selectedSlot?.source === "person" && iv!.format === "phone" ? <span> · By phone</span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
         {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
       </div>
       {/* One line that people decide; how the AI helps is one click away. */}
@@ -749,7 +813,7 @@ candidatePages.get("/c/status/:token", async (c) => {
           <button class="btn secondary" type="submit">Don't keep me for future roles</button>
         </form>
       )}
-      <MessageThread messages={thread.messages} more={thread.more} companyName={company?.name ?? "The hiring team"} timeZone={cand?.location?.timezone ?? company?.timezone ?? "America/Los_Angeles"} />
+      <MessageThread messages={thread.messages} more={thread.more} companyName={company?.name ?? "The hiring team"} timeZone={cand?.location?.timezone ?? company?.timezone ?? "America/Los_Angeles"} locked={!!onFile} />
       <h2 id="help">Need something?</h2>
       <p>Reply to any of our emails with HUMAN to reach a person, or make a request below.</p>
       {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p>A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
@@ -839,7 +903,8 @@ candidatePages.post("/c/status/:token/withdraw", rateLimit(POLICIES.withdraw), a
       await exitCleanup(tx, container, { companyId: app.companyId, applicationId: app.id, reason: "the candidate withdrew", actor, candidateEmail: "send_cancellation" });
       const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
       const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
-      await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+      // The team hears nothing of someone locked (Rule 2): they could not read them, and this would name them.
+      await notify(tx, { companyId: app.companyId, about: app.id, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     });
     // the withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation are the same as for any other request
     await recordWithdrawal(container, app, "status_page");

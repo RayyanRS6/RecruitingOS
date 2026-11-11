@@ -93,6 +93,10 @@ async function main() {
       if (d?.d) problems.push(`${t}: ${role} may DELETE from an append-only table`);
     }
   }
+  // A locked candidate is decided once, at insert (migration 0036): null means visible, so a default would lock everyone who applies.
+  const [locked] = rows<{ is_nullable: string; column_default: string | null; udt_name: string }>(await handle.db.execute(sql`SELECT is_nullable, column_default, udt_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'applications' AND column_name = 'locked_at'`));
+  if (!locked) problems.push("applications.locked_at: column missing");
+  else if (locked.is_nullable !== "YES" || locked.column_default !== null || locked.udt_name !== "timestamptz") problems.push("applications.locked_at: must be a nullable timestamptz with no default");
   notes.push(`${APPEND_ONLY.length} append-only tables checked against every application role; ${policies.size} tables with policies checked for tenant scoping; ${views.length} views`);
   notes.push(`${tenantTables} tenant tables with row-level security and a policy; ${platformTables} platform tables checked against the tenant role`);
   if (problems.length) notes.push(`tenant-role privileges on platform tables:\n  ${privilegeTable.join("\n  ")}`);

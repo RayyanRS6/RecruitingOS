@@ -1,4 +1,4 @@
-import { NOTIFY_GROUPS, type NotifyGroup } from "@ros/contracts";
+import { NOTIFY_GROUPS, oneLine, type NotifyGroup } from "@ros/contracts";
 import { NOTIFY_ALWAYS, NOTIFY_GROUP_INFO, notifyGroupOf } from "./notify-groups";
 
 /**
@@ -62,6 +62,7 @@ const HEADLINES: Record<string, string> = {
   "stuck.boards_outdated": "A job board still shows an earlier version of a job",
   "stuck.escalated": "An ITS recruiter is looking at a role",
   "volume.high": "A role had more applicants in a day than your limit",
+  "entitlement.more_applied": "More people applied to a role",
   "applications.closed": "A role stopped taking new applications",
   "applications.reopened": "A role is taking applications again",
   "recruiter.resolved": "Your ITS recruiter answered your request",
@@ -73,12 +74,18 @@ const HEADLINES: Record<string, string> = {
   "candidate.unreachable": "A message to a candidate could not be delivered",
   "company.verified": "ITS confirmed your company",
   "company.unverified": "Your careers page is offline while ITS checks your company again",
+  // First sign-in asks for approval (6 November 2026).
+  "company.access_accepted": "Your request was approved",
+  // Accept after Take away access: nobody made a request, so the email says what the notice says (11 November 2026).
+  "company.access_restored": "Your access is back",
   // The Trial plan's 30 days (founder decision L-02 B).
   "company.trial_started": "Your 30-day trial has started",
   "company.trial_ending": "Your trial ends soon",
   "company.trial_extended": "ITS extended your trial",
   "company.trial_ended": "Your trial has ended",
+  "company.plan_changed": "ITS changed your plan",
   "entitlement.text_screens": "News about your plan's AI interviews",
+  "entitlement.ai_credit": "News about your plan's AI help",
 };
 
 /** When a kind has no headline of its own, its group's. */
@@ -155,7 +162,7 @@ export function renderAlertEmail(input: AlertEmailInput): { subject: string; tex
     "",
     `${headline}.`,
     "",
-    `Company: ${input.companyName}`,
+    `Company: ${oneLine(input.companyName, 120)}`,
     ...(input.roleTitle ? [`Role: ${input.roleTitle}`] : []),
     `Open it: ${input.link}`,
     "",

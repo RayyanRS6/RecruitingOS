@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { RecruiterRequestView } from "../../packages/contracts/src/api";
+import type { EscalationThreadEntry, RecruiterRequestView } from "../../packages/contracts/src/api";
 import { hasChoice, loosens, looseningQuestion, splitRules } from "../../apps/web/src/ai-rules";
 import { presetOf } from "../../apps/web/src/recruiter-access";
-import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
+import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, LOCKED_ANSWER_LABEL, LOCKED_CALL_NOTES_HINT, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST, NOTES_TAB_CALL_HINT, RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, callNotesButton, callNotesHint, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
 import { canAskRecruiter } from "../../apps/web/src/roles";
 
 /**
@@ -97,6 +97,13 @@ describe("what a person may do, and who may ask", () => {
     expect(requestActions(req({ status: "resolved" }), { staff: false })).toEqual({ note: false, reopen: true });
     expect(requestActions(req({ status: "cancelled" }), { staff: false })).toEqual({ note: false, reopen: false });
     expect(requestActions(req({ status: "resolved" }), { staff: true })).toEqual({ note: false, reopen: false });
+  });
+
+  it("nothing on a request about someone the team cannot read: it stays with ITS, and the API refuses both", () => {
+    expect(requestActions(req({ status: "open", locked: true }), { staff: false })).toEqual({ note: false, reopen: false });
+    expect(requestActions(req({ status: "resolved", locked: true }), { staff: false })).toEqual({ note: false, reopen: false });
+    // It says who it is about the way any request about an unnamed candidate does.
+    expect(aboutWords({ scope: "application", roleTitle: "Hygienist", candidateName: null })).toBe("A candidate for Hygienist");
   });
 
   it("everyone but an interviewer brings in a recruiter (escalation.create)", () => {
@@ -201,6 +208,68 @@ describe("the recruiter queue shows the draft a request is about (plan C12)", ()
     expect(CALL_NOTES_HINT).toMatch(/never as the candidate's own words/);
     const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
     expect(queue).toContain("e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId");
+  });
+
+  it("past screening the hint and the button lead to the Notes tab, never to an AI interview tab with no notes form (10 November 2026)", () => {
+    const past = { roleId: "r1", applicationId: "a1", kind: CANDIDATE_ASKED_FOR_PERSON, contextSnapshot: {}, callNotesOnAiInterview: false };
+    expect(callNotesHint(past)).toBe(NOTES_TAB_CALL_HINT);
+    expect(NOTES_TAB_CALL_HINT).toBe("The candidate asked to talk to a person instead of the assistant. Call or email them, then open the candidate in the customer's workspace and add what you learned on their Notes tab. It is kept as your note, never as the candidate's own words.");
+    expect(NOTES_TAB_CALL_HINT).not.toMatch(/AI interview tab|scorecard/);
+    expect(callNotesButton(past)).toBe("Open the candidate's Notes tab");
+    expect(workspaceHref(past)).toBe("/roles/r1/talent?open=a1&tab=notes");
+    // at screening, and on an older answer without the field, as before
+    for (const callNotesOnAiInterview of [true, null, undefined]) {
+      const at = { ...past, callNotesOnAiInterview };
+      expect(callNotesHint(at)).toBe(CALL_NOTES_HINT);
+      expect(callNotesButton(at)).toBe("Open the candidate's AI interview tab");
+      expect(workspaceHref(at)).toBe("/roles/r1/talent?open=a1&tab=screen");
+    }
+    // writing to them still opens their message box
+    expect(workspaceHref({ ...past, message: true })).toBe("/roles/r1/talent?open=a1&message=1");
+    const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
+    expect(queue).toContain("{callNotesButton(e)}");
+  });
+
+  it("has its own hint for a request about someone the company cannot read: they never had the assistant, and nothing is scored", () => {
+    expect(LOCKED_CALL_NOTES_HINT).toMatch(/add your notes from the call on the AI interview tab/);
+    expect(LOCKED_CALL_NOTES_HINT).toMatch(/never as the candidate's own words/);
+    expect(LOCKED_CALL_NOTES_HINT).toMatch(/no AI interview or interview starts/);
+    expect(LOCKED_CALL_NOTES_HINT).not.toMatch(/instead of the assistant|scorecard is written|finish the AI interview/i);
+    // the queue's card says it for a locked request whatever else the answer carries, and leads to the AI interview tab
+    for (const callNotesOnAiInterview of [true, false, null, undefined]) {
+      expect(callNotesHint({ lockedForCompany: true, callNotesOnAiInterview })).toBe(LOCKED_CALL_NOTES_HINT);
+      expect(callNotesButton({ lockedForCompany: true, callNotesOnAiInterview })).toBe("Open the candidate's AI interview tab");
+    }
+    const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
+    expect(queue).toContain("{callNotesHint(e)}");
+    // Those notes land on the Notes tab, whose own read has to start again, or its next save writes over them: pressed with a
+    // real query cache in apps/shell/components/call-notes-ui.test.ts.
+  });
+
+  it("on such a request the answer's words say the company can't read it while the candidate is locked but can once an upgrade opens them, from what the API answers, and Write to the candidate opens their message box", () => {
+    expect(workspaceHref({ roleId: "r1", applicationId: "a1", kind: CANDIDATE_ASKED_FOR_PERSON, message: true, contextSnapshot: {} })).toBe("/roles/r1/talent?open=a1&message=1");
+    // True at every moment: after an upgrade the team reads the request in full, the answer and the notes included (the check of 9 November 2026, C5).
+    expect(LOCKED_ANSWER_LABEL).toBe("What you did or advised (not sent to the candidate; the company can't read it while the candidate is locked, but can if an upgrade opens them)");
+    expect(LOCKED_NOTE_TOAST).toBe("Kept on this request, not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel.");
+    expect(LOCKED_RESOLVED_TOAST).toBe("Resolved. Your note is not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel before your access ends in 24 hours.");
+    for (const words of [LOCKED_ANSWER_LABEL, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST]) {
+      expect(words).not.toMatch(/only ITS reads/i);
+      expect(words).not.toMatch(/customer/i);
+    }
+    const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
+    expect(queue).toContain('toast(r?.lockedForCompany ? LOCKED_NOTE_TOAST : "Sent to the customer.")');
+    expect(queue).toContain('r?.lockedForCompany ? LOCKED_RESOLVED_TOAST : "Resolved. The customer has your answer in full; your access ends in 24 hours."');
+    expect(queue).toContain("enter.mutate({ ...e, message: true })");
+  });
+
+  it("the line saying a candidate wrote back reads as theirs, in the queue and on the team's list, never as the customer's note", () => {
+    const line: EscalationThreadEntry = { id: "m1", side: "customer", kind: "reply", body: "Their message is on the Messages tab of their page.", by: null, at: "2026-11-06T10:00:00Z", raisedBy: "candidate" };
+    expect(queueThreadHeading(line)).toBe("The candidate wrote back");
+    expect(threadHeading(line)).toBe("The candidate wrote back");
+    // Someone on the team's note is still theirs.
+    const note: EscalationThreadEntry = { ...line, raisedBy: undefined };
+    expect(queueThreadHeading(note)).toBe("The customer added a note");
+    expect(threadHeading({ ...note, by: "Dana" })).toBe("Dana added a note");
   });
 
   it("reads what the draft knows, one plain line each, saying the pay may not be confirmed", () => {

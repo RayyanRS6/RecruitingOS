@@ -45,9 +45,9 @@ export const FIXED: Readonly<Record<string, string>> = {
   "application.invite_screen": "Every applicant is invited to a short AI interview as soon as their résumé is read: it opens on the page they applied on, and the link is in the one email they get. Someone who answered \"No\" to a must-have question waits for you; \"Keep them in\" sends them the link. You hear about each person once, when their interview is scored. A person still makes every decision.",
   "screen.conduct": "The AI interview runs with each applicant in their own time; they can skip any question or ask for a person at any point.",
   "message.send_templated": "Confirmations and reminders (that an application arrived, a screening reminder, an interview time) go out by themselves in the approved wording.",
-  "interview.request": "An interview always waits for a person on your team to approve it on the candidate's page before any times go to the candidate.",
-  "interview.schedule": "Once an interview is approved, times are offered from your team's calendars or declared hours, and the booking goes on the calendars by itself.",
-  "interview.reschedule": "When someone on your team moves or cancels an interview, the candidate is offered new times or told, and the calendars follow by themselves. When a candidate cancels and asks for new times, they get one set automatically after the working days you choose in Settings under \"When a candidate cancels\"; you can switch that off.",
+  "interview.request": "An interview is always a person's decision: someone on your team sets it up on the candidate's page, and nothing goes to the candidate before that.",
+  "interview.schedule": "Once a person sets the date and time, the candidate is emailed and it goes on any connected calendar by itself. With hours or a calendar connected, you can let the candidate pick from your free times instead.",
+  "interview.reschedule": "When someone on your team moves or cancels an interview, the candidate is told and the calendars follow by themselves. When a candidate cancels and asks for new times, and your team has hours or a calendar to offer them from, they get one set automatically after the working days you choose in Settings under \"When a candidate cancels\"; you can switch that off.",
 };
 
 /** The product does it today: a setting to choose, or work it does the same way for everyone. The rest are planned. */

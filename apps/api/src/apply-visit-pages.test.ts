@@ -9,7 +9,7 @@ import { CHAT_WRAP_QUESTION } from "@ros/agents";
 import { CHAT_WRAP_KEY } from "@ros/core";
 import { SCREEN_BUSY_JS } from "./pages/candidate";
 import { CHAT_BUSY_NOTE } from "./pages/conversation-frame";
-import { pastTheWaitingRoom, statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
+import { pastTheWaitingRoom, statusTokenFor, useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * Wave E's candidate pages over HTTP, the way a browser without JavaScript uses them (plan E1, E2, E3, E4, E5, E7, E8,
@@ -108,6 +108,8 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     const co = (await (await json("POST", "/api/v1/companies", { name: "Visit Dental", vertical: "dental", sizeBand: "20-49", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     companyId = co.id;
     slug = co.slug;
+    // More people apply to this one job here than Free's five, and each of them goes on to the AI interview: a plan with no candidate limit.
+    await usePlan(container, companyId, "ultra");
     // A pilot company: ITS switched the one-visit flow on for it.
     await useOneVisitApplyFlow(container, companyId);
     const s = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };

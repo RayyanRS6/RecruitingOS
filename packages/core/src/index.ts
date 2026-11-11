@@ -11,6 +11,8 @@ export * from "./dedupe";
 export * from "./escalations";
 export * from "./compliance";
 export * as entitlements from "./entitlements";
+export * from "./ai-credit";
+export * from "./candidate-lock";
 export { uuidv7, randomToken } from "@ros/db";
 export * from "./notifications";
 export * from "./contact-hours";

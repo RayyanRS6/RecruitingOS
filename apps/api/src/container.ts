@@ -2,7 +2,7 @@ import { createRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
 import { cancelInterviewEvents } from "@ros/agents";
 import { eq } from "drizzle-orm";
 import { communications, createDb, inspectConnectionRole, migrate, migrationStatus, postings, problemsWithConnectionRole, roles, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
-import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, SYSTEM_ACTOR, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
+import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, SYSTEM_ACTOR, countActiveAdmins, createAiCreditGate, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { AI_HOLD_CHECK_JOB_KIND, aiNoticeSentSignal, createEngine, type WorkflowEngine } from "@ros/workflows";
 import { ALERT_EMAIL_JOB_KIND, ESCALATION_QUEUE_EMAIL_JOB_KIND, REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setAlertEmails, setEscalationQueueEmails, setEventSink, setNotifyClock } from "@ros/core";
@@ -139,6 +139,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       },
       { now: opts.now },
     );
+    // The AI credit: the one gate on every model call a company makes (packages/core/src/ai-credit.ts), on the engine's clock, as the periods it reads are.
+    ai.credit = createAiCreditGate({ now: () => engine.clock() });
     // The outbox stamps its send jobs on the engine's clock, so a message queued "now" is due on the clock that runs the queue.
     integrations.clock = () => engine.clock();
     // So does the job that writes an email alert for an update (plan B3).

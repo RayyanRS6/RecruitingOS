@@ -20,6 +20,14 @@ export function requestState(status: string): RequestState {
 
 export const STATE_WORDS: Record<RequestState, string> = { waiting: "Waiting for a recruiter", working: "A recruiter is on it", answered: "Answered", cancelled: "Cancelled" };
 
+/** A request's state on the team's list. A talk about the plan is with ITS: no recruiter is working on their hiring. */
+export function requestStateWords(r: Pick<RecruiterRequestView, "status"> & Partial<Pick<RecruiterRequestView, "topic">>): string {
+  const state = requestState(r.status);
+  if (r.topic === "plan" && state === "waiting") return "Waiting for ITS";
+  if (r.topic === "plan" && state === "working") return "ITS is on it";
+  return STATE_WORDS[state];
+}
+
 const closedAt = (r: RecruiterRequestView) => Date.parse(r.resolvedAt ?? r.createdAt);
 const dueAt = (r: RecruiterRequestView) => (r.slaDueAt ? Date.parse(r.slaDueAt) : Number.POSITIVE_INFINITY);
 
@@ -34,8 +42,9 @@ export function splitRequests(rows: readonly RecruiterRequestView[], now: Date):
   return { current: [...open, ...closed.filter((r) => closedAt(r) >= since)], older: closed.filter((r) => closedAt(r) < since) };
 }
 
-/** What the request is about: one candidate (by name, while the record has one), one role, or all of the hiring. */
-export function aboutWords(r: Pick<RecruiterRequestView, "scope" | "roleTitle" | "candidateName">): string {
+/** What the request is about: the plan, one candidate (by name, while the record has one), one role, or all of the hiring. */
+export function aboutWords(r: Pick<RecruiterRequestView, "scope" | "roleTitle" | "candidateName"> & Partial<Pick<RecruiterRequestView, "topic">>): string {
+  if (r.topic === "plan") return "Your plan";
   if (r.scope === "application") return r.candidateName ? `${r.candidateName}${r.roleTitle ? `, for ${r.roleTitle}` : ""}` : `A candidate${r.roleTitle ? ` for ${r.roleTitle}` : ""}`;
   if (r.scope === "role") return r.roleTitle ?? "One role";
   return "All of your hiring";
@@ -80,7 +89,8 @@ export function threadHeading(entry: EscalationThreadEntry): string {
     case "question": return entry.raisedBy ? RAISED_BY_WORDS[entry.raisedBy] : entry.by ? `${entry.by} asked` : "The request";
     case "answer": return `${entry.by ?? "The recruiter"} answered`;
     case "reopen": return `${entry.by ?? "Your team"} reopened it`;
-    default: return entry.side === "recruiter" ? `${entry.by ?? "The recruiter"} wrote` : `${entry.by ?? "Your team"} added a note`;
+    // The candidate the request is about wrote back: the line says so, and their words stay on the application's own thread.
+    default: return entry.raisedBy === "candidate" ? "The candidate wrote back" : entry.side === "recruiter" ? `${entry.by ?? "The recruiter"} wrote` : `${entry.by ?? "Your team"} added a note`;
   }
 }
 
@@ -89,8 +99,7 @@ export function threadHeading(entry: EscalationThreadEntry): string {
  * A request Recruiting OS or a candidate raised says so instead of "The customer asked".
  */
 export function queueThreadHeading(entry: EscalationThreadEntry): string {
-  if (entry.side === "recruiter") return threadHeading(entry);
-  if (entry.kind === "question" && entry.raisedBy) return RAISED_BY_WORDS[entry.raisedBy];
+  if (entry.side === "recruiter" || entry.raisedBy === "candidate" || (entry.kind === "question" && entry.raisedBy)) return threadHeading(entry);
   return entry.kind === "question" ? "The customer asked" : entry.kind === "reopen" ? "The customer reopened it" : "The customer added a note";
 }
 
@@ -112,12 +121,14 @@ export type HandedOverDraft = {
  * Where "Open in the customer's workspace" goes: the draft in the job builder when the request is about one, the
  * candidate's panel when it is about one candidate (on the AI interview tab when the candidate asked for a person during the
  * screening conversation, where the call notes go; plan E3), the role's candidates when it is about a role, and Today
- * otherwise.
+ * otherwise. `message`: "Write to the candidate", their panel with its message box open.
  */
-export function workspaceHref(e: { roleId?: string | null; applicationId?: string | null; kind?: string; contextSnapshot?: Record<string, unknown> }): string {
+export function workspaceHref(e: { roleId?: string | null; applicationId?: string | null; kind?: string; contextSnapshot?: Record<string, unknown>; message?: boolean; callNotesOnAiInterview?: boolean | null }): string {
   const draft = (e.contextSnapshot as { intakeSession?: { id?: unknown } | null } | undefined)?.intakeSession;
   if (draft && typeof draft.id === "string") return `/roles/new?session=${encodeURIComponent(draft.id)}`;
-  if (e.roleId && e.applicationId) return `/roles/${e.roleId}/talent?open=${encodeURIComponent(e.applicationId)}${e.kind === CANDIDATE_ASKED_FOR_PERSON ? "&tab=screen" : ""}`;
+  // Past screening the AI interview tab takes no notes: the call's notes go on the Notes tab (10 November 2026).
+  const callTab = e.callNotesOnAiInterview === false ? "&tab=notes" : "&tab=screen";
+  if (e.roleId && e.applicationId) return `/roles/${e.roleId}/talent?open=${encodeURIComponent(e.applicationId)}${e.message ? "&message=1" : e.kind === CANDIDATE_ASKED_FOR_PERSON ? callTab : ""}`;
   return e.roleId ? `/roles/${e.roleId}/talent` : "/";
 }
 
@@ -126,6 +137,40 @@ export const CANDIDATE_ASKED_FOR_PERSON = "candidate_issue";
 
 /** Said on such a request once accepted: what to do after the call, and that the notes are never the candidate's words. */
 export const CALL_NOTES_HINT = "The candidate asked to talk to a person instead of the assistant. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the AI interview tab. Your notes finish the AI interview so the scorecard is written; they are kept as yours, never as the candidate's own words.";
+
+/** The same, about someone the company cannot read: they never had the assistant, and nothing is scored or started while locked. */
+export const LOCKED_CALL_NOTES_HINT = "This candidate wrote to us or asked for a person, and the company cannot read them. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the AI interview tab. Your notes are kept on their Notes tab as yours, never as the candidate's own words. Nothing scores them, and no AI interview or interview starts, while they are locked.";
+
+/**
+ * The same once the candidate is past screening, or their AI interview is closed (10 November 2026): the AI interview tab
+ * has no notes form then (the route answers `not_screening` or `screen_closed`), so the call goes on the Notes tab.
+ */
+export const NOTES_TAB_CALL_HINT = "The candidate asked to talk to a person instead of the assistant. Call or email them, then open the candidate in the customer's workspace and add what you learned on their Notes tab. It is kept as your note, never as the candidate's own words.";
+
+/**
+ * The hint on a request from a candidate who asked for a person, true wherever they are: someone locked has their own, and
+ * one past screening (`callNotesOnAiInterview` false, GET /escalations/:id) is sent to the Notes tab, never to a form that is
+ * not there. An older answer without the field reads as before.
+ */
+export function callNotesHint(e: { lockedForCompany?: boolean; callNotesOnAiInterview?: boolean | null }): string {
+  if (e.lockedForCompany) return LOCKED_CALL_NOTES_HINT;
+  return e.callNotesOnAiInterview === false ? NOTES_TAB_CALL_HINT : CALL_NOTES_HINT;
+}
+
+/** The button under that hint: the tab the hint names. */
+export function callNotesButton(e: { lockedForCompany?: boolean; callNotesOnAiInterview?: boolean | null }): string {
+  return !e.lockedForCompany && e.callNotesOnAiInterview === false ? "Open the candidate's Notes tab" : "Open the candidate's AI interview tab";
+}
+
+/**
+ * The answer on a request about someone the company cannot read: nobody there reads it while the candidate is locked (the API
+ * writes them no notice, and they see no thread), but a change of plan that opens the candidate opens the request to the team in
+ * full, answer and notes included, so the words never promise more. It does not reach the candidate either, who is written to
+ * from their panel.
+ */
+export const LOCKED_ANSWER_LABEL = "What you did or advised (not sent to the candidate; the company can't read it while the candidate is locked, but can if an upgrade opens them)";
+export const LOCKED_NOTE_TOAST = "Kept on this request, not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel.";
+export const LOCKED_RESOLVED_TOAST = "Resolved. Your note is not sent to the candidate. The company can't read it while the candidate is locked, but can if an upgrade opens them. To reach the candidate, write to them from their panel before your access ends in 24 hours.";
 
 const PAY_PER: Record<string, string> = { hourly: "an hour", salary: "a year" };
 const money = (n: unknown) => (typeof n === "number" ? `$${n.toLocaleString("en-US")}` : null);
@@ -160,8 +205,9 @@ export function latestAnswer(thread: readonly EscalationThreadEntry[]): Escalati
  * What a person may do with a request now: add a note while it is open, reopen it once answered. An ITS recruiter
  * inside the company does neither here; they answer from the recruiter queue.
  */
-export function requestActions(r: Pick<RecruiterRequestView, "status">, opts: { staff: boolean }): { note: boolean; reopen: boolean } {
-  if (opts.staff) return { note: false, reopen: false };
+export function requestActions(r: Pick<RecruiterRequestView, "status" | "locked">, opts: { staff: boolean }): { note: boolean; reopen: boolean } {
+  // About someone the team cannot read (Rule 3): it stays with ITS, and the API refuses both.
+  if (opts.staff || r.locked) return { note: false, reopen: false };
   const s = requestState(r.status);
   return { note: s === "waiting" || s === "working", reopen: s === "answered" };
 }
@@ -174,7 +220,9 @@ export const REOPEN_MIN = 5;
  * still take it (they still work for ITS, and nobody here ended their access to it); otherwise to the ITS queue. The
  * reply after the reopen says which it was.
  */
-export function reopenHint(recruiterName: string | null, access: string, days: number): string {
+export function reopenHint(recruiterName: string | null, access: string | null, days: number): string {
+  // A talk about the plan gives whoever has it no access, so nothing here says it does.
+  if (access === null) return "Reopening sets a new reply-by time, and it goes back to ITS.";
   const where = recruiterName ? `It goes back to ${recruiterName}, who answered, when they can still take it; otherwise to the ITS queue.` : "It goes back to the ITS queue.";
   return `Reopening sets a new reply-by time. ${where} Whoever has it then can see ${access} for up to ${days} days, or until a day after it is resolved again. That access is recorded in your activity, your team is told, and an owner or admin can end it in Settings.`;
 }

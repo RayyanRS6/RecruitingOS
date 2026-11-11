@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, PostingTaskKind } from "@ros/contracts";
 import { events, recruiterEscalations, type Queryable } from "@ros/db";
+import { ITS_WORK, check } from "./entitlements";
 import { createEscalation, recordEscalationAnswer } from "./escalations";
 import { emit } from "./events";
 
@@ -25,10 +26,25 @@ export function isPostingTask(kind: string): kind is PostingTaskKind {
 /** A request still waiting on someone. */
 const OPEN = ["open", "claimed", "in_progress"];
 
-/** Who posts on the boards for a company: ITS by default, the team itself once it chose to ("self"). */
+/** Who the company's own setting says posts on the boards: ITS by default, the team itself once it chose to ("self"). */
 export function boardPostingOf(settings: unknown): "its" | "self" {
   const v = settings && typeof settings === "object" ? (settings as { boardPosting?: unknown }).boardPosting : undefined;
   return v === "self" ? "self" : "its";
+}
+
+/** Whether the company's plan includes ITS staff time on posting (`its_work`: 0 means none; no row means no limit, as `check` reads it). */
+export async function planIncludesItsPosting(q: Queryable, companyId: string): Promise<boolean> {
+  return (await check(q, companyId, ITS_WORK)).ok;
+}
+
+/**
+ * Who really posts on the boards for a company (the plans of 5 November 2026, Rule 6): the team, when its plan has no ITS
+ * staff time; otherwise what the company's own setting says. Every server site that opens ITS work or says who posts
+ * reads this, never the setting alone. A plan moved up lifts it, and a choice the company made stays theirs: nothing is
+ * written to its settings here, so a move down and back up changes nothing they chose.
+ */
+export async function whoPostsBoards(q: Queryable, companyId: string, settings: unknown): Promise<"its" | "self"> {
+  return (await planIncludesItsPosting(q, companyId)) ? boardPostingOf(settings) : "self";
 }
 
 /** What a task asks, in a few words: "Post the job on LinkedIn". */

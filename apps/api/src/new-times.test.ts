@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { activeFollowUpsFor, anonymizeCandidate, cancelledView, entitlements, grantStaffAccess } from "@ros/core";
 import { newTimesDayWords } from "@ros/agents";
-import { applications, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, recruiterEscalations, takeovers, users, withPlatform, withTenant, workflowRuns, type WaitCondition } from "@ros/db";
+import { applications, candidates, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, recruiterEscalations, takeovers, users, withPlatform, withTenant, workflowRuns, type WaitCondition } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -112,7 +112,8 @@ describe("new times for people under Cancelled", () => {
     const r = await app.request(`/careers/${companySlug}/jobs/${role}/apply`, { method: "POST", body: fd });
     expect(r.status).toBe(302);
     await container.drain();
-    const [a] = await container.db.select().from(applications).where(eq(applications.roleId, role)).orderBy(desc(applications.createdAt)).limit(1);
+    // Found by who applied, not by the newest time: the machine's clock can step back while a suite runs.
+    const [a] = await container.db.select({ id: applications.id }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, role), eq(candidates.email, email))).limit(1);
     return { id: a.id, email, name: `${first} ${last}` };
   };
   const pick = async (token: string, slotId: string) => {
@@ -522,7 +523,7 @@ describe("new times for people under Cancelled", () => {
     expect((await notes("interview.new_times_not_sent")).find((x) => x.title === "New times for Ned Ford were not sent")?.body).toContain("Nobody who ran the interview is still on your team.");
     const r = await sendNewTimes(p.id);
     expect(r.status).toBe(409);
-    expect(await r.json()).toMatchObject({ error: { code: "no_interviewers", message: "Nobody who ran that interview is still on your team. Approve a new interview from their page and choose the interviewers." } });
+    expect(await r.json()).toMatchObject({ error: { code: "no_interviewers", message: "Nobody who ran that interview is still on your team. Set a date and time from their page and choose the interviewers." } });
   });
 
   it("the team cancelling the reopened interview, here by removing its only interviewer, takes them out of Cancelled, and every page shows the team's cancellation, never 'You cancelled'", async () => {

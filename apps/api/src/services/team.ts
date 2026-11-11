@@ -2,7 +2,7 @@ import { and, asc, count, eq, inArray } from "drizzle-orm";
 import { seatsFullLine, type Actor, type InviteMember, type UpdateMember } from "@ros/contracts";
 import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, createInvitation, disconnectCalendar, emit, entitlements, invitationLink, invitationState, isRecentlyAuthenticated, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeInvitation, revokeSessionsForCompany, roleInWords, setActiveCompany, type InvitationRow, type SessionContext } from "@ros/core";
 import { queueCommunication } from "@ros/agents";
-import { applications, companies, interviewParticipants, interviews, invitations, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
+import { applications, communications, companies, interviewParticipants, interviews, invitations, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
@@ -27,15 +27,35 @@ export async function listTeam({ tenant, container }: Pick<Team, "tenant" | "con
   return rows.filter((r) => r.status === "active");
 }
 
+/**
+ * Where an invitation's email stands, for the row of "Invited, not yet in" (6 November 2026): on its way, sent, or failed,
+ * as `emailState` (`email` is the invited address). Read from the email of the link that works now (`invite:<id>:<token>`),
+ * so a fresh link's email is the one that counts; a link made to be copied has no email, and says nothing.
+ */
+export type InvitationEmail = "on_its_way" | "sent" | "failed";
+const INVITATION_EMAIL: Record<string, InvitationEmail> = { queued: "on_its_way", sending: "on_its_way", held: "on_its_way", sent: "sent", delivered: "sent", opened: "sent", clicked: "sent", failed: "failed", bounced: "failed", complained: "failed", unknown: "failed", cancelled: "failed" };
+
+/** The key of the email that carries an invitation's link as it is now. */
+const invitationEmailKey = (inv: Pick<InvitationRow, "id" | "tokenHash">) => `invite:${inv.id}:${inv.tokenHash.slice(0, 12)}`;
+
 export async function listInvitations({ tenant, container }: Pick<Team, "tenant" | "container">) {
   const now = container.engine.clock();
-  const rows = await withTenant(container.db, tenant.companyId, (tx) => listPendingInvitations(tx, tenant.companyId, now));
-  return rows.map((r) => publicInvitation(r, now));
+  return withTenant(container.db, tenant.companyId, async (tx) => {
+    const rows = await listPendingInvitations(tx, tenant.companyId, now);
+    const keys = rows.map(invitationEmailKey);
+    const sent = keys.length ? await tx.select({ key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, keys)) : [];
+    const status = new Map(sent.map((s) => [s.key, s.status]));
+    return rows.map((r) => ({ ...publicInvitation(r, now), emailState: INVITATION_EMAIL[status.get(invitationEmailKey(r)) ?? ""] ?? null }));
+  });
 }
 
-/** The link only a development stand-in may show on screen; production never returns it. */
-function devLinkOf(container: Container, link: string): { devLink?: string } {
-  return container.env.NODE_ENV !== "production" && container.integrations.email.id === "fake-email" ? { devLink: link } : {};
+/**
+ * The invitation's link, for the person who sent it (6 November 2026): they can copy it and send it themselves, because
+ * the email may not arrive. It works only for the invited address, which the sign-in proves, and lasts seven days, so it
+ * opens nothing for anyone else. `devLink` is the same link under its older name, for the development pages and tests.
+ */
+function linkOf(container: Container, link: string): { link: string; devLink?: string } {
+  return { link, ...(container.env.NODE_ENV !== "production" && container.integrations.email.id === "fake-email" ? { devLink: link } : {}) };
 }
 
 async function companyNameOf(tx: Tx, companyId: string): Promise<string> {
@@ -88,10 +108,10 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
   const result = await withTenant(container.db, tenant.companyId, async (tx) => {
     const [member] = await tx.select({ id: memberships.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.status, "active"), eq(users.email, email))).limit(1);
     if (member) throw new HttpError(409, "already_member", `${email} is already on your team.`);
-    // The plan's people (founder decision L-02 B: 3 on the Trial plan), counting invitations not yet answered; an open
-    // invitation to this same address is replaced below, so it is not counted twice. Taken under the company's seat lock.
+    // The plan's people, counting invitations not yet answered; an open invitation to this same address is replaced below,
+    // so it is not counted twice. Taken under the company's seat lock.
     const seats = await entitlements.seatRoom(tx, tenant.companyId, { now, exceptEmail: email });
-    if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit), { seats: { used: seats.used, limit: seats.limit } });
+    if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit, seats.planKey), { seats: { used: seats.used, limit: seats.limit } });
     // A new invitation replaces any open one for the same address (core createInvitation), which withdraws it: the same
     // ranks as withdrawing it directly apply, so HR cannot quietly replace an admin or owner invitation with a lower one.
     const open = await tx.select({ role: invitations.role }).from(invitations).where(and(eq(invitations.companyId, tenant.companyId), eq(invitations.email, email), eq(invitations.status, "pending")));
@@ -102,7 +122,7 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
     return { row: created.row, link, replaced: created.replaced.length };
   });
   await container.kick();
-  return { ok: true as const, invitation: publicInvitation(result.row, now), replaced: result.replaced, ...devLinkOf(container, result.link) };
+  return { ok: true as const, invitation: publicInvitation(result.row, now), replaced: result.replaced, ...linkOf(container, result.link) };
 }
 
 /**
@@ -127,8 +147,11 @@ function assertRecentSignIn(team: Team): void {
   throw new HttpError(403, "reauth_required", "To make someone an admin or an owner, confirm it's you first: sign in with your provider again, then try once more.", { freshSessionMinutes: FRESH_SESSION_MS / 60_000, reauthMinutes: REAUTH_WINDOW_MS / 60_000 });
 }
 
-/** A fresh link (the old one stops working) and another seven days; the email goes out again. */
-export async function resendMemberInvitation(team: Team, input: { invitationId: string; inviterName: string }) {
+/**
+ * A fresh link (the old one stops working) and another seven days; the email goes out again. `email: false` (6 November
+ * 2026): the same fresh link with no email, for the person to copy and send themselves when the email did not arrive.
+ */
+export async function resendMemberInvitation(team: Team, input: { invitationId: string; inviterName: string; email?: boolean }) {
   const { container, tenant, actor } = team;
   const now = container.engine.clock();
   const result = await withTenant(container.db, tenant.companyId, async (tx) => {
@@ -137,18 +160,19 @@ export async function resendMemberInvitation(team: Team, input: { invitationId: 
     const [lapsed] = await tx.select({ email: invitations.email, status: invitations.status, expiresAt: invitations.expiresAt }).from(invitations).where(and(eq(invitations.id, input.invitationId), eq(invitations.companyId, tenant.companyId))).limit(1);
     if (lapsed && invitationState(lapsed, now) === "expired") {
       const seats = await entitlements.seatRoom(tx, tenant.companyId, { now, exceptEmail: lapsed.email });
-      if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit), { seats: { used: seats.used, limit: seats.limit } });
+      if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit, seats.planKey), { seats: { used: seats.used, limit: seats.limit } });
     }
-    const rotated = await resendInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now });
+    const byEmail = input.email !== false;
+    const rotated = await resendInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now, ...(byEmail ? {} : { reason: "a new link to copy and send by hand; no email" }) });
     if (!rotated) throw new HttpError(404, "not_found", "No open invitation with that id.");
     // A fresh link to an owner or admin invitation is for those who may grant it; the refusal rolls the rotation back, so the old link still works.
     assertMayInviteAs(team, rotated.row.role);
     const companyName = await companyNameOf(tx, tenant.companyId);
-    const link = await queueInvitationEmail(tx, team, { invitation: rotated.row, token: rotated.token, companyName, inviterName: input.inviterName, again: true });
+    const link = byEmail ? await queueInvitationEmail(tx, team, { invitation: rotated.row, token: rotated.token, companyName, inviterName: input.inviterName, again: true }) : invitationLink(container.env.APP_BASE_URL, rotated.token);
     return { row: rotated.row, link };
   });
   await container.kick();
-  return { ok: true as const, invitation: publicInvitation(result.row, now), ...devLinkOf(container, result.link) };
+  return { ok: true as const, invitation: publicInvitation(result.row, now), emailed: input.email !== false, ...linkOf(container, result.link) };
 }
 
 /**
@@ -278,7 +302,7 @@ async function endMembershipInTx(tx: Tx, team: Team, input: { userId: string; ta
   }
   // An interview that counted on nobody else cannot take place and nothing adds an interviewer to an existing one, so
   // it is cancelled through the one cancellation path: its scheduling run ends, a candidate with a booked time is
-  // told, and the candidate goes back to "Interview approved" for the team to approve a new interview. An interview
+  // told, and the candidate goes back to "Interview to set up" for the team to set a new date and time. An interview
   // with other interviewers goes ahead with them.
   const cancelled: Array<{ title: string; candidateTold: boolean }> = [];
   const continuing: string[] = [];
@@ -354,7 +378,7 @@ function removalNotice(who: string, cancelled: Array<{ title: string; candidateT
     const told = cancelled.filter((x) => x.candidateTold).length;
     // A candidate hears about it when they knew of it: a booked time, or times they were offered to pick from.
     const toldLine = told ? ` ${told === 1 ? "The candidate was" : `The ${told} candidates were`} told the interview is off.` : "";
-    parts.push(`${list(cancelled.map((x) => x.title))}: ${who} was the only interviewer, so ${one ? "that interview was" : `those ${cancelled.length} interviews were`} cancelled.${toldLine} To go on with ${one ? "the candidate" : "those candidates"}, approve a new interview with another interviewer from ${one ? "their" : "each candidate's"} page.`);
+    parts.push(`${list(cancelled.map((x) => x.title))}: ${who} was the only interviewer, so ${one ? "that interview was" : `those ${cancelled.length} interviews were`} cancelled.${toldLine} To go on with ${one ? "the candidate" : "those candidates"}, set a date and time with another interviewer from ${one ? "their" : "each candidate's"} page.`);
   }
   if (continuing.length) parts.push(`${list(continuing)}: ${continuing.length === 1 ? "goes" : "go"} ahead with the other interviewers.`);
   const title = cancelled.length

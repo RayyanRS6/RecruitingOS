@@ -82,7 +82,7 @@ export function chatItemSettled(item: Pick<ChatItem, "state">): boolean {
  * covers it, and so does any reply to a yes-or-no question (`ladder` false). A vague one gets one push for specifics,
  * then counts as covered (the team reads the words). "No" / "I haven't" climbs the ladder: the analog ("not done
  * that? something similar from your own work"), then, for a gap, the smaller version ("even a small moment?"), then
- * the item is settled as not known: never a "no" for a skill, and never held against anyone.
+ * the item is settled as not known: never a "no" for a skill, and never read as one.
  */
 export type ChatMove = "push" | "analog" | "smaller" | "covered" | "unknown";
 export function chatNextMove(item: Pick<ChatItem, "kind" | "step" | "pushes">, reading: ChatReading, ladder: boolean): ChatMove {

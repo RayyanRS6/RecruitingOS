@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
-import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunOutcome, type ScreenContext } from "@ros/ai";
+import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, errorForLog, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, scoredSkill, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, companies, documents, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
@@ -993,14 +993,30 @@ export async function prepareScreenOpening(db: Db, ai: AiRuntime, input: { compa
   return runPromptDetached(db, ai, screenTurnPrompt, contextOf(asked, state, null), { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { applicationId: input.applicationId, turn: 0 } });
 }
 
+/**
+ * The opening of a chat by text with no model (the company's AI credit is used up): the invitation's own disclosure, which
+ * the model's opening would have said, and the first question in the job's own words. Nothing about a plan or money.
+ */
+export function openingWithoutModel(companyName: string, packet: Pick<RolePacket, "identity">, firstQuestion: string): string {
+  return `${companyName} hiring team (AI-assisted): a short AI interview for ${packet.identity.title}. Reply HUMAN for a person, STOP to opt out.\n\n${firstQuestion}`;
+}
+
 /** Phase two of the opening: writes the first assistant message onto the screen, unless one is already there. */
-export async function applyScreenOpening(q: Queryable, input: { companyId: string; screenId: string; packet: RolePacket; out: RunOutcome<ScreenTurn> | null }): Promise<ScreenOpening> {
+export async function applyScreenOpening(q: Queryable, input: { companyId: string; companyName: string; screenId: string; packet: RolePacket; out: RunOutcome<ScreenTurn> | null }): Promise<ScreenOpening> {
   const [fresh] = await q.select().from(screens).where(eq(screens.id, input.screenId)).limit(1);
   if (!fresh) return { error: "screen not found" };
   const first = fresh.transcript.find((t) => t.role === "assistant");
   if (first) return { message: first.content, aiRunId: first.aiRunId ?? null };
   if (!input.out) return { error: "no opening was prepared" };
   const out = input.out;
+  if (outOfCredit(out)) {
+    const question = nextQuestion(chatPacket(input.packet, fresh.progress), fresh.progress, answersOf(fresh));
+    if (!question) return { error: "the job has no question to open with" };
+    const message = openingWithoutModel(input.companyName, input.packet, question.question);
+    const entry: ScreenTranscriptEntry = { role: "assistant", content: message, at: new Date().toISOString(), questionKey: question.key, channel: fresh.channel as ScreenChannel, source: "system" };
+    await q.update(screens).set({ transcript: [...fresh.transcript, entry], progress: advanceProgress(fresh.progress, { ...SILENT_TURN, messageToCandidate: message, questionKey: question.key }) }).where(eq(screens.id, fresh.id));
+    return { message, aiRunId: null };
+  }
   if (!out.ok) {
     await emit(q, { type: "ai.run_failed", companyId: input.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: fresh.id }, payload: { reason: out.reason, error: out.error, turn: 0 } });
     return { error: out.error };
@@ -1250,6 +1266,40 @@ export function chatCodeLead(tapped: string | null, kept = false): string {
 }
 
 /**
+ * A turn with no model, when the company's AI credit is used up, worked out in code for both kinds of chat (a first
+ * application's and a repeat submission's detached one, which must read the same). Whatever the candidate typed, they are
+ * never stuck and never told: no words about a plan or credit, and they end on Review & send as any chat does.
+ * - A reply that only asks something or only shows confusion (`onlyQuestions`, `seemsConfused`) is no answer: the question
+ *   again in the job's own words, with the offer of a person, as a confused candidate gets.
+ * - Any other reply is the answer to the current question: every usable reply since it was asked, as `enforceTurnRules`
+ *   keeps them (the caller records it through `redactProtected`), then the next question in the job's own words, after a
+ *   plain "Thanks." (a tap's `chatCodeLead` says the words back, which would echo anything typed). A plain "No" to a gap in
+ *   a planned chat records nothing and settles it as not known, as its ladder does in the end: never a "no" for a skill.
+ * - No next question: the end of the questions (`done`).
+ * Null with no current question: the caller ends the chat as `endAtTurnCap` does.
+ */
+export function turnWithoutModel(input: { packet: RolePacket; progress: ScreenProgress; answers: Record<string, string>; transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ScreenTurn; move: { key: string; move: ChatMove } | null } | null {
+  const { packet, progress, answers, transcript, latest } = input;
+  const current = progress.currentQuestionKey;
+  const question = currentQuestion(packet, progress);
+  if (!current || !question) return null;
+  const said = usableReplies(replyListSince(transcript, current)).join(" ");
+  if (!said || seemsConfused(latest) || onlyQuestions(latest)) {
+    const message = progress.chat ? `${question.question}\n\n${CONFUSED_OFFER}` : `${question.question} ${CONFUSED_OFFER}`;
+    return { turn: { ...SILENT_TURN, messageToCandidate: message, sentiment: seemsConfused(latest) ? "confused" : "fine" }, move: null };
+  }
+  const item = progress.chat?.items.find((i) => i.key === current) ?? null;
+  const unknown = item?.kind === "gap" && saysNotDone(latest);
+  const answerRecorded: ScreenTurn["answerRecorded"] = unknown ? null : { questionKey: current, answer: said, complete: true };
+  const move = item ? { key: current, move: (unknown ? "unknown" : "covered") as ChatMove } : null;
+  // The question being asked is among those asked already, so this is the one after it.
+  const next = nextQuestion(packet, progress, answersOf({ answers, progress }));
+  if (!next) return { turn: { ...SILENT_TURN, messageToCandidate: `Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.`, answerRecorded, done: true }, move };
+  const lead = unknown ? CHAT_CALM_LINE : "Thanks.";
+  return { turn: { ...SILENT_TURN, messageToCandidate: progress.chat ? `${lead}\n\n${next.question}` : `${lead} Next: ${next.question}`, questionKey: next.key, answerRecorded }, move };
+}
+
+/**
  * The conversation reached `modelTurnCap` with the candidate's latest message already recorded: it ends the way the end
  * of the questions does, in code, without calling the model again. On the web in the one-visit flow the candidate
  * checks their answers next (E10), where they can change any of them, answer one still open, and press Send, none of
@@ -1355,7 +1405,7 @@ export async function answerWithdrawPrompt(q: Queryable, deps: ScreenDeps, input
   await transition(q, { applicationId: app.id, companyId: company.id, to: "withdrawn", by: "candidate", actor: candidateActor, reason: "candidate withdrew during screening", correlationId: screen.workflowRunId });
   await emit(q, { type: "application.withdrawn", companyId: company.id, actor: candidateActor, subject: { type: "application", id: app.id }, payload: { during: "screen", channel: input.channel }, correlationId: screen.workflowRunId });
   await deps.onWithdrawn?.(q, { companyId: company.id, applicationId: app.id, actor: candidateActor });
-  await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the AI interview, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  await notify(q, { companyId: company.id, about: app.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the AI interview, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdrawn:${screen.id}`, templateKey: "screen_withdrawn", disclosureIncluded: false });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { withdrawn: true } });
   return msg;
@@ -1371,7 +1421,8 @@ export function withdrawnMessage(roleTitle: string): string {
  * reply, and hands over to a person or closes the conversation when the turn says so. On a model failure the candidate
  * gets an honest holding message; two failures in a row hand the conversation to a person, or, for the conversation
  * offered with the application, pause it until the assistant works again (E5). A paused conversation retried by the
- * workflow resumes here.
+ * workflow resumes here. With no AI credit left nothing failed: no failure is counted, nobody is told, nothing pauses or
+ * goes to a person, a paused conversation opens again, and the chat carries on in the job's own words (`turnWithoutModel`).
  */
 export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: TurnInput, pending: Extract<BegunTurn, { kind: "pending" }>, out: RunOutcome<ScreenTurn>): Promise<TurnResult> {
   const { app, candidate, company, packet } = pending.b;
@@ -1379,7 +1430,7 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
   const [fresh] = await q.select().from(screens).where(eq(screens.id, screen.id)).limit(1);
   if (!fresh) return { kind: "error", message: "This conversation is no longer available." };
   const b: ScreenBundle = { ...pending.b, screen: fresh };
-  if (!out.ok) {
+  if (!out.ok && !outOfCredit(out)) {
     // A retry of a paused conversation that failed again: it stays paused, and the workflow tries later.
     if (fresh.status === "paused") return { kind: "error", message: pausedMessage(company.name) };
     const failures = (fresh.progress.failures ?? 0) + 1;
@@ -1396,8 +1447,17 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     return { kind: "error", message: holding };
   }
 
-  // A Kanvis-style chat is held to its own rules too (Wave S7), and the step it took moves its plan on.
-  const enforced = fresh.progress.chat ? enforceChatTurn(out.output, packet, fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: input.message }) : { turn: enforceTurnRules(out.output, packet, fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: input.message }), move: null };
+  // A Kanvis-style chat is held to its own rules too (Wave S7), and the step it took moves its plan on. With no AI credit
+  // left the turn is worked out in code; with nothing being asked, the chat ends as it does at the cap.
+  const enforced = out.ok
+    ? fresh.progress.chat ? enforceChatTurn(out.output, packet, fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: input.message }) : { turn: enforceTurnRules(out.output, packet, fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: input.message }), move: null }
+    : turnWithoutModel({ packet, progress: fresh.progress, answers: fresh.answers, transcript: fresh.transcript, latest: input.message });
+  if (!enforced) {
+    const open = fresh.status === "paused" ? await reopenPaused(q, fresh) : fresh;
+    return endAtTurnCap(q, deps, { ...b, screen: open }, { channel: input.channel, actor: input.actor });
+  }
+  // The run that wrote this turn: none when it was worked out in code, which counts toward no cap.
+  const aiRunId = out.ok ? out.runId : undefined;
   let turn = enforced.turn;
   // The model never states a response time; the accurate business-hours expectation is appended in code (founder decision F12).
   if (turn.humanRequested && !/business/i.test(turn.messageToCandidate)) turn = { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(nowOf(deps), await loadBusinessCalendar(q))}.` };
@@ -1410,15 +1470,14 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     else answers[turn.answerRecorded.questionKey] = recorded;
   }
   if (fresh.status === "paused") {
-    // The workflow's retry succeeded: the conversation is open again and the candidate is emailed to finish (E5).
+    // The workflow's retry succeeded, or the turn was worked out in code: the conversation is open again and the candidate is emailed to finish (E5).
     progress = { ...progress, pausedAt: undefined };
-    await q.update(screens).set({ status: "in_progress" }).where(eq(screens.id, screen.id));
-    await emit(q, { type: "screen.resumed", companyId: company.id, actor: { kind: "system", id: "screening" }, subject: { type: "screen", id: screen.id }, payload: { pausedAt: fresh.progress.pausedAt ?? null }, correlationId: screen.workflowRunId });
+    await reopenPaused(q, fresh);
   }
   if (turn.humanRequested) {
-    const reply: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: nowOf(deps).toISOString(), channel: input.channel, aiRunId: out.runId };
+    const reply: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: nowOf(deps).toISOString(), channel: input.channel, aiRunId };
     await q.update(screens).set({ transcript: [...fresh.transcript, reply], answers, progress }).where(eq(screens.id, screen.id));
-    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: { kind: "agent", id: "screening", runId: out.runId }, text: turn.messageToCandidate, idempotencyKey: `screen_turn:${screen.id}:${fresh.transcript.length + 1}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: out.runId, correlationId: screen.workflowRunId });
+    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: aiRunId ? { kind: "agent", id: "screening", runId: aiRunId } : input.actor, text: turn.messageToCandidate, idempotencyKey: `screen_turn:${screen.id}:${fresh.transcript.length + 1}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: aiRunId ?? null, correlationId: screen.workflowRunId });
     // A turn retried after an outage (E5) that hands over is told by the hand-over email instead: one email, not two.
     // One reason for every hand-over the assistant makes in the conversation, whether they asked for a person in their
     // own words or it judged they needed one: either comes from words they have not sent, so the team and the recruiter
@@ -1426,7 +1485,15 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     await requestHuman(q, deps, { screenId: screen.id, reason: HANDED_TO_A_PERSON, actor: input.actor, reply: null, replyChannel: input.channel, confirmByEmail: fresh.status !== "paused" });
     return { kind: "reply", message: turn.messageToCandidate, done: false, humanRequested: true };
   }
-  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: fresh.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId, closing: turn.done ? turn.messageToCandidate : null });
+  const closing = !turn.done ? null : out.ok ? turn.messageToCandidate : `Thank you, ${candidate.firstName}.`;
+  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: fresh.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId, closing });
+}
+
+/** A paused conversation open again (E5), with the event that says so; the caller writes its progress. */
+async function reopenPaused(q: Queryable, screen: ScreenRow): Promise<ScreenRow> {
+  await q.update(screens).set({ status: "in_progress" }).where(eq(screens.id, screen.id));
+  await emit(q, { type: "screen.resumed", companyId: screen.companyId, actor: { kind: "system", id: "screening" }, subject: { type: "screen", id: screen.id }, payload: { pausedAt: screen.progress.pausedAt ?? null }, correlationId: screen.workflowRunId });
+  return { ...screen, status: "in_progress", progress: { ...screen.progress, pausedAt: undefined } };
 }
 
 /**
@@ -1476,7 +1543,7 @@ export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { scre
   await createEscalation(q, { companyId: company.id, roleId: app.roleId, applicationId: app.id, kind: "candidate_issue", summaryOrigin: byCandidate ? "candidate" : "system", summary: byCandidate ? undefined : screeningStoppedSummary(!!app.roleId), question: `${candidate.firstName} ${candidate.lastName} needs a person during the ${packet.identity.title} screening (${input.reason}). Please reach out by ${candidate.phone ? "phone or " : ""}email and finish the screen.`, requestedBy: input.actor, workflowRunId: screen.workflowRunId });
   // Their answers so far were never sent, so neither the team nor the recruiter reads them (9 October 2026): the
   // recruiter calls and adds notes from the call.
-  await notify(q, { companyId: company.id, kind: "screen.human_requested", title: `${candidate.firstName} asked for a person`, body: `During the ${packet.identity.title} screening. A recruiter will contact them and add notes from the call. Anything they typed before asking was not sent, so it stays private. You can also reply to them directly.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  await notify(q, { companyId: company.id, about: app.id, kind: "screen.human_requested", title: `${candidate.firstName} asked for a person`, body: `During the ${packet.identity.title} screening. A recruiter will contact them and add notes from the call. Anything they typed before asking was not sent, so it stays private. You can also reply to them directly.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.reply && input.replyChannel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: input.reply, idempotencyKey: `screen_human:${screen.id}`, templateKey: "screen_human", disclosureIncluded: false });
   const textSaidWhen = !!input.reply && input.replyChannel === "sms";
   if (byCandidate && input.confirmByEmail !== false && !textSaidWhen && candidate.email) {
@@ -1505,7 +1572,7 @@ export async function declineConversation(q: Queryable, deps: ScreenDeps, input:
   await entitlements.record(q, company.id, entitlements.PERSON_REQUESTS, 1, "request", { screenId: screen.id, choice: "send_without" });
   const [cur] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, app.id)).limit(1);
   if (cur && ["screen_invited", "screening"].includes(cur.stage)) await transition(q, { applicationId: app.id, companyId: company.id, to: "triaged", by: "system", actor: input.actor, reason: "sent without the AI interview", correlationId: screen.workflowRunId });
-  await notify(q, { companyId: company.id, kind: "screen.declined_by_candidate", title: `${candidate.firstName} ${candidate.lastName} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  await notify(q, { companyId: company.id, about: app.id, kind: "screen.declined_by_candidate", title: `${candidate.firstName} ${candidate.lastName} sent their application without the AI interview`, body: `They chose not to do the AI interview for ${packet.identity.title}. Nobody is declined for it; their score is from the résumé alone. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { declined: true } });
   return { message: msg };
 }
@@ -1835,7 +1902,8 @@ export function scorecardInput(ctx: ScreenContext, identity: ScoringIdentity): {
  * Read `SCORECARD_READINGS` times side by side, like the résumé (known bugs 20 and 106: one reading overrode the
  * résumé's findings and moved the score run to run), and the middle answer of each finding kept (`scorecardReadings`).
  * A reading lost to an outage is asked once more; one still lost fails the step, which the engine retries. Every run is
- * linked to the one the stored scorecard keeps (`linkReadingRuns`).
+ * linked to the one the stored scorecard keeps (`linkReadingRuns`). The readings ask the AI credit together: with no room
+ * for all of them none is made, and the `screen` run waits for credit.
  */
 export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<ScreenAssessment>> {
   const b = await withTenant(db, input.companyId, (q) => loadScreenBundle(q, input.screenId));
@@ -1843,9 +1911,11 @@ export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: st
   if (b.screen.status !== "completed") throw new Error(`a conversation the candidate did not send is never read (it is ${b.screen.status})`);
   const screen = teamScreenView(b.screen);
   const { ctx, view } = scorecardInput({ ...contextOf(b, screen, null), incomplete: null }, { firstName: b.candidate.firstName, lastName: b.candidate.lastName, email: b.candidate.email, phone: b.candidate.phone, fullName: b.app.extraction?.fullName ?? null, keep: jobWords(null, b.app.extraction) });
-  const read = (reading: number) => runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: screen.transcript.length, scoringView: SCORING_VIEW_VERSION, hidden: view.counts(), reading } });
-  const runs = await Promise.all(Array.from({ length: SCORECARD_READINGS }, (_, i) => read(i + 1)));
-  const settled = await Promise.all(runs.map((r, i) => (!r.ok && r.reason === "error" ? read(i + 1) : r)));
+  const meta = (reading: number): RunMeta => ({ companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: screen.transcript.length, scoringView: SCORING_VIEW_VERSION, hidden: view.counts(), reading } });
+  const runs = await runPromptsDetached(db, ai, screenAssessPrompt, ctx, Array.from({ length: SCORECARD_READINGS }, (_, i) => meta(i + 1)));
+  const settled = await Promise.all(runs.map((r, i) => (!r.ok && r.reason === "error" ? runPromptDetached(db, ai, screenAssessPrompt, ctx, meta(i + 1)) : r)));
+  const noCredit = settled.find(outOfCredit);
+  if (noCredit) return noCredit;
   const outage = settled.find((r) => !r.ok && r.reason === "error");
   if (outage) return outage;
   const out = scorecardReadings(settled, view, screen, b.packet);

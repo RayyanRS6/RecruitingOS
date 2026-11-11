@@ -1,12 +1,12 @@
-import { MATCH_WEIGHT, importanceOf, matchWeightOf, previewMatch, type Importance, type MatchCriterion } from "@ros/contracts";
+import { MATCH_WEIGHT, importanceOf, matchWeightOf, previewMatch, type Importance, type WeighableRequirement } from "@ros/contracts";
 import type { BoardCard, BoardView, RolePacket } from "./api/client";
 import { READ_FROM_NOW_ON, type EditorFocus } from "./skills-form";
 
 /**
  * "Try different weights" (founder decision L-07 A, preview only): the owner, or whoever may edit the job, changes how
  * much each must-have and each scored skill counts and watches the candidates' order change. Every number here is worked
- * out in the browser from the scores GET /roles/:id/board already sent (each card's breakdown), with the same sums as
- * the real score (packages/contracts previewMatch). Nothing is read again, no AI is asked, nothing is saved, stored or
+ * out in the browser from the scores GET /roles/:id/board already sent (each card's breakdown and what is not known yet),
+ * with the same sums as the real score (packages/contracts previewMatch). Nothing is read again, no AI is asked, nothing is saved, stored or
  * sent, and the real scores and order never change. "Use these weights" opens the job's own editor, where saving makes
  * a new version of the job. Pure, so tests/web/weights-preview.test.ts checks it without a page.
  */
@@ -89,7 +89,7 @@ const hasScore = (c: BoardCard): c is Scored => typeof c.score?.score === "numbe
  */
 export function previewOrder(board: Pick<BoardView, "columns"> & Partial<Pick<BoardView, "noAiInterview" | "stillApplying">>, rows: readonly WeightRow[], levels: WeightLevels): PreviewOrder {
   const changed = new Map(changedRows(rows, levels).map((r) => [r.id, levelOf(r, levels)]));
-  const weightOf = (c: MatchCriterion): number => {
+  const weightOf = (c: WeighableRequirement): number => {
     const level = changed.get(`${c.mustHave ? "m" : "s"}:${c.key}`);
     return level === undefined ? matchWeightOf(c) : LEVEL_WEIGHT[level];
   };

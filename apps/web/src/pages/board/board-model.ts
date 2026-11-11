@@ -1,4 +1,4 @@
-import { BATCH_MAX, BOARD_COLUMN_LABEL, BoardColumn, DECLINE_REASON_LABEL, RESUME_ONLY_CHIP, RejectReason } from "@ros/contracts";
+import { BATCH_MAX, BOARD_COLUMN_LABEL, BoardColumn, DECLINE_REASON_LABEL, MATCH_FIT_LABEL, RESUME_ONLY_CHIP, RejectReason, sureBeside, type MatchFit } from "@ros/contracts";
 import { scoreBand, type Tone } from "@ros/ui";
 import type { BatchPreview, BatchResult, BoardCard, BoardView, PoolAnswer, PoolQuestion, PoolSummary, RoleBatchItem } from "../../api/client";
 import { SAFETY_NET_NOTE, appliedWhen, scoreBasis } from "../../talent-list";
@@ -38,8 +38,11 @@ export function boardSearch(current: URLSearchParams | string, change: { mode?: 
   return qs ? `?${qs}` : "";
 }
 
-/** The strip above the list and the board, in one line: what sorting does, and that nothing moves or is sent. */
-export const SORT_TITLE = "Sort the pool";
+/**
+ * The bar above the list and the board: its name, which never says "Sort" (the list's "Sort:" menu is the one control that
+ * sorts), and what the board does and that nothing moves or is sent, as the title of its Refresh.
+ */
+export const VIEW_SWITCH_LABEL = "Board or list";
 export const SORT_TEXT = "Groups everyone who finished applying, with a reason for each. Nothing moves until you apply it, and nothing is sent to anyone.";
 
 /** The strip once the board is showing: when it was sorted, and the same promise. */
@@ -55,12 +58,14 @@ export function sortedText(generatedAt: string | null | undefined): string {
 
 /**
  * The three columns, in our words, with the line under each title. The lines say what puts someone there, no more: a
- * low score from too little evidence, or anything the board is unsure of, waits on the Longlist for a person's eye.
+ * low score from too little evidence, or anything the board is unsure of, waits on the Longlist for a person's eye. A low
+ * score may still have requirements not shown (the release review, 11 November 2026: "nothing left to find out" was not
+ * true), only never enough of them to lift it out of Low (`tooLittleToGoOn`).
  */
 export const BOARD_COLUMNS: ReadonlyArray<{ id: BoardColumn; title: string; sub: string }> = [
   { id: "shortlist", title: BOARD_COLUMN_LABEL.shortlist, sub: "Good evidence on the must-haves" },
   { id: "longlist", title: BOARD_COLUMN_LABEL.longlist, sub: "Some evidence, or more to find out" },
-  { id: "not_moving_forward", title: BOARD_COLUMN_LABEL.not_moving_forward, sub: "A must-have shown missing, or a low score on what is known" },
+  { id: "not_moving_forward", title: BOARD_COLUMN_LABEL.not_moving_forward, sub: "A must-have shown missing, or a low score that what is still unknown could not lift" },
 ];
 
 /** "3 shortlist · 1 longlist · 2 not moving forward". */
@@ -93,13 +98,15 @@ export function laneRow(card: Pick<BoardCard, "applicationId" | "name" | "applie
 }
 
 /**
- * The score on a card or a row in words: "High · 78" with the badge's colour (packages/ui SCORE_BANDS), what a screen
- * reader hears, and "No score yet" when nothing could be judged.
+ * The score on a card or a row in words: "Strong match · 78", the one verdict word with the badge's colour (packages/ui
+ * SCORE_BANDS; an older answer without the word has the band's), what a screen reader hears, and "No score yet" when nothing
+ * could be judged.
  */
-export function scoreText(score: number | null | undefined): { text: string; tone: Tone; label: string } {
+export function scoreText(score: number | null | undefined, fit?: MatchFit | null): { text: string; tone: Tone; label: string } {
   const b = scoreBand(score);
   if (!b) return { text: "No score yet", tone: "neutral", label: "No match score yet" };
-  return { text: `${b.label} · ${b.score}`, tone: b.tone, label: `Match score ${b.score} out of 100 (${b.label.toLowerCase()})` };
+  const word = fit ? MATCH_FIT_LABEL[fit] : b.label;
+  return { text: `${word} · ${b.score}`, tone: b.tone, label: `Match score ${b.score} out of 100 (${word.toLowerCase()})` };
 }
 
 export type CardChip = { label: string; tone: "good" | "caution" | "critical" | "neutral"; title?: string; done?: boolean };
@@ -122,10 +129,10 @@ export function cardChip(card: Pick<BoardCard, "placement" | "score">): CardChip
 
 const CONFIDENCE_WORDS: Record<string, string> = { high: "High confidence", medium: "Medium confidence", low: "Low confidence" };
 
-/** The reading's own confidence, kept apart from the score: amber when low (read it yourself), plain otherwise. */
-export function confidenceChip(card: Pick<BoardCard, "confidence">): CardChip | null {
+/** The reading's own confidence, kept apart from the score: amber when low (read it yourself), plain otherwise; only beside Strong or Potential (`sureBeside`). */
+export function confidenceChip(card: Pick<BoardCard, "confidence"> & { score?: Pick<NonNullable<BoardCard["score"]>, "fit"> | null }): CardChip | null {
   const c = card.confidence;
-  if (!c || !CONFIDENCE_WORDS[c]) return null;
+  if (!c || !CONFIDENCE_WORDS[c] || !sureBeside(card.score?.fit)) return null;
   return { label: CONFIDENCE_WORDS[c], tone: c === "low" ? "caution" : "neutral", title: "How sure the AI was about its review. It is not part of the score." };
 }
 
@@ -236,7 +243,7 @@ export function reviewRows(view: Pick<BoardView, "columns">, opts: { mayDecline:
         column,
         action,
         score: card.score?.score ?? null,
-        scoreText: scoreText(card.score?.score).text,
+        scoreText: scoreText(card.score?.score, card.score?.fit).text,
         reason: p.reason,
         needsYourEye: p.needsYourEye,
         missing: (card.score?.missingMustHave ?? []).map((m) => m.label),

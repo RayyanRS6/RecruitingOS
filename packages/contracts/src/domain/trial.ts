@@ -23,9 +23,14 @@ const DAY_MS = 86_400_000;
 /** The one line the owners read once the trial has ended (Home, Settings, and every refusal of new work). */
 export const TRIAL_ENDED_LINE = "Your trial has ended. New applications are paused until a plan is chosen. Contact ITS to choose a plan.";
 
-/** Why a 4th person cannot be invited on the Trial plan (invitations not yet answered count too). */
-export function seatsFullLine(limit: number): string {
-  return `Your trial includes ${limit} people. Choose a plan to add more.`;
+/** Why one more person cannot be invited when the plan's people are all in use (invitations not yet answered count too). */
+export function seatsFullLine(limit: number, planKey?: string | null): string {
+  return onTrialPlan(planKey) ? `Your trial includes ${limit} people. Choose a plan to add more.` : `Your plan includes ${limit} people. Upgrade to add more.`;
+}
+
+/** The same, to the person invited: they cannot join until someone makes room, or the company moves to a bigger plan. */
+export function seatsFullAtSignInLine(limit: number, planKey?: string | null): string {
+  return onTrialPlan(planKey) ? `This company's trial includes ${limit} people. Ask the person who invited you to choose a plan to add more.` : `This company's plan includes ${limit} people. Ask the person who invited you to upgrade.`;
 }
 
 /** One extension ITS made from the console: how many days, why, who, when, and the end date before and after. */

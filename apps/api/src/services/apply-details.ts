@@ -1,6 +1,6 @@
 import { and, asc, eq, or, sql } from "drizzle-orm";
 import { MAX_RESUME_BYTES, inspectResumeFile, type QuickQuestionView, type ResumeExtraction } from "@ros/contracts";
-import { resumeExtractPrompt, runPromptDetached, type AiRuntime } from "@ros/ai";
+import { outOfCredit, resumeExtractPrompt, runPromptDetached, type AiRuntime } from "@ros/ai";
 import { cvLinesOf, documentToText, verifyQuotes } from "@ros/agents";
 import { errorForLog, scrubAiRun } from "@ros/core";
 import { aiRuns, jobs, withTenant, type Db, type Queryable } from "@ros/db";
@@ -115,6 +115,14 @@ export async function readingAskedAt(db: Db, ref: Pick<ResumeReadRef, "companyId
   return Number.isFinite(at) ? Math.floor(at / 1000) : null;
 }
 
+/**
+ * A file the form holds goes a day later unless an application holds it by then (the discard job checks), read or not: until it
+ * is sent it has no row, so nobody could find it to remove it, and the form promises it goes. Queued as soon as a file can exist.
+ */
+export async function queueUnsentFileDiscard(deps: { db: Db; engine: Pick<WorkflowEngine, "enqueue"> }, input: { companyId: string; key: string; now: Date }): Promise<void> {
+  await deps.engine.enqueue(deps.db, { kind: DISCARD_OBJECT_JOB_KIND, payload: { companyId: input.companyId, key: input.key }, runAt: new Date(input.now.getTime() + RESUME_READING_KEEP_MS) });
+}
+
 /** Asks the worker to read an uploaded résumé. Safe to call twice: the job does nothing once a reading exists. */
 export async function startResumeReading(deps: { db: Db; engine: Pick<WorkflowEngine, "enqueue"> }, ref: ResumeReadRef): Promise<void> {
   await deps.engine.enqueue(deps.db, { kind: RESUME_READING_JOB_KIND, payload: { ...ref }, maxAttempts: 3 });
@@ -188,7 +196,8 @@ async function readAndFinish(deps: ReadingDeps, ref: ResumeReadRef, last: boolea
   const out = await runPromptDetached(deps.db, deps.ai, resumeExtractPrompt, { text, filename: ref.filename }, { companyId: ref.companyId, workflowRunId: null, inputRef: { uploadId: ref.uploadId, roleId: ref.roleId, purpose: "apply_form", chars: text.length } });
   if (!out.ok) {
     if (out.reason === "error" && !last) throw new Error(out.error);
-    return finish("failed", out.runId);
+    // No AI credit left: no run was written and nothing is tried again. The candidate reads the same neutral line and fills in the form.
+    return finish("failed", outOfCredit(out) ? null : out.runId);
   }
   return finish("read", out.runId, verifyQuotes(out.output, text));
 }

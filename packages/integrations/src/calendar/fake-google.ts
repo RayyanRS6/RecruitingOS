@@ -121,8 +121,8 @@ export class FakeGoogleCalendarProvider implements CalendarProvider {
   revokeAccount(email: string): void {
     for (const a of this.accounts.values()) if (a.email === email.toLowerCase()) a.revoked = true;
   }
-  eventsFor(email: string): Array<{ eventId: string; status: string; start: string; end: string; title: string; attendees: string[]; idempotencyKey: string; meetingUrl: string | null }> {
-    return [...this.events.values()].filter((e) => e.calendarId === email.toLowerCase()).map((e) => ({ eventId: e.eventId, status: e.status, start: e.input.start, end: e.input.end, title: e.input.title, attendees: e.input.attendees.map((a) => a.email), idempotencyKey: e.idempotencyKey, meetingUrl: e.meetingUrl }));
+  eventsFor(email: string): Array<{ eventId: string; status: string; start: string; end: string; title: string; attendees: string[]; idempotencyKey: string; meetingUrl: string | null; location: string | null }> {
+    return [...this.events.values()].filter((e) => e.calendarId === email.toLowerCase()).map((e) => ({ eventId: e.eventId, status: e.status, start: e.input.start, end: e.input.end, title: e.input.title, attendees: e.input.attendees.map((a) => a.email), idempotencyKey: e.idempotencyKey, meetingUrl: e.meetingUrl, location: e.input.location ?? null }));
   }
   accountCount(): number {
     return [...this.accounts.values()].filter((a) => !a.revoked).length;

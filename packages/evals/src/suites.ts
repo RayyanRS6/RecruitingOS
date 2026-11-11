@@ -753,9 +753,10 @@ export const redactionCases: RedactionCase[] = [
 /**
  * The match score and the board's placement (founder decision B2, plan F6) are worked out by code from the stored
  * findings, so they must be deterministic and must keep their rules: the same findings give the same number, band and
- * column whatever their order; a must-have shown missing by a quote holds the score at 54; the unknown is set aside,
- * never penalised; a "no" with nothing quoted is unknown; low confidence never puts anyone on the Shortlist or under
- * Not moving forward. No model is called: these hold for any provider.
+ * column whatever their order; a must-have shown missing by a quote holds the score at 54; what nothing was said about
+ * earns no points, and is never read as a no or a ticked decline (the owner, 6 November 2026); a "no" with nothing quoted
+ * is unknown; low confidence never puts anyone on the Shortlist or under Not moving forward. No model is called: these
+ * hold for any provider.
  */
 export type BoardCase = { id: string; provenance: "synthetic"; reading: EvidenceAssessment; expect: { score: number | null; band: MatchBand | null; column: BoardColumn | null; confident: boolean; missing: string[] } };
 
@@ -781,21 +782,21 @@ export const boardCases: BoardCase[] = [
   // a "no" the licence rule lets stand: said plainly (a lapsed one reads "unknown", never "no": credentialCases)
   { id: "missing_must_have_caps_the_score", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no", "I do not hold a CA RDH license"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "medium", weakHold), expect: { score: 54, band: "low", column: "not_moving_forward", confident: true, missing: ["rdh_license"] } },
   // A low score from little evidence is never a decline ticked in advance: the must-haves are not known yet.
-  { id: "thin_evidence_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "unknown"), mustHaveFinding("perio", "unknown")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "not_evidenced"), skillFinding("infection", "not_evidenced")], "medium", weakHold), expect: { score: 50, band: "low", column: "longlist", confident: false, missing: [] } },
+  { id: "thin_evidence_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "unknown"), mustHaveFinding("perio", "unknown")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "not_evidenced"), skillFinding("infection", "not_evidenced")], "medium", weakHold), expect: { score: 11, band: "low", column: "longlist", confident: false, missing: [] } },
   { id: "one_skill_against_them_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "unknown"), mustHaveFinding("perio", "unknown")], [skillFinding("chairside", "contradicted"), skillFinding("patients", "not_evidenced"), skillFinding("infection", "not_evidenced")], "medium", weakHold), expect: { score: 0, band: "low", column: "longlist", confident: false, missing: [] } },
   // The reading and the score disagree: a person reads it before either end of the board.
   { id: "a_suggested_screen_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "partially", "some charting")], allSkills("partially_evidenced")), expect: { score: 50, band: "low", column: "longlist", confident: false, missing: [] } },
   { id: "a_suggested_hold_is_not_a_shortlist", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "medium", weakHold), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
-  { id: "unknown_is_set_aside", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "unknown")], allSkills("not_evidenced")), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
-  // Wave S7 (fairness run of 15 Oct 2026): partly shown never scores below saying nothing, so with every other
-  // requirement met it costs nothing; the board then asks for more instead of suggesting the Shortlist on it.
-  { id: "partly_shown_costs_nothing_but_asks_for_more", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "partially", "some charting")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "evidenced"), skillFinding("infection", "evidenced")]), expect: { score: 100, band: "very_high", column: "longlist", confident: true, missing: [] } },
-  // and with weaker evidence around it, partly shown counts half: the middle
+  // The owner, 6 November 2026: what nothing was said about earns no points, and is still never a ticked decline.
+  { id: "not_shown_earns_no_points_and_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "unknown")], allSkills("not_evidenced")), expect: { score: 29, band: "low", column: "longlist", confident: false, missing: [] } },
+  // Partly shown counts half, and a must-have only partly shown asks for more instead of suggesting the Shortlist on it.
+  { id: "partly_shown_counts_half_and_asks_for_more", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "partially", "some charting")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "evidenced"), skillFinding("infection", "evidenced")]), expect: { score: 61, band: "medium", column: "longlist", confident: true, missing: [] } },
+  // and with weaker evidence around it, partly shown counts half too: the middle
   { id: "partly_shown_is_the_middle_when_the_rest_is_weaker", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], [skillFinding("chairside", "contradicted"), skillFinding("patients", "contradicted"), skillFinding("infection", "evidenced")]), expect: { score: 50, band: "low", column: "longlist", confident: false, missing: [] } },
-  // known bug 32: a "yes" with nothing quoted counts as partly shown and never raises the score above the checked
-  // evidence; the breakdown says "no quote", and the board asks for more before the Shortlist
-  { id: "unquoted_yes_is_partly", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 100, band: "very_high", column: "longlist", confident: true, missing: [] } },
-  { id: "unquoted_no_is_unknown", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
+  // known bug 32: a "yes" with nothing quoted counts as partly shown; the breakdown says "no quote", and the board asks for
+  // more before the Shortlist
+  { id: "unquoted_yes_is_partly", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 86, band: "very_high", column: "longlist", confident: true, missing: [] } },
+  { id: "unquoted_no_is_unknown", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 71, band: "high", column: "longlist", confident: false, missing: [] } },
   { id: "low_confidence_is_never_at_either_end", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no", "I do not hold a CA RDH license"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "low"), expect: { score: 54, band: "low", column: "longlist", confident: false, missing: ["rdh_license"] } },
 ];
 
@@ -829,8 +830,9 @@ export function boardCaseFailures(bc: BoardCase): string[] {
  * The fixes for the real-model fairness run of 15 Oct 2026 (packages/evals results; fairness-findings), checked with no
  * model call ("triage.fairness_rules"), so they hold for any provider and run with the unit tests too. Candidates now
  * see their score after sending (founder decision S7-1), so each is a rule the code keeps whatever the model answers:
- * - the match score is monotonic: showing some evidence never scores below showing none (the zip-code and
- *   earlier-rejection twins were 94 and 83 when one reading said "partly evidenced" and the other "not evidenced");
+ * - the match score is monotonic: showing some evidence never scores below showing none. Since 6 November 2026 twins whose
+ *   readings say "partly evidenced" and "not evidenced" no longer score the same (the owner's fix counts every requirement,
+ *   so a thin résumé no longer reads 100): the one with some evidence is ahead by half that skill's share, no more;
  * - the overall reading is worked out from the settled findings, so it cannot move on its own between readings (the
  *   "assistant not yet a hygienist" and "lapsed licence" cases moved between "potential" and "unknown");
  * - an answer on the form reaches the reading as a sentence, the question then the answer, which is the candidate's own
@@ -846,28 +848,45 @@ const LEVELS: readonly Level[] = ["no", "unknown", "partly", "yes"];
 const MUST_AT: Record<Level, ReqF["met"]> = { no: "no", unknown: "unknown", partly: "partially", yes: "yes" };
 const SKILL_AT: Record<Level, CompF["finding"]> = { no: "contradicted", unknown: "not_evidenced", partly: "partially_evidenced", yes: "evidenced" };
 
-/** Every combination of findings on the board's role, each moved up one requirement at a time: the score must never drop. */
+/**
+ * The board's role with a must-have checked only in the team's own interviews (the release review, 11 November 2026: the
+ * property could not see one, and partly showing it lowered the score).
+ */
+const MONOTONIC_PACKET = { ...BOARD_PACKET, requirements: { ...BOARD_PACKET.requirements, mustHaves: [...BOARD_PACKET.requirements.mustHaves, { key: "practical", text: "Passes our practical test", rationale: "the work", evidencedBy: ["interview"] }] } } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+/** A fixed scorecard or résumé reading beside the one that moves, one level of each kind among its findings. */
+const BESIDE: readonly Level[] = ["partly", "yes", "no", "unknown", "yes", "partly"];
+
+/**
+ * Every combination of findings on that role, each moved up one requirement at a time: the score must never drop. Once as
+ * the résumé reading alone, then as the résumé beside a fixed scorecard, then as the scorecard beside a fixed résumé.
+ */
 function monotonicFailures(): string[] {
-  const mustKeys = BOARD_PACKET.requirements.mustHaves.map((m) => m.key);
-  const skillKeys = BOARD_PACKET.competencies.map((c) => c.key);
+  const mustKeys = MONOTONIC_PACKET.requirements.mustHaves.map((m) => m.key);
+  const skillKeys = MONOTONIC_PACKET.competencies.map((c) => c.key);
   const keys = [...mustKeys, ...skillKeys];
   const readingAt = (levels: readonly Level[]) =>
     boardReading(
       mustKeys.map((k, i) => mustHaveFinding(k, MUST_AT[levels[i] ?? "unknown"], levels[i] === "unknown" ? undefined : `${k} in their own words`)),
       skillKeys.map((k, i) => skillFinding(k, SKILL_AT[levels[mustKeys.length + i] ?? "unknown"])),
     );
-  const scoreAt = (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", result: readingAt(levels) }, screen: null }, BOARD_PACKET)?.score ?? null;
+  const ways = [
+    { name: "résumé", scoreAt: (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", result: readingAt(levels) }, screen: null }, MONOTONIC_PACKET)?.score ?? null },
+    { name: "résumé beside a scorecard", scoreAt: (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", createdAt: "2026-10-01T10:00:00Z", result: readingAt(levels) }, screen: { kind: "screen", createdAt: "2026-10-02T10:00:00Z", result: readingAt(BESIDE) } }, MONOTONIC_PACKET)?.score ?? null },
+    { name: "scorecard beside a résumé", scoreAt: (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", createdAt: "2026-10-01T10:00:00Z", result: readingAt(BESIDE) }, screen: { kind: "screen", createdAt: "2026-10-02T10:00:00Z", result: readingAt(levels) } }, MONOTONIC_PACKET)?.score ?? null },
+  ];
   const f: string[] = [];
   const total = LEVELS.length ** keys.length;
-  for (let n = 0; n < total && f.length < 5; n++) {
-    const levels = keys.map((_, i) => LEVELS[Math.floor(n / LEVELS.length ** i) % LEVELS.length] ?? "unknown");
-    const before = scoreAt(levels);
-    keys.forEach((key, i) => {
-      for (const up of LEVELS.slice(LEVELS.indexOf(levels[i] ?? "unknown") + 1)) {
-        const after = scoreAt(levels.map((l, j) => (j === i ? up : l)));
-        if (before !== null && after !== null && after < before) f.push(`${levels.join(",")}: ${key} ${levels[i]} → ${up} lowered the score ${before} → ${after}`);
-      }
-    });
+  for (const way of ways) {
+    for (let n = 0; n < total && f.length < 5; n++) {
+      const levels = keys.map((_, i) => LEVELS[Math.floor(n / LEVELS.length ** i) % LEVELS.length] ?? "unknown");
+      const before = way.scoreAt(levels);
+      keys.forEach((key, i) => {
+        for (const up of LEVELS.slice(LEVELS.indexOf(levels[i] ?? "unknown") + 1)) {
+          const after = way.scoreAt(levels.map((l, j) => (j === i ? up : l)));
+          if (before !== null && after !== null && after < before) f.push(`${way.name} ${levels.join(",")}: ${key} ${levels[i]} → ${up} lowered the score ${before} → ${after}`);
+        }
+      });
+    }
   }
   return f;
 }
@@ -948,7 +967,11 @@ const FORM_ROLE = { ...BOARD_PACKET, requirements: { ...BOARD_PACKET.requirement
 
 export const fairnessRuleCases: FairnessRuleCase[] = [
   {
-    id: "twins_partly_vs_not_evidenced_score_the_same",
+    // Given up on purpose on 6 November 2026 (the owner's "why everyone has the score of 100"): these twins used to score
+    // the same only because partly shown was lifted to the level of the rest. Partly is half now, so the twin with some
+    // evidence is ahead, by half that skill's share and no more, and never behind. Whether the model flips between the two
+    // is what the real-model bias pairs measure.
+    id: "twins_partly_vs_not_evidenced_never_behind_and_half_a_share_apart",
     provenance: "synthetic",
     failures: () => {
       // the zip-code twins of the run: one reading said a skill was partly evidenced, the other not, from the same quote
@@ -956,8 +979,11 @@ export const fairnessRuleCases: FairnessRuleCase[] = [
       const others = [skillFinding("patients", "evidenced"), skillFinding("infection", "contradicted")];
       const none = boardReading(musts, [skillFinding("chairside", "not_evidenced"), ...others]);
       const some = boardReading(musts, [{ competencyKey: "chairside", finding: "partially_evidenced", evidence: { source: "resume", quote: "Periodontal charting, scaling and root planing" } }, ...others]);
-      const pair = biasPairs.find((p) => p.id === "zip_code");
-      return pair ? biasPairDifferences(pair, none, some, BOARD_PACKET) : ["the zip-code pair is missing"];
+      const scoreOf = (r: EvidenceAssessment) => matchScore({ resume: { kind: "triage", result: r }, screen: null }, BOARD_PACKET);
+      const [a, b] = [scoreOf(none)?.score, scoreOf(some)?.score];
+      if (a === null || a === undefined || b === null || b === undefined) return ["a twin has no score"];
+      const halfShare = Math.ceil((scoreOf(none)?.unknown.find((u) => u.key === "chairside")?.weightPct ?? 0) / 2);
+      return b < a ? [`the twin with some evidence scored ${b}, below the one with none at ${a}`] : b - a > halfShare ? [`the twins are ${b - a} points apart, more than half the skill's share (${halfShare})`] : [];
     },
   },
   { id: "showing_more_never_lowers_the_score", provenance: "synthetic", failures: monotonicFailures },

@@ -80,8 +80,8 @@ Levels: `auto`, `auto_notify`, `approval`, `human_only`. Resolution: role policy
 | application.reject_on_assessment | human_only | | locked |
 | application.invite_screen | auto (fixed, 20 Oct 2026, R20-4: every applicant gets the AI interview by itself) | | no: Setup shows it as a fixed line; a saved "ask me first" or "only a person" is read as "do it" (`MAX_LEVELS`) |
 | screen.conduct | auto | | yes (human_only disables AI screening) |
-| application.recommend_interview | auto_notify (information) | | yes |
-| interview.request | approval | owner, hiring_manager, recruiter | approver list only; cannot become auto (new lock, AC10.1) |
+| application.recommend_interview | human_only since 6 November 2026 (Setup: "Suggest who to interview"; a person decides who to interview); auto_notify before | | yes: a company that chooses "Do it and tell me" or "Do it" has the assistant move the people it suggests |
+| interview.request | approval | owner, hiring_manager, recruiter | approver list only; cannot become auto (new lock, AC10.1). A person's press of Book on "Set a date and time" is the approval (6 November 2026) |
 | interview.schedule | auto | | yes |
 | interview.reschedule | auto_notify | | yes |
 | disposition.send | auto_notify | | yes |

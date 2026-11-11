@@ -11,7 +11,7 @@ export const CUSTOMER_AUDIT_ACTIONS: readonly string[] = [
   // the team
   "membership.changed", "invitation.sent", "invitation.resent", "invitation.revoked", "invitation.accepted", "session.revoked", "session.reauthenticated",
   // the rules and the company
-  "policy.changed", "notice.changed", "company.updated", "company.verified", "company.unverified",
+  "policy.changed", "notice.changed", "company.updated", "company.verified", "company.unverified", "company.access_accepted", "company.access_declined", "company.access_removed", "plan.changed",
   // candidates, outcomes and exports
   "candidate.viewed", "candidate.exported", "outcome.recorded", "outcome.corrected", "role.outcome_recorded",
   "export.created", "report.exported", "audit.exported",
@@ -57,9 +57,13 @@ export function describeAuditRecord(r: Pick<AuditRow, "action" | "actor" | "reas
     case "company.updated": return companyUpdatedWords(who, d);
     case "company.verified": return r.actor.kind === "system" ? "The company was confirmed automatically (no ITS check is needed in this environment)." : `ITS confirmed your company${num(d.released) ? `; ${num(d.released)} waiting ${num(d.released) === 1 ? "message" : "messages"} to candidates went out` : ""}.`;
     case "company.unverified": return "ITS took back its confirmation of your company: your careers page and job pages are offline and messages to candidates wait until ITS confirms it again.";
+    case "company.access_accepted": return num(d.restored) ? "ITS gave your company its access back." : "ITS accepted your request for access.";
+    case "company.access_declined": return "ITS declined your request for access.";
+    case "company.access_removed": return "ITS took your company's access away: nobody on it could sign in to it, and its careers page and job pages were offline.";
+    case "plan.changed": return `ITS moved your company to the ${str(d.toName) ?? str(d.to) ?? "new"} plan${str(d.fromName) ?? str(d.from) ? ` from ${str(d.fromName) ?? str(d.from)}` : ""}${r.reason ? `: ${r.reason}` : ""}.${num(d.unlocked) ? ` ${num(d.unlocked) === 1 ? "1 candidate who was locked is open now" : `${num(d.unlocked)} candidates who were locked are open now`}.` : ""}`;
     case "candidate.viewed": return `${who} opened a candidate's record${r.reason ? ` (${r.reason})` : ""}.`;
     case "candidate.exported": return `${who} exported a candidate's information.`;
-    case "interview.booked_on_behalf": return `${who} booked an interview time on the candidate's behalf${r.reason ? ` (${r.reason.replace(/^booked on the candidate's behalf:\s*/, "")})` : ""}.`;
+    case "interview.booked_on_behalf": return r.reason === "a person set the date and time" ? `${who} set an interview's date and time${d.moved === true ? ", moving a booked time" : ""}.` : `${who} booked an interview time on the candidate's behalf${r.reason ? ` (${r.reason.replace(/^booked on the candidate's behalf:\s*/, "")})` : ""}.`;
     case "outcome.recorded": return `${who} recorded an outcome: ${OUTCOME_WORDS[str(d.outcome) ?? ""] ?? str(d.outcome) ?? "recorded"}.`;
     case "outcome.corrected": return `${who} corrected a recorded outcome${r.reason ? `: ${r.reason}` : ""}.`;
     case "role.outcome_recorded": return `${who} closed a role: ${OUTCOME_WORDS[str(d.outcome) ?? ""] ?? str(d.outcome) ?? "closed"}.`;

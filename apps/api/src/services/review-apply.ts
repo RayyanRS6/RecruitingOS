@@ -29,11 +29,14 @@ const CAPABILITY_OF: Record<Exclude<BatchAction, "escalate">, ApplicationCapabil
 
 /**
  * Why someone the board keeps apart (R20-7, R20-9) is never applied from it, by where their AI interview stands: being
- * scored, still to come, or closed (a link that lapsed or was stopped, one left part-way, or one that never came for
- * want of allowance, Q17), which they cannot finish without a new link. Neutral, like the lane: never how far they got.
+ * scored, waiting to be scored for want of AI help, its scorecard could not be written, still to come, or closed (a link that lapsed or was stopped, one left
+ * part-way, or one that never came for want of allowance, Q17), which they cannot finish without a new link. Neutral, like
+ * the lane: never how far they got.
  */
 const APART_REFUSAL = {
   being_scored: "Their AI interview is being scored; they join the board when it is. Decide from their own page if you need to.",
+  not_scored: "Their AI interview is in, but your plan's AI help is used up, so it was not scored. Read their answers and decide from their own page.",
+  scoring_failed: "Their AI interview is in, but its AI review could not be written, so it was not scored. Read their answers and decide from their own page.",
   not_done_yet: "They have no AI interview yet; they join the board when they finish it. Decide from their own page if you need to.",
   not_done: "They have no AI interview and none is open, so the board leaves them out. Decide from their own page, or send them a new AI interview link.",
 } as const;
@@ -43,7 +46,7 @@ function batchRefusal(row: PoolRow | undefined, item: RoleBatchItem, tenant: Ten
   if (!row) return "Not a candidate of this role.";
   // Never suggested or applied from the board before their AI interview is in their score (R20-7, R20-9): decide from
   // their own page if needed.
-  if (row.noAiInterview) return row.interview === "being_scored" ? APART_REFUSAL.being_scored : row.interview === "not_done" ? APART_REFUSAL.not_done : APART_REFUSAL.not_done_yet;
+  if (row.noAiInterview) return row.interview === "being_scored" ? APART_REFUSAL.being_scored : row.interview === "not_scored" ? APART_REFUSAL.not_scored : row.interview === "scoring_failed" ? APART_REFUSAL.scoring_failed : row.interview === "not_done" ? APART_REFUSAL.not_done : APART_REFUSAL.not_done_yet;
   if (item.action === "not_moving_forward" && row.activeInterview) return "They have an interview in motion. Decide from their page, so the interview is called off properly.";
   if (item.action === "escalate") {
     if (tenant.staff) return "You are the recruiter on this; add a note to the request instead.";

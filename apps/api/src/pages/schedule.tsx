@@ -21,6 +21,11 @@ import { Layout } from "./layout";
  * Cancelling asks what they would like next (founder decision 2A): new times later, or no longer interested. Either way
  * they go under Cancelled on the team's side (1A). Someone who asks for new times gets one set automatically after the
  * company's working days (3A) when nothing stops it; the page says so only when it is true for them, with the day.
+ *
+ * A time a person set (`selectedSlot.source` "person", the owner's words of 6 November 2026: "nadine sets date and time"):
+ * the candidate never sees the page that picks a time, so the confirmed page carries what that page did (the accommodation
+ * field, the time zone, the HUMAN notice), says "booked" rather than "confirmed" (they confirmed nothing), and asking for a
+ * different time tells the team and leaves the time standing: nothing is reopened that no hours could fill.
  */
 export const schedulePages = new Hono<Vars>();
 
@@ -171,10 +176,23 @@ const TimesBeingReady = (props: { b: Bundle }) => (
   </Layout>
 );
 
+/** A person set this time themselves, so the candidate never picked it (the file's own note). */
+const setByAPerson = (b: Bundle) => b.iv.selectedSlot?.source === "person";
+
+/** Where it takes place, on the confirmed page: the link, what a person set (an address, or by phone), or the format. */
+const PlaceRow = ({ b }: { b: Bundle }) => {
+  if (b.iv.meetingUrl && /^https?:\/\//i.test(b.iv.meetingUrl)) return <div><span>Join</span><a href={b.iv.meetingUrl} rel="noopener">{b.iv.meetingUrl}</a></div>;
+  if (b.iv.selectedSlot?.address) return <div><span>Where</span><span>{b.iv.selectedSlot.address}</span></div>;
+  if (setByAPerson(b) && b.iv.format === "phone") return <div><span>Where</span><span>{b.candidate.phone ? `By phone: ${b.company.name} will call you at ${b.candidate.phone}` : `By phone: ${b.company.name} will call you. Reply to any of our emails with the best number to reach you.`}</span></div>;
+  return <div><span>Format</span><span>{b.iv.format.replace("_", " ")}</span></div>;
+};
+
 /** The sentence under "Send me new times later": what will happen for this candidate now, with the day when there is one. */
 function newTimesHint(plan: AutoPlan, b: Bundle): string {
   if (plan.arm) return `We will email you new times on ${newTimesDayWords(plan.dueAt, tzOf(b))}, unless the team gets in touch first.`;
-  if (plan.reason === "reschedules_used") return "You have moved this interview twice, so someone from the team will be in touch to arrange a time.";
+  // Both presses were "Ask for a different time", which moves a time they picked and leaves one a person set standing: the
+  // words are true either way (the release review, 11 November 2026).
+  if (plan.reason === "reschedules_used") return "You have asked for a different time twice, so someone from the team will be in touch to arrange a time.";
   return "Someone from the team will be in touch about new times.";
 }
 
@@ -270,10 +288,10 @@ schedulePages.post("/c/schedule/:token", rateLimit(POLICIES.schedule), async (c)
     const woken = await container.engine.signal(tx, { companyId: b.company.id, key: `${b.iv.id}:interview.slot_selected`, payload: { slotId: slot.id } });
     const where = await routePick(tx, { iv: current, slot, woken, now: container.engine.clock() });
     if (where === "taken" || where === "stale") return { where };
-    const [picked] = await tx.update(interviews).set({ selectedSlot: slot, schedulingWindow: { ...current.schedulingWindow, candidateTimezone: tzOf(b, parsed.data.timezone) }, candidateAvailability: parsed.data.accessibilityNote ? { ...(current.candidateAvailability ?? {}), note: current.candidateAvailability?.note, timezone: tzOf(b, parsed.data.timezone), preferred: current.candidateAvailability?.preferred ?? [], at: new Date().toISOString(), accessibilityNote: parsed.data.accessibilityNote } as never : current.candidateAvailability }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, current.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
+    const [picked] = await tx.update(interviews).set({ selectedSlot: slot, schedulingWindow: { ...current.schedulingWindow, candidateTimezone: tzOf(b, parsed.data.timezone) }, candidateAvailability: parsed.data.accessibilityNote ? { ...(current.candidateAvailability ?? {}), note: current.candidateAvailability?.note, timezone: tzOf(b, parsed.data.timezone), preferred: current.candidateAvailability?.preferred ?? [], at: new Date().toISOString(), accessibilityNote: parsed.data.accessibilityNote } : current.candidateAvailability }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, current.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
     if (!picked) return { where: "changed" as const };
     await emit(tx, { type: "interview.slot_selected", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, timezone: tzOf(b, parsed.data.timezone), accessibilityNote: !!parsed.data.accessibilityNote, booking: where } });
-    if (parsed.data.accessibilityNote) await notify(tx, { companyId: b.company.id, kind: "interview.accessibility", title: `${b.candidate.firstName} asked for an accommodation`, body: parsed.data.accessibilityNote, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+    if (parsed.data.accessibilityNote) await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.accessibility", title: `${b.candidate.firstName} asked for an accommodation`, body: parsed.data.accessibilityNote, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
     // a direct booking that finds the interview moved on undoes the pick: the page is shown again with what is on offer now
     if (where === "direct" && !(await bookPickNow(tx, container, { iv: current, roleId: b.app.roleId, actor }))) throw new PickChanged();
     return { where, resignal: where === "workflow" && woken === 0, slotId: slot.id };
@@ -300,7 +318,8 @@ schedulePages.post("/c/schedule/:token/none-work", rateLimit(POLICIES.scheduleNo
   const parsed = CandidateAvailability.safeParse({ timezone: form.timezone || undefined, note: form.note || undefined, preferred: [] });
   const data = parsed.success ? parsed.data : { preferred: [] as never[] };
   await withTenant(container.db, b.company.id, async (tx) => {
-    await tx.update(interviews).set({ candidateAvailability: { ...data, at: new Date().toISOString() } }).where(eq(interviews.id, b.iv.id));
+    // What they asked for earlier stays: an accommodation is not undone by saying these times do not work.
+    await tx.update(interviews).set({ candidateAvailability: { ...(b.iv.candidateAvailability ?? {}), ...data, at: new Date().toISOString() } }).where(eq(interviews.id, b.iv.id));
     await emit(tx, { type: "interview.candidate_availability", companyId: b.company.id, actor: { kind: "candidate", id: b.candidate.id }, subject: { type: "interview", id: b.iv.id }, payload: { hasNote: !!data.note } });
     await container.engine.signal(tx, { companyId: b.company.id, key: `${b.iv.id}:interview.none_work`, payload: {} });
   });
@@ -344,32 +363,62 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
   const now = container.engine.clock();
   // Once the interview has started it can no longer be moved or cancelled from here (audit 06, bug 96).
   const ahead = Date.parse(start) > now.getTime();
-  const plan = !b.closed && ahead ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now })) : null;
+  const plan = !b.closed && ahead ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, interviewId: b.iv.id })) : null;
   const missing = c.req.query("error") === "cancel";
+  const setByPerson = setByAPerson(b);
   return c.html(
-    <Layout title={`Confirmed: ${b.iv.title} at ${b.company.name}`} extraCss={SCHEDULE_CSS}>
+    <Layout title={`${setByPerson ? "Your interview" : "Confirmed"}: ${b.iv.title} at ${b.company.name}`} extraCss={SCHEDULE_CSS}>
       {/* The employer and job, said nowhere else on the page (kept, as on the page that picks the time). */}
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
-      <h1>You're confirmed</h1>
+      {/* They confirmed nothing when a person booked it, so it does not say they did. */}
+      <h1>{setByPerson ? "Your interview is booked" : "You're confirmed"}</h1>
+      {c.req.query("asked") === "1" ? <div class="card" role="status"><strong>We told the team.</strong><p>This time stands until you hear from them.</p></div> : null}
+      {c.req.query("noted") === "1" ? <div class="card" role="status"><strong>We told the team.</strong><p>They have what you asked for. If you want to add anything, reply to any of our emails.</p></div> : null}
       <div class="card status">
         <div><span>When</span><strong>{formatInZone(start, tz)}</strong></div>
         {tz !== b.company.timezone ? <div><span>For the team</span><span>{formatInZone(start, b.company.timezone)}</span></div> : null}
         <div><span>How long</span><span>{b.iv.durationMinutes} minutes</span></div>
         <div><span>Who</span><span>{b.participants.map((p) => p.firstName).join(", ") || "the hiring team"}</span></div>
-        {b.iv.meetingUrl && /^https?:\/\//i.test(b.iv.meetingUrl) ? <div><span>Join</span><a href={b.iv.meetingUrl} rel="noopener">{b.iv.meetingUrl}</a></div> : <div><span>Format</span><span>{b.iv.format.replace("_", " ")}</span></div>}
+        <PlaceRow b={b} />
       </div>
       <a class="btn" href={`/c/schedule/${b.iv.scheduleToken}/ics`}><Icon name="calendar" />Add to my calendar</a>
+      {/* Later reminders use the zone saved here (one click away, as on the page that picks the time). The line above names the one shown. */}
+      {b.closed || !ahead ? null : (
+        <details class="more">
+          <summary>Change the time zone</summary>
+          <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/timezone`} class="card">
+            <label for="tz" class="flush">Show times in</label>
+            <select id="tz" name="timezone">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
+            <button class="btn secondary" type="submit">Save</button>
+          </form>
+        </details>
+      )}
+      {/* The accommodation field (counsel register item 12): someone a person booked never sees the page that picks a time, where it first lived. */}
+      {b.closed || !ahead ? null : (
+        <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/accommodation`} class="card">
+          <label for="access" class="flush">Anything that would make the interview easier for you? (optional)</label>
+          <input type="text" id="access" name="accessibilityNote" maxlength={500} value={b.iv.candidateAvailability?.accessibilityNote ?? ""} placeholder="For example: captions on, or a phone call instead of video" />
+          <button class="btn secondary" type="submit">Tell the team</button>
+        </form>
+      )}
       {/* The time stays on record for someone no longer in the process (it had already started); it can no longer be moved. */}
-      {b.closed ? null : <h2>Need to change it?</h2>}
+      {b.closed ? null : <h2>{setByPerson ? "Need a different time?" : "Need to change it?"}</h2>}
       {b.closed ? null : !ahead ? (
         <div class="card"><p>This interview has started, so it can no longer be moved here. If something went wrong, reply to any of our emails.</p></div>
-      ) : b.iv.rescheduleCountCandidate < MAX_CANDIDATE_RESCHEDULES ? (
+      ) : b.iv.rescheduleCountCandidate >= MAX_CANDIDATE_RESCHEDULES ? (
+        <div class="card"><p>You have {setByPerson ? "asked for a different time" : "rescheduled"} twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
+      ) : setByPerson ? (
+        <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/reschedule`} class="card">
+          <p>We will tell the team. This time stands until you hear from them.</p>
+          <label for="suits">What suits you better? (optional)</label>
+          <input type="text" id="suits" name="note" maxlength={1000} placeholder="For example: mornings next week" />
+          <button class="btn secondary" type="submit">Ask for a different time</button>
+        </form>
+      ) : (
         <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/reschedule`} class="card">
           <p>We will send new times. You can do this {MAX_CANDIDATE_RESCHEDULES - b.iv.rescheduleCountCandidate === 1 ? "one more time" : "twice"}.</p>
           <button class="btn secondary" type="submit">Ask for a different time</button>
         </form>
-      ) : (
-        <div class="card"><p>You have rescheduled twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
       )}
       {/* Cancelling, with what they would like next (founder decision 2A), only while the interview is still ahead. One
           click away (founder brief, 14 October 2026), and open when a send came back incomplete (?error=cancel#cancel). */}
@@ -392,8 +441,61 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
           </form>
         </details>
       ) : null}
+      <p class="notice">Reply to any of our emails with HUMAN to reach a person. Nothing here is decided by software.</p>
     </Layout>,
   );
+});
+
+/** Whether a zone is one this runtime knows: what a form sends is never trusted to be. */
+function knownZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return zone.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** The candidate saves their time zone from the confirmed page: this page and every later reminder use it. The email already sent named the company's. */
+schedulePages.post("/c/schedule/:token/timezone", rateLimit(POLICIES.schedule), async (c) => {
+  const container = c.get("container");
+  const b = await loadByToken(container.db, c.req.param("token") ?? "");
+  if (!b) return c.notFound();
+  const form = await c.req.parseBody();
+  const zone = typeof form.timezone === "string" ? form.timezone : "";
+  if (knownZone(zone) && b.iv.status === "scheduled" && !b.closed) {
+    await withTenant(container.db, b.company.id, async (tx) => {
+      await lockApplication(tx, b.app.id);
+      const [current] = await tx.select({ schedulingWindow: interviews.schedulingWindow }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1).for("update");
+      if (current) await tx.update(interviews).set({ schedulingWindow: { ...current.schedulingWindow, candidateTimezone: zone } }).where(eq(interviews.id, b.iv.id));
+    });
+  }
+  return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
+});
+
+/**
+ * The accommodation field on the confirmed page (counsel register item 12, the same words and the same stored shape as the
+ * page that picks a time): the team is told at once. Empty, or sent again unchanged, says nothing new.
+ */
+schedulePages.post("/c/schedule/:token/accommodation", rateLimit(POLICIES.schedule), async (c) => {
+  const container = c.get("container");
+  const b = await loadByToken(container.db, c.req.param("token") ?? "");
+  if (!b) return c.notFound();
+  const confirmed = `/c/schedule/${b.iv.scheduleToken}/confirmed`;
+  const form = await c.req.parseBody();
+  // A long note is cut, never refused.
+  const note = typeof form.accessibilityNote === "string" ? form.accessibilityNote.trim().slice(0, 500) : "";
+  if (!note || b.closed || b.iv.status !== "scheduled") return c.redirect(confirmed);
+  await withTenant(container.db, b.company.id, async (tx) => {
+    await lockApplication(tx, b.app.id);
+    const [current] = await tx.select({ status: interviews.status, candidateAvailability: interviews.candidateAvailability }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1).for("update");
+    if (current?.status !== "scheduled" || current.candidateAvailability?.accessibilityNote === note) return;
+    await tx.update(interviews).set({ candidateAvailability: { ...(current.candidateAvailability ?? {}), timezone: tzOf(b), preferred: current.candidateAvailability?.preferred ?? [], at: new Date().toISOString(), accessibilityNote: note } }).where(eq(interviews.id, b.iv.id));
+    await emit(tx, { type: "interview.candidate_availability", companyId: b.company.id, actor: { kind: "candidate", id: b.candidate.id }, subject: { type: "interview", id: b.iv.id }, payload: { hasNote: false, accessibilityNote: true } });
+    await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.accessibility", title: `${b.candidate.firstName} asked for an accommodation`, body: note, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+  });
+  await container.kick();
+  return c.redirect(`${confirmed}?noted=1`);
 });
 
 schedulePages.get("/c/schedule/:token/ics", async (c) => {
@@ -414,10 +516,25 @@ schedulePages.post("/c/schedule/:token/reschedule", rateLimit(POLICIES.reschedul
   // An interview that has started (or is over and not yet closed) is never reopened from the candidate's page.
   if (!b.iv.startsAt || Date.parse(b.iv.startsAt) <= container.engine.clock().getTime()) return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
   if (b.iv.rescheduleCountCandidate >= MAX_CANDIDATE_RESCHEDULES) {
-    await withTenant(container.db, b.company.id, (tx) => notify(tx, { companyId: b.company.id, kind: "interview.reschedule_limit", title: `${b.candidate.firstName} wants to reschedule again`, body: "They have used both self-service reschedules; please arrange a time with them directly.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } }));
+    await withTenant(container.db, b.company.id, (tx) => notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.reschedule_limit", title: `${b.candidate.firstName} wants to reschedule again`, body: "They have used both self-service reschedules; please arrange a time with them directly.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } }));
     return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
   }
   const actor = { kind: "candidate" as const, id: b.candidate.id };
+  // A time a person set: the team is told and the time stands. Nothing is reopened, since no hours may be there to fill it.
+  if (setByAPerson(b)) {
+    const form = await c.req.parseBody();
+    const note = typeof form.note === "string" ? form.note.trim().slice(0, 1000) : "";
+    await withTenant(container.db, b.company.id, async (tx) => {
+      await lockApplication(tx, b.app.id);
+      const [current] = await tx.select({ status: interviews.status, attempt: interviews.attempt, count: interviews.rescheduleCountCandidate, availability: interviews.candidateAvailability }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1).for("update");
+      if (current?.status !== "scheduled" || current.attempt !== b.iv.attempt) return;
+      await tx.update(interviews).set({ rescheduleCountCandidate: current.count + 1, candidateAvailability: { ...(current.availability ?? {}), timezone: tzOf(b), preferred: current.availability?.preferred ?? [], at: new Date().toISOString(), ...(note ? { note } : {}) } }).where(eq(interviews.id, b.iv.id));
+      await emit(tx, { type: "interview.candidate_availability", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { hasNote: !!note, askedForAnotherTime: true } });
+      await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.rescheduled", title: `${b.candidate.firstName} ${b.candidate.lastName} asked for a different time`, body: note || "The time stands until you set a new one.", action: { label: "Set a new time", href: `/interviews/${b.iv.id}` } });
+    });
+    await container.kick();
+    return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed?asked=1`);
+  }
   const now = container.engine.clock();
   const hadEvents = Object.keys((b.iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
   await withTenant(container.db, b.company.id, async (tx) => {
@@ -426,7 +543,7 @@ schedulePages.post("/c/schedule/:token/reschedule", rateLimit(POLICIES.reschedul
     await tx.update(interviews).set({ status: "scheduling", attempt: b.iv.attempt + 1, selectedSlot: null, offeredSlots: [], startsAt: null, endsAt: null, reminders: {}, schedulingWindow: freshSchedulingWindow(b.iv.schedulingWindow, now, b.company.timezone), rescheduleCountCandidate: b.iv.rescheduleCountCandidate + 1, meetingUrl: b.iv.linkSource === "pasted" ? b.iv.meetingUrl : null, scheduleTokenExpiresAt: new Date(now.getTime() + 14 * 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
     await emit(tx, { type: "interview.rescheduled", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { byCandidate: true, attempt: b.iv.attempt + 1, hadEvents } });
     if (b.app.stage === "interview_scheduled") await transition(tx, { applicationId: b.app.id, companyId: b.company.id, to: "interview_recommended", by: "system", actor, reason: "candidate asked to reschedule" });
-    await notify(tx, { companyId: b.company.id, kind: "interview.rescheduled", title: `${b.candidate.firstName} ${b.candidate.lastName} asked to reschedule`, body: "New times are being offered automatically.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
+    await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.rescheduled", title: `${b.candidate.firstName} ${b.candidate.lastName} asked to reschedule`, body: "New times are being offered automatically.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: b.iv.id, companyId: b.company.id, actor }, runAt: now.toISOString(), maxAttempts: 5 });
     await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: b.company.id, subject: { type: "interview", id: b.iv.id }, state: { interviewId: b.iv.id, applicationId: b.app.id, roleId: b.app.roleId, roundKey: b.iv.roundKey, attempt: b.iv.attempt + 1, rescheduled: true }, idempotencyKey: `schedule:${b.iv.id}:${b.iv.attempt + 1}`, actor });
   });
@@ -444,13 +561,15 @@ function teamCancelNote(next: CancelNext, plan: AutoPlan | { arm: false; reason:
     case "already_used":
       return "They asked for new times. They already had their one automatic set, so nothing more goes automatically: send new times or decide.";
     case "reschedules_used":
-      return "They asked for new times after moving this interview twice, so a person should arrange the time with them. Nothing goes to them automatically.";
+      return "They asked for new times after asking twice for a different time, so a person should arrange the time with them. Nothing goes to them automatically.";
     case "takeover":
       return "They asked for new times. An ITS recruiter is running this role, so nothing goes automatically: you or the recruiter decide.";
     case "was_on_hold":
       return "They asked for new times. You had put them on hold; that hold has ended and nothing goes automatically: send new times or decide.";
     case "company_not_checked":
       return "They asked for new times. ITS has not confirmed your company yet, so nothing can go to them automatically. Once ITS confirms it, send new times from their page.";
+    case "no_hours":
+      return "They asked for new times. Set a new date and time from their page.";
     default:
       return "They asked for new times. Nothing goes to them automatically: send new times or decide.";
   }
@@ -494,13 +613,13 @@ schedulePages.post("/c/schedule/:token/cancel", rateLimit(POLICIES.cancelIntervi
     const underCancelled = !!app && CANCEL_STAGES.includes(app.stage);
     // Read before the row is written, so it says what was true when they chose (a hold still counts).
     // Under a share lock on the company row: switching automatic times off waits for this cancel, or this cancel reads it off.
-    const plan: AutoPlan | { arm: false; reason: "not_asked" } = next === "new_times" && underCancelled ? await autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, lock: true }) : { arm: false, reason: "not_asked" };
+    const plan: AutoPlan | { arm: false; reason: "not_asked" } = next === "new_times" && underCancelled ? await autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, lock: true, interviewId: b.iv.id }) : { arm: false, reason: "not_asked" };
     if (underCancelled) {
       const { row } = await openFollowUp(tx, { companyId: b.company.id, applicationId: b.app.id, interviewId: b.iv.id, interviewAttempt: b.iv.attempt + 1, kind: "candidate_cancelled", choice: next, auto: plan.arm ? { state: "waiting", dueAt: plan.dueAt, workingDays: plan.workingDays, day: plan.day } : { state: "none", reason: plan.reason }, actor, now });
       if (plan.arm) await armNewTimes(tx, container.engine, { companyId: b.company.id, followUpId: row.id, applicationId: b.app.id, roleId: b.app.roleId, interviewId: b.iv.id, actor });
     }
-    await notify(tx, { companyId: b.company.id, kind: "interview.cancelled", title: `${b.candidate.firstName} ${b.candidate.lastName} cancelled the interview`, body: `${reason ? `They said: "${reason}". ` : ""}${teamCancelNote(next, plan, b)}`, action: { label: "Open the candidate", href: `/roles/${b.app.roleId}/talent?open=${b.app.id}` } });
-    if (b.participants.length) await notify(tx, { companyId: b.company.id, kind: "interview.cancelled", title: `Interview cancelled: ${b.iv.title}`, body: `The candidate cancelled, so this interview is off.${hadEvents ? " The calendar event is being removed." : ""}`, action: { label: "Open interviews", href: "/interviews" }, userIds: b.participants.map((p) => p.userId) });
+    await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.cancelled", title: `${b.candidate.firstName} ${b.candidate.lastName} cancelled the interview`, body: `${reason ? `They said: "${reason}". ` : ""}${teamCancelNote(next, plan, b)}`, action: { label: "Open the candidate", href: `/roles/${b.app.roleId}/talent?open=${b.app.id}` } });
+    if (b.participants.length) await notify(tx, { companyId: b.company.id, about: b.app.id, kind: "interview.cancelled", title: `Interview cancelled: ${b.iv.title}`, body: `The candidate cancelled, so this interview is off.${hadEvents ? " The calendar event is being removed." : ""}`, action: { label: "Open interviews", href: "/interviews" }, userIds: b.participants.map((p) => p.userId) });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: b.iv.id, companyId: b.company.id, actor }, runAt: now.toISOString(), maxAttempts: 5 });
     await sendInterviewCancelled(tx, container.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet, actor, appBaseUrl: container.env.APP_BASE_URL, interview: { ...b.iv, status: "cancelled" }, interviewerFirstNames: b.participants.map((p) => p.firstName), candidateTimezone: tzOf(b), companyTimezone: b.company.timezone, byCandidate: true, candidateChoice: { next, newTimesOn: plan.arm ? newTimesDayWords(plan.dueAt, tzOf(b)) : null } });
     return true;

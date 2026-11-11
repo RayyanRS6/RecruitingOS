@@ -5,10 +5,12 @@ import { companies, withPlatform } from "@ros/db";
 import { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import type { Container } from "./container";
 import { errorHandler } from "./middleware/errors";
+import { applicationLockGuard, interviewLockGuard } from "./middleware/candidate-lock";
 import { sessionMiddleware, type Vars } from "./middleware/session";
 import { authRoutes } from "./routes/auth";
 import { companyRoutes } from "./routes/companies";
 import { companySettingsRoutes } from "./routes/company-settings";
+import { planRoutes } from "./routes/plans";
 import { authSessionRoutes } from "./routes/auth-sessions";
 import { privacyRequestPages } from "./pages/privacy-request";
 import { intakeRoutes } from "./routes/intake";
@@ -131,10 +133,15 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
     return c.json({ ok: true, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy });
   });
 
+  // Rule 3 of the plans of 5 November 2026: before any handler under these paths, and at the prefix so a new router cannot forget it.
+  for (const p of ["/api/v1/applications/:id", "/api/v1/applications/:id/*"]) app.use(p, applicationLockGuard);
+  for (const p of ["/api/v1/interviews/:id", "/api/v1/interviews/:id/*"]) app.use(p, interviewLockGuard);
+
   app.route("/api/v1/auth", authRoutes);
   app.route("/api/v1/auth", authSessionRoutes);
   app.route("/api/v1/companies", companyRoutes);
   app.route("/api/v1/companies", companySettingsRoutes);
+  app.route("/api/v1/plans", planRoutes);
   app.route("/api/v1/intake", intakeRoutes);
   // Before the data routes: a browser tab asking for the preview gets the page, the app's own requests the data.
   app.route("/api/v1/intake", draftPreviewPages);

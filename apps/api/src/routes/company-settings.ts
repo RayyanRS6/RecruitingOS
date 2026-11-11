@@ -1,13 +1,15 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
-import { GettingStartedRequest, UpdateCompany, isCompanyVerified, type Actor, type NewTimesSettingView } from "@ros/contracts";
-import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, boardPostingOf, emit, newTimesSettingOf, pendingNewTimesRows, revokeSessionsForCompany, setAutoState, withdrawPostingTasks, zipRecruiterOffered } from "@ros/core";
+import { AI_HELP_BUSY_LINE, AI_HELP_LINE, GettingStartedRequest, ITS_POSTING_UPGRADE_LINE, ITS_POSTING_UPGRADE_QUESTION, UpdateCompany, isCompanyVerified, type Actor, type NewTimesSettingView } from "@ros/contracts";
+import { outOfCredit } from "@ros/ai";
+import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, boardPostingOf, can, emit, newTimesSettingOf, pendingNewTimesRows, planIncludesItsPosting, revokeSessionsForCompany, setAutoState, withdrawPostingTasks, zipRecruiterOffered } from "@ros/core";
 import { auditRecords, companies, memberships, uuidv7, withPlatform, withTenant, type Tx } from "@ros/db";
 import { LOGO_MAX_BYTES, inspectLogo, logoFileName, logoKey } from "@ros/integrations";
 import { cancelNewTimesRuns } from "@ros/workflows";
 import { actorOf, clientIp, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { assertRecentAuth } from "../middleware/reauth";
+import { aiCreditAnswer } from "../services/ai-credit";
 import { CUSTOMER_AUDIT_ACTIONS, auditCsv, customerAuditRow, isoTime } from "../services/audit-history";
 import { AboutApproval, AboutDraftRequest, HiringContactInput, aboutWordingProblem, draftAbout, logoMemberPath, logoResponse, profileOf, publicProfileView, type SettingsWithProfile } from "../services/company-settings-profile";
 import { dismissGettingStarted, markPoliciesReviewed } from "../services/company-trust";
@@ -24,7 +26,10 @@ export const companySettingsRoutes = new Hono<Vars>();
 const ADMIN_ONLY_COMPANY_KEYS: Record<string, string> = {
   planKey: "the plan", plan: "the plan", status: "the account status", slug: "the careers page address", vertical: "the kind of business", id: "the company id", entitlements: "the allowances", usage: "the allowances",
 };
-const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan", verifiedAt: "the ITS company check", verifiedBy: "the ITS company check", onboarding: "the getting-started checklist", candidateScoreShown: "whether candidates see their match score", candidateScoreSetBy: "whether candidates see their match score", trial: "the trial dates" };
+const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan", verifiedAt: "the ITS company check", verifiedBy: "the ITS company check", onboarding: "the getting-started checklist", candidateScoreShown: "whether candidates see their match score", candidateScoreSetBy: "whether candidates see their match score", trial: "the trial dates", accessRequestEmailedAt: "the record of your request for access" };
+
+/** The way on when a plan with no ITS staff time asks ITS to post: the request about the plan, as every Upgrade is. */
+const askForItsPosting = { label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: ITS_POSTING_UPGRADE_QUESTION } };
 
 /** Settings with their own routes below (plan D10): named here so a PATCH that sends them gets a plain answer. */
 const PROFILE_SETTINGS_KEYS: Record<string, string> = {
@@ -114,7 +119,9 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
     }
     if (s.benefitsSummary !== undefined && (s.benefitsSummary || "") !== (existing.settings.benefitsSummary ?? "")) { if (s.benefitsSummary) settings.benefitsSummary = s.benefitsSummary; else delete settings.benefitsSummary; fields.push("benefitsSummary"); }
     // Who posts on the job boards (plan D3): ITS unless the company says its own team does. Boards already waiting keep
-    // the tasks or cards they have; the choice applies to what is posted, updated or taken down from now on.
+    // the tasks or cards they have; the choice applies to what is posted, updated or taken down from now on. On a plan with
+    // no ITS staff time (Rule 6) the team posts, so asking for ITS is refused, with the way on.
+    if (s.boardPosting === "its" && !(await planIncludesItsPosting(tx, t.companyId))) throw new HttpError(402, "plan_has_no_its_posting", ITS_POSTING_UPGRADE_LINE, { upgrade: true, actions: can(t.role, "escalation.create") ? [askForItsPosting] : [] });
     if (s.boardPosting !== undefined && s.boardPosting !== boardPostingOf(existing.settings)) { settings.boardPosting = s.boardPosting; fields.push("boardPosting"); }
     // The company's own paid ZipRecruiter plan (Q11): only then is ZipRecruiter offered as a board.
     if (s.zipRecruiterPlan !== undefined && s.zipRecruiterPlan !== zipRecruiterOffered(existing.settings)) { if (s.zipRecruiterPlan) settings.zipRecruiterPlan = true; else delete settings.zipRecruiterPlan; fields.push("zipRecruiterPlan"); }
@@ -260,6 +267,7 @@ companySettingsRoutes.post("/current/about/draft", requireTenant, async (c) => {
   const container = c.get("container");
   const actor = actorOf(c);
   const out = await draftAbout(container, { companyId: t.companyId, actor, notes: body.notes || null });
+  if (outOfCredit(out)) throw await aiCreditAnswer(container, t, out.refusedHoldUsd, { usedUp: AI_HELP_LINE.about, busy: AI_HELP_BUSY_LINE.about });
   if (!out.ok) throw new HttpError(502, "about_draft_failed", "The assistant could not write a draft just now. Try again in a minute, or write the text yourself.");
   const row = await withTenant(container.db, t.companyId, (tx) => changeProfile(c, tx, t.companyId, "the assistant drafted the text about the company", (settings, { now }) => {
     settings.aboutDraft = { text: out.output.text, draftedAt: now, draftedBy: actor, aiRunId: out.runId, basedOn: out.output.basedOn };

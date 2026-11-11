@@ -102,7 +102,12 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
     exportedAt: new Date().toISOString(),
     person: { firstName: cand.firstName, lastName: cand.lastName, email: cand.email, phone: cand.phone, location: cand.locationText, consent: cand.consent, preferences: cand.preferences, createdAt: cand.createdAt },
     // A decision is in the export whether or not the person was told it yet (plan G1), with whether and when they were.
-    applications: apps.map((a) => ({ id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, eligibility: a.eligibility ? { passed: a.eligibility.passed, failedRules: a.eligibility.failedRules } : null, appliedAt: a.createdAt, rejectReason: a.rejectReason ?? null, ...(DECISION_STAGES.includes(a.stage) ? { decisionTold: a.toldState, decisionToldAt: a.candidateToldAt ?? null } : {}) })),
+    // Whether the hiring team could read an application that was ever past its job's limit (the plans of 5 November 2026,
+    // Rule 2), and since when: one plain field, with no word about a plan.
+    applications: apps.map((a) => {
+      const openedAt = history.find((e) => e.type === "application.unlocked" && e.subjectId === a.id)?.occurredAt;
+      return { id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, eligibility: a.eligibility ? { passed: a.eligibility.passed, failedRules: a.eligibility.failedRules } : null, appliedAt: a.createdAt, rejectReason: a.rejectReason ?? null, ...(DECISION_STAGES.includes(a.stage) ? { decisionTold: a.toldState, decisionToldAt: a.candidateToldAt ?? null } : {}), ...(a.lockedAt ? { hiringTeamCanSeeThis: false } : openedAt ? { hiringTeamCanSeeThis: true, hiringTeamCanSeeThisSince: openedAt } : {}) };
+    }),
     documents: docs,
     screens: scr,
     // Only what actually left us is "sent"; one that may not have arrived says so.
@@ -226,7 +231,8 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
   // The team's private notes (plan H3) lose their words, earlier versions included (the counsel default, register item
   // 25), and so does the note recorded with each decision after an interview. Who wrote a note, and when, stays.
   await q.update(applicationNotes).set({ body: "", previousVersions: [], deletedAt: sql`coalesce(${applicationNotes.deletedAt}, ${now.toISOString()}::timestamptz)` }).where(inArray(applicationNotes.applicationId, appIds));
-  await q.update(interviews).set({ decisionNote: null }).where(inArray(interviews.applicationId, appIds));
+  // What they told us about a time goes too: what suits them, and an accommodation they asked for.
+  await q.update(interviews).set({ decisionNote: null, candidateAvailability: null }).where(inArray(interviews.applicationId, appIds));
   // The team's free-text notes were copied into the history as it happened (a mark, a decline, "I told them myself", a
   // decision after an interview): they are blanked there too. What happened, who did it and when stay.
   await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{note}', 'null'::jsonb)` }).where(and(eq(events.subjectType, "application"), inArray(events.subjectId, appIds), sql`${events.payload}->>'note' is not null`));

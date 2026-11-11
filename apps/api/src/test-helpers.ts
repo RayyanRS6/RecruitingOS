@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
-import type { MembershipRole } from "@ros/contracts";
+import { TRIAL_PLAN_KEY, isCompanyVerified, newTrialTerm, type MembershipRole } from "@ros/contracts";
 import { entitlements, grantPlatformRole, type PlatformRole } from "@ros/core";
 import { applications, candidates, companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
@@ -120,12 +120,27 @@ export const useLaterApplyFlow = (container: Container, companyId: string) => se
 export const useOneVisitApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "one_visit");
 
 /**
- * Puts a company on a plan as the console's Change plan does (entitlements.applyPlan): for suites whose subject is not
- * the Trial plan's 30 days and 3 people (founder decision L-02 B), which move the clock past a month or invite more
- * than three people. Every plan but Trial has no limit of people and no end date.
+ * Puts a company on a plan as the console's Change plan does (entitlements.applyPlan, which takes a retired plan too): for
+ * suites whose subject is not the Free plan's one job and 2 people, which open several jobs, invite more people or move
+ * the clock on. The default, Growth, has no limit of people, no limit of jobs ever and no end date.
  */
 export async function usePlan(container: Container, companyId: string, planKey = "growth"): Promise<void> {
   await withPlatform(container.db, (tx) => entitlements.applyPlan(tx, companyId, planKey, "plan"));
+}
+
+/**
+ * Puts a company on the Trial plan, as one that signed up before the plans of 5 November 2026 is: a new company starts on
+ * Free, so a suite about Trial says so. Its 30 days run from now when the company is already confirmed (COMPANY_CHECK=auto),
+ * as they did at sign-up, and otherwise start at the ITS check.
+ */
+export async function useTrial(container: Container, companyId: string): Promise<void> {
+  await withPlatform(container.db, async (tx) => {
+    await entitlements.applyPlan(tx, companyId, TRIAL_PLAN_KEY, "trial");
+    const [co] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    if (!co) throw new Error(`no company ${companyId}`);
+    const settings = isCompanyVerified(co.settings) && !co.settings.trial ? { ...co.settings, trial: newTrialTerm(container.engine.clock(), "its_check") } : co.settings;
+    await tx.update(companies).set({ status: "trial", settings }).where(eq(companies.id, companyId));
+  });
 }
 
 /**

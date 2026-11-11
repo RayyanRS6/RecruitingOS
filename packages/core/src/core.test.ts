@@ -107,6 +107,11 @@ describe("the stage strip (founder decision B3)", () => {
     expect(ownerStage({ stage: "interview_scheduled" }, { mark: "on_hold", remindAt: later })).toBe("on_hold");
     expect(ownerStage({ stage: "triaged" }, { mark: "not_a_fit_for_now" })).toBe("not_moving_forward");
     expect(ownerStageLabel("not_moving_forward", { mark: "not_a_fit_for_now" })).toBe("Not a fit for now");
+    // the candidate's own choice reads as theirs, never as if the team said no (6 November 2026)
+    expect(ownerStageLabel("not_moving_forward", null, null, null, "withdrawn")).toBe("Withdrew");
+    expect(ownerStageLabel("not_moving_forward", null, null, null, "declined")).toBe("Declined the offer");
+    expect(ownerStageLabel("not_moving_forward", null, null, null, "rejected")).toBe("Not moving forward");
+    expect(ownerStageLabel("not_moving_forward", null, null, null, "talent_pool")).toBe("Not moving forward");
     // out of the process, no mark counts
     expect(ownerStage({ stage: "rejected" }, { mark: "shortlist" })).toBe("not_moving_forward");
     expect(ownerStage({ stage: "hired" }, { mark: "on_hold", remindAt: later })).toBe("hired");
@@ -157,6 +162,20 @@ describe("the stage strip (founder decision B3)", () => {
     expect(at("rejected", "waiting", false)).toBe("not_moving_forward");
     expect(groupFor({ stage: "interview_recommended" }, null, now)).toBe("waiting_on_you");
   });
+  it("counts an interview booked or with times out as in process, and one with no time as waiting on you (6 November 2026)", () => {
+    // "Interview to set up" with nothing booked or out: a person sets the date and time
+    expect(groupFor({ stage: "interview_recommended" }, null, now, null, false)).toBe("waiting_on_you");
+    // a time booked, or times out to pick from: nothing waits on the team
+    expect(groupFor({ stage: "interview_recommended" }, null, now, null, true)).toBe("in_process");
+    expect(groupFor({ stage: "interview_complete" }, null, now, null, true)).toBe("in_process");
+    // marks still count first: a hold that ended waits on you whatever the interview does; a running one waits on nobody
+    expect(groupFor({ stage: "interview_recommended" }, { mark: "on_hold", remindAt: earlier }, now, null, true)).toBe("waiting_on_you");
+    expect(groupFor({ stage: "interview_recommended" }, { mark: "on_hold", remindAt: later }, now, null, false)).toBe("in_process");
+    // nothing else moves: out of the process, an answer awaited, under Cancelled
+    expect(groupFor({ stage: "hired" }, null, now, null, true)).toBe("hired");
+    expect(groupFor({ stage: "offer_sent" }, null, now, null, true)).toBe("waiting_on_candidate");
+    expect(groupFor({ stage: "interview_recommended" }, null, now, { reason: "asked_new_times", autoState: "none", interviewOpen: false }, true)).toBe("waiting_on_you");
+  });
   it("gives the Cancelled column's alerts headlines that name nobody", () => {
     expect(alertHeadline("interview.no_show")).toBe("A candidate did not come to an interview");
     expect(alertHeadline("interview.new_times_sent")).toBe("New interview times went to a candidate who asked for them");
@@ -187,8 +206,11 @@ describe("the candidate's steps (plan A1)", () => {
   it("shows four plain steps and hides the team's internal ones", () => {
     expect(candidateStep("applied", "not_told")).toBe("received");
     expect(candidateStep("received", "not_told")).toBe("received");
-    for (const s of ["ineligible", "eligible", "triaged", "screen_invited", "screening", "screen_complete", "interview_recommended", "finalist", "reference_check", "offer_draft", "offer_approval"] as const) expect(candidateStep(s, "not_told"), s).toBe("under_review");
-    for (const s of ["interview_scheduled", "interview_complete", "debrief"] as const) expect(candidateStep(s, "not_told"), s).toBe("interview");
+    for (const s of ["ineligible", "eligible", "triaged", "screen_invited", "screening", "screen_complete", "interview_recommended"] as const) expect(candidateStep(s, "not_told"), s).toBe("under_review");
+    // after a real interview the step stays Interview (6 November 2026): a finalist read Review again, as if it never happened
+    for (const s of ["interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval"] as const) expect(candidateStep(s, "not_told"), s).toBe("interview");
+    // a private decline after the finalist step keeps the page at Interview too, so nothing hints at it
+    expect(candidateStep("rejected", "not_told", "finalist")).toBe("interview");
     for (const s of ["hired", "withdrawn", "declined", "offer_sent"] as const) expect(candidateStep(s, "not_told"), s).toBe("decision");
     expect(CANDIDATE_STEP_LABEL.under_review).toBe("Under review");
   });

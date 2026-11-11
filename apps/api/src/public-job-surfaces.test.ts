@@ -9,7 +9,7 @@ import { createContainer, type Container } from "./container";
 import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache, robotsTxt } from "./pages/public-feeds";
 import { ASKED_OF_EVERYONE, questionHelp, withPlainQuestionHelp } from "./pages/question-help";
 import { jobUrls } from "./services/job-urls";
-import { pastTheWaitingRoom, statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
+import { pastTheWaitingRoom, statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * The candidate-facing job surfaces (docs/spec/20 section 2 items 1 to 8, 19 and 20; docs/readiness/20 section D):
@@ -51,6 +51,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
   const seedRole = async (c: Container, a: ReturnType<typeof createApp>, cookie: string, name: string) => {
     const j = (method: string, path: string, body?: unknown) => a.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
     const co = (await (await j("POST", "/api/v1/companies", { name, vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
+    // More people apply to one job here than Free's five, and these pages are about a job open to anyone: a plan with no candidate limit.
+    await usePlan(c, co.id, "ultra");
     // A pilot company: ITS switched the one-visit flow on for it (plan Wave E).
     await useOneVisitApplyFlow(c, co.id);
     const s = (await (await j("POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };

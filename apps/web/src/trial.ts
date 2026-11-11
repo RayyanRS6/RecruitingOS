@@ -1,10 +1,10 @@
-import { TRIAL_DAYS, TRIAL_ENDED_LINE, seatsFullLine, type TrialStanding } from "@ros/contracts";
+import { TRIAL_DAYS, TRIAL_ENDED_LINE, onTrialPlan, seatsFullLine, type TrialStanding } from "@ros/contracts";
 
 /**
- * The Trial plan's 30 days and its 3 people (founder decision L-02 B) as the team's pages say them, kept free of React
+ * The Trial plan's 30 days (founder decision L-02 B) and a plan's people as the team's pages say them, kept free of React
  * so the words can be tested (tests/web/trial.test.ts). GET /companies/current carries `trial` (where the 30 days
- * stand, null on another plan) and `usage.seats` (people in use, counting invitations not yet answered). Dates are on
- * the company's own calendar, as the server's notices say them.
+ * stand, null on another plan), `planKey`, and `usage.seats` (people in use, counting invitations not yet answered).
+ * Dates are on the company's own calendar, as the server's notices say them.
  */
 
 /** The zone a company has when it never chose one (the database's default). */
@@ -42,10 +42,10 @@ export function trialPlanLine(trial: TrialStanding | null | undefined, timeZone?
 
 export type SeatUsage = { used: number; limit: number | null };
 
-/** The people line above the invite form: "Your trial includes 3 people: 2 in use, counting invitations not yet answered." */
-export function seatLine(seats: SeatUsage | null | undefined): string | null {
+/** The people line above the invite form: "Your plan includes 3 people: 2 in use, counting invitations not yet answered." ("Your trial" on Trial.) */
+export function seatLine(seats: SeatUsage | null | undefined, planKey?: string | null): string | null {
   if (!seats || seats.limit === null) return null;
-  return `Your trial includes ${seats.limit} people: ${seats.used} in use, counting invitations not yet answered.`;
+  return `Your ${onTrialPlan(planKey) ? "trial" : "plan"} includes ${seats.limit} people: ${seats.used} in use, counting invitations not yet answered.`;
 }
 
 /** Whether every place is in use, so a new invitation would be refused (the API's 409 `seats_full` says the same). */
@@ -54,8 +54,8 @@ export function seatsAllUsed(seats: SeatUsage | null | undefined): boolean {
 }
 
 /** What the invite form says when every place is in use; the same words as the API's refusal. */
-export function seatsFullWords(seats: SeatUsage): string {
-  return seatsFullLine(seats.limit ?? 0);
+export function seatsFullWords(seats: SeatUsage, planKey?: string | null): string {
+  return seatsFullLine(seats.limit ?? 0, planKey);
 }
 
 /** The request to ITS about choosing a plan, opened in the request form first (never sent in one click). */

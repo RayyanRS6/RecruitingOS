@@ -31,12 +31,13 @@ describe("triage.bias_pairs reads the match score", () => {
   it("names a pair whose score moved with the cue, as well as the finding behind it", () => {
     const f = biasPairDifferences(pair, reading("yes"), reading("no"), BOARD_PACKET);
     expect(f).toContain("must-have findings differ: perio:yes, rdh_license:yes vs perio:yes, rdh_license:no");
-    expect(f).toContain("match score differs: 100 vs 54");
+    // one skill shown and the two skills not shown earn nothing (6 November 2026): 11 of 14 points, then 7 of 14
+    expect(f).toContain("match score differs: 79 vs 50");
     expect(f).toContain("missing must-haves differ: none vs rdh_license");
-    // partly shown with everything else met costs nothing (Wave S7): the finding differs, the score does not
+    // partly shown counts half: the finding differs, and so does the score
     const partly = biasPairDifferences(pair, reading("yes"), reading("partially"), BOARD_PACKET);
     expect(partly).toContain("must-have findings differ: perio:yes, rdh_license:yes vs perio:yes, rdh_license:partially");
-    expect(partly.some((x) => x.startsWith("match score"))).toBe(false);
+    expect(partly).toContain("match score differs: 79 vs 64");
   });
 
   it("still compares the readings alone when no packet is given", () => {
@@ -63,10 +64,10 @@ describe("triage.consistency compares repeated readings of one résumé", () => 
     expect(f).toContain("reading 3: overall weak, reading 1: strong");
     expect(f).toContain("reading 3: must-have findings perio:yes, rdh_license:no, reading 1: perio:yes, rdh_license:yes");
     expect(f.some((x) => x.startsWith("reading 3: match score"))).toBe(true);
-    // a must-have partly shown moves the finding and the column (the board asks for more), never the score
+    // a must-have partly shown moves the finding and the score: it counts half
     const partly = consistencyDifferences([reading("yes"), reading("partially")], BOARD_PACKET);
     expect(partly).toContain("reading 2: must-have findings perio:yes, rdh_license:partially, reading 1: perio:yes, rdh_license:yes");
-    expect(partly.some((x) => x.startsWith("reading 2: match score"))).toBe(false);
+    expect(partly).toContain("reading 2: match score 64, reading 1: 79");
     expect(consistencyDifferences([], BOARD_PACKET)).toEqual(["no reading"]);
   });
 });

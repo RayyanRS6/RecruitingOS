@@ -8,13 +8,15 @@ import { Link } from "../../nav";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { InlineUndo } from "../../components/InlineUndo";
+import { useCompanyCheck } from "../../components/use-company-check";
+import { interviewLine } from "../../interview-time";
 import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { openScreenOf } from "../../evidence";
-import { offerMadeOn, plainDayWords } from "../../hiring";
+import { offerMadeOn, plainDayWords, recordedOutcomeLine } from "../../hiring";
 import { aiInterviewCard, callNotesState, noScreenWords, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
 import { HIDDEN_LINK_NOTE, sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft, type ThreadPart } from "../../telling";
-import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard, StrengthsAndConcerns } from "./assessment";
+import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScorecardWaitingCard, ScreenCard, StrengthsAndConcerns } from "./assessment";
 import { CallNotesCard } from "./call-notes";
 import { MatchVerdict, NextStepLine, ScoreBreakdown } from "./match";
 import type { NextStepAction } from "./match-view";
@@ -40,6 +42,7 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
       <AiInterviewCard a={a} roleId={roleId} onDecline={() => onNext?.({ kind: "move", to: "not_moving_forward", label: "Not moving forward" })} />
       <NoAssessmentCard detail={a} />
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
+      <ScorecardWaitingCard detail={a} />
       <MatchVerdict a={a}>
         <NextStepLine a={a} onAction={onNext} />
         <StrengthsAndConcerns assessment={latest} />
@@ -95,6 +98,7 @@ function AiInterviewCard({ a, roleId, onDecline }: { a: ApplicationDetail; roleI
  * company's questions it answered (Wave S7).
  */
 function WhereTheyAre({ a }: { a: ApplicationDetail }) {
+  const check = useCompanyCheck();
   const outcomes = useQuery({ queryKey: ["outcomes", a.id], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRecord[] }>(`/api/v1/applications/${a.id}/outcomes`), enabled: ["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(a.stage) });
   const recorded = outcomes.data?.outcomes.find((o) => !o.correctedAt);
   const lines: string[] = [];
@@ -115,13 +119,14 @@ function WhereTheyAre({ a }: { a: ApplicationDetail }) {
       {lines.length || interviews.length ? (
         <div className="grid gap-1">
           {lines.map((l) => <p key={l} className="small">{l}</p>)}
-          {interviews.map((i) => <p key={i.id} className="small"><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {i.status.replace(/_/g, " ")}{i.startsAt ? ` · ${new Date(i.startsAt).toLocaleString("en-US", { timeZone: i.timezone ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : i.status === "scheduling" ? ` · ${i.offeredSlots.length} times offered` : ""}{i.decision ? ` · decision: ${i.decision.replace(/_/g, " ")}` : ""}</p>)}
+          {/* each interview in the Interviews page's own words (`interviewLine`), never its raw status */}
+          {interviews.map((i) => <p key={i.id} className="small"><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {interviewLine(i, check)}</p>)}
         </div>
       ) : null}
       {recorded ? (
         <p className="small">
           <Chip tone={recorded.outcome === "hired_externally" ? "good" : "neutral"}>{OUTCOME_WORDS[recorded.outcome] ?? recorded.outcome.replace(/_/g, " ")}</Chip>{" "}
-          <span className="muted">Recorded by {recorded.recordedBy.name ?? "a team member"} on {new Date(recorded.recordedAt).toLocaleDateString()}{recorded.hireDate ? `, hire date ${recorded.hireDate}` : ""}{recorded.correctionOf ? " (a correction by an ITS administrator)" : ""}. {outcomes.data?.statement}</span>
+          <span className="muted">{recordedOutcomeLine(recorded)} {outcomes.data?.statement}</span>
         </p>
       ) : null}
     </Card>
@@ -271,6 +276,7 @@ export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; 
       {a.screens.map((s, i) => <ScreenCard key={s.id} screen={s} open={i === 0} questions={panelQuestions(a.packetLabels)} mustHaves={a.packetLabels.mustHaves} timeline={a.timeline} action={i === 0 ? <StopScreen a={a} roleId={roleId} /> : undefined} />)}
       {notesCard}
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
+      <ScorecardWaitingCard detail={a} />
       {scorecards.slice(a.assessments[0]?.kind === "screen" ? 1 : 0).map((s) => <AssessmentCard key={s.id} assessment={s} detail={a} roleId={roleId} labels={a.packetLabels} />)}
       {a.assessments[0]?.kind === "screen" ? <p className="small muted">The latest AI review of this chat is on the Overview, under Full breakdown.</p> : null}
     </div>
@@ -517,7 +523,8 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
           {preview.data ? <div className="small muted whitespace-pre-wrap border-t border-line pt-3">{aiHelped && preview.data.aiFooter ? preview.data.aiFooter : preview.data.footer}</div> : null}
           <div className="row">
             <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
-            {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
+            {/* no AI call on the company's credit for someone locked (the API refuses it too) */}
+            {!kept && !a.lockedAt ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
             <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
           </div>
           {aiHelped ? (

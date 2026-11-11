@@ -175,12 +175,16 @@ export function noBoardsLine(boards: readonly BoardChoiceView[]): string | null 
   return "No job boards were chosen for this job. You can add LinkedIn or Indeed from the Share tab at any time.";
 }
 
-/** The note when interview rounds have nobody on them yet, or null. */
+/**
+ * The line when interview rounds have nobody on them yet, or null. Since 6 November 2026 nobody needs naming first: whoever
+ * sets a date and time chooses who interviews (the person pressing, unless they tick someone else), so it is a plain fact,
+ * never a caution, and promises no times offered (the release review, 11 November 2026).
+ */
 export function interviewersNote(i: { rounds: number; roundsWithoutInterviewers: number }): string | null {
   if (!i.rounds || !i.roundsWithoutInterviewers) return null;
-  const when = "Choose who interviews now, so the first good applicants can be offered times straight away.";
-  if (i.roundsWithoutInterviewers === i.rounds) return `Nobody is set to interview yet. ${when}`;
-  return `${i.roundsWithoutInterviewers} of the ${i.rounds} interview rounds have nobody set to interview yet. ${when}`;
+  const who = "Whoever sets a date and time chooses who interviews.";
+  if (i.roundsWithoutInterviewers === i.rounds) return `Nobody is named to interview yet. ${who}`;
+  return `${i.roundsWithoutInterviewers} of the ${i.rounds} interview rounds ${i.roundsWithoutInterviewers === 1 ? "has" : "have"} nobody named to interview yet. ${who}`;
 }
 
 /** The boards an approved edit left showing the earlier version, and who brings them up to date. */
@@ -208,11 +212,6 @@ export function legalLines(check: LegalCheck | null | undefined): { missing: Leg
   if (!check) return { missing: [], inOrder: [] };
   const missing = check.items.filter((i) => i.blocking && !i.met);
   return { missing, inOrder: check.items.filter((i) => !missing.includes(i)) };
-}
-
-/** Whether the reason approval is held is the legal check (the card then lists the items instead of repeating it). */
-export function isLegalReason(reason: string | null | undefined): boolean {
-  return !!reason && reason.startsWith("Before this job can go live, the law where it is asks for");
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

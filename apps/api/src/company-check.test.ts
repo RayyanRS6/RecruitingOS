@@ -10,7 +10,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { createApplication } from "./services/applications";
-import { signInAdmin, signInAs } from "./test-helpers";
+import { signInAdmin, signInAs, usePlan, useTrial } from "./test-helpers";
 
 /**
  * The one-time ITS check (founder decision B7; plan B1) and the getting-started card (plan B2). A company that signs
@@ -50,6 +50,8 @@ describe("the ITS company check and getting started", () => {
     const r = await json(owner, "POST", "/api/v1/companies", { name: "Check Dental", vertical: "dental", sizeBand: "20-49", website: "checkdental.example", ownerName: "Olive Owner", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(r.status).toBe(201);
     ({ id: companyId, slug } = (await r.json()) as { id: string; slug: string });
+    // on Trial, as a company that signed up earlier is: the check also starts its 30 days (Free has no clock, free-plan.test.ts)
+    await useTrial(container, companyId);
     admin = await signInAdmin(app, container, "ana.admin@identifiedtalent.com", "Ana Admin");
   });
   afterAll(async () => {
@@ -61,7 +63,9 @@ describe("the ITS company check and getting started", () => {
     expect(current.settings.verifiedAt).toBeUndefined();
     const notice = mail().sent.find((m) => m.to === container.env.ITS_QUEUE_EMAIL && m.subject.includes("[company check]"));
     expect(notice?.subject).toBe("[company check] Check Dental is waiting for the ITS check");
-    expect(notice?.text).toContain("Owner: Olive Owner <owner@check.test>");
+    // the address their sign-in proved, then the name they typed, as the request's email says it (AP-10, 9 November 2026)
+    expect(notice?.text).toContain("Owner: owner@check.test (Olive Owner)");
+    expect(notice?.text).toContain("Only the email address is proved; the rest is what they typed.");
     expect(notice?.text).toContain("Website: checkdental.example");
     expect((await page(`/careers/${slug}`)).status).toBe(404);
     for (const settings of [{ verifiedAt: "2026-10-08T00:00:00.000Z" }, { verifiedBy: { kind: "user", id: "me" } }, { onboarding: { jobBoardsConfirmedAt: "2026-10-08T00:00:00.000Z" } }]) {
@@ -100,14 +104,15 @@ describe("the ITS company check and getting started", () => {
     expect(mine?.gettingStarted).toMatchObject({ verified: false, heldMessages: 0, dismissible: true });
     expect(mine?.body).toContain("ITS is confirming your company");
     expect(mine?.body).toContain("emails to candidates wait");
-    expect(stepKeys(mine)).toEqual(["company_details", "team", "interview_hours", "first_role", "job_boards", "ai_rules"]);
+    // no step for interview hours (6 November 2026): a person sets each interview's date and time, so hours are optional
+    expect(stepKeys(mine)).toEqual(["company_details", "team", "first_role", "job_boards", "ai_rules"]);
     // derived from the record: the website was given at sign-up; a role exists; nothing else is done yet
     expect(step(mine, "company_details")).toMatchObject({ done: false, detail: "Still to add: a careers-page introduction, a benefits summary. A logo is optional." });
     expect(step(mine, "first_role")?.done).toBe(true);
     expect(mine?.gettingStarted?.steps.filter((s) => s.done).map((s) => s.key)).toEqual(["first_role"]);
     for (const s of mine?.gettingStarted?.steps ?? []) expect(s.why.length, s.key).toBeGreaterThan(20);
     const hm = await signInAs(container, app, { companyId, role: "hiring_manager" });
-    expect(stepKeys(await setupCard(hm))).toEqual(["interview_hours", "first_role"]);
+    expect(stepKeys(await setupCard(hm))).toEqual(["first_role"]);
     const hr = await signInAs(container, app, { companyId, role: "hr" });
     expect(stepKeys(await setupCard(hr))).toEqual(["team"]);
     // only those who may draft and approve roles are told they can meanwhile; HR may do neither
@@ -246,6 +251,35 @@ describe("the ITS company check and getting started", () => {
     const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
     expect(co.settings.trial).toEqual(trialTerm);
     expect(await container.db.select().from(events).where(and(eq(events.companyId, companyId), eq(events.type, "trial.started")))).toHaveLength(1);
+  });
+
+  it("under open sign-up anyone has the direct door, so a typed name cannot pass for an address of ours in the email ITS acts on (the review of 9 November 2026)", async () => {
+    expect(container.env.SIGNUP_MODE).toBe("open");
+    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "stranger@lookalike.test" }) });
+    const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
+    const stranger = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
+    const r = await json(stranger, "POST", "/api/v1/companies", { name: "Lookalike Dental", vertical: "dental", sizeBand: "1-19", ownerName: "Pat Example <pat@its.example>", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
+    expect(r.status).toBe(201);
+    const notice = mail().sent.find((m) => m.to === container.env.ITS_QUEUE_EMAIL && m.subject === "[company check] Lookalike Dental is waiting for the ITS check");
+    expect(notice?.text).toContain("Owner: stranger@lookalike.test (Pat Example pat@its.example)");
+    expect(notice?.text).not.toContain("<pat@its.example>");
+    expect(notice?.text).toContain("Only the email address is proved; the rest is what they typed.");
+  });
+
+  it("Send the held messages only sends: from a card that still showed the company confirmed, once the confirmation was taken back, it confirms nothing (the review of 9 November 2026)", async () => {
+    // confirmed, as the tests before leave it; another administrator takes the confirmation back
+    expect((await verify(admin, { verified: false, reason: "A doubt about the company.", confirm: true })).status).toBe(200);
+    const heldOnly = { verified: true, heldOnly: true, reason: "Held messages sent after the company was confirmed.", confirm: true };
+    const refused = await verify(admin, heldOnly);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "not_confirmed", message: "Check Dental is not confirmed any more, so nothing was sent. Its held messages go out when it is confirmed again." } });
+    const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    expect(co.settings.verifiedAt).toBeUndefined();
+    expect((await page(`/careers/${slug}`)).status).toBe(404);
+    // confirmed again, the same press sends what is still held and changes nothing else
+    expect((await verify(admin, { verified: true, reason: "Spoke with the owner again.", confirm: true })).status).toBe(200);
+    expect(await (await verify(admin, heldOnly)).json()).toMatchObject({ ok: true, verified: true, changed: false });
+    expect((await verify(admin, { ...heldOnly, heldOnly: false })).status).toBe(400);
   });
 });
 
@@ -496,6 +530,11 @@ describe("getting started: ticks, hiding, and drafting the first role with ITS",
   });
 
   it("ticks job-board access when ITS confirms it, and the AI rules when an owner or admin has reviewed them", async () => {
+    // the step is there only while ITS posts for the company: on the Free plan its team does, and it never shows
+    const keys = async () => (await setupCard(owner))?.gettingStarted?.steps.map((s) => s.key);
+    expect(await keys()).not.toContain("job_boards");
+    await usePlan(container, companyId, "pro");
+    expect(await keys()).toContain("job_boards");
     const admin = await signInAdmin(app, container, "ben.admin@identifiedtalent.com", "Ben Admin");
     expect((await json(owner, "POST", `/api/v1/admin/customers/${companyId}/job-boards`, { confirmed: true })).status).toBe(403);
     expect((await json(admin, "POST", `/api/v1/admin/customers/${companyId}/job-boards`, { confirmed: true })).status).toBe(200);

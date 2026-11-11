@@ -6,12 +6,14 @@ import { Alert, Button, Card, Chip, Dialog, EvidenceChip, Menu } from "@ros/ui";
 import { api, ApiError, type ApplicationDetail, type AssessmentResult, type Me, type Screen } from "../../api/client";
 import { ACCESS_LIMITS, accessWords } from "../../recruiter-access";
 import { toast } from "../../toast";
+import { AI_HELP_UPGRADE_QUESTION, sureBeside } from "@ros/contracts";
 import { AskRecruiter } from "../../components/AskRecruiter";
-import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, screenQuestionText } from "../../evidence";
+import { Upgrade } from "../../components/Upgrade";
+import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, SCORECARD_WAITING_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, scorecardWaiting, screenQuestionText } from "../../evidence";
 import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, hiddenAnswersLine, isRecruiterNote, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
 import { actionToast } from "../../talent-actions";
-import { ASSISTANT_NOTE_LABEL, REC_LABEL, chatGapLines, writeupLines, writeupSummary, type PanelQuestion, type WriteupLine } from "./helpers";
-import { competencyChip, importanceTag, orderCompetencyFindings, orderRequirementFindings, requirementChip, skillLabels } from "./match-view";
+import { ASSISTANT_NOTE_LABEL, chatGapLines, recChip, writeupLines, writeupSummary, type PanelQuestion, type WriteupLine } from "./helpers";
+import { competencyChip, fitWord, importanceTag, matchOf, orderCompetencyFindings, orderRequirementFindings, requirementChip, skillLabels } from "./match-view";
 import { CARD, QUOTE, STEP, Why } from "./why";
 
 /**
@@ -124,7 +126,8 @@ export function NoAssessmentCard({ detail }: { detail: ApplicationDetail }) {
       <div className="row"><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></div>
       <p>{ASSESSMENT_UNAVAILABLE_TEXT}</p>
       {resumeUnreadable(detail) ? <p className="small text-caution">{RESUME_UNREADABLE_TEXT}</p> : null}
-      <Why>Nothing is hidden: the résumé, the answers and the messages are on this panel. The assistant's answer was not usable after two tries; ITS has the details.</Why>
+      {/* AI never read them (`noReading`): the verdict below says why, so no word here about tries */}
+      <Why>{detail.noReading === "no_ai_notice" ? "Nothing is hidden: the résumé, the answers and the messages are on this panel." : "Nothing is hidden: the résumé, the answers and the messages are on this panel. The assistant's answer was not usable after two tries; ITS has the details."}</Why>
     </Card>
   );
 }
@@ -147,6 +150,17 @@ export function ScorecardUnavailableCard({ detail, roleId }: { detail: Applicati
       <p>{SCORECARD_UNAVAILABLE_TEXT}</p>
       <div className="row"><AskRecruiter roleId={roleId} applicationId={detail.id} size="sm" /></div>
       <Why>Nothing is hidden: the whole chat is on the AI interview tab. {state.recruiterAsked ? "An ITS recruiter has been asked to look into it." : "ITS has the details."}</Why>
+    </Card>
+  );
+}
+
+/** The AI review of a finished AI interview waits for the plan's AI help: said, so it never looks forgotten, with the way on. */
+export function ScorecardWaitingCard({ detail }: { detail: ApplicationDetail }) {
+  if (!scorecardWaiting(detail)) return null;
+  return (
+    <Card title="AI review of the AI interview" className={STEP}>
+      <p>{SCORECARD_WAITING_TEXT}</p>
+      <div className="row"><Upgrade size="sm" reason={AI_HELP_UPGRADE_QUESTION} /></div>
     </Card>
   );
 }
@@ -213,12 +227,18 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
   const look = closerLook(detail);
   const marked = look.checkedId === assessmentId;
   const reasons = result.confidenceReasons ?? [];
+  // One verdict word on the panel (6 November 2026): the person's fit, on their latest review only, so an earlier review's
+  // own word never disagrees with it; an older answer without the fit keeps the review's word. How sure the AI was only beside Strong or Potential.
+  const fit = matchOf(detail)?.fit ?? null;
+  const verdict = !fit ? { label: overallLabel(overall), tone: overall === "strong" ? ("good" as const) : overall === "weak" ? ("caution" as const) : ("accent" as const) } : detail.assessments[0]?.id === assessmentId ? fitWord({ fit }) : null;
+  const sure = sureBeside(fit);
+  const rec = recChip(result.recommendation, fit);
   return (
     <Card title={title ?? (kind === "screen" ? "AI review of the AI interview" : "AI review of the résumé")} className={marked ? STEP : CARD} needsYou={marked} aside={<span className="row"><span className="small muted">{new Date(createdAt).toLocaleDateString()}</span><FlagAssessment applicationId={detail.id} assessmentId={assessmentId} /></span>}>
-      <div className="row"><Chip tone={overall === "strong" ? "good" : overall === "weak" ? "caution" : "accent"}>{overallLabel(overall)}</Chip><Chip tone={result.recommendation === "decline_recommended" ? "caution" : "neutral"}>{REC_LABEL[result.recommendation] ?? result.recommendation}</Chip><Chip>{confidence} confidence</Chip>{marked ? <Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip> : null}</div>
+      <div className="row">{verdict ? <Chip tone={verdict.tone}>{verdict.label}</Chip> : null}{rec ? <Chip tone={result.recommendation === "decline_recommended" ? "caution" : "neutral"}>{rec}</Chip> : null}{sure ? <Chip>{confidence} confidence</Chip> : null}{marked ? <Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip> : null}</div>
       {marked && look.inconsistent && look.reason ? <Alert tone="caution">{look.reason}</Alert> : null}
       <p>{result.summary}</p>
-      {reasons.length ? <p className="small muted">Confidence is {confidence} because {reasons.join("; ")}.</p> : null}
+      {sure && reasons.length ? <p className="small muted">Confidence is {confidence} because {reasons.join("; ")}.</p> : null}
       {triage && resumeUnreadable(detail) ? <Alert tone="caution">{RESUME_UNREADABLE_TEXT}</Alert> : null}
       {kind === "screen" && (result.compensationExpectation?.stated || result.availability?.stated) ? (
         <dl className="kv">
@@ -322,7 +342,7 @@ export function ScreenCard({ screen, open, action, questions = [], mustHaves = [
       ) : null}
       {lines.length ? (
         <div className="grid gap-1">
-          <p className="small muted">{written.length ? "Their other answers" : "Their answers"}{lines.some((l) => l.declined) ? `. "${DECLINED_WORDS}" is never held against them; it counts as not known yet.` : ""}</p>
+          <p className="small muted">{written.length ? "Their other answers" : "Their answers"}{lines.some((l) => l.declined) ? `. "${DECLINED_WORDS}" is never read as a no; it counts as not known yet.` : ""}</p>
           <dl className="kv small">
             {lines.map((l) => (
               <Fragment key={l.key}>

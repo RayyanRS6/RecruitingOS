@@ -6,11 +6,14 @@ import { useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, ErrorState, Field, Icon, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 
+/** The product's name, as the heading below writes it, for the sentences that name it. A rename changes this line and the heading. */
+const PRODUCT = "Recruiting OS";
+
 const ERRORS: Record<string, string> = {
   invite_email_mismatch: "That invitation was sent to a different email address. Sign in with the address the invitation was sent to, or continue without it.",
   invite_expired: "That invitation has expired or was withdrawn. Ask the person who invited you for a new one, then sign in as usual.",
-  // The company's Trial plan has all its people (founder decision L-02 B).
-  invite_seats_full: "This company's trial is full. Ask the person who invited you to choose a plan, then open the invitation link again.",
+  // The company's plan has all its people.
+  invite_seats_full: "This company's plan is full. Ask the person who invited you to upgrade, then open the invitation link again.",
   mfa_expired: "The second-factor step timed out. Sign in again.",
   mfa_failed: "The code was wrong too many times. Sign in again.",
   mfa_unavailable: "The second-factor service is not available right now. Try again in a few minutes.",
@@ -23,9 +26,13 @@ const ERRORS: Record<string, string> = {
   staff_provider_required: "ITS staff sign in with their Microsoft 365 account.",
   staff_provider_linked: "This ITS account is also linked to another sign-in method. Ask an ITS administrator to remove that link, then sign in with Microsoft 365.",
   mfa_required: "ITS staff need a second factor. Finish multi-factor sign-in with Microsoft and try again.",
-  email_unverified: "Your email address is not verified with the sign-in provider. Verify it and try again.",
+  email_unverified: "Your email address is not verified with the sign-in provider. Ask your IT to check the email address on your account, or use the other sign-in button.",
   exchange_failed: "The sign-in could not be completed. Try again.",
   identity_mismatch: "This email address is already linked to a different Google or Microsoft account. Sign in with the account you used before, or contact ITS support to change it.",
+  // Microsoft's refusals, as the sign-in callback names them (apps/api/src/routes/auth.ts).
+  microsoft_needs_approval: `Your company's IT has to approve ${PRODUCT} once before you can sign in with Microsoft. Ask them, or continue with Google.`,
+  microsoft_declined: `The Microsoft sign-in did not finish. Start again and press Accept. If your IT has to approve ${PRODUCT} first, try again once they have.`,
+  microsoft_no_email: "Microsoft did not share an email address for this account. Ask your IT to check it, or continue with Google.",
 };
 
 /**

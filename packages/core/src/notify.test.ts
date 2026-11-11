@@ -74,8 +74,8 @@ describe("notification preferences", () => {
 describe("updates nobody can turn off", () => {
   const everythingOff = Object.fromEntries(NOTIFY_GROUPS.map((g) => [g, "off"]));
 
-  it("are a recruiter given access, ITS confirming the company or taking it back, a candidate asking for a person, and an eligibility hold waiting", () => {
-    expect([...NOTIFY_ALWAYS.keys()].sort()).toEqual(["application.ineligible_hold", "application.ineligible_review_due", "company.unverified", "company.verified", "recruiter.access_granted", "recruiter.claimed", "screen.human_requested"]);
+  it("are a recruiter given access, ITS confirming the company, taking it back, accepting a request for access or giving access back, a candidate asking for a person, and an eligibility hold waiting", () => {
+    expect([...NOTIFY_ALWAYS.keys()].sort()).toEqual(["application.ineligible_hold", "application.ineligible_review_due", "company.access_accepted", "company.access_restored", "company.unverified", "company.verified", "recruiter.access_granted", "recruiter.claimed", "screen.human_requested"]);
     for (const a of NOTIFY_ALWAYS.values()) {
       expect(a.label.length).toBeGreaterThan(10);
       expect(a.why.length).toBeGreaterThan(10);

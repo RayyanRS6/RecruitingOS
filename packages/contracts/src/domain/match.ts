@@ -41,11 +41,16 @@ export const MATCH_SCORE_BANDS: ReadonlyArray<{ band: MatchBand; min: number; la
 export const MISSING_MUST_HAVE_CAP = 54;
 /** How much each kind of requirement counts: must-haves most, then the skills by their importance. */
 export const MATCH_WEIGHT = { must_have: 4, essential: 3, important: 2, helpful: 1 } as const;
+
 /**
- * The rule for a partly shown requirement, in the words a person (and, after sending, the candidate) reads (Wave S7,
- * fairness run of 15 Oct 2026): showing part of something never scores lower than saying nothing about it.
+ * The one verdict word beside the number (the owner, 6 November 2026), worked out in code from the same numbers by `fitOf`,
+ * so it can never disagree with them. Wherever a word sits beside the score it is this one: the band stays in the data for
+ * the badge's colour and the candidate's own view.
  */
-export const PARTLY_SHOWN_RULE = "A requirement partly shown counts half, or as much as the rest of the evidence when that is higher, so showing part of something never scores lower than saying nothing about it.";
+export type MatchFit = "strong" | "potential" | "weak" | "missing_must_have" | "insufficient";
+export const MATCH_FIT_LABEL: Record<MatchFit, string> = { strong: "Strong match", potential: "Potential match", weak: "Weak match", missing_must_have: "Missing a must-have", insufficient: "Not enough evidence" };
+/** How sure the AI was shows only beside Strong or Potential: beside any other word it says nothing new. An older answer without the word keeps it. */
+export const sureBeside = (fit: MatchFit | null | undefined): boolean => !fit || fit === "strong" || fit === "potential";
 
 /** One requirement the score counted: what it is, how much of the score it carries, how much of it was met, and the quote. */
 export type MatchCriterion = {
@@ -54,16 +59,10 @@ export type MatchCriterion = {
   mustHave: boolean;
   /** For a skill; null for a must-have. */
   importance: Importance | null;
-  /** This requirement's share of the score, in points out of 100 (of the requirements that could be judged). */
+  /** This requirement's share of the score, in points out of 100. */
   weightPct: number;
   /** 100 met, 50 partly, 0 not met. */
   pctMet: number;
-  /**
-   * Set on a partly shown requirement counted above half (`PARTLY_SHOWN_RULE`): the share of it the score counted, the
-   * level of the rest of the evidence, so it never pulls the score below what leaving it out would give. `pointsLost`
-   * is worked out from this; `pctMet` stays 50.
-   */
-  countedPct?: number;
   pointsLost: number;
   /** The finding in plain words: "Shown", "Partly shown", "Not met" (a must-have), "Shown", "Partly shown", "Goes against it" (a skill). */
   finding: string;
@@ -77,7 +76,10 @@ export type MatchCriterion = {
 /**
  * Whether the AI interview is in the score (20 October 2026, R20-9): every applicant gets one, and the score counts both
  * readings once it is scored. Until then the number is the résumé's alone, and says so. `done`: the interview's scorecard
- * is in the score. `being_scored`: sent, its scorecard not written yet. `not_done_yet`: being prepared, or its link is
+ * is in the score. `being_scored`: sent, its scorecard not written yet. `not_scored`: sent, and its scorecard waits for
+ * the company's AI credit, so the team reads the answers themselves. `scoring_failed`: sent, and its scorecard could not be
+ * written, for good (the screen's run gave up and asked ITS to look; the lead's D2, 11 November 2026), so the team reads the
+ * answers themselves and the number is the résumé's, final unless someone runs it again. `not_done_yet`: being prepared, or its link is
  * open (not started, started, paused, or they asked for a person). `not_done`: it closed without being sent (the link
  * lapsed, they stopped part-way or said no, or it was stopped), or it never came because the month's AI interviews
  * stayed used up for the whole sixty-day wait (Q17); one wording for all of these, so the label never says how far
@@ -85,7 +87,7 @@ export type MatchCriterion = {
  * offered one (an application from before 20 October 2026, or one held on an eligibility answer, which the board
  * places as held).
  */
-export const InterviewInScore = z.enum(["done", "being_scored", "not_done_yet", "not_done", "none"]);
+export const InterviewInScore = z.enum(["done", "being_scored", "not_scored", "scoring_failed", "not_done_yet", "not_done", "none"]);
 export type InterviewInScore = z.infer<typeof InterviewInScore>;
 /**
  * The label beside the score wherever it shows (the board card, the list's tooltip, the candidate panel, Compare), so a
@@ -95,6 +97,8 @@ export type InterviewInScore = z.infer<typeof InterviewInScore>;
 export const SCORE_BASIS_WORDS: Record<InterviewInScore, string> = {
   done: "From the résumé and the AI interview",
   being_scored: "Résumé only for now: AI interview done, being scored",
+  not_scored: "Résumé only: AI interview done, not scored",
+  scoring_failed: "Résumé only: AI interview could not be scored",
   not_done_yet: "Résumé only: AI interview not done yet",
   not_done: "Résumé only: no AI interview",
   none: "Résumé only: no AI interview",
@@ -102,28 +106,53 @@ export const SCORE_BASIS_WORDS: Record<InterviewInScore, string> = {
 export const SCORE_BASIS_INTERVIEW_ONLY = "From the AI interview";
 /** The small grey chip beside a résumé-only score on the list (any status but `done`). */
 export const RESUME_ONLY_CHIP = "Résumé only";
+/** Where the AI interview is still to come into the score, through no choice of the candidate's yet: their number is only a floor. */
+export const INTERVIEW_STILL_COMING: readonly InterviewInScore[] = ["not_done_yet", "being_scored", "not_scored"];
 
 /**
- * A requirement the evidence says nothing about either way: left out of the score, and an open question instead.
- * `unquotedNo` is set when a reading said it is not met (or goes against it) without quoting the candidate's own words:
- * still left out, but the board asks a person to look (plan F6).
+ * The groups of "Sort: Score", highest first within each (6 November 2026): 0 the number is final (the AI interview is in,
+ * it closed unsent, its scorecard could not be written, it was never offered, or an older answer that does not say); 1 the
+ * interview is still coming, so nobody
+ * ranks low just for not having done it yet; 2 no score yet. The list, the API's `order=score` and Compare all use it.
  */
-export type MatchUnknown = { key: string; label: string; mustHave: boolean; importance: Importance | null; unquotedNo?: boolean };
+export function scoreRank(a: { score?: number | null; interview?: InterviewInScore | null }): number {
+  if (a.score === null || a.score === undefined) return 2;
+  return a.interview && INTERVIEW_STILL_COMING.includes(a.interview) ? 1 : 0;
+}
+
+/**
+ * A requirement nothing was said about either way: it earns no points so far and is never read as a no, and it is an open
+ * question. `weightPct` and `pointsLost` are its share of the score, all still open. `unquotedNo` is set when a reading said
+ * it is not met (or goes against it) without quoting the candidate's own words: still not known, but the board asks a person
+ * to look (plan F6).
+ */
+export type MatchUnknown = { key: string; label: string; mustHave: boolean; importance: Importance | null; weightPct: number; pointsLost: number; unquotedNo?: boolean };
 
 /**
  * The match score of one application, worked out by code from the stored, quote-checked findings (never by the model):
  * `score` is null when nothing could be judged yet. `breakdown` lists the requirements that were judged, the ones that
- * cost the most points first; `unknown` the ones left out ("based on 5 of 7 requirements"). `missingMustHave` holds the
- * must-haves the candidate's own words show are not met (a verified quote only); one of them holds the score at 54.
- * `interview` and `basis` (R20-9) say whether the AI interview is in it, and in which words; they never change the number.
+ * cost the most points first; `unknown` the ones nothing was said about ("based on 5 of 7 requirements"). `missingMustHave`
+ * holds the must-haves the candidate's own words show are not met (a verified quote only); one of them holds the score at
+ * 54. `interview` and `basis` (R20-9) say whether the AI interview is in it, and in which words; they never change the number.
  */
 export type MatchScore = {
   score: number | null;
   band: MatchBand | null;
   bandLabel: string | null;
+  /** The one verdict word (`fitOf`), from the same numbers as the score. */
+  fit: MatchFit;
   coverage: { known: number; total: number; words: string };
   breakdown: MatchCriterion[];
   unknown: MatchUnknown[];
+  /** The points still open: the share of the score that nothing has been said about yet. */
+  openPoints: number;
+  /**
+   * The must-haves the role checks only in the team's own interviews that no reading shows in full yet (not known, partly
+   * shown, or claimed with nothing quoted): never part of the number, but not known either, so the verdict word is never
+   * Strong match beside one, the board never starts a decline ticked on a low score while one is open, and on the Shortlist
+   * it says to check it in the interview (the release review, 11 November 2026). An older answer leaves it out.
+   */
+  checkInInterview?: Array<{ key: string; label: string }>;
   /** How many judged requirements are fully met ("N more at full marks"). */
   fullMarks: number;
   missingMustHave: Array<{ key: string; label: string; quote: string }>;
@@ -149,76 +178,100 @@ export function matchBand(score: number | null | undefined): { band: MatchBand; 
   return { band: b.band, label: b.label };
 }
 
+/** Where the Low band ends (`MATCH_SCORE_BANDS`). */
+const LOW_BELOW = 55;
+/** Below this share of the requirements judged, a low score is too little to go on. */
+export const MIN_COVERAGE_TO_JUDGE = 0.5;
+
+/**
+ * The one verdict word, from the same numbers as the score (the owner, 6 November 2026), so a word and a number can never
+ * disagree: a must-have their own words show is not met; then nothing to go on; under 55 the word says whether that is too
+ * little evidence (`tooLittleToGoOn`, the board's own rule: a must-have not known, half the points still open, enough open
+ * to lift it out of Low, or under half the requirements judged) or what the evidence shows; from 70 with every
+ * must-have fully shown it is strong; anything else from 55 is potential. A must-have the role checks only in the team's own
+ * interviews (`checkInInterview`) is not known until a reading shows it in full, though it is never in the number. The stored
+ * `overall` of a reading stays for the audit trail and the board's own checks, and no longer speaks beside the number.
+ */
+export function fitOf(m: { score: number | null; missingMustHave: readonly unknown[]; openPoints: number; coverage: Pick<MatchScore["coverage"], "known" | "total">; breakdown: ReadonlyArray<Pick<MatchCriterion, "mustHave" | "pctMet">>; unknown: ReadonlyArray<Pick<MatchUnknown, "mustHave">>; checkInInterview?: readonly unknown[] }): MatchFit {
+  if (m.missingMustHave.length) return "missing_must_have";
+  if (m.score === null) return "insufficient";
+  const mustOpen = m.unknown.some((u) => u.mustHave) || !!m.checkInInterview?.length;
+  if (m.score < LOW_BELOW) return tooLittleToGoOn(m) ? "insufficient" : "weak";
+  return m.score >= 70 && !mustOpen && m.breakdown.every((c) => !c.mustHave || c.pctMet === 100) ? "strong" : "potential";
+}
+
+/**
+ * Whether a low number rests on too little to go on: one rule for the verdict word and the pool board (the release review,
+ * 11 November 2026, after the panel read "Weak match" over the board's own "a low score from so little is not enough to go
+ * on"). No number; a must-have not known yet, or one still to check in the team's own interviews; half the points still
+ * open; enough points still open to lift it out of Low; or fewer than half the requirements judged. `fitOf` then says "Not
+ * enough evidence", never "Weak match", and the board never starts a decline ticked on it (`boardPlacement`).
+ */
+export function tooLittleToGoOn(m: { score: number | null; openPoints: number; coverage: Pick<MatchScore["coverage"], "known" | "total">; unknown: ReadonlyArray<Pick<MatchUnknown, "mustHave">>; checkInInterview?: readonly unknown[] }): boolean {
+  if (m.score === null) return true;
+  return m.unknown.some((u) => u.mustHave) || !!m.checkInInterview?.length || m.openPoints >= 50 || m.score + m.openPoints >= LOW_BELOW || m.coverage.known < m.coverage.total * MIN_COVERAGE_TO_JUDGE;
+}
+
 /* ------------------------------------------------------------------------------------------------------------ */
 /* The match score's sums, shared by the real score and the weights preview (founder decision L-07 A).            */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** A judged requirement as the sums read it: met, partly met or not met (one nothing was said about is never here). */
-export type WeighedFinding = "yes" | "partly" | "no";
+/** A requirement as the sums read it: met, partly met, not met, or nothing said about it either way. */
+export type WeighedFinding = "yes" | "partly" | "no" | "unknown";
 export type WeighedRequirement = { weight: number; status: WeighedFinding; mustHave: boolean };
 
-const WEIGHED_PCT: Record<WeighedFinding, number> = { yes: 100, partly: 50, no: 0 };
+const WEIGHED_PCT: Record<WeighedFinding, number> = { yes: 100, partly: 50, no: 0, unknown: 0 };
 
 /**
- * How much of a partly shown requirement the score counts (`PARTLY_SHOWN_RULE`): half, or the level of the rest of
- * the evidence (the requirements met or not met, by their weights) when that is higher. Counted at that level, the
- * partly shown ones leave the score where leaving them out would put it; counted at half when the rest is lower, they
- * raise it. So a partly shown requirement never scores below one nothing was said about.
+ * The match score's sums over every scored requirement, in the order given (packages/core match-score.ts reads them from
+ * the stored findings): points earned over the points of all of them (6 November 2026). Shown is full, partly is half, and
+ * a quoted no or something nothing was said about earns nothing; only the quoted no holds the score at
+ * `MISSING_MUST_HAVE_CAP`, and nothing here reads "nothing said" as a no. Each requirement's share of the score and the
+ * points it lost come back too. The real score and the weights preview (L-07 A) both run this, so a preview with the job's
+ * own weights gives the real score back. `score` is null when nothing at all is known.
  */
-function partlyCredit(items: readonly WeighedRequirement[]): number {
-  const decided = items.filter((r) => r.status === "yes" || r.status === "no");
-  const weight = decided.reduce((n, r) => n + r.weight, 0);
-  if (!weight) return WEIGHED_PCT.partly;
-  const rest = decided.reduce((n, r) => n + r.weight * WEIGHED_PCT[r.status], 0) / weight;
-  return Math.max(WEIGHED_PCT.partly, rest);
-}
-
-/**
- * The match score's sums over the judged requirements, in the order given (packages/core match-score.ts reads them from
- * the stored findings): each one's share of the score, the share it counted and the points it lost, then the score out
- * of 100, held at `MISSING_MUST_HAVE_CAP` when a must-have is shown not met. The real score and the weights preview
- * (L-07 A) both run this, so a preview with the job's own weights gives the real score back. `score` is null when
- * nothing is left to weigh.
- */
-export function weighRequirements(items: readonly WeighedRequirement[]): { score: number | null; capped: boolean; parts: Array<{ share: number; counted: number; lost: number }> } {
+export function weighRequirements(items: readonly WeighedRequirement[]): { score: number | null; capped: boolean; parts: Array<{ share: number; lost: number }> } {
   const total = items.reduce((n, r) => n + r.weight, 0);
-  if (!items.length || !total) return { score: null, capped: false, parts: items.map(() => ({ share: 0, counted: 0, lost: 0 })) };
-  const partlyAt = partlyCredit(items);
+  if (!total) return { score: null, capped: false, parts: items.map(() => ({ share: 0, lost: 0 })) };
   let lost = 0;
   const parts = items.map((r) => {
     const share = (100 * r.weight) / total;
-    const counted = r.status === "partly" ? partlyAt : WEIGHED_PCT[r.status];
-    const exactLost = share * (1 - counted / 100);
+    const exactLost = share * (1 - WEIGHED_PCT[r.status] / 100);
     lost += exactLost;
-    return { share, counted, lost: exactLost };
+    return { share, lost: exactLost };
   });
-  // to six places first, so the same sum reached in another order (with a partly shown requirement at the rest's level,
-  // or left out) rounds the same way at a half point
+  if (items.every((r) => r.status === "unknown")) return { score: null, capped: false, parts };
+  // to six places first, so the same sum reached in another order rounds the same way at a half point
   const raw = Math.round(Number((100 - lost).toFixed(6)));
   const capped = items.some((r) => r.mustHave && r.status === "no") && raw > MISSING_MUST_HAVE_CAP;
   const score = Math.min(100, Math.max(0, capped ? MISSING_MUST_HAVE_CAP : raw));
   return { score, capped, parts };
 }
 
-/** The job's own weight of a judged requirement: a must-have 4, a skill by its importance (Essential 3, Important 2, Helpful 1). */
-export const matchWeightOf = (c: Pick<MatchCriterion, "mustHave" | "importance">): number => (c.mustHave ? MATCH_WEIGHT.must_have : MATCH_WEIGHT[c.importance ?? "helpful"]);
+/** A requirement as a weight reads it, judged or not. */
+export type WeighableRequirement = Pick<MatchCriterion, "key" | "mustHave" | "importance">;
+
+/** The job's own weight of a requirement: a must-have 4, a skill by its importance (Essential 3, Important 2, Helpful 1). */
+export const matchWeightOf = (c: Pick<WeighableRequirement, "mustHave" | "importance">): number => (c.mustHave ? MATCH_WEIGHT.must_have : MATCH_WEIGHT[c.importance ?? "helpful"]);
 
 /** One person's score in the weights preview (L-07 A): a number nobody else sees, never saved. */
 export type PreviewScore = { score: number | null; band: MatchBand | null; capped: boolean };
 
 /**
  * "Try different weights" (founder decision L-07 A, preview only): one person's match score worked out again from the
- * requirements their stored score already judged, with other weights. Nothing is read again, no AI is asked, and nothing
- * is saved or sent; the real score stays as it is. A weight of 0 leaves that requirement out of the score; requirements
- * nothing was said about stay set aside, as in the real score. With `matchWeightOf` it gives the real score back.
+ * requirements their stored score already carries, with other weights. Nothing is read again, no AI is asked, and nothing
+ * is saved or sent; the real score stays as it is. A weight of 0 leaves that requirement out of the score; one nothing was
+ * said about earns nothing, as in the real score. With `matchWeightOf` it gives the real score back.
  */
-export function previewMatch(match: Pick<MatchScore, "breakdown">, weightOf: (c: MatchCriterion) => number): PreviewScore {
+export function previewMatch(match: Pick<MatchScore, "breakdown" | "unknown">, weightOf: (c: WeighableRequirement) => number): PreviewScore {
   const items: WeighedRequirement[] = [];
-  for (const c of match.breakdown) {
+  const weigh = (c: WeighableRequirement, status: WeighedFinding) => {
     const w = weightOf(c);
     const weight = Number.isFinite(w) ? Math.max(0, w) : 0;
-    if (weight > 0) items.push({ weight, status: c.pctMet === 100 ? "yes" : c.pctMet === 0 ? "no" : "partly", mustHave: c.mustHave });
-  }
+    if (weight > 0) items.push({ weight, status, mustHave: c.mustHave });
+  };
+  for (const c of match.breakdown) weigh(c, c.pctMet === 100 ? "yes" : c.pctMet === 0 ? "no" : "partly");
+  for (const u of match.unknown) weigh(u, "unknown");
   const { score, capped } = weighRequirements(items);
   return { score, band: matchBand(score)?.band ?? null, capped };
 }

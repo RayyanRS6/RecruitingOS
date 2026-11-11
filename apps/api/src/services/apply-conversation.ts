@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ChatCounter, type ReviewItem, type RolePacket, type ScreenProgress, type ScreenStatus, type ScreenTranscriptEntry, type ScreenTurn, type ScreenWriteup, type TapAnswer, type TapFormat, type UnconfirmedIntent, type WrittenQuestionView } from "@ros/contracts";
-import { runPromptDetached, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
+import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, candidateScoreShown, type Actor, type ChatCounter, type ReviewItem, type RolePacket, type ScreenProgress, type ScreenStatus, type ScreenTranscriptEntry, type ScreenTurn, type ScreenWriteup, type TapAnswer, type TapFormat, type UnconfirmedIntent, type WrittenQuestionView } from "@ros/contracts";
+import { outOfCredit, runPromptDetached, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
 import {
   CHAT_CAP_CLOSING, EMPTY_SCREEN_PROGRESS, MOVED_ON_MESSAGE, REVIEW_MESSAGE, SCREEN_COMPLETE_MESSAGE, SKIPPED_MESSAGE, TURN_CAP_REVIEW_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, cvLinesOf, visitChatFacts, chatOpening, chatPacket, enforceChatTurn, withChatPlan, modelTurnCap, modelTurnsUsed, answerWithdrawPrompt, answersOf, countConversation, createScreen, currentQuestion, declineConversation, editScreenAnswer, enforceTurnRules, flagAllowance,
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
-  sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
+  sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, turnWithoutModel, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
-import { addBusinessHours, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, errorForLog, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
+import { addBusinessHours, aiCreditStanding, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, errorForLog, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, type WorkflowEngine } from "@ros/workflows";
 import type { Container } from "../container";
+import { recordScoreFor, screensOf } from "./application-record";
 import { recordWithdrawal } from "./applications";
 import { learnFromSentChat } from "./profile-facts";
 import { screenDeps } from "./screens";
@@ -65,14 +66,18 @@ const WEB_ACTOR: Actor = { kind: "system", id: "screen_web" };
  * - `receipt`, with why, and no loader, worked out from what was typed alone, so a known address gets the same one:
  *   `held` (an answer to a must-have question was No: the neutral words, never why; R20-10, E7); `used_up` (the month's
  *   AI interviews are used up: the link follows by email; Q17, R20-11); `paused` (the company's trial has ended and this
- *   form was opened before; checked last, so it only ever says the link is on its way when it is).
+ *   form was opened before; checked last, so it only ever says the link is on its way when it is); `on_file` (the job is
+ *   past its plan's candidates per job: no interview, no reading, and the receipt's own words; checked first, from the job
+ *   and never the address typed, so a new, a repeat and a known address read the same, and a must-have "No" reads the same).
  */
-export type ApplyVisitOutcome = { kind: "interview"; applicationId: string | null; conversationId: string | null } | { kind: "receipt"; reason: "held" | "used_up" | "paused" };
+export type ApplyVisitOutcome = { kind: "interview"; applicationId: string | null; conversationId: string | null } | { kind: "receipt"; reason: "on_file" | "held" | "used_up" | "paused" };
 
 export type ApplyVisitInput = {
   /** `createApplication`'s result: the application (the existing one for a repeat), and whether it was a repeat. */
   application: Application;
   duplicate: boolean;
+  /** `createApplication`'s result: the job is past its limit, so nothing follows but the receipt and the on-file email. */
+  onFile?: boolean;
   /** The company had this person before the form was sent (an earlier application to another role; known-bugs row 17). */
   knownPerson?: boolean;
   company: Company;
@@ -97,6 +102,7 @@ export type ApplyVisitInput = {
 /** Called by the apply POST inside its transaction, after `createApplication`: what the page shows next (see above). */
 export async function applyVisitNext(tx: Tx, container: Container, input: ApplyVisitInput): Promise<ApplyVisitOutcome> {
   const { application: app, company, packet } = input;
+  if (input.onFile) return { kind: "receipt", reason: "on_file" };
   if (!evaluateEligibility(packet.requirements.eligibility, input.eligibilityAnswers, container.engine.clock()).passed) return { kind: "receipt", reason: "held" };
   const ent = await entitlements.check(tx, company.id, entitlements.TEXT_SCREENS, 1);
   if (!ent.ok && company.planKey !== "design_partner") return { kind: "receipt", reason: "used_up" };
@@ -405,13 +411,16 @@ async function beginDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, inp
   return { ctx: detachedContext(d, state, message), turn: transcript.length };
 }
 
-/** The second transaction of a detached turn, mirroring `finishScreenTurn`. Also finishes a retry after an outage. */
+/**
+ * The second transaction of a detached turn, mirroring `finishScreenTurn`, the turn worked out in code included (no AI
+ * credit left: `turnWithoutModel`, so the two kinds read the same). Also finishes a retry after an outage.
+ */
 async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, out: RunOutcome<ScreenTurn>): Promise<TurnResult> {
   const d = await loadDetached(tx, id, { lock: true });
   if (!d) return { kind: "error", message: "This conversation is no longer available." };
   const { row, packet, company } = d;
   const now = deps.engine.clock();
-  if (!out.ok) {
+  if (!out.ok && !outOfCredit(out)) {
     if (row.status === "paused") return { kind: "error", message: pausedMessage(company.name) };
     const failures = (row.progress.failures ?? 0) + 1;
     if (failures >= 2) {
@@ -426,11 +435,19 @@ async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, ou
   }
   // A Kanvis-style chat is held to its own rules, exactly as a first application's (`finishScreenTurn`).
   const latest = [...row.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
-  const enforced = row.progress.chat ? enforceChatTurn(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }) : { turn: enforceTurnRules(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }), move: null };
+  const enforced = out.ok
+    ? row.progress.chat ? enforceChatTurn(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }) : { turn: enforceTurnRules(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }), move: null }
+    : turnWithoutModel({ packet, progress: row.progress, answers: row.answers, transcript: row.transcript, latest: latest ?? "" });
+  // With nothing being asked and no AI credit left, it ends as it does at the cap.
+  if (!enforced) {
+    const ended: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: true, humanRequested: false };
+    return detachedReply(tx, d, { status: "in_progress", transcript: row.transcript, answers: row.answers, progress: { ...advanceProgress(row.progress, ended), pausedAt: undefined }, message: TURN_CAP_REVIEW_MESSAGE, reviewMessage: TURN_CAP_REVIEW_MESSAGE, questionKey: null, done: true, closing: CHAT_CAP_CLOSING });
+  }
+  const aiRunId = out.ok ? out.runId : undefined;
   let turn = enforced.turn;
   if (turn.humanRequested) {
     turn = !/business/i.test(turn.messageToCandidate) ? { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(new Date(), await loadBusinessCalendar(tx))}.` } : turn;
-    await tx.update(unconfirmedScreens).set({ transcript: [...row.transcript, { role: "assistant", content: turn.messageToCandidate, at: now.toISOString(), channel: "web", aiRunId: out.runId }] }).where(eq(unconfirmedScreens.id, row.id));
+    await tx.update(unconfirmedScreens).set({ transcript: [...row.transcript, { role: "assistant", content: turn.messageToCandidate, at: now.toISOString(), channel: "web", aiRunId }] }).where(eq(unconfirmedScreens.id, row.id));
     const fresh = (await loadDetached(tx, id))!;
     await detachedPerson(tx, deps, fresh, "contact_me", { silent: true });
     return { kind: "reply", message: turn.messageToCandidate, done: false, humanRequested: true };
@@ -443,7 +460,8 @@ async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, ou
     else answers[turn.answerRecorded.questionKey] = recorded;
   }
   if (row.status === "paused") progress = { ...progress, pausedAt: undefined };
-  return detachedReply(tx, d, { status: "in_progress", transcript: row.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId, closing: turn.done ? turn.messageToCandidate : null });
+  const closing = !turn.done ? null : out.ok ? turn.messageToCandidate : `Thank you, ${row.firstName || "there"}.`;
+  return detachedReply(tx, d, { status: "in_progress", transcript: row.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId, closing });
 }
 
 /**
@@ -701,9 +719,14 @@ export type ConversationView = {
    * application's own. Review & send lists them read only.
    */
   formAnswers: string[];
+  /**
+   * Once it is sent: whether a match score can come for them, as their record says (`recordScoreFor`), so the closing page promises
+   * one only then. A detached copy reads it from the company alone, so a first application and a repeat one read the same.
+   */
+  scoreComes: boolean;
 };
 
-function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; rolePacket: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"]; formAnswers: string[] }): ConversationView {
+function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; rolePacket: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"]; formAnswers: string[]; scoreComes: boolean }): ConversationView {
   const { progress, packet } = input;
   const status = input.status as ScreenStatus;
   const oneVisit = progress.flow === "one_visit";
@@ -737,6 +760,7 @@ function viewOf(input: { token: string; status: string; channel: string; progres
     counter: chatCounter(progress.chat),
     writeup: progress.writeup ?? null,
     formAnswers: input.formAnswers,
+    scoreComes: input.scoreComes,
   };
 }
 
@@ -760,13 +784,15 @@ export async function conversationView(db: Db, ref: ConversationRef, now: Date =
     if (ref.kind === "screen") {
       const b = await loadScreenBundle(tx, ref.id);
       if (!b) return null;
-      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, rolePacket: b.rolePacket, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null, formAnswers: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia)?.formAnswers ?? [] });
+      const scoreComes = b.screen.status === "completed" && !["off", "not_coming"].includes((await recordScoreFor(tx, { app: b.app, companySettings: b.company.settings, screens: await screensOf(tx, b.app.id), hiddenDecision: false, now })).state);
+      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, rolePacket: b.rolePacket, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null, formAnswers: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia)?.formAnswers ?? [], scoreComes });
     }
     const d = await loadDetached(tx, ref.id);
     if (!d) return null;
     // A wiped conversation reads as an expired link, like a screen nobody answered.
     const status = d.row.discardedAt ? "expired" : d.row.status;
-    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, rolePacket: d.rolePacket, firstName: d.row.firstName || "there", expectation, personAsked: status === "human_requested" ? asked(d.row.finishedAt) : null, formAnswers: d.row.discardedAt ? [] : chatFactsFor(null, d.row.progress, "apply")?.formAnswers ?? [] });
+    const scoreComes = status === "completed" && candidateScoreShown(d.company.settings) && !(await aiCreditStanding(tx, d.company.id, { now, settled: true }))?.usedUp;
+    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, rolePacket: d.rolePacket, firstName: d.row.firstName || "there", expectation, personAsked: status === "human_requested" ? asked(d.row.finishedAt) : null, formAnswers: d.row.discardedAt ? [] : chatFactsFor(null, d.row.progress, "apply")?.formAnswers ?? [], scoreComes });
   });
 }
 

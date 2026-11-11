@@ -10,6 +10,7 @@ import { NavLink } from "@ros/web/src/nav";
 import { otherCompanies, type RailRole, railCompact, railListsRoles, railRoles, teamRoleWord } from "@ros/web/src/rail";
 import { clearAllQuickStarts } from "@ros/web/src/pages/new-role/quick-start";
 import { canSeeTalent, canStartHire } from "@ros/web/src/roles";
+import { watchForEndedSession } from "@ros/web/src/session-ended";
 import { browserStorage, isFormControl, isStartHireShortcut, SHORTCUT_CHANGED_EVENT, START_HIRE_HREF, START_HIRE_KEY, startHireShortcutOn } from "@ros/web/src/start-hire";
 import type { Me } from "../lib/session";
 import { shownTheme, type Theme, themeCookie } from "../lib/theme";
@@ -244,6 +245,10 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const listRoles = railListsRoles(me);
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: listRoles, refetchInterval: 120_000 });
   const listed = listRoles ? railRoles(roles.data ?? [], { role: myRole }) : [];
+
+  // Any page's own look that answers 401 sends it to sign in: the session ended under a tab left open (Take away access, Sign
+  // out everywhere), and no page in the frame stays on "Could not load" with a Try again that cannot work (11 November 2026).
+  useEffect(() => watchForEndedSession(qc, () => window.location.assign("/login")), [qc]);
 
   // Something typed, ticked or chosen on this page may not be saved yet, so N leaves the page alone until the person
   // moves to another page (the Start a hire button still works).

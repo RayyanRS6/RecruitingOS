@@ -1,9 +1,10 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
+import type { SignupConfig } from "@ros/contracts";
 import { getShellForRequest } from "./container";
 
-/** Who may create a company (GATE-V2): the `signup` part of GET /api/v1/auth/config (apps/api/src/routes/auth.ts). */
-export type Signup = { mode: "open" | "invite"; allowed: boolean; contact: string };
+/** Who may create a company (GATE-V2), and this person's own request if they sent one: the `signup` part of GET /api/v1/auth/config (apps/api/src/routes/auth.ts). */
+export type Signup = SignupConfig;
 
 /**
  * The sign-in page's public configuration, asked of the mounted API in-process with the person's cookies, as getMe asks

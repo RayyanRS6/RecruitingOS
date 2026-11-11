@@ -21,7 +21,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { Setup } = await import("@ros/web/src/pages/Setup");
+const { Setup, usageLines, usageResets } = await import("@ros/web/src/pages/Setup");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const company = { id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "pilot", status: "active", locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: "2026-10-01T00:00:00.000Z" }, integrations: [{ kind: "jobboard", provider: "linkedin_basic", status: "not_connected" }], ai: { provider: "fake" }, usage: { active_roles: { used: 1, limit: 3 }, text_screens: { used: 4, limit: 50, resetsAt: "2026-10-30T12:00:00.000Z" } } };
@@ -225,6 +225,79 @@ describe("Settings: the Trial plan's 30 days and 3 people (founder decision L-02
   });
 });
 
+describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
+  const onFree = (over: Record<string, unknown> = {}, seats = { used: 1, limit: 2 }) => ({ ...company, planKey: "free", status: "active", plan: { key: "free", name: "Free", limits: { jobs_total: 1, candidates_per_job: 5, seats: 2 } }, usage: { active_roles: { used: 1, limit: 1 }, jobs_total: { used: 1, limit: 1 }, text_screens: { used: 3, limit: null, resetsAt: "2026-12-05T12:00:00.000Z" }, ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" }, recruiter_asks: { used: 0, limit: 1, resetsAt: "2026-12-05T12:00:00.000Z" }, seats }, trial: null, ...over });
+
+  it("Free shows its jobs and its AI help as a percentage, with no trial words, no dollars and no row for candidates per job", () => {
+    const words = text(page({ company: onFree() }));
+    expect(words).toContain("Plan Free");
+    expect(words).not.toContain("trial");
+    expect(words).toContain("jobs: 1 of 1");
+    // the jobs ever take the place of the jobs at a time: with one job, the two would say the same thing twice
+    expect(words).not.toContain("active jobs:");
+    expect(words).toContain("AI help: 18% used");
+    expect(words).not.toContain("18 of 100");
+    expect(words).not.toMatch(/cents|\$\d/);
+    expect(words).not.toContain("candidates per job");
+    expect(words).toContain("AI interviews this month: 3");
+  });
+
+  it("a plan with no limit of jobs ever keeps the jobs at a time, and its monthly AI help says when it starts again", () => {
+    const lines = usageLines({ active_roles: { used: 2, limit: 3 }, ai_credit_monthly_cents: { used: 40, limit: 100, unit: "percent", resetsAt: "2026-12-05T12:00:00.000Z" } });
+    expect(lines).toEqual(["active jobs: 2 of 3", "AI help this month: 40% used, starts again December 5"]);
+    // its own date, so it is not said again as a month for everything
+    expect(usageResets({ ai_credit_monthly_cents: { limit: 100, resetsAt: "2026-12-05T12:00:00.000Z" } })).toBeNull();
+  });
+
+  it("after an upgrade the AI help's month and the other allowances' dates differ, and each says its own: Free on October 1, Basic on November 5", () => {
+    // the upgrade starts the credit's month, November 5 to December 5; recruiter requests keep rolling from sign-up, to November 30
+    const usage = { ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent" as const, resetsAt: "2026-12-05T18:00:00.000Z" }, recruiter_asks: { used: 0, limit: 1, resetsAt: "2026-11-30T18:00:00.000Z" } };
+    expect(usageLines(usage)).toEqual(["AI help this month: 18% used, starts again December 5", "recruiter requests: 0 of 1"]);
+    expect(usageResets(usage)).toBe("Monthly allowances reset on November 30.");
+    const words = text(page({ company: onFree({ usage }) }));
+    expect(words).toContain("AI help this month: 18% used, starts again December 5 · recruiter requests: 0 of 1 Monthly allowances reset on November 30.");
+    // on the company's calendar, as Home says it, whichever server draws it: 2 a.m. in UTC on the 5th is still the 4th in Los Angeles
+    expect(usageLines({ ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent", resetsAt: "2026-12-05T02:00:00.000Z" } }, "America/Los_Angeles")).toEqual(["AI help this month: 18% used, starts again December 4"]);
+    // and the page reads the company's own zone: 6 p.m. in UTC on the 5th is already the 6th in Tokyo
+    expect(text(page({ company: onFree({ timezone: "Asia/Tokyo", usage: { ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent", resetsAt: "2026-12-05T18:00:00.000Z" } } }) }))).toContain("AI help this month: 18% used, starts again December 6");
+    // the AI help on Free never starts again, so it names no day
+    expect(usageLines({ ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" } })).toEqual(["AI help: 18% used"]);
+  });
+
+  it("says used up when everything else does, where the percentage still reads 98: Free at $9.89, past what one small call needs", () => {
+    const usedUp = { level: "used_up", percent: 98, resetsAt: null, notice: { title: "Your plan's AI help is used up", body: "Applications still come in and candidates can still finish." } };
+    const words = text(page({ company: onFree({ aiCredit: usedUp, usage: { jobs_total: { used: 1, limit: 1 }, ai_credit_total_cents: { used: 98, limit: 100, unit: "percent" } } }) }));
+    expect(words).toContain("AI help: used up");
+    expect(words).not.toContain("98% used");
+    // a monthly one says when it starts again too
+    expect(usageLines({ ai_credit_monthly_cents: { used: 99, limit: 100, unit: "percent", resetsAt: "2026-12-05T18:00:00.000Z" } }, "America/Los_Angeles", "used_up")).toEqual(["AI help this month: used up, starts again December 5"]);
+    // at the 80% line, and below it, the figure stands
+    expect(usageLines({ ai_credit_total_cents: { used: 83, limit: 100, unit: "percent" } }, null, "warning")).toEqual(["AI help: 83% used"]);
+    expect(usageLines({ ai_credit_total_cents: { used: 12, limit: 100, unit: "percent" } }, null, null)).toEqual(["AI help: 12% used"]);
+    // and nothing else on the row reads the level
+    expect(usageLines({ recruiter_asks: { used: 1, limit: 1 } }, null, "used_up")).toEqual(["recruiter requests: 1 of 1"]);
+  });
+
+  it("promises a pilot only while the company is on one: its dates stay on record after a move to Pro or Free, and the line goes", () => {
+    const pilot = { startedAt: "2026-08-01T00:00:00.000Z", endsAt: "2026-10-30T00:00:00.000Z" };
+    const on = text(page({ company: onFree({ planKey: "design_partner", status: "design_partner", plan: { key: "design_partner", name: "Design Partner", limits: {} }, settings: { ...company.settings, pilot } }) }));
+    expect(on).toContain("pilot until");
+    expect(on).toContain("jobs in progress are never cut off");
+    const moved = text(page({ company: onFree({ planKey: "pro", status: "active", plan: { key: "pro", name: "Pro", limits: {} }, settings: { ...company.settings, pilot } }) }));
+    expect(moved).toContain("Plan Pro");
+    expect(moved).not.toContain("pilot until");
+    expect(moved).not.toContain("never cut off");
+  });
+
+  it("the Team tab's invite form says the plan's words, on the plan's two people", () => {
+    const html = page({ search: "?tab=team", company: onFree({}, { used: 2, limit: 2 }) });
+    expect(text(html)).toContain("Your plan includes 2 people: 2 in use, counting invitations not yet answered.");
+    expect(text(html)).toContain("Your plan includes 2 people. Upgrade to add more.");
+    expect(text(html)).not.toContain("Your trial includes");
+    expect(html).toMatch(/<button type="submit" class="btn primary" disabled=""[^>]*>Invite<\/button>/);
+  });
+});
+
 describe("Settings: Connected services, for a service without a provider (audit MAIL-18)", () => {
   // what the API sends where texting, calendars, analytics and the app's own file scanner run without a provider
   const services = [
@@ -243,7 +316,9 @@ describe("Settings: Connected services, for a service without a provider (audit 
   it("in production (staging too) each says what really happens, names no provider and is not a warning", () => {
     const html = card({ integrations: services, production: true, ai: { provider: "anthropic" } });
     const words = text(html);
-    expect(words).toContain("Email Postmark Connected and working Candidate email is sent from the dedicated ITS domain.");
+    // a key alone proves nothing about arriving mail (6 November 2026): with no email to a candidate yet, it says so
+    expect(words).toContain("Email Postmark Connected No email to a candidate in the last 7 days.");
+    expect(words).not.toContain("dedicated ITS domain");
     // texting is off on purpose (decision M2), and the line that says so shows
     expect(words).toContain("Text messages None Off Text messaging is off until carrier registration and counsel review are complete. The AI interview runs on the web from an email link.");
     expect(words).toContain("File scanner None Checked by the background worker");
@@ -252,6 +327,20 @@ describe("Settings: Connected services, for a service without a provider (audit 
     expect(words).not.toMatch(/development|stand-in|fake|never used in production|nothing leaves/i);
     expect(html).toMatch(/class="pill neutral[^"]*"><span class="dot" aria-hidden="true"><\/span>Manual times and calendar files<\/span>/);
     expect(html).not.toContain("pill caution");
+  });
+
+  it("connected email reads the last week's sends to candidates, never the key: working, some did not arrive, or not working", () => {
+    const email = [{ kind: "email", provider: "postmark", status: "live" }];
+    const at = (candidateEmail: Record<string, unknown>) => card({ integrations: email, production: true, ai: { provider: "anthropic" }, candidateEmail: { days: 7, lastLeftAt: null, lastFailedAt: null, ...candidateEmail } });
+    const working = at({ left: 12, failed: 0, lastLeftAt: "2026-11-08T15:00:00.000Z" });
+    expect(text(working)).toContain("Email Postmark Connected and working The last email to a candidate went out on Nov 8.");
+    const some = at({ left: 9, failed: 3, lastLeftAt: "2026-11-08T15:00:00.000Z", lastFailedAt: "2026-11-08T16:00:00.000Z" });
+    expect(text(some)).toContain("Email Postmark Some did not arrive 3 of the last 12 emails to candidates did not arrive. Home lists who to phone.");
+    expect(some).toMatch(/class="pill caution[^"]*"><span class="dot" aria-hidden="true"><\/span>Some did not arrive<\/span>/);
+    const none = at({ left: 0, failed: 5, lastFailedAt: "2026-11-08T16:00:00.000Z" });
+    expect(text(none)).toContain("Email Postmark Not working None of the last 5 emails to candidates arrived. Home lists who to phone.");
+    expect(none).toMatch(/class="pill critical[^"]*"><span class="dot" aria-hidden="true"><\/span>Not working<\/span>/);
+    for (const html of [working, some, none]) expect(text(html)).not.toContain("dedicated ITS domain");
   });
 
   it("in production, email without Postmark shows as not connected and says candidate email is not being sent", () => {

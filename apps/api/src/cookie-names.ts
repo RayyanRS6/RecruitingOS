@@ -24,3 +24,11 @@ export const SESSION_COOKIE = "ros_session";
 export function sessionCookieName(env: { NODE_ENV?: string; COOKIE_DOMAIN?: string }): string {
   return cookieName(SESSION_COOKIE, { secure: env.NODE_ENV === "production", path: "/", domain: env.COOKIE_DOMAIN });
 }
+
+/** The cookie a sign-in starts with (`verifier.state.provider`, routes/auth-shared.ts): Path=/, and shared like the session. */
+export const PKCE_COOKIE = "ros_pkce";
+
+/** The PKCE cookie's name in a process's environment: the shell's middleware reads which provider a refusal at the root belongs to. */
+export function pkceCookieName(env: { NODE_ENV?: string; COOKIE_DOMAIN?: string }): string {
+  return cookieName(PKCE_COOKIE, { secure: env.NODE_ENV === "production", path: "/", domain: env.COOKIE_DOMAIN });
+}

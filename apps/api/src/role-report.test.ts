@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { createApplicationLink, entitlements, findPostingLink, groupFor, openFollowUp, ownerGroup, setAutoState } from "@ros/core";
-import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, interviews, jobs, postings, recruiterEscalations, users, withTenant } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, hiringOutcomes, interviews, jobs, postings, recruiterEscalations, roles, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { SEND_MAX_ATTEMPTS, TRIAGE_READINGS } from "@ros/agents";
 import { localDays } from "@ros/workflows";
@@ -366,9 +366,18 @@ describe("role report", () => {
       if (rows.some((a) => !marks.has(a.id) && ((ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "ineligible" && a.stage !== "interview_complete") || a.stage === "eligible"))) needsMe += 1;
       if (rows.some((a) => a.stage === "ineligible")) needsMe += 1;
       if (rows.some((a) => ["rejected", "talent_pool"].includes(a.stage) && a.toldState === "not_told")) needsMe += 1;
+      // and "Close this job?" (6 November 2026, HF-16): a job still open or paused whose every standing hire has started
+      const [job] = await container.db.select({ status: roles.status }).from(roles).where(eq(roles.id, rid));
+      const hires = (await container.db.select({ hireDate: hiringOutcomes.hireDate, stage: applications.stage }).from(hiringOutcomes).innerJoin(applications, eq(applications.id, hiringOutcomes.applicationId)).where(and(eq(hiringOutcomes.roleId, rid), eq(hiringOutcomes.outcome, "hired_externally"), isNull(hiringOutcomes.correctedAt)))).filter((h) => h.stage === "hired" && h.hireDate);
+      if (["open", "paused"].includes(job.status) && hires.length && hires.every((h) => h.hireDate!.slice(0, 10) < new Date().toISOString().slice(0, 10))) needsMe += 1;
     }
     expect(Number(m![1])).toBe(needsMe);
-    const strongIds = new Set((await container.db.select().from(assessments).where(and(eq(assessments.companyId, companyId), eq(assessments.overall, "strong")))).map((a) => a.applicationId));
+    // strong in the same word the list shows beside each number (6 November 2026), never a reading's stored word
+    const strongIds = new Set<string>();
+    for (const rid of [roleId, role2Id]) {
+      const listed = (await (await json(owner, "GET", `/api/v1/roles/${rid}/applications`)).json()) as Array<{ id: string; fit: string | null }>;
+      for (const r of listed) if (r.fit === "strong") strongIds.add(r.id);
+    }
     const strong = (await waitsOnYou(await container.db.select().from(applications).where(eq(applications.companyId, companyId)))).filter((a) => strongIds.has(a.id)).length;
     expect(Number(m![2])).toBe(strong);
     expect(Number(m![3])).toBe(brief.cards.filter((c) => c.kind === "stuck").length + report.escalations.open);
@@ -390,7 +399,7 @@ describe("role report", () => {
     const col = (name: string, column: (typeof APPLICANT_COLUMNS)[number]) => cells(name)[APPLICANT_COLUMNS.indexOf(column)];
     expect(col("Ben Osei", "Source")).toBe("Referral");
     expect(col("Ben Osei", "Source detail")).toBe("Dr. Patel");
-    expect(col("Ben Osei", "Stage")).toBe("Recommended for interview");
+    expect(col("Ben Osei", "Stage")).toBe("Interview to set up");
     expect(col("Ben Osei", "Decision")).toBe("Moved to interview");
     expect(col("Cara Diaz", "Source")).toBe("Indeed");
     expect(col("Dev Patel", "Source detail")).toBe("LinkedIn campaign");

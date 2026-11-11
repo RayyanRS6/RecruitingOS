@@ -56,6 +56,8 @@ US companies with 25 to 250 employees hiring 10 to 75 people a year, where recru
 
 Three tiers of autonomy and service (§20): Core $499/month, Growth $899/month, Company $1,499/month, annual discounts, usage entitlements for text screens, voice minutes, sourcing contacts and recruiter asks; plus Software + Recruiter and Managed Recruiting tiers priced as retainers. Plans live in `packages/db/src/seed.ts`; the product checks entitlements, never plan names.
 
+Since 5 November 2026 (the owner's request, for handing the app to testers; `docs/workflow-decisions.md`, PL-1) the plans a customer can be on are Free ($0), Basic ($49), Pro ($149) and Ultra ($399) a month, with no payment system: Upgrade asks ITS. Core, Growth and Company are retired, with their rows kept. On a plan with a limit a company reads only the first people who applied to a job, by arrival order alone. Nobody is declined by this, and people still make every decision.
+
 ## Working name
 
 The repository is `recruiting-os`. The product name is a marketing decision not made here; the code uses the neutral prefix `@ros/`.

@@ -1,7 +1,7 @@
 import type { Actor, ClosingMessagePreview, ClosingMessageResult } from "@ros/contracts";
 import { assertCan, audit, emit, gate } from "@ros/core";
 import type { Tx, approvalRequests } from "@ros/db";
-import { closingAudience, closingMessageText, isClosingProposal, queueClosingMessages, type ClosingProposal } from "@ros/agents";
+import { closingAudience, closingMessageText, isClosingProposal, queueClosingMessages, tellLockedOfClose, type ClosingProposal } from "@ros/agents";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
@@ -12,7 +12,9 @@ import { declineMessagePolicy, undoUntil } from "./application-actions";
  * to the talent pool privately (B6), and they stay there unless they asked not to be kept. One courteous message then
  * tells all of them, approved once for everyone: under "Do it" the person's press is that approval, under "Ask me first"
  * one approval request covers the whole group, and under "Only a person" nothing is sent. People already told, or whose
- * own message waits for an approver, are left out; every message has one key per person, so nobody is told twice.
+ * own message waits for an approver, are left out; every message has one key per person, so nobody is told twice. People past
+ * the plan's candidates per job (Rule 2) are only ever a count here: they get the same news without a word about keeping
+ * them, when the message goes for the others, or by themselves after five working days (`runUntoldSafetyNet`).
  */
 type ApprovalRow = typeof approvalRequests.$inferSelect;
 
@@ -40,6 +42,7 @@ export async function closingMessagePreview(tx: Tx, container: Container, roleId
     waitingApproval: aud.waitingApproval,
     noEmail: people.filter((p) => !p.hasEmail).length,
     optedOut: people.filter((p) => p.optedOut).length,
+    locked: aud.locked.length,
     policy: await declineMessagePolicy(tx, { companyId: aud.role.companyId, roleId: aud.role.id }),
     waitingApprovalId: aud.batch?.id ?? null,
     sendPath: closingSendPath(aud.role.id),
@@ -74,6 +77,7 @@ export async function sendClosingMessage(tx: Tx, container: Container, input: { 
   else if (d.outcome === "human_only") result = { status: "not_sent_settings", queued: 0, held: 0, notSent: ids.length, results: ids.map((applicationId) => ({ applicationId, ok: false, candidateNotice: "not_sent_settings" as const })) };
   else {
     const results = await queueClosingMessages(tx, container.integrations, { roleId: aud.role.id, applicationIds: ids, actor: input.actor, statusBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock(), sendAt: undoUntil(container) });
+    await tellLockedOfClose(tx, container.integrations, { roleId: aud.role.id, statusBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() });
     result = { status: "sent", ...tally(results), results };
   }
   await emit(tx, { type: "role.closing_message", companyId: aud.role.companyId, actor: input.actor, subject: { type: "role", id: aud.role.id }, payload: { status: result.status, requested: ids.length, queued: result.queued, held: result.held, approvalRequestId: result.approvalRequestId ?? null } });
@@ -98,6 +102,7 @@ export async function sendApprovedClosingMessages(tx: Tx, container: Container, 
   const still = new Set(aud.apps.map((a) => a.id));
   const ids = input.req.proposal.applicationIds.filter((id) => still.has(id));
   const results = await queueClosingMessages(tx, container.integrations, { roleId: aud.role.id, applicationIds: ids, actor: input.actor, statusBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() });
+  await tellLockedOfClose(tx, container.integrations, { roleId: aud.role.id, statusBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() });
   const result: ClosingMessageResult = { status: "sent", ...tally(results), results };
   await emit(tx, { type: "role.closing_message", companyId: aud.role.companyId, actor: input.actor, subject: { type: "role", id: aud.role.id }, payload: { status: "approved", requested: input.req.proposal.applicationIds.length, queued: result.queued, held: result.held, approvalRequestId: input.req.id } });
   return result;

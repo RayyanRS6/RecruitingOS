@@ -110,6 +110,8 @@ describe("email failure handling", () => {
     expect(sup.reason).toBe("hard_bounce");
     const note = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "candidate.unreachable")))).pop()!;
     expect(note.body).toMatch(/texted them a link|goes out when contact hours open/);
+    // it opens that candidate, never the whole list (6 November 2026)
+    expect(note.action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${applicationId}` });
     const text = sms().sent.find((m) => m.to === "+19495550100" && /could not reach you by email/.test(m.body));
     if (/texted them/.test(note.body)) expect(text).toBeTruthy();
     expect((await container.db.select().from(events).where(eq(events.type, "message.suppressed"))).length).toBeGreaterThanOrEqual(1);

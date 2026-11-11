@@ -13,7 +13,7 @@ Target: WCAG 2.1 AA on every candidate page and every signed-in page. Automated:
 
 ## Manual (Not started; do on the staging URL)
 
-- [ ] Screen reader (VoiceOver on macOS and iOS), by the person the founder names: apply, pick a time, status page, sign in, approve an interview, resolve a queue item, and the intake conversation (each new reply is announced).
+- [ ] Screen reader (VoiceOver on macOS and iOS), by the person the founder names: apply, the booked interview's page (and pick a time), status page, sign in, set a date and time for an interview (since 6 November 2026 the main way an interview is set up), resolve a queue item, and the intake conversation (each new reply is announced).
 - [ ] 200% zoom and 320px width: no clipped content, no two-dimensional scrolling.
 - [ ] Focus order and visible focus on every interactive element in the sheets (candidate, interview, privacy request).
 - [ ] Error messages are announced and tied to their fields (`aria-describedby` review).

@@ -137,7 +137,7 @@ export async function sendSlotsLapsed(q: Queryable, integrations: Integrations, 
 /**
  * The interview's calendar file. One UID per interview; the sequence always grows: a booking at attempt n is 2(n-1), its
  * cancellation 2(n-1)+1, and the next booking (a later attempt) is higher again, so a calendar app takes a time moved after
- * a cancellation file as the newer one.
+ * a cancellation file as the newer one, and a time moved straight to another replaces it in place.
  */
 export function interviewIcs(input: { interview: InterviewRow; company: MessageInput["company"]; packet: RolePacket; candidate: MessageInput["candidate"]; fromAddress: string; method: "REQUEST" | "CANCEL"; appBaseUrl: string }): string {
   const { interview } = input;
@@ -151,46 +151,129 @@ export function interviewIcs(input: { interview: InterviewRow; company: MessageI
     summary: `${interview.title}: ${input.packet.identity.title} at ${input.company.name}`,
     description: `${interview.durationMinutes}-minute ${interview.format.replace("_", " ")} interview with ${input.company.name}.${interview.meetingUrl ? ` Join: ${interview.meetingUrl}` : ""} Manage: ${scheduleUrl(input.appBaseUrl, interview)}/confirmed`,
     url: interview.meetingUrl ?? null,
+    location: interview.selectedSlot?.address ?? (interview.format === "phone" ? "By phone" : null),
     organizer: { name: `${input.company.name} hiring team`, email: input.fromAddress },
     attendees: input.candidate.email ? [{ name: `${input.candidate.firstName} ${input.candidate.lastName}`, email: input.candidate.email }] : [],
     status: input.method === "CANCEL" ? "CANCELLED" : "CONFIRMED",
   });
 }
 
-export async function sendInterviewConfirmation(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { roundPurpose: string }): Promise<SendResult> {
-  const { candidate, company, packet, interview } = input;
-  const start = interview.startsAt!;
-  const both = input.candidateTimezone === input.companyTimezone ? formatInZone(start, input.candidateTimezone) : `${formatInZone(start, input.candidateTimezone)} (${formatInZone(start, input.companyTimezone)} for the team)`;
-  const text = `Hi ${candidate.firstName},
+/**
+ * The accommodation line (counsel register item 12), on every confirmation: someone a person booked never sees the page
+ * that picks a time, where the field used to be alone. Required: never cut.
+ */
+export const ACCOMMODATION_LINE = "Need an adjustment, such as captions or a phone call instead of video? Tell us on the same page, or reply to this email.";
 
-You are confirmed: ${interview.title} for the ${packet.identity.title} position at ${company.name}.
-
-When: ${both}
-How long: ${interview.durationMinutes} minutes
-${interview.meetingUrl ? `Join: ${interview.meetingUrl}` : `Format: ${interview.format.replace("_", " ")}; details from the team follow if anything else is needed.`}
-Who: ${input.interviewerFirstNames.join(", ") || "the hiring team"}
-
-What to prepare: ${input.roundPurpose}
-
-A calendar invitation is attached. Need to change it? ${scheduleUrl(input.appBaseUrl, interview)}/confirmed lets you reschedule or cancel.
-
-${footer(packet, company)}`;
-  const ics = interviewIcs({ interview, company, packet, candidate, fromAddress: integrations.env.fromAddress, method: "REQUEST", appBaseUrl: input.appBaseUrl });
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_confirmation", subject: `Confirmed: ${interview.title} at ${company.name}, ${formatInZone(start, input.candidateTimezone)}`, text, idempotencyKey: `confirm:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email, attachments: [{ filename: "interview.ics", contentType: "text/calendar; method=REQUEST", contentBase64: Buffer.from(ics).toString("base64") }] });
+/**
+ * Where the interview takes place, as one line of an email: the meeting link, or what a person set (an address, or by
+ * phone, said so the candidate knows who calls whom). Null when nothing more is known.
+ */
+export function interviewPlaceLine(input: Pick<InterviewMessageInput, "interview" | "candidate" | "company">): string | null {
+  const { interview, candidate, company } = input;
+  if (interview.meetingUrl) return `Join: ${interview.meetingUrl}`;
+  const slot = interview.selectedSlot;
+  if (slot?.address) return `Where: ${slot.address}`;
+  if (slot?.source === "person" && interview.format === "phone") return candidate.phone ? `By phone: ${company.name} will call you at ${candidate.phone}` : `By phone: ${company.name} will call you. Reply with the best number to reach you.`;
+  return null;
 }
 
-export async function sendInterviewReminder(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { which: "before24h" | "before2h" }): Promise<SendResult> {
+/**
+ * What differs when a person set the time (`setByPerson`) rather than the candidate picking it: they did not confirm
+ * anything, so the email says what was booked for them and how to ask for another time. `moved`: it replaces a time they
+ * were told, in one email, with the team's reason when they gave one; its calendar file replaces the old entry in place.
+ * `changed`: the same time they were told, with new details (a link, the address, how long): the email says the details
+ * changed, never that it moved (11 November 2026); its calendar file replaces the old entry in place too.
+ * `newTimeAfterCancel`: they cancelled, or did not come, and a person set a new time. `missedByUs`: the same round again
+ * after our interviewer missed it (founder decision L-12). `note`: the personal line (Q28).
+ */
+export type ConfirmationInput = InterviewMessageInput & { roundPurpose: string; setByPerson?: boolean; moved?: { reason: string | null } | null; changed?: { reason: string | null } | null; newTimeAfterCancel?: boolean; missedByUs?: boolean; note?: InvitationNote | null };
+
+/** The confirmation, written but not sent: one template and one key per interview and attempt in every variant, so the outbox's rules hold for all of them. */
+export function interviewConfirmationMessage(input: ConfirmationInput): { subject: string; text: string } {
+  const { candidate, company, packet, interview } = input;
+  const start = interview.startsAt!;
+  const when = formatInZone(start, input.candidateTimezone);
+  const both = input.candidateTimezone === input.companyTimezone ? when : `${when} (${formatInZone(start, input.companyTimezone)} for the team)`;
+  const position = packet.identity.title;
+  const title = titleMidSentence(interview.title);
+  const details = `When: ${both}
+How long: ${interview.durationMinutes} minutes
+${interviewPlaceLine(input) ?? `Format: ${interview.format.replace("_", " ")}; details from the team follow if anything else is needed.`}
+Who: ${input.interviewerFirstNames.join(", ") || "the hiring team"}
+
+What to prepare: ${input.roundPurpose}`;
+  const page = `${scheduleUrl(input.appBaseUrl, interview)}/confirmed`;
+  if (!input.setByPerson) {
+    return {
+      subject: `Confirmed: ${interview.title} at ${company.name}, ${when}`,
+      text: `Hi ${candidate.firstName},
+
+You are confirmed: ${interview.title} for the ${position} position at ${company.name}.
+
+${details}
+
+A calendar invitation is attached. Need to change it? ${page} lets you reschedule or cancel.
+
+${ACCOMMODATION_LINE}
+
+${footer(packet, company)}`,
+    };
+  }
+  const reason = (input.moved ?? input.changed)?.reason?.trim();
+  const said = reason ? ` ${company.name} said: "${reason}"` : "";
+  const opening = input.moved
+    ? `${company.name} has moved your ${title}.${said}`
+    : input.changed
+      ? `${company.name} has changed the details of your ${title}.${said}`
+    : input.missedByUs
+      ? `We are sorry: the interviewer from ${company.name} could not join your last interview for the ${position} position. Here is a new time for your ${title}.`
+      : input.newTimeAfterCancel
+        ? `${company.name} has set a new time for your ${title} for the ${position} position.`
+        : `Good news: ${company.name} would like to interview you for the ${position} position.`;
+  return {
+    subject: `${input.moved ? "New time for your interview" : input.changed ? "Your interview has changed" : "Your interview"}: ${interview.title} at ${company.name}, ${when}`,
+    text: `Hi ${candidate.firstName},
+
+${opening}
+
+${details}${invitationNoteText(input.note)}
+
+A calendar invitation is attached. Need a different time? ${page}
+
+${ACCOMMODATION_LINE}
+
+${footer(packet, company)}`,
+  };
+}
+
+export async function sendInterviewConfirmation(q: Queryable, integrations: Integrations, input: ConfirmationInput): Promise<SendResult> {
+  const { candidate, company, packet, interview } = input;
+  const message = interviewConfirmationMessage(input);
+  const ics = interviewIcs({ interview, company, packet, candidate, fromAddress: integrations.env.fromAddress, method: "REQUEST", appBaseUrl: input.appBaseUrl });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_confirmation", subject: message.subject, text: message.text, idempotencyKey: `confirm:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email, attachments: [{ filename: "interview.ics", contentType: "text/calendar; method=REQUEST", contentBase64: Buffer.from(ics).toString("base64") }] });
+}
+
+type ReminderInput = InterviewMessageInput & { which: "before24h" | "before2h" };
+
+/** A reminder, written but not sent. */
+export function interviewReminderMessage(input: ReminderInput): { subject: string; text: string } {
   const { candidate, company, packet, interview } = input;
   const start = interview.startsAt!;
   const text = `Hi ${candidate.firstName},
 
 ${input.which === "before24h" ? "Your interview is tomorrow." : "Your interview starts in about two hours."} ${interview.title} at ${company.name}: ${formatInZone(start, input.candidateTimezone)}.
-${interview.meetingUrl ? `Join: ${interview.meetingUrl}` : ""}
+${interviewPlaceLine(input) ?? ""}
 
 Need to change it? ${scheduleUrl(input.appBaseUrl, interview)}/confirmed
 
 ${footer(packet, company)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: `interview_reminder_${input.which}`, subject: `${input.which === "before24h" ? "Tomorrow" : "Soon"}: ${interview.title} at ${company.name}`, text, idempotencyKey: `iv_reminder:${interview.id}:${interview.attempt}:${input.which}`, eventOnSent: "message.sent", to: candidate.email });
+  return { subject: `${input.which === "before24h" ? "Tomorrow" : "Soon"}: ${interview.title} at ${company.name}`, text };
+}
+
+export async function sendInterviewReminder(q: Queryable, integrations: Integrations, input: ReminderInput): Promise<SendResult> {
+  const { candidate, interview } = input;
+  const message = interviewReminderMessage(input);
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: `interview_reminder_${input.which}`, subject: message.subject, text: message.text, idempotencyKey: `iv_reminder:${interview.id}:${interview.attempt}:${input.which}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**

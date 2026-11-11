@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { ApplicationStage, RolePacket, ScreenProgress, ScreenTranscriptEntry, ToldState } from "@ros/contracts";
-import { applications, assessments, auditRecords, communications, screens, withTenant } from "@ros/db";
+import { TRIAGE_READINGS } from "@ros/agents";
+import { suppressAddress } from "@ros/core";
+import { applications, assessments, auditRecords, communications, screens, users, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { decisionHeadline } from "./pages/application-record";
 import { otherApplicationState, sentChatAnswers } from "./services/application-record";
+import { createApplication } from "./services/applications";
 import { signInStaff, statusTokenFor } from "./test-helpers";
 
 /**
@@ -132,7 +135,7 @@ describe("the application record (status page) after sending", () => {
     roleId = await makeRole("I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.");
     its = await signInStaff(app, container, "ops@its-record.test", "platform_admin");
     // room for a second job, so one person can apply to two jobs at the company
-    const plan = await json("POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "growth", reason: "Two jobs for this suite" }, its, { "x-admin-reason": "test" });
+    const plan = await json("POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "pro", reason: "Two jobs for this suite" }, its, { "x-admin-reason": "test" });
     expect(plan.status, await plan.clone().text()).toBe(200);
     secondRoleId = await makeRole("I need a dental assistant in Irvine, $25 to $30 an hour, part time. New role. I decide. Must-haves: x-ray certificate. Just draft it.");
     packet = ((await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } }).currentPacket.packet;
@@ -161,17 +164,21 @@ describe("the application record (status page) after sending", () => {
     const must = packet.requirements.mustHaves[0];
     expect(score).toContain(`<li class="strong"><div class="bar-head"><span>${must.text}</span><span>100% met · Shown</span></div><progress max="100" value="100" aria-label="${must.text}: 100% met">100%</progress></li>`);
     if (packet.competencies.length) {
-      // the skills the team looks for are not on the job page: one line, never a skill's name
-      // the share the number counted (a partly shown skill can count for more than half), so bars and number agree
+      // the skills the team looks for are not on the job page: one line, never a skill's name, so bars and number agree. What
+      // nothing showed counts there at no points, so the line says how much was shown, never "met" (the release review, 11
+      // November 2026: "0% met" in red read as "you meet none of what they look for")
       const shown = Number(score.match(/<span class="score-num">(\d{1,3})</)?.[1]);
-      expect(score).toMatch(/<span>Other things the team looks for<\/span><span>\d{1,3}% met<\/span>/);
-      if (shown === 100) expect(score).toContain("<span>Other things the team looks for</span><span>100% met</span>");
+      expect(score).toMatch(/<span>Other things the team looks for<\/span><span>\d{1,3}% shown<\/span><\/div><progress max="100" value="\d{1,3}" aria-label="Other things the team looks for: \d{1,3}% shown">/);
+      expect(score).not.toMatch(/Other things the team looks for(<\/span><span>|: )\d{1,3}% met/);
+      if (shown === 100) expect(score).toContain("<span>Other things the team looks for</span><span>100% shown</span>");
       for (const c of packet.competencies) expect(score).not.toContain(c.name);
     }
     // a must-have nothing showed is listed as not shown yet; skills nothing showed are private and stay unnamed
     if (packet.requirements.mustHaves.length > 1) expect(score).toContain("Not shown yet:");
     for (const m of packet.requirements.mustHaves.slice(1)) expect(score).toContain(m.text);
-    expect(score).toMatch(/Based on \d+ of \d+ requirements\. Anything the team could not see in what you sent is left out of the number, never held against you\./);
+    expect(score).toMatch(/Based on \d+ of \d+ requirements\. Anything the team could not see in what you sent earns no points yet, and is never read as a no\./);
+    expect(score).not.toMatch(/left out|held against/);
+    if (packet.requirements.mustHaves.length > 1) expect(score).toContain("Nothing you sent says either way, so these earn no points yet.");
     // she sent it without the AI interview: the number is her résumé's alone, and says so (R20-9)
     expect(score).toContain('<p class="meta">From your résumé only. Based on ');
     expect(score).toContain("The team sees what you sent; their private notes are never shared with you.");
@@ -187,6 +194,30 @@ describe("the application record (status page) after sending", () => {
     for (const kept of ["<h2>What happens next</h2>", '<div class="card status">', "No longer interested?", "Ask for a copy, a fix, deletion, or a person's review", "Shared this link by mistake?", "How AI is used", "make every decision about your application"]) expect(html).toContain(kept);
     expect(html).not.toMatch(/ style="/);
     expect(html).not.toContain("<script");
+  });
+
+  it("names a folded line nothing in it showed '0% shown', in the bar and to a screen reader, never '0% met' (the release review, 11 November 2026)", async () => {
+    expect(packet.competencies.length).toBeGreaterThan(0);
+    const a = await applyAs("Bea", "bea.record@example.com");
+    await withoutChat(a);
+    const [must, ...rest] = packet.requirements.mustHaves;
+    const result = {
+      overall: "potential", confidence: "high", summary: "Reads well.", strengths: [], concerns: [], unknowns: [], anomalies: [], recommendation: "screen", rationale: "r",
+      requirementFindings: [{ requirementKey: must.key, met: "yes", evidence: { quote: "Registered Dental Hygienist at Coastal Family Dentistry", source: "resume" } }, ...rest.map((m) => ({ requirementKey: m.key, met: "unknown" }))],
+      competencyFindings: packet.competencies.map((c) => ({ competencyKey: c.key, finding: "not_evidenced" })),
+    };
+    const [row] = await withTenant(container.db, companyId, (tx) => tx.insert(assessments).values({ companyId, applicationId: a.id, kind: "triage", packetVersion: a.packetVersion, result: result as never, overall: "potential", confidence: "high", createdAt: at(60) }).returning());
+    await container.db.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, a.id));
+    const { html } = await page(`/c/status/${a.statusToken}`);
+    const score = html.slice(html.indexOf('<section class="card" id="score"'), html.indexOf("</section>", html.indexOf('id="score"')));
+    expect(score).toContain('<span>Other things the team looks for</span><span>0% shown</span></div><progress max="100" value="0" aria-label="Other things the team looks for: 0% shown">0%</progress>');
+    expect(score).not.toMatch(/(^|[^\d])0% met/);
+    // and its bar is one neutral colour, never the red of a must-have not met (the second reading, 11 November 2026, S-3)
+    expect(score).toContain('<li class="shown"><div class="bar-head"><span>Other things the team looks for</span>');
+    expect(html).toContain(".bars .shown progress::-webkit-progress-value { background: var(--primary); }");
+    expect(html).toContain(".bars .shown progress::-moz-progress-bar { background: var(--primary); }");
+    // the must-have their résumé shows still reads as met, with its finding
+    expect(score).toContain(`<span>${must.text}</span><span>100% met · Shown</span>`);
   });
 
   it("while the reading is worked out: 'Working out your match score…' with a plain Check again link (never a timed reload, WCAG 2.2.1), then 'Not ready yet'", async () => {
@@ -219,6 +250,167 @@ describe("the application record (status page) after sending", () => {
     // once the reading is there, the score shows
     await readingFor(a);
     expect((await page(`/c/status/${a.statusToken}`)).html).toContain("Your match score is ready");
+  });
+
+  it("while an AI interview they sent has no scorecard, never a résumé-only number: 'Working out…', then 'Not ready yet', for as long as it takes (6 November 2026); while that scorecard waits for the AI credit, nothing about a score at all", async () => {
+    const a = await applyAs("Noor", "noor.record@example.com");
+    await readingFor(a);
+    // it was sent, and its scorecard is not written yet: the résumé's number would read low for someone who did what was asked
+    const sent = await addScreen(a, { status: "completed", progress: progressOf({ submittedAt: at(1) }), completedAt: at(1) });
+    const scoreOf = async () => (await page(`/c/status/${a.statusToken}`)).html;
+    let html = await scoreOf();
+    expect(html).toContain('<h2 id="score-h">Working out your match score…</h2>');
+    expect(html).not.toContain("Your match score is ready");
+    expect(html).not.toContain("From your résumé only");
+    // past the window, however long it waits: never the number
+    await container.db.update(screens).set({ completedAt: at(-30 * 60) }).where(eq(screens.id, sent.id));
+    html = await scoreOf();
+    expect(html).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Not ready yet</h2>');
+    expect(html).not.toContain("Your match score is ready");
+    expect(html).not.toContain("From your résumé only");
+    // and no word about a plan or AI credit in what it tells them
+    const scoreCard = html.slice(html.indexOf('<section class="card" id="score"'), html.indexOf("</section>", html.indexOf('<section class="card" id="score"')));
+    expect(scoreCard).toContain("Not ready yet");
+    expect(scoreCard).not.toMatch(/\b(credit|upgrade|plan)\b/i);
+    // the scorecard waits for the company's AI credit (PL-10): nothing will work it out for now, so "Working out…" would not be
+    // true, and the résumé's number still never stands in for it. Nothing is said about a score, a moment after sending or long after.
+    for (const completedAt of [at(1), at(-30 * 60)]) {
+      await container.db.update(screens).set({ completedAt, progress: progressOf({ submittedAt: completedAt, scoreWaitsForCredit: completedAt }) }).where(eq(screens.id, sent.id));
+      html = await scoreOf();
+      expect(html).not.toContain('id="score"');
+      expect(html).not.toMatch(/match score|Not ready yet/i);
+      expect(html).not.toContain("From your résumé only");
+    }
+  });
+
+  /**
+   * The release review (11 November 2026, L1-4): someone who asked for a person in the AI interview has a recruiter's call to
+   * come, whose notes write the scorecard, and so has an AI interview a recruiter finished on a call until that scorecard is
+   * written. The team reads their number as still to come, so their own page never shows the résumé's alone as ready.
+   */
+  it("someone who asked for a person, or whose AI interview a recruiter finished on a call, reads 'Not ready yet' until its scorecard is in, never a résumé-only number", async () => {
+    const a = await applyAs("Kai", "kai.record@example.com");
+    await readingFor(a);
+    const scr = await addScreen(a, { status: "human_requested" });
+    const scoreOf = async () => (await page(`/c/status/${a.statusToken}`)).html;
+    // a moment after applying and long after: the call is a person's, so never "under a minute", and never the résumé's number
+    for (const createdAt of [at(0), at(-20 * 60)]) {
+      await container.db.update(applications).set({ createdAt }).where(eq(applications.id, a.id));
+      const html = await scoreOf();
+      expect(html).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Not ready yet</h2><p>Your match score shows here once it is ready. The hiring team reads every application themselves either way.</p>');
+      expect(html).not.toContain("Your match score is ready");
+      expect(html).not.toContain("From your résumé only");
+    }
+    // the team reads the same: their AI interview is still to come
+    expect(((await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { matchScore: { interview: string } }).matchScore.interview).toBe("not_done_yet");
+    // a recruiter called and finished it with their notes: its scorecard is being written, as after the candidate's own Send
+    await container.db.update(screens).set({ status: "completed", completedAt: at(0), progress: progressOf({ completedBy: "recruiter_call" }) }).where(eq(screens.id, scr.id));
+    let html = await scoreOf();
+    expect(html).toContain('<h2 id="score-h">Working out your match score…</h2>');
+    expect(html).not.toContain("From your résumé only");
+    await container.db.update(screens).set({ completedAt: at(-30 * 60) }).where(eq(screens.id, scr.id));
+    html = await scoreOf();
+    expect(html).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Not ready yet</h2>');
+    expect(html).not.toContain("From your résumé only");
+    // once that scorecard is in, the number shows, counting both
+    await container.db.update(screens).set({ assessmentId: (await readingFor(a, at(90), "screen")).id }).where(eq(screens.id, scr.id));
+    html = await scoreOf();
+    expect(html).toContain("Your match score is ready");
+    expect(html).toMatch(/<p class="meta">From your résumé and your AI interview\. Based on /);
+  });
+
+  /**
+   * The release review's second reading (11 November 2026, S-1): the call someone asked for is still to come only while it can
+   * finish their AI interview. Once a person books them, or decides, a recruiter's notes no longer go on it (`not_screening`),
+   * and nothing will score it: "Not ready yet ... once it is ready" would stand for good, through the interview and the hire.
+   * Their page shows the résumé's number and says so, as before cf2cb36, and the team's label reads the AI interview as not done.
+   * A private decision changes nothing on their page (B6), so there it still reads as before the decision.
+   */
+  it("someone who asked for a person and was then booked, or hired, sees the résumé's number 'From your résumé only', never 'Not ready yet' for good; a private decision changes nothing", async () => {
+    const [me] = await container.db.select({ id: users.id }).from(users).where(eq(users.email, "owner@record.test"));
+    const scoreCard = async (token: string) => {
+      const { html } = await page(`/c/status/${token}`);
+      const from = html.indexOf('<section class="card" id="score"');
+      expect(from, "the score card").toBeGreaterThan(-1);
+      return html.slice(from, html.indexOf("</section>", from));
+    };
+    const askedForAPerson = (a: typeof applications.$inferSelect) => container.db.update(screens).set({ status: "human_requested", humanRequestedAt: at(0) }).where(eq(screens.applicationId, a.id));
+    const team = async (id: string) => ((await (await json("GET", `/api/v1/applications/${id}`)).json()) as { matchScore: { interview: string; basis: string } }).matchScore;
+
+    const a = await applyAs("Mia", "mia.record@example.com");
+    await readingFor(a);
+    await askedForAPerson(a);
+    expect(await scoreCard(a.statusToken)).toContain('<h2 id="score-h">Not ready yet</h2>');
+    // the owner phones them and books the interview themselves ("Set a date and time")
+    const day = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+    const booked = await json("POST", `/api/v1/applications/${a.id}/interviews`, { roundKey: packet.interviews.plan[0].key, interviewerUserIds: [me.id], setTime: { date: day, time: "10:00", durationMinutes: 45, place: { kind: "phone" } } });
+    expect(booked.status, await booked.clone().text()).toBe(201);
+    await container.drain();
+    expect((await container.db.select().from(applications).where(eq(applications.id, a.id)))[0].stage).toBe("interview_scheduled");
+    // a recruiter's notes can no longer finish it, so nothing will score it: the résumé's number, saying so
+    let card = await scoreCard(a.statusToken);
+    expect(card).toContain('<p class="eyebrow">Your match score is ready</p>');
+    expect(card).toContain('<p class="meta">From your résumé only. Based on ');
+    expect(card).not.toMatch(/Not ready yet|once it is ready/);
+    // the team reads it the same way: no AI interview, a final number, never "not done yet" for good
+    expect(await team(a.id)).toMatchObject({ interview: "not_done", basis: "Résumé only: no AI interview" });
+    // hired and told: the same
+    await container.db.update(applications).set({ stage: "hired", toldState: "sent" }).where(eq(applications.id, a.id));
+    card = await scoreCard(a.statusToken);
+    expect(card).toContain('<p class="meta">From your résumé only. Based on ');
+    expect(card).not.toMatch(/Not ready yet|once it is ready/);
+
+    // a private decision while the call is still to come: their page stands where it was (B6), "Not ready yet"
+    const b = await applyAs("Ned", "ned.record@example.com");
+    await readingFor(b);
+    await askedForAPerson(b);
+    const before = await scoreCard(b.statusToken);
+    expect(before).toContain('<h2 id="score-h">Not ready yet</h2>');
+    const declined = await json("POST", `/api/v1/applications/${b.id}/actions`, { action: "reject", reason: "not_a_match_experience" });
+    expect(declined.status, await declined.clone().text()).toBe(200);
+    expect((await container.db.select().from(applications).where(eq(applications.id, b.id)))[0]).toMatchObject({ stage: "rejected", toldState: "not_told" });
+    expect(await scoreCard(b.statusToken)).toBe(before);
+  });
+
+  /**
+   * The lead's D2 (11 November 2026): an AI interview they sent whose scorecard could not be written, for good (the screen's run
+   * gave up and asked ITS to look), read "Not ready yet" for ever, and the team's label said "being scored" beside a card that
+   * said its review could not be written. Both are true now: fix A's words for the candidate, and a label that says so.
+   */
+  it("a sent AI interview whose scorecard could not be written says 'Could not be worked out' at once, and the team's label says it could not be scored", async () => {
+    const a = await applyAs("Lou", "lou.record@example.com");
+    await readingFor(a);
+    const [run] = await container.db.insert(workflowRuns).values({ companyId, workflowKey: "screen", subject: { type: "application", id: a.id }, status: "running", currentStep: "assess", state: {} }).returning();
+    const sent = await addScreen(a, { status: "completed", progress: progressOf({ submittedAt: at(-30 * 60) }), completedAt: at(-30 * 60) });
+    await container.db.update(screens).set({ workflowRunId: run.id }).where(eq(screens.id, sent.id));
+    await container.db.update(applications).set({ stage: "screen_complete" }).where(eq(applications.id, a.id));
+    const scoreCard = async () => {
+      const { html } = await page(`/c/status/${a.statusToken}`);
+      const from = html.indexOf('<section class="card" id="score"');
+      expect(from, "the score card").toBeGreaterThan(-1);
+      return html.slice(from, html.indexOf("</section>", from));
+    };
+    const team = async () => (await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { matchScore: { interview: string; basis: string }; screens: Array<{ id: string; scorecard?: string }> };
+    // while it is being written: "Not ready yet", and the team's "being scored"
+    expect(await scoreCard()).toContain('<h2 id="score-h">Not ready yet</h2>');
+    expect((await team()).matchScore).toMatchObject({ interview: "being_scored" });
+    // the run gave up for good: nothing will write it by itself
+    await container.db.update(workflowRuns).set({ status: "failed" }).where(eq(workflowRuns.id, run.id));
+    const card = await scoreCard();
+    expect(card).toContain('<p class="eyebrow">Your match score</p><h2 id="score-h">Could not be worked out</h2><p>The hiring team reads your application themselves.</p>');
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready|From your résumé only/);
+    expect(card).not.toMatch(/\b(credit|upgrade|plan)\b/i);
+    // the page the chat closes on promises no score either
+    expect((await page(`/c/screen/${sent.token}`)).html).not.toMatch(/match score/i);
+    // the team: the scorecard card says it could not be written, and the label beside the number says the same, on the panel and the list
+    const detail = await team();
+    expect(detail.screens.find((s) => s.id === sent.id)?.scorecard).toBe("unavailable");
+    expect(detail.matchScore).toMatchObject({ interview: "scoring_failed", basis: "Résumé only: AI interview could not be scored" });
+    const rows = (await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; interview: string | null; basis: string | null }>;
+    expect(rows.find((r) => r.id === a.id)).toMatchObject({ interview: "scoring_failed", basis: "Résumé only: AI interview could not be scored" });
+    // the board keeps them apart, in words that say so
+    const board = (await (await json("GET", `/api/v1/roles/${roleId}/board`)).json()) as { noAiInterview: Array<{ applicationId: string; placement: { doneLabel: string | null } }> };
+    expect(board.noAiInterview.find((c) => c.applicationId === a.id)?.placement.doneLabel).toBe("AI interview could not be scored");
   });
 
   it("S7-2: 'Your answers' reads back exactly what was sent: the form's questions in sentences and the sent chat, the assistant's note apart; an unsent chat shows nothing and holds the score back", async () => {
@@ -278,6 +470,13 @@ describe("the application record (status page) after sending", () => {
     expect(html).not.toContain('id="score"');
     expect(html).not.toContain('href="#score"');
     expect(html).not.toMatch(/match score/i);
+    // nor the page a sent chat closes on: no score is coming. Its scorecard is in, so the switch is all that holds the score
+    // back (a sent chat with none never shows a number, switch or not: 6 November 2026).
+    const sentChat = await addScreen(a, { status: "completed", completedAt: at(-30 * 60), progress: progressOf({ submittedAt: at(-30 * 60) }), assessmentId: (await readingFor(a, at(90), "screen")).id });
+    const closed = (await page(`/c/screen/${sentChat.token}`)).html;
+    expect(closed).toContain("<h1>Thanks, your answers are sent</h1>");
+    expect(closed).not.toMatch(/match score/i);
+    expect(closed).toContain("Everything you sent will be on your application page.");
     // recorded with who, when and why, as a change to the company's settings the customer's history lists
     const recorded = (await container.db.select().from(auditRecords).where(eq(auditRecords.companyId, companyId))).filter((r) => r.action === "company.updated" && (r.details as { fields?: string[] }).fields?.includes("candidateScoreShown"));
     expect(recorded.at(-1)).toMatchObject({ reason: "Customer asked to wait for counsel", details: { candidateScoreShown: { from: true, to: false } } });
@@ -342,5 +541,138 @@ describe("the application record (status page) after sending", () => {
     const job = await page(`/careers/${slug}/jobs/${roleId}`);
     expect(job.html).toContain('<a href="/c/link-request">Already applied? See your application</a>');
     expect((await page(`/careers/${slug}`)).html).toContain('<a href="/c/link-request">Already applied? See your application</a>');
+  });
+
+  /**
+   * A score that never comes (10 November 2026): once nothing will work a number out by itself, the record says so at once in
+   * short true words, never "Working out…" or "Not ready yet" for ever. Two ways: the résumé reading could not be made (the
+   * assistant's answer unusable every time), or AI never reads an emailed-in applicant's résumé because our email with the AI
+   * notice did not reach them (known-bugs row 16). While their AI interview is open its scorecard can still give one, so that
+   * line stays. The team's panel says it in its own words (`noReading`), instead of a review "a minute or two" away.
+   */
+  it("a score that will not come by itself says so at once: the reading could not be made, or AI does not read their résumé (row 16); the team's panel is told why", async () => {
+    const scoreCard = async (token: string) => {
+      const { html } = await page(`/c/status/${token}`);
+      const from = html.indexOf('<section class="card" id="score"');
+      expect(from, "the score card").toBeGreaterThan(-1);
+      return html.slice(from, html.indexOf("</section>", from));
+    };
+    const panel = async (id: string) => (await (await json("GET", `/api/v1/applications/${id}`)).json()) as { noReading?: string | null; assessments: unknown[] };
+    /** Their AI interview link closed unused: its run ended with it, as the run itself ends it. */
+    const chatClosed = async (a: typeof applications.$inferSelect, status: string) => {
+      await container.db.update(screens).set({ status }).where(eq(screens.applicationId, a.id));
+      await container.db.update(workflowRuns).set({ status: "completed" }).where(and(eq(workflowRuns.workflowKey, "screen"), sql`${workflowRuns.subject}->>'id' = ${a.id}`));
+    };
+    const NO_SCORE = '<p class="eyebrow">Your match score</p><h2 id="score-h">Could not be worked out</h2><p>The hiring team reads your application themselves.</p>';
+
+    // every résumé reading unusable (each with the runner's one retry): the reading cannot be made
+    for (let i = 0; i < TRIAGE_READINGS * 2; i++) container.fake!.failNext("triage.assess", "invalid");
+    const gil = await applyAs("Gil", "gil.record@example.com");
+    expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, gil.id))).toHaveLength(0);
+    // their AI interview is open, and its scorecard can still give a number: the line stays as it was
+    expect(await scoreCard(gil.statusToken)).toContain('<h2 id="score-h">Shown once your AI interview is sent</h2>');
+    // they sent the application without it: nothing will work one out, so the record says so at once, a moment after applying too
+    await chatClosed(gil, "declined_by_candidate");
+    let card = await scoreCard(gil.statusToken);
+    expect(card).toContain(NO_SCORE);
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready|Check again/);
+    expect(card).not.toMatch(/\b(credit|upgrade|plan)\b/i);
+    // the team's panel is told the review could not be made, never that one comes in a minute or two
+    expect((await panel(gil.id)).noReading).toBe("could_not_read");
+
+    // an emailed-in applicant whose email with the AI notice could not go: AI never reads their résumé (row 16)
+    await suppressAddress(container.db, { address: "hal.record@example.com", reason: "hard_bounce", source: "admin", actor: { kind: "system", id: "test" } });
+    const made = await withTenant(container.db, companyId, (tx) => createApplication(tx, container, { companyId, roleId, source: "email_in", firstName: "Hal", lastName: "Record", email: "hal.record@example.com", phone: null, smsConsent: false, consentSource: "email_in", noticeVersionsShown: [], eligibilityAnswers: Object.fromEntries(packet.requirements.eligibility.map((r) => [r.key, "yes"])), noResumeAnswers: { summary: "Registered dental hygienist, eight years of perio work." } }, { kind: "system", id: "email_in" }));
+    await container.drain();
+    const [hal] = await container.db.select().from(applications).where(eq(applications.id, made.application.id));
+    expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, hal.id))).toHaveLength(0);
+    expect((await panel(hal.id)).noReading).toBe("no_ai_notice");
+    // the link in that email closed unused: no reading and no AI interview will give a number
+    await chatClosed(hal, "expired");
+    card = await scoreCard(hal.statusToken);
+    expect(card).toContain(NO_SCORE);
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready/);
+    // the required notices stay on the page around it
+    const { html } = await page(`/c/status/${hal.statusToken}`);
+    for (const kept of ["How AI is used", "make every decision about your application"]) expect(html).toContain(kept);
+
+    // a reading that is only late keeps the words that promise it: nothing has given up on it
+    const ivy = await applyAs("Ivy", "ivy.record@example.com");
+    await chatClosed(ivy, "declined_by_candidate");
+    await withTenant(container.db, companyId, async (tx) => {
+      await tx.update(applications).set({ latestAssessmentId: null, createdAt: at(-20 * 60) }).where(eq(applications.id, ivy.id));
+      await tx.delete(assessments).where(eq(assessments.applicationId, ivy.id));
+    });
+    await container.db.update(workflowRuns).set({ status: "waiting" }).where(eq(workflowRuns.idempotencyKey, `application_intake:${ivy.id}`));
+    expect(await scoreCard(ivy.statusToken)).toContain('<h2 id="score-h">Not ready yet</h2><p>Your match score shows here once it is ready.');
+    expect((await panel(ivy.id)).noReading ?? null).toBeNull();
+    // and one whose intake stopped for good, a request raised to ITS, says the reading could not be made
+    await container.db.update(workflowRuns).set({ status: "failed" }).where(eq(workflowRuns.idempotencyKey, `application_intake:${ivy.id}`));
+    expect(await scoreCard(ivy.statusToken)).toContain(NO_SCORE);
+    expect((await panel(ivy.id)).noReading).toBe("could_not_read");
+  });
+
+  /**
+   * The release review (11 November 2026, L4-2): a wrong-trade CV, read, where every requirement is not known gives no number at
+   * all, and nothing else will give one by itself. Their page read "Not ready yet ... shows here once it is ready" for ever, and
+   * the AI interview's closing page promised a score. Fix A's words now, as for a reading that could not be made.
+   */
+  it("a reading that judged nothing, with nothing else to give a number, says 'Could not be worked out', never 'Not ready yet' for ever", async () => {
+    const NO_SCORE = '<p class="eyebrow">Your match score</p><h2 id="score-h">Could not be worked out</h2><p>The hiring team reads your application themselves.</p>';
+    const scoreCard = async (token: string) => {
+      const { html } = await page(`/c/status/${token}`);
+      const from = html.indexOf('<section class="card" id="score"');
+      expect(from, "the score card").toBeGreaterThan(-1);
+      return html.slice(from, html.indexOf("</section>", from));
+    };
+    /** A reading as the triage writes one when nothing in the CV speaks to the job: every requirement and skill not known. */
+    const nothingJudged = async (a: typeof applications.$inferSelect, kind: "triage" | "screen", createdAt = at(60)) => {
+      const result = {
+        overall: "insufficient_evidence", confidence: "low", summary: "Nothing in it speaks to this job.", strengths: [], concerns: [], unknowns: [], anomalies: [], recommendation: "screen", rationale: "PRIVATE",
+        requirementFindings: packet.requirements.mustHaves.map((m) => ({ requirementKey: m.key, met: "unknown" })),
+        competencyFindings: packet.competencies.map((c) => ({ competencyKey: c.key, finding: "not_evidenced", note: "" })),
+      };
+      const [row] = await withTenant(container.db, companyId, (tx) => tx.insert(assessments).values({ companyId, applicationId: a.id, kind, packetVersion: a.packetVersion, result: result as never, overall: "insufficient_evidence", confidence: "low", createdAt }).returning());
+      await container.db.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, a.id));
+      return row;
+    };
+    const onlyThis = async (a: typeof applications.$inferSelect) => withTenant(container.db, companyId, async (tx) => {
+      await tx.update(applications).set({ latestAssessmentId: null }).where(eq(applications.id, a.id));
+      await tx.delete(assessments).where(eq(assessments.applicationId, a.id));
+    });
+    const runEnded = (a: typeof applications.$inferSelect) => container.db.update(workflowRuns).set({ status: "completed" }).where(and(eq(workflowRuns.workflowKey, "screen"), sql`${workflowRuns.subject}->>'id' = ${a.id}`));
+
+    // they sent the application without the AI interview, long ago: nothing will give a number
+    const ben = await applyAs("Bea", "bea.record@example.com");
+    await onlyThis(ben);
+    await nothingJudged(ben, "triage");
+    await withoutChat(ben);
+    await runEnded(ben);
+    await container.db.update(applications).set({ createdAt: at(-20 * 60) }).where(eq(applications.id, ben.id));
+    let card = await scoreCard(ben.statusToken);
+    expect(card).toContain(NO_SCORE);
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready/);
+    // a moment after sending too: nothing is being worked out
+    await container.db.update(applications).set({ createdAt: at(0) }).where(eq(applications.id, ben.id));
+    expect(await scoreCard(ben.statusToken)).toContain(NO_SCORE);
+
+    // they did the AI interview, and its scorecard judged nothing either: the same, and its closing page promises no score
+    const cy = await applyAs("Cyd", "cyd.record@example.com");
+    await onlyThis(cy);
+    await nothingJudged(cy, "triage");
+    const sent = await addScreen(cy, { status: "completed", progress: progressOf({ submittedAt: at(-30 * 60) }), completedAt: at(-30 * 60), createdAt: at(30) });
+    await container.db.update(screens).set({ status: "declined_by_candidate" }).where(and(eq(screens.applicationId, cy.id), sql`${screens.id} <> ${sent.id}`));
+    await runEnded(cy);
+    await container.db.update(screens).set({ assessmentId: (await nothingJudged(cy, "screen", at(90))).id }).where(eq(screens.id, sent.id));
+    card = await scoreCard(cy.statusToken);
+    expect(card).toContain(NO_SCORE);
+    expect(card).not.toMatch(/Not ready yet|Working out|once it is ready/);
+    expect((await page(`/c/screen/${sent.token}`)).html).not.toMatch(/match score/i);
+
+    // a reading that judged something still shows its number, as before
+    const dee = await applyAs("Dee", "dee.record@example.com");
+    await withoutChat(dee);
+    await readingFor(dee);
+    expect((await page(`/c/status/${dee.statusToken}`)).html).toContain("Your match score is ready");
   });
 });

@@ -321,6 +321,14 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
   };
 }
 
+/** Whether a statement was stopped by the database's lock timeout (SQLSTATE 55P03), through whatever wrappers the driver and the query builder put around it. */
+export function isLockTimeout(err: unknown): boolean {
+  for (let e = err, depth = 0; e && typeof e === "object" && depth < 5; e = (e as { cause?: unknown }).cause, depth += 1) {
+    if ((e as { code?: unknown }).code === "55P03") return true;
+  }
+  return false;
+}
+
 /**
  * Runs `fn` inside a transaction scoped to one tenant. The database's row-level
  * security policies enforce isolation: the transaction switches to the non-privileged

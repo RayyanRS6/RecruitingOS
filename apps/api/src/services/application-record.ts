@@ -1,8 +1,10 @@
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { candidateScoreShown, type ApplicationStage, type CandidateScoreView, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type WriteupAnswer } from "@ros/contracts";
-import { DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
+import { CALL_NOTES_STAGES, DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
 import { chatPacket } from "@ros/agents";
-import { applications, assessments, rolePackets, roles, screens, type Tx } from "@ros/db";
+import { applications, assessments, events, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
+import { interviewRunOn } from "@ros/workflows";
+import { failedScorecards } from "./screen-scorecards";
 
 /**
  * What the candidate's application record shows beyond its steps (Wave S7, slice S7-E; spec-s7-apply-flow.md steps 8, 9
@@ -22,14 +24,46 @@ export const REVIEWING_REFRESH_SECONDS = 15;
 
 /**
  * Where the match score stands on the record:
- * - `off`: ITS switched the score off for this company (or it never shows, see below): nothing is said about it.
+ * - `off`: ITS switched the score off for this company (or it never shows, or none can come for now, see below): nothing is said about it.
  * - `after_chat`: a screening chat is open or paused: the score waits until they send it (a reading of an unsent chat
  *   never counts). A chat a private decision cancelled reads the same as before, so nothing hints at the decision.
  * - `reviewing`: sent a moment ago and the reading is not written yet: "Working out your match score…", with "Check again".
- * - `not_ready`: no score after the reviewing window (the reading failed, or a résumé could not be read).
+ * - `not_ready`: no score after the reviewing window while a reading may still come (one late, a résumé that could not be
+ *   read), or a sent AI interview whose scorecard is not written yet, for as long as that takes: never a résumé-only number
+ *   for someone who did it. One waiting for the plan's AI help is `off` instead. The same for an AI interview a recruiter
+ *   finished on a call until its scorecard is written, and while the call someone asked for in the AI interview is still to
+ *   come (11 November 2026): the team reads both as still to come. That call is still to come only while its notes can finish
+ *   the AI interview (`CALL_NOTES_STAGES`): once a person has set up an interview or decided, nothing will score it, so the
+ *   résumé's number shows, saying so, as the team reads it.
+ * - `not_coming`: nothing will work a number out by itself (10 November 2026): no reading gives one, the résumé's could not be
+ *   made or AI does not read it (`readingWontCome`), and no AI interview is open, being written up or still on its way. Said at
+ *   once, never "Working out…" or "Not ready yet" for ever. Since 11 November 2026 (the lead's D2) also a finished AI interview
+ *   whose scorecard could not be written, for good: the résumé's number never stands in for it. And readings that are in and
+ *   judged nothing (every requirement not known, so no number), with no scorecard due, no call and no AI interview still on.
  * - `ready`: the score and its breakdown (`view`).
  */
-export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "ready"; view: CandidateScoreView | null };
+export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "not_coming" | "ready"; view: CandidateScoreView | null };
+
+/**
+ * Why no résumé reading will come by itself, or null while one is written or may still come (10 November 2026), from the
+ * application's newest intake run: `no_ai_notice` when our email with the AI notice never reached an emailed-in applicant, so
+ * AI does not read their résumé (known-bugs row 16); `could_not_read` when the reading could not be made: the assistant's
+ * answer was unusable every time (`ai.output_invalid`), or the run stopped for good and raised a request to ITS. Any other
+ * end (the application moved on before the reading, an older application with no run) says nothing.
+ */
+export type NoReading = "could_not_read" | "no_ai_notice";
+
+export async function readingWontCome(tx: Tx, applicationId: string): Promise<NoReading | null> {
+  const [triage] = await tx.select({ id: assessments.id }).from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "triage"))).limit(1);
+  if (triage) return null;
+  const [run] = await tx.select({ id: workflowRuns.id, status: workflowRuns.status, state: workflowRuns.state }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, "application_intake"), sql`${workflowRuns.subject}->>'id' = ${applicationId}`)).orderBy(desc(workflowRuns.startedAt), desc(workflowRuns.id)).limit(1);
+  if (!run) return null;
+  if ((run.state as { noAiReading?: boolean }).noAiReading) return "no_ai_notice";
+  if (run.status === "failed") return "could_not_read";
+  if (run.status !== "completed") return null;
+  const [invalid] = await tx.select({ id: events.id }).from(events).where(and(eq(events.type, "ai.output_invalid"), eq(events.subjectType, "application"), eq(events.subjectId, applicationId), eq(events.correlationId, run.id))).limit(1);
+  return invalid ? "could_not_read" : null;
+}
 
 const OPEN_SCREEN = ["invited", "reminded", "in_progress", "paused"];
 
@@ -43,30 +77,67 @@ export async function packetOf(tx: Tx, roleId: string, version: number): Promise
  * The record's score (founder decision S7-1): the team's own match score (core/match-score.ts) as the candidate sees it
  * (`candidateScoreView`: only the job page's must-haves named, everything else folded into one line), from the readings
  * the team may see, against the version of the role they were read against. `hiddenDecision`: a private decision the
- * candidate was not told (founder decision B6); a chat it cancelled still reads as waiting for the chat.
+ * candidate was not told (founder decision B6); a chat it cancelled still reads as waiting for the chat. Nothing is said
+ * about a score for someone locked (Rule 2): nothing works one out while they are, and nobody on the team sees them, so the
+ * block, which says the team sees it and is under counsel word for word, stays away whole. The same while there is no reading
+ * and what would write one waits for the plan's AI help (PL-10): nobody is told that, and "under a minute" would not be true.
+ * And the same while a sent AI interview's scorecard waits for it, reading or not: the résumé's number never stands in for that
+ * scorecard (6 November 2026). `stageShown`: the stage their page stands at, which under a private decision is the stage it was
+ * made from, so whether a call is still to come is read as it was before the decision, and nothing on the page changes with it.
  */
-export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; now: Date }): Promise<RecordScore> {
-  if (!candidateScoreShown(input.companySettings)) return { state: "off", view: null };
+export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; stageShown?: ApplicationStage | null; now: Date }): Promise<RecordScore> {
+  if (!candidateScoreShown(input.companySettings) || input.app.lockedAt) return { state: "off", view: null };
   const { app } = input;
-  const last = input.screens[0];
-  const chatOpen = !!last && (OPEN_SCREEN.includes(last.status) || (input.hiddenDecision && last.status === "cancelled"));
-  if (chatOpen) return { state: "after_chat", view: null };
   const rows = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
   const hidden = unsentScreenReadings(input.screens, rows);
   const own = rows.filter((r) => !hidden.has(r.id));
+  if (!own.length && (await readingWaitsForCredit(tx, app.id, input.screens))) return { state: "off", view: null };
+  const last = input.screens[0];
+  const chatOpen = !!last && (OPEN_SCREEN.includes(last.status) || (input.hiddenDecision && last.status === "cancelled"));
+  if (chatOpen) return { state: "after_chat", view: null };
   const latest = own.find((r) => r.id === app.latestAssessmentId) ?? own[0] ?? null;
   const readAgainst = latest?.packetVersion ?? app.packetVersion;
   const packet = (await packetOf(tx, app.roleId, readAgainst)) ?? (readAgainst !== app.packetVersion ? await packetOf(tx, app.roleId, app.packetVersion) : null);
   // Labelled with where their AI interview stands (R20-9): "From your résumé only" until its scorecard is in.
   const match = packet && own.length ? matchScore(readingPair(own), packet, { packetVersion: readAgainst, interview: interviewInScore(input.screens, app.stage) }) : null;
   const view = packet ? candidateScoreView(match, packet) : null;
-  // A chat sent a moment ago whose scorecard is not written yet: the score is about to change, so it waits for it.
-  const sent = last && screenAnswersSent(last) ? last : null;
+  // An AI interview whose scorecard is not written yet: the score is about to change, and the résumé's number would read low
+  // for someone who did what was asked, so it waits for it (6 November 2026). One they sent, or one a recruiter finished on a
+  // call, whose notes write the scorecard (the release review, 11 November 2026).
+  const sent = last && last.status === "completed" ? last : null;
+  // Unless that scorecard waits for the plan's AI help (PL-10): then nothing is about to change, so "Working out…" would not
+  // be true, and the résumé's number still never stands in for it. Nothing is said about a score, as with no reading at all,
+  // and it shows once the credit is back.
+  if (sent && !sent.assessmentId && sent.progress.scoreWaitsForCredit) return { state: "off", view: null };
   const scorecardDue = !!sent && !sent.assessmentId;
+  // That scorecard could not be written, for good (the screen's run gave up and asked ITS to look): nothing will give the number
+  // by itself, so the record says so at once, in fix A's words, never "Not ready yet" for ever (the lead's D2, 11 November 2026).
+  if (sent && scorecardDue && (await failedScorecards(tx, [sent])).size) return { state: "not_coming", view: null };
+  // They asked for a person in the AI interview: a recruiter's call is still to come, and its notes write the scorecard, so the
+  // résumé's number is only a floor, as the team reads it ("Résumé only: AI interview not done yet"). "Not ready yet", never
+  // "under a minute": the call is a person's (the release review, 11 November 2026). Only while those notes can still finish it,
+  // the rule `addRecruiterCallNotes` applies: once a person has booked them or decided, they go nowhere near it (`not_screening`)
+  // and nothing will score it, so "Not ready yet" would stand for good, through the interview and the hire. A private decision
+  // is read from the stage it was made from (B6). Without a stage to read there, as before: still to come.
+  const stageNow = input.hiddenDecision ? input.stageShown ?? null : app.stage;
+  const callComing = last?.status === "human_requested" && (!stageNow || CALL_NOTES_STAGES.includes(stageNow));
+  // Nothing will give a number by itself (10 November 2026): said at once, a moment after applying too.
+  if (!view && !scorecardDue && !callComing && (await readingWontCome(tx, app.id)) && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
+  // The readings are in and judged nothing (every requirement not known: no number at all), and nothing else will give one by
+  // itself: no sent chat's scorecard is due, no call is coming, no automatic AI interview is still on. Fix A's words at once,
+  // never "Not ready yet" for ever, and the chat's closing page promises no score (the release review, 11 November 2026).
+  if (match && match.score === null && !scorecardDue && !callComing && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
   const since = Date.parse(sent?.completedAt ?? app.createdAt);
   const recent = input.now.getTime() - since < REVIEWING_WINDOW_MS;
   if ((scorecardDue || !view) && recent) return { state: "reviewing", view: null };
-  return view ? { state: "ready", view } : { state: "not_ready", view: null };
+  return view && !scorecardDue && !callComing ? { state: "ready", view } : { state: "not_ready", view: null };
+}
+
+/** Whether what would write a reading waits for AI credit: a sent chat's scorecard (its mark), or the résumé's reading (its intake's run, however it started). */
+async function readingWaitsForCredit(tx: Tx, applicationId: string, sent: readonly Pick<ScreenRow, "progress">[]): Promise<boolean> {
+  if (sent.some((s) => s.progress.scoreWaitsForCredit)) return true;
+  const [run] = await tx.select({ id: workflowRuns.id }).from(workflowRuns).where(and(like(workflowRuns.idempotencyKey, `application_intake:${applicationId}%`), eq(workflowRuns.status, "waiting"), sql`${workflowRuns.state}->>'creditWaitSince' is not null`)).limit(1);
+  return !!run;
 }
 
 /** One answer from the chat as it was sent: the question in the company's words, the answer, and how it came to be. */

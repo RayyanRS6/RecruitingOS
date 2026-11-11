@@ -6,6 +6,7 @@ import { Alert, Button, Field, Segmented, Sheet } from "@ros/ui";
 import { api, ApiError, type RoleSummary } from "../api/client";
 import { ACCESS_LIMITS, DRAFT_HANDED_OVER, accessWords, scopeOf, type AskKind, type AskPreset } from "../recruiter-access";
 import { toast } from "../toast";
+import { Upgrade } from "./Upgrade";
 import { useAskRole } from "./use-ask-role";
 
 const QUICK = [
@@ -22,15 +23,26 @@ const ALL_HIRING = "all";
 
 type Kind = AskKind;
 
+type AskProps = { roleId?: string; applicationId?: string; label?: string; size?: "sm" | "md"; variant?: "primary" | "secondary"; preset?: AskPreset; onSent?: (message: string) => void };
+
 /**
- * "Ask a recruiter" is on every decision surface (docs/02). On a role or a candidate the request is about that alone.
- * From the top of Today (no role, no candidate) it first asks which hire it is about, or all of your hiring, and for a
- * one-line note, and it says what the recruiter will see and until when (founder decision Q31: the real access). Before
- * anything is sent it shows the reply-by time the request would get (plan B6) and where it stands against the plan's
- * recruiter requests (Q33). A card's own request (`preset`) opens here filled in. Shown only to people who may ask
+ * "Ask a recruiter" is on every decision surface (docs/02). A card's own request (`preset`) opens filled in. A talk about the
+ * plan (`topic: "plan"`) has one form, the upgrade sheet: it gives ITS no access to anything, so nothing about access, urgency
+ * or what to help with fits it (the plans of 5 November 2026, Rule 5).
+ */
+export function AskRecruiter(props: AskProps) {
+  if (props.preset?.topic === "plan") return <Upgrade label={props.label} size={props.size} variant={props.variant} reason={props.preset.question} onSent={props.onSent} />;
+  return <RecruiterForm {...props} />;
+}
+
+/**
+ * On a role or a candidate the request is about that alone. From the top of Today (no role, no candidate) it first asks
+ * which hire it is about, or all of your hiring, and for a one-line note, and it says what the recruiter will see and until
+ * when (founder decision Q31: the real access). Before anything is sent it shows the reply-by time the request would get
+ * (plan B6) and where it stands against the plan's recruiter requests (Q33). Shown only to people who may ask
  * (escalation.create: never an interviewer, plan B7).
  */
-export function AskRecruiter(props: { roleId?: string; applicationId?: string; label?: string; size?: "sm" | "md"; variant?: "primary" | "secondary"; preset?: AskPreset; onSent?: (message: string) => void }) {
+function RecruiterForm(props: AskProps) {
   const who = useAskRole();
   const qc = useQueryClient();
   const preset = props.preset ?? {};
@@ -43,10 +55,9 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
   const draftId = preset.intakeSessionId;
   const picks = !props.roleId && !props.applicationId && !draftId;
   const [about, setAbout] = useState<string>(preset.about === "all" ? ALL_HIRING : "");
-  const topic = preset.topic;
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: open && picks });
   // The reply-by time if it were sent now; urgency changes the queue's order, never this time.
-  const estimate = useQuery({ queryKey: ["escalations", "estimate", kind, topic ?? ""], queryFn: () => api.get<{ slaDueAt: string; message: string; allowance?: { message: string } }>(`/api/v1/escalations/estimate?kind=${kind}${topic ? `&topic=${topic}` : ""}`), enabled: open && !done && who.mayAsk, staleTime: 60_000 });
+  const estimate = useQuery({ queryKey: ["escalations", "estimate", kind, ""], queryFn: () => api.get<{ slaDueAt: string; message: string; allowance?: { message: string } }>(`/api/v1/escalations/estimate?kind=${kind}`), enabled: open && !done && who.mayAsk, staleTime: 60_000 });
   const choosable = (roles.data ?? []).filter((r) => r.status !== "closed");
   // What the request names: the page's role or candidate, or the choice made here ({} is all of the company's hiring).
   const target = draftId ? {} : picks ? (about === ALL_HIRING ? {} : about ? { roleId: about } : null) : { roleId: props.roleId, applicationId: props.applicationId };
@@ -54,10 +65,10 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
   const note = question.trim();
   const ready = !!scope && (!picks || note.length > 0);
   const send = useMutation({
-    mutationFn: () => api.post<{ id: string; slaDueAt: string; message: string }>("/api/v1/escalations", { kind, scope, ...(target ?? {}), question: note || QUICK.find((q) => q[0] === kind)![1], urgency, ...(topic ? { topic } : {}), ...(draftId ? { intakeSessionId: draftId } : {}) }),
+    mutationFn: () => api.post<{ id: string; slaDueAt: string; message: string }>("/api/v1/escalations", { kind, scope, ...(target ?? {}), question: note || QUICK.find((q) => q[0] === kind)![1], urgency, ...(draftId ? { intakeSessionId: draftId } : {}) }),
     onSuccess: (r) => {
       setDone(`${r.message} You can follow it, and read the answer in full, under Your recruiter requests on Home.`);
-      toast(topic === "plan" ? "Sent to ITS." : "A recruiter has it.");
+      toast("A recruiter has it.");
       props.onSent?.(r.message);
       qc.invalidateQueries({ queryKey: ["escalations", "mine"] });
       qc.invalidateQueries({ queryKey: ["brief"] });
@@ -69,7 +80,7 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
   return (
     <>
       <Button variant={props.variant ?? "secondary"} size={props.size ?? "md"} icon="people" onClick={() => setOpen(true)}>{props.label ?? "Bring in a recruiter"}</Button>
-      <Sheet open={open} onClose={close} title={topic === "plan" ? "Talk to ITS about your plan" : "Bring in a recruiter"}>
+      <Sheet open={open} onClose={close} title="Bring in a recruiter">
         {done ? (
           <div className="stack gap-4 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]"><Alert tone="info">{done}</Alert><div className="row"><Button onClick={close}>Done</Button></div></div>
         ) : (
@@ -99,7 +110,7 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
               {estimate.data ? <p className="small muted" data-testid="reply-by-estimate">{estimate.data.message}</p> : null}
               {estimate.data?.allowance?.message ? <p className="small muted" data-testid="recruiter-request-allowance">{estimate.data.allowance.message}</p> : null}
               {send.error ? <Alert tone="critical">{send.error instanceof ApiError ? send.error.message : "Could not send."}</Alert> : null}
-              <div className="row"><Button variant="primary" icon="send" disabled={!ready} loading={send.isPending} onClick={() => send.mutate()}>{topic === "plan" ? "Send to ITS" : "Send to a recruiter"}</Button></div>
+              <div className="row"><Button variant="primary" icon="send" disabled={!ready} loading={send.isPending} onClick={() => send.mutate()}>Send to a recruiter</Button></div>
               {picks && !ready ? <p className="small muted">{scope ? "Add a line about what you need." : "Choose which hire this is about first."}</p> : null}
             </div>
           </div>

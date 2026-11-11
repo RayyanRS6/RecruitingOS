@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, isCompanyVerified, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, nextContactWindow, notify, raiseAlert } from "@ros/core";
+import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, lockedAmong, nextContactWindow, notify, raiseAlert, raiseAlertOnce, zonedParts } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviews, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 
@@ -76,6 +76,17 @@ export type QueueSmsInput = QueueBase & { channel: "sms"; to: string; from: stri
 
 export type QueueResult = SendResult & { communicationId: string };
 
+/**
+ * A tag on a message whose delivery failure raises no operator alert (`NOTIFY_QUIET_ON_FAILURE` in @ros/core). It is still
+ * marked failed or unknown, recorded and reported as any other message is; only the alert stays away.
+ */
+export const QUIET_ON_FAILURE_TAG = "quietOnFailure";
+
+/** Whether this message's tags ask for no alert. */
+function quietOnFailure(row: { tags?: Record<string, string> | null }): boolean {
+  return row.tags?.[QUIET_ON_FAILURE_TAG] === "true";
+}
+
 /** The status of a message to a candidate waiting for the ITS company check. */
 export const HELD_STATUS = "held";
 /** What a caller hears about such a message. */
@@ -139,9 +150,9 @@ export async function companyConfirmed(q: Queryable, companyId: string): Promise
 /**
  * Invitations to a next step: pointless, and confusing, once the person has left the process. The links and reminders
  * of the conversation that goes with the application (plan Wave E) are among them, and so are the courtesy notes that
- * say the application is still with the team (plan G10).
+ * say the application is still with the team (plan G10), and the close-out note to someone locked (Rule 2).
  */
-const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "interview_slots", "interview_slots_reminder", "interview_slots_lapsed", "interview_confirmation", "screen_later", "screen_idle_reminder", "screen_review_reminder", "screen_not_started_reminder", "screen_resume", "screen_repeat_later", "screen_repeat_resume", "still_reviewing", "screen_expired"]);
+const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "interview_slots", "interview_slots_reminder", "interview_slots_lapsed", "interview_confirmation", "screen_later", "screen_idle_reminder", "screen_review_reminder", "screen_not_started_reminder", "screen_resume", "screen_repeat_later", "screen_repeat_resume", "still_reviewing", "screen_expired", "close_out"]);
 /** Where an application has left the process: the candidate withdrew, or a decision was made. */
 const LEFT_PROCESS = new Set(["withdrawn", "rejected", "declined", "talent_pool"]);
 /** Messages whose link opens a screening conversation: dead once that conversation has ended (expired, closed, done). */
@@ -153,20 +164,51 @@ const SLOT_LINK_TEMPLATES = new Set(["interview_slots", "interview_slots_reminde
  * (`autoTimesUnderTakeover`). The set's run reads it to end the set for the takeover.
  */
 export const AUTO_TIMES_TAKEN_OVER = "an ITS recruiter is running the role now, so the automatic new times do not go";
+/** Why a confirmation or a reminder of a booked time did not go: that time no longer stands. */
+export const INTERVIEW_CHANGED_SINCE = "the interview changed since it was written";
+/** Why a reminder did not go: it waited past the moment its words are true for ("tomorrow", "in about two hours"). */
+export const REMINDER_TOO_LATE = "its moment passed while it waited";
+/** Why the news that an interview is off did not go when ITS confirmed the company: nothing about that interview ever reached them. */
+export const NEVER_HEARD_OF_IT = "nothing about this interview had reached them";
 
 type WaitingRow = Pick<CommunicationRow, "id" | "companyId" | "channel" | "templateKey" | "candidateId" | "applicationId" | "sentBy" | "correlationId" | "idempotencyKey">;
+
+/** A message about one booked time: its interview and attempt, and which reminder it is, from its key (`confirm:<id>:<attempt>`, `iv_reminder:<id>:<attempt>:<which>`). */
+function bookedTimeOf(r: Pick<WaitingRow, "templateKey" | "idempotencyKey">): { interviewId: string; attempt: number; which: string | null } | null {
+  const template = r.templateKey ?? "";
+  if (template !== "interview_confirmation" && !template.startsWith("interview_reminder_")) return null;
+  const m = /^(?:confirm|iv_reminder):([^:]+):(\d+)(?::(\w+))?$/.exec(r.idempotencyKey ?? "");
+  return m ? { interviewId: m[1], attempt: Number(m[2]), which: m[3] ?? null } : null;
+}
+
+/**
+ * Why a message about a booked time must no longer go, if any. A company waiting for the ITS check can book and move a
+ * time, so on release every held confirmation and reminder would otherwise go at once, the old time among them: only the
+ * current attempt of a time still ahead goes. A reminder also stops once its words stop being true: "tomorrow" on the day
+ * itself, "in about two hours" inside the last 45 minutes (the same rule as `on_timer`'s).
+ */
+function bookedTimeStale(message: { attempt: number; which: string | null }, iv: { status: string; attempt: number; startsAt: string | null; timezone: string | null } | undefined, now: Date): string | null {
+  if (!iv || iv.status !== "scheduled" || iv.attempt !== message.attempt || !iv.startsAt) return INTERVIEW_CHANGED_SINCE;
+  const start = Date.parse(iv.startsAt);
+  if (start <= now.getTime()) return INTERVIEW_CHANGED_SINCE;
+  const zone = iv.timezone ?? "UTC";
+  if (message.which === "before24h" && zonedParts(now, zone).dayKey >= zonedParts(new Date(start), zone).dayKey) return REMINDER_TOO_LATE;
+  if (message.which === "before2h" && start - now.getTime() < 45 * 60_000) return REMINDER_TOO_LATE;
+  return null;
+}
 
 /**
  * Messages to candidates that waited (held for the ITS check, or queued for a later hour) and must no longer go, with
  * the reason: the candidate stopped texts or withdrew their consent to them, their details were deleted at their
  * request, an invitation to a next step whose person has since left the process (a closing message, such as the
  * decision or a cancellation, still goes), a link to a step that has ended since (a screening conversation no longer
- * open, interview times no longer on offer: the closing note of the step still goes), the times of an automatic set of
- * new times for a role an ITS recruiter took over meanwhile, or a decision message whose decision no longer applies.
- * Read again just before a release and just before a send, because a message can wait for days. The answer to a privacy
- * request always goes.
+ * open, interview times no longer on offer: the closing note of the step still goes), a confirmation or reminder of a
+ * time that no longer stands (`bookedTimeStale`; a retry of one after a soft bounce too), the times of an automatic set of new times for a role an ITS recruiter
+ * took over meanwhile, a decision message whose decision no longer applies, or a close-out note to someone a change of
+ * plan has opened since: it says nobody has reviewed them, and the team can now. Read again just before a release and
+ * just before a send, because a message can wait for days. The answer to a privacy request always goes.
  */
-export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]): Promise<Map<string, string>> {
+export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[], now: Date): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const relevant = rows.filter((r) => waitsForCompanyCheck(r));
   if (!relevant.length) return out;
@@ -180,16 +222,27 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
   const openScreen = new Set((screenApps.length ? await q.select({ a: screens.applicationId }).from(screens).where(and(inArray(screens.applicationId, screenApps), inArray(screens.status, [...SCREEN_PERSON_ROUTE_STATUSES]))) : []).map((s) => s.a));
   const openOffer = new Set((slotApps.length ? await q.select({ a: interviews.applicationId }).from(interviews).where(and(inArray(interviews.applicationId, slotApps), eq(interviews.status, "scheduling"))) : []).map((i) => i.a));
   const takenOver = await autoTimesUnderTakeover(q, relevant.filter((r) => r.templateKey === "interview_slots").map((r) => r.idempotencyKey).filter((k): k is string => !!k));
+  const closeOuts = appsWith(new Set(["close_out"]));
+  const stillLocked = await lockedAmong(q, closeOuts);
+  // A retry of a confirmation or a reminder (a soft bounce tried again) is about the same booked time as the message it repeats,
+  // so a time called off or moved since stops it too (the second reading of the release review, 11 November 2026).
+  const firstKeys = await firstKeysOfRetries(q, relevant.map((r) => r.idempotencyKey));
+  const bookedTimes = new Map(relevant.flatMap((r) => { const t = bookedTimeOf({ templateKey: r.templateKey, idempotencyKey: (r.idempotencyKey ? firstKeys.get(r.idempotencyKey) : undefined) ?? r.idempotencyKey }); return t ? [[r.id, t] as const] : []; }));
+  const bookedIds = [...new Set([...bookedTimes.values()].map((t) => t.interviewId))];
+  const booked = new Map((bookedIds.length ? await q.select({ id: interviews.id, status: interviews.status, attempt: interviews.attempt, startsAt: interviews.startsAt, timezone: interviews.timezone }).from(interviews).where(inArray(interviews.id, bookedIds)) : []).map((i) => [i.id, i]));
   for (const r of relevant) {
     const who = r.candidateId ? people.get(r.candidateId) : undefined;
     const stage = r.applicationId ? stages.get(r.applicationId) : undefined;
     const template = r.templateKey ?? "";
+    const time = bookedTimes.get(r.id);
     const reason = who?.anonymizedAt ? "the candidate's details were deleted at their request"
       : who && r.channel === "sms" && (!who.consent.sms?.granted || who.preferences.smsOptOut) ? "the candidate stopped text messages"
       : stage && LEFT_PROCESS.has(stage) && NEXT_STEP_TEMPLATES.has(template) ? "the candidate has left the process since it was written"
       : r.applicationId && ((SCREEN_LINK_TEMPLATES.has(template) && !openScreen.has(r.applicationId)) || (SLOT_LINK_TEMPLATES.has(template) && !openOffer.has(r.applicationId))) ? "the step it invites to has ended since it was written"
+      : time ? bookedTimeStale(time, booked.get(time.interviewId), now)
       : r.idempotencyKey && takenOver.has(r.idempotencyKey) ? AUTO_TIMES_TAKEN_OVER
       : stage && template.startsWith("disposition:") && !DECISION_STAGES.includes(stage) ? "the decision no longer applies"
+      : r.applicationId && template === "close_out" && !stillLocked.has(r.applicationId) ? "the team can read this application now"
       : null;
     if (reason) out.set(r.id, reason);
   }
@@ -288,19 +341,133 @@ export async function undoQueuedMessage(q: Queryable, input: { communicationId: 
   return { templateKey: row.templateKey };
 }
 
+/** What told them about an interview, by template: a time to pick from, or a booked time. */
+const ABOUT_AN_INTERVIEW = ["interview_slots", "interview_slots_reminder", "interview_confirmation"];
+/** The interview a message about one is keyed by (`slots:<id>:<attempt>`, `slots_reminder:<id>:<attempt>`, `confirm:<id>:<attempt>`). */
+const ABOUT_AN_INTERVIEW_KEY = /^(?:slots|slots_reminder|confirm):([^:]+):\d+$/;
+/** A message in one of these never left us, so nothing it says has reached them. */
+export const NEVER_LEFT = ["queued", HELD_STATUS, "failed", "cancelled"];
+/**
+ * A message in one of these did not reach them: it never left us, or it came back (`bounced`, from the provider's webhook,
+ * email-failures.ts). A soft bounce is tried again as a new message (`retryOf`); one of those that arrives reached them.
+ * `unknown` (a send cut off) and `sending` may have reached them, so they count as reached: the safe side for a cancellation.
+ */
+export const DID_NOT_REACH: readonly string[] = [...NEVER_LEFT, "bounced"];
+/** A retry's key (`retryCommunication` in email-failures.ts): the id of the message it tries again, then `:retry:<attempt>`. */
+const RETRY_KEY = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):retry:\d+$/i;
+/** How many retries of retries are followed back; a soft bounce is tried twice (`RETRY_DELAYS_MS`), so a few is plenty. */
+const RETRY_DEPTH = 5;
+
+/**
+ * For each key of a retry among these, the key of the first message it tries again, followed back through retries of retries,
+ * so a retry is read as the message it repeats: a confirmation's retry is about the same booked time. One read per level, and
+ * none at all when no key is a retry's.
+ */
+export async function firstKeysOfRetries(q: Queryable, keys: ReadonlyArray<string | null | undefined>): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  let level = [...new Set(keys.filter((k): k is string => !!k && RETRY_KEY.test(k)))].map((key) => ({ key, id: RETRY_KEY.exec(key)![1] }));
+  for (let depth = 0; level.length && depth < RETRY_DEPTH; depth += 1) {
+    const rows = await q.select({ id: communications.id, key: communications.idempotencyKey }).from(communications).where(inArray(communications.id, [...new Set(level.map((l) => l.id))]));
+    const keyOf = new Map(rows.map((r) => [r.id, r.key ?? ""]));
+    const next: typeof level = [];
+    for (const l of level) {
+      const key = keyOf.get(l.id);
+      if (!key) continue;
+      const again = RETRY_KEY.exec(key);
+      if (again) next.push({ key: l.key, id: again[1] });
+      else out.set(l.key, key);
+    }
+    level = next;
+  }
+  return out;
+}
+
+/**
+ * Of these messages, the ones a retry of which arrived (left us and did not come back), retries of retries too: a soft bounce
+ * that reached them after all, read where the first message's own status still says `bounced`.
+ */
+export async function reachedOnRetry(q: Queryable, ids: readonly string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  let level = [...new Set(ids)].map((id) => ({ root: id, id }));
+  for (let depth = 0; level.length && depth < RETRY_DEPTH; depth += 1) {
+    const rows = await q.select({ id: communications.id, retryOf: communications.retryOf, status: communications.status }).from(communications).where(inArray(communications.retryOf, level.map((l) => l.id)));
+    const rootOf = new Map(level.map((l) => [l.id, l.root]));
+    const next: typeof level = [];
+    for (const r of rows) {
+      const root = r.retryOf ? rootOf.get(r.retryOf) : undefined;
+      if (!root) continue;
+      if (!DID_NOT_REACH.includes(r.status)) out.add(root);
+      else next.push({ root, id: r.id });
+    }
+    level = next;
+  }
+  return out;
+}
+
+/** Whether a message is really on its way: it did not fail, and it does not wait for the ITS check. What a screen may say "was sent" about. */
+export function onItsWay(result: SendResult): boolean {
+  return result.status !== "failed" && !(result.status === "pending" && result.reason === HELD_REASON);
+}
+
+/**
+ * Whether any email about this interview reached them: what the candidate can know of it. Someone a person booked hears of it
+ * only by email, which goes a moment after the press, or once ITS confirms the company, so a time called off before that is
+ * one they never heard of. An email that came back (`bounced`: a mistyped address, a full mailbox) told them nothing either,
+ * unless a retry of it arrived (the second reading of the release review, 11 November 2026). Read by the interview's id in
+ * each email's key (`slots:<id>:<attempt>`, `confirm:<id>:<attempt>`; a retry's is read through the message it repeats).
+ */
+export async function interviewReachedThem(q: Queryable, input: { applicationId: string; interviewId: string }): Promise<boolean> {
+  return (await interviewsThatReachedThem(q, { applicationIds: [input.applicationId] })).has(input.interviewId);
+}
+
+/** `interviewReachedThem` for every interview of these applications at once: the ids an email about reached them for. */
+export async function interviewsThatReachedThem(q: Queryable, input: { applicationIds: readonly string[] }): Promise<Set<string>> {
+  if (!input.applicationIds.length) return new Set();
+  // Every email about an interview, the retries of one that soft-bounced among them (same template and application).
+  const rows = await q.select({ id: communications.id, key: communications.idempotencyKey, status: communications.status, retryOf: communications.retryOf }).from(communications).where(and(inArray(communications.applicationId, [...input.applicationIds]), inArray(communications.templateKey, ABOUT_AN_INTERVIEW)));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (DID_NOT_REACH.includes(r.status)) continue;
+    let first = r;
+    for (let depth = 0; first.retryOf && byId.has(first.retryOf) && depth < RETRY_DEPTH; depth += 1) first = byId.get(first.retryOf)!;
+    const id = ABOUT_AN_INTERVIEW_KEY.exec(first.key ?? "")?.[1];
+    if (id) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * Of the messages being released, the news that an interview is off (`iv_cancel:<id>:<attempt>`, `iv_moved:<id>:<attempt>`)
+ * about an interview nothing ever told them of: a company waiting for the ITS check can book a time and call it off, and
+ * both emails wait. Their confirmation is withdrawn on release, so "had to cancel your interview" would be the first
+ * they hear of one.
+ */
+async function newsOfAnUnknownInterview(q: Queryable, rows: readonly WaitingRow[]): Promise<string[]> {
+  const news = rows.flatMap((r) => {
+    const m = /^iv_(?:cancel|moved):([^:]+):\d+$/.exec(r.idempotencyKey ?? "");
+    return m && r.applicationId ? [{ id: r.id, interviewId: m[1], applicationId: r.applicationId }] : [];
+  });
+  if (!news.length) return [];
+  // The same rule as the cancellation's own (`interviewsThatReachedThem`): an email that came back told them nothing.
+  const heardOf = await interviewsThatReachedThem(q, { applicationIds: [...new Set(news.map((n) => n.applicationId))] });
+  return news.filter((n) => !heardOf.has(n.interviewId)).map((n) => n.id);
+}
+
 /**
  * ITS confirmed the company: every message to a candidate that waited for the check goes into the queue, oldest first,
  * through the same send job as any other. A text waits for the next hours the company may text candidates (the legal
  * window, narrowed by the company's contact hours); an email goes at once. One that must no longer go (the candidate
  * stopped texts, or left the process, or the step its link opens ended, while it waited: `reasonsNotToSend`) is
  * cancelled instead, with its reason: someone held for a week never gets an invitation, its reminder and the note that
- * the link closed all at once.
+ * the link closed all at once. So is the news that an interview is off, when nothing about it ever reached them.
  * Returns how many were released.
  */
 export async function releaseHeldCommunications(q: Queryable, input: { companyId: string; actor: Actor; now: Date }): Promise<number> {
   const waiting = await q.select({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, candidateId: communications.candidateId, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId, idempotencyKey: communications.idempotencyKey }).from(communications).where(and(eq(communications.companyId, input.companyId), eq(communications.status, HELD_STATUS)));
   if (!waiting.length) return 0;
-  const stale = await reasonsNotToSend(q, waiting);
+  const stale = await reasonsNotToSend(q, waiting, input.now);
+  for (const id of await newsOfAnUnknownInterview(q, waiting)) if (!stale.has(id)) stale.set(id, NEVER_HEARD_OF_IT);
   for (const r of waiting) {
     const reason = stale.get(r.id);
     if (reason) await cancelWaiting(q, r, reason, input.actor, input.now);
@@ -334,12 +501,28 @@ async function holdIfUnconfirmed(tx: Queryable, input: { communicationId: string
 async function cancelIfUnwanted(tx: Queryable, input: { communicationId: string; companyId: string }, now: Date): Promise<boolean> {
   const [row] = await tx.select({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, candidateId: communications.candidateId, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId, idempotencyKey: communications.idempotencyKey }).from(communications).where(and(eq(communications.id, input.communicationId), eq(communications.companyId, input.companyId), eq(communications.status, "queued"))).limit(1);
   if (!row) return false;
-  const reason = (await reasonsNotToSend(tx, [row])).get(row.id);
+  const reason = (await reasonsNotToSend(tx, [row], now)).get(row.id);
   return !!reason && (await cancelWaiting(tx, row, reason, row.sentBy, now));
 }
 
 /** `unknown`: the provider may have taken it but its reply was cut off; marked unknown, alerted, never re-sent. */
 export type SendOutcome = "sent" | "failed" | "skipped" | "retry" | "held" | "cancelled" | "unknown";
+
+/** The alert ITS gets when the email provider refuses an email for good for a reason that is not one address. */
+export const PROVIDER_REFUSED_ALERT = "message.provider_refused";
+
+/**
+ * The team's notice that an email to a candidate did not arrive (6 November 2026): who it was for, which email, in plain
+ * words (never the provider's own error), and the way to their page, where their address and phone are. Through `notify`'s
+ * `about`, so nothing is written for someone the team may not read.
+ */
+async function tellTeamItDidNotArrive(tx: Queryable, claimed: CommunicationRow): Promise<void> {
+  if (!claimed.applicationId) return;
+  const [who] = await tx.select({ roleId: applications.roleId, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(applications.id, claimed.applicationId)).limit(1);
+  const name = who ? `${who.firstName} ${who.lastName}`.trim() || "a candidate" : "a candidate";
+  const which = claimed.subject ? `"${claimed.subject}"` : "An email";
+  await notify(tx, { companyId: claimed.companyId, about: claimed.applicationId, kind: "candidate.unreachable", title: `An email to ${name} did not arrive`, body: `${which} could not be delivered. Phone them, or write to them another way.`, action: who ? { label: `Open ${name}`, href: `/roles/${who.roleId}/talent?open=${claimed.applicationId}` } : { label: "Open the candidates", href: "/talent" } });
+}
 
 /**
  * The worker's half: claim the queued row, call the provider outside any transaction, record what happened. A
@@ -417,16 +600,19 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
     await tx.update(communications).set({ status: "failed", error, sendingAt: null }).where(eq(communications.id, claimed.id));
     await emit(tx, { type: "message.failed", companyId: claimed.companyId, actor, subject: { type: "communication", id: claimed.id }, payload: { ...payload, error }, correlationId: claimed.correlationId });
     await settleDecisionTold(tx, claimed, "failed", ctx.now);
-    if (claimed.candidateId && claimed.applicationId) {
-      await notify(tx, { companyId: claimed.companyId, kind: "candidate.unreachable", title: `A message to a candidate could not be sent`, body: `${claimed.subject ?? claimed.templateKey ?? "A message"}: ${error}. Please reach them another way.`, action: { label: "Open the candidate", href: "/talent" } });
-    }
+    // Not about someone locked (Rule 2): it would lead the team to a person they cannot read. ITS's own alert below still goes.
+    if (claimed.candidateId && claimed.applicationId) await tellTeamItDidNotArrive(tx, claimed);
     return "failed";
   });
-  if (outcome === "failed" && (result.status !== "failed" || result.retryable)) {
+  if (outcome === "failed" && (result.status !== "failed" || result.retryable) && !quietOnFailure(claimed)) {
     // The provider itself failed for good (an outage that outlasted every retry, or an adapter that is not configured): an operator must see it.
     await raiseAlert(db, { kind: "message.delivery_failed", severity: "high", title: `A ${claimed.channel} could not be delivered after ${ctx.attempt} attempt${ctx.attempt === 1 ? "" : "s"}`, body: `${claimed.templateKey ?? "message"} to a recipient in this company failed: ${describeFailure(result)}. Check the provider's status and credentials; the message is marked failed and was not sent.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey, attempts: ctx.attempt } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${errorForLog(err)}`));
+  } else if (outcome === "failed" && claimed.channel === "email" && result.status === "failed" && !result.aboutAddress && !quietOnFailure(claimed)) {
+    // The provider refused it for good, and not because of this one address (a sender signature, the account, the token):
+    // every other email is refused the same way, so ITS hears at once (6 November 2026). One alert while it lasts, not one per email.
+    await raiseAlertOnce(db, { kind: PROVIDER_REFUSED_ALERT, severity: "high", title: "The email provider is refusing emails", body: `${claimed.templateKey ?? "An email"} to a recipient in this company was refused: ${describeFailure(result)}. The refusal is not about one address, so other emails are likely refused too. Check the provider's account, sender signature and domain.`, companyId: claimed.companyId, target: { type: "integration", id: integrations.email.id }, details: { template: claimed.templateKey, communicationId: claimed.id } }, { withinMs: 3600_000, now: ctx.now }).catch((err) => console.warn(`[outbox] could not raise the refusal alert: ${errorForLog(err)}`));
   }
-  if (outcome === "unknown") {
+  if (outcome === "unknown" && !quietOnFailure(claimed)) {
     await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${claimed.channel} may or may not have been delivered`, body: `The provider's reply to sending ${claimed.templateKey ?? "a message"} was cut off (${describeFailure(result).slice(0, 200)}). Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${errorForLog(err)}`));
   }
   if (outcome === "retry") throw new Error(`delivery failed (attempt ${ctx.attempt} of ${ctx.maxAttempts}): ${describeFailure(result)}`);
@@ -448,7 +634,7 @@ export async function settleDecisionTold(tx: Queryable, row: Pick<CommunicationR
   if (outcome !== "sent") {
     const notArrived = row.retryOf ? and(eq(applications.id, row.applicationId), inArray(applications.toldState, ["queued", "sent"]), inArray(applications.stage, [...DECISION_STAGES])) : where;
     const [back] = await tx.update(applications).set({ toldState: "not_told", ...(row.retryOf ? { candidateToldAt: null } : {}) }).where(notArrived).returning({ id: applications.id, roleId: applications.roleId });
-    if (back && outcome === "unknown") await notify(tx, { companyId: row.companyId, kind: "candidate.unreachable", title: "A decision message may not have reached a candidate", body: "Sending it was interrupted, so we cannot tell whether it arrived. They show as not told yet: check with them, or record that you told them yourself, before sending it again.", action: { label: "Open the candidate", href: `/roles/${back.roleId}/talent?open=${back.id}` } });
+    if (back && outcome === "unknown") await notify(tx, { companyId: row.companyId, about: back.id, kind: "candidate.unreachable", title: "A decision message may not have reached a candidate", body: "Sending it was interrupted, so we cannot tell whether it arrived. They show as not told yet: check with them, or record that you told them yourself, before sending it again.", action: { label: "Open the candidate", href: `/roles/${back.roleId}/talent?open=${back.id}` } });
     return;
   }
   const [told] = await tx.update(applications).set({ toldState: "sent", candidateToldAt: now.toISOString() }).where(where).returning({ id: applications.id });
@@ -469,12 +655,13 @@ function describeFailure(result: SendResult): string {
 export async function sweepStaleSending(db: Db, now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - SENDING_STALE_MS).toISOString();
   const rows = await withPlatform(db, async (tx) => {
-    const stale = await tx.update(communications).set({ status: "unknown", error: "interrupted while sending; delivery could not be confirmed", sendingAt: null }).where(and(eq(communications.status, "sending"), lt(communications.sendingAt, cutoff))).returning({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, applicationId: communications.applicationId, sentBy: communications.sentBy, retryOf: communications.retryOf });
+    const stale = await tx.update(communications).set({ status: "unknown", error: "interrupted while sending; delivery could not be confirmed", sendingAt: null }).where(and(eq(communications.status, "sending"), lt(communications.sendingAt, cutoff))).returning({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, applicationId: communications.applicationId, sentBy: communications.sentBy, retryOf: communications.retryOf, tags: communications.tags });
     // A decision message among them: the decision goes back to not told, and the team is asked to check (founder decision B6).
     for (const r of stale) await settleDecisionTold(tx, r, "unknown", now);
     return stale;
   });
   for (const r of rows) {
+    if (quietOnFailure(r)) continue;
     await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${r.channel} may or may not have been delivered`, body: `The process was interrupted while sending ${r.templateKey ?? "a message"}. Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: r.companyId, target: { type: "communication", id: r.id }, details: { channel: r.channel, template: r.templateKey } });
   }
   return rows.length;

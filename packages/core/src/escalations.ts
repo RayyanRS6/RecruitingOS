@@ -10,7 +10,7 @@ import { notify } from "./notifications";
 import { escalationReplyBy, type CalendarSource } from "./business-hours";
 import { loadBusinessCalendar } from "./business-calendar";
 import { hiddenTextNoteOf } from "./hidden-text";
-import { ESCALATION_ACCESS_DAYS, endStaffGrant, grantStaffAccess, type StaffGrant } from "./staff-access";
+import { ESCALATION_ACCESS_DAYS, endStaffGrant, grantStaffAccess, limitGrantAfterResolution, type StaffGrant } from "./staff-access";
 import { defaultUrgency, genericSummary, requestOrigin, requiredExpertise, servedSummary, type EscalationUrgency } from "./escalation-preview";
 import { screenAnswersOf, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents } from "./screen-answers";
 
@@ -63,6 +63,8 @@ export async function createEscalation(
     postingId?: string | null;
     summary?: string;
     context?: Record<string, unknown>;
+    /** What it needs from whoever picks it up, when the category's own words would be wrong (a talk about the plan is no hiring advice). */
+    expertise?: string;
     /** Email the ITS queue mailbox from here; by default only for a request no person raised (`raisedWithoutAPerson`). */
     tellQueue?: boolean;
   },
@@ -82,7 +84,7 @@ export async function createEscalation(
       kind: input.kind,
       question: input.question,
       urgency: input.urgency ?? defaultUrgency(input.kind),
-      requiredExpertise: requiredExpertise(input.kind, company?.vertical ?? null),
+      requiredExpertise: input.expertise ?? requiredExpertise(input.kind, company?.vertical ?? null),
       summary: input.summary ?? genericSummary(input.kind, { hasRole: !!input.roleId, hasApplication: !!input.applicationId, origin: input.summaryOrigin ?? (input.requestedBy.kind === "system" ? "system" : input.requestedBy.kind === "candidate" ? "candidate" : "customer") }),
       requestedBy: input.requestedBy,
       contextSnapshot: snapshot,
@@ -176,6 +178,40 @@ export function queueOrder<T extends { urgency: string; slaDueAt: string | null;
 export type EscalationRow = typeof recruiterEscalations.$inferSelect;
 export type EscalationMessageRow = typeof escalationMessages.$inferSelect;
 
+/** A request still waiting on someone. */
+const STILL_OPEN = ["open", "claimed", "in_progress"];
+
+/**
+ * A talk about the plan itself (the plans of 5 November 2026, Rule 5): not recruiting help, so it is never counted, and like a
+ * posting task it gives ITS no access to anything: taking it up must not open the company's hiring, its locked candidates
+ * least of all, to a person whose answers reach the customer.
+ */
+export function isPlanRequest(e: { billing?: unknown }): boolean {
+  return (e.billing as { topic?: unknown } | null | undefined)?.topic === "plan";
+}
+
+/** The company's open requests about the plan, oldest first. */
+export async function openPlanRequests(q: Queryable, companyId: string): Promise<EscalationRow[]> {
+  return q.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, STILL_OPEN), sql`${recruiterEscalations.billing}->>'topic' = 'plan'`)).orderBy(asc(recruiterEscalations.createdAt));
+}
+
+/**
+ * ITS changed the plan, so what the company asked for is done: each open plan request closes with `answer` on its thread, and
+ * returns the ones it closed. A plan request grants nothing now; one taken up before that rule loses its access as any
+ * resolved request does.
+ */
+export async function resolvePlanRequests(q: Queryable, input: { companyId: string; answer: string; actor: Actor; now: Date }): Promise<EscalationRow[]> {
+  const open = await openPlanRequests(q, input.companyId);
+  const at = input.now.toISOString();
+  for (const e of open) {
+    const accessUntil = await limitGrantAfterResolution(q, e.id, input.now);
+    await q.update(recruiterEscalations).set({ status: "resolved", resolvedAt: at, resolution: input.answer, firstResponseAt: e.firstResponseAt ?? at, accessExpiresAt: accessUntil ?? e.accessExpiresAt }).where(eq(recruiterEscalations.id, e.id));
+    await recordEscalationAnswer(q, { escalation: e, author: input.actor, body: input.answer, now: input.now });
+    await emit(q, { type: "recruiter.resolved", companyId: e.companyId, actor: input.actor, subject: { type: "escalation", id: e.id }, payload: { resolution: input.answer, minutesSpent: null, responseMinutes: null, planChanged: true } });
+  }
+  return open;
+}
+
 /**
  * One note on a request's thread (plan B5): from the team while a recruiter works on it, or from the recruiter holding
  * it. The caller has checked who may write and that the request belongs to their company. The event names the message,
@@ -215,6 +251,17 @@ export async function settleRetriedRunRequest(q: Queryable, input: { escalationI
   const readers = [...new Set([...(e.requestedBy.kind === "user" ? [e.requestedBy.id] : []), ...owners.map((m) => m.userId)])];
   await notify(q, { companyId: e.companyId, kind: "recruiter.resolved", title: "A stopped step is working again", body: RETRIED_RUN_FINISHED, action: { label: "Read the answer", href: `/?request=${e.id}` }, userIds: readers });
   return "resolved";
+}
+
+/** What a request's thread says when the candidate it is about writes back: never their words, which stay on the application's own thread. */
+export const CANDIDATE_WROTE_BACK = "Their message is on the Messages tab of their page.";
+
+/**
+ * Someone the team cannot read wrote back while a recruiter holds the request about them (the plans of 5 November 2026, Rule 2):
+ * one wordless line on its thread, which nobody at the company reads while they are locked. The caller tells the holder too.
+ */
+export async function noteCandidateWroteBack(q: Queryable, input: { escalation: Pick<EscalationRow, "id" | "companyId">; candidateId: string; now?: Date }): Promise<EscalationMessageRow> {
+  return insertMessage(q, { escalation: input.escalation, side: "customer", kind: "reply", author: { kind: "candidate", id: input.candidateId }, body: CANDIDATE_WROTE_BACK, now: input.now });
 }
 
 /** The recruiter's answer, kept on the thread as well as on the request, so a reopened request keeps every answer it was given. */
@@ -267,6 +314,8 @@ export async function reopenEscalation(
 
 async function recruiterWhoCanReturn(q: Queryable, e: EscalationRow): Promise<{ id: string; name: string; email: string } | null> {
   if (!e.assignedToUserId) return null;
+  // A talk about the plan grants nothing, at claim or here: it goes back to the queue.
+  if (isPlanRequest(e)) return null;
   // All of a company's hiring is shared only when someone at the company chose it (Q31), exactly as at claim.
   if (!e.roleId && !e.applicationId && e.requestedBy.kind !== "user") return null;
   const [u] = await q.select({ id: users.id, name: users.name, email: users.email, platformRole: users.platformRole }).from(users).where(eq(users.id, e.assignedToUserId)).limit(1);
@@ -297,7 +346,7 @@ export function escalationThread(
   if (origin === "system" || origin === "candidate") question.raisedBy = origin;
   const out: EscalationThreadEntry[] = [question];
   const ordered = [...messages].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt });
+  for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt, ...(m.author.kind === "candidate" ? { raisedBy: "candidate" as const } : {}) });
   if (e.resolution && !ordered.some((m) => m.kind === "answer")) out.push({ id: `${e.id}:answer`, side: "recruiter", kind: "answer", body: e.resolution, by: recruiterName, at: e.resolvedAt ?? e.createdAt });
   return out;
 }

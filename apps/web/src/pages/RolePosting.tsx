@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, IconLabel, numHead, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
+import { LOCKED_WORD } from "@ros/contracts";
 import { api, ApiError, type ApplicationLink, type Posting, type PostingView, type PostingsResponse, type RoleDetail, type VolumeReport, type WhoPosts } from "../api/client";
 import { POSTING_WAITS_FOR_CHECK } from "../company-check";
 import { BoardTicks } from "../components/BoardTicks";
@@ -661,13 +662,17 @@ function VolumeCard({ report, loading, failed, onRetry }: { report: VolumeReport
   if (failed || !report) return <ErrorState message="Could not load the application counts." onRetry={onRetry} />;
   const yesterday = report.days[report.days.length - 2];
   const today = report.days[report.days.length - 1];
+  // Someone past the plan's limit counts in the totals and never by source, so the table adds up with one line of its own.
+  const beyondSources = (total: number, bySource: Record<string, number> = {}) => total - Object.values(bySource).reduce((a, b) => a + b, 0);
+  const locked = beyondSources(report.totals.total, report.totals.bySource);
   return (
     <Card title="Applications by source (last 14 days)">
       <p className="small muted">{report.totals.total} in total; {report.yesterday.total} yesterday, {report.today.total} so far today.</p>
       <p className="small muted mt-1 mb-3">You are told when a day goes above {report.threshold}. Nobody is turned away automatically; "Stop accepting applications" in the More menu stops new ones.</p>
-      {report.sources.length ? (
+      {report.totals.total ? (
         <Table head={["Source", numHead("Last 14 days"), numHead("Yesterday"), numHead("Today")]} label="Applications by source">
           {report.sources.map((s) => <tr key={s.source}><td>{s.label}</td><td className="num">{s.total}</td><td className="num">{yesterday?.bySource[s.source] ?? 0}</td><td className="num">{today?.bySource[s.source] ?? 0}</td></tr>)}
+          {locked ? <tr><td>{LOCKED_WORD}</td><td className="num">{locked}</td><td className="num">{beyondSources(yesterday?.total ?? 0, yesterday?.bySource)}</td><td className="num">{beyondSources(today?.total ?? 0, today?.bySource)}</td></tr> : null}
         </Table>
       ) : <p className="small muted">No applications in the last 14 days.</p>}
       <p className="small muted mt-3 tabular">By day: {report.days.map((d) => `${d.day.slice(5)}: ${d.total}`).join(" · ")}</p>

@@ -1,16 +1,18 @@
 "use client";
 
-import { type CSSProperties, useState } from "react";
+import { type CSSProperties, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, Button, Card, ErrorState, Icon, IconChip, PageHeader, Skeleton, StatCell, StatStrip } from "@ros/ui";
 import { api, type Me } from "../../api/client";
 import { allowanceAlerts, allowanceChip } from "../../allowance";
 import { useIsClient } from "../../components/use-is-client";
+import { focusLost } from "../../focus-after";
 import { Link } from "../../nav";
-import { firstName } from "../../today";
+import { sessionEnded, useSignInWhenSessionEnds } from "../../session-ended";
+import { TODAY_REFRESH, firstName } from "../../today";
 import { adminKeys, adminReason, type AlertRow, type CustomerRow, type DataRequest } from "./admin-api";
 import { activityWords, money, planWords, severityWords } from "./admin-words";
-import { customerOrder, waitingCustomers } from "./customers";
+import { AccessButtons, accessFacts, accessRequests, aiCreditDollars, customerOrder, FactsLine, type LineFact, realCustomers, waitingCustomers, waitingForCheck } from "./customers";
 import { PRIVACY_DUE_SOON_DAYS } from "./privacy";
 import { needsAPerson } from "./problems";
 import { costsSinceKey, monthStartIn } from "./system";
@@ -24,6 +26,9 @@ import { costsSinceKey, monthStartIn } from "./system";
  * Fewer words (founder, 23 Oct 2026): the counts live in the stat strip, so the card titles under it carry none (the
  * greeting keeps "N things need you.", the state to act on), and "Nothing needs you right now." is the list's own row,
  * not a second line under the title.
+ * First sign-in asks for approval (6 November 2026): a request for access is a row of its own at the very top, with who is
+ * asking, and Accept and Decline in the row instead of one button. It waits for the ITS check in the stat strip, as
+ * accepting it is the check; it is no customer yet, in the strip or on the Customers card, and a declined one is neither.
  */
 
 type FailuresDto = { failedRuns: Array<{ id: string }>; failedJobs: Array<{ id: number; createdAt?: string }>; failedAi: Array<{ id: string; createdAt?: string }>; alerts: AlertRow[]; pendingDeletions: Array<{ id: string }> };
@@ -36,8 +41,15 @@ type CalendarDto = { version: number | null; current: { timeZone: string } };
 /** What Overview reads to build "Needs attention"; a source not (yet) read is left out. */
 export type OverviewSources = { customers?: CustomerRow[]; alerts?: AlertRow[]; failures?: FailuresDto; privacy?: DataRequest[]; failedEmail?: Array<{ id: string }>; csp?: CspDto; escalations?: EscalationPreview[] };
 
-/** One row of "Needs attention": one sentence, an optional quieter line, and the one button that opens the exact place. */
-export type AttentionRow = { key: string; urgent: boolean; text: string; sub?: string; action: { label: string; href: string } };
+/**
+ * One row of "Needs attention": one sentence, an optional quieter line, and the one button that opens the exact place.
+ * `access`: a request for access, whose row draws its facts and Accept and Decline instead. `things`: how many things it
+ * stands for, when that is more than one (the row for the rest of the requests).
+ */
+export type AttentionRow = { key: string; urgent: boolean; text: string; sub?: string; action: { label: string; href: string }; access?: { company: CustomerRow; facts: LineFact[] }; things?: number };
+
+/** Up to this many requests for access get a row each, the longest waiting first; the rest share one row linking to them. */
+export const ACCESS_ROWS_EACH = 5;
 
 const DAY = 86_400_000;
 // A privacy request shows on Overview once it is due within PRIVACY_DUE_SOON_DAYS (privacy.tsx's own rule), or overdue.
@@ -71,16 +83,27 @@ export function dueWords(slaDueAt: string, now: number = Date.now()): string {
 }
 
 /**
- * "Needs attention", most urgent first (redesign spec 3.2): companies waiting for the ITS check (the longest waiting
- * first, B7); alerts that need a person (urgent first); privacy requests overdue or due within 5 days; failed work;
- * security reports not reviewed; email applications that could not be imported; credentials still stored after a
- * disconnect; recruiter requests past their reply-by time; customers at 80% or more of their screening chats.
+ * "Needs attention", most urgent first (redesign spec 3.2): requests for access (one row each, the longest waiting first,
+ * up to five, then one row linking to the rest); companies waiting for the ITS check (the longest waiting first, B7); alerts
+ * that need a person (urgent first); privacy requests overdue or due within 5 days; failed work; security reports not
+ * reviewed; email applications that could not be imported; credentials still stored after a disconnect; recruiter requests
+ * past their reply-by time; customers at 80% or more of their screening chats.
  */
 export function attentionRows(s: OverviewSources, now: number = Date.now()): AttentionRow[] {
   const rows: AttentionRow[] = [];
   const names = new Map((s.customers ?? []).map((c) => [c.id, c.name]));
 
-  const waiting = waitingCustomers(s.customers ?? []);
+  const requests = accessRequests(s.customers ?? []);
+  for (const c of requests.slice(0, ACCESS_ROWS_EACH)) {
+    const facts = accessFacts(c, now);
+    rows.push({ key: `access-${c.id}`, urgent: true, text: `${c.name} is asking for access`, sub: facts.map((f) => f.text).join(" · "), action: { label: "Review", href: `/admin/customers?open=${encodeURIComponent(c.id)}&tab=check` }, access: { company: c, facts } });
+  }
+  const moreRequests = requests.slice(ACCESS_ROWS_EACH);
+  if (moreRequests.length) {
+    rows.push({ key: "access-more", urgent: true, text: `${count(moreRequests.length, "more company is", "more companies are")} asking for access`, sub: someNames(moreRequests.map((c) => c.name)), action: { label: "Open", href: "/admin/customers?show=waiting" }, things: moreRequests.length });
+  }
+
+  const waiting = waitingForCheck(s.customers ?? []);
   if (waiting.length) {
     rows.push({
       key: "waiting",
@@ -185,7 +208,28 @@ export function attentionRows(s: OverviewSources, now: number = Date.now()): Att
       });
     }
   }
+
+  // The AI credit, from each customer's own line (the plans of 5 November 2026, Rule 4): in dollars, which only ITS reads.
+  const credit = (s.customers ?? []).filter((c) => c.aiCredit?.level).sort((a, b) => (a.aiCredit?.level === b.aiCredit?.level ? 0 : a.aiCredit?.level === "used_up" ? -1 : 1));
+  if (credit.length > LOW_ROWS_EACH) {
+    rows.push({ key: "credit", urgent: false, text: `${credit.length} customers are running low on AI credit`, sub: someNames(credit.map((c) => c.name)), action: { label: "Open", href: "/admin/customers?show=low" } });
+  } else {
+    for (const c of credit) {
+      if (c.aiCredit) rows.push({ key: `credit-${c.id}`, urgent: false, text: `${c.name} has used ${c.aiCredit.level === "used_up" ? "all its" : "80% of its"} AI credit`, sub: aiCreditDollars(c.aiCredit), action: { label: "Open", href: `/admin/customers?open=${encodeURIComponent(c.id)}&tab=plan` } });
+    }
+  }
+
+  // A customer waiting for ITS to change its plan (Rule 5): there is no payment system, so nothing happens until someone here does it.
+  const asking = (s.customers ?? []).filter((c) => c.planRequestSince);
+  if (asking.length) {
+    rows.push({ key: "plan-requests", urgent: false, text: count(asking.length, "customer asked to upgrade", "customers asked to upgrade"), sub: someNames(asking.map((c) => c.name)), action: { label: "Open", href: asking.length === 1 ? `/admin/customers?open=${encodeURIComponent(asking[0].id)}&tab=plan` : "/admin/customers" } });
+  }
   return rows;
+}
+
+/** How many things need a person: each request for access is one thing, also among the rest that share a row. */
+export function attentionCount(rows: readonly AttentionRow[]): number {
+  return rows.reduce((n, r) => n + (r.things ?? 1), 0);
 }
 
 /** The first day of this month in the business calendar's time zone ("2026-10-01"); the reader's own month without one. */
@@ -231,25 +275,41 @@ function partOfDay(local: boolean): string {
 
 const CUSTOMERS_SHOWN = 5;
 
+/**
+ * A tab left open stays true (the review of 6 November 2026): every source behind "Needs attention" and its "Nothing needs
+ * you right now." is asked again when the window comes back into focus and every minute while the tab is visible, never in
+ * a hidden one, as Home is (TODAY_REFRESH), because each read is recorded (admin.ts) and a request for access may be waiting.
+ * The recruiter requests are recorded per customer on each read, so they are asked every five minutes, and on focus only once
+ * the answer is two minutes old.
+ */
+export const OVERVIEW_REFRESH = TODAY_REFRESH;
+export const ESCALATIONS_REFRESH = { refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 } as const;
+
+/** Whether the staff session ended under a tab left open (the review of 9 November 2026): session-ended.ts, shared with Home and Customers. */
+export { sessionEnded };
+
 export function Overview() {
   const why = adminReason("overview");
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const customers = useQuery({ queryKey: adminKeys.customers, queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", why) });
-  const alerts = useQuery({ queryKey: adminKeys.alerts, queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", why) });
-  const failures = useQuery({ queryKey: adminKeys.failures, queryFn: () => api.get<FailuresDto>("/api/v1/admin/failures", why) });
-  const privacy = useQuery({ queryKey: adminKeys.privacy, queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", why) });
-  const failedEmail = useQuery({ queryKey: adminKeys.failedEmailApplications, queryFn: () => api.get<Array<{ id: string }>>("/api/v1/admin/failed-email-applications", why) });
-  const csp = useQuery({ queryKey: adminKeys.csp, queryFn: () => api.get<CspDto>("/api/v1/admin/csp-reports", why) });
+  const customers = useQuery({ queryKey: adminKeys.customers, queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", why), ...OVERVIEW_REFRESH });
+  const alerts = useQuery({ queryKey: adminKeys.alerts, queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", why), ...OVERVIEW_REFRESH });
+  const failures = useQuery({ queryKey: adminKeys.failures, queryFn: () => api.get<FailuresDto>("/api/v1/admin/failures", why), ...OVERVIEW_REFRESH });
+  const privacy = useQuery({ queryKey: adminKeys.privacy, queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", why), ...OVERVIEW_REFRESH });
+  const failedEmail = useQuery({ queryKey: adminKeys.failedEmailApplications, queryFn: () => api.get<Array<{ id: string }>>("/api/v1/admin/failed-email-applications", why), ...OVERVIEW_REFRESH });
+  const csp = useQuery({ queryKey: adminKeys.csp, queryFn: () => api.get<CspDto>("/api/v1/admin/csp-reports", why), ...OVERVIEW_REFRESH });
   // The recruiter queue's own list: `overdue` is worked out on business time by the API. Each read of it is recorded per
   // customer (as the queue list), so Overview keeps an answer for two minutes instead of reading it again on every visit.
-  const escalations = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<EscalationPreview[]>("/api/v1/escalations"), staleTime: 120_000 });
+  const escalations = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<EscalationPreview[]>("/api/v1/escalations"), ...ESCALATIONS_REFRESH });
   const calendar = useQuery({ queryKey: adminKeys.calendar, queryFn: () => api.get<CalendarDto>("/api/v1/admin/calendar", why) });
   const queue = useQuery({ queryKey: adminKeys.queue, queryFn: () => api.get<QueueDto>("/api/v1/admin/queue", why), refetchInterval: 30_000 });
   // "This month" starts on the 1st in the business calendar's time zone; the costs wait for the calendar's answer.
   const since = monthStart(calendar.data?.current.timeZone);
   const costs = useQuery({ queryKey: costsSinceKey(since), queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
   const isClient = useIsClient();
+  useSignInWhenSessionEnds([me, customers, alerts, failures, privacy, failedEmail, csp, escalations, calendar, queue, costs].map((q) => q.error));
 
+  // A source whose latest look failed counts as failed even while it still holds an earlier answer (the review of 9
+  // November 2026), so "Nothing needs you right now." never stands over a look that failed.
   const sources = [
     { key: "customers", thing: "the companies waiting for the ITS check", q: customers },
     { key: "alerts", thing: "alerts", q: alerts },
@@ -258,18 +318,24 @@ export function Overview() {
     { key: "csp", thing: "security reports", q: csp },
     { key: "email", thing: "email applications", q: failedEmail },
     { key: "escalations", thing: "recruiter requests", q: escalations },
-  ].map(({ key, thing, q }) => ({ key, thing, loading: q.data === undefined && !q.error, failed: q.data === undefined && !!q.error, retry: () => void q.refetch() }));
+  ].map(({ key, thing, q }) => ({ key, thing, loading: q.data === undefined && !q.isError, failed: q.isError, retry: () => void q.refetch() }));
   const rows = attentionRows({ customers: customers.data, alerts: alerts.data, failures: failures.data, privacy: privacy.data, failedEmail: failedEmail.data, csp: csp.data, escalations: escalations.data });
+  const things = attentionCount(rows);
   const loading = sources.filter((s) => s.loading);
   const failed = sources.filter((s) => s.failed);
   const settled = loading.length === 0;
   const first = firstName(me.data?.user.name);
+  // A row that was decided leaves with the button that had focus: it goes to the next thing in the list, not to the page.
+  const list = useRef<HTMLUListElement>(null);
+  const afterDecided = () => requestAnimationFrame(() => {
+    if (focusLost(document.activeElement, document.body)) (list.current?.querySelector<HTMLElement>("button:not(:disabled), a[href]") ?? list.current)?.focus();
+  });
 
   return (
     <div className="min-w-0">
       <PageHeader
         title={`Good ${partOfDay(isClient)}${first ? `, ${first}` : ""}.`}
-        sub={settled && rows.length ? `${count(rows.length, "thing needs", "things need")} you.` : undefined}
+        sub={settled && things ? `${count(things, "thing needs", "things need")} you.` : undefined}
         actions={<Link to="/recruiter/queue" className="btn secondary">Open the recruiter queue</Link>}
       />
 
@@ -280,10 +346,11 @@ export function Overview() {
           be read is left out. The last, tinted cell is the console's rule staff must know, said once.
         */}
         <StatStrip label="At a glance">
-          <StatCell icon="alert" tone={settled && !rows.length ? "lavender" : "peach"} label="Needs attention" value={settled ? rows.length : PENDING} />
+          <StatCell icon="alert" tone={settled && !things ? "lavender" : "peach"} label="Needs attention" value={settled ? things : PENDING} />
           {customers.data || !customers.error ? (
             <>
-              <StatCell icon="building" label="Customers" value={customers.data ? customers.data.length : PENDING} />
+              {/* a request for access, waiting or declined, is no customer yet; one waiting does wait for the check, as accepting it is the check */}
+              <StatCell icon="building" label="Customers" value={customers.data ? realCustomers(customers.data).length : PENDING} />
               <StatCell icon="clock" label="Waiting for the ITS check" value={customers.data ? waitingCustomers(customers.data).length : PENDING} />
             </>
           ) : null}
@@ -299,19 +366,32 @@ export function Overview() {
               <Skeleton lines={3} />
             </div>
           ) : (
-            <ul>
-              {rows.map((r, i) => (
+            <ul ref={list} tabIndex={-1} className="focus:outline-none">
+              {rows.map((r, i) => (r.access ? (
+                // Its facts run on as one line that wraps, and from a tablet up the buttons (or the question, however long a
+                // name it holds) sit beside at least 20rem of them, or on a line of their own.
+                <li key={r.key} className={`${ROW} flex-wrap`} style={enterDelay(i)}>
+                  <span className="list-row-lead"><IconChip icon="alert" tone="peach" size="sm" /></span>
+                  <span className="list-row-main sm:basis-80">
+                    <span className="list-row-title wrap">{r.text}</span>
+                    <span className="list-row-meta"><span className="min-w-0 wrap-anywhere"><FactsLine facts={r.access.facts} /></span></span>
+                  </span>
+                  <span className="list-row-end max-w-full">
+                    <AccessButtons company={r.access.company} onDecided={afterDecided} />
+                  </span>
+                </li>
+              ) : (
                 <li key={r.key} className={ROW} style={enterDelay(i)}>
                   <span className="list-row-lead"><IconChip icon={r.urgent ? "alert" : "info"} tone={r.urgent ? "peach" : "lavender"} size="sm" /></span>
                   <span className="list-row-main">
                     <span className="list-row-title wrap">{r.text}</span>
-                    {r.sub ? <span className="list-row-meta">{r.sub}</span> : null}
+                    {r.sub ? <span className="list-row-meta wrap-anywhere">{r.sub}</span> : null}
                   </span>
                   <span className="list-row-end">
                     <Link to={r.action.href} className="btn secondary sm" aria-label={`${r.action.label}: ${r.text}`}>{r.action.label}</Link>
                   </span>
                 </li>
-              ))}
+              )))}
               {failed.map((s, i) => (
                 <li key={`failed-${s.key}`} className={ROW} style={enterDelay(rows.length + i)}>
                   <span className="list-row-lead"><IconChip icon="alert" tone="peach" size="sm" /></span>
@@ -345,7 +425,7 @@ export function Overview() {
 
         {/* Customers beside this month's costs (the "at a glance" side card); one column on a phone or a tablet. */}
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
-          <CustomersCard rows={customers.data} error={!!customers.error} retry={() => void customers.refetch()} />
+          <CustomersCard rows={customers.data ? realCustomers(customers.data) : undefined} error={!!customers.error} retry={() => void customers.refetch()} />
           <CostsCard rows={costs.data} error={!!costs.error && !costs.data} retry={() => void costs.refetch()} since={since} names={new Map((customers.data ?? []).map((c) => [c.id, c.name]))} />
         </div>
 
@@ -421,7 +501,7 @@ function CustomersCard({ rows, error, retry }: { rows: CustomerRow[] | undefined
             ))}
             {!rows.length ? <li className="px-4 py-5 text-sm text-ink-3">No customers yet.</li> : !matches.length ? <li className="px-4 py-5 text-sm text-ink-3">{`No customer matches “${typed.trim()}”.`}</li> : null}
           </ul>
-          {rows.length ? <MoreLink to={seeAll}>{typed.trim() ? "See every match in Customers" : `See all ${rows.length} customers`}</MoreLink> : null}
+          {rows.length ? <MoreLink to={seeAll}>{typed.trim() ? "See every match in Customers" : `See all ${count(rows.length, "customer", "customers")}`}</MoreLink> : null}
         </>
       )}
     </Card>

@@ -1,6 +1,6 @@
 "use client";
 
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { cx, domId, type Move, nextIndex, type OwnerStage, ownerStage, stageMenuItems, type Tone, typeaheadIndex } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
@@ -49,6 +49,19 @@ export function menuFixedAt(side: "start" | "end", button: { top: number; bottom
 }
 
 /**
+ * How tall a menu's list may be inside a dialog, where nothing scrolls the page to a menu that runs past the bottom of the
+ * window (the stage menu on the candidate panel, on a laptop: its last choices sat out of reach). `menu` is the whole
+ * menu's height and `list` its choices' (both unscrolled), under a button whose bottom is at `buttonBottom` in a window
+ * whose bottom is at `bottom`. Null when the whole menu fits; else the list's height that keeps the menu inside the
+ * window, never under 120px (three choices), so the list scrolls inside itself under its heading.
+ */
+export function menuCap(input: { menu: number; list: number; buttonBottom: number; bottom: number }): number | null {
+  const room = input.bottom - EDGE - (input.buttonBottom + GAP);
+  if (input.menu <= room) return null;
+  return Math.max(120, Math.floor(room - (input.menu - input.list)));
+}
+
+/**
  * The small mark before an item's words: a tick on the current choice of a one-of-many menu (so the current sort or
  * job can be seen, not only heard as "checked"), else the item's coloured dot or its icon, else an empty slot.
  */
@@ -80,20 +93,24 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
   const preferred = props.align ?? "start";
   const [side, setSide] = useState<"start" | "end">(preferred);
   const [fixedAt, setFixedAt] = useState<{ top: number; left: number } | null>(null);
+  const [cap, setCap] = useState<number | null>(null);
 
   // The menu opens on its preferred side unless that would run past the edge of the window where the other side would
   // not (a button that wrapped to the left of a phone screen): nothing past the edge can be scrolled to. Inside a
   // table's scrolling box (.table-wrap scrolls sideways, which clips everything past its edges) the menu is placed
-  // against the window instead, and follows its button while the page or the box scrolls.
+  // against the window instead, and follows its button while the page or the box scrolls. Inside a dialog, a menu taller
+  // than the room under its button keeps its list to that room and scrolls it (`menuCap`).
   useLayoutEffect(() => {
     if (!open) return;
     const scroller = wrap.current?.closest(".table-wrap") ?? null;
+    const inDialog = !scroller && !!wrap.current?.closest('[role="dialog"]');
     const place = () => {
       const at = wrap.current?.getBoundingClientRect();
       const width = panel.current?.offsetWidth ?? 0;
       if (!at || !width) {
         setSide(preferred);
         setFixedAt(null);
+        setCap(null);
         return;
       }
       // A button scrolled out of its table's box takes its menu with it, so the menu never floats over other rows.
@@ -106,6 +123,10 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
       const chosen = menuSide(preferred, { left: at.left, right: at.right }, width, win.width);
       setSide(chosen);
       setFixedAt(scroller ? menuFixedAt(chosen, at, { width, height: panel.current?.offsetHeight ?? 0 }, win) : null);
+      // measured unscrolled: a list already kept short still counts every choice
+      const list = inDialog ? panel.current?.querySelector<HTMLElement>('[role="menu"]') : null;
+      const menu = (panel.current?.offsetHeight ?? 0) - (list?.offsetHeight ?? 0) + (list?.scrollHeight ?? 0);
+      setCap(list ? menuCap({ menu, list: list.scrollHeight, buttonBottom: at.bottom, bottom: win.height }) : null);
     };
     place();
     if (!scroller) return;
@@ -194,7 +215,7 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
               {props.heading}
             </div>
           ) : null}
-          <div role="menu" id={menuId} aria-label={props.heading ?? props.ariaLabel ?? "Choices"} tabIndex={-1}>
+          <div role="menu" id={menuId} aria-label={props.heading ?? props.ariaLabel ?? "Choices"} tabIndex={-1} className={cap === null ? undefined : "menu-scroll"} style={cap === null ? undefined : ({ "--menu-max": `${cap}px` } as CSSProperties)}>
             {props.items.map((item, i) => (
               <button
                 key={item.id}

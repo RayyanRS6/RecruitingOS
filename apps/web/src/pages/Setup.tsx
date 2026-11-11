@@ -9,6 +9,7 @@ import { STILL_REVIEWING_LABEL, STILL_REVIEWING_NOTE, hasChoice, loosens, loosen
 import { NEW_TIMES_SETUP, newTimesReadOnlyText, newTimesSavedNotice, newTimesSettingFrom, newTimesSettingText, pendingQuestion, workingDaysFrom, type NewTimesSaved } from "../cancelled";
 import { CAREERS_PAGE_WAITS, companyCheckOf } from "../company-check";
 import { VERTICALS } from "../company-setup";
+import { candidateEmailRow, type CandidateEmailHealth } from "../email-health";
 import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoProblem, logoUrlOf } from "../publishing";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
 import { ACCESS_DAYS, accessChip } from "../recruiter-access";
@@ -16,10 +17,11 @@ import { canChangeCompany, canSeeActivity, canStartHire } from "../roles";
 import { SETTINGS_TABS, type SettingsTab, defaultTab, leadAndRest, settingsHref, settingsLanding, setupSections, tabFrom } from "../setup-sections";
 import { browserStorage, SHORTCUT_CHANGED_EVENT, START_HIRE_KEY, setStartHireShortcut, startHireShortcutOn } from "../start-hire";
 import { toast } from "../toast";
-import { trialPlanLine, trialRow } from "../trial";
+import { trialDate, trialPlanLine, trialRow } from "../trial";
+import { Upgrade } from "../components/Upgrade";
 import { NotificationsCard } from "./NotificationsCard";
 import { TeamCard } from "./TeamCard";
-import type { TrialStanding } from "@ros/contracts";
+import { ITS_POSTING_UPGRADE_QUESTION, isAiCreditKey, mayOfferUpgrade, type AiCreditLevel, type AiCreditView, type TrialStanding } from "@ros/contracts";
 
 type BusinessHours = { days: number[]; start: string; end: string };
 /**
@@ -30,12 +32,17 @@ type BusinessHours = { days: number[]; start: string; end: string };
  */
 type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string }; about?: CompanyAbout | null; boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean; newTimesAfterCancel?: { auto: boolean; workingDays: number } };
 type CompanyAbout = { text: string; approvedAt: string; approvedBy?: { id?: string; name?: string | null } | null };
+/** One allowance as GET /companies/current sends it; `unit: "percent"` is the AI credit, which customers read as a percentage. */
+type UsageRow = { used: number; limit: number | null; resetsAt?: string | null; unit?: "percent" };
 /**
  * `trial`: where the Trial plan's 30 days stand (founder decision L-02 B), null on another plan; `usage.seats` counts
  * people live. `production`: the app runs in production (staging too), where a service without a provider is there on
- * purpose rather than a development stand-in (Connected services).
+ * purpose rather than a development stand-in (Connected services). `candidateEmail`: the last week's emails to candidates,
+ * left and not arrived, which the email row reads (6 November 2026); older answers leave it out.
  */
-type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null; resetsAt?: string | null }>; trial?: TrialStanding | null; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean };
+type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, UsageRow>; aiCredit?: Pick<AiCreditView, "level"> | null; trial?: TrialStanding | null; /** Who really posts on the boards, and whether the plan leaves that to the company (the plans of 5 November 2026, Rule 6); older answers leave them out. */ whoPosts?: "its" | "self"; itsPosting?: boolean; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean; candidateEmail?: CandidateEmailHealth | null };
+/** Who posts on the boards as the API reads it, plan first; an older answer has only the company's own setting. */
+const whoPostsOf = (c: Pick<Company, "whoPosts" | "settings">): "its" | "self" => c.whoPosts ?? (c.settings.boardPosting === "self" ? "self" : "its");
 /**
  * minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered.
  * available: whether the product does this today (plan B7); the rest are listed under "Coming later" with no choice.
@@ -185,7 +192,7 @@ export function Setup() {
           <Section id="setup-profile"><CompanyProfileCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
         </>)}
 
-        {panel("team", <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} onReauthRequired={() => setReauthNeeded(true)} seats={c.usage?.seats} /></Section>)}
+        {panel("team", <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} onReauthRequired={() => setReauthNeeded(true)} seats={c.usage?.seats} planKey={c.planKey} /></Section>)}
 
         {panel("notifications", <>
           <Section id="setup-notifications"><NotificationsCard /></Section>
@@ -237,14 +244,14 @@ export function Setup() {
             <Card title="Connected services">
               <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
                 {c.integrations.map((i) => {
-                  const cells = serviceCells(i, c.production === true);
+                  const cells = serviceCells(i, c.production === true, c.candidateEmail);
                   return (
                     <tr key={`${i.kind}-${i.provider}`}>
                       <td className="font-semibold">{SERVICE_KIND_LABEL[i.kind] ?? i.kind.replace(/_/g, " ")}</td>
                       <td>{cells.provider}</td>
                       {/* a long state wraps inside its pill, so the explanations keep room and the table never scrolls sideways */}
                       <td><Pill size="sm" tone={cells.tone} className="wrap">{cells.state}</Pill></td>
-                      <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its", c.production === true)}</td>
+                      <td className="small muted">{explainStatus(i, whoPostsOf(c), c.production === true, c.candidateEmail)}</td>
                     </tr>
                   );
                 })}
@@ -324,10 +331,15 @@ const WITHOUT_PROVIDER: Record<string, string> = { sms: "Off", calendar: "Manual
 const SERVICE_KIND_LABEL: Record<string, string> = { email: "Email", sms: "Text messages", jobboard: "Job board", link_verifier: "Link checker", comp: "Pay data", storage: "File storage", scanner: "File scanner", secrets: "Key vault", identity: "Sign-in", calendar: "Calendar", analytics: "Analytics" };
 const SERVICE_PROVIDER_LABEL: Record<string, string> = { careers_page: "Careers page", google_jobs: "Google for Jobs", indeed: "Indeed", ziprecruiter: "ZipRecruiter", linkedin_basic: "LinkedIn", email_in: "Email in", postmark: "Postmark", twilio: "Twilio", google: "Google" };
 
-/** A service's provider and state cells: in production a service without a provider names none and says what happens instead. */
-function serviceCells(i: { kind: string; provider: string; status: string }, production: boolean): { provider: string; state: string; tone: Tone } {
+/**
+ * A service's provider and state cells: in production a service without a provider names none and says what happens
+ * instead. Connected email reads its state from the last week's sends to candidates (`candidateEmailRow`), never from a key.
+ */
+function serviceCells(i: { kind: string; provider: string; status: string }, production: boolean, email?: CandidateEmailHealth | null): { provider: string; state: string; tone: Tone } {
   if (i.status === "fake" && production) return { provider: "None", state: WITHOUT_PROVIDER[i.kind] ?? SERVICE_STATE_LABEL.not_connected, tone: "neutral" };
-  return { provider: SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " "), state: SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " "), tone: SERVICE_STATE_TONE[i.status] ?? "neutral" };
+  const provider = SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " ");
+  if (i.provider === "postmark" && i.status === "live") { const row = candidateEmailRow(email); return { provider, state: row.state, tone: row.tone }; }
+  return { provider, state: SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " "), tone: SERVICE_STATE_TONE[i.status] ?? "neutral" };
 }
 
 /**
@@ -336,7 +348,7 @@ function serviceCells(i: { kind: string; provider: string; status: string }, pro
  * whichever provider is loaded, the stand-in included. Another stand-in says in development that nothing leaves the
  * app; in production only email has more to say than its state.
  */
-function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its", production = false): string {
+function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its", production = false, email?: CandidateEmailHealth | null): string {
   if (i.provider === "twilio" || i.provider === "fake-sms") return "Text messaging is off until carrier registration and counsel review are complete. The AI interview runs on the web from an email link.";
   if (i.status === "fake") return production ? (i.kind === "email" ? "Candidate email is not being sent." : "") : "Nothing leaves the app.";
   if (i.provider === "careers_page") return "Served by the product; every open job has a public page and apply form.";
@@ -346,7 +358,7 @@ function explainStatus(i: { kind: string; provider: string; status: string }, wh
   if (i.provider === "indeed") return "Not connected to Indeed. Post from your own Indeed account with the apply link, or forward applications to the intake address once email-in is connected.";
   if (i.provider === "ziprecruiter") return "Not connected to ZipRecruiter. Post from your own account with the apply link.";
   if (i.provider === "linkedin_basic") return "Not connected to LinkedIn. Post a free listing from your company page with the apply link.";
-  if (i.provider === "postmark") return i.status === "live" ? "Candidate email is sent from the dedicated ITS domain." : "The sending domain is not configured; candidate email is not being sent.";
+  if (i.provider === "postmark") return i.status === "live" ? candidateEmailRow(email).line : "The sending domain is not configured; candidate email is not being sent.";
   if (i.kind === "secrets") return i.status === "live" ? "Connected credentials are kept in the managed key vault." : "Development stand-in; production uses the managed key vault.";
   if (i.kind === "comp") return i.status === "live" ? "Public wage data from the Bureau of Labor Statistics." : "Wage benchmarks unavailable; playbook ranges are used and cited.";
   return "";
@@ -362,7 +374,7 @@ function actionLabel(a: string): string {
     "role_packet.approve": "Approve a drafted job, pay included", "posting.sponsor_spend": "Spend on sponsored ads within budget",
     "application.triage": "Read and assess applicants (information only)", "application.hold_ineligible": "Hold an applicant who answers no to an eligibility question", "application.reject_ineligible": "Decline an applicant held on an eligibility answer",
     "application.reject_on_assessment": "Decline a candidate on judgment", "application.invite_screen": "Invite every applicant to the AI interview", "screen.conduct": "Run the AI interview",
-    "application.recommend_interview": "Recommend who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate",
+    "application.recommend_interview": "Suggest who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate",
     "disposition.send": "Send the decision message when someone presses Send",
     "message.still_reviewing": STILL_REVIEWING_LABEL,
     "interview.request": "Advance someone to an interview", "interview.schedule": "Book interviews on calendars",
@@ -387,6 +399,7 @@ const ACTION_NOTE: Record<string, string> = {
  * message says what happens after five working days in every case (founder decision D-03 = A, 14 Oct 2026).
  */
 const ACTION_MORE: Record<string, string> = {
+  "application.recommend_interview": "Only a person: nobody moves after the AI interview. They stay in New, you hear about each one once, and you decide. Ask me first: the assistant's suggestion waits on a card for your yes or no. Do it and tell me: the assistant moves the ones it likes to Interviewing and tells you. Do it: the same, without telling you.",
   "disposition.send": "Declining never sends anything by itself. Do it: the message goes when someone presses Send, and if nobody has told someone five working days after a decision, the standard message goes by itself and you are told. Ask me first: a second person approves it, and a recruiter is brought in instead of the message going by itself. Only a person: the app sends none and you tell candidates yourself, and if nobody has after five working days a recruiter is brought in to make sure they hear from you.",
 };
 
@@ -398,7 +411,7 @@ const ACTION_MORE: Record<string, string> = {
 export function calendarConnectOffered(providers: MyCalendar["providers"] | undefined): boolean {
   return !!providers?.some((p) => p.key === "google" && p.status === "live");
 }
-export const CALENDAR_OFF_LINE = "Calendar connection is not switched on for this workspace yet. Interviews are scheduled with the times you set below.";
+export const CALENDAR_OFF_LINE = "Calendar connection is not switched on for this workspace yet. The hours below let candidates pick a time with you.";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const ZONES = ["America/Los_Angeles", "America/Denver", "America/Phoenix", "America/Chicago", "America/New_York"];
@@ -459,7 +472,8 @@ function MyAvailability() {
           ) : null}
         </div>
         <div className="stack gap-4">
-          <h3 className="text-[15px]">Declared hours</h3>
+          {/* the days below are a suggestion until saved (6 November 2026): they never look saved when nothing is */}
+          <div className="row"><h3 className="text-[15px]">Declared hours</h3>{q.data && !q.data.availability ? <Chip tone="neutral">Not saved yet</Chip> : null}</div>
           <div className="max-w-[22rem]"><Field label="Time zone" htmlFor="av-tz"><select id="av-tz" className="select" value={timezone} onChange={(e) => setTimezone(e.target.value)}>{[...new Set([timezone, ...ZONES])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field></div>
           <div className="grid divide-y divide-line rounded-xl border border-line">
             {[1, 2, 3, 4, 5, 6, 0].map((d) => (
@@ -482,7 +496,7 @@ function MyAvailability() {
   );
 }
 
-type Grant = { id: string; kind: string; purpose: string; escalationId: string | null; roleId: string | null; roleTitle: string | null; applicationId: string | null; startsAt: string; expiresAt: string; endedAt: string | null; revokedAt: string | null; revokeReason: string | null; recruiterName: string | null; recruiterEmail: string; active: boolean };
+type Grant = { id: string; kind: string; purpose: string; escalationId: string | null; roleId: string | null; roleTitle: string | null; applicationId: string | null; oneCandidate?: boolean; startsAt: string; expiresAt: string; endedAt: string | null; revokedAt: string | null; revokeReason: string | null; recruiterName: string | null; recruiterEmail: string; active: boolean };
 
 /** ITS recruiter access (founder decision F10; item 1 of 21 Sep): visible to everyone on the team; owners and admins can end it now. */
 function RecruiterAccess({ canRevoke }: { canRevoke: boolean }) {
@@ -633,15 +647,33 @@ const NOTICE_LABEL: Record<string, string> = { ai_use: "How we use AI (shown on 
 const NOTICE_SHORT: Record<string, string> = { ai_use: "AI notice", privacy: "privacy notice", pay_transparency: "pay range notice", adverse_decision_explanation: "decision review notice" };
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 /** The plan's allowances in the company card's words (recruiter_asks counts the team's own requests, founder decision Q33). */
-const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", text_screens: "AI interviews this month", screen_person_requests: "requests for a person instead of the AI interview", voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "people (invitations not yet answered count too)" };
+const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", jobs_total: "jobs", text_screens: "AI interviews this month", screen_person_requests: "requests for a person instead of the AI interview", recruiter_asks: "recruiter requests", seats: "people (invitations not yet answered count too)", ai_credit_total_cents: "AI help", ai_credit_monthly_cents: "AI help this month" };
+/** Limits for what was never built: nothing is used of them, and a company moved off an older plan still has their rows (a change of plan clears no key). */
+const NEVER_BUILT: ReadonlySet<string> = new Set(["voice_minutes", "sourcing_contacts"]);
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /**
+ * The Usage row's lines: "label: used of limit", and "label: 18% used" for the AI credit, with the day a monthly credit starts
+ * again, on the company's calendar as Home says it: its month starts with an upgrade, so it has its own date. Once the credit
+ * reads as used up (`aiCreditLevel`, a small call no longer fits) the line says so, as Home and the notice do, where the
+ * percentage would still read 98 or 99. A limit of jobs ever takes the place of the jobs at a time: with one job ever, the two
+ * would say the same thing twice.
+ */
+export function usageLines(usage: Record<string, UsageRow>, timeZone?: string | null, aiCreditLevel?: AiCreditLevel | null): string[] {
+  const jobsEver = usage.jobs_total?.limit !== null && usage.jobs_total?.limit !== undefined;
+  const credit = (v: UsageRow) => `${aiCreditLevel === "used_up" ? "used up" : `${v.used}% used`}${v.resetsAt ? `, starts again ${trialDate(v.resetsAt, timeZone)}` : ""}`;
+  return Object.entries(usage)
+    .filter(([k]) => !NEVER_BUILT.has(k) && !(jobsEver && k === "active_roles"))
+    .map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.unit === "percent" ? credit(v) : `${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`}`);
+}
+
+/**
  * When the monthly allowances start again from zero (GET /companies/current `usage[key].resetsAt`; roles never reset):
- * "Monthly allowances reset on October 30.", or null when no limited allowance has a reset date.
+ * "Monthly allowances reset on October 30.", or null when no limited allowance has a reset date. Not the AI credit, whose
+ * month may not line up with theirs: `usageLines` gives it its own date.
  */
 export function usageResets(usage: Record<string, { limit: number | null; resetsAt?: string | null }> | null | undefined): string | null {
-  const dates = Object.values(usage ?? {}).filter((v) => v.limit !== null && v.resetsAt).map((v) => Date.parse(v.resetsAt!)).filter(Number.isFinite);
+  const dates = Object.entries(usage ?? {}).filter(([k, v]) => !isAiCreditKey(k) && v.limit !== null && v.resetsAt).map(([, v]) => Date.parse(v.resetsAt!)).filter(Number.isFinite);
   if (!dates.length) return null;
   return `Monthly allowances reset on ${new Date(Math.min(...dates)).toLocaleDateString("en-US", { month: "long", day: "numeric" })}.`;
 }
@@ -714,9 +746,11 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
             <dt>ITS check</dt><dd>{companyCheckOf(c) === "waiting" ? <Chip tone="caution">ITS is confirming your company</Chip> : <Chip tone="good">Confirmed</Chip>}</dd>
             <dt>Careers page</dt><dd><a href={`/careers/${c.slug}`} target="_blank" rel="noreferrer">/careers/{c.slug}</a>{companyCheckOf(c) === "waiting" ? <span className="small muted"> · {CAREERS_PAGE_WAITS}</span> : null}</dd>
             <dt>Website</dt><dd>{c.settings.website || <span className="muted">not set</span>}</dd>
+            {/* "Use for every job" on an approval card lands here: the right place shows at once, before Edit. */}
+            <dt>Benefits</dt><dd>{c.settings.benefitsSummary || <span className="muted">not set</span>}</dd>
             <dt>Locations</dt><dd>{c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}</dd>
-            <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{trialLine ? <span className="small muted"> · {trialLine}</span> : null}{c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; jobs in progress are never cut off</span> : null}</dd>
-            {c.usage ? <><dt>Usage</dt><dd className="small">{Object.entries(c.usage).map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}{c.usage.recruiter_asks ?<span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
+            <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{trialLine ? <span className="small muted"> · {trialLine}</span> : null}{c.status === "design_partner" && c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; jobs in progress are never cut off</span> : null}{mayOfferUpgrade(c.planKey) ? <span className="ms-2 inline-block align-middle"><Upgrade size="sm" /></span> : null}</dd>
+            {c.usage ? <><dt>Usage</dt><dd className="small">{usageLines(c.usage, c.timezone, c.aiCredit?.level).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}{c.usage.recruiter_asks ?<span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
           </dl>
           {/* The rest of the company's details, one click away. The plan and its usage stay on view: "See usage" links land here. */}
           <details className="more mt-4">
@@ -1012,7 +1046,7 @@ function AboutText({ company: c, canEdit }: { company: Company; canEdit: boolean
  */
 function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
   const qc = useQueryClient();
-  const whoPosts = c.settings.boardPosting === "self" ? "self" : "its";
+  const whoPosts = whoPostsOf(c);
   const save = useMutation({
     mutationFn: (settings: { boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean }) => api.patch<{ changed: string[] }>("/api/v1/companies/current", { settings }),
     onSuccess: async (r) => {
@@ -1026,7 +1060,10 @@ function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boo
     <Card title="Job boards">
       <div className="stack gap-4">
         <Field label="Who posts your jobs on the boards">
-          {canEdit ? (
+          {/* a plan with no ITS staff time leaves no choice (Rule 6): the team posts, and the way to ITS is a bigger plan */}
+          {c.itsPosting === false ? (
+            <div className="row"><Chip>Your team posts them</Chip><Upgrade size="sm" reason={ITS_POSTING_UPGRADE_QUESTION} /></div>
+          ) : canEdit ? (
             <Segmented value={whoPosts} onChange={(v) => save.mutate({ boardPosting: v })} ariaLabel="Who posts your jobs on the boards" options={[{ value: "its", label: "ITS posts them for us" }, { value: "self", label: "Our team posts them" }]} />
           ) : <Chip>{whoPosts === "its" ? "ITS posts them for you" : "Your team posts them"}</Chip>}
         </Field>

@@ -100,7 +100,14 @@ function scopeError(): HttpError {
   return new HttpError(403, "staff_scope", "Your access is limited to the role and candidate of the escalation you accepted.");
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CANONICAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Whether an id in a path is written the one way the database writes it, which is how the product hands every id out. A
+ * guard must refuse anything else, never pass it on: Postgres also reads the same bytes with no hyphens, with hyphens
+ * elsewhere, in braces or in capitals, so a handler would find the row a guard that looks only at this form had skipped.
+ */
+export const isCanonicalId = (id: string): boolean => CANONICAL_ID.test(id);
 
 /**
  * The roles an interviewer interviews for: those with an interview they are on (F9: an interviewer sees their own
@@ -128,9 +135,14 @@ const interviewerOnRole = new WeakMap<Request, Promise<boolean>>();
 export const roleScopeGuard: MiddlewareHandler<Vars> = async (c, next) => {
   const t = c.get("tenant");
   const roleId = c.req.param("id");
+  // An id not written the database's way names no role, for every reader and every method: a plain 404 before any query, never
+  // the database refusing the cast as a 500 (the release review, 11 November 2026; the rule app.ts mounts for
+  // /applications/:id and /interviews/:id). Nobody signed in to a company is left to `requireTenant`.
+  if (t && roleId && !isCanonicalId(roleId)) throw new HttpError(404, "not_found", "Role not found.");
   if (t?.staff) {
     if (roleId && !scopeAllows({ roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId }, { roleId })) throw scopeError();
-  } else if (t?.role === "interviewer" && roleId && UUID.test(roleId) && (c.req.method === "GET" || c.req.method === "HEAD")) {
+  } else if (t?.role === "interviewer" && roleId && (c.req.method === "GET" || c.req.method === "HEAD")) {
+    if (!isCanonicalId(roleId)) throw new HttpError(404, "not_found", "Role not found.");
     let on = interviewerOnRole.get(c.req.raw);
     if (!on) {
       on = withTenant(c.get("container").db, t.companyId, async (tx) => (await rolesInterviewedBy(tx, t.userId, roleId)).has(roleId));

@@ -120,6 +120,8 @@ describe("company preferences, audit history, sessions, re-authentication and th
 
     it("saves who posts on the job boards and the company's own ZipRecruiter plan (plan D3, Q11)", async () => {
       const stored = async () => (await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)))[0].settings;
+      // on a plan with ITS staff time (Rule 6): the Free plan leaves no choice, and plan-upgrade.test.ts holds it to that
+      await usePlan(container, companyId, "pro");
       expect(boardPostingOf(await stored())).toBe("its");
       expect(zipRecruiterOffered(await stored())).toBe(false);
       const self = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "self" } });

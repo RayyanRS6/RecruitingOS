@@ -49,6 +49,8 @@ describe("the words for a recruiter's access", () => {
     expect(accessChip({ roleId: null, roleTitle: null, applicationId: null })).toBe("all of your hiring");
     expect(accessChip({ roleId: "r", roleTitle: "Hygienist", applicationId: null })).toBe("role: Hygienist");
     expect(accessChip({ roleId: "r", roleTitle: "Hygienist", applicationId: "a" })).toBe("one candidate");
+    // A grant about someone the team cannot read comes with no id, and it is still about one candidate, never the whole role.
+    expect(accessChip({ roleId: "r", roleTitle: "Hygienist", applicationId: null, oneCandidate: true })).toBe("one candidate");
   });
 
   it("say who can end the access, since hiring managers and HR may ask but only owners and admins can end it", () => {

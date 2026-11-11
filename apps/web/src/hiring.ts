@@ -95,16 +95,20 @@ export function offerAnswerToast(answer: "declined" | "withdrew", r: Pick<Action
 /** The question before the hire is recorded. */
 export function hireConfirmText(input: { name: string; startDate: string; offerAcceptedAt?: string }): string {
   const accepted = input.offerAcceptedAt ? `, who accepted the offer on ${plainDayWords(input.offerAcceptedAt)}` : "";
-  return `Record the hire of ${input.name}${accepted}, starting ${plainDayWords(input.startDate)}? It is recorded with your name and can only be corrected by an administrator. Nothing is sent to anyone.`;
-}
-
-/** The toast after the hire is recorded. */
-export function hireToast(input: { name: string; startDate: string | null }): ToastParts {
-  return { title: `${input.name} is hired.`, detail: input.startDate ? `Starting ${plainDayWords(input.startDate)}. Recorded with your name; nothing was sent to anyone.` : "Recorded with your name; nothing was sent to anyone." };
+  return `Record the hire of ${input.name}${accepted}, starting ${plainDayWords(input.startDate)}? It is recorded with your name and can only be corrected by an administrator. Nothing is sent to them.`;
 }
 
 /**
- * A start date before today (a hire recorded after they started): Today's "keep your backups warm" card is kept through
+ * The toast after the hire is recorded. `interviewsEnded`: their interviews still to come that the hire called off
+ * (6 November 2026); the interviewers were told, and the candidate was sent nothing.
+ */
+export function hireToast(input: { name: string; startDate: string | null; interviewsEnded?: number }): ToastParts {
+  const ended = input.interviewsEnded ? ` ${input.interviewsEnded === 1 ? "Their interview still to come is" : `Their ${input.interviewsEnded} interviews still to come are`} called off; the interviewers were told.` : "";
+  return { title: `${input.name} is hired.`, detail: `${input.startDate ? `Starting ${plainDayWords(input.startDate)}. ` : ""}Recorded with your name; nothing was sent to them.${ended}` };
+}
+
+/**
+ * A start date before today (a hire recorded after they started): Home's "keep your backups warm" card is kept through
  * the start day itself and gone after it, so nothing would remind anyone. Read in the reader's own calendar.
  */
 export function hireStarted(startDate: string | null | undefined, now: Date = new Date()): boolean {
@@ -115,16 +119,23 @@ export function hireStarted(startDate: string | null | undefined, now: Date = ne
  * What the hire sheet asks once the hire is recorded: the other people still in the running, and what to do with the
  * role: close it now and tell them (the one closing message, seen before it goes), or keep them warm until the start date.
  * When the start date has already passed (`started`), Today has no reminder to give, so leaving the role open is offered
- * plainly, without promising one.
+ * plainly, without promising one. With nobody to keep warm (only people who applied are still in process, never
+ * interviewed or shortlisted) but a role that can still be closed, leaving it open is offered too, saying what Home does:
+ * the sheet is never only "Close it now" (found by the whole-hire walk, 9 November 2026). `keepsBackups`: there are
+ * backups, so the choice keeps them warm.
  */
-export function hireFollowUpView(hire: HireFollowUp, name: string, now: Date = new Date()): { startLine: string; backupsLine: string | null; people: HireFollowUp["backups"]["people"]; mayClose: boolean; closeWords: string | null; keepWarmWords: string | null; started: boolean } {
+export function hireFollowUpView(hire: HireFollowUp, name: string, now: Date = new Date()): { startLine: string; backupsLine: string | null; people: HireFollowUp["backups"]["people"]; mayClose: boolean; closeWords: string | null; keepWarmWords: string | null; keepsBackups: boolean; started: boolean } {
   const start = hire.startDate ? plainDayWords(hire.startDate) : null;
   const started = hireStarted(hire.startDate, now);
   const n = hire.backups.count;
   const backupsLine = n ? `${n === 1 ? "1 other person is" : `${n} other people are`} still in the running:` : null;
-  const keepWarmWords = !n ? null
-    : started ? `Leave the role open for now. Nobody is told anything. ${name} has already started, so Today will not remind you about ${n === 1 ? "them" : "the others"}; close the role from its page when you are ready.`
-    : `Keep the role open and ${n === 1 ? "them" : "them all"} in mind until ${name} starts${start ? ` on ${start}` : ""}. Nobody is told anything; Today reminds you about your backups until then, in case the start falls through.`;
+  // Home's "Close this job?" asks from the day after the start date until the job is closed.
+  const leaveOpen = started
+    ? `Leave the job open for now. Nobody is told anything. ${name} has already started, so Home asks you to close the job until you do.`
+    : `Leave the job open for now. Nobody is told anything. After ${name} starts${start ? ` on ${start}` : ""}, Home asks you to close it.`;
+  const keepWarmWords = n
+    ? started ? leaveOpen : `Keep the job open and ${n === 1 ? "them" : "them all"} in mind until ${name} starts${start ? ` on ${start}` : ""}. Nobody is told anything; Home reminds you about your backups until then, in case the start falls through.`
+    : hire.closeRole ? leaveOpen : null;
   return {
     startLine: !start ? `${name} is hired.` : started ? `${name} started on ${start}.` : `${name} starts on ${start}.`,
     backupsLine,
@@ -132,27 +143,37 @@ export function hireFollowUpView(hire: HireFollowUp, name: string, now: Date = n
     mayClose: !!hire.closeRole,
     closeWords: hire.closeRole?.words ?? null,
     keepWarmWords,
+    keepsBackups: n > 0,
     started,
   };
 }
 
-/** The toast after "Keep them warm" (or, once the start date has passed, "Leave it open"). */
-export function keepWarmToast(name: string, startDate: string | null, now: Date = new Date()): ToastParts {
-  if (hireStarted(startDate, now)) return { title: "The role stays open.", detail: "Nobody was told anything. Close the role from its page when you are ready." };
-  return { title: "The role stays open.", detail: `Nobody was told anything. Today reminds you about your backups until ${name} starts${startDate ? ` on ${plainDayWords(startDate)}` : ""}.` };
+/**
+ * The line beside a recorded outcome on the candidate panel: who recorded it and when, and a hire's start day the way the
+ * app says days ("Monday, November 30", `plainDayWords`), never the stored "2026-11-30".
+ */
+export function recordedOutcomeLine(o: { recordedBy: { name?: string }; recordedAt: string; hireDate: string | null; correctionOf: string | null }): string {
+  return `Recorded by ${o.recordedBy.name ?? "a team member"} on ${new Date(o.recordedAt).toLocaleDateString()}${o.hireDate ? `, hire date ${plainDayWords(o.hireDate)}` : ""}${o.correctionOf ? " (a correction by an ITS administrator)" : ""}.`;
+}
+
+/** The toast after "Keep them warm" (or "Leave it open": once the start date has passed, or with nobody to keep warm, `backups` 0). */
+export function keepWarmToast(name: string, startDate: string | null, now: Date = new Date(), backups = 1): ToastParts {
+  if (hireStarted(startDate, now)) return { title: "The job stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." };
+  if (!backups) return { title: "The job stays open.", detail: `Nobody was told anything. After ${name} starts${startDate ? ` on ${plainDayWords(startDate)}` : ""}, Home asks you to close it.` };
+  return { title: "The job stays open.", detail: `Nobody was told anything. Home reminds you about your backups until ${name} starts${startDate ? ` on ${plainDayWords(startDate)}` : ""}.` };
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* The interview approval filled in from a suggestion (plan H4)                                                   */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** The line above the filled-in interview approval: what was filled in, and that the approval is still a person's. */
-export function interviewDraftLine(draft: Pick<InterviewDraft, "roundTitle" | "durationMinutes" | "interviewerUserIds" | "window" | "nextRound">): string {
-  const who = draft.interviewerUserIds.length ? `${draft.interviewerUserIds.length === 1 ? "1 interviewer" : `${draft.interviewerUserIds.length} interviewers`} from the plan` : "nobody yet (choose who interviews below)";
-  const from = draft.window.fromDate ? plainDayWords(draft.window.fromDate) : null;
-  const to = draft.window.toDate ? plainDayWords(draft.window.toDate) : null;
-  const when = from && to ? ` Times are offered between ${from} and ${to}${draft.window.businessDaysOnly ? ", on working days" : ""}.` : "";
-  return `Filled in from your interview plan: the ${draft.nextRound ? "next round, " : ""}${draft.roundTitle} (${draft.durationMinutes} minutes), with ${who}.${when} Check it and approve; nothing goes to the candidate until you do.`;
+/**
+ * What the "Set a date and time" form was filled in with, one click away under "Why": the round and who interviews, and
+ * that the press is still a person's (6 November 2026: the day and time are the person's own, so no window is said).
+ */
+export function interviewDraftLine(draft: Pick<InterviewDraft, "roundTitle" | "durationMinutes" | "interviewerUserIds" | "nextRound">): string {
+  const who = draft.interviewerUserIds.length ? `${draft.interviewerUserIds.length === 1 ? "1 interviewer" : `${draft.interviewerUserIds.length} interviewers`} from the plan` : "nobody yet (choose who interviews above)";
+  return `Filled in from your interview plan: the ${draft.nextRound ? "next round, " : ""}${draft.roundTitle} (${draft.durationMinutes} minutes), with ${who}. Nothing goes to the candidate until you book it.`;
 }
 
 /**

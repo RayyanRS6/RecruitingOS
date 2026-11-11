@@ -1,5 +1,6 @@
-import { OWNER_STAGE_LABEL, titleMidSentence, type MarkKind, type OwnerStage } from "@ros/contracts";
+import { OWNER_STAGE_LABEL, lockedClosingLine, titleMidSentence, type MarkKind, type OwnerStage } from "@ros/contracts";
 import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, SendNewTimesBatchResult, SendNewTimesResult, StageMove } from "./api/client";
+import { shortWhen } from "./interview-time";
 import { safetyNetDate, safetyNetShort } from "./telling";
 
 /**
@@ -96,7 +97,7 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
     case "clear_mark":
       return { title: r.ownerStage ? `Moved to ${OWNER_STAGE_LABEL[r.ownerStage]}.` : "Mark taken off.", detail: NOT_TOLD };
     case "advance_to_interview":
-      return { title: "Marked for interview.", detail: "The candidate was not told; choose Interviewing to offer them times." };
+      return { title: "Marked for interview.", detail: "The candidate was not told. Set a date and time from their page." };
     case "move_to_talent_pool":
       // The person's own "don't keep me for future roles" stands (Wave 0 item 0.11); the page says so instead of "added".
       return r.talentPoolOptOut
@@ -132,7 +133,7 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
 /** The toast after "How did the interview go?" (POST /applications/:id/decision). */
 export function decisionToast(decision: "next_round" | "finalist" | "not_moving_forward", r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint & { nextRoundKey?: string | null }, now: Date = new Date()): ToastParts {
   if (decision === "finalist") return { title: "Marked as a finalist.", detail: "The candidate was not told." };
-  if (decision === "next_round") return { title: r.nextRoundKey ? "Next round." : "Next round recorded.", detail: r.nextRoundKey ? "Check the interviewers below and approve; times go out from there." : undefined };
+  if (decision === "next_round") return { title: r.nextRoundKey ? "Next round." : "Next round recorded.", detail: r.nextRoundKey ? "Set its date and time below." : undefined };
   return { title: "Recorded: not moving forward.", detail: decisionDetail(r, now) };
 }
 
@@ -205,7 +206,7 @@ export function briefDecisionToast(action: { label: string; body?: Record<string
   if (/^Yes, interview/i.test(action.label)) {
     // The answer carries the interview approval filled in (plan H4): the page opens it on the candidate's panel.
     const filled = !!(response as { interviewDraft?: unknown } | null)?.interviewDraft;
-    return { title: "Moved to Interviewing.", detail: filled ? "Check the interview filled in from your plan and approve it; times go out to the candidate from there." : "Open the candidate to choose the round and the interviewers; times go out from there." };
+    return { title: "Moved to Interviewing.", detail: filled ? "Set the date and time on their page: the round is filled in from your plan." : "Open the candidate to set a date and time." };
   }
   if (action.label === "Yes, send it") {
     // a message a team member wrote, approved: on its way, or saved until ITS confirms the company (founder decision B7)
@@ -215,12 +216,29 @@ export function briefDecisionToast(action: { label: string; body?: Record<string
   return { title: "Approved.", detail: "Recorded with your name." };
 }
 
-/** An interview a decision would call off: its title, when it is, its state, and the times offered to the candidate. */
-export type InterviewRef = { title: string; startsAt: string | null; timezone: string | null; status: string; offeredSlots?: readonly unknown[] };
+/**
+ * An interview a decision would call off: its title, when it is, its state, and the times offered to the candidate.
+ * `candidateHeard` (the API, 11 November 2026): whether an email about it reached them, as the cancellation decides whom to tell.
+ */
+export type InterviewRef = { title: string; startsAt: string | null; timezone: string | null; status: string; offeredSlots?: readonly unknown[]; candidateHeard?: boolean };
 
-/** Whether the candidate knows about the interview: a booked time, or times offered to pick from. */
-export function candidateKnowsOf(iv: InterviewRef): boolean {
+/** A booked time, or times on offer to pick from: what the candidate would know of, once an email about it reached them. */
+function bookedOrOffered(iv: InterviewRef): boolean {
   return (iv.status === "scheduled" && !!iv.startsAt) || (iv.status === "scheduling" && (iv.offeredSlots?.length ?? 0) > 0);
+}
+
+/**
+ * Whether the candidate knows about the interview, so calling it off tells them: what the API says (`candidateHeard`: an email
+ * about it reached them), never the booking alone, which is booked before any email leaves, or with one held or failed (the
+ * release review, 11 November 2026). An older answer without it reads a booked time or times offered.
+ */
+export function candidateKnowsOf(iv: InterviewRef): boolean {
+  return iv.candidateHeard ?? bookedOrOffered(iv);
+}
+
+/** The Interviews sheet's cancel reason: the candidate reads it only in the note, which goes only to someone who heard of the interview. */
+export function cancelReasonLabel(iv: Pick<InterviewRef, "candidateHeard">): string {
+  return iv.candidateHeard === false ? "Reason (only the team sees it)" : "Reason (the candidate sees it)";
 }
 
 /**
@@ -228,16 +246,19 @@ export function candidateKnowsOf(iv: InterviewRef): boolean {
  * candidate will hear it under the company's settings, and the interviews it calls off, by name and time. One they knew
  * about (a booked time, times to pick from) is cancelled and the candidate is told at once, in a short note with no
  * reason, that it is off, so nobody turns up for it; the decision itself is sent only when someone chooses to send it.
- * One never offered to them is simply stopped.
+ * One never offered to them is simply stopped, and so is one booked or offered that no email about reached them.
  */
 export function declineConfirmText(policy: DeclineMessagePolicy, input: { hasEmail: boolean; eligibility?: boolean; interviews?: readonly InterviewRef[] }): string {
   const known = (input.interviews ?? []).filter(candidateKnowsOf);
-  const unknown = (input.interviews ?? []).filter((iv) => !candidateKnowsOf(iv));
+  // Booked or on offer, but no email about it reached them (not left yet, waiting for the ITS check, or not delivered).
+  const unheard = (input.interviews ?? []).filter((iv) => !candidateKnowsOf(iv) && bookedOrOffered(iv));
+  const unknown = (input.interviews ?? []).filter((iv) => !candidateKnowsOf(iv) && !bookedOrOffered(iv));
   // With an interview to call off something does go now (the short note), so the private sentence is about the decision.
   const sendable = policy !== "not_sent" && input.hasEmail;
   const privacy = !known.length ? "nothing is sent to the candidate now" : sendable ? "the decision itself is only sent to the candidate when you choose to send it" : "the decision itself is not sent to the candidate";
   const parts = [`Not moving forward is your decision, recorded with your reason. It is private: ${privacy}.`];
   if (known.length) parts.push(`This cancels ${listWords(known.map(interviewWords))}, and the candidate is told now, in a short note that gives no reason, that ${known.length === 1 ? "it is" : "they are"} off.`);
+  if (unheard.length) parts.push(`It also stops ${listWords(unheard.map(interviewWords))}; no email about ${unheard.length === 1 ? "it" : "them"} reached the candidate, so nothing is sent about ${unheard.length === 1 ? "it" : "them"}.`);
   if (unknown.length) parts.push(`It also stops ${listWords(unknown.map(interviewWords))}; no times had gone to the candidate.`);
   if (policy === "not_sent") parts.push("Under your settings no decision messages are sent, so tell them yourself and record it on their page.");
   else if (!input.hasEmail) parts.push("There is no email address on file, so tell them yourself and record it on their page.");
@@ -263,14 +284,27 @@ export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: 
 
 /**
  * What "Record what happened" says the candidate gets: nothing about the outcome, but an interview they know of (a booked
- * time, or times to pick from) is called off by any outcome but a hire, and they are told now, in a short note with no
- * reason, that it is off.
+ * time, or times to pick from) is called off, and they are told now, in a short note with no reason, that it is off. A
+ * hire is the hire sheet's (`hireSheetLead`): it ends their interviews too, and tells the candidate nothing.
  */
 export function outcomeNoticeText(interviews: readonly InterviewRef[]): string {
   const known = interviews.filter(candidateKnowsOf);
   if (!known.length) return "Nothing is sent to the candidate.";
-  return `Nothing about the outcome is sent to the candidate. Unless it is a hire, ${listWords(known.map(interviewWords))} ${known.length === 1 ? "is" : "are"} called off, and they are told now, in a short note that gives no reason, that ${known.length === 1 ? "it is" : "they are"} off.`;
+  return `Nothing about the outcome is sent to the candidate. ${capitalized(listWords(known.map(interviewWords)))} ${known.length === 1 ? "is" : "are"} called off, and they are told now, in a short note that gives no reason, that ${known.length === 1 ? "it is" : "they are"} off.`;
 }
+
+/**
+ * The hire sheet's lead (6 November 2026): a hire ends that person's interviews still to come, quietly. Nothing is sent to
+ * them; the interviewers of one still to come are told it is off.
+ */
+export function hireSheetLead(firstName: string, interviews: readonly InterviewRef[]): string {
+  const open = interviews.filter((iv) => ["proposed", "scheduling", "scheduled"].includes(iv.status) && !(iv.status === "scheduled" && iv.startsAt && Date.parse(iv.startsAt) <= Date.now()));
+  const first = firstName || "them";
+  if (!open.length) return `Recorded with your name. Nothing is sent to ${first}.`;
+  return `Recorded with your name. Nothing is sent to ${first}. ${capitalized(listWords(open.map(interviewWords)))} ${open.length === 1 ? "is" : "are"} called off, and the interviewers are told.`;
+}
+
+const capitalized = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
 
 /** "the Phone screen on Tuesday, October 14, 2:00 PM": an interview the decision would call off, named. */
 export function interviewWords(iv: InterviewRef): string {
@@ -278,12 +312,53 @@ export function interviewWords(iv: InterviewRef): string {
     const when = new Date(iv.startsAt).toLocaleString("en-US", { timeZone: iv.timezone ?? undefined, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
     return `the ${iv.title} on ${when}`;
   }
-  return candidateKnowsOf(iv) ? `the ${iv.title} (times offered, none chosen yet)` : `the ${iv.title} (times not offered yet)`;
+  return bookedOrOffered(iv) ? `the ${iv.title} (times offered, none chosen yet)` : `the ${iv.title} (times not offered yet)`;
+}
+
+/**
+ * The toast after a person set the date and time (POST /applications/:id/interviews with `setTime`, or POST
+ * /interviews/:id/set-time): booked or moved, then what may be said about the email, from the API's `candidateNotice`.
+ * Never that it left: the worker sends it after the press, it waits for ITS to confirm the company, or there is no address.
+ */
+export function interviewSetToast(r: { candidateNotice?: "queued" | "held" | "not_sent_no_email" | null; unchanged?: boolean; changed?: boolean; startsAt?: string | null; timezone?: string | null }, firstName: string, opts: { moving?: boolean } = {}): ToastParts {
+  // The same day, time, length and place again: nothing moved and no email goes (the release review, 11 November 2026).
+  if (r.unchanged) {
+    const when = shortWhen(r.startsAt, r.timezone);
+    return { title: "Nothing changed.", detail: `It is still booked ${when ? `for ${when}` : "as it was"}. No email was sent.` };
+  }
+  // The same time with new details (a link, the address, how long): updated, not moved, as the email says.
+  const title = r.changed ? "Updated." : opts.moving ? "Moved." : "Booked.";
+  const first = firstName || "the candidate";
+  if (r.candidateNotice === "not_sent_no_email") return { title, detail: "There is no email address on file: tell them yourself." };
+  if (r.candidateNotice === "held") return { title, detail: `${first.charAt(0).toUpperCase()}${first.slice(1)} has not been told: the email waits for ITS to confirm your company.` };
+  return { title, detail: `The email to ${first} is on its way.` };
+}
+
+/**
+ * The toast after "Book this for them" (a time chosen with the candidate by phone, on the folded pick-a-time path), in the
+ * API's own word (`booking`): booked now, booked by the run in a moment, or saved while the times wait for the ITS check,
+ * which books nothing until ITS confirms the company (the release review, 11 November 2026).
+ */
+export function bookOnBehalfToast(r: { status?: string; booking?: string } | null | undefined): ToastParts {
+  if (r?.status === "scheduled") return { title: "Booked on the candidate's behalf." };
+  if (r?.booking === "held") return { title: "Saved.", detail: "It is booked as soon as ITS confirms your company." };
+  return { title: "Booking that time for them.", detail: "It shows here as booked in a moment." };
+}
+
+/**
+ * The toast after "Offer times to pick from" (the old path, folded under "Or let them pick from your free times"): the
+ * times are worked out from the interviewers' hours or calendars, then emailed; while ITS has not confirmed the company the
+ * email waits for it.
+ */
+export function pickTimesToast(firstName: string, check: "confirmed" | "waiting" | "unknown"): ToastParts {
+  const first = firstName || "the candidate";
+  return { title: "Times are being worked out.", detail: check === "waiting" ? `They go to ${first} by email once ITS confirms your company.` : `${first.charAt(0).toUpperCase()}${first.slice(1)} gets them by email to pick one.` };
 }
 
 /** The toast after "Cancel interview" on the Interviews page: exactly who was told (POST /interviews/:id/cancel). */
-export function interviewCancelToast(r: { candidateTold?: boolean; interviewersTold?: boolean }): ToastParts {
-  return { title: "Interview cancelled.", detail: `${r.candidateTold ? "The candidate was sent a cancellation." : "The candidate had no time booked or offered, so nothing was sent to them."}${r.interviewersTold ? " The interviewers were told." : ""}` };
+export function interviewCancelToast(r: { candidateTold?: boolean; interviewersTold?: boolean; candidateNotice?: string }): ToastParts {
+  const candidate = r.candidateTold ? "The candidate was sent a cancellation." : r.candidateNotice === "held" ? "The cancellation waits for ITS to confirm your company." : "No email about it had reached the candidate, so nothing was sent to them.";
+  return { title: "Interview cancelled.", detail: `${candidate}${r.interviewersTold ? " The interviewers were told." : ""}` };
 }
 
 /**
@@ -319,14 +394,18 @@ export const CLOSING_SENDERS = "An owner, admin, hiring manager or recruiter";
  * carries it, says which way the safety net goes. `mayTell` is false for someone who may close a role but not tell
  * candidates a decision (HR): they are told who sends the message instead of being asked to send it.
  */
-export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Role closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
+export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Job closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
   const moved = Math.max(0, (r.movedToTalentPool ?? 0) - (r.heldEmailsAddedToTalentPool ?? 0));
   const policy = r.closingMessage?.policy ?? null;
   const net = safetyNetShort({ policy, on: safetyNetDate(now.toISOString()), what: "the closing message" });
   const tell = !mayTell ? `${CLOSING_SENDERS} sends them the closing message; it waits on their Home page. ${net}`
     : policy === "not_sent" ? `Under your settings no message is sent: tell each of them yourself, then record it on their page. ${net}`
     : `Send the closing message when you are ready. ${net}`;
-  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told yet. ${tell}` : "Nobody else was still in the process.";
+  // The people the team cannot see yet moved with it: a count, never who; the closing message goes to them by itself (the
+  // release review, 11 November 2026). Never "Nobody else was still in the process" while they were.
+  const locked = r.lockedInProcess ?? 0;
+  const theLocked = locked ? ` ${lockedClosingLine(locked)}` : "";
+  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told yet. ${tell}${theLocked}` : locked ? `Nobody you could see was still in the process.${theLocked}` : "Nobody else was still in the process.";
   return { title, detail: `${who}${closedInterviewsText(r.interviewsCancelled ?? 0, r.interviewOffNotes ?? 0)}` };
 }
 

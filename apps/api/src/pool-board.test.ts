@@ -81,7 +81,7 @@ describe("the match score, the pool board, Review and apply and the one-click qu
     await container.close();
   });
 
-  type Row = { id: string; score: number | null; band: string | null; bandLabel: string | null; coverage: { known: number; total: number; words: string } | null; missingMustHave: Array<{ key: string; label: string; quote: string }>; mustHaves: { words: string } | null; placement: { column: string | null; confident: boolean; needsYourEye: string | null; suggestedAction: string | null }; nextStep: { kind: string; label: string } | null };
+  type Row = { id: string; score: number | null; band: string | null; bandLabel: string | null; fit: string | null; coverage: { known: number; total: number; words: string } | null; missingMustHave: Array<{ key: string; label: string; quote: string }>; mustHaves: { words: string } | null; placement: { column: string | null; confident: boolean; needsYourEye: string | null; suggestedAction: string | null }; nextStep: { kind: string; label: string } | null };
 
   describe("the match score on the list and the candidate's page (B2, F1, F3)", () => {
     it("carries the score worked out from the stored findings, its band, coverage, the missing must-have, the placement and next step", async () => {
@@ -92,20 +92,24 @@ describe("the match score, the pool board, Review and apply and the one-click qu
         const own = await container.db.select().from(assessments).where(eq(assessments.applicationId, id));
         expect(row(id).score, id).toBe(matchScore(readingPair(own), packet)!.score);
       }
-      expect(row(ids.ada)).toMatchObject({ score: 100, band: "very_high", bandLabel: "Very high", missingMustHave: [], placement: { column: "shortlist", confident: true }, mustHaves: { words: "Must-haves: 2 of 2 shown" } });
+      expect(row(ids.ada)).toMatchObject({ score: 100, band: "very_high", bandLabel: "Very high", fit: "strong", missingMustHave: [], placement: { column: "shortlist", confident: true }, mustHaves: { words: "Must-haves: 2 of 2 shown" } });
       expect(row(ids.ada).coverage).toMatchObject({ known: 2 + packet.competencies.length, total: 2 + packet.competencies.length });
-      expect(row(ids.ben).band).toBe("medium");
-      expect(row(ids.ben).placement).toMatchObject({ column: "longlist", confident: true });
+      // the licence (4), half the perio work (2), one skill against him and three not shown: 6 of 18 points. Low, and the 7 still
+      // open could lift him out of it, so the board asks a person to read him and never ticks a decline, and the word beside the
+      // number says the same, "Not enough evidence", never "Weak match" (one rule for both, the release review of 11 November 2026)
+      expect(row(ids.ben)).toMatchObject({ score: 33, band: "low", fit: "insufficient" });
+      expect(row(ids.ben).placement).toMatchObject({ column: "longlist", confident: false });
       expect(row(ids.ben).coverage!.words).toBe(`Based on 3 of ${2 + packet.competencies.length} requirements`);
-      expect(row(ids.cy)).toMatchObject({ band: "low", missingMustHave: [{ key: must(0).key, label: "active CA RDH license", quote: "RDH license CA expired in 2021" }], placement: { column: "not_moving_forward", suggestedAction: "not_moving_forward" }, nextStep: { kind: "not_moving_forward", label: "Not moving forward" } });
+      expect(row(ids.cy)).toMatchObject({ band: "low", fit: "missing_must_have", missingMustHave: [{ key: must(0).key, label: "active CA RDH license", quote: "RDH license CA expired in 2021" }], placement: { column: "not_moving_forward", suggestedAction: "not_moving_forward" }, nextStep: { kind: "not_moving_forward", label: "Not moving forward" } });
       expect(row(ids.cy).score).toBeLessThanOrEqual(54);
-      expect(row(ids.dee)).toMatchObject({ score: null, band: null, coverage: null, placement: { column: "longlist", confident: false } });
+      expect(row(ids.dee)).toMatchObject({ score: null, band: null, fit: null, coverage: null, placement: { column: "longlist", confident: false } });
     });
 
     it("sorts by score, highest first, with no score last (order=score or sort=score)", async () => {
       for (const q of ["order=score", "sort=score"]) {
         const rows = await get<Row[]>(`/api/v1/roles/${roleId}/applications?${q}`);
-        expect(rows.map((r) => r.id), q).toEqual([ids.ada, ids.ben, ids.cy, ids.dee]);
+        // Cy's own words hold him at 54, above the 33 Ben has shown so far: the word beside each number says the rest
+        expect(rows.map((r) => r.id), q).toEqual([ids.ada, ids.cy, ids.ben, ids.dee]);
       }
     });
 
@@ -152,22 +156,47 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect((await json(owner, "GET", "/api/v1/roles/not-a-role/board")).status).toBe(404);
     });
 
-    it("puts the pool on Today as one card per role, and counts strong candidates by their latest reading only (F5)", async () => {
+    it("puts the pool on Today as one card per role, and counts as strong whoever the list calls strong, by the same word (F5; 6 November 2026)", async () => {
       const brief = await get<{ summary: string; cards: Array<{ kind: string; roleId?: string; title: string; body: string; actions: Array<{ path: string }> }> }>("/api/v1/brief");
       const card = brief.cards.find((c) => c.kind === "pool_ready" && c.roleId === roleId)!;
       const { title } = await get<{ title: string }>(`/api/v1/roles/${roleId}`);
       expect(card.title).toBe(`4 people to sort for ${title}`);
       expect(card.body).toContain("4 people on the board");
       expect(card.actions.map((a) => a.path)).toEqual([`/roles/${roleId}/talent?view=board`, `/roles/${roleId}/talent?view=board&review=1`]);
-      // Ada's Strong reading counts; once a later, Potential scorecard replaces it, it no longer does
+      // Ada reads Strong on the list, so Today counts her
       expect(brief.summary).toMatch(/· 1 strong candidate ready ·/);
-      await withTenant(container.db, companyId, async (tx) => {
-        const [card2] = await tx.insert(assessments).values({ companyId, applicationId: ids.ada, kind: "screen", packetVersion: 1, result: { ...resultOf([]), recommendation: "interview", questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [] } as unknown as EvidenceAssessment, overall: "potential", confidence: "medium" }).returning();
-        await tx.update(applications).set({ latestAssessmentId: card2.id }).where(eq(applications.id, ids.ada));
+      const addScorecard = (requirementFindings: Req[]) => withTenant(container.db, companyId, async (tx) => {
+        const [later] = await tx.insert(assessments).values({ companyId, applicationId: ids.ada, kind: "screen", packetVersion: 1, result: { ...resultOf(requirementFindings), recommendation: "interview", questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [] } as unknown as EvidenceAssessment, overall: "potential", confidence: "medium" }).returning();
+        await tx.update(applications).set({ latestAssessmentId: later.id }).where(eq(applications.id, ids.ada));
+        return later.id;
       });
+      const adaRow = async () => (await get<Row[]>(`/api/v1/roles/${roleId}/applications`)).find((r) => r.id === ids.ada)!;
+      // a later scorecard whose stored word is Potential but which says nothing about the must-haves: the résumé's findings
+      // still count, her number and her word stay, and Today follows the word the list shows, never the stored one
+      const silent = await addScorecard([]);
+      expect(await adaRow()).toMatchObject({ score: 100, fit: "strong" });
+      expect((await get<{ summary: string }>("/api/v1/brief")).summary).toMatch(/· 1 strong candidate ready ·/);
+      // a scorecard quoting her saying a must-have is not met: the list says so, and Today no longer counts her
+      const quotedNo = await addScorecard([{ requirementKey: must(0).key, met: "no", evidence: { source: "resume", quote: "My RDH license lapsed last year" } }]);
+      expect(await adaRow()).toMatchObject({ fit: "missing_must_have" });
       expect((await get<{ summary: string }>("/api/v1/brief")).summary).toMatch(/· 0 strong candidates ready ·/);
-      // the scorecard said nothing about the must-haves, so the résumé's findings still count for her score
-      expect((await get<Row[]>(`/api/v1/roles/${roleId}/applications`)).find((r) => r.id === ids.ada)!.score).toBe(100);
+      // (that one goes again: the tests below read her as she was)
+      await container.db.update(applications).set({ latestAssessmentId: silent }).where(eq(applications.id, ids.ada));
+      await container.db.delete(assessments).where(eq(assessments.id, quotedNo));
+      expect(await adaRow()).toMatchObject({ score: 100, fit: "strong" });
+      // a reading the software holds for a person (its own word says weak, yet it suggests a step forward): the list reads "Needs
+      // a closer look" whatever her number, and its Strong filter leaves her out, so Today does not count her as a strong
+      // candidate ready either (the release review, 11 November 2026)
+      const held = await withTenant(container.db, companyId, async (tx) => {
+        const [r] = await tx.insert(assessments).values({ companyId, applicationId: ids.ada, kind: "triage", packetVersion: 1, result: resultOf([yes(0, "RDH license CA active"), yes(1, "Periodontal charting daily")], { overall: "weak" }), overall: "weak", confidence: "medium", createdAt: new Date(Date.now() + 60_000).toISOString() }).returning();
+        await tx.update(applications).set({ latestAssessmentId: r.id }).where(eq(applications.id, ids.ada));
+        return r.id;
+      });
+      expect(await adaRow()).toMatchObject({ score: 100, fit: "strong", evidence: { needsCloserLook: true } });
+      expect((await get<{ summary: string }>("/api/v1/brief")).summary).toMatch(/· 0 strong candidates ready ·/);
+      await container.db.update(applications).set({ latestAssessmentId: silent }).where(eq(applications.id, ids.ada));
+      await container.db.delete(assessments).where(eq(assessments.id, held));
+      expect((await get<{ summary: string }>("/api/v1/brief")).summary).toMatch(/· 1 strong candidate ready ·/);
     });
 
     it("adds how the pool meets each must-have to the role report, counts only", async () => {
@@ -373,8 +402,8 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       // a new reading against the new version uses its importance
       const fresh = await seed("Max", resultOf([yes(0, "RDH license CA active"), yes(1, "perio")], { competencyFindings: [{ competencyKey: next.competencies[0].key, finding: "contradicted", evidence: { source: "resume", quote: "I rush cleanings" } }] }), { packetVersion: v.version });
       const max = (await get<Row[]>(`/api/v1/roles/${roleId}/applications`)).find((x) => x.id === fresh)!;
-      // must-haves 4 + 4 met, the Helpful skill (1) goes against it: 8 of 9
-      expect(max.score).toBe(89);
+      // must-haves 4 + 4 met, the Helpful skill (1) goes against it, the other three skills (3 + 2 + 2) not shown: 8 of 16
+      expect(max.score).toBe(50);
     });
   });
 
@@ -422,14 +451,19 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const where = (id: string) => [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward].find((c) => c.applicationId === id)!;
       expect(where(strong).placement.column).toBe("shortlist");
       expect(where(strong).score?.band).toMatch(/high/);
-      // "possible" shows a must-have only in part: since Wave S7 that costs the score nothing against its other evidence
-      // (showing some never scores below showing none), so the board asks for more instead of the Shortlist
-      expect(where(possible).placement).toMatchObject({ column: "longlist", confident: true, nextStep: { kind: "ask_more" } });
-      expect(where(possible).placement.nextStep?.reason).toMatch(/^Their application only partly shows /);
-      expect(where(possible).score?.breakdown.some((c) => c.mustHave && c.pctMet === 50 && c.countedPct !== undefined)).toBe(true);
+      // "possible" shows the licence, half the perio work and half of one skill, and nothing of three more. A low number the
+      // reading itself leaned against, so the board asks a person to read them; it never ticks a decline. What is still open
+      // could lift it out of Low, so its word is "Not enough evidence", never "Weak match" (the release review, 11 November 2026)
+      expect(where(possible).placement).toMatchObject({ column: "longlist", confident: false, declineReason: null, nextStep: { kind: "read_yourself" } });
+      expect(where(possible).placement.needsYourEye).toMatch(/but the score puts them lower/);
+      expect(where(possible).score).toMatchObject({ band: "low", fit: "insufficient" });
+      expect(where(possible).score?.breakdown.some((c) => c.mustHave && c.pctMet === 50)).toBe(true);
       expect(where(weak).placement.column).toBe("not_moving_forward");
       expect(where(weak).score?.missingMustHave.map((m) => m.quote)).toEqual(["I do not hold a CA RDH license"]);
-      expect(where(weak).reading).toBe("Weak match");
+      // the card's word is the one the list shows
+      expect(where(strong).reading).toBe("Strong match");
+      expect(where(possible).reading).toBe("Not enough evidence");
+      expect(where(weak).reading).toBe("Missing a must-have");
       for (const id of [strong, possible, weak]) expect(where(id).score).toMatchObject({ interview: "done", basis: "From the résumé and the AI interview" });
     });
   });
@@ -511,7 +545,7 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       });
     type Scored = Row & { interview: string | null; basis: string | null };
 
-    it("labels each score by where the AI interview stands, keeps résumé-only scores off the columns and out of Review and apply, and sorts the interviewed first", async () => {
+    it("labels each score by where the AI interview stands, keeps résumé-only scores off the columns and out of Review and apply, and sorts final numbers first, then anyone whose AI interview is still coming", async () => {
       const both = [yes(0, "RDH license CA active"), yes(1, "Periodontal charting daily")];
       // Ivo: his AI interview is sent and scored; in it one skill goes against him, so his number is below Wyn's
       const against = resultOf(both, { competencyFindings: packet.competencies.map((c, i) => ({ competencyKey: c.key, finding: i === 0 ? "contradicted" : "evidenced", evidence: { source: "resume", quote: i === 0 ? "I prefer not to do this" : `${c.name} shown` } })) });
@@ -521,15 +555,15 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const wyn = await seed("Wyn", resultOf(both, { overall: "strong" }));
       await screenOf(wyn, "invited");
       await container.db.update(applications).set({ stage: "screen_invited" }).where(eq(applications.id, wyn));
-      // Rae: sent a moment ago, the scorecard not written yet
-      const rae = await seed("Rae", resultOf(both, { overall: "strong" }));
+      // Rae: sent a moment ago, the scorecard not written yet; waiting a day longer than Wyn
+      const rae = await seed("Rae", resultOf(both, { overall: "strong" }), { stageChangedAt: new Date(Date.now() - 86_400_000).toISOString() });
       await screenOf(rae, "completed");
       await container.db.update(applications).set({ stage: "screen_complete" }).where(eq(applications.id, rae));
       // Kit: the team stopped the invitation before she started, and reviews her without it (New)
       const kit = await seed("Kit", resultOf(both, { overall: "strong" }));
       await screenOf(kit, "cancelled");
-      // Ned: never offered one (as before 20 October 2026); Nil: nothing read at all
-      const ned = await seed("Ned", resultOf(both, { overall: "strong" }));
+      // Ned: never offered one (as before 20 October 2026), waiting a day longer than Kit; Nil: nothing read at all
+      const ned = await seed("Ned", resultOf(both, { overall: "strong" }), { stageChangedAt: new Date(Date.now() - 86_400_000).toISOString() });
       const nil = await seed("Nil", null);
 
       // the list: the label beside each score, and the number exactly as the pure function gives it without one
@@ -547,13 +581,12 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       }
       expect(row(wyn).score).toBeGreaterThan(row(ivo).score!);
 
-      // Sort: Score: the interviewed first, then the résumé-only scores, each highest first; no score last
+      // Sort: Score: final numbers highest first (Ned and Kit tie, the longer wait first, then Ivo below them), then those whose
+      // AI interview is still coming, so nobody ranks low for not having done it yet (Rae and Wyn tie the same way); no score last
       const mine = [ivo, wyn, rae, kit, ned, nil];
       for (const q of ["order=score", "sort=score"]) {
         const ordered = (await get<Scored[]>(`/api/v1/roles/${roleId}/applications?${q}`)).filter((r) => mine.includes(r.id)).map((r) => r.id);
-        expect(ordered[0], q).toBe(ivo);
-        expect(new Set(ordered.slice(1, 5)), q).toEqual(new Set([wyn, rae, kit, ned]));
-        expect(ordered[5], q).toBe(nil);
+        expect(ordered, q).toEqual([ned, kit, ivo, rae, wyn, nil]);
       }
 
       // the candidate's page and Compare carry the same label

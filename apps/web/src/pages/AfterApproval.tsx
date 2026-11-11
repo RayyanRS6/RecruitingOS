@@ -1,9 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Dialog, Eyebrow, Icon, IconChip, Pill, Skeleton } from "@ros/ui";
 import { api, type PostingsResponse } from "../api/client";
+import { CATCH_UP_FOR_MS } from "./RolePlan";
 import { ShareJob } from "../components/ShareJob";
 import { scrollBehavior } from "../motion";
 import { destinationsOf, interviewersNote, noBoardsLine, outdatedBoardsLine, pollInterval, type Destination, type StatusChip } from "../publishing";
@@ -12,23 +13,32 @@ import { toast } from "../toast";
 /** How long the screen keeps asking after an approved change to a live job (see AfterApproval). */
 const EDIT_SETTLE_MS = 30_000;
 
+/** What the screen says once getting the job ready has taken as long as the job page waits for the worker (`CATCH_UP_FOR_MS`). */
+export const OPENING_TAKES_LONGER = "This is taking longer than it should. The Share tab shows where it stands; if the job is not live in a few minutes, bring in a recruiter.";
+
 function copy(text: string, what: string) {
   navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}.`), () => toast("Could not copy. Select the text and copy it by hand."));
 }
 
 /**
  * A status chip: the kit's Pill with a tick only once it was checked, its spinner (`busy`) while something is under way,
- * otherwise its dot. `className` places it.
+ * otherwise its dot. `stuck`: it has taken longer than it should, so nothing spins once the words say so (the release
+ * review, 11 November 2026). `className` places it.
  */
-export function StatusPill({ s, className }: { s: StatusChip; className?: string }) {
-  return <Pill size="sm" tone={s.tone} icon={s.done ? "check" : undefined} busy={!s.done && s.working} className={className}>{s.label}</Pill>;
+export function StatusPill({ s, className, stuck }: { s: StatusChip; className?: string; stuck?: boolean }) {
+  return <Pill size="sm" tone={s.tone} icon={s.done ? "check" : undefined} busy={!s.done && s.working && !stuck} className={className}>{s.label}</Pill>;
+}
+
+/** Whether the list of places reads as busy to a screen reader: while it is got ready, and never once that is taking too long. */
+export function placesBusy(preparing: boolean, slow: boolean): true | undefined {
+  return preparing && !slow ? true : undefined;
 }
 
 /**
  * One place the job goes, as a row of the side card in screenshot 7: an icon chip, the place and what happens there (with
  * Copy and Open when it has an address), and its status on the right; on a narrow screen the status moves under it.
  */
-function DestinationRow({ d }: { d: Destination }) {
+function DestinationRow({ d, stuck }: { d: Destination; stuck: boolean }) {
   return (
     <li className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-line py-3.5 first:border-t-0">
       <IconChip icon={d.icon} size="sm" />
@@ -43,7 +53,7 @@ function DestinationRow({ d }: { d: Destination }) {
         ) : null}
       </div>
       {/* under the words on a phone: the chip's 32px and the 12px gap */}
-      <StatusPill s={d.status} className="flex-none max-sm:ml-11" />
+      <StatusPill s={d.status} stuck={stuck} className="flex-none max-sm:ml-11" />
     </li>
   );
 }
@@ -52,8 +62,8 @@ function DestinationRow({ d }: { d: Destination }) {
  * The screen right after approval (plan D2): a calm confirmation with a tick for what is done (the approval), then
  * where the job is going, each place with a status that ticks only once it was checked: the careers page ("checking it
  * is up"), Google (marked found once someone sees it there), the email address for applications only while it works,
- * and each chosen board with who posts it. A note when no interviewers are set. "Share it now" opens the share block at
- * the top; "Go to your role" closes the screen. It asks the server again while publishing is under way (with the
+ * and each chosen board with who posts it. A plain line when no interviewers are named. "Share it now" opens the share block at
+ * the top; "Go to your job" closes the screen. It asks the server again while publishing is under way (with the
  * worker separate from the web server, opening and preparing the channels takes a moment).
  *
  * For an approved change to a live job (`editWhileOpen`) it says the job page shows the new version and names the boards
@@ -78,9 +88,16 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
   };
   // An answer read before the approval, kept from the Share tab, says "not_open" with the role still pending: this screen opens after the approval.
   const preparing = !d || d.publishing.state === "preparing" || (d.publishing.state === "not_open" && d.role.status === "pending_approval");
+  // Two minutes of "getting it ready" means something is stuck (6 November 2026): the words stop promising a moment.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!props.open || !preparing) { setSlow(false); return; }
+    const t = window.setTimeout(() => setSlow(true), CATCH_UP_FOR_MS);
+    return () => window.clearTimeout(t);
+  }, [props.open, preparing]);
   const sub = props.editWhileOpen
     ? "Your careers page shows the new version now; Google picks it up the next time it reads the page."
-    : (!preparing ? d?.publishing.message : null) ?? "Getting the job ready on its channels. This takes a moment.";
+    : (!preparing ? d?.publishing.message : null) ?? (slow ? OPENING_TAKES_LONGER : "Getting the job ready on its channels. This takes a moment.");
   const note = d ? interviewersNote(d.interviewers) : null;
   // Not while it is being got ready: until the worker opens the role the server has no boards to name, and the line would be wrong for a moment.
   const noBoards = d && !preparing && !props.editWhileOpen ? noBoardsLine(d.boards) : null;
@@ -98,7 +115,7 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
       footer={
         <>
           {props.canShare && !props.editWhileOpen && !sharing ? <Button icon="share" onClick={shareNow}>Share it now</Button> : null}
-          <Button variant="primary" onClick={props.onClose}>Go to your role</Button>
+          <Button variant="primary" onClick={props.onClose}>Go to your job</Button>
         </>
       }
     >
@@ -111,23 +128,19 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
         ) : null}
         <section aria-label="Where it is going" className="stack gap-2">
           <Eyebrow as="h3">{props.editWhileOpen ? "Where the job is" : "Where it is going"}</Eyebrow>
-          {/* each place's status says where it stands (a tick only once checked, a spinner while under way); the list
-              asks again by itself while it is open */}
+          {/* each place's status says where it stands (a tick only once checked, a spinner while under way, never once it is
+              taking longer than it should); the list asks again by itself while it is open */}
           {q.isLoading || !d ? <Skeleton lines={4} /> : (
-            <ul className="rounded-2xl border border-line bg-surface px-4" aria-busy={preparing || undefined}>
-              {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} />)}
+            <ul className="rounded-2xl border border-line bg-surface px-4" aria-busy={placesBusy(preparing, slow)}>
+              {destinationsOf(d).map((x) => <DestinationRow key={x.key} d={x} stuck={slow} />)}
             </ul>
           )}
           {noBoards ? <p className="small muted">{noBoards}</p> : null}
           {outdated ? <Alert tone="info">{outdated}</Alert> : null}
         </section>
+        {/* a plain fact, not a caution: nobody needs naming before a date and time is set (the release review, 11 November 2026) */}
         {note ? (
-          <Alert tone="caution">
-            <div className="stack gap-1.5">
-              <span>{note}</span>
-              {props.canEditPacket ? <div className="row"><Button size="sm" onClick={() => goTo("plan")}>Choose interviewers</Button></div> : <span className="small">An owner, an admin or a hiring manager chooses them on the Interview plan tab.</span>}
-            </div>
-          </Alert>
+          <p className="small muted">{note}{props.canEditPacket ? <> You can name them on the <button type="button" className="link-btn" onClick={() => goTo("plan")}>Interview plan tab</button>.</> : null}</p>
         ) : null}
         {q.error ? <Alert tone="critical">Could not read where the job stands. The Share tab shows it too.</Alert> : null}
         {/* the way to change where it goes, for those who may; nobody else is offered anything to change here */}

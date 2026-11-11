@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, gt } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
+import { isAccessRequestStatus, seatsFullAtSignInLine, type Actor } from "@ros/contracts";
 import { invitations, memberships, randomToken, users, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { seatRoom } from "./entitlements";
@@ -83,7 +83,7 @@ export async function createInvitation(
 /** A fresh token and another seven days for an invitation that is still open (or lapsed unanswered); the old link stops working. */
 export async function resendInvitation(
   q: Queryable,
-  input: { invitationId: string; companyId: string; actor: Actor; now?: Date; ttlMs?: number },
+  input: { invitationId: string; companyId: string; actor: Actor; now?: Date; ttlMs?: number; /** what the record says, when the new link goes some other way than an email (it is copied to be sent by hand) */ reason?: string },
 ): Promise<{ row: InvitationRow; token: string } | null> {
   const now = input.now ?? new Date();
   const [existing] = await q.select().from(invitations).where(and(eq(invitations.id, input.invitationId), eq(invitations.companyId, input.companyId))).limit(1);
@@ -96,7 +96,7 @@ export async function resendInvitation(
     .set({ tokenHash: sha256(token), status: "pending", expiresAt: new Date(now.getTime() + (input.ttlMs ?? INVITATION_TTL_MS)).toISOString() })
     .where(eq(invitations.id, existing.id))
     .returning();
-  await audit(q, { companyId: input.companyId, actor: input.actor, action: "invitation.resent", target: { type: "invitation", id: row.id }, reason: `sent again to ${row.email}`, details: { email: row.email, role: row.role, wasExpired: state === "expired" } });
+  await audit(q, { companyId: input.companyId, actor: input.actor, action: "invitation.resent", target: { type: "invitation", id: row.id }, reason: input.reason ?? `sent again to ${row.email}`, details: { email: row.email, role: row.role, wasExpired: state === "expired" } });
   return { row, token };
 }
 
@@ -143,8 +143,8 @@ export type AcceptedInvitation = { invitationId: string; companyId: string; role
  *   - the carried invitation is expired or withdrawn: refused (`invite_expired`); the caller drops the cookie;
  *   - otherwise every open invitation for the address becomes an active membership with its role, marked accepted,
  *     with `member.joined` emitted and `invitation.accepted` audited. ITS staff accounts accept nothing.
- * The plan's people (founder decision L-02 B: 3 on the Trial plan) are checked under the company's seat lock before a
- * new member joins, counting this invitation's own place: an invitation sent before a company was full, to a company
+ * The plan's people are checked under the company's seat lock before a new member joins, counting this invitation's own
+ * place: an invitation sent before a company was full, to a company
  * that is full now, stays pending (it joins once a place is free), and when it is the carried one the sign-in is
  * refused (`invite_seats_full`) with what to do. Someone who is already an active member takes no new place.
  * Returns which company the new session should open in: the carried invitation's when it was honoured, else the first
@@ -170,11 +170,14 @@ export async function acceptPendingInvitations(
   const accepted: AcceptedInvitation[] = [];
   for (const inv of open) {
     const [member] = await q.select({ status: memberships.status }).from(memberships).where(and(eq(memberships.companyId, inv.companyId), eq(memberships.userId, input.user.id))).limit(1);
+    // A person's own request for access, waiting or declined, is answered only by an administrator's Accept: no invitation
+    // to that same company opens it by a side door, though one to any other company works as ever. It stays pending.
+    if (isAccessRequestStatus(member?.status)) continue;
     if (member?.status !== "active") {
       // This invitation already holds a place among the open ones, so it is left out of the count and asks for one place.
       const room = await seatRoom(q, inv.companyId, { now, exceptEmail: email });
       if (!room.ok) {
-        if (carried?.id === inv.id) throw new InvitationRefused("invite_seats_full", `This company's trial includes ${room.limit} people. Ask the person who invited you to choose a plan to add more.`, email);
+        if (carried?.id === inv.id) throw new InvitationRefused("invite_seats_full", seatsFullAtSignInLine(room.limit ?? 0, room.planKey), email);
         continue;
       }
     }

@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button, Card, Field } from "@ros/ui";
 import { api, ApiError, type ApplicationDetail } from "../../api/client";
 import { toast } from "../../toast";
 import { callNotesBody, callNotesMayStayOpen, callNotesQuestions, callNotesToast } from "../../screen-view";
 import { useDraft, useRefreshCandidate } from "./hooks";
+import { notesKey } from "./notes";
 import { CARD, LEAD, STEP, Why } from "./why";
 
 /**
@@ -25,19 +26,25 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
   const [complete, setComplete] = useState(true);
   useDraft("call-notes", [...Object.values(byQuestion), other].join("").trim());
   const refresh = useRefreshCandidate(a.id, roleId);
+  const qc = useQueryClient();
+  // Someone locked has no AI interview to finish and nothing is scored: the API keeps the notes on the Notes tab.
+  const locked = !!a.lockedAt;
   // With no conversation yet, the notes are the screening and always finish it.
   const mayStayOpen = callNotesMayStayOpen(a);
   // The questions the conversation asks (Wave S8: on one created since, the company's written questions), so each note keeps its question.
   const questions = callNotesQuestions(a);
-  const body = callNotesBody(byQuestion, other, complete || !mayStayOpen);
+  const body = callNotesBody(byQuestion, other, !locked && (complete || !mayStayOpen));
   const save = useMutation({
-    mutationFn: () => api.post<{ ok: true; screenId: string; completed: boolean }>(`/api/v1/applications/${a.id}/screen/recruiter-notes`, body),
+    mutationFn: () => api.post<{ ok: true; screenId: string | null; completed: boolean; keptAsNote?: boolean }>(`/api/v1/applications/${a.id}/screen/recruiter-notes`, body),
     onSuccess: async (r) => {
       const t = callNotesToast(r, a.candidate.firstName);
       toast(t.title, t.detail);
       setByQuestion({});
       setOther("");
       setOpen(false);
+      // They went on the Notes tab. Nothing draws that tab while this card is open, so marking its read stale would leave the old
+      // words for its box to open on, and its next save would write over them: the read is dropped, and the tab reads it afresh.
+      if (r.keptAsNote) await qc.resetQueries({ queryKey: notesKey(a.id) });
       await refresh();
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not add the notes. Try again."),
@@ -62,13 +69,13 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
           </Field>
         ))}
         <Field label="Anything else from the call" htmlFor="call-note-other"><textarea id="call-note-other" className="textarea" rows={3} maxLength={4000} value={other} onChange={(e) => setOther(e.target.value)} /></Field>
-        {mayStayOpen ? (
+        {locked ? <p className="small muted">{first} is locked, so these notes go on the Notes tab and no AI review is written from them.</p> : mayStayOpen ? (
           <label className="check">
             <input type="checkbox" checked={complete} onChange={(e) => setComplete(e.target.checked)} />
             Finish the AI interview with these notes, so the AI review is written from them
           </label>
         ) : <p className="small muted">{first} has no AI interview, so these notes are their AI interview: the AI review is written from them.</p>}
-        {mayStayOpen && !complete ? <p className="small muted">The chat stays open, and you can add more notes later.</p> : null}
+        {!locked && mayStayOpen && !complete ? <p className="small muted">The chat stays open, and you can add more notes later.</p> : null}
         <div className="row">
           <Button variant="primary" size="sm" disabled={!body} loading={save.isPending} onClick={() => save.mutate()}>Add the notes</Button>
           {!prominent ? <Button variant="quiet" size="sm" onClick={() => setOpen(false)}>Cancel</Button> : null}

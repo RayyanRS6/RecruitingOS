@@ -3,10 +3,11 @@
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import { isCompanyVerified, trialPaused, type RolePacket } from "@ros/contracts";
-import { jobNoticesFor, type Notice } from "@ros/core";
-import { candidates, companies, rolePackets, roles } from "@ros/db";
+import { jobNoticesFor, jobPastItsLimit, type Notice } from "@ros/core";
+import { candidates, companies, rolePackets, roles, withTenant } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
+import { APPLY_FLOW, type ApplyFlowView } from "../services/job-preview";
 import { Layout } from "./layout";
 
 /**
@@ -85,6 +86,15 @@ export async function loadJob(db: Vars["Variables"]["container"]["db"], slug: st
   return { company, role, packet: pv.packet };
 }
 export type Job = NonNullable<Awaited<ReturnType<typeof loadJob>>>;
+
+/**
+ * What this job's public pages say about applying: past its plan's candidates per job a new applicant is on file, with no AI
+ * interview and no AI reading of the form's résumé (the plans of 5 November 2026, Rule 2). Read from the job, never from who
+ * is asking, and in the same words for everyone: never a word about a plan.
+ */
+export async function applyFlowOf(container: Pick<Container, "db">, job: { company: { id: string }; role: { id: string } }): Promise<ApplyFlowView> {
+  return (await withTenant(container.db, job.company.id, (tx) => jobPastItsLimit(tx, { companyId: job.company.id, roleId: job.role.id }))) ? "on_file" : APPLY_FLOW;
+}
 
 /** After a fulfilled deletion the link is dead: the page says so and nothing is recorded or sent (docs/readiness/14). */
 export async function anonymizedFor(container: Container, candidateId: string): Promise<boolean> {

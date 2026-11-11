@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment, RolePacket } from "@ros/contracts";
 import type { ApplicationDetail } from "../../apps/web/src/api/client";
-import { MATCH_PROMISE, basisLine, cappedLine, competencyChip, confidenceChip, coverageLine, criterionTag, importanceTag, leftOut, matchBars, matchCardState, missingMustHaves, mustHaveLineOf, nextStepAction, orderCompetencyFindings, orderRequirementFindings, quoteSummary, requirementChip, suggestedStepOf, verdictLine, versionNote } from "../../apps/web/src/pages/candidate-panel/match-view";
-import { firstSentence } from "../../apps/web/src/pages/candidate-panel/helpers";
+import { MATCH_PROMISE, basisLine, cappedLine, competencyChip, confidenceChip, coverageLine, criterionTag, fitWord, importanceTag, leftOut, matchBars, matchCardState, missingMustHaves, mustHaveLineOf, nextStepAction, nextStepActions, orderCompetencyFindings, orderRequirementFindings, quoteSummary, requirementChip, suggestedStepOf, verdictLine, versionNote } from "../../apps/web/src/pages/candidate-panel/match-view";
+import { firstSentence, recChip } from "../../apps/web/src/pages/candidate-panel/helpers";
 import { MATCH_SCORE_PROMISE, matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -38,6 +38,18 @@ const detail = (over: Record<string, unknown> = {}): ApplicationDetail => ({ ass
 describe("the match card", () => {
   it("shows nothing for an answer from before the score existed", () => {
     expect(matchCardState(detail())).toEqual({ kind: "hidden" });
+  });
+
+  it("never promises a review that will not come by itself: one that could not be made, or one AI never makes because the AI notice did not reach them (10 November 2026)", () => {
+    expect(matchCardState(detail({ matchScore: null, noReading: "could_not_read" }))).toEqual({ kind: "unread", text: "No match score: the AI review could not be made, so read this one yourself." });
+    expect(matchCardState(detail({ matchScore: null, noReading: "no_ai_notice" }))).toEqual({ kind: "unread", text: "No match score: our email with the AI notice did not reach them, so the assistant does not read their résumé." });
+    for (const noReading of ["could_not_read", "no_ai_notice"]) expect(JSON.stringify(matchCardState(detail({ matchScore: null, noReading }))), noReading).not.toMatch(/minute or two|starts once/);
+    // a score from their AI interview still shows: the line is only for no score at all
+    const m = score(null, reading("screen", [must("rdh_license", "yes", "I hold an active CA RDH license")]));
+    expect(matchCardState(detail({ matchScore: m, noReading: "could_not_read" }))).toMatchObject({ kind: "scored", score: m.score });
+    // the panel's verdict says why AI never read them, rather than that the review could not be made
+    const verdict = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/match.tsx", import.meta.url), "utf8");
+    expect(verdict).toContain('!m && look.assessmentUnavailable && a.noReading !== "no_ai_notice" ? NO_REVIEW_LINE');
   });
 
   it("says plainly when there is no reading yet, or when the reading speaks to no requirement", () => {
@@ -93,9 +105,14 @@ describe("the match card", () => {
     const moves = (allowed: string[]) => ["new", "longlist", "shortlist", "interviewing", "not_moving_forward"].map((to) => ({ to, label: to, via: "set_mark", allowed: allowed.includes(to), current: to === "new" }));
     const at = (kind: string, suggestedAction: string | null, allowed = ["longlist", "shortlist", "interviewing", "not_moving_forward"], email: string | null = "maria@example.com") => ({ stageMoves: moves(allowed), candidate: { firstName: "Maria", email }, placement: { column: "shortlist", state: "suggested", doneLabel: null, confident: true, needsYourEye: null, reason: "r", nextStep: { kind, label: kind, reason: "r" }, suggestedAction, declineReason: null } }) as never;
     expect(nextStepAction(at("keep_as_backup", "longlist"))).toEqual({ kind: "move", to: "longlist", label: "Move to Longlist" });
-    expect(nextStepAction(at("interview", "shortlist"))).toEqual({ kind: "move", to: "interviewing", label: "Approve an interview" });
+    // an interview: Shortlist first, then "Set a date and time" (6 November 2026: Nadine reads, shortlists, then sets the time)
+    expect(nextStepAction(at("interview", "shortlist"))).toEqual({ kind: "move", to: "shortlist", label: "Move to Shortlist" });
+    expect(nextStepActions(at("interview", "shortlist"))).toEqual([{ kind: "move", to: "shortlist", label: "Move to Shortlist" }, { kind: "move", to: "interviewing", label: "Set a date and time" }]);
+    // with Shortlist not open to them now, "Set a date and time" is the one
+    expect(nextStepActions(at("interview", "shortlist", ["interviewing"]))).toEqual([{ kind: "move", to: "interviewing", label: "Set a date and time" }]);
     // an interview the role may not request yet: the board's own column instead
     expect(nextStepAction(at("interview", "shortlist", ["shortlist"]))).toEqual({ kind: "move", to: "shortlist", label: "Move to Shortlist" });
+    expect(nextStepActions(at("interview", "shortlist", ["shortlist"]))).toHaveLength(1);
     expect(nextStepAction(at("not_moving_forward", "not_moving_forward"))).toEqual({ kind: "move", to: "not_moving_forward", label: "Not moving forward" });
     expect(nextStepAction(at("read_yourself", "longlist"))).toEqual({ kind: "tab", tab: "resume", label: "Open the résumé" });
     expect(nextStepAction(at("ask_more", null))).toEqual({ kind: "write", label: "Write to Maria" });
@@ -136,12 +153,12 @@ describe("the match card", () => {
   it("lists the requirements that cost points first, costliest first, and folds the rest under 'N more at full marks'", () => {
     const m = score(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], [skill("chairside", "partially_evidenced", "assisted"), skill("patients", "evidenced", "calm"), skill("software", "contradicted", "never used dental software")]));
     const bars = matchBars(m);
-    // Wave S7: the partly shown ones count at the level of the rest (6 of 7), never below it, so they cost less
-    expect(bars.costly.map((b) => [b.label, b.tag, b.pctMet, b.pointsLost])).toEqual([["Dental software", "Helpful", 0, 7], ["Perio charting experience", "Must-have", 50, 4], ["Chairside skill", "Essential", 50, 3]]);
+    // partly shown counts half, whatever the rest shows
+    expect(bars.costly.map((b) => [b.label, b.tag, b.pctMet, b.pointsLost])).toEqual([["Perio charting experience", "Must-have", 50, 14], ["Chairside skill", "Essential", 50, 11], ["Dental software", "Helpful", 0, 7]]);
     expect(bars.full.map((b) => b.label)).toEqual(["Active CA RDH license", "Patient care"]);
     expect(bars.foldedLabel).toBe("2 more at full marks");
-    expect(quoteSummary(bars.costly[1])).toBe("Partly shown, from the AI review of the résumé · see their words");
-    expect(bars.costly[1].quote).toBe("some perio");
+    expect(quoteSummary(bars.costly[0])).toBe("Partly shown, from the AI review of the résumé · see their words");
+    expect(bars.costly[0].quote).toBe("some perio");
   });
 
   it("says when everything judged is at full marks, and says 'no quote' when nothing of theirs backs a finding", () => {
@@ -165,11 +182,16 @@ describe("the match card", () => {
     expect(cappedLine(score(reading("triage", [must("perio", "yes", "perio")])))).toBeNull();
   });
 
-  it("lists what the evidence says nothing about apart: left out, never counted against them", () => {
+  it("lists what the evidence says nothing about apart: no points so far, never a no", () => {
     const out = leftOut(score(reading("triage", [must("rdh_license", "yes", "RDH")], [skill("chairside", "not_evidenced")])))!;
     expect(out.heading).toBe("4 requirements not known yet");
     expect(out.items).toEqual([{ key: "perio", label: "Perio charting experience", tag: "Must-have" }, { key: "chairside", label: "Chairside skill", tag: "Essential" }, { key: "patients", label: "Patient care", tag: "Important" }, { key: "software", label: "Dental software", tag: "Helpful" }]);
-    expect(out.note).toMatch(/never counted against them/);
+    expect(out.note).toBe("Not shown yet: no points so far, never counted as a no. Ask about them in the AI interview or a call.");
+    expect(out.note).not.toMatch(/left out|counted against/);
+    // once the AI interview is done no second one is offered, so the way to ask is a call; the same once they sent it, scored
+    // or not (D2, 11 November 2026: "in the AI interview" beside a card saying its review could not be written)
+    for (const interview of ["done", "being_scored", "not_scored", "scoring_failed"] as const) expect(leftOut({ ...score(reading("triage", [must("rdh_license", "yes", "RDH")])), interview })!.note, interview).toBe("Not shown yet: no points so far, never counted as a no. Ask about them on a call.");
+    for (const interview of ["not_done_yet", "not_done", "none"] as const) expect(leftOut({ ...score(reading("triage", [must("rdh_license", "yes", "RDH")])), interview })!.note, interview).toBe("Not shown yet: no points so far, never counted as a no. Ask about them in the AI interview or a call.");
     expect(leftOut(score(reading("triage", [must("rdh_license", "yes", "a"), must("perio", "yes", "b")], [skill("chairside", "evidenced", "c"), skill("patients", "evidenced", "d"), skill("software", "evidenced", "e")])))).toBeNull();
   });
 
@@ -192,6 +214,39 @@ describe("the match card", () => {
     const skills = [{ key: "a", name: "A", importance: "essential" as const }, { key: "b", name: "B" }];
     expect(importanceTag(skills, "a")).toBe("Essential");
     expect(importanceTag(skills, "b")).toBeNull();
+  });
+});
+
+describe("the one verdict word on the panel (the owner, 6 November 2026)", () => {
+  it("says it in the list's words and colours, from the score's own numbers", () => {
+    const low = score(reading("triage", [must("rdh_license", "unknown")], [skill("chairside", "evidenced", "x")]));
+    expect(low).toMatchObject({ score: 21, fit: "insufficient" });
+    expect(fitWord(low)).toEqual({ label: "Not enough evidence", tone: "neutral" });
+    expect(fitWord(score(reading("triage", [must("rdh_license", "yes", "a"), must("perio", "yes", "b")], [skill("chairside", "evidenced", "c"), skill("patients", "evidenced", "d"), skill("software", "evidenced", "e")])))).toEqual({ label: "Strong match", tone: "good" });
+    expect(fitWord(score(reading("triage", [must("rdh_license", "no", "lapsed")])))).toEqual({ label: "Missing a must-have", tone: "critical" });
+    expect(fitWord(undefined)).toBeNull();
+    expect(fitWord(null)).toBeNull();
+  });
+
+  it("replaces every other verdict on the panel: the review's own word only on an older answer, and the suggestion as a suggestion", () => {
+    const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+    const card = read("../../apps/web/src/pages/candidate-panel/assessment.tsx");
+    expect(card).toContain("const verdict = !fit ?");
+    expect(card).toContain("detail.assessments[0]?.id === assessmentId ? fitWord({ fit }) : null");
+    expect(card).toContain("{sure ? <Chip>{confidence} confidence</Chip> : null}");
+    expect(card).toContain("const rec = recChip(result.recommendation, fit);");
+    expect(card).not.toContain("{REC_LABEL[");
+  });
+
+  it("shows the assistant's lean as a suggestion, and 'Suggests an interview' only where it cannot disagree with the word beside the number", () => {
+    expect(recChip("strong_interview", "strong")).toBe("Suggests an interview");
+    expect(recChip("interview", "potential")).toBe("Suggests an interview");
+    expect(recChip("interview", null)).toBe("Suggests an interview");
+    for (const fit of ["weak", "insufficient", "missing_must_have"] as const) expect(recChip("interview", fit), fit).toBeNull();
+    // the others say something new whatever the word: a person decides, or a concern was raised
+    expect(recChip("hold", "weak")).toBe("Your call");
+    expect(recChip("decline_recommended", "strong")).toBe("Concern raised");
+    expect(recChip("something_new", "strong")).toBe("something new");
   });
 });
 
@@ -281,8 +336,12 @@ describe("the panel's wiring", () => {
   it("shows the bars costliest first with the full marks folded, and the confidence chip apart from the score", () => {
     const match = read("../../apps/web/src/pages/candidate-panel/match.tsx");
     expect(match).toContain("items={bars.costly.map(barItem)} folded={bars.full.map(barItem)}");
-    expect(match).toContain('<ScoreBadge score={state.score} size="lg" showBand />');
+    // one verdict word beside the number: the fit in place of the band's word, which only an older answer without it still shows
+    expect(match).toContain('<ScoreBadge score={state.score} size="lg" showBand={!fit} />');
+    expect(match).toContain("{fit ? <Chip tone={fit.tone}>{fit.label}</Chip> : null}");
     expect(match).toContain("<Chip tone={confidence.tone}>{confidence.label}</Chip>");
+    // how sure the AI was, only beside Strong or Potential
+    expect(match).toContain("const confidence = m && sure ? confidenceChip(m.confidence) : null;");
     expect(match).toContain('<Chip tone="critical" icon="alert">{x.chip}</Chip>');
   });
 });

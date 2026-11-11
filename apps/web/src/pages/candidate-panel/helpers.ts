@@ -1,4 +1,4 @@
-import { MARK_LABEL, type MarkKind } from "@ros/contracts";
+import { MARK_LABEL, sureBeside, type MarkKind, type MatchFit } from "@ros/contracts";
 import type { ApplicationDetail, Screen, TimelineEvent } from "../../api/client";
 import { notSentReasonText } from "../../cancelled";
 import { DECLINED_WORDS, isRecruiterNote, transcriptBubble, type TranscriptBubble } from "../../screen-view";
@@ -221,7 +221,7 @@ export function panelQuestions(labels: Pick<PacketLabels, "questions" | "written
 type WriteupAnswerView = NonNullable<Screen["progress"]["writeup"]>["answers"][number];
 type Tone = "good" | "accent" | "neutral" | "caution";
 
-/** What became of a written question, in the panel's words. Not answering is never held against anyone. */
+/** What became of a written question, in the panel's words. Not answering is never read as a no. */
 export const WRITEUP_STATUS: Readonly<Record<WriteupAnswerView["status"], { words: string; tone: Tone }>> = {
   answered: { words: "Answered", tone: "good" },
   partly: { words: "Partly answered", tone: "accent" },
@@ -348,11 +348,31 @@ export const REJECT_REASON_LABEL: Record<string, string> = {
 /** The reasons a person picks when moving someone to Not moving forward (the fixed list; eligibility has its own card). */
 export const DECLINE_REASONS: ReadonlyArray<[string, string]> = ["not_a_match_experience", "not_a_match_skills", "compensation_mismatch", "location_or_schedule", "position_filled", "candidate_unresponsive", "other"].map((k) => [k, REJECT_REASON_LABEL[k]]);
 
+/**
+ * Whether More offers "Send a new AI interview link": until they have sent one. After that there is nothing more to send, and
+ * "interview" means one with a person (the owner, 6 November 2026: "when the interview has been done by AI it can interview again").
+ */
+export function offersNewInterviewLink(a: Pick<ApplicationDetail, "screens">): boolean {
+  return !a.screens.some((s) => s.status === "completed");
+}
+
 /** The assistant's suggestion after reading the résumé or the screen. Its "hold" means thin evidence, never the On hold mark. */
 export const REC_LABEL: Record<string, string> = { screen: "Worth an AI interview", hold: "Thin evidence: your call", review_manually: "Needs a closer look", strong_interview: "Strong: interview", interview: "Interview", decline_recommended: "Concern raised" };
+/** The same suggestion as a chip near the person's one verdict word (6 November 2026): what it suggests doing, never a second verdict. */
+export const REC_CHIP: Record<string, string> = { ...REC_LABEL, hold: "Your call", strong_interview: "Suggests an interview", interview: "Suggests an interview" };
+
+/**
+ * The assistant's lean as a chip, never beside a word it disagrees with: "Suggests an interview" only beside Strong or
+ * Potential (or an older answer without the word), like "Check" and the confidence chip. Beside anything else the board's next
+ * step says in a sentence that the two differ. Null when it does not show.
+ */
+export function recChip(recommendation: string, fit: MatchFit | null | undefined): string | null {
+  if ((recommendation === "strong_interview" || recommendation === "interview") && !sureBeside(fit)) return null;
+  return REC_CHIP[recommendation] ?? recommendation.replace(/_/g, " ");
+}
 
 /** Owner Mode never shows raw stage names (docs/07); mirrors STAGE_LABEL in packages/core, in the staff glossary's words (screening chat). */
-export const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview", screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
+export const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to an AI interview", screening: "In the AI interview", screen_complete: "AI interview done", interview_recommended: "Interview to set up", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
 
 const MARK_DONE: Record<MarkKind, string> = { longlist: "Put on the longlist", shortlist: "Put on the shortlist", on_hold: "Put on hold", not_a_fit_for_now: "Set aside: not a fit for now" };
 
@@ -444,6 +464,11 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: "Confirmation sent to the candidate" };
     case "application.duplicate_detected":
       return { ...base, what: "Applied again (the original was kept)" };
+    // Only ever read once a person is unlocked: the team cannot open them before then.
+    case "application.locked":
+      return { ...base, what: "Applied past the plan's candidates per job", who: "The system" };
+    case "application.unlocked":
+      return { ...base, what: "Opened by a change of plan" };
     case "resume.ingested":
       return { ...base, what: "Résumé read" };
     case "resume.extraction_failed":
@@ -456,6 +481,9 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: `AI review of the résumé: ${REC_LABEL[String(p.recommendation ?? "")] ?? "done"}` };
     case "assessment.created":
       return { ...base, what: p.kind === "screen" ? "AI review of the AI interview written" : "AI review of the résumé written" };
+    // the line above says it, and "The assistant suggested an interview" says where it leaned
+    case "screen.assessed":
+      return null;
     case "application.stage_changed":
       return { ...base, what: `Now "${STAGE_LABEL[String(p.to ?? "")] ?? String(p.to ?? "").replace(/_/g, " ")}"`, ...(str(p.reason) && !REJECT_REASON_LABEL[String(p.reason)] ? { why: String(p.reason) } : {}) };
     case "application.rejected":
@@ -482,6 +510,8 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       if (p.how === "before_tracking") return { ...base, what: "Counted as told: decided before decisions became private", told: "Their status page already showed the decision." };
       return { ...base, what: p.how === "in_person" ? "Recorded telling the candidate in person" : "The decision message reached the candidate", told: p.how === "in_person" ? "Told in person." : "Told by the decision message." };
     case "application.untold_fallback":
+      // Someone locked when their job closed (Rule 2): the closing message went by itself, because the team could not send it.
+      if (p.locked) return p.action === "sent" ? { ...base, what: "The job closed while the team could not open them, so the closing message went by itself", who: "The system", told: "Told by the decision message." } : { ...base, what: "The job closed while the team could not open them, and there is no address on file to tell them", who: "The system" };
       // The safety net (Q27): five working days after the decision, the standard message went by itself, or a recruiter was brought in.
       if (p.action === "sent") return { ...base, what: "Nobody had told them for five working days, so the standard decision message went by itself", who: "The system", told: "Told by the decision message." };
       return { ...base, what: "Nobody had told them for five working days, so an ITS recruiter was brought in", who: "The system", ...(str(p.why) ? { why: `Nothing was sent, because ${String(p.why)}.` } : {}) };
@@ -508,7 +538,7 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
     case "candidate.recommended":
       if (p.by === "approval") return { ...base, what: "Moved to Interviewing", who: `Suggested by the assistant, approved by ${e.actor.name ?? "a team member"}` };
       if (p.by === "human") return { ...base, what: "Marked for interview" };
-      return { ...base, what: "Recommended for interview" };
+      return { ...base, what: "The assistant suggested an interview" };
     case "interview.decision_recorded":
       return { ...base, what: `Decision after the interview: ${String(p.decision ?? "").replace(/_/g, " ")}`, ...(note ? { why: note } : {}) };
     // The Cancelled column (founder decisions 1A to 4A): in, out, and what became of the new times.
@@ -533,7 +563,8 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
         review_anyway: "Reopened after an eligibility decline",
         invite_screen: "Invited to an AI interview",
         ask_in_screen: "Invited to an AI interview that starts with the open questions",
-        "interview.request": "Approved an interview; times go out to the candidate",
+        // a time a person set, or times worked out for them to pick: both start here, so neither is said
+        "interview.request": "Set up an interview",
         flag_assessment: "Flagged the AI review as wrong",
         outcome: `Recorded an outcome${str(p.outcome) ? `: ${String(p.outcome).replace(/_/g, " ")}` : ""}`,
         outcome_corrected: "An ITS administrator corrected the recorded outcome",
@@ -572,7 +603,7 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: p.via === "recruiter_call" ? "Screening finished with a recruiter's notes from a call" : "Finished the AI interview" };
     // Wave E: the conversation in the same visit as applying.
     case "screen.declined_by_candidate":
-      return { ...base, what: "Sent the application without the AI interview", why: "Their own choice; it is never held against them." };
+      return { ...base, what: "Sent the application without the AI interview", why: "Their own choice. Nobody is declined for it; their score is from the résumé alone." };
     case "screen.idle_reminded":
       return { ...base, what: "Reminded once to finish the AI interview", who: "The system" };
     case "screen.unfinished":
@@ -644,17 +675,22 @@ export function recruiterEventsFor(applicationId: string, events: ReadonlyArray<
   return events.filter((e) => e.subjectType === "escalation" && e.subjectId && ids.has(e.subjectId));
 }
 
+/** What the assistant suggested once it has read the AI interview, in words that finish "The assistant suggested …". */
+const SUGGESTED_AFTER_INTERVIEW: Record<string, string> = { strong_interview: "an interview", interview: "an interview", hold: "a closer look before deciding", decline_recommended: "not moving forward" };
+
 /**
- * "The assistant suggested Y; you decided X" (plan A10): the latest suggestion and the first thing a person decided
- * after it, so a reader sees at once where the two differ. Null parts when there is none yet.
+ * "The assistant suggested Y; you decided X" (plan A10): the latest suggestion, the AI interview's once it has been read (never
+ * "Worth an AI interview" after they did it), and the first thing a person decided since the assistant first suggested
+ * anything, so a reader sees at once where the two differ. Null parts when there is none yet.
  */
 export function suggestionAndDecision(timeline: readonly TimelineEvent[]): { suggested: string | null; decided: string | null; decidedBy: string | null } {
   const ordered = [...timeline].sort((x, y) => Date.parse(x.occurredAt) - Date.parse(y.occurredAt));
-  let at = -1;
-  for (let i = ordered.length - 1; i >= 0; i--) if (ordered[i].type === "application.triaged" && ordered[i].payload.recommendation) { at = i; break; }
-  if (at < 0) return { suggested: null, decided: null, decidedBy: null };
-  const suggested = REC_LABEL[String(ordered[at].payload.recommendation)] ?? String(ordered[at].payload.recommendation).replace(/_/g, " ");
-  for (const e of ordered.slice(at + 1)) {
+  const suggestions = ordered.filter((e) => (e.type === "application.triaged" || e.type === "screen.assessed") && e.payload.recommendation);
+  const latest = suggestions.at(-1);
+  if (!latest) return { suggested: null, decided: null, decidedBy: null };
+  const rec = String(latest.payload.recommendation);
+  const suggested = (latest.type === "screen.assessed" ? SUGGESTED_AFTER_INTERVIEW[rec] : null) ?? REC_LABEL[rec] ?? rec.replace(/_/g, " ");
+  for (const e of ordered.slice(ordered.indexOf(suggestions[0]) + 1)) {
     if (e.actor.kind !== "user" && e.actor.kind !== "recruiter") continue;
     const p = e.payload as Record<string, unknown>;
     let decided: string | null = null;

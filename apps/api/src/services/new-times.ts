@@ -1,14 +1,14 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Actor, CancelledView, MembershipRole, SendNewTimesBatch, SendNewTimesBatchResult, SendNewTimesResult } from "@ros/contracts";
-import { CANCEL_STAGES, PermissionError, activeFollowUpsFor, assertCan, cancelledView, emit, followUpParked, openFollowUpOf, setAutoState, type FollowUpRow } from "@ros/core";
-import { companyConfirmed } from "@ros/agents";
+import { CANCEL_STAGES, PermissionError, activeFollowUpsFor, assertCan, cancelledView, emit, followUpParked, hiddenAmong, openFollowUpOf, setAutoState, type FollowUpRow } from "@ros/core";
+import { companyConfirmed, interviewHasNoHours } from "@ros/agents";
 import { applications, candidates, companies, interviews, roles, withTenant, type Tx } from "@ros/db";
 import { activeInterviewersOf, cancelNewTimesRuns, reopenForNewTimes } from "@ros/workflows";
 import type { Container } from "../container";
 import { HttpError, PERMISSION_MESSAGE } from "../middleware/errors";
 import { reportError } from "../observability";
 import type { Tenant } from "../middleware/session";
-import { createApprovedInterview } from "./interview-create";
+import { NO_HOURS, createApprovedInterview } from "./interview-create";
 
 /**
  * The team's new times for someone under Cancelled (founder decision 2A: "the team can send new times to one person or
@@ -22,7 +22,7 @@ const NOT_IN_CANCELLED = "They are not under Cancelled any more.";
 const TIMES_OUT = "New times are already being prepared or are out to them.";
 const NO_EMAIL = "We have no email address for them. Call them, then book a time from the interview page.";
 const COMPANY_NOT_CHECKED = "New times can go out once ITS confirms your company. Until then, emails to candidates wait.";
-const NO_INTERVIEWERS = "Nobody who ran that interview is still on your team. Approve a new interview from their page and choose the interviewers.";
+const NO_INTERVIEWERS = "Nobody who ran that interview is still on your team. Set a date and time from their page and choose the interviewers.";
 const CHANGED = "Something changed a moment ago. Refresh to see where they are now.";
 const NOTHING_DUE = "Nothing is due to go to them automatically.";
 const STAFF_SCOPE = "Your access covers one candidate, so you can send new times to them only.";
@@ -59,8 +59,9 @@ async function stopPendingSet(tx: Tx, container: Container, input: { companyId: 
 
 /**
  * "Send new times" for one person, inside the caller's tenant transaction. Refused, with a plain reason, for someone no
- * longer under Cancelled, someone whose new times are already being prepared or out, someone with no email address, and
- * before ITS has confirmed the company (every email to its candidates waits then, and the times would lapse unseen).
+ * longer under Cancelled, someone whose new times are already being prepared or out, someone with no email address,
+ * before ITS has confirmed the company (every email to its candidates waits then, and the times would lapse unseen), and
+ * when someone on the interview has no hours to offer: times could never be worked out, and a person sets the time instead.
  */
 export async function sendNewTimes(tx: Tx, container: Container, input: SendInput): Promise<SendNewTimesResult> {
   const { companyId, actor, now } = input;
@@ -71,6 +72,7 @@ export async function sendNewTimes(tx: Tx, container: Container, input: SendInpu
   const [cand] = await tx.select({ email: candidates.email, anonymizedAt: candidates.anonymizedAt }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   if (!cand?.email || cand.anonymizedAt) throw new HttpError(400, "no_email", NO_EMAIL);
   if (!(await companyConfirmed(tx, companyId))) throw new HttpError(409, "company_not_checked", COMPANY_NOT_CHECKED);
+  if (await interviewHasNoHours(tx, { companyId, interviewId: followUp.currentInterviewId ?? followUp.interviewId })) throw new HttpError(409, "no_hours", NO_HOURS);
 
   let interviewId: string;
   let via: SendNewTimesResult["via"] = "reopened";
@@ -111,20 +113,23 @@ export async function stopNewTimes(tx: Tx, container: Container, input: { compan
  * "Send new times" to several people under one role's Cancelled column, one transaction each: one refusal never stops
  * the rest, and each person's result says why in plain words. Recorded once on the role. An ITS recruiter whose access
  * covers one candidate reaches that candidate only (as with the decision messages): anyone else is refused, and their
- * name is never looked up.
+ * name is never looked up. Nor is the name of someone past the plan's candidates per job (Rule 3): no path guard sees the
+ * ids in this body, so they answer like an id that is not in the role, and nothing goes to them.
  */
 export async function sendNewTimesBatch(container: Container, input: { roleId: string; tenant: Tenant; actor: Actor; body: SendNewTimesBatch }): Promise<SendNewTimesBatchResult> {
   const { tenant: t, actor } = input;
   assertCan(t.role, "interview.manage");
-  const ids = [...new Set(input.body.applicationIds)];
+  // The body's check lets capitals through, and the database writes none: said its way, so `hidden` and `inScope` below recognise the id.
+  const ids = [...new Set(input.body.applicationIds.map((id) => id.toLowerCase()))];
   const only = t.staff?.scope.applicationId ?? null;
   const inScope = (id: string) => !only || id === only;
-  const names = await withTenant(container.db, t.companyId, async (tx) => {
+  const { names, hidden } = await withTenant(container.db, t.companyId, async (tx) => {
     const [role] = isUuid(input.roleId) ? await tx.select({ id: roles.id }).from(roles).where(and(eq(roles.id, input.roleId), eq(roles.companyId, t.companyId))).limit(1) : [];
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    const visible = ids.filter(inScope);
+    const hidden = await hiddenAmong(tx, t, ids);
+    const visible = ids.filter((id) => inScope(id) && !hidden.has(id));
     const rows = visible.length ? await tx.select({ id: applications.id, first: candidates.firstName, last: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, input.roleId), inArray(applications.id, visible))) : [];
-    return new Map(rows.map((r) => [r.id, `${r.first} ${r.last}`.trim()]));
+    return { names: new Map(rows.map((r) => [r.id, `${r.first} ${r.last}`.trim()])), hidden };
   });
   const results: SendNewTimesBatchResult["results"] = [];
   for (const applicationId of ids) {
@@ -132,6 +137,12 @@ export async function sendNewTimesBatch(container: Container, input: { roleId: s
     if (!inScope(applicationId)) {
       out.code = "staff_scope";
       out.message = STAFF_SCOPE;
+      results.push(out);
+      continue;
+    }
+    if (hidden.has(applicationId)) {
+      out.code = "not_found";
+      out.message = "Application not found.";
       results.push(out);
       continue;
     }

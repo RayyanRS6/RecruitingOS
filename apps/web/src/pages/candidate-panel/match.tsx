@@ -1,21 +1,23 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { sureBeside } from "@ros/contracts";
 import { Alert, Button, Card, Chip, ScoreBadge, type ScoreBarItem, ScoreBars } from "@ros/ui";
 import type { ApplicationDetail } from "../../api/client";
 import { CLOSER_LOOK_LABEL, LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLook } from "../../evidence";
 import { overallLabel } from "./assessment";
 import { resumeOnlyChip } from "../../talent-list";
 import { firstSentence, notReadYetWords } from "./helpers";
-import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, basisLine, cappedLine, confidenceChip, coverageLine, leftOut, matchBars, matchCardState, missingMustHaves, nextStepAction, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
+import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, basisLine, cappedLine, confidenceChip, coverageLine, fitWord, leftOut, matchBars, matchCardState, missingMustHaves, nextStepActions, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
 import { CARD, QUOTE, Why } from "./why";
 
 /**
  * The match score on the candidate panel's Overview (founder decision B2; docs/spec/22 section 5), split the Kanvis way
- * (Wave S1): the verdict first (the score as a big "91/100" with its band word, how sure the AI was, one line on the
- * must-haves, and a red chip for each must-have their own words show is missing), then the suggested next step with its
- * one button. How the number was worked out (the bars per requirement, costliest first, what was left out of the score,
- * the version label and the promise) sits under "Full breakdown". The number is worked out by code; a person decides.
+ * (Wave S1): the verdict first (the score as a big "91/100" with its one verdict word, how sure the AI was only beside
+ * Strong or Potential, one line on the must-haves, and a red chip for each must-have their own words show is missing), then
+ * the suggested next step with its one button. How the number was worked out (the bars per requirement, costliest first,
+ * what is not known yet, the version label and the promise) sits under "Full breakdown". The number is worked out by code;
+ * a person decides.
  */
 
 /** A part of the card under a hairline, with its small label on top. */
@@ -30,12 +32,16 @@ export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?:
   const latest = a.assessments[0] ?? null;
   const m = state.kind === "scored" || state.kind === "nothing" ? state.m : null;
   const version = versionNote(a, m);
-  const confidence = m ? confidenceChip(m.confidence) : null;
+  // One verdict word beside the number (6 November 2026): the fit, in place of the band's word; how sure the AI was only beside Strong or Potential.
+  const fit = state.kind === "scored" ? fitWord(m) : null;
+  const sure = sureBeside(m?.fit);
+  const confidence = m && sure ? confidenceChip(m.confidence) : null;
   const missing = m ? missingMustHaves(m) : [];
   // An older answer without the score: the AI review's own words stand in for it.
   const fallback = state.kind === "hidden" && latest ? latest : null;
-  // When the AI review could not be made at all, the card above the verdict says so; the line never promises one soon.
-  const line = !m && look.assessmentUnavailable ? NO_REVIEW_LINE
+  // When the AI review could not be made at all, the card above the verdict says so; the line never promises one soon, and
+  // says why when AI never reads them (`noReading`).
+  const line = !m && look.assessmentUnavailable && a.noReading !== "no_ai_notice" ? NO_REVIEW_LINE
     : state.kind === "unread" ? state.text
     : m ? verdictLine(a) ?? (state.kind === "nothing" ? state.text : null)
     : fallback ? firstSentence(fallback.result.summary).line
@@ -48,12 +54,13 @@ export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?:
   const resumeOnly = m && !basis ? resumeOnlyChip(m) : null;
   return (
     <Card title={MATCH_TITLE} className={CARD}>
-      {/* the number in display type, like the figures on Home's stat tiles, with its band word and how sure the AI was */}
+      {/* the number in display type, like the figures on Home's stat tiles, with its one verdict word */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        {state.kind === "scored" ? <ScoreBadge score={state.score} size="lg" showBand /> : fallback ? <Chip tone={fallback.overall === "strong" ? "good" : fallback.overall === "weak" ? "caution" : "accent"}>{overallLabel(fallback.overall)}</Chip> : <ScoreBadge score={null} />}
+        {state.kind === "scored" ? <ScoreBadge score={state.score} size="lg" showBand={!fit} /> : fallback ? <Chip tone={fallback.overall === "strong" ? "good" : fallback.overall === "weak" ? "caution" : "accent"}>{overallLabel(fallback.overall)}</Chip> : <ScoreBadge score={null} />}
+        {fit ? <Chip tone={fit.tone}>{fit.label}</Chip> : null}
         {resumeOnly ? <span title={resumeOnly.title}><Chip tone="neutral">{resumeOnly.label}</Chip></span> : null}
         {confidence ? <span title={confidence.title}><Chip tone={confidence.tone}>{confidence.label}</Chip></span> : fallback ? <Chip tone={fallback.confidence === "low" ? "caution" : "neutral"}>{fallback.confidence} confidence</Chip> : null}
-        {look.needsCloserLook ? <span title={look.reason ?? undefined}><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></span> : look.lowConfidence && !lowShown ? <span title={LOW_CONFIDENCE_TEXT}><Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip></span> : null}
+        {look.needsCloserLook ? <span title={look.reason ?? undefined}><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></span> : look.lowConfidence && !lowShown && sure ? <span title={LOW_CONFIDENCE_TEXT}><Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip></span> : null}
         {version?.changed ? <span title={version.text}><Chip tone="caution">Read against older job details</Chip></span> : null}
       </div>
       {basis || line ? (
@@ -99,14 +106,15 @@ export function TheirWords({ quote, label = "Their words" }: { quote: string; la
 export function NextStepLine({ a, onAction }: { a: ApplicationDetail; onAction?: (action: NextStepAction) => void }) {
   const next = suggestedStepOf(a);
   if (!next) return null;
-  const action = onAction ? nextStepAction(a) : null;
+  // the main button first; an interview's second ("Set a date and time" after Shortlist) quieter beside it
+  const actions = onAction ? nextStepActions(a) : [];
   const { line, rest } = firstSentence(next.reason);
   return (
     <div className={PART}>
       <h3 className="eyebrow">Suggested next step</h3>
       <div className="row justify-between">
         <p className="small min-w-0 flex-[1_1_220px]"><strong>{next.label}</strong>{line ? <> · <span className={next.needsYourEye ? "text-caution" : undefined}>{line}</span></> : null}</p>
-        {action ? <Button size="sm" onClick={() => onAction?.(action)}>{action.label}</Button> : null}
+        {actions.length ? <span className="row">{actions.map((x, i) => <Button key={x.label} size="sm" variant={i === 0 ? undefined : "quiet"} onClick={() => onAction?.(x)}>{x.label}</Button>)}</span> : null}
       </div>
       {rest ? <Why>{rest}</Why> : null}
     </div>
@@ -115,16 +123,17 @@ export function NextStepLine({ a, onAction }: { a: ApplicationDetail; onAction?:
 
 /**
  * How the score was worked out, under "Full breakdown": what it rests on, why a missing must-have holds it down, the bars
- * per requirement (the costliest first, the ones at full marks folded), what is not known yet, how sure the AI was, the
- * version of the job it was read against, and the promise that a person decides. Nothing for an older answer without
- * the score, or before there is one (the verdict says so).
+ * per requirement (the costliest first, the ones at full marks folded), what is not known yet, how sure the AI was (only
+ * beside Strong or Potential), the version of the job it was read against, and the promise that a person decides. Nothing
+ * for an older answer without the score, or before there is one (the verdict says so).
  */
 export function ScoreBreakdown({ a }: { a: ApplicationDetail }) {
   const state = matchCardState(a);
   if (state.kind === "hidden" || state.kind === "unread") return null;
   const m = state.m;
   const version = versionNote(a, m);
-  const confidence = confidenceChip(m.confidence);
+  const sure = sureBeside(m.fit);
+  const confidence = sure ? confidenceChip(m.confidence) : null;
   const capped = cappedLine(m);
   const look = closerLook(a);
   const bars = state.kind === "scored" ? matchBars(m) : null;
@@ -141,7 +150,7 @@ export function ScoreBreakdown({ a }: { a: ApplicationDetail }) {
         </div>
       ) : null}
       <LeftOut m={m} />
-      {confidence || look.lowConfidence ? (
+      {sure && (confidence || look.lowConfidence) ? (
         <div className={PART}>
           <h3 className="eyebrow">How sure the AI is</h3>
           {confidence ? <p className="small"><Chip tone={confidence.tone}>{confidence.label}</Chip> {confidence.title}</p> : null}
