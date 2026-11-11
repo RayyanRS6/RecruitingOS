@@ -323,7 +323,7 @@ describe("the application record (status page) after sending", () => {
    * The release review's second reading (11 November 2026, S-1): the call someone asked for is still to come only while it can
    * finish their AI interview. Once a person books them, or decides, a recruiter's notes no longer go on it (`not_screening`),
    * and nothing will score it: "Not ready yet ... once it is ready" would stand for good, through the interview and the hire.
-   * Their page shows the résumé's number and says so, as before 186af29, and the team's label reads the AI interview as not done.
+   * Their page shows the résumé's number and says so, as before cf2cb36, and the team's label reads the AI interview as not done.
    * A private decision changes nothing on their page (B6), so there it still reads as before the decision.
    */
   it("someone who asked for a person and was then booked, or hired, sees the résumé's number 'From your résumé only', never 'Not ready yet' for good; a private decision changes nothing", async () => {
