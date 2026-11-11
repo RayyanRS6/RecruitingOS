@@ -8,7 +8,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { applyVisitNext, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
-import { signInAdmin, signInAs, signInStaff, useOneVisitApplyFlow } from "./test-helpers";
+import { signInAdmin, signInAs, signInStaff, useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * "Hide them until they send" (founder decision, 9 October 2026; counsel register item 20). While a candidate is in the
@@ -138,6 +138,8 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const { devLink } = (await r1.json()) as { devLink: string };
     owner = (await request("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") })).headers.get("set-cookie")!.split(";")[0];
     companyId = ((await (await request("POST", "/api/v1/companies", { name: "Unsent Dental", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    // More people apply to this one job here than Free's five, and each of them goes on to the AI interview: a plan with no candidate limit.
+    await usePlan(container, companyId, "ultra");
     await useOneVisitApplyFlow(container, companyId);
     const c1 = (await (await request("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
     await request("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Must-haves: active CA RDH license, perio experience. Deal-breakers: can't work Saturdays." });
@@ -338,19 +340,23 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
   it("a reading written of an unsent conversation before this rule is never shown or counted: everything reads as before it, history and Today included", async () => {
     const score = (body: unknown, id: string) => (body as { applications: Array<{ id: string; score: number | null; band: string | null }> }).applications.find((r) => r.id === id);
     // as an unfinished chat did before 20 October 2026 (R20-7 keeps her under "No AI interview yet" now), she waits on the
-    // team; her résumé reading is Strong: Today counts her among the strong candidates waiting on the team
+    // team; her résumé shows every requirement, so she reads Strong: Today counts her among the strong candidates waiting on
+    // the team, by the same word the list shows (6 November 2026)
     await container.db.update(applications).set({ stage: "triaged" }).where(eq(applications.id, priya.applicationId));
     const baseline = await teamSurfaces([priya.applicationId]);
     const [app0] = await container.db.select().from(applications).where(eq(applications.id, priya.applicationId));
-    await container.db.update(assessments).set({ overall: "strong" }).where(eq(assessments.id, app0.latestAssessmentId!));
+    const [reading0] = await container.db.select().from(assessments).where(eq(assessments.id, app0.latestAssessmentId!));
+    const showsEverything = { ...reading0.result, requirementFindings: packet.requirements.mustHaves.map((m) => ({ requirementKey: m.key, met: "yes" as const, evidence: { source: "resume" as const, quote: "RDH license CA #RDH12345, active" } })), competencyFindings: packet.competencies.map((c) => ({ competencyKey: c.key, finding: "evidenced" as const, evidence: { source: "resume" as const, quote: "Skills: Dentrix, periodontal charting, perio maintenance" } })) };
+    await container.db.update(assessments).set({ overall: "strong", result: showsEverything }).where(eq(assessments.id, reading0.id));
     const before = await teamSurfaces([priya.applicationId]);
     expect(strongCount(before.out.today.body)).toBe(strongCount(baseline.out.today.body) + 1);
     const beforeCsv = before.out.csv.text;
     const beforeToday = (before.out.today.body as { summary: string }).summary;
     // an old scorecard of Priya's unfinished conversation, "strong", as one was written before 9 October 2026: marked as
-    // read from a conversation she did not finish, linked from her screen, her latest reading, and in her history
+    // read from a conversation she did not finish, linked from her screen, her latest reading, and in her history. It quotes
+    // her saying a must-have is not met, so reading it would take her out of Today's count and hold her score at 54
     const [maria0] = await screenAssessments(maria.applicationId);
-    const [legacy] = await container.db.insert(assessments).values({ companyId, applicationId: priya.applicationId, kind: "screen", packetVersion: maria0.packetVersion, aiRunId: null, result: { ...maria0.result, summary: "ZQXP-legacy: read from what she said before she stopped.", recommendation: "strong_interview", anomalies: [{ kind: "incomplete_screen", detail: "The candidate stopped part-way and did not come back: 1 of 5 questions answered." }] } as typeof maria0.result, overall: "strong", confidence: "high" }).returning();
+    const [legacy] = await container.db.insert(assessments).values({ companyId, applicationId: priya.applicationId, kind: "screen", packetVersion: maria0.packetVersion, aiRunId: null, result: { ...maria0.result, summary: "ZQXP-legacy: read from what she said before she stopped.", recommendation: "strong_interview", requirementFindings: [{ requirementKey: packet.requirements.mustHaves[0].key, met: "no", evidence: { source: "resume", quote: "ZQXP-legacy: my license lapsed." } }], anomalies: [{ kind: "incomplete_screen", detail: "The candidate stopped part-way and did not come back: 1 of 5 questions answered." }] } as typeof maria0.result, overall: "strong", confidence: "high" }).returning();
     legacyId = legacy.id;
     const priyaScreen = await screenOf(priya.applicationId);
     await container.db.update(screens).set({ assessmentId: legacy.id }).where(eq(screens.applicationId, priya.applicationId));
@@ -377,8 +383,9 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     expect(score(after.out.list.body, priya.applicationId)).toEqual(score(before.out.list.body, priya.applicationId));
     expect((after.out.compare.body as { candidates: Array<{ screen: unknown; score: unknown }> }).candidates[0]).toMatchObject({ screen: null, score: (before.out.compare.body as { candidates: Array<{ score: unknown }> }).candidates[0].score });
     expect(after.out.csv.text).toBe(beforeCsv);
-    // Today counts her by her Strong résumé reading, as the list and the board show her, not by the hidden one
+    // Today counts her by what her résumé shows, as the list and the board show her, not by the hidden one
     expect((after.out.today.body as { summary: string }).summary).toBe(beforeToday);
+    expect(strongCount(after.out.today.body)).toBe(strongCount(baseline.out.today.body) + 1);
     expect(JSON.stringify(await briefFor(priya.applicationId, "Priya"))).not.toContain("ZQXP");
     // and nobody can flag what they cannot see
     expect((await request("POST", `/api/v1/applications/${priya.applicationId}/assessments/${legacy.id}/flag`, { kind: "wrong_evidence" })).status).toBe(404);

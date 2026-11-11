@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { sessionCookieName } from "@ros/api/src/cookie-names";
+import { pkceCookieName, sessionCookieName } from "@ros/api/src/cookie-names";
+import { isRefusalQuery, refusalCode } from "@ros/api/src/signin-refusal";
 import { buildAppCsp, cspHeaderName, cspMode, makeNonce } from "./lib/csp";
 
 /**
@@ -13,13 +14,28 @@ import { buildAppCsp, cspHeaderName, cspMode, makeNonce } from "./lib/csp";
  * sign-in. A Home address with a query is a link from the app's own emails (`/?request=<id>`, `/?start=1`), so it goes on
  * to the sign-in form as before. The session cookie goes by the API's own rule ("__Host-ros_session" over https), from
  * apps/api/src/cookie-names.ts, which imports nothing, so the middleware bundle stays dependency-free.
+ * A refusal the identity service could not tie to a sign-in (its record of the flow expired or missing, as after more than
+ * five minutes on Microsoft's approval screen) lands on the root with error, error_code and error_description in the query
+ * and no code (10 November 2026): it goes to the sign-in page as the code the callback would give it (signin-refusal.ts,
+ * which imports nothing either), with a trailing "#" so the service's copy in the fragment goes too. Its words never stay
+ * in the address, and nothing here logs them.
  */
 export function middleware(req: NextRequest) {
   const nonce = makeNonce();
   const mode = cspMode(process.env.CSP_MODE);
   const csp = buildAppCsp({ nonce, dev: process.env.NODE_ENV !== "production", reportPath: "/api/csp-report" });
   const header = cspHeaderName(mode);
-  const sessionCookie = sessionCookieName({ NODE_ENV: process.env.NODE_ENV, COOKIE_DOMAIN: process.env.COOKIE_DOMAIN });
+  const cookieEnv = { NODE_ENV: process.env.NODE_ENV, COOKIE_DOMAIN: process.env.COOKIE_DOMAIN };
+  if (req.nextUrl.pathname === "/" && isRefusalQuery(req.nextUrl.searchParams)) {
+    const q = req.nextUrl.searchParams;
+    // the provider this browser's sign-in started with, as the callback reads it: `verifier.state.provider`
+    const provider = req.cookies.get(pkceCookieName(cookieEnv))?.value.split(".")[2] ?? null;
+    const { code } = refusalCode({ error: q.get("error"), errorCode: q.get("error_code"), errorSubcode: q.get("error_subcode"), description: q.get("error_description"), provider });
+    const toSignIn = NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(code)}#`, req.url));
+    toSignIn.headers.set(header, csp);
+    return toSignIn;
+  }
+  const sessionCookie = sessionCookieName(cookieEnv);
   if (req.nextUrl.pathname === "/" && req.nextUrl.search === "" && !req.cookies.has(sessionCookie)) {
     const away = NextResponse.redirect(new URL("/welcome", req.url));
     away.headers.set(header, csp);

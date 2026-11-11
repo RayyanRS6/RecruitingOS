@@ -4,22 +4,27 @@ import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, Card, cn, ErrorState, Icon, IconChip, Menu, PageHeader, Pill, SectionHeader, Skeleton, type Tone } from "@ros/ui";
-import type { GettingStartedAction, TrialStanding } from "@ros/contracts";
+import { AI_HELP_UPGRADE_QUESTION, mayOfferUpgrade, type AiCreditView, type GettingStartedAction, type TrialStanding } from "@ros/contracts";
 import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, type InterviewDraft, type Me, type Notification, type RoleSummary } from "../api/client";
 import { ALLOWANCE_ASK, screeningAllowanceWarning, type AllowanceWarning, type UsageLine } from "../allowance";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { OwnRequest } from "../components/OwnRequest";
 import { RecruiterRequests } from "../components/RecruiterRequests";
+import { Upgrade } from "../components/Upgrade";
 import { useIsClient } from "../components/use-is-client";
 import { interviewDraftPath } from "../hiring";
+import { NO_EMAIL_ON_FILE, openPersonPath, telHref } from "../email-health";
 import { closingDateToast, isClosingDateAction } from "../publishing";
 import { railListsRoles } from "../rail";
 import { roleStatus } from "../role-status";
 import { canChangeCompany, canStartHire } from "../roles";
+import { useSignInWhenSessionEnds } from "../session-ended";
 import { presetOf, requestSentText } from "../recruiter-access";
 import { START_HIRE_HREF } from "../start-hire";
 import { briefDecisionToast } from "../talent-actions";
 import { TRIAL_ASK, trialRow, type TrialRowWords } from "../trial";
+import { isPlanAsk, reasonOf } from "../upgrade";
 import { HOME_ROWS, TODAY_REFRESH, cardLine, firstName, homeHeadline, homeJobs, homeRows, isFyi, moreLabel, nextStep, setupActionToast, splitActions, type HomeJob } from "../today";
 import { POOL_CARD_NOTE, boardPersonPath, poolCardView } from "./board/board-model";
 import { isDiscardDraft } from "./new-role/rules";
@@ -52,10 +57,12 @@ export function Home() {
   const [sentToRecruiter, setSentToRecruiter] = useState<string | null>(null);
   // The plan's screening conversations at 80% or used up (Q17): owners and admins, who can talk to ITS about the plan.
   const seesAllowance = canChangeCompany(myRole);
-  const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<{ planKey?: string; timezone?: string; usage?: Record<string, UsageLine>; trial?: TrialStanding | null }>("/api/v1/companies/current"), enabled: seesAllowance, ...TODAY_REFRESH });
+  const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<{ planKey?: string; timezone?: string; usage?: Record<string, UsageLine>; trial?: TrialStanding | null; aiCredit?: AiCreditView | null }>("/api/v1/companies/current"), enabled: seesAllowance, ...TODAY_REFRESH });
   const allowance = seesAllowance ? screeningAllowanceWarning(company.data?.usage, company.data?.planKey) : null;
   // The Trial plan's last 7 days, and its end (founder decision L-02 B): owners and admins, the first row under Needs you.
   const trial = seesAllowance ? trialRow(company.data?.trial, company.data?.timezone) : null;
+  // The plan's AI help at 80% or used up (the plans of 5 November 2026, Rule 4): in words or a percentage, never dollars.
+  const aiCredit = seesAllowance && company.data?.aiCredit?.notice ? company.data.aiCredit : null;
   // "Your jobs" is the rail's list (the same request, shared): members only, never an ITS recruiter under a grant.
   const listsRoles = railListsRoles(me.data);
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: listsRoles });
@@ -63,6 +70,8 @@ export function Home() {
   // browser's (use-is-client.ts), "Your jobs" waits, so the first draw matches the server's (Wave S2).
   const isClient = useIsClient();
   const jobs = listsRoles && isClient ? homeJobs(roles.data ?? [], { role: myRole }) : [];
+  // A tab left open past the session goes to sign in, as the console's pages do (10 November 2026), instead of "Could not load".
+  useSignInWhenSessionEnds([brief.error, me.error, company.error, roles.error]);
 
   // Old links and bookmarks to "/?start=1" (before the job builder had a page of its own) go to the job builder.
   const [params] = useSearchParams();
@@ -76,17 +85,18 @@ export function Home() {
 
   const { setup, rows, empty } = homeRows(brief.error ? [] : brief.data?.cards ?? []);
   const setupOpen = !!setup?.gettingStarted?.steps.some((s) => !s.done);
-  const needs = rows.filter((c) => !isFyi(c.kind)).length + (trial ? 1 : 0) + (allowance ? 1 : 0) + (setupOpen ? 1 : 0);
+  const needs = rows.filter((c) => !isFyi(c.kind)).length + (trial ? 1 : 0) + (aiCredit ? 1 : 0) + (allowance ? 1 : 0) + (setupOpen ? 1 : 0);
   // A company's first screen (nothing yet, and this person may start a hire) is a first step, not "nothing waiting" (plan C18).
   const firstRun = !!empty && empty.actions.some((a) => a.path === START_HIRE_HREF);
   const name = firstName(me.data?.user.name);
 
   // The trial and allowance rows do not wait for the brief: they come from the company's own plan and usage.
-  const needsBlock = rows.length || allowance || trial ? (
+  const needsBlock = rows.length || allowance || trial || aiCredit ? (
     <NeedsYou title={needs > 0 ? "Needs you" : "Good to know"} items={[
       ...(trial ? [{ key: "trial", node: <TrialRow row={trial} onSentToRecruiter={setSentToRecruiter} /> }] : []),
+      ...(aiCredit ? [{ key: "ai-credit", node: <AiCreditRow credit={aiCredit} planKey={company.data?.planKey} onSentToRecruiter={setSentToRecruiter} /> }] : []),
       ...(allowance ? [{ key: "allowance", node: <AllowanceRow warning={allowance} onSentToRecruiter={setSentToRecruiter} /> }] : []),
-      ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
+      ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : card.kind === "unreached" && card.unreached?.length ? <UnreachedRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
     ]} />
   ) : empty ? (
     <Card><CardRow card={empty} level={2} onSentToRecruiter={setSentToRecruiter} /></Card>
@@ -115,6 +125,9 @@ export function Home() {
           </>
         }
       />
+
+      {/* Where this person's own company's request for access stands, while they work in another company (OwnRequest.tsx). */}
+      <OwnRequest />
 
       {/* A row's one-click request says what the recruiter will see and until when, and stays until read (the row itself may go). */}
       {sentToRecruiter ? <Alert tone="info"><div className="row justify-between"><span>{sentToRecruiter}</span><Button size="sm" variant="quiet" onClick={() => setSentToRecruiter(null)}>Got it</Button></div></Alert> : null}
@@ -232,6 +245,21 @@ function AllowanceRow({ warning, onSentToRecruiter }: { warning: AllowanceWarnin
 }
 
 /**
+ * The plan's AI help at 80%, or used up (the plans of 5 November 2026, Rule 4): the words the owner's notice says, a word or
+ * a percentage beside them and never dollars, and the way on. Applications keep coming in and candidates can still finish.
+ * Always a way to ITS: with no plan above theirs the sheet asks to talk about the plan, so that is what the button says.
+ */
+function AiCreditRow({ credit, planKey, onSentToRecruiter }: { credit: AiCreditView; planKey?: string; onSentToRecruiter: (message: string) => void }) {
+  const { line, rest } = cardLine(credit.notice?.body ?? "");
+  return (
+    <Row title={credit.notice?.title ?? ""} pill={<Pill size="sm" tone="caution">{credit.level === "used_up" ? "Used up" : `${credit.percent}% used`}</Pill>} line={line} rest={rest ? restText(rest) : null}>
+      <Upgrade size="sm" label={mayOfferUpgrade(planKey) ? undefined : "Talk to ITS"} reason={AI_HELP_UPGRADE_QUESTION} onSent={onSentToRecruiter} />
+      <Link to="/setup" className="btn quiet sm">See usage</Link>
+    </Row>
+  );
+}
+
+/**
  * The Trial plan's last 7 days, and its end (founder decision L-02 B): "Your trial ends on <date>", then "Your trial has
  * ended" with the one line on what is paused. Choosing a plan is done by ITS, so the button opens the request about the
  * plan, filled in, never sent in one click; "See plan" opens Settings, where the plan and its dates are.
@@ -287,6 +315,8 @@ function CardRow({ card, level, onSentToRecruiter }: { card: BriefCard; level?: 
   // Start a hire is Home's one main button: a row's first button is the strong one on the row, the others quiet.
   const button = (a: BriefCard["actions"][number], i: number) => {
     const variant = i === 0 ? "secondary" : "quiet";
+    // A request about the plan opens the one upgrade sheet, never goes in one click.
+    if (isPlanAsk(a)) return <Upgrade key={i} label={a.label} size="sm" reason={reasonOf(a.body)} onSent={onSentToRecruiter} />;
     return a.method === "GET"
       ? <Link key={i} to={a.path} className={`btn ${variant} sm`}>{a.label}</Link>
       : <Button key={i} size="sm" variant={variant} loading={act.isPending && act.variables === a} disabled={act.isPending} onClick={() => run(a)}>{a.label}</Button>;
@@ -318,9 +348,35 @@ function cardTone(kind: string, needsYou: boolean): Tone {
   return kind === "escalation" ? "accent" : kind === "empty" || kind === "share" || kind === "hire" ? "good" : "neutral";
 }
 
-/** `hire`: "keep your backups warm" until a new hire starts (plan H1). */
+/** `hire`: "keep your backups warm" until a new hire starts (plan H1). `unreached`: emails to candidates that did not arrive. */
 function label(kind: string): string {
-  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "AI interview", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort", hire: "New hire" }[kind] ?? kind;
+  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "AI interview", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort", hire: "New hire", unreached: "Email failed" }[kind] ?? kind;
+}
+
+/**
+ * Emails to candidates that did not arrive (6 November 2026): the card's one line, then each person in view, never behind
+ * a fold: their name opens their page, and their address and phone are right there to reach them another way. Never
+ * anyone the team may not read; the server leaves them out.
+ */
+function UnreachedRow({ card }: { card: BriefCard }) {
+  const { line } = cardLine(card.body);
+  const people = card.unreached ?? [];
+  const more = card.body.split("\n").find((l) => l.startsWith("And ") && l.endsWith(" more."));
+  return (
+    <Row title={card.title} pill={<Pill size="sm" tone="caution">{label(card.kind)}</Pill>} line={line}>
+      <ul className="grid w-full gap-2" aria-label="Who did not get an email">
+        {people.map((p) => (
+          <li key={p.applicationId} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            {/* the kit's link look, so it reads as the way to their page */}
+            <Link to={openPersonPath(p)} className="link-like">{p.name}</Link>
+            <span className="small min-w-0 text-ink-2 [overflow-wrap:anywhere]">{p.email ?? NO_EMAIL_ON_FILE}{p.phone ? <>{" · "}<a href={telHref(p.phone)}>{p.phone}</a></> : null}</span>
+            <span className="small muted">{p.roleTitle}</span>
+          </li>
+        ))}
+        {more ? <li className="small muted">{more}</li> : null}
+      </ul>
+    </Row>
+  );
 }
 
 /**

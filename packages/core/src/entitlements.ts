@@ -1,13 +1,23 @@
-import { and, asc, eq, gt, inArray, ne, sql } from "drizzle-orm";
-import { adminAlerts, companies, entitlements, invitations, memberships, plans, roles, usageEvents, users, type Queryable } from "@ros/db";
+import { and, asc, eq, gt, gte, inArray, isNotNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, ITS_WORK, JOBS_TOTAL, RECRUITER_ASKS, SEATS, TEXT_SCREENS, isAiCreditKey } from "@ros/contracts";
+import { adminAlerts, aiRuns, companies, entitlements, invitations, memberships, plans, roles, usageEvents, users, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
 import { audit } from "./audit";
 
-/** The plan's allowance of roles at a time. */
-export const ACTIVE_ROLES = "active_roles";
+/** The limit keys (packages/contracts/src/domain/plans.ts, which says what each one is), read by key: product code never compares plan names. */
+export { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, ITS_WORK, JOBS_TOTAL, RECRUITER_ASKS, SEATS, TEXT_SCREENS };
 
-/** The plan's allowance of people (founder decision L-02 B: 3 on the Trial plan, no limit on the others). */
-export const SEATS = "seats";
+/** The company's plan: its key, and its name when the plans table knows it. */
+export async function planOf(q: Queryable, companyId: string): Promise<{ key: string; name: string | null } | null> {
+  const [row] = await q.select({ key: companies.planKey, name: plans.name }).from(companies).leftJoin(plans, eq(plans.key, companies.planKey)).where(eq(companies.id, companyId)).limit(1);
+  return row ?? null;
+}
+
+/** A company's limit for a key, from its own row: null when the row says none, or when it has no row (unmetered, as `check` reads it). */
+export async function limitOf(q: Queryable, companyId: string, key: string): Promise<number | null> {
+  const [row] = await q.select({ limit: entitlements.limit }).from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
+  return row?.limit ?? null;
+}
 
 /**
  * The people using the plan's places now, counted live (never from a running total): active members of any team role,
@@ -44,13 +54,15 @@ async function lockSeats(q: Queryable, companyId: string): Promise<void> {
 
 /**
  * Room for one more person: takes the company's seat lock first (held to the end of the caller's transaction), then
- * counts. `ok` false means the plan's people are all in use, counting invitations not yet answered.
+ * counts. `ok` false means the plan's people are all in use, counting invitations not yet answered; `planKey` is there to
+ * say so in the plan's words (`seatsFullLine`).
  */
-export async function seatRoom(q: Queryable, companyId: string, opts: { now: Date; exceptEmail?: string }): Promise<{ ok: boolean; limit: number | null; used: number }> {
+export async function seatRoom(q: Queryable, companyId: string, opts: { now: Date; exceptEmail?: string }): Promise<{ ok: boolean; limit: number | null; used: number; planKey: string | null }> {
   await lockSeats(q, companyId);
   const limit = await seatLimit(q, companyId);
   const used = await seatsInUse(q, companyId, opts);
-  return { ok: limit === null || used + 1 <= limit, limit, used };
+  const ok = limit === null || used + 1 <= limit;
+  return { ok, limit, used, planKey: ok ? null : (await planOf(q, companyId))?.key ?? null };
 }
 
 /**
@@ -67,12 +79,39 @@ export async function rolesUsingAPlace(q: Queryable, companyId: string, opts: { 
   return q.select({ roleId: roles.id, title: roles.title, status: roles.status }).from(roles).where(and(...where)).orderBy(asc(roles.createdAt));
 }
 
-/** Where a company stands on roles: the places in use (and which roles use them) and room for one more. */
-export async function roleRoom(q: Queryable, companyId: string, opts: { except?: string } = {}): Promise<{ ok: boolean; limit: number | null; used: number; holding: Array<{ roleId: string; title: string; status: string }> }> {
-  const [row] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, ACTIVE_ROLES))).limit(1);
+/**
+ * The jobs a company has had, for a plan's limit of jobs ever (`jobs_total`), counted live from the roles: every role
+ * using a place now, and every role that ever went live, closed or not. `opened_at` is set once and never cleared, so a
+ * job that went live counts for good; one closed before it ever opened gives its place back, because no applicant could
+ * have seen it. `except` leaves out a role being created in this transaction.
+ */
+export async function jobsCounted(q: Queryable, companyId: string, opts: { except?: string } = {}): Promise<number> {
+  const where: Array<SQL | undefined> = [eq(roles.companyId, companyId), or(inArray(roles.status, [...ROLE_STATUSES_USING_A_PLACE]), isNotNull(roles.openedAt))];
+  if (opts.except) where.push(ne(roles.id, opts.except));
+  const [row] = await q.select({ n: sql<number>`count(*)` }).from(roles).where(and(...where));
+  return Number(row?.n ?? 0);
+}
+
+export type RoleRoom = {
+  ok: boolean;
+  /** The plan's roles at a time. */
+  limit: number | null;
+  used: number;
+  holding: Array<{ roleId: string; title: string; status: string }>;
+  /** The plan's jobs ever, when it has such a limit; `full` means no more, whatever is closed. */
+  lifetime: { limit: number; used: number; full: boolean } | null;
+};
+
+/** Where a company stands on roles: the places in use (and which roles use them), its jobs ever, and room for one more under both. */
+export async function roleRoom(q: Queryable, companyId: string, opts: { except?: string } = {}): Promise<RoleRoom> {
+  const rows = await q.select({ key: entitlements.key, limit: entitlements.limit }).from(entitlements).where(and(eq(entitlements.companyId, companyId), inArray(entitlements.key, [ACTIVE_ROLES, JOBS_TOTAL])));
+  const limitFor = (key: string) => rows.find((r) => r.key === key)?.limit ?? null;
   const holding = await rolesUsingAPlace(q, companyId, opts);
-  const limit = row?.limit ?? null;
-  return { ok: limit === null || holding.length + 1 <= limit, limit, used: holding.length, holding };
+  const limit = limitFor(ACTIVE_ROLES);
+  const jobsLimit = limitFor(JOBS_TOTAL);
+  const jobsUsed = jobsLimit === null ? 0 : await jobsCounted(q, companyId, opts);
+  const lifetime = jobsLimit === null ? null : { limit: jobsLimit, used: jobsUsed, full: jobsUsed + 1 > jobsLimit };
+  return { ok: !lifetime?.full && (limit === null || holding.length + 1 <= limit), limit, used: holding.length, holding, lifetime };
 }
 
 /** How long one allowance period lasts: `applyPlan` writes the first, and each one that ends is followed by the next. */
@@ -82,9 +121,12 @@ const PERIOD_MS = PERIOD_DAYS * 86_400_000;
 /**
  * The allowances that start again each period. Every other key keeps its count and Settings shows no reset date for
  * it: roles and seats are counted live (from the roles using a place, and from the members and open invitations), so
- * they go down by themselves when a role closes or someone leaves; anything metered later keeps its running total.
+ * they go down by themselves when a role closes or someone leaves; anything metered later keeps its running total. The
+ * monthly AI credit is here for its period, and is summed live like the jobs ever: nothing records either one, so their
+ * `used` column stays 0 and never holds money. The total AI credit is not here: it never resets, so a company moved down
+ * to Free gets no second credit.
  */
-export const MONTHLY_KEYS: readonly string[] = ["text_screens", "recruiter_asks", "screen_person_requests", "voice_minutes", "sourcing_contacts"];
+export const MONTHLY_KEYS: readonly string[] = ["text_screens", "recruiter_asks", "screen_person_requests", "voice_minutes", "sourcing_contacts", AI_CREDIT_MONTHLY_CENTS];
 export const isMonthly = (key: string): boolean => MONTHLY_KEYS.includes(key);
 
 /** A row as the period rules read it. */
@@ -123,14 +165,56 @@ async function rollIfEnded(q: Queryable, row: EntitlementRow, now: Date): Promis
 }
 
 /**
+ * How long an AI call can still be running after its hold: the /api route is stopped at 5 minutes and a call's own budget
+ * ends at 4.5, on the web and in the worker alike (packages/ai/src/runner.ts, providers/anthropic.ts). A row still `running`
+ * past this was left by a process that went away, so its hold is no money in flight but money spent (the check of 9 November).
+ */
+export const AI_RUN_IN_FLIGHT_MS = 10 * 60_000;
+
+/** The runs whose cost is money spent at `now`: all but a call that can still be running (`AI_RUN_IN_FLIGHT_MS`). */
+export function settledRun(now: Date): SQL {
+  return or(ne(aiRuns.status, "running"), lt(aiRuns.createdAt, new Date(now.getTime() - AI_RUN_IN_FLIGHT_MS).toISOString())) as SQL;
+}
+
+/**
+ * What a company's AI has cost, in millionths of a dollar (the column's own precision), summed live from the runs
+ * themselves (nothing deletes a run, and a privacy scrub keeps its cost): since a date for the monthly credit, or over the
+ * company's whole life. A call still running counts at its hold, so money in flight is in the sum; `settled` leaves out the
+ * calls that can still be running (`settledRun`, at `now`), for what the owner and ITS read, so a hold whose process went
+ * away counts as the gate counts it. For the server's own checks and for ITS; a customer reads a percentage (`usageOf`), never this.
+ */
+export async function aiCreditSpentMicros(q: Queryable, companyId: string, opts: { since?: string | null; settled?: boolean; now?: Date } = {}): Promise<number> {
+  const where = [eq(aiRuns.companyId, companyId)];
+  if (opts.since) where.push(gte(aiRuns.createdAt, opts.since));
+  if (opts.settled) where.push(settledRun(opts.now ?? new Date()));
+  const [row] = await q.select({ micros: sql<string>`coalesce(sum(${aiRuns.costUsd}), 0) * 1000000` }).from(aiRuns).where(and(...where));
+  return Math.round(Number(row?.micros ?? 0));
+}
+
+/** The same in whole cents, rounded up, as the plan's limit is written: a fraction of a cent is never undercounted. */
+export async function aiCreditSpentCents(q: Queryable, companyId: string, opts: { since?: string | null } = {}): Promise<number> {
+  return Math.ceil((await aiCreditSpentMicros(q, companyId, opts)) / 10_000);
+}
+
+/** What an allowance has used at `now`: roles, jobs ever, people and the AI credit counted live, the rest from the row's period. */
+async function usedNow(q: Queryable, companyId: string, row: EntitlementRow, now: Date): Promise<number> {
+  if (row.key === ACTIVE_ROLES) return (await rolesUsingAPlace(q, companyId)).length;
+  if (row.key === JOBS_TOTAL) return jobsCounted(q, companyId);
+  if (row.key === SEATS) return seatsInUse(q, companyId, { now });
+  if (isAiCreditKey(row.key)) return aiCreditSpentCents(q, companyId, isMonthly(row.key) ? { since: currentPeriod(row, now).periodStart } : {});
+  return currentPeriod(row, now).used;
+}
+
+/**
  * Entitlement checks by key. Product code never compares plan names. Roles are counted from the roles themselves; a
  * monthly allowance counts only what was used in its current period, so a new period has room again without anyone at
- * ITS doing anything (a run waiting for the allowance gets through at its next look).
+ * ITS doing anything (a run waiting for the allowance gets through at its next look). For the AI credit `limit` and
+ * `used` are cents, for the server only: what a customer reads comes from `usageOf`.
  */
 export async function check(q: Queryable, companyId: string, key: string, delta = 1, opts: { now?: Date } = {}): Promise<{ ok: boolean; limit: number | null; used: number }> {
   const [row] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
   if (!row) return { ok: true, limit: null, used: 0 }; // unmetered
-  const used = key === ACTIVE_ROLES ? (await rolesUsingAPlace(q, companyId)).length : key === SEATS ? await seatsInUse(q, companyId, { now: opts.now ?? new Date() }) : currentPeriod(row, opts.now).used;
+  const used = await usedNow(q, companyId, row, opts.now ?? new Date());
   if (row.limit === null) return { ok: true, limit: null, used };
   return { ok: used + delta <= row.limit, limit: row.limit, used };
 }
@@ -157,27 +241,43 @@ export async function record(q: Queryable, companyId: string, key: string, quant
   return after ?? null;
 }
 
-/** One allowance as the company's settings show it; `resetsAt` is when a monthly one starts again from zero (left out for roles, which never reset). */
-export type UsageLine = { used: number; limit: number | null; resetsAt?: string | null };
+/**
+ * One allowance as the company's settings show it; `resetsAt` is when a monthly one starts again from zero (left out for
+ * roles, which never reset). `unit: "percent"` is the AI credit: `used` of 100, because customers read words or a
+ * percentage, never dollars.
+ */
+export type UsageLine = { used: number; limit: number | null; resetsAt?: string | null; unit?: "percent" };
+
+/** Limits that are not a count of anything used, so they have no "used of limit" line: read them with `limitOf`. */
+const NOT_A_COUNT: readonly string[] = [CANDIDATES_PER_JOB, ITS_WORK];
+
+const MICROS_PER_CENT = 10_000;
+
+/** A share of the credit in whole percent, never past 100; short of all never reads as all. Spent and limit in one unit. */
+export const creditPercent = (spent: number, limit: number): number => (limit <= 0 ? 100 : Math.min(100, Math.floor((spent * 100) / limit)));
 
 /**
  * The plan's usage as the company's settings show it: roles counted from the roles using a place now, people from the
- * members and open invitations now (known bug 128: the stored count never moved), the rest within their period.
+ * members and open invitations now (known bug 128: the stored count never moved), jobs ever from the roles (only with a
+ * limit: without one there is nothing to say), the AI credit as a percentage (only with a limit), the rest within their
+ * period. The credit's percentage is money actually spent, worked out as Home's is (`aiCreditView`), so a draft's hold does
+ * not move it up and back down, and the two pages read one figure. `check` and the gate go on counting holds.
  */
 export async function usageOf(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<Record<string, UsageLine>> {
   const rows = await q.select().from(entitlements).where(eq(entitlements.companyId, companyId));
+  const now = opts.now ?? new Date();
   const out: Record<string, UsageLine> = {};
   for (const e of rows) {
-    if (e.key === ACTIVE_ROLES) {
-      out[e.key] = { used: (await rolesUsingAPlace(q, companyId)).length, limit: e.limit };
-      continue;
+    if (NOT_A_COUNT.includes(e.key)) continue;
+    const credit = isAiCreditKey(e.key);
+    if ((credit || e.key === JOBS_TOTAL) && e.limit === null) continue;
+    const resets = isMonthly(e.key) ? { resetsAt: currentPeriod(e, now).periodEnd } : {};
+    if (credit) {
+      const spent = await aiCreditSpentMicros(q, companyId, { since: isMonthly(e.key) ? currentPeriod(e, now).periodStart : null, settled: true, now });
+      out[e.key] = { used: creditPercent(spent, (e.limit ?? 0) * MICROS_PER_CENT), limit: 100, unit: "percent", ...resets };
+    } else {
+      out[e.key] = { used: await usedNow(q, companyId, e, now), limit: e.limit, ...resets };
     }
-    if (e.key === SEATS) {
-      out[e.key] = { used: await seatsInUse(q, companyId, { now: opts.now ?? new Date() }), limit: e.limit };
-      continue;
-    }
-    const p = currentPeriod(e, opts.now);
-    out[e.key] = isMonthly(e.key) ? { used: p.used, limit: e.limit, resetsAt: p.periodEnd } : { used: p.used, limit: e.limit };
   }
   return out;
 }
@@ -186,29 +286,32 @@ export async function usageOf(q: Queryable, companyId: string, opts: { now?: Dat
  * Materializes a plan's limits into entitlement rows for a company (signup, upgrade, downgrade, renewal). A change of
  * plan takes effect at once and keeps the current period: what was used this month stays used, against the new limit,
  * and the reset date does not move. A period that has already ended starts again from zero; a row without dates (or a
- * new one) starts its first period now.
+ * new one) starts its first period now. So does a monthly AI credit that had no limit until now: an upgrade's first month
+ * starts with the upgrade, and what was spent on the free credit is not charged to it. `aiCreditMonthStarted` says this happened.
  */
-export async function applyPlan(q: Queryable, companyId: string, planKey: string, source: "plan" | "trial" = "plan", opts: { now?: Date } = {}): Promise<void> {
+export async function applyPlan(q: Queryable, companyId: string, planKey: string, source: "plan" | "trial" = "plan", opts: { now?: Date } = {}): Promise<{ aiCreditMonthStarted: boolean }> {
   const [plan] = await q.select().from(plans).where(eq(plans.key, planKey)).limit(1);
   if (!plan) throw new Error(`unknown plan ${planKey}`);
   const now = opts.now ?? new Date();
   const periodStart = now.toISOString();
   const periodEnd = new Date(now.getTime() + PERIOD_MS).toISOString();
+  let aiCreditMonthStarted = false;
   for (const [key, limit] of Object.entries(plan.limits)) {
     const [existing] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
+    if (key === AI_CREDIT_MONTHLY_CENTS && limit !== null && (!existing?.periodEnd || existing.limit === null)) aiCreditMonthStarted = true;
     if (existing) {
       const p = currentPeriod(existing, now);
-      const period = existing.periodEnd ? { used: p.used, periodStart: p.periodStart, periodEnd: p.periodEnd } : { periodStart, periodEnd };
+      const creditStarts = key === AI_CREDIT_MONTHLY_CENTS && existing.limit === null && limit !== null;
+      const period = existing.periodEnd && !creditStarts ? { used: p.used, periodStart: p.periodStart, periodEnd: p.periodEnd } : { periodStart, periodEnd };
       await q.update(entitlements).set({ limit, source, ...period }).where(eq(entitlements.id, existing.id));
     } else {
       await q.insert(entitlements).values({ companyId, key, limit, used: 0, source, periodStart, periodEnd });
     }
   }
   await q.update(companies).set({ planKey }).where(eq(companies.id, companyId));
+  return { aiCreditMonthStarted };
 }
 
-/** The plan's allowance of screening conversations. */
-export const TEXT_SCREENS = "text_screens";
 /** Requests for a person instead of the screening conversation (Q16): counted, never limited; ITS covers them. */
 export const PERSON_REQUESTS = "screen_person_requests";
 /** The share of the monthly allowance at which the owner and ITS are warned (Q17). */
@@ -258,9 +361,6 @@ export async function flagScreenAllowance(q: Queryable, input: { companyId: stri
     details: { used, limit },
   }, { now: input.now });
 }
-
-/** The plan's allowance of recruiter requests. */
-export const RECRUITER_ASKS = "recruiter_asks";
 
 /** Where a company stands against its recruiter-request allowance: `over` once it has used more than the plan includes. */
 export type RecruiterAskStanding = { used: number; limit: number | null; over: boolean };

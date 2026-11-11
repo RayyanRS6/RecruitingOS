@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { LOCKED_WORD } from "@ros/contracts";
 import { Alert, Avatar, Button, Chip, Drawer, ErrorState, IconButton, Menu, type MenuItem, ScoreBadge, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
-import { api, type ApplicationDetail } from "../../api/client";
+import { api, isCandidateLocked, type ApplicationDetail } from "../../api/client";
+import { LockedCard } from "../../components/LockedCandidates";
 import { canSeeActivity } from "../../roles";
 import { isTextEntry } from "../../start-hire";
 import { stageBlocked, stageIntent, type PanelStep } from "../../talent-actions";
 import { resumeOnlyChip } from "../../talent-list";
-import { NO_COMPOSE, PANEL_TABS, composeFor, hasUnsent, latestByTab, markSeen, neighbours, unreadTabs, type PanelTab, type SeenTabs } from "./helpers";
+import { NO_COMPOSE, PANEL_TABS, composeFor, hasUnsent, latestByTab, markSeen, neighbours, offersNewInterviewLink, unreadTabs, type PanelTab, type SeenTabs } from "./helpers";
 import { DraftContext, useCandidateAction, useViewer } from "./hooks";
 import { matchOf, type NextStepAction } from "./match-view";
 import { NeedsYou } from "./needs-you";
@@ -67,8 +69,10 @@ function writeSeen(id: string, seen: SeenTabs): void {
 
 export function CandidatePanel(props: PanelProps) {
   const { id, roleId, tab, onTab, onClose } = props;
-  const q = useQuery({ queryKey: ["application", id], queryFn: () => api.get<ApplicationDetail>(`/api/v1/applications/${id}`) });
+  // Someone past the plan's candidates per job (Rule 3) is an answer, not a hiccup: it is not asked again.
+  const q = useQuery({ queryKey: ["application", id], queryFn: () => api.get<ApplicationDetail>(`/api/v1/applications/${id}`), retry: (count, e) => !isCandidateLocked(e) && count < 1 });
   const a = q.data && q.data.id === id ? q.data : undefined;
+  const locked = !a && isCandidateLocked(q.error);
   const viewer = useViewer();
   const act = useCandidateAction(id, roleId);
 
@@ -138,12 +142,21 @@ export function CandidatePanel(props: PanelProps) {
 
   const name = a ? `${a.candidate.firstName} ${a.candidate.lastName}`.trim() : "Candidate";
   const openCompose = () => { setCompose({ ...composing, open: true }); onTab("messages"); };
+  // The panel's top, where the next step a move brings appears ("Shortlist", then "Set a date and time", 6 November 2026):
+  // brought into view once the move is saved and the panel read again, as the browser otherwise keeps the old content in
+  // place and the new card waits above it, out of sight.
+  const body = useRef<HTMLDivElement>(null);
+  const toTop = () => {
+    const sheet = body.current?.closest<HTMLElement>('[role="dialog"]');
+    const still = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    sheet?.scrollTo({ top: 0, behavior: still ? "auto" : "smooth" });
+  };
   const onMove = (to: OwnerStage) => {
     const move = a?.stageMoves.find((m) => m.to === to);
     if (!move) return;
     const intent = stageIntent(move);
     // a step opens at the top of the panel, above every section, so the section in view stays as it was
-    if (intent.kind === "action") act.mutate(intent.body);
+    if (intent.kind === "action") act.mutate(intent.body, { onSuccess: () => { window.setTimeout(toTop, 60); } });
     else if (intent.kind === "step") props.onStep(intent.step);
   };
   // The Overview's suggested next step: its one button does what the stage button, a section or Email would.
@@ -155,7 +168,7 @@ export function CandidatePanel(props: PanelProps) {
   const more: MenuItem[] = a
     ? [
         // Every applicant gets the AI interview by itself (20 Oct 2026); a person's invitation is a new link.
-        { id: "invite_screen", label: "Send a new AI interview link", icon: "send", disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen },
+        ...(offersNewInterviewLink(a) ? [{ id: "invite_screen", label: "Send a new AI interview link", icon: "send" as const, disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen }] : []),
         { id: "record_outcome", label: "Record an outcome", icon: "edit", disabled: !a.allowedActions.includes("record_outcome"), reason: a.blockedReasons.record_outcome },
       ]
     : [];
@@ -176,7 +189,7 @@ export function CandidatePanel(props: PanelProps) {
       open
       size="lg"
       onClose={() => guarded(onClose)}
-      title={name}
+      title={locked ? LOCKED_WORD : name}
       sub={sub}
       leading={a ? <Avatar name={name} size="lg" /> : undefined}
       actions={
@@ -219,9 +232,9 @@ export function CandidatePanel(props: PanelProps) {
       }
       tabs={a ? <Tabs idBase="candidate-panel" label="Candidate sections" value={tab} onChange={(v) => onTab(v as PanelTab)} items={PANEL_TABS.map((t) => ({ id: t.id, label: t.label, marker: unread.has(t.id) }))} /> : undefined}
     >
-      {q.error && !a ? <ErrorState message="Could not load this candidate. They may have been removed, or you may not have access." onRetry={() => q.refetch()} /> : !a ? <Skeleton lines={6} /> : (
+      {locked ? <LockedCard /> : q.error && !a ? <ErrorState message="Could not load this candidate. They may have been removed, or you may not have access." onRetry={() => q.refetch()} /> : !a ? <Skeleton lines={6} /> : (
         <DraftContext.Provider value={report}>
-          <div key={id}>
+          <div key={id} ref={body}>
             <NeedsYou a={a} roleId={roleId} myRole={viewer.role} myUserId={viewer.userId} step={props.step} setStep={props.onStep} roundKey={props.roundKey} onTab={onTab} />
             <TabPanel idBase="candidate-panel" value={tab}>
               {/* keyed by the section, so a switch fades the new one in (CSS: before any script, and not at all for less motion);

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn, usePlan } from "./helpers";
 
 /**
  * Approving and publishing (plan Wave D) in a real browser, with the fake AI provider: the approval card opens the job
@@ -33,7 +33,8 @@ test("approve a role, see where it is going, share it and give it a closing date
   await expectAccessible(page, "approval card");
 
   // approving opens the confirmation: where the job is going, nothing ticked before it was checked
-  // the must-haves are on the job page, and the card says so (plan D10)
+  // the must-haves are on the job page, and the card says so under More (plan D10)
+  await card.getByText("More", { exact: true }).click();
   await expect(card.getByText(/The job page lists what you are looking for:/)).toBeVisible();
   await card.getByRole("button", { name: "Approve and publish" }).click();
   const done = page.getByRole("dialog", { name: "Your job is approved" });
@@ -49,7 +50,7 @@ test("approve a role, see where it is going, share it and give it a closing date
   await expect(shareGroup).toBeVisible();
   await expect(shareGroup.getByText("WhatsApp")).toBeVisible();
   await expect(page.locator("script[src*='facebook'], script[src*='linkedin'], script[src*='twitter'], iframe")).toHaveCount(0);
-  await done.getByRole("button", { name: "Go to your role" }).click();
+  await done.getByRole("button", { name: "Go to your job" }).click();
   await expect(done).toBeHidden();
 
   // the Posting tab: the share block, the boards, and the closing date
@@ -114,7 +115,7 @@ test("a board unticked on the approval card is left out, without pressing Save t
   await expect(where.getByText("Your careers page", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(where.getByText("Indeed", { exact: true })).toHaveCount(0);
   await expect(where.getByText(/No job boards were chosen for this job/)).toBeVisible();
-  await done.getByRole("button", { name: "Go to your role" }).click();
+  await done.getByRole("button", { name: "Go to your job" }).click();
   expect(saves).toEqual([]);
 
   // and the Share tab agrees
@@ -201,7 +202,7 @@ test("approving on a page left behind changes no boards, and the page catches up
   await expect(page.getByRole("checkbox", { name: /Indeed/ })).toBeChecked({ timeout: 30_000 });
 });
 
-test("Setup: the logo and the 'about the company' text, and who posts on the job boards", async ({ page }) => {
+test("Setup: the logo and the 'about the company' text, and who posts on the job boards", async ({ page, browser, baseURL }) => {
   test.setTimeout(180_000);
   await signIn(page, { email: `profile+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
   await createCompanyThroughTheForm(page, `Brightline Profile ${run}`);
@@ -225,9 +226,16 @@ test("Setup: the logo and the 'about the company' text, and who posts on the job
   await expect(profile.getByText(`Candidates see: jobs+${run}@brightline.test.`, { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(profile.getByRole("button", { name: "Use the ITS inbox" })).toBeVisible();
   await expectAccessible(page, "company profile");
-  // the job boards card sits on the Settings page's Hiring rules tab (Wave S1)
+  // the job boards card sits on the Settings page's Hiring rules tab (Wave S1): on the Free plan the team posts, with no choice to make
   await page.getByRole("tab", { name: "Hiring rules" }).click();
   const boards = page.locator("#setup-boards");
-  await expect(boards.getByRole("button", { name: "ITS posts them for us" })).toHaveAttribute("aria-pressed", "true");
+  await expect(boards.getByText("Your team posts them")).toBeVisible();
+  await expect(boards.getByRole("button", { name: "ITS posts them for us" })).toHaveCount(0);
+  await expect(boards.getByRole("button", { name: "Upgrade" })).toBeVisible();
   await expect(boards.getByLabel("We have our own paid ZipRecruiter plan")).not.toBeChecked();
+  // on a plan with ITS staff time the choice is the company's, and ITS posts unless it says otherwise
+  const company = await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json() as { id: string };
+  await usePlan(browser, baseURL!, company.id, "pro");
+  await page.reload();
+  await expect(boards.getByRole("button", { name: "ITS posts them for us" })).toHaveAttribute("aria-pressed", "true", { timeout: 30_000 });
 });

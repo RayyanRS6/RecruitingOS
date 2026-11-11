@@ -52,11 +52,14 @@ describe("the comparison view", () => {
     expect(orderLine(1)).toMatch(/^1 person, the highest match score first\. A score helps you read; it never decides\.$/);
   });
 
-  it("tops each column with the score, its band, what it rests on and any missing must-have", () => {
-    expect(scoreSummary(ana)).toMatchObject({ score: ana.score!.score, band: ana.score!.bandLabel, coverage: "Based on 4 of 5 requirements", basis: "Résumé only: no AI interview" });
-    // two must-haves judged, one shown missing by their own words: half the points, already under the cap of 54
-    expect(scoreSummary(ben)).toMatchObject({ score: 50, missing: ["Missing must-have: Active CA RDH license"] });
-    expect(scoreSummary(cy)).toEqual({ score: null, band: null, coverage: "No AI review yet", basis: null, missing: [] });
+  it("tops each column with the score, its one verdict word, what it rests on and any missing must-have", () => {
+    expect(scoreSummary(ana)).toMatchObject({ score: 64, verdict: "Potential match", coverage: "Based on 4 of 5 requirements", basis: "Résumé only: no AI interview" });
+    // two must-haves judged, one shown missing by their own words: 4 of the 14 points, under the cap of 54
+    expect(scoreSummary(ben)).toMatchObject({ score: 29, verdict: "Missing a must-have", missing: ["Missing must-have: Active CA RDH license"] });
+    expect(scoreSummary(cy)).toEqual({ score: null, verdict: null, coverage: "No AI review yet", basis: null, missing: [] });
+    // an older answer without the word: the band's
+    const { fit: _fit, ...older } = ana.score!;
+    expect(scoreSummary({ ...ana, score: older as MatchScore }).verdict).toBe(ana.score!.bandLabel);
   });
 
   it("says beside each score whether the AI interview is in it, so a résumé-only number is never read as an interviewed one (R20-9)", () => {
@@ -69,24 +72,28 @@ describe("the comparison view", () => {
     expect(waiting.score!.score).toBe(matchScore({ resume, screen: null }, packet)!.score);
   });
 
-  it("puts interviewed people first under 'Highest score first', like with like as Sort: Score (R20-9)", () => {
-    // Kit: a résumé that shows everything, her AI interview not done; Ivo: interviewed, one skill against him
+  it("puts final numbers first under 'Highest score first', then anyone whose AI interview is still coming, as Sort: Score does", () => {
+    // Kit: a résumé that shows everything, her AI interview still to come; Ivo: interviewed, one skill against him
     const all = reading([must("rdh", "yes", "RDH"), must("perio", "yes", "daily perio")], [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "x"), skill("software", "evidenced", "x")]);
-    const kit = person("k", "Kit", null, { score: matchScore({ resume: all, screen: null }, packet, { interview: "not_done" }) });
+    const kit = person("k", "Kit", null, { score: matchScore({ resume: all, screen: null }, packet, { interview: "not_done_yet" }) });
     const scorecard: ScoredReading = { ...all, kind: "screen", createdAt: "2026-10-02T10:00:00Z", result: { requirementFindings: all.result.requirementFindings, competencyFindings: [skill("chairside", "contradicted", "I rush"), skill("patients", "evidenced", "x"), skill("software", "evidenced", "x")] } };
     const ivo = person("i", "Ivo", null, { score: matchScore({ resume: all, screen: scorecard }, packet) });
     expect(kit.score!.score).toBeGreaterThan(ivo.score!.score!);
     expect(ivo.score!.interview).toBe("done");
     expect(orderCandidates([kit, cy, ivo], "score").map((c) => c.name)).toEqual(["Ivo", "Kit", "Cy"]);
-    // within each kind, the highest first; an older answer that does not say counts with the interviewed
+    // a link that closed unsent is a final number: it ranks by itself, with the interviewed, not below them
+    const closed = person("l", "Lia", null, { score: matchScore({ resume: all, screen: null }, packet, { interview: "not_done" }) });
+    expect(orderCandidates([ivo, closed], "score").map((c) => c.name)).toEqual(["Lia", "Ivo"]);
+    // within each kind, the highest first; an older answer that does not say counts as final
     const { interview: _left, basis: _out, ...olderScore } = ivo.score!;
     const older = person("o", "Ola", null, { score: { ...olderScore, score: 70 } as MatchScore });
     expect(orderCandidates([kit, older, ivo], "score").map((c) => c.name)).toEqual(["Ivo", "Ola", "Kit"]);
     expect(orderCandidates([ben, ana], "score").map((c) => c.name)).toEqual(["Ana", "Ben"]);
     // the line says why a lower number can come first, only when both kinds are compared
     expect(mixedScores([kit, ivo])).toBe(true);
+    expect(mixedScores([closed, ivo])).toBe(false);
     expect(mixedScores([ana, ben, cy])).toBe(false);
-    expect(orderLine(2, true)).toBe("2 people, the highest match score first, scores with the AI interview in them before résumé-only ones. A score helps you read; it never decides.");
+    expect(orderLine(2, true)).toBe("2 people, the highest match score first, anyone whose AI interview is still coming after them. A score helps you read; it never decides.");
   });
 
   it("shows, per requirement, what was found, how much was met and the points it cost", () => {
@@ -96,8 +103,8 @@ describe("the comparison view", () => {
     const rdh = criterionCell(ana, "rdh", true);
     if (rdh.state === "judged") expect(cellFigures(rdh)).toBe("100% met · full marks");
     expect(criterionCell(ana, "software", false)).toMatchObject({ state: "judged", words: "Goes against it", pctMet: 0 });
-    // a skill the evidence says nothing about is left out of the score, and the cell says so
-    expect(criterionCell(ana, "patients", false)).toEqual({ state: "unknown", words: "Not known yet, left out of the score" });
+    // a skill the evidence says nothing about earns nothing so far, and the cell says so, never as a no
+    expect(criterionCell(ana, "patients", false)).toEqual({ state: "unknown", words: "Not known yet, no points so far" });
   });
 
   it("falls back to the finding's words when there is no score to read it from, and says when there is nothing", () => {

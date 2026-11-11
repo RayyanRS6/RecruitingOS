@@ -1,6 +1,10 @@
+import type { SignupRequest } from "@ros/contracts";
+
 /**
  * The sign-up form's choices, kept out of the page so they can be tested: the business types, which of them have a
  * hiring guide behind the drafting, and the time zone the owner's own computer reports, snapped to the list we offer.
+ * Also what the screens around a request for access need (SIGNUP_MODE=approval): the look the waiting screen takes every
+ * 30 seconds, and how a company's typed kind of business and website may be shown.
  */
 
 /** The launch wedge first (docs/FOUNDER-CONTEXT.md §06): consumer, beauty, e-commerce, creative and marketing, tech-enabled services. */
@@ -18,6 +22,49 @@ export const VERTICALS: ReadonlyArray<readonly [string, string]> = [
   ["dealership", "Dealership"],
   ["other", "Something else"],
 ];
+
+/** A kind of business in the form's own words; one the form does not offer (a hand-made request) reads as it was sent. */
+export function verticalWords(vertical: string): string {
+  return VERTICALS.find(([value]) => value === vertical)?.[1] ?? vertical;
+}
+
+/**
+ * The address a typed website may link to, or null: what a stranger typed becomes a link only as a plain http or https
+ * address, and never one that hides its real host behind a name and password. Anything else stays plain text. The link is
+ * the parsed address, not the typed words, so what the browser follows is what was checked.
+ */
+export function websiteHref(typed: string | null | undefined): string | null {
+  if (!typed) return null;
+  try {
+    const url = new URL(typed.trim());
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** How often the waiting screen looks again. */
+export const ACCESS_LOOK_MS = 30_000;
+
+/** What one look found: this person's company is open now (`home`), or where their own request stands. */
+export type AccessStanding = { home: true } | { home: false; request: SignupRequest; contact: string | null };
+
+/**
+ * One look from the waiting screen: GET /auth/me says as soon as there is an active company, and GET /auth/config, which
+ * /auth/me knows nothing about, where the request stands. It never rejects: an expired sign-in, no network or a page that
+ * is not JSON is a look that found nothing (null), and the screen stays as it is until a later one finds something.
+ */
+export async function lookAtAccess(get: (path: string) => Promise<unknown>): Promise<AccessStanding | null> {
+  try {
+    const me = (await get("/api/v1/auth/me")) as { activeCompanyId?: string | null } | null;
+    if (me?.activeCompanyId) return { home: true };
+    const config = (await get("/api/v1/auth/config")) as { signup?: { request?: SignupRequest; contact?: string | null } } | null;
+    const request = config?.signup?.request;
+    return request ? { home: false, request, contact: config?.signup?.contact ?? null } : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The business types whose roles are drafted from one of our hiring guides (VERTICAL_TO_PLAYBOOK in packages/playbooks;

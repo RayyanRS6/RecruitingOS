@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, queueCommunication, sendQueuedCommunication } from "@ros/agents";
 import type { Actor } from "@ros/contracts";
-import { loadBusinessCalendar, servedSummary } from "@ros/core";
+import { errorForLog, loadBusinessCalendar, raiseAlert, servedSummary } from "@ros/core";
 import { recruiterEscalations, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
@@ -121,6 +121,36 @@ export async function emailHolderAboutNote(container: Container, n: HeldNote): P
     tags: { template: "escalation_note" },
   });
   return sent.status !== "failed";
+}
+
+/**
+ * Tells the recruiter holding a request that the candidate it is about wrote back (someone the team cannot read, Rule 2), never
+ * their words: the queue row looks the same, and a reply can be a request for an adjustment that nobody else may read. Not
+ * the customer's note, so not `emailHolderAboutNote`'s words. It runs after the reply has committed and never fails it: when the
+ * email cannot go, ITS is put in front of it to tell them another way.
+ */
+export async function emailHolderAboutCandidateReply(container: Container, n: HeldNote & { companyId: string }): Promise<void> {
+  let error: string | null = null;
+  try {
+    const [holder] = await withPlatform(container.db, (tx) => tx.select({ email: users.email }).from(users).where(eq(users.id, n.holderId)).limit(1));
+    if (holder?.email) {
+      const sent = await container.integrations.email.send({
+        to: holder.email,
+        from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
+        subject: `[${n.kind}] The candidate wrote back on a request you hold`,
+        text: `The candidate on a request you are working on wrote back. Their words are on the Messages tab of their page in the customer's workspace, which you open from the request: ${container.env.APP_BASE_URL}/recruiter/queue/${n.escalationId}`,
+        idempotencyKey: `escalation-message:${n.messageId}`,
+        tags: { template: "escalation_candidate_reply" },
+      });
+      if (sent.status !== "failed") return;
+      error = sent.error ?? "no reason given";
+    } else {
+      error = "no address on file for them";
+    }
+  } catch (err) {
+    error = errorForLog(err);
+  }
+  await raiseAlert(container.db, { kind: "recruiter.notify_failed", severity: "high", title: "A recruiter was not told a candidate wrote back", body: `A candidate on a request a recruiter holds wrote back, and the email to the recruiter failed (${error}). Tell them another way: the reply is on the application's thread.`, companyId: n.companyId, target: { type: "escalation", id: n.escalationId }, details: { recruiterUserId: n.holderId, error } }).catch((err: unknown) => console.warn(`[replies] could not raise the alert about a holder not told: ${errorForLog(err)}`));
 }
 
 /**

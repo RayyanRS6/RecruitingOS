@@ -127,12 +127,13 @@ function firstSentence(text: string, companyName: string): string {
  * "What to expect" at a glance (founder brief, 14 October 2026): at most four short lines, from the same steps every
  * page lists (services/job-preview.ts `applySteps`: applying, the conversation, each interview, the decision). Applying
  * and the conversation keep their first sentence; the interviews share one line. The full steps stay one click away.
+ * `noConversation`: the steps of a job past its limit, which have no conversation between applying and the interviews.
  */
-export function expectAtAGlance(steps: string[], companyName: string): string[] {
+export function expectAtAGlance(steps: string[], companyName: string, opts: { noConversation?: boolean } = {}): string[] {
   if (steps.length < 3) return steps.map((s) => firstSentence(s, companyName));
-  const rounds = steps.slice(2, -1);
+  const rounds = steps.slice(opts.noConversation ? 1 : 2, -1);
   const interviews = rounds.length === 0 ? null : rounds.length === 1 ? rounds[0] : `Interviews: ${rounds.join(", ")}`;
-  return [firstSentence(steps[0], companyName), firstSentence(steps[1], companyName), interviews, steps[steps.length - 1]].filter((s): s is string => !!s);
+  return [firstSentence(steps[0], companyName), opts.noConversation ? null : firstSentence(steps[1], companyName), interviews, steps[steps.length - 1]].filter((s): s is string => !!s);
 }
 
 /**
@@ -220,7 +221,7 @@ export function JobPage(props: JobPageProps) {
             {props.benefits ? <p class="pre">{props.benefits}</p> : null}
             <h2>What to expect</h2>
             <ol class="steps">
-              {expectAtAGlance(steps, company.name).map((s) => <li>{s}</li>)}
+              {expectAtAGlance(steps, company.name, { noConversation: props.flow === "on_file" }).map((s) => <li>{s}</li>)}
             </ol>
             <details class="more">
               <summary>More about each step</summary>

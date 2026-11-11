@@ -100,6 +100,24 @@ export function jobActions(input: {
   }
   if (can.hireAgain && (status === "filled" || status === "closed")) out.push({ id: "hire-again", label: "Hire for this job again" });
   if (can.tell && status === "closed" && !input.closingMessageOpen) out.push({ id: "closing-message", label: "Send the closing message" });
-  if (can.close && live) out.push({ id: "close", label: "Close the job", danger: true });
+  if (can.close && CLOSABLE.includes(status)) out.push({ id: "close", label: "Close the job", danger: true });
   return out;
+}
+
+/**
+ * The statuses a job can be closed from (6 November 2026): live or paused, and also waiting for approval or sent back to a
+ * draft, so a plan with no room ("close a role you no longer need") always has a Close to press. Closing gives the place
+ * back and withdraws an approval still waiting (POST /roles/:id/outcome).
+ */
+export const CLOSABLE: readonly string[] = ["open", "paused", "pending_approval", "draft"];
+
+/**
+ * The outcome the close card opens on (6 November 2026): "Filled" when someone on this job is hired here (`counts.hired`,
+ * the job's applicants by stage), "Cancelled" for a job that never went live (waiting for approval or a draft), and
+ * otherwise `fallback`: "Filled outside the platform" from More, "Closed without a hire" from Home's closing-date card.
+ */
+export function defaultCloseOutcome(role: { status: string; counts?: Partial<Record<string, number>> | null }, fallback = "filled_outside_platform"): string {
+  if ((role.counts?.hired ?? 0) > 0) return "filled";
+  if (role.status === "pending_approval" || role.status === "draft") return "role_cancelled";
+  return fallback;
 }

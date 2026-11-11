@@ -90,6 +90,12 @@ export type StartInput = {
   state?: Record<string, unknown>;
   idempotencyKey?: string;
   actor?: Actor;
+  /**
+   * The step to begin at, when this run skips the definition's first. A worker of an older build, during a release, does
+   * not know a step a newer build added: it puts the tick back for a newer worker instead of running it (GAP6-2), which it
+   * could not do for a run that began at a first step it knows and fails on.
+   */
+  startStep?: string;
 };
 
 export type EngineOptions = {

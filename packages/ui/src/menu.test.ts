@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { Icon } from "./icons";
-import { MenuLead, menuFixedAt, menuSide } from "./menu";
+import { MenuLead, menuCap, menuFixedAt, menuSide } from "./menu";
 
 /**
  * Where a menu opens (docs/07): on the side asked for, unless that runs past the edge of the window, where nothing can be
@@ -100,6 +100,30 @@ describe("menuFixedAt", () => {
     // a button scrolled out of its table's box closes its menu, so it never floats over other rows
     expect(src).toContain("if (box && (at.bottom <= box.top || at.top >= box.bottom || at.right <= box.left || at.left >= box.right)) {");
     expect(src).toContain('style={fixedAt ? { position: "fixed", top: fixedAt.top, left: fixedAt.left, right: "auto" } : undefined}');
+  });
+});
+
+/**
+ * A menu taller than the room under its button inside a dialog (the stage menu on the candidate panel, on a laptop's
+ * window): a dialog does not scroll the page, so its last choices ("Hired", "Not moving forward") sat past the window's edge
+ * where nothing could reach them with a mouse. Found by the whole-flow walks, 10 November 2026. Its list now scrolls inside
+ * itself, under its heading.
+ */
+describe("menuCap", () => {
+  it("leaves a menu that fits alone, and lets a taller one's list scroll inside itself, never past the edge", () => {
+    expect(menuCap({ menu: 300, list: 260, buttonBottom: 100, bottom: 720 })).toBeNull();
+    // the stage menu (about 650px, its heading and padding 40px) under the panel's button at 116px in a 720px window
+    expect(menuCap({ menu: 650, list: 610, buttonBottom: 116, bottom: 720 })).toBe(720 - 8 - (116 + 6) - 40);
+    // a button near the bottom keeps room for three choices at least
+    expect(menuCap({ menu: 650, list: 610, buttonBottom: 650, bottom: 720 })).toBe(120);
+  });
+
+  it("is used only inside a dialog, where nothing scrolls the page to a menu, and only on its list", () => {
+    const src = readFileSync(new URL("./menu.tsx", import.meta.url), "utf8");
+    expect(src).toContain(`wrap.current?.closest('[role="dialog"]')`);
+    expect(src).toContain('className={cap === null ? undefined : "menu-scroll"}');
+    const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+    expect(css).toContain(".menu .menu-scroll { max-height: var(--menu-max); overflow-y: auto; overscroll-behavior: contain; }");
   });
 });
 

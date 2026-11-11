@@ -467,18 +467,22 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
     await expect(withTenant(container.db, companyId, (tx) => createApplication(tx, container, late, { kind: "candidate", id: "applicant" }))).rejects.toThrow(/not accepting/);
     const admitted = await withTenant(container.db, companyId, (tx) => createApplication(tx, container, late, { kind: "candidate", id: "applicant" }, { closingGrace: true }));
     expect(admitted.application.roleId).toBe(roleC);
-    // Today: extend by two weeks, choose another date, or close the role (a person's decision)
+    // Today: extend by two weeks, choose another date, or close the job (a person's decision), its button in job words like every other (10 November 2026)
     const card = (await brief(owner)).find((c) => c.kind === "closing_date" && c.roleId === roleC)!;
     expect(card.title).toContain("stopped taking applications");
-    expect(card.actions.map((a) => a.label)).toEqual(["Extend by two weeks", "Choose another date", "Close the role"]);
+    expect(card.actions.map((a) => a.label)).toEqual(["Extend by two weeks", "Choose another date", "Close the job"]);
+    expect(card.actions.map((a) => a.label)).not.toContain("Close the role");
+    expect(card.actions[2]).toMatchObject({ method: "GET", path: `/roles/${roleC}?close=1` });
     expect(card.actions[0]).toMatchObject({ method: "POST", path: `/api/v1/roles/${roleC}/closing-date` });
-    expect(card.body).toContain("close the role when you are ready");
-    // a recruiter manages the date but may not close a role (outcome.record): no "Close the role", and the card says who can
+    // its sentence in job words too (the lead's D1, 11 November 2026)
+    expect(card.body).toContain("close the job when you are ready");
+    expect(card.body).not.toMatch(/\brole\b/);
+    // a recruiter manages the date but may not close a role (outcome.record): no "Close the job", and the card says who can
     const recruiterMember = await signInAs(container, app, { companyId, role: "recruiter", email: "rory@publish.test" });
     const theirs = (await brief(recruiterMember)).find((c) => c.kind === "closing_date" && c.roleId === roleC)!;
     expect(theirs.actions.map((a) => a.label)).toEqual(["Extend by two weeks", "Choose another date"]);
-    expect(theirs.body).not.toContain("close the role when you are ready");
-    expect(theirs.body).toContain("Closing the role is up to the company's owner, an admin, the hiring manager or HR.");
+    expect(theirs.body).not.toContain("close the job when you are ready");
+    expect(theirs.body).toContain("Closing the job is up to the company's owner, an admin, the hiring manager or HR.");
     // the plain switch cannot reopen past the date: the date would stop them again and show a past date
     expect((await errorOf(await post(owner, `/api/v1/roles/${roleC}/applications/accepting`, { accepting: true }))).code).toBe("closing_date_passed");
     // the card's button posts its body as it is (Today adds a question field, which is ignored)
@@ -513,6 +517,8 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
   it("a company that posts on the boards itself gets no ITS tasks; after an approved edit it is told which boards still show the old version", async () => {
     const own = await signIn("owner@diy.test");
     const co = await body<{ id: string }>(await post(own, "/api/v1/companies", { name: "Do It Yourself Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] }));
+    // its own choice, on a plan that leaves the choice to it (a plan with no ITS staff time is in plan-upgrade.test.ts)
+    await entitlements.applyPlan(container.db, co.id, "growth");
     await settings({ boardPosting: "self" }, co.id);
     const roleId = await newRole(own);
     expect((await post(own, `/api/v1/roles/${roleId}/approve`, { version: 1 })).status).toBe(200);

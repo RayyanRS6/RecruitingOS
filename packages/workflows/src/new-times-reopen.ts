@@ -82,6 +82,7 @@ export async function reopenForNewTimes(q: Queryable, engine: WorkflowEngine, in
   const full = `${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "the candidate";
   await notify(q, {
     companyId: iv.companyId,
+    about: iv.applicationId,
     kind: "interview.new_times",
     title: `New times are being set up for ${full}`,
     body: input.offerKind === "new_times_asked"

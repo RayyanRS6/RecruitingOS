@@ -96,11 +96,17 @@ describe("the skills in the role editor", () => {
     expect(MUST_HAVES_SCORE_LINE).toMatch(/holds the score at 54 at most/);
   });
 
-  it("opens the editor at a section only for the sections it has", () => {
+  it("a link opens the editor only at the must-haves or the skills; the approval card's own button opens it at the pay", () => {
     expect(editorFocusFrom("must-haves")).toBe("must-haves");
     expect(editorFocusFrom("skills")).toBe("skills");
     expect(editorFocusFrom("pay")).toBeNull();
     expect(editorFocusFrom(null)).toBeNull();
+    expect(read("../../apps/web/src/pages/RoleEditor.tsx")).toContain('<RequirementGroup id="ed-pay"');
+    const card = read("../../apps/web/src/pages/RolePlan.tsx");
+    expect(card).toContain('onClick={() => onEdit("pay")}>Edit the pay</Button>');
+    // the other buttons pass no focus: a plain `onClick={onEdit}` would hand the click event over as the section to open at
+    expect(card).not.toContain("onClick={onEdit}");
+    expect(read("../../apps/web/src/pages/RoleDetail.tsx")).toContain("onEdit={(focus) => openEditor(focus ?? null)}");
   });
 
   it("is wired into the editor and the role page: the skills rows, the save, and the ?edit= link", () => {

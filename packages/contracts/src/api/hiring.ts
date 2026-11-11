@@ -34,7 +34,8 @@ export type RecordInterviewDecision = z.infer<typeof RecordInterviewDecision>;
  */
 export type HireFollowUp = {
   startDate: string | null;
-  backups: { count: number; people: Array<{ applicationId: string; name: string; stageLabel: string }> };
+  /** `locked`: how many more applied past the plan's candidates per job, a number and never who; older answers leave it out. */
+  backups: { count: number; people: Array<{ applicationId: string; name: string; stageLabel: string }>; locked?: number };
   closeRole: { path: string; outcome: "filled"; stillInProcess: number; words: string } | null;
 };
 
@@ -82,9 +83,10 @@ export type NotesView = { notes: NoteView[]; mine: NoteView | null; canRead: "al
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /**
- * The interview approval card filled in (GET /applications/:id/interview-draft, and `interviewDraft` when "Yes,
- * interview" approves the assistant's suggestion): the round, who interviews (the plan's people who are still active
- * members), the meeting link and the scheduling window. Posting it to `requestPath` is the one approval.
+ * The "Set a date and time" form's defaults (GET /applications/:id/interview-draft, and `interviewDraft` when "Yes,
+ * interview" approves the assistant's suggestion; since 6 November 2026 a person books the time directly): the round, who
+ * interviews (the plan's people who are still active members), the meeting link and the scheduling window. The form posts
+ * to `requestPath` with the day and time the person chose.
  */
 export type InterviewDraft = {
   applicationId: string; roleId: string; roundKey: string; roundTitle: string; durationMinutes: number; format: string;

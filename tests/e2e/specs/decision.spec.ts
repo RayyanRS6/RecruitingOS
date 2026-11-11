@@ -2,12 +2,12 @@ import { expect, test } from "@playwright/test";
 import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /**
- * The loop after an interview in a real browser (audit findings F6 and J13): the owner approves an interview, the
- * candidate books a time, the owner records that it took place from the interview sheet, follows the deep link to
- * the candidate's sheet, and records the decision there; then (plan Wave H) writes a private team note, records the
- * offer made outside the app, the candidate's yes on the one-sheet hire, and closes the role from it. Every page visited
- * is checked against WCAG 2.1 AA with axe.
- * Everything is synthetic; every provider is a fake. Mirrors journey.spec.ts step for step up to the booking.
+ * The loop after an interview in a real browser (audit findings F6 and J13): the owner sets the date and time herself
+ * (6 November 2026: no calendar and no declared hours needed, and one press books it), the candidate's page shows it
+ * booked, the owner records that it took place from the interview sheet, follows the deep link to the candidate's sheet,
+ * and records the decision there; then (plan Wave H) writes a private team note, records the offer made outside the app,
+ * the candidate's yes on the one-sheet hire, and closes the role from it. Every page visited is checked against WCAG 2.1
+ * AA with axe. Everything is synthetic; every provider is a fake.
  */
 const run = Date.now().toString(36);
 
@@ -23,13 +23,8 @@ test.describe("decision after an interview", () => {
 
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
 
-    // the owner declares availability so times can be offered from her hours
-    await page.goto("/setup?tab=notifications");
-    await expect(page.getByRole("heading", { name: "My availability for interviews" })).toBeVisible();
-    await page.getByRole("button", { name: "Save availability" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Availability saved/ })).toBeVisible();
-
-    // the owner opens the candidate and moves them to Interviewing, which opens the interview approval
+    // the owner opens the candidate and moves them to Interviewing, which opens "Set a date and time": nobody has
+    // declared hours or connected a calendar, and none is needed
     await page.goto(`/roles/${seeded.roleId}/talent`);
     await page.getByRole("tab", { name: /^All/ }).click();
     await expect(page.getByRole("button", { name: "Maria Reyes" })).toBeVisible({ timeout: 30_000 });
@@ -38,25 +33,23 @@ test.describe("decision after an interview", () => {
     await expect(sheet).toBeVisible();
     await sheet.getByRole("button", { name: /^Stage: / }).click();
     await sheet.getByRole("menuitemradio", { name: /^Interviewing/ }).click();
-    await expect(sheet.getByRole("heading", { name: "Approve an interview" })).toBeVisible();
-    await sheet.getByRole("checkbox").first().check();
+    await expect(sheet.getByRole("heading", { name: "Set a date and time" })).toBeVisible();
+    // greyed with its reason until the day and time are chosen; the time is on the company's clock, named beside it
+    await expect(sheet.getByText("Choose a date and a time.", { exact: true })).toBeVisible();
+    const day = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+    await sheet.getByLabel("Date", { exact: true }).fill(day);
+    await sheet.getByLabel(/^Time \(/).fill("10:30");
+    await expect(sheet.getByText(/ at 10:30 AM, America\//)).toBeVisible();
     // an optional personal line for the invitation (Q28), checked like any other
     await sheet.getByText("Add a personal line (optional)", { exact: true }).click();
     await sheet.getByLabel("A personal line for the invitation (optional)").fill("We enjoyed reading about your work.");
-    await expectAccessible(page, "interview approval with a personal line");
-    await sheet.getByRole("button", { name: "Approve and offer times" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Interview approved/ })).toBeVisible();
+    await expectAccessible(page, "set a date and time with a personal line");
+    await sheet.getByRole("button", { name: /^Book( and email Maria)?$/ }).click();
+    await expect(page.getByRole("status").filter({ hasText: /Booked\./ })).toBeVisible();
 
-    // the candidate picks a time from the status page
+    // the candidate's own page has it booked: nothing for them to pick
     await page.goto(seeded.statusPath);
-    await expect(page.getByRole("link", { name: "Choose a time" })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("link", { name: "Choose a time" }).click();
-    await expect(page.getByRole("heading", { name: /Pick a time/ })).toBeVisible();
-    await page.getByRole("radio").first().check();
-    await page.getByRole("button", { name: "Confirm this time" }).click();
-    await expect(page.getByRole("heading", { name: /confirmed|Booking your time/ })).toBeVisible();
-    await page.reload();
-    await expect(page.getByRole("heading", { name: /You.re confirmed/ })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/Your interview is booked/).first()).toBeVisible({ timeout: 30_000 });
 
     // the owner records that the interview took place; the candidate moves to "Interview done: decision needed"
     await page.goto("/interviews");
@@ -134,11 +127,13 @@ test.describe("decision after an interview", () => {
     await expectAccessible(page, "candidate panel hire sheet");
     await candidate.getByRole("button", { name: "Yes, record the hire" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Maria Reyes is hired\./ })).toBeVisible();
-    // nobody else is in the running here: the sheet offers to close the role now, and nobody is told anything by it
-    await expect(candidate.getByRole("heading", { name: "Maria Reyes is hired: what about the role?" })).toBeVisible({ timeout: 30_000 });
-    await expect(candidate.getByText("Close the role now and tell them")).toBeVisible();
+    // nobody else is in process here: the sheet offers to close the job now, in job words, and promises nobody a message
+    // ("and tell them" only when someone is left to tell: the release review, 11 November 2026)
+    await expect(candidate.getByRole("heading", { name: "Maria Reyes is hired: what about the job?" })).toBeVisible({ timeout: 30_000 });
+    await expect(candidate.getByText("Close the job now", { exact: true })).toBeVisible();
+    await expect(candidate.getByText("Close the job now and tell them")).toHaveCount(0);
     await candidate.getByRole("button", { name: "Close it now" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Role closed as filled\./ })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: /Job closed as filled\./ })).toBeVisible();
     await expect(candidate.getByRole("button", { name: /^Stage: Hired/ })).toBeVisible({ timeout: 30_000 });
 
     // closing the sheet clears the deep link from the address

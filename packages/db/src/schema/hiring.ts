@@ -329,6 +329,8 @@ export const applications = pgTable(
      */
     toldState: text("told_state").$type<ToldState>().notNull().default("not_told"),
     candidateToldAt: ts("candidate_told_at"),
+    /** Past the plan's candidates per job when it came in (migration 0036): the team cannot read this person. Null means visible. */
+    lockedAt: ts("locked_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -482,9 +484,10 @@ export const interviews = pgTable(
     scheduleToken: text("schedule_token"),
     scheduleTokenExpiresAt: ts("schedule_token_expires_at"),
     schedulingWindow: jsonb("scheduling_window").$type<{ fromDate?: string; toDate?: string; businessDaysOnly?: boolean; candidateTimezone?: string }>().notNull().default({}),
-    offeredSlots: jsonb("offered_slots").$type<Array<{ id: string; startsAt: string; endsAt: string; interviewerUserIds: string[]; source: "calendar" | "declared" }>>().notNull().default([]),
-    selectedSlot: jsonb("selected_slot").$type<{ id: string; startsAt: string; endsAt: string; interviewerUserIds: string[]; source: "calendar" | "declared" } | null>(),
-    candidateAvailability: jsonb("candidate_availability").$type<{ timezone?: string; note?: string; preferred?: Array<{ day: number; part: string }>; at?: string } | null>(),
+    offeredSlots: jsonb("offered_slots").$type<Array<{ id: string; startsAt: string; endsAt: string; interviewerUserIds: string[]; source: "calendar" | "declared" | "person"; address?: string }>>().notNull().default([]),
+    /** `source: "person"`: someone on the team set this time themselves; `address` is the place when they gave one (no column of its own). */
+    selectedSlot: jsonb("selected_slot").$type<{ id: string; startsAt: string; endsAt: string; interviewerUserIds: string[]; source: "calendar" | "declared" | "person"; address?: string } | null>(),
+    candidateAvailability: jsonb("candidate_availability").$type<{ timezone?: string; note?: string; preferred?: Array<{ day: number; part: string }>; at?: string; accessibilityNote?: string } | null>(),
     linkSource: text("link_source").notNull().default("calendar"),
     rescheduleCountCandidate: integer("reschedule_count_candidate").notNull().default(0),
     attempt: integer("attempt").notNull().default(1),

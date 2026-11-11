@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { MessageStreamParams, TextBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import { z } from "zod";
+import { DEFAULT_MAX_TOKENS } from "../pricing";
 import type { AiProvider, StructuredRequest, StructuredResult, Usage } from "../types";
 
 /**
@@ -104,8 +105,12 @@ export function instructionSchema(schema: StructuredRequest<unknown>["schema"]):
   return JSON.stringify(z.toJSONSchema(schema, { reused: "ref" }));
 }
 
-/** What every request in one `structured` call shares: when it started and must end, the deadline signal, and the tokens used so far. */
-type CallState = { started: number; endsAt: number; signal: AbortSignal; usage: Usage };
+/**
+ * What every request in one `structured` call shares: when it started and must end, the deadline signal, and the tokens used
+ * so far. `replying`: the request under way has begun to answer, so if it fails now it may be billed for what it wrote,
+ * which `usage` cannot say (usage is added only once a reply has ended).
+ */
+type CallState = { started: number; endsAt: number; signal: AbortSignal; usage: Usage; replying: boolean };
 
 /**
  * The only file that imports the Anthropic SDK. Uses structured outputs (JSON-schema constrained), prompt caching on
@@ -141,7 +146,7 @@ export class AnthropicProvider implements AiProvider {
     // Haiku 5.5 and Sonnet 5.5 answer a conversation that ends with an assistant turn (a prefill) with a 400, so a
     // request always ends with a turn from the user.
     if (!messages.length || messages[messages.length - 1]!.role === "assistant") messages.push({ role: "user", content: "Continue." });
-    const base = { model, max_tokens: req.maxTokens ?? 16000, system, messages };
+    const base = { model, max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS, system, messages };
     const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     // The call's own budget, or less when the HTTP request it serves must answer sooner (see CALL_BUDGET_MS).
     const endsAt = Math.min(started + CALL_BUDGET_MS, req.deadlineAt === undefined ? Number.POSITIVE_INFINITY : req.deadlineAt - ROUTE_RESERVE_MS);
@@ -151,7 +156,7 @@ export class AnthropicProvider implements AiProvider {
     // One deadline for the whole call: it stops whichever request is still running when the budget is spent.
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), endsAt - started);
-    const call: CallState = { started, endsAt, signal: deadline.signal, usage };
+    const call: CallState = { started, endsAt, signal: deadline.signal, usage, replying: false };
     try {
       if (!tooLargeForGrammar.has(req.schema)) {
         try {
@@ -167,8 +172,11 @@ export class AnthropicProvider implements AiProvider {
       const params = { ...base, system: [...system, instruction], ...(effort ? { output_config: { effort } } : {}) } satisfies MessageStreamParams;
       return await this.ask(req, params, " (unconstrained)", call);
     } catch (err) {
-      const message = deadline.signal.aborted ? `the model did not finish within ${Math.round((endsAt - started) / 1000)} seconds, so the call was stopped` : err instanceof Error ? err.message : String(err);
-      return { kind: "invalid", error: `provider error: ${message}`, model, usage, latencyMs: Date.now() - started, final: true };
+      const stopped = deadline.signal.aborted;
+      const message = stopped ? `the model did not finish within ${Math.round((endsAt - started) / 1000)} seconds, so the call was stopped` : err instanceof Error ? err.message : String(err);
+      // Cut after a reply began, at the deadline or part-way: it may well be billed. A failure before any reply is not, a deadline
+      // that came first included (a provider that never answered), and neither is an error of our own.
+      return { kind: "invalid", error: `provider error: ${message}`, model, usage, latencyMs: Date.now() - started, final: true, ...(call.replying ? { usageUnknown: true } : {}) };
     } finally {
       clearTimeout(timer);
     }
@@ -187,7 +195,12 @@ export class AnthropicProvider implements AiProvider {
     let last = { error: "no reply", rawText: "" };
     for (let attempt = 0; attempt < 2; attempt++) {
       const left = Math.max(1, endsAt - Date.now());
-      const response = await this.client.messages.stream({ ...params, messages }, { timeout: left, signal: call.signal }).finalMessage();
+      call.replying = false;
+      const stream = this.client.messages.stream({ ...params, messages }, { timeout: left, signal: call.signal });
+      // The stream's own word that the provider began to answer: a status other than 2xx, or no connection, never comes this far.
+      stream.on("connect", () => { call.replying = true; });
+      const response = await stream.finalMessage();
+      call.replying = false;
       usage.inputTokens += response.usage.input_tokens;
       usage.outputTokens += response.usage.output_tokens;
       usage.cacheReadTokens += response.usage.cache_read_input_tokens ?? 0;

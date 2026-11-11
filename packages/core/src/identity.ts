@@ -64,7 +64,7 @@ export function holdsOtherThanStaffProvider(identity: IdentityLike, policy: Sign
 export function evaluateSignIn(identity: IdentityLike, existing: { platformRole: string } | null, policy: SignInPolicy = DEFAULT_SIGN_IN_POLICY): SignInDecision {
   const bootstrap = (policy.bootstrapAdmins ?? []).includes(normalizeEmail(identity.email));
   const staff = isStaffAccount(identity.email, bootstrap ? "platform_admin" : existing?.platformRole, policy);
-  if (!identity.emailVerified) return { ok: false, staff, code: "email_unverified", message: "Your email address is not verified with the sign-in provider. Verify it and try again." };
+  if (!identity.emailVerified) return { ok: false, staff, code: "email_unverified", message: "Your email address is not verified with the sign-in provider. Ask your IT to check the email address on your account, or use the other sign-in button." };
   if (staff && identity.provider !== policy.staffProvider) return { ok: false, staff, code: "staff_provider_required", message: "ITS staff sign in with their Microsoft 365 account." };
   if (staff && holdsOtherThanStaffProvider(identity, policy)) return { ok: false, staff, code: "staff_provider_linked", message: "This ITS account is also linked to another sign-in method. Ask an ITS administrator to remove that link, then sign in with Microsoft 365." };
   if (staff && policy.requireStaffMfa && identity.aal !== "aal2") return { ok: false, staff, code: "mfa_required", message: "ITS staff need a second factor. Finish multi-factor sign-in and try again." };

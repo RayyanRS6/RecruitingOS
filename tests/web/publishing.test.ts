@@ -7,7 +7,7 @@ import { shareTargets } from "../../apps/api/src/services/job-urls";
 import type { PostingView, PostingsResponse, RolePacket } from "../../apps/web/src/api/client";
 import {
   aboutDraftOf, aboutProblem, addDays, approveRequest, autoActionsLine, boardsOnTheLine, boardStatus, boardTicksToast, careersStatus, closingDateLine, closingDateProblem, closingDateRequiredFor,
-  closingDateToast, dayWords, destinationsOf, draftClosingDateKey, googleStatus, interviewersNote, isClosingDateAction, isLegalReason, isPostingTaskKind, legalLines,
+  closingDateToast, dayWords, destinationsOf, draftClosingDateKey, googleStatus, interviewersNote, isClosingDateAction, isPostingTaskKind, legalLines,
   liveEditWords, logoProblem, logoUrlOf, materialChangesOf, noBoardsLine, opensOwnApp, outdatedBoardsLine, pollInterval, previewHref, previewOfEdit, previewPageHref, queueKindLabel,
   readDraftClosingDate, savedBoardsKey, savedVersionToast, shareSubject, shareTargetsFor, shareTextFor, todayIn, unsavedBoards, writeDraftClosingDate,
 } from "../../apps/web/src/publishing";
@@ -114,20 +114,24 @@ describe("the screen right after approval (D2)", () => {
     expect(noBoardsLine(view().boards.map((b) => ({ ...b, chosen: false })))).toBe("No job boards were chosen for this job. You can add LinkedIn or Indeed from the Share tab at any time.");
   });
 
-  it("says when no interviewers are set, and which boards still show the earlier version after an approved change", () => {
-    expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: 2 })).toMatch(/^Nobody is set to interview yet\./);
-    expect(interviewersNote({ rounds: 3, roundsWithoutInterviewers: 1 })).toMatch(/^1 of the 3 interview rounds have nobody/);
+  it("says when no interviewers are named, and which boards still show the earlier version after an approved change", () => {
+    // a plain fact in the new flow's words: whoever sets a date and time chooses who interviews, and no times are promised
+    // (the release review, 11 November 2026, L3-2)
+    expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: 2 })).toBe("Nobody is named to interview yet. Whoever sets a date and time chooses who interviews.");
+    expect(interviewersNote({ rounds: 3, roundsWithoutInterviewers: 1 })).toBe("1 of the 3 interview rounds has nobody named to interview yet. Whoever sets a date and time chooses who interviews.");
+    expect(interviewersNote({ rounds: 3, roundsWithoutInterviewers: 2 })).toMatch(/^2 of the 3 interview rounds have nobody named/);
+    for (const n of [1, 2]) expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: n })).not.toMatch(/offered times|straight away|Choose who interviews now/);
     expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: 0 })).toBeNull();
     expect(outdatedBoardsLine(["indeed"], "its")).toBe("Indeed still shows the earlier version. ITS has a task to update it from your company's account.");
     expect(outdatedBoardsLine(["linkedin_basic", "indeed"], "self")).toBe("LinkedIn, Indeed still show the earlier version. Update them from your own account, then confirm on the Share tab.");
     expect(outdatedBoardsLine([], "its")).toBeNull();
   });
 
-  it("is a calm confirmation with a tick, 'Go to your role' as the main button and 'Share it now'", () => {
+  it("is a calm confirmation with a tick, 'Go to your job' as the main button and 'Share it now'", () => {
     const screen = read("../../apps/web/src/pages/AfterApproval.tsx");
     expect(screen).toContain('title={props.editWhileOpen ? "Your change is approved" : "Your job is approved"}');
     expect(screen).toContain('mark="check"');
-    expect(screen).toContain('<Button variant="primary" onClick={props.onClose}>Go to your role</Button>');
+    expect(screen).toContain('<Button variant="primary" onClick={props.onClose}>Go to your job</Button>');
     expect(screen).toContain(">Share it now</Button>");
     expect(screen).toContain("pollInterval(query.state.data?.publishing)");
     expect(screen).toContain("props.editWhileOpen && Date.now() - openedAt.current < EDIT_SETTLE_MS ? 3000");
@@ -152,9 +156,6 @@ describe("what starts on its own, and the legal check, on the approval card (D9,
     expect(lines.missing.map((i) => i.key)).toEqual(["benefits"]);
     expect(lines.inOrder.map((i) => i.key)).toEqual(["pay_range", "closing_date"]);
     expect(legalLines(null)).toEqual({ missing: [], inOrder: [] });
-    // the card lists the items instead of repeating the server's sentence
-    expect(isLegalReason("Before this job can go live, the law where it is asks for: a short description of the benefits.")).toBe(true);
-    expect(isLegalReason("You started this role, so someone else approves it.")).toBe(false);
   });
 });
 
@@ -268,7 +269,7 @@ describe("the closing date (D7, founder decision Q12)", () => {
     expect(todayIn("Not/AZone", new Date("2026-10-09T03:00:00Z"))).toBe("2026-10-09");
   });
 
-  it("Today's 'Extend' posts the date as the card has it; 'Close the role' opens the close form, nothing more", () => {
+  it("Today's 'Extend' posts the date as the card has it; 'Close the job' opens the close form, nothing more", () => {
     expect(isClosingDateAction({ method: "POST", path: "/api/v1/roles/r1/closing-date" })).toBe(true);
     expect(isClosingDateAction({ method: "GET", path: "/roles/r1?tab=posting#closing-date" })).toBe(false);
     const home = read("../../apps/web/src/pages/Home.tsx");

@@ -1,15 +1,18 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
-import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
-import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
+import { and, desc, eq, inArray, isNull, like, notInArray, sql } from "drizzle-orm";
+import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, LOCKED_REQUEST_LINE, NO_WORK_WHILE_LOCKED, PLAN_REQUEST_EXPERTISE, PLAN_REQUEST_OPEN_LINE, PLAN_REQUEST_SUMMARY, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, applicationLocked, assertCan, audit, can, companyHasLocked, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, hiddenAmong, isBoardChannel, isPlanRequest, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, openPlanRequests, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
-import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
+import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Tenant, type Vars } from "../middleware/session";
+import { assertNotLocked } from "../middleware/candidate-lock";
+import { withoutLockedApprovals, withoutLockedEvents } from "../services/locked-visibility";
 import { HttpError } from "../middleware/errors";
 import { briefViewerOf, composeBrief } from "../services/brief";
 import { escalationInScope, eventTargets, inStaffScope, staffMayAsk, staffScopeOf } from "../services/staff-scope";
 import { assertMayApprovePacket } from "../services/packet-approval";
+import { CLOSED_ROLE_MESSAGE } from "../services/packet-versions";
 import { withoutUnsentChats } from "../services/screen-visibility";
 import { assertMayShareDraft } from "./intake";
 import { settleMessageApproval } from "../services/messages";
@@ -19,15 +22,20 @@ import { approverRolesOf, mayDecideByRole } from "../services/approvers";
 import { attachBoardSnapshot, emailItsQueue, sendToIts } from "../services/escalation-queue";
 import { interviewDraftFor } from "./interviews";
 import { assertNoNewWork } from "../services/trial";
+import { callNotesGoOnAiInterview } from "../services/screens";
 
 export const approvalRoutes = new Hono<Vars>();
+
+/** An id in a path that is not a uuid names nothing: a plain 404 in the route's words, never a database error (10 November 2026). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The approval requests themselves. A request's proposal can carry a candidate's name and a message written to them
  * (F11), so the list needs application.read (an interviewer sees only their own interviews, F9), and ITS staff under a
  * scoped grant see only the requests they may decide (`staffMayAsk`, the rule POST /:id/decide applies): a role grant
  * those about its role or one of its candidates, a grant about one candidate only that candidate's. A request about a
- * whole role (the closing message lists every untold applicant) or about the whole company is left out for them.
+ * whole role (the closing message lists every untold applicant) or about the whole company is left out for them. A
+ * request about someone past the plan's candidates per job (Rule 3) is left out for everyone it does not name.
  */
 approvalRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -35,7 +43,7 @@ approvalRoutes.get("/", requireTenant, async (c) => {
   const status = c.req.query("status") ?? "pending";
   const scope = staffScopeOf(t);
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const all = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, t.companyId), eq(approvalRequests.status, status))).orderBy(desc(approvalRequests.createdAt));
+    const all = await withoutLockedApprovals(tx, t, await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, t.companyId), eq(approvalRequests.status, status))).orderBy(desc(approvalRequests.createdAt)));
     if (!scope) return all;
     // A request about a candidate may carry only the application: its role comes from the application, as on decide.
     const appIds = [...new Set(all.filter((r) => r.applicationId && !r.roleId).map((r) => r.applicationId as string))];
@@ -52,9 +60,12 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
   const container = c.get("container");
   // Stamped on the engine's clock, the one the waiting workflow compares against (expiry, the decision after the request).
   const decidedAt = container.engine.clock().toISOString();
+  const id = c.req.param("id");
   const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [req] = await tx.select().from(approvalRequests).where(eq(approvalRequests.id, c.req.param("id"))).limit(1);
+    const [req] = UUID.test(id) ? await tx.select().from(approvalRequests).where(eq(approvalRequests.id, id)).limit(1) : [];
     if (!req) throw new HttpError(404, "not_found", "Approval request not found.");
+    // The approval's id is in the path, not the person's: nobody decides about someone they cannot read (Rule 3).
+    await assertNotLocked(tx, t, req.applicationId);
     // ITS staff under a grant decide only what the grant covers, as on every route that takes an id: a request about
     // their role or one of its candidates (a grant about one candidate: that candidate). Deciding acts for the whole of
     // what a request is about, so a request about the role's whole group, or the company's, is not theirs to decide under
@@ -72,6 +83,8 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
       assertCan(t.role, "role.approve");
       const [role] = req.roleId ? await tx.select().from(roles).where(eq(roles.id, req.roleId)).limit(1) : [];
       if (!role) throw new HttpError(404, "not_found", "Role not found.");
+      // A closed role is never opened or sent back by a decision (closing one withdraws its request); only ITS reopens one.
+      if (role.status === "closed") throw new HttpError(409, "role_closed", CLOSED_ROLE_MESSAGE);
       const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, proposedVersion))).limit(1);
       if (status === "approved") await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null, now: container.engine.clock() });
       else {
@@ -89,6 +102,8 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
     // (founder decision L-02 B), as the invite button does. Refused before anything is written, so the suggestion stays
     // waiting and can be approved once a plan is chosen; "Not now" is never refused.
     if (status === "approved" && req.actionType === "application.invite_screen") await assertNoNewWork(tx, t.companyId, container.engine.clock());
+    // Neither of these starts for someone locked, even under a grant naming them, as with the same choices on their page.
+    if (status === "approved" && (req.actionType === "application.invite_screen" || req.actionType === "application.recommend_interview") && req.applicationId && (await applicationLocked(tx, req.applicationId))) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
     await tx.update(approvalRequests).set({ status, decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null, decisionEdits: body.edits ?? null }).where(eq(approvalRequests.id, req.id));
     await emit(tx, { type: body.decision === "approve" ? "approval.granted" : "approval.denied", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: req.roleId, applicationId: req.applicationId ?? null, version: Number.isFinite(proposedVersion) ? proposedVersion : null, note: body.note ?? null }, correlationId: req.workflowRunId });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: status } });
@@ -115,7 +130,7 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
         await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor: actorOf(c), reason: body.note ?? "approved the recommendation" });
         await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { by: "approval", approvalRequestId: req.id } });
       }
-      // "Yes, interview" (plan H4): the answer carries the interview approval card filled in, so the next click books it.
+      // "Yes, interview" (plan H4): the answer carries the "Set a date and time" form's defaults, so the next click books it.
       if (app && req.actionType === "application.recommend_interview" && can(t.role, "interview.request")) interviewDraft = await interviewDraftFor(tx, { app, now: container.engine.clock() });
     }
     return { ok: true, status, ...(decisionMessage ?? {}), ...(messageStatus ? { messageStatus } : {}), ...(closing ? { closingMessage: closing } : {}), ...(interviewDraft ? { interviewDraft } : {}) };
@@ -125,8 +140,6 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
 });
 
 export const escalationRoutes = new Hono<Vars>();
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** What the recruiter sees, in the words every message about their access uses (Q31: say the real access). */
 function accessWords(scope: EscalationScope): string {
@@ -140,9 +153,11 @@ const ACCESS_LIMITS = `Their access starts when they pick the request up and end
 /**
  * Settles what a request covers before it is created. The ids decide it; a request with neither a role nor a candidate
  * covers the whole company only when the person said so (`scope: "company"`), never by leaving the ids out. A candidate
- * brings their role along, so the recruiter can read the role they applied for.
+ * brings their role along, so the recruiter can read the role they applied for. Nobody brings a recruiter in on someone past
+ * the plan's candidates per job (Rule 3), or asking who they are would be a way past the lock; a request about the role or
+ * the company is taken as ever, and its context has no one locked in it.
  */
-async function settleScope(tx: Tx, body: CreateEscalation): Promise<{ scope: EscalationScope; roleId: string | null; applicationId: string | null }> {
+async function settleScope(tx: Tx, body: CreateEscalation, t: Tenant): Promise<{ scope: EscalationScope; roleId: string | null; applicationId: string | null }> {
   const scope: EscalationScope | undefined = body.scope ?? (body.applicationId ? "application" : body.roleId ? "role" : undefined);
   if (!scope) throw new HttpError(400, "scope_required", "Say which hire this is about, or choose all of your hiring.");
   if (scope === "company") {
@@ -154,6 +169,7 @@ async function settleScope(tx: Tx, body: CreateEscalation): Promise<{ scope: Esc
   if (body.applicationId) {
     const [app] = UUID.test(body.applicationId) ? await tx.select({ id: applications.id, roleId: applications.roleId }).from(applications).where(eq(applications.id, body.applicationId)).limit(1) : [];
     if (!app) throw new HttpError(404, "not_found", "That candidate is not in your company.");
+    await assertNotLocked(tx, t, app.id);
     if (body.roleId && body.roleId !== app.roleId) throw new HttpError(400, "scope_mismatch", "That candidate applied to a different role.");
     return { scope, roleId: app.roleId, applicationId: app.id };
   }
@@ -162,19 +178,36 @@ async function settleScope(tx: Tx, body: CreateEscalation): Promise<{ scope: Esc
   return { scope, roleId: role.id, applicationId: null };
 }
 
+/** What the queue says before a recruiter accepts a talk about the plan: its words open, nothing else does. */
+const PLAN_REQUEST_BEFORE_ACCEPT = "Accept to read what the customer wrote about their plan. It gives you no access to their hiring.";
+
 /** Said with every request marked urgent (founder decision Q32, option A): what urgency does, and what it does not. */
 const URGENT_WORDS = "It is marked urgent, so it goes to the front of the ITS queue; the reply-by time is the same as for any request.";
 const isUrgent = (urgency: string) => urgency === "high" || urgency === "critical";
 
-/** "Bring in a recruiter." The customer's request; the SLA counts business hours (founder decision F12). */
+/**
+ * One open request about the plan at a time, whoever asks: two people asking at once take turns on this lock, and the second
+ * reads the first's request and is told softly that ITS has it. Held to the end of the transaction.
+ */
+async function lockPlanRequests(tx: Tx, companyId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`plan_request:${companyId}`}))`);
+}
+
+/**
+ * "Bring in a recruiter." The customer's request; the SLA counts business hours (founder decision F12). A talk about the
+ * plan (`topic: "plan"`, the plans of 5 November 2026, Rule 5) carries no record of the company's hiring and gives whoever
+ * takes it no access, so its answer says nothing about access; while one is open another is not raised: 200, "ITS has your
+ * request", and the open one's id.
+ */
 escalationRoutes.post("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "escalation.create");
   const body = CreateEscalation.parse(await c.req.json());
   const container = c.get("container");
   const actor = actorOf(c);
-  const { created, preview, calendar, scope, allowance, companyName } = await withTenant(container.db, t.companyId, async (tx) => {
-    const { scope, roleId, applicationId } = await settleScope(tx, body);
+  const planTalk = body.topic === "plan";
+  const outcome = await withTenant(container.db, t.companyId, async (tx) => {
+    const { scope, roleId, applicationId } = await settleScope(tx, body, t);
     // A recruiter under a grant asks only about what that grant covers, never wider: claiming the request would grant it.
     if (!staffMayAsk(staffScopeOf(t), { roleId, applicationId })) throw new HttpError(403, "staff_scope", "Your access is limited to the role or candidate of the request you accepted, so you can only ask about that.");
     // A draft still being written (C12) has no role yet: the request covers the company, and carries the draft's conversation.
@@ -182,7 +215,15 @@ escalationRoutes.post("/", requireTenant, async (c) => {
       if (scope !== "company") throw new HttpError(400, "scope_mismatch", "A request about a draft covers all of your hiring, since the role does not exist yet.");
       await assertMayShareDraft(tx, t, body.intakeSessionId);
     }
-    const created = await createEscalation(tx, { companyId: t.companyId, roleId, applicationId, kind: body.kind, question: body.question, requestedBy: actor, urgency: body.urgency, intakeSessionId: body.intakeSessionId ?? null });
+    const [co] = await tx.select({ id: companies.id, name: companies.name, vertical: companies.vertical, sizeBand: companies.sizeBand }).from(companies).where(eq(companies.id, t.companyId)).limit(1);
+    if (planTalk) {
+      await lockPlanRequests(tx, t.companyId);
+      const [open] = await openPlanRequests(tx, t.companyId);
+      if (open) return { already: { id: open.id, slaDueAt: open.slaDueAt } };
+    }
+    // A talk about the plan needs the company's name and what the person wrote, nothing about its hiring, and its summary before anyone accepts it says what it is.
+    const planFields = planTalk ? { summary: PLAN_REQUEST_SUMMARY, expertise: PLAN_REQUEST_EXPERTISE, context: { capturedAt: container.engine.clock().toISOString(), company: co ?? null } } : {};
+    const created = await createEscalation(tx, { companyId: t.companyId, roleId, applicationId, kind: body.kind, question: body.question, requestedBy: actor, urgency: body.urgency, intakeSessionId: body.intakeSessionId ?? null, ...planFields });
     // "Have a recruiter check this" from the pool board (plan F9): the recruiter opens the board as it stood when asked,
     // with the summary and where each person was placed and why, beside the role's own record.
     if (body.kind === "review" && roleId && !applicationId) await attachBoardSnapshot(tx, { escalationId: created.id, roleId, tenant: t, now: container.engine.clock() });
@@ -192,12 +233,14 @@ escalationRoutes.post("/", requireTenant, async (c) => {
     if (allowance) await tx.update(recruiterEscalations).set({ billing: { countsTowardAllowance: true, used: allowance.used, limit: allowance.limit, overAllowance: allowance.over } }).where(eq(recruiterEscalations.id, created.id));
     else if (body.topic === "plan") await tx.update(recruiterEscalations).set({ billing: { countsTowardAllowance: false, topic: "plan" } }).where(eq(recruiterEscalations.id, created.id));
     const [row] = await tx.select({ urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary }).from(recruiterEscalations).where(eq(recruiterEscalations.id, created.id)).limit(1);
-    const [co] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, t.companyId)).limit(1);
     return { created, preview: row, calendar: await loadBusinessCalendar(tx), scope, allowance, companyName: co?.name ?? "A customer" };
   });
+  if ("already" in outcome) return c.json({ ...outcome.already, scope: "company" as const, alreadyAsked: true, message: PLAN_REQUEST_OPEN_LINE });
+  const { created, preview, calendar, scope, allowance, companyName } = outcome;
   // Past the allowance: ITS is told, for billing; the request itself went ahead like any other.
   if (allowance?.over) await withPlatform(container.db, (tx) => entitlements.flagRecruiterAsksOver(tx, { companyId: t.companyId, companyName, standing: allowance, escalationId: created.id }));
   await emailItsQueue(container, { id: created.id, companyId: t.companyId, kind: body.kind, slaDueAt: created.slaDueAt, urgency: preview.urgency, requiredExpertise: preview.requiredExpertise, summary: preview.summary, timeZone: calendar.timeZone });
+  if (planTalk) return c.json({ id: created.id, slaDueAt: created.slaDueAt, scope, message: `ITS will respond by ${deadlineWords(new Date(created.slaDueAt), calendar)} (business hours are ${describeHours(calendar)}). No card is charged, and nothing changes until then.` }, 201);
   const over = allowance?.over && allowance.limit !== null ? ` Your plan includes ${allowance.limit} recruiter ${allowance.limit === 1 ? "request" : "requests"} and this is number ${allowance.used}. It goes ahead as usual; ITS will talk with you about the extra.` : "";
   return c.json({ id: created.id, slaDueAt: created.slaDueAt, scope, message: `A recruiter will respond by ${deadlineWords(new Date(created.slaDueAt), calendar)} (business hours are ${describeHours(calendar)}).${isUrgent(preview.urgency) ? ` ${URGENT_WORDS}` : ""} They will see ${accessWords(scope)}. ${ACCESS_LIMITS}${over}` }, 201);
 });
@@ -227,7 +270,9 @@ escalationRoutes.get("/estimate", requireTenant, async (c) => {
  * The customer's own requests (plan B4, "Your recruiter requests" on Today): each with its state, the reply-by time,
  * who picked it up, the full answer and the whole thread. The words in them can name candidates, so the list needs
  * escalation.create (an interviewer sees only their own interviews), and a recruiter under a scoped grant sees only the
- * requests about what the grant covers.
+ * requests about what the grant covers. A request about someone past the plan's candidates per job (Rule 3), which only the
+ * candidate or Recruiting OS can raise, keeps only that it exists and where it stands: no name, no id, no question and no
+ * thread, because a system-written question names them, and free text from either side cannot be checked by a machine.
  */
 escalationRoutes.get("/mine", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -236,15 +281,17 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
   const container = c.get("container");
   const found = await withTenant(container.db, t.companyId, async (tx) => {
     // ITS posting tasks (plan D3) are ITS's own work, shown with each board on the role's Posting tab, not as the team's requests.
-    const rows = (await tx.select({ id: recruiterEscalations.id, kind: recruiterEscalations.kind, status: recruiterEscalations.status, urgency: recruiterEscalations.urgency, summary: recruiterEscalations.summary, question: recruiterEscalations.question, requestedBy: recruiterEscalations.requestedBy, assignedToUserId: recruiterEscalations.assignedToUserId, createdAt: recruiterEscalations.createdAt, resolvedAt: recruiterEscalations.resolvedAt, resolution: recruiterEscalations.resolution, slaDueAt: recruiterEscalations.slaDueAt, firstResponseAt: recruiterEscalations.firstResponseAt, accessExpiresAt: recruiterEscalations.accessExpiresAt, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId })
+    const rows = (await tx.select({ id: recruiterEscalations.id, kind: recruiterEscalations.kind, status: recruiterEscalations.status, urgency: recruiterEscalations.urgency, summary: recruiterEscalations.summary, question: recruiterEscalations.question, requestedBy: recruiterEscalations.requestedBy, assignedToUserId: recruiterEscalations.assignedToUserId, createdAt: recruiterEscalations.createdAt, resolvedAt: recruiterEscalations.resolvedAt, resolution: recruiterEscalations.resolution, slaDueAt: recruiterEscalations.slaDueAt, firstResponseAt: recruiterEscalations.firstResponseAt, accessExpiresAt: recruiterEscalations.accessExpiresAt, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId, billing: recruiterEscalations.billing })
       .from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, t.companyId), notInArray(recruiterEscalations.kind, [...POSTING_TASK_KINDS]))).orderBy(desc(recruiterEscalations.createdAt))).filter((r) => escalationInScope(scope, r));
-    const ids = rows.map((r) => r.id);
+    const appIds = [...new Set(rows.map((r) => r.applicationId).filter((x): x is string => !!x))];
+    const hidden = await hiddenAmong(tx, t, appIds);
+    const ids = rows.filter((r) => !r.applicationId || !hidden.has(r.applicationId)).map((r) => r.id);
     const messages = ids.length ? await tx.select().from(escalationMessages).where(inArray(escalationMessages.escalationId, ids)) : [];
     const roleIds = [...new Set(rows.map((r) => r.roleId).filter((x): x is string => !!x))];
     const titles = new Map((roleIds.length ? await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, roleIds)) : []).map((r) => [r.id, r.title]));
-    const appIds = [...new Set(rows.map((r) => r.applicationId).filter((x): x is string => !!x))];
-    const people = new Map((appIds.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName, anonymizedAt: candidates.anonymizedAt }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, appIds)) : []).map((p) => [p.id, p.anonymizedAt ? null : `${p.firstName} ${p.lastName}`.trim() || null]));
-    return { rows, messages, titles, people };
+    const named = appIds.filter((id) => !hidden.has(id));
+    const people = new Map((named.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName, anonymizedAt: candidates.anonymizedAt }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, named)) : []).map((p) => [p.id, p.anonymizedAt ? null : `${p.firstName} ${p.lastName}`.trim() || null]));
+    return { rows, messages, titles, people, hidden };
   });
   const names = await recruiterNames(container.db, found.rows.map((r) => r.assignedToUserId));
   return c.json(found.rows.map((row): RecruiterRequestView => {
@@ -253,12 +300,22 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
     const r = { ...row, question: withoutSentimentWords(plainRequestText(row.question, row.requestedBy.kind)), summary: servedSummary(row) };
     const own = found.messages.filter((m) => m.escalationId === r.id);
     const recruiterName = r.assignedToUserId ? names.get(r.assignedToUserId) ?? null : [...own].reverse().find((m) => m.side === "recruiter")?.author.name ?? null;
+    if (r.applicationId && found.hidden.has(r.applicationId)) {
+      return {
+        id: r.id, kind: r.kind, status: r.status, urgency: r.urgency, summary: r.summary, question: LOCKED_REQUEST_LINE,
+        scope: "application", roleId: r.roleId, roleTitle: r.roleId ? found.titles.get(r.roleId) ?? null : null, applicationId: null, candidateName: null,
+        askedBy: askedByOf(r.requestedBy, t.userId),
+        createdAt: r.createdAt, slaDueAt: r.slaDueAt, firstResponseAt: r.firstResponseAt, resolvedAt: r.resolvedAt, resolution: null, accessExpiresAt: r.accessExpiresAt,
+        recruiterName, reopenedCount: 0, thread: [], locked: true,
+      };
+    }
     return {
       id: r.id, kind: r.kind, status: r.status, urgency: r.urgency, summary: r.summary, question: r.question,
       scope: r.applicationId ? "application" : r.roleId ? "role" : "company", roleId: r.roleId, roleTitle: r.roleId ? found.titles.get(r.roleId) ?? null : null, applicationId: r.applicationId, candidateName: r.applicationId ? found.people.get(r.applicationId) ?? null : null,
       askedBy: askedByOf(r.requestedBy, t.userId),
       createdAt: r.createdAt, slaDueAt: r.slaDueAt, firstResponseAt: r.firstResponseAt, resolvedAt: r.resolvedAt, resolution: r.resolution, accessExpiresAt: r.accessExpiresAt,
       recruiterName, reopenedCount: own.filter((m) => m.kind === "reopen").length, thread: escalationThread(r, own, recruiterName),
+      ...(isPlanRequest(r) ? { topic: "plan" as const } : {}),
     };
   }));
 });
@@ -290,6 +347,8 @@ async function ownRequest(c: Context<Vars>): Promise<EscalationRow> {
   // An ITS posting task (plan D3) is not one of the team's requests: it carries no thread, and reopening it must never
   // give anyone access to the company's records.
   if (!e || isPostingTask(e.kind)) throw new HttpError(404, "not_found", "That request is not in your company.");
+  // About someone past the plan's candidates per job (Rule 3): a note would be the team talking about someone it cannot read, and reopening grants fresh access.
+  if (e.applicationId) await withTenant(c.get("container").db, t.companyId, (tx) => assertNotLocked(tx, t, e.applicationId));
   return e;
 }
 
@@ -371,6 +430,8 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
     idempotencyKey: `escalation-reopen:${done.messageId}`,
     template: "escalation",
   });
+  // A talk about the plan gives whoever takes it no access, so nothing here says it does.
+  if (isPlanRequest(e)) return c.json({ status: done.status, slaDueAt: done.slaDueAt, message: `Reopened and back with ITS, who will respond by ${due}.` });
   return c.json({ status: done.status, slaDueAt: done.slaDueAt, message: `Reopened and back in the ITS queue. A recruiter will respond by ${due}. Whoever picks it up will see ${accessWords(scope)}. ${ACCESS_LIMITS}` });
 });
 
@@ -431,20 +492,23 @@ escalationRoutes.get("/", requireRecruiterOrAdmin, async (c) => {
 escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
   const s = c.get("session")!;
   const container = c.get("container");
+  const id = c.req.param("id");
   const row = await withPlatform(container.db, async (tx) => {
-    const [e] = await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, c.req.param("id"))).limit(1);
+    const [e] = UUID.test(id) ? await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id)).limit(1) : [];
     if (!e) return null;
     const [co] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, e.companyId)).limit(1);
     const role = e.roleId ? (await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, e.roleId)).limit(1))[0] : null;
     const previewRow: PreviewRow = { id: e.id, companyId: e.companyId, companyName: co?.name ?? "", roleTitle: role?.title ?? null, kind: e.kind, status: e.status, urgency: e.urgency, requiredExpertise: e.requiredExpertise, summary: e.summary, slaDueAt: e.slaDueAt, createdAt: e.createdAt, assignedToUserId: e.assignedToUserId, requestedBy: e.requestedBy, roleId: e.roleId, applicationId: e.applicationId };
-    if (e.assignedToUserId !== s.user.id) return { previewRow, full: null as null | Record<string, unknown>, why: e.assignedToUserId ? "claimed by another recruiter" : "claim it to open the full context" };
+    // A talk about the plan opens what the person wrote and nothing else, with no grant: taking it up gives no access at all.
+    const planRequest = isPlanRequest(e);
+    if (e.assignedToUserId !== s.user.id) return { previewRow, full: null as null | Record<string, unknown>, why: e.assignedToUserId ? "claimed by another recruiter" : planRequest ? PLAN_REQUEST_BEFORE_ACCEPT : "claim it to open the full context" };
     // A posting task (plan D3) opens the job ad and the posting only, read below in the customer's own scope; no grant.
     if (isPostingTask(e.kind)) return { previewRow, full: null as null | Record<string, unknown>, why: null as string | null, task: e };
-    const grant = await activeStaffGrant(tx, s.user.id, e.companyId);
-    if (!grant) return { previewRow, full: null as null | Record<string, unknown>, why: "your access to this customer has ended" };
+    const grant = planRequest ? null : await activeStaffGrant(tx, s.user.id, e.companyId);
+    if (!grant && !planRequest) return { previewRow, full: null as null | Record<string, unknown>, why: "your access to this customer has ended" };
     const actor = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-    await audit(tx, { companyId: e.companyId, actor, action: "escalation.context_viewed", target: { type: "escalation", id: e.id }, reason: "recruiter queue", details: { grantId: grant.id, expiresAt: grant.expiresAt } });
-    await recordStaffAccess(tx, { grant, userName: actor.name, method: "GET", path: `/api/v1/escalations/${e.id}`, ip: clientIp(c) });
+    await audit(tx, { companyId: e.companyId, actor, action: "escalation.context_viewed", target: { type: "escalation", id: e.id }, reason: "recruiter queue", details: grant ? { grantId: grant.id, expiresAt: grant.expiresAt } : { planRequest: true, grant: null } });
+    if (grant) await recordStaffAccess(tx, { grant, userName: actor.name, method: "GET", path: `/api/v1/escalations/${e.id}`, ip: clientIp(c) });
     // The thread (plan B5): the team's notes, the recruiter's replies, every answer and why it was reopened.
     const messages = await tx.select().from(escalationMessages).where(eq(escalationMessages.escalationId, e.id));
     // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
@@ -452,7 +516,12 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
     // or a candidate raised it, never a name.
     const question = withoutSentimentWords(plainRequestText(e.question, e.requestedBy.kind));
     const thread = escalationThread({ ...e, question }, messages, actor.name, { forRecruiter: true });
-    const full = { companyId: e.companyId, roleId: e.roleId, applicationId: e.applicationId, firstResponseAt: e.firstResponseAt, accessExpiresAt: e.accessExpiresAt, resolution: e.resolution, resolvedAt: e.resolvedAt, minutesSpent: e.minutesSpent, question, contextSnapshot: withoutUnsentInContext(e.contextSnapshot), thread, reopenedCount: messages.filter((m) => m.kind === "reopen").length, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };
+    // Whether the company can read this person (Rule 3): the queue says so, because words cannot be checked by a machine.
+    const lockedForCompany = await aboutLockedApplicant(tx, e);
+    // Where the notes from a call with a candidate who asked for a person go now (10 November 2026, additive): their AI interview
+    // tab, or their Notes tab once they are past screening. The queue's hint and button follow it.
+    const callNotesOnAiInterview = e.kind === "candidate_issue" && e.applicationId ? await callNotesOnAiInterviewOf(tx, e.applicationId) : null;
+    const full = { companyId: e.companyId, roleId: e.roleId, applicationId: e.applicationId, lockedForCompany, callNotesOnAiInterview, firstResponseAt: e.firstResponseAt, accessExpiresAt: e.accessExpiresAt, resolution: e.resolution, resolvedAt: e.resolvedAt, minutesSpent: e.minutesSpent, question, contextSnapshot: withoutUnsentInContext(e.contextSnapshot), thread, reopenedCount: messages.filter((m) => m.kind === "reopen").length, planRequest, grant: grant ? { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } : null };
     return { previewRow, full, why: null as string | null };
   });
   if (!row) throw new HttpError(404, "not_found", "Escalation not found.");
@@ -475,20 +544,22 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
   const s = c.get("session")!;
   const container = c.get("container");
   const now = new Date();
+  const id = c.req.param("id");
   const row = await withPlatform(container.db, async (tx) => {
-    const [e] = await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, c.req.param("id"))).limit(1);
+    const [e] = UUID.test(id) ? await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id)).limit(1) : [];
     if (!e) throw new HttpError(404, "not_found", "Escalation not found.");
     if (e.status === "resolved" || e.status === "cancelled") throw new HttpError(409, "closed", `This request is already ${e.status}.`);
     if (e.assignedToUserId && e.assignedToUserId !== s.user.id) throw new HttpError(409, "claimed", "Another recruiter has this request.");
     // 21 Sep, item 1: when the customer ended this recruiter's access to this request, the same recruiter cannot take it back.
     const removedByCustomer = await tx.select({ id: staffAccessGrants.id }).from(staffAccessGrants).where(and(eq(staffAccessGrants.escalationId, e.id), eq(staffAccessGrants.userId, s.user.id), like(staffAccessGrants.revokeReason, "revoked by the customer:%"))).limit(1);
     if (removedByCustomer.length) throw new HttpError(403, "revoked_by_customer", "The customer ended your access to this request. Another recruiter must take it.");
-    // A posting task (plan D3) needs the job ad, never the customer's records: taking it gives no access at all, so
-    // there is no grant to record and nothing to tell the customer about who can see their hiring.
-    if (isPostingTask(e.kind)) {
+    // A posting task (plan D3) needs the job ad, never the customer's records, and a talk about the plan (the plans of 5
+    // November 2026, Rule 5) needs what they wrote: taking either gives no access at all, so there is no grant to record and
+    // nothing to tell the customer about who can see their hiring. On a plan with locked candidates that is the point.
+    if (isPostingTask(e.kind) || isPlanRequest(e)) {
       const recruiter = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
       const [u] = await tx.update(recruiterEscalations).set({ status: "claimed", assignedToUserId: s.user.id, claimedAt: e.claimedAt ?? now.toISOString(), firstResponseAt: e.firstResponseAt ?? now.toISOString() }).where(eq(recruiterEscalations.id, e.id)).returning();
-      await emit(tx, { type: "recruiter.claimed", companyId: e.companyId, actor: recruiter, subject: { type: "escalation", id: e.id }, payload: { grantId: null, postingTask: e.kind, postingId: e.postingId } });
+      await emit(tx, { type: "recruiter.claimed", companyId: e.companyId, actor: recruiter, subject: { type: "escalation", id: e.id }, payload: isPostingTask(e.kind) ? { grantId: null, postingTask: e.kind, postingId: e.postingId } : { grantId: null, planRequest: true } });
       return { escalation: u, grant: null };
     }
     // All of a company's hiring is shared only when someone at the company chose it (Q31). A request that names no role
@@ -533,8 +604,22 @@ async function requestReaders(tx: Tx, e: Pick<EscalationRow, "companyId" | "requ
   return [...new Set([...(e.requestedBy.kind === "user" ? [e.requestedBy.id] : []), ...owners.map((m) => m.userId)])];
 }
 
+/** Whether a request is about someone the team cannot read: a candidate who asked for a person while locked. */
+async function aboutLockedApplicant(tx: Tx, e: Pick<EscalationRow, "applicationId">): Promise<boolean> {
+  return !!e.applicationId && applicationLocked(tx, e.applicationId);
+}
+
+/** Whether a call's notes about this candidate go on their AI interview tab now (`callNotesGoOnAiInterview`); null when they are gone. */
+async function callNotesOnAiInterviewOf(tx: Tx, applicationId: string): Promise<boolean | null> {
+  const [app] = await tx.select({ stage: applications.stage, lockedAt: applications.lockedAt }).from(applications).where(eq(applications.id, applicationId)).limit(1);
+  if (!app) return null;
+  const [latest] = await tx.select({ status: screens.status }).from(screens).where(eq(screens.applicationId, applicationId)).orderBy(desc(screens.createdAt)).limit(1);
+  return callNotesGoOnAiInterview(app, latest);
+}
+
 /** What a request is about, for a notice's title: never a candidate's name. */
-async function aboutWords(tx: Tx, e: Pick<EscalationRow, "roleId" | "applicationId">): Promise<string> {
+async function aboutWords(tx: Tx, e: Pick<EscalationRow, "roleId" | "applicationId" | "billing">): Promise<string> {
+  if (isPlanRequest(e)) return "your plan";
   const [role] = e.roleId ? await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, e.roleId)).limit(1) : [];
   if (e.applicationId) return role ? `a candidate for ${role.title}` : "a candidate";
   return role ? role.title : "all of your hiring";
@@ -583,13 +668,15 @@ escalationRoutes.post("/:id/resolve", requireRecruiterOrAdmin, async (c) => {
     const task = isPostingTask(e.kind) ? await postingTaskState(tx, e) : null;
     await emit(tx, { type: "recruiter.resolved", companyId: e.companyId, actor, subject: { type: "escalation", id: e.id }, payload: { resolution: body.resolution, minutesSpent: body.minutesSpent ?? null, responseMinutes: e.firstResponseAt ? Math.round((Date.parse(e.firstResponseAt) - Date.parse(e.createdAt)) / 60_000) : null, ...(task ? { postingTask: e.kind, postingId: e.postingId, notDone: task.notDone } : {}) } });
     if (!isPostingTask(e.kind)) {
-      await notify(tx, { companyId: e.companyId, kind: "recruiter.resolved", title: `${actor.name} (ITS recruiter) answered the request about ${await aboutWords(tx, e)}`, body: body.resolution, action: { label: "Read the answer", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
+      // ITS's answer about someone locked goes to them, never to the team (the plans of 5 November 2026, Rule 2): its words can describe the person.
+      if (!(await aboutLockedApplicant(tx, e))) await notify(tx, { companyId: e.companyId, kind: "recruiter.resolved", title: `${actor.name} (ITS recruiter) answered the request about ${await aboutWords(tx, e)}`, body: body.resolution, action: { label: "Read the answer", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
     } else if (task?.notDone) {
       const label = postingTaskLabel(e.kind, task.board);
       await notify(tx, { companyId: e.companyId, kind: "recruiter.posting_not_done", title: `${task.roleTitle}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${actor.name} at ITS wrote: "${body.resolution}" ${POSTING_NOT_DONE_NEXT[e.kind](task.board)}`, action: { label: "Open the Share tab", href: `/roles/${task.roleId}?tab=posting` }, roles: ["owner", "admin"] });
     }
     await container.engine.signal(tx, { companyId: e.companyId, key: `escalation:${e.id}`, payload: { resolved: true } });
-    return u;
+    // The queue's words say who read it from this, and not from what the page was showing: it may have been open a while.
+    return { ...u, lockedForCompany: await aboutLockedApplicant(tx, e) };
   });
   await container.kick();
   return c.json(row);
@@ -610,14 +697,16 @@ escalationRoutes.post("/:id/messages", requireRecruiterOrAdmin, async (c) => {
     if (e.assignedToUserId !== s.user.id) throw new HttpError(403, "not_assigned", "Accept the request before writing to the customer.");
     if (e.status === "resolved" || e.status === "cancelled") throw new HttpError(409, "closed", `This request is already ${e.status}.`);
     if (isPostingTask(e.kind)) throw new HttpError(409, "posting_task", "A posting task has no conversation with the customer. Record the work on the task; if it cannot be done, resolve it and say why.");
-    const grant = await activeStaffGrant(tx, s.user.id, e.companyId, now);
-    if (!grant) throw new HttpError(403, "no_access", "Your access to this customer has ended.");
+    // A talk about the plan was taken up with no grant, so there is none to need or to record against.
+    const grant = isPlanRequest(e) ? null : await activeStaffGrant(tx, s.user.id, e.companyId, now);
+    if (!grant && !isPlanRequest(e)) throw new HttpError(403, "no_access", "Your access to this customer has ended.");
     const actor = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-    await recordStaffAccess(tx, { grant, userName: actor.name, method: "POST", path: `/api/v1/escalations/${e.id}/messages`, ip: clientIp(c) });
+    if (grant) await recordStaffAccess(tx, { grant, userName: actor.name, method: "POST", path: `/api/v1/escalations/${e.id}/messages`, ip: clientIp(c) });
     const message = await addEscalationReply(tx, { escalation: e, side: "recruiter", author: actor, body: body.body, now });
     if (e.status === "claimed") await tx.update(recruiterEscalations).set({ status: "in_progress" }).where(eq(recruiterEscalations.id, e.id));
-    const told = await notify(tx, { companyId: e.companyId, kind: "recruiter.replied", title: `${actor.name} (ITS recruiter) wrote to you about ${await aboutWords(tx, e)}`, body: body.body, action: { label: "Open the request", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
-    return { id: message.id, told };
+    const lockedForCompany = await aboutLockedApplicant(tx, e);
+    const told = lockedForCompany ? 0 : await notify(tx, { companyId: e.companyId, kind: "recruiter.replied", title: `${actor.name} (ITS recruiter) wrote to you about ${await aboutWords(tx, e)}`, body: body.body, action: { label: "Open the request", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
+    return { id: message.id, told, lockedForCompany };
   });
   return c.json(out, 201);
 });
@@ -731,7 +820,8 @@ export const eventRoutes = new Hono<Vars>();
  * The activity list. A recruiter under a grant for one role or one candidate reads only the events about it. A screening
  * conversation the candidate has not sent (or never did) shows no entry about a single answer and no count of what was
  * answered, and no entry about a reading written of one before 9 October 2026 ("scorecard written", its recommendation)
- * (founder decision of 9 October 2026, `withoutUnsentScreenEvents`).
+ * (founder decision of 9 October 2026, `withoutUnsentScreenEvents`). Nothing about anyone past the plan's candidates per job
+ * (Rule 3, `withoutLockedEvents`): an entry can carry their address.
  */
 eventRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -745,11 +835,11 @@ eventRoutes.get("/", requireTenant, async (c) => {
     if (subjectType) conds.push(eq(events.subjectType, subjectType));
     if (subjectId) conds.push(eq(events.subjectId, subjectId));
     if (type) conds.push(eq(events.type, type));
-    // Scoped: read further back, keep what the grant covers, and answer with the same 200 at most.
-    const found = await tx.select().from(events).where(and(...conds)).orderBy(desc(events.occurredAt)).limit(scope ? 2000 : 200);
-    // The same rule as a job's Activity tab (`withoutUnsentChats`).
-    const shown = await withoutUnsentChats(tx, found);
-    if (!scope) return shown;
+    // Scoped, or with people past the plan's limit whose entries come out: read further back, keep what may be shown, and answer with the same 200 at most.
+    const found = await tx.select().from(events).where(and(...conds)).orderBy(desc(events.occurredAt)).limit(scope || (await companyHasLocked(tx, t.companyId)) ? 2000 : 200);
+    // The same rules as a job's Activity tab (`withoutUnsentChats`, `withoutLockedEvents`).
+    const shown = await withoutLockedEvents(tx, { companyId: t.companyId, reader: t }, await withoutUnsentChats(tx, found));
+    if (!scope) return shown.slice(0, 200);
     const targets = await eventTargets(tx, shown);
     return shown.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, 200);
   });

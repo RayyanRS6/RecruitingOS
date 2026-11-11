@@ -20,6 +20,9 @@ export type AuditAction =
   | "staff.tenant_accessed"
   | "admin.break_glass"
   | "plan.changed"
+  /** An application past the plan's candidates per job, and its opening by a change of plan (Rule 2): why, in arrival order and the plan's numbers, never a name. */
+  | "application.locked"
+  | "application.unlocked"
   /** The Trial plan's 30 days (founder decision L-02 B): started, extended by ITS with a reason (days, end before and after), ended. */
   | "trial.started"
   | "trial.extended"
@@ -97,6 +100,10 @@ export type AuditAction =
   /** The one-time ITS check of a self-serve company (founder decision B7): confirmed, or taken back, by whom and why. */
   | "company.verified"
   | "company.unverified"
+  /** First sign-in asks for approval (6 November 2026): an administrator accepted or declined a person's request, or took an accepted company's access away. */
+  | "company.access_accepted"
+  | "company.access_declined"
+  | "company.access_removed"
   /** The customer's own audit history left as a file (audit finding A9): who, how many rows, which filters. */
   | "audit.exported"
   /** The holder of a session confirmed with their sign-in provider again before a sensitive change (audit finding A12). */
@@ -104,6 +111,8 @@ export type AuditAction =
   /** A person wrote to a candidate from the sheet (F11): who, which application, whether it went at once or waited for an approval, and who approved it. Never the text. */
   | "message.sent"
   | "message.approval_requested"
+  /** ITS staff wrote to someone locked, past the company's approval rule, because nobody at the company may read them (the plans of 5 November 2026, Rule 2). Which rule, never the text. */
+  | "message.approval_skipped"
   /** Undo (plan G9): a person took back a message while it waited in the outbox. Which message, never the text. */
   | "message.undone"
   /** The one closing message of a closed role (Q30): sent to everyone untold, or put to one approval, by whom, how many. */

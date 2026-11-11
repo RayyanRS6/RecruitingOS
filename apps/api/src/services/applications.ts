@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, inspectResumeFile, trialPaused, type Actor } from "@ros/contracts";
 import { fromAddress, queueCommunication, replyToFor, sendPrivacyCompletion, sendRepeatApplicationNotice, sendStatusLinks, statusUrlFor } from "@ros/agents";
-import { CLOSING_DATE_REASON, audit, createDataRequest, dedupeKey, emit, fulfilWithdrawal, normalizeEmailForDedupe, normalizePhone, transition } from "@ros/core";
+import { CANDIDATE_LOCK_ACTOR, CLOSING_DATE_REASON, audit, createDataRequest, decideLock, dedupeKey, emit, errorForLog, fulfilWithdrawal, jobPastItsLimit, normalizeEmailForDedupe, normalizePhone, tellMoreApplied, transition } from "@ros/core";
 import { applications, candidates, companies, documents, events, interviews, lowercaseToken, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type ConsentRecord, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { Container } from "../container";
@@ -79,8 +79,13 @@ export type ResumeInput =
  * once to the talent pool, exactly where the role's other active candidates went when it closed. It is never
  * acknowledged as if the role were still hiring (the intake workflow only acknowledges a fresh application); its
  * résumé is still scanned and read so the person can be found for a later opening.
+ *
+ * The only place applications are born, so the only place a place is decided (the plans of 5 November 2026, Rule 2): past
+ * the plan's candidates per job, in arrival order, the application is locked. A repeat is not a new row and keeps what it
+ * has. `onFile`: what the page says next, from the job and never from the address typed (Q14), so a repeat on a job past
+ * its limit reads as a new address does.
  */
-export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean; closingGrace?: boolean; trialGrace?: boolean } = {}) {
+export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean; closingGrace?: boolean; trialGrace?: boolean; files?: KeptBytes[] } = {}) {
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) throw new Error("role not found");
   // `closingGrace`: a form opened before the role's closing date passed may still be sent (plan D7; services/closing-date.ts).
@@ -116,8 +121,64 @@ export async function createApplication(tx: Tx, container: Container, input: New
   const [existing] = await tx.select().from(applications).where(and(eq(applications.roleId, role.id), eq(applications.candidateId, candidate.id))).limit(1);
   if (existing) {
     await settleRepeatSubmission(tx, container, { input, actor, application: existing, candidate, roleTitle: role.title });
-    return { application: existing, candidate, duplicate: true, knownPerson: true };
+    return { application: existing, candidate, duplicate: true, knownPerson: true, onFile: await jobPastItsLimit(tx, { companyId: input.companyId, roleId: role.id }) };
   }
+  // A file the application received itself is stored before the job's lock, never behind it: a slow write would hold up everyone
+  // applying to the job until they time out. Nothing keeps the file if what follows fails (`dropKept`), a lock timeout included,
+  // or if the caller's transaction then does not commit (`opts.files`, from `withNewApplication`).
+  const kept = input.resume?.kind === "bytes" ? await keepResumeBytes(container, input.companyId, role.id, input.resume) : null;
+  try {
+    const placed = await placeApplication(tx, container, { input, actor, opts, role, packetVersion: role.currentPacketVersion, candidate, knownPerson, kept });
+    if (kept && !placed.duplicate) opts.files?.push(kept);
+    return placed;
+  } catch (err) {
+    await dropKept(container, kept);
+    throw err;
+  }
+}
+
+/**
+ * The transaction an application is born in. Storage is no part of a transaction, so a file it received itself and stored goes
+ * if this one does not commit, whatever stopped it after the application was made: nothing would ever point at that file, and
+ * no privacy request could find it.
+ */
+export async function withNewApplication<T>(container: Container, companyId: string, run: (tx: Tx, files: KeptBytes[]) => Promise<T>): Promise<T> {
+  const files: KeptBytes[] = [];
+  try {
+    return await withTenant(container.db, companyId, (tx) => run(tx, files));
+  } catch (err) {
+    for (const kept of files) await dropKept(container, kept);
+    throw err;
+  }
+}
+
+/** What became of a file the application received itself: stored in quarantine, or refused by the quick look before anything was kept. */
+type KeptBytes = { stored: { storageKey: string; sizeBytes: number; sha256: string; mime: string } | null; refusal: { reason: string; detail: string } | null };
+
+/** A quick look at the bytes before anything is kept; the worker repeats it in quarantine together with the scan. */
+async function keepResumeBytes(container: Container, companyId: string, roleId: string, r: Extract<ResumeInput, { kind: "bytes" }>): Promise<KeptBytes> {
+  const look = inspectResumeFile(r.bytes, { mime: r.mime, filename: r.filename });
+  if (!look.ok) return { stored: null, refusal: { reason: look.reason, detail: look.detail } };
+  const storageKey = quarantineKey(companyId, roleId, uuidv7(), look.extension);
+  await container.integrations.storage.put(storageKey, r.bytes, look.mime);
+  return { stored: { storageKey, sizeBytes: r.bytes.byteLength, sha256: createHash("sha256").update(r.bytes).digest("hex"), mime: look.mime }, refusal: null };
+}
+
+/** A stored file nothing will point at. A failure here never hides what went wrong: it is only left for the bucket's own rules. */
+async function dropKept(container: Container, kept: KeptBytes | null): Promise<void> {
+  if (!kept?.stored) return;
+  try {
+    await container.integrations.storage.delete(kept.stored.storageKey);
+  } catch (err) {
+    console.warn(`[applications] could not remove a file nothing points at: ${errorForLog(err)}`);
+  }
+}
+
+/** The new application behind the job's lock, with its place, its résumé and its intake (`createApplication`). */
+async function placeApplication(tx: Tx, container: Container, args: { input: NewApplication; actor: Actor; opts: { intoTalentPool?: boolean }; role: typeof roles.$inferSelect; packetVersion: number; candidate: Candidate; knownPerson: boolean; kept: KeptBytes | null }) {
+  const { input, actor, opts, role, packetVersion, candidate, knownPerson, kept } = args;
+  // Decided behind the job's lock, held until this commits: two people applying at the same moment take different places.
+  const locked = await decideLock(tx, { companyId: input.companyId, roleId: role.id });
   // Two submissions for the same role and person at the same moment (a double press): the second waits for the first's
   // row, finds it, and is settled as a repeat instead of failing on the unique key (known-bugs row 78).
   const [inserted] = await tx
@@ -126,7 +187,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
       companyId: input.companyId,
       roleId: role.id,
       candidateId: candidate.id,
-      packetVersion: role.currentPacketVersion,
+      packetVersion,
       source: input.source,
       sourceDetail: input.sourceDetail ?? null,
       linkId: input.linkId ?? null,
@@ -144,14 +205,16 @@ export async function createApplication(tx: Tx, container: Container, input: New
       statusToken: randomToken(24),
       // The reply address's token (F12): its own random value, never the status token, lowercase because it travels in an email address.
       replyToken: lowercaseToken(16),
+      lockedAt: locked ? container.engine.clock().toISOString() : null,
     })
     .onConflictDoNothing({ target: [applications.roleId, applications.candidateId] })
     .returning();
   if (!inserted) {
     const [raced] = await tx.select().from(applications).where(and(eq(applications.roleId, role.id), eq(applications.candidateId, candidate.id))).limit(1);
     if (!raced) throw new Error("the application could not be recorded");
+    await dropKept(container, kept);
     await settleRepeatSubmission(tx, container, { input, actor, application: raced, candidate, roleTitle: role.title });
-    return { application: raced, candidate, duplicate: true, knownPerson: true };
+    return { application: raced, candidate, duplicate: true, knownPerson: true, onFile: await jobPastItsLimit(tx, { companyId: input.companyId, roleId: role.id }) };
   }
   let application = inserted;
   // The upload the form sent with its reading (Wave S7; 20 Oct, R20-1), for the intake to find that reading by.
@@ -163,15 +226,8 @@ export async function createApplication(tx: Tx, container: Container, input: New
     let refusal: { reason: string; detail: string } | null = null;
     if (r.kind === "stored") {
       stored = { storageKey: r.storageKey, sizeBytes: r.sizeBytes, sha256: "pending", mime: r.mime };
-    } else {
-      // A quick look at the bytes before anything is kept; the worker repeats it in quarantine together with the scan.
-      const look = inspectResumeFile(r.bytes, { mime: r.mime, filename: r.filename });
-      if (!look.ok) refusal = { reason: look.reason, detail: look.detail };
-      else {
-        const storageKey = quarantineKey(input.companyId, role.id, uuidv7(), look.extension);
-        await container.integrations.storage.put(storageKey, r.bytes, look.mime);
-        stored = { storageKey, sizeBytes: r.bytes.byteLength, sha256: createHash("sha256").update(r.bytes).digest("hex"), mime: look.mime };
-      }
+    } else if (kept) {
+      ({ stored, refusal } = kept);
     }
     if (refusal) {
       // Nothing is kept. The application continues without a résumé; the owner sees why on the candidate's page.
@@ -195,6 +251,13 @@ export async function createApplication(tx: Tx, container: Container, input: New
   }
 
   await emit(tx, { type: "application.received", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { roleId: role.id, source: input.source, linkId: input.linkId ?? null, hasResume: !!application.resumeDocumentId, note: input.note ?? null } });
+  // The reason must be provable, and is arrival order alone: the place, the limit and the plan. No name, never a score.
+  if (locked) {
+    await emit(tx, { type: "application.locked", companyId: input.companyId, actor: CANDIDATE_LOCK_ACTOR, subject: { type: "application", id: application.id }, payload: locked });
+    await audit(tx, { companyId: input.companyId, actor: CANDIDATE_LOCK_ACTOR, action: "application.locked", target: { type: "application", id: application.id }, details: locked });
+    // All the team hears of it (Rule 3): behind the job's lock, so two at the same moment send one.
+    await tellMoreApplied(tx, { companyId: input.companyId, roleId: role.id, roleTitle: role.title });
+  }
   if (opts.intoTalentPool) {
     await transition(tx, { applicationId: application.id, companyId: input.companyId, to: "talent_pool", by: "system", actor, reason: "the role closed while this emailed application was held" });
     application = { ...application, stage: "talent_pool" };
@@ -211,7 +274,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
     idempotencyKey: `application_intake:${application.id}`,
     actor,
   });
-  return { application, candidate, duplicate: false, knownPerson };
+  return { application, candidate, duplicate: false, knownPerson, onFile: !!locked };
 }
 
 /**

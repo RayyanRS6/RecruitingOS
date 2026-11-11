@@ -1,7 +1,7 @@
 import { and, eq, gte, inArray, isNull, lt } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { queueCommunication } from "@ros/agents";
-import { DIGEST_CATCH_UP_DAYS, alertLink, belongsInDigest, digestCadencesDue, digestWindow, lastDigestAt, nextDigestAt, notifyGroupOf, renderAlertEmail, renderDigestEmail, resolveNotifyCadence, rolesForLinks, storedPreferences, type DigestCadence } from "@ros/core";
+import { QUIET_ON_FAILURE_TAG, queueCommunication } from "@ros/agents";
+import { DIGEST_CATCH_UP_DAYS, NOTIFY_QUIET_ON_FAILURE, alertLink, belongsInDigest, digestCadencesDue, digestWindow, lastDigestAt, nextDigestAt, notifyGroupOf, renderAlertEmail, renderDigestEmail, resolveNotifyCadence, rolesForLinks, storedPreferences, type DigestCadence } from "@ros/core";
 import { companies, memberships, notifications, users, withTenant, workflowRuns, type Db, type Queryable } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { WorkflowEngine } from "../engine";
@@ -128,7 +128,7 @@ export async function emailNotifications(db: Db, services: Services, payload: Re
       if (!person || !resolveNotifyCadence(r.kind, prefs.get(r.userId) ?? {}).emailNow) continue;
       const role = r.action?.href ? roleOf.get(r.action.href) : undefined;
       const email = renderAlertEmail({ kind: r.kind, recipientName: person.name, companyName: company?.name ?? "your company", roleTitle: role?.title ?? null, link: alertLink(services.env.appBaseUrl, r.action?.href), appBaseUrl: services.env.appBaseUrl });
-      await queueCommunication(tx, services.integrations, { channel: "email", companyId, to: person.email, from: teamFrom(services), subject: email.subject, text: email.text, templateKey: ALERT_TEMPLATE, idempotencyKey: `${ALERT_TEMPLATE}:${r.id}`, tags: { template: ALERT_TEMPLATE, group: notifyGroupOf(r.kind) }, actor: ALERT_ACTOR }, now);
+      await queueCommunication(tx, services.integrations, { channel: "email", companyId, to: person.email, from: teamFrom(services), subject: email.subject, text: email.text, templateKey: ALERT_TEMPLATE, idempotencyKey: `${ALERT_TEMPLATE}:${r.id}`, tags: { template: ALERT_TEMPLATE, group: notifyGroupOf(r.kind), ...(NOTIFY_QUIET_ON_FAILURE.has(r.kind) ? { [QUIET_ON_FAILURE_TAG]: "true" } : {}) }, actor: ALERT_ACTOR }, now);
       await tx.update(notifications).set({ emailedAt: now.toISOString() }).where(eq(notifications.id, r.id));
       sent += 1;
     }

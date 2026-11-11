@@ -1,11 +1,12 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { desc, eq, gt, gte, inArray, ne, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
-import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
+import { desc, eq, gt, gte, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, aiCreditLines, audit, boardPostingOf, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, settleAiCreditAlerts, suppressAddress, describeHours, unsentScreenReadings, whoPostsBoards, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
+import { AI_CREDIT_AVAILABLE, ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, CustomerAccessChange, JobBoardAccessChange, PUBLIC_PLAN_KEYS, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { mailbox } from "@ros/integrations";
+import { unlockApplicants } from "@ros/workflows";
 import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, invitations, jobs, memberships, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
 import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, resolveAlert, resolveAlertsFor, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
@@ -17,9 +18,11 @@ import { and } from "drizzle-orm";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import { customerReport } from "../services/role-report";
+import { customerAccessRequests, decideAccess, refuseWhileAccessOpen, tellOwnersRemoved, tellPersonDeclined } from "../services/access-requests";
 import { setJobBoardAccess, unverifyCompany, verifyCompany } from "../services/company-trust";
 import { resetPublicFeedCache } from "../pages/public-feeds";
 import { failedEmailApplications, retryFailedEmail } from "../webhooks/postmark";
+import { afterPlanChange } from "../services/plan-change";
 import { TRIAL_ENDED_ALERT, extendTrial, replayHeldEmailsForCompany } from "../services/trial";
 
 /** Platform admin console API (docs/16). Every read is audited with the reason the admin supplies. */
@@ -46,6 +49,9 @@ adminRoutes.get("/customers", async (c) => {
   const heldCounts = byCompany(await db.select({ companyId: communications.companyId, n: sql<number>`count(*)` }).from(communications).where(eq(communications.status, HELD_STATUS)).groupBy(communications.companyId));
   // Allowance alerts whose period ended or whose limit was raised leave the list first (Wave S2 F1).
   await entitlements.settleAllowanceAlerts(db);
+  await settleAiCreditAlerts(db);
+  // Where each company stands on its AI credit, in dollars (only ITS reads this): beside the lifetime spend above.
+  const aiCredit = await aiCreditLines(db, { now: c.get("container").engine.clock() });
   // Each monthly allowance counts only its current period: a period that ended reads as a new one, nothing used yet.
   const allowanceOf = async (key: string) => byCompany((await db.select().from(entitlementRows).where(eq(entitlementRows.key, key))).map((r) => { const p = entitlements.currentPeriod(r); return { companyId: r.companyId, used: p.used, limit: r.limit, resetsAt: p.periodEnd }; }));
   // Where each company stands against its recruiter requests (Q33): going over never refuses one; ITS talks about billing.
@@ -58,17 +64,26 @@ adminRoutes.get("/customers", async (c) => {
   const memberCounts = byCompany(await db.select({ companyId: memberships.companyId, n: sql<number>`count(*)` }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.status, "active"), ne(memberships.role, "recruiter"), eq(users.platformRole, "none"))).groupBy(memberships.companyId));
   const inviteCounts = byCompany(await db.select({ companyId: invitations.companyId, n: sql<number>`count(*)` }).from(invitations).where(and(eq(invitations.status, "pending"), gt(invitations.expiresAt, now.toISOString()))).groupBy(invitations.companyId));
   const seatRows = byCompany(await db.select({ companyId: entitlementRows.companyId, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.SEATS)));
+  // The people the plan's candidates per job left locked (a count, for ITS), and whether the company asked to upgrade.
+  const lockedCounts = byCompany(await db.select({ companyId: applications.companyId, n: sql<number>`count(*)` }).from(applications).where(isNotNull(applications.lockedAt)).groupBy(applications.companyId));
+  const planAsks = byCompany(await db.select({ companyId: recruiterEscalations.companyId, since: sql<string>`min(${recruiterEscalations.createdAt})` }).from(recruiterEscalations).where(and(inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"]), sql`${recruiterEscalations.billing}->>'topic' = 'plan'`)).groupBy(recruiterEscalations.companyId));
+  // Who posts its jobs: the plan first, as `whoPostsBoards` reads it for one company (a row with no staff time), then its own setting.
+  const itsWorkRows = byCompany(await db.select({ companyId: entitlementRows.companyId, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.ITS_WORK)));
   const planLimits = new Map((await db.select({ key: plans.key, limits: plans.limits }).from(plans)).map((p) => [p.key, p.limits]));
   const seatsOf = (co: typeof companies.$inferSelect) => {
     const row = seatRows.get(co.id);
     const fallback = planLimits.get(co.planKey)?.[entitlements.SEATS];
     return { used: Number(memberCounts.get(co.id)?.n ?? 0) + Number(inviteCounts.get(co.id)?.n ?? 0), limit: row ? row.limit ?? null : typeof fallback === "number" ? fallback : null };
   };
+  // First sign-in asks for approval: who is asking or was declined, null for every other company (two queries).
+  const accessRequests = await customerAccessRequests(db);
   return c.json(rows.map((co) => ({
     ...co,
+    accessRequest: accessRequests.get(co.id) ?? null,
     roles: Number(roleCounts.get(co.id)?.n ?? 0),
     applications: Number(appCounts.get(co.id)?.n ?? 0),
     aiCostUsd: Number(costs.get(co.id)?.usd ?? 0),
+    aiCredit: aiCredit.get(co.id) ?? null,
     lastActivityAt: lastActivity.get(co.id)?.at ?? null,
     escalations: Number(escalationCounts.get(co.id)?.n ?? 0),
     verifiedAt: companyVerifiedAt(co.settings),
@@ -88,6 +103,9 @@ adminRoutes.get("/customers", async (c) => {
     trial: trialStanding(co, now),
     trialTerm: co.settings.trial ?? null,
     seats: seatsOf(co),
+    lockedApplicants: Number(lockedCounts.get(co.id)?.n ?? 0),
+    planRequestSince: planAsks.get(co.id)?.since ?? null,
+    whoPosts: itsWorkRows.get(co.id)?.limit === 0 ? "self" : boardPostingOf(co.settings),
   })));
 });
 
@@ -98,11 +116,45 @@ function recruiterAsksOf(row: { used: number; limit: number | null } | undefined
 }
 
 /**
+ * First sign-in asks for approval (the owner's request of 6 November 2026, SIGNUP_MODE=approval): an administrator accepts
+ * or declines a person's request, with a second press and no reason typed (services/access-requests.ts). Accept lets them
+ * in, on the Free plan, and counts as the one-time ITS check too: one approval, not two. Decline stops there, and accepting
+ * later is the undo. Two presses at once make one change, and the second reads `changed: false` with what happened.
+ * Accepting a company with nobody waiting changes nothing and says so; declining one answers 409 `already_accepted`. The
+ * first press wins: an Accept from a row that still showed the request, once it was declined, answers 409 `access_decided`
+ * with who declined it and when (or who took its access away, once it was accepted and taken away), and only the declined
+ * company's own Accept (`from: "declined"`) undoes a Decline.
+ * `remove` (6 November 2026) takes an accepted company's access away: everyone on it is declined, its confirmation taken
+ * back and their sessions in it ended, in one transaction; then one email to the owners (`emailed` says whether it left).
+ * On a request, a declined company or one with nobody active it answers 409 `no_access`, and changes nothing. It sends no
+ * `from`, as an accepted company has no request.
+ */
+adminRoutes.post("/customers/:id/access", async (c) => {
+  const s = c.get("session")!;
+  const container = c.get("container");
+  const companyId = c.req.param("id") ?? "";
+  if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  const body = CustomerAccessChange.parse(await c.req.json().catch(() => ({})));
+  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  const result = await withPlatform(container.db, (tx) => decideAccess(tx, container, { companyId, decision: body.decision, from: body.from, actor, now: container.engine.clock() }));
+  // As the verification route does: the feeds and the sitemap are rebuilt at once.
+  resetPublicFeedCache(container);
+  if (result.declined) await tellPersonDeclined(container, result.declined);
+  // Taken away (6 November 2026): one email to the owners, said on screen only when it really left.
+  const emailed = result.removed ? await tellOwnersRemoved(container, result.removed) : undefined;
+  await container.kick();
+  return c.json(emailed === undefined ? result.answer : { ...result.answer, emailed });
+});
+
+/**
  * The one-time ITS check (founder decision B7, plan B1): an administrator confirms a company that signed itself up, after
  * whatever check they made (the kick-off call, the website, a phone number), or takes the confirmation back. Confirming
  * makes the careers page, job pages and feeds public, publishes approved roles and sends every message to candidates that
  * waited; taking it back puts them offline again and holds messages. A reason and a confirmation are required; the
- * change is audited (the customer sees it, with the reason, in their own history) and the owners are told.
+ * change is audited (the customer sees it, with the reason, in their own history) and the owners are told. A request for
+ * access, waiting or declined, answers 409 `access_request_open`: its one door is the route above. `heldOnly`, the
+ * console's "Send the held messages", only sends what is still held: on a company not confirmed it answers 409
+ * `not_confirmed` and changes nothing.
  */
 adminRoutes.post("/customers/:id/verification", async (c) => {
   const s = c.get("session")!;
@@ -112,7 +164,16 @@ adminRoutes.post("/customers/:id/verification", async (c) => {
   const body = CompanyVerificationChange.parse(await c.req.json().catch(() => ({})));
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const now = container.engine.clock();
-  const result = await withPlatform(container.db, (tx) => (body.verified ? verifyCompany(tx, container, { companyId, actor, reason: body.reason, now }) : unverifyCompany(tx, { companyId, actor, reason: body.reason })));
+  const result = await withPlatform(container.db, async (tx) => {
+    await refuseWhileAccessOpen(tx, companyId);
+    // "Send the held messages" only sends (the review of 9 November 2026): from a card that still showed the company
+    // confirmed, once someone took that back, it confirms nothing. Read under the row lock verifyCompany takes again.
+    if (body.verified && body.heldOnly) {
+      const [co] = await tx.select({ name: companies.name, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
+      if (co && !companyVerifiedAt(co.settings)) throw new HttpError(409, "not_confirmed", `${co.name} is not confirmed any more, so nothing was sent. Its held messages go out when it is confirmed again.`);
+    }
+    return body.verified ? verifyCompany(tx, container, { companyId, actor, reason: body.reason, now }) : unverifyCompany(tx, { companyId, actor, reason: body.reason });
+  });
   if (!result) throw new HttpError(404, "not_found", "Company not found.");
   // The feeds and the sitemap are rebuilt at once, so a company taken offline leaves them now, not in five minutes.
   resetPublicFeedCache(container);
@@ -128,7 +189,10 @@ adminRoutes.post("/customers/:id/job-boards", async (c) => {
   if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
   const body = JobBoardAccessChange.parse(await c.req.json().catch(() => ({})));
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const ok = await withPlatform(container.db, (tx) => setJobBoardAccess(tx, { companyId, confirmed: body.confirmed, actor, now: container.engine.clock(), note: body.note }));
+  const ok = await withPlatform(container.db, async (tx) => {
+    await refuseWhileAccessOpen(tx, companyId);
+    return setJobBoardAccess(tx, { companyId, confirmed: body.confirmed, actor, now: container.engine.clock(), note: body.note });
+  });
   if (!ok) throw new HttpError(404, "not_found", "Company not found.");
   return c.json({ ok: true, companyId, confirmed: body.confirmed });
 });
@@ -146,6 +210,7 @@ adminRoutes.post("/customers/:id/apply-flow", async (c) => {
   const body = ApplyFlowDefaultChange.parse(await c.req.json().catch(() => ({})));
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const result = await withPlatform(container.db, async (tx) => {
+    await refuseWhileAccessOpen(tx, companyId);
     const [co] = await tx.select({ id: companies.id, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
     if (!co) return null;
     const from = co.settings.applyFlowDefault ?? APPLY_FLOW_FALLBACK;
@@ -175,7 +240,10 @@ adminRoutes.post("/customers/:id/trial", async (c) => {
   const body = TrialExtensionRequest.parse(await c.req.json().catch(() => ({})));
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const now = container.engine.clock();
-  const result = await withPlatform(container.db, (tx) => extendTrial(tx, { companyId, days: body.days, reason: body.reason, actor, now }));
+  const result = await withPlatform(container.db, async (tx) => {
+    await refuseWhileAccessOpen(tx, companyId);
+    return extendTrial(tx, { companyId, days: body.days, reason: body.reason, actor, now });
+  });
   if (result.wasPaused) {
     resetPublicFeedCache(container);
     await replayHeldEmailsForCompany(container, companyId);
@@ -198,6 +266,7 @@ adminRoutes.post("/customers/:id/candidate-score", async (c) => {
   const body = CandidateScoreSwitchChange.parse(await c.req.json().catch(() => ({})));
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const result = await withPlatform(container.db, async (tx) => {
+    await refuseWhileAccessOpen(tx, companyId);
     const [co] = await tx.select({ id: companies.id, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
     if (!co) return null;
     const from = candidateScoreShown(co.settings);
@@ -301,8 +370,10 @@ adminRoutes.get("/failures", async (c) => {
   const db = c.get("container").db;
   const failedRuns = await db.select().from(workflowRuns).where(eq(workflowRuns.status, "failed")).orderBy(desc(workflowRuns.updatedAt)).limit(100);
   const failedJobs = await db.select().from(jobs).where(eq(jobs.status, "failed")).orderBy(desc(jobs.createdAt)).limit(100);
-  const failedAi = (await withoutUnsentAnswers(db, { runs: await db.select().from(aiRuns).where(sql`${aiRuns.status} <> 'ok'`).orderBy(desc(aiRuns.createdAt)).limit(100), events: [] })).runs;
+  // A call still `running` holds its place in the AI credit and has not failed: it is not on this list.
+  const failedAi = (await withoutUnsentAnswers(db, { runs: await db.select().from(aiRuns).where(sql`${aiRuns.status} not in ('ok', 'running')`).orderBy(desc(aiRuns.createdAt)).limit(100), events: [] })).runs;
   await entitlements.settleAllowanceAlerts(db);
+  await settleAiCreditAlerts(db);
   const alerts = await openAlerts(db);
   const pendingDeletions = await pendingCredentialDeletions(db);
   return c.json({ failedRuns, failedJobs, failedAi, alerts, pendingDeletions });
@@ -518,6 +589,8 @@ adminRoutes.post("/break-glass", async (c) => {
   const now = new Date();
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const grant = await withPlatform(c.get("container").db, async (tx) => {
+    // A request has nothing to read yet, and no AI and no work may start in its name before someone accepts it.
+    await refuseWhileAccessOpen(tx, body.companyId);
     const g = await grantStaffAccess(tx, { userId: s.user.id, userName: actor.name, companyId: body.companyId, kind: "break_glass", scope: {}, purpose: `break-glass: ${body.reason}`, grantedBy: actor, expiresAt: new Date(now.getTime() + minutes * 60_000), mfaVerified: true, now });
     await audit(tx, { companyId: body.companyId, actor, action: "admin.break_glass", target: { type: "company", id: body.companyId }, reason: body.reason, details: { grantId: g.id, minutes, expiresAt: g.expiresAt } });
     return g;
@@ -538,22 +611,28 @@ adminRoutes.get("/staff-access", async (c) => {
   return c.json(rows);
 });
 
-/** The plans a customer can be put on (the console's Plan control): key, name and what each includes. */
+/**
+ * The plans a customer can be put on (the console's Plan control): key, name, price and what each includes, in dollars for
+ * ITS. The public plans in their own order first, then the private pilot, whichever row is older in this database.
+ */
 adminRoutes.get("/plans", async (c) => {
-  const rows = await c.get("container").db.select({ key: plans.key, name: plans.name, limits: plans.limits, active: plans.active }).from(plans).orderBy(plans.createdAt);
-  return c.json(rows.filter((p) => p.active).map((p) => ({ key: p.key, name: p.name, limits: p.limits })));
+  const rows = await c.get("container").db.select({ key: plans.key, name: plans.name, prices: plans.prices, limits: plans.limits, active: plans.active }).from(plans).orderBy(plans.createdAt);
+  const place = (key: string) => { const at = (PUBLIC_PLAN_KEYS as readonly string[]).indexOf(key); return at < 0 ? PUBLIC_PLAN_KEYS.length : at; };
+  return c.json(rows.filter((p) => p.active).sort((a, b) => place(a.key) - place(b.key)).map((p) => ({ key: p.key, name: p.name, prices: p.prices, limits: p.limits })));
 });
 
 /**
  * Founder decision F8: a platform admin puts a customer on the Design Partner plan (or another plan). Pilot term 90 days,
- * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move.
- * Allowance alerts the new limits clear are resolved.
+ * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move, except
+ * that a monthly AI credit that had no limit starts its first month now (`aiCreditMonthStarted` in the answer).
+ * Allowance alerts the new limits clear are resolved. Any plan other than Trial and Design Partner reads as "active".
  *
  * The Trial plan (founder decision L-02 B): moving a customer to Trial sets its status to "trial" and starts a new 30
  * days when the company is confirmed (otherwise they start at the ITS check). Moving it to another plan ends the trial
  * with nothing to write (only the Trial plan reads the dates, which stay as a record): the "trial ended" alert is
  * resolved, and a company that was paused takes applications again, so the emails held meanwhile are added once this
- * has committed. The answer is the company, with `trialEnded` true when this change ended a trial.
+ * has committed. The answer is the company, with `trialEnded` true when this change ended a trial, and `unlocked`, how many
+ * people locked on its jobs the new plan opened (`unlockApplicants`).
  */
 adminRoutes.post("/customers/:id/plan", async (c) => {
   const s = c.get("session")!;
@@ -569,14 +648,26 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
   const clock = container.engine.clock();
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const result = await withPlatform(container.db, async (tx) => {
-    // Locked: the settings are written back whole, so the ITS check or a customer's change made meanwhile is kept.
-    const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
+    // Locked: the settings are written back whole, so the ITS check or a customer's change made meanwhile is kept. Not "for
+    // update": every insert that names this company takes a key share of its row, and `unlockApplicants` below waits for each
+    // job's applicants' lock, whose holder is about to make such an insert. "For update" would leave the two waiting for each other.
+    const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1).for("no key update");
     if (!co) throw new HttpError(404, "not_found", "Company not found.");
-    const [plan] = await tx.select({ key: plans.key, active: plans.active }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
+    // Accept lets a person in on the Free plan; a plan is chosen once they are in.
+    await refuseWhileAccessOpen(tx, companyId);
+    const [plan] = await tx.select({ key: plans.key, name: plans.name, active: plans.active, limits: plans.limits }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
     if (!plan) throw new HttpError(400, "unknown_plan", `There is no plan called ${body.planKey}.`);
     // a retired plan (hidden from GET /admin/plans) is not offered by the API either
     if (plan.active === false) throw new HttpError(400, "inactive_plan", `The ${body.planKey} plan is retired and can no longer be given to a customer.`);
-    await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
+    const [fromPlan] = await tx.select({ name: plans.name }).from(plans).where(eq(plans.key, co.planKey)).limit(1);
+    // Who posts on the boards before the change: the plan decides that too (Rule 6), read against what it decides after.
+    const postedBy = await whoPostsBoards(tx, companyId, co.settings);
+    // People a smaller plan left locked open now, oldest first, up to the new limit. A move down opens nobody and locks nobody.
+    // Before the plan's rows are written, because opening many takes a while and every AI call of this company waits on those
+    // rows: until they are written its calls go on under the old plan, and they wait only for the short rest of this transaction.
+    const limit = entitlements.CANDIDATES_PER_JOB in plan.limits ? plan.limits[entitlements.CANDIDATES_PER_JOB] : await entitlements.limitOf(tx, companyId, entitlements.CANDIDATES_PER_JOB);
+    const opened = await unlockApplicants(tx, container.engine, { companyId, planKey: body.planKey, limit, actor, reason, now: clock, integrations: container.integrations, statusBaseUrl: container.env.JOBS_BASE_URL });
+    const { aiCreditMonthStarted } = await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
     await entitlements.settleAllowanceAlerts(tx, { companyId });
     const pilot = body.planKey === "design_partner"
       ? { startedAt: co.settings.pilot?.startedAt ?? now.toISOString(), endsAt: co.settings.pilot?.endsAt ?? new Date(now.getTime() + (body.pilotDays ?? 90) * 86_400_000).toISOString(), ...(body.extendUntil ? { extendedUntil: body.extendUntil } : {}) }
@@ -587,23 +678,30 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     const leavingTrial = onTrialPlan(co.planKey) && !onTrialPlan(body.planKey);
     const wasPaused = leavingTrial && trialStanding(co, clock)?.ended === true;
     const term = toTrial && isCompanyVerified(co.settings) ? newTrialTerm(clock, "plan_change") : null;
-    const { trial: oldTerm, ...others } = co.settings;
+    // What the owner was told about the AI credit goes: a new plan's lines are told again.
+    const { trial: oldTerm, aiCreditTold: _told, ...others } = co.settings;
     const settings = { ...others, pilot, ...(toTrial ? (term ? { trial: term } : {}) : oldTerm ? { trial: oldTerm } : {}) };
-    const status = onTrialPlan(body.planKey) ? "trial" : body.planKey === "design_partner" ? "design_partner" : co.status === "trial" ? "active" : co.status;
+    const status = onTrialPlan(body.planKey) ? "trial" : body.planKey === "design_partner" ? "design_partner" : "active";
     const [updated] = await tx.update(companies).set({ status, settings }).where(eq(companies.id, companyId)).returning();
+    await settleAiCreditAlerts(tx, { companyId, now: clock });
+    // AI work waiting for credit looks again now: each run woken passes the same check at the credit's own gate.
+    await container.engine.signal(tx, { companyId, key: AI_CREDIT_AVAILABLE });
     if (leavingTrial) await resolveAlertsFor(tx, TRIAL_ENDED_ALERT, companyId, clock);
     await emit(tx, { type: "plan.changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from: co.planKey, to: body.planKey, pilot, ...(leavingTrial ? { trialEnded: true } : {}) } });
-    await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey, ...(term ? { trial: { startedAt: term.startedAt, endsAt: term.endsAt } } : {}), ...(leavingTrial ? { trialEnded: true } : {}) } });
+    // The customer reads this in their own history (`describeAuditRecord`), so it carries the plans' names.
+    await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey, fromName: fromPlan?.name ?? null, toName: plan.name, unlocked: opened.unlocked, ...(term ? { trial: { startedAt: term.startedAt, endsAt: term.endsAt } } : {}), ...(leavingTrial ? { trialEnded: true } : {}) } });
     if (term) await emit(tx, { type: "trial.started", companyId, actor, subject: { type: "company", id: companyId }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
-    return { updated, wasPaused, leavingTrial };
+    // The boards' work follows the plan, the open plan request is answered and the owners and admins are told.
+    await afterPlanChange(tx, container, { companyId, planName: plan.name, opened: opened.unlocked, postedBy, postsNow: await whoPostsBoards(tx, companyId, settings), actor, now: clock });
+    return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked, aiCreditMonthStarted };
   });
   if (result.wasPaused) {
     // Paused no more: the jobs go back on the feeds, and the emails that arrived meanwhile are added to their jobs.
     resetPublicFeedCache(container);
     await replayHeldEmailsForCompany(container, companyId);
-    await container.kick();
   }
-  return c.json({ ...result.updated, trialEnded: result.leavingTrial });
+  await container.kick();
+  return c.json({ ...result.updated, trialEnded: result.leavingTrial, unlocked: result.unlocked, aiCreditMonthStarted: result.aiCreditMonthStarted });
 });
 
 /**

@@ -67,7 +67,7 @@ export const ScreenProgress = z.object({
   flow: z.enum(["one_visit"]).optional(),
   /** "review": every question is answered or skipped and the candidate is checking their answers before sending (E10). */
   phase: z.enum(["conversation", "review"]).optional(),
-  /** Questions the candidate chose to skip (E11): unknown in the scorecard, never held against them. */
+  /** Questions the candidate chose to skip (E11): unknown in the scorecard, never read as a no. */
   declined: z.array(z.string()).optional(),
   /** How many times each answer was changed on the "check your answers" page (E10). */
   edits: z.record(z.string(), z.number()).optional(),
@@ -84,6 +84,13 @@ export const ScreenProgress = z.object({
   /** When it was paused because the assistant was not working (E5), and the last time the software tried again. */
   pausedAt: z.string().optional(),
   retriedAt: z.string().optional(),
+  /**
+   * When the scorecard of a sent chat started waiting for the company's AI credit (Rule 4 of the plans of 5 November
+   * 2026): the answers are there for the team, who read them themselves; the `screen` run writes it after an upgrade or
+   * when a monthly credit starts again, and clears this. Everything that says "being scored" reads it, so nobody stays
+   * there for ever (`interviewInScore`, `screenScorecards`, the board's lane).
+   */
+  scoreWaitsForCredit: z.string().optional(),
   /**
    * A person's "Send a reminder" (20 Oct 2026, R20-7) about an interview already started: it stays open at least until
    * then, beside the idle close after the reminder (the `screen` run's `after_invite`). Unstarted, `expiresAt` says it.

@@ -119,7 +119,7 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html).toContain('<td>What pay are you looking for?</td><td class="num">3</td>');
     // the fairness rule and the no-names assurance stay on the card, as on the must-haves card; what "typical" means is
     // in the Report tab's disclosure (fewer words, 23 Oct 2026)
-    expect(html).toContain("Choosing a person or not answering a question is never held against anyone. Counts only; nobody is named here.");
+    expect(html).toContain("Choosing a person or not answering a question is never read as a no. Counts only; nobody is named here.");
     expect(html).not.toContain("is the middle value");
     // the old inline 28px figure is gone: the look comes from the stylesheet
     expect(html).not.toContain("font-size:28px");
@@ -210,6 +210,24 @@ describe("tables elsewhere on a role", () => {
     expect(html).not.toContain('role="status"');
   });
 
+  it("gives each person one verdict word on Compare: the word beside their number, never a reading's stored word lower down (6 November 2026)", () => {
+    const score = { score: 62, band: "medium", bandLabel: "Medium", fit: "potential", openPoints: 0, coverage: { known: 2, total: 2, words: "Based on all 2 requirements" }, breakdown: [], unknown: [], fullMarks: 0, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview", packetVersion: 1 };
+    const person = { applicationId: "a1", name: "Maria Reyes", stage: "triaged", stageLabel: "Ready", group: "waiting_on_you", mustHaves: {}, competencies: {}, screen: null, resume: { overall: "strong", confidence: "high", summary: "s" }, unknownCount: 0, open: "/roles/r1/talent?open=a1", score, notes: [] };
+    const data = { role: { id: "r1", title: "Dental Hygienist" }, mustHaves: [], competencies: [], max: 5, reminder: "People decide.", candidates: [person] };
+    const html = render(client(), createElement(CompareTable, { data: data as never }));
+    expect(html).toContain("Potential match");
+    expect(html).not.toContain("Strong match");
+    expect(html).not.toContain("Medium");
+    // the AI interview's row: the assistant's lean beside Potential; beside a word it disagrees with, only that it was done
+    const scorecard = { overall: "strong", recommendation: "strong_interview", summary: "s", confidence: "high" };
+    const interviewed = (fit: string) => ({ ...data, candidates: [{ ...person, screen: scorecard, score: { ...score, fit } }] });
+    expect(render(client(), createElement(CompareTable, { data: interviewed("potential") as never }))).toContain("Suggests an interview");
+    const weak = render(client(), createElement(CompareTable, { data: interviewed("weak") as never }));
+    expect(weak).toContain("Weak match");
+    expect(weak).not.toContain("Suggests an interview");
+    expect(weak).toMatch(/<td class="small">Done<\/td>/);
+  });
+
   it("right-aligns the visits of each tracked link and the counts of applications by source", () => {
     const postings = {
       role: { id: "r1", title: "Dental hygienist", status: "open", acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, volumeAlertPerDay: 50, applicationsCloseOn: "2026-10-30", openedAt: "2026-10-08T10:00:00.000Z", currentPacketVersion: 1 },
@@ -230,6 +248,17 @@ describe("tables elsewhere on a role", () => {
     expect(html).toContain('<td class="num">5</td>');
     expect(html).toContain('<th scope="col" class="num">Last 14 days</th>');
     expect(html).toContain('<td>Careers page</td><td class="num">3</td><td class="num">2</td><td class="num">1</td>');
+    expect(html).not.toContain("<td>Locked</td>");
+    // People past the plan's limit are in the totals and in no source: one line of their own, so the table adds up.
+    const lockedToo = { ...volume, days: [{ day: "2026-10-09", total: 3, bySource: { careers_page: 2 } }, { day: "2026-10-10", total: 1, bySource: { careers_page: 1 } }], totals: { total: 4, bySource: { careers_page: 3 } } };
+    const withLocked = render(client([[["company"], { settings: { verifiedAt: "2026-10-01T00:00:00.000Z" } }], [["postings", "r1"], postings], [["volume", "r1"], lockedToo]]), createElement(PostingTab, { roleId: "r1", roleStatus: "open", canManage: true }));
+    expect(withLocked).toContain('<td>Careers page</td><td class="num">3</td><td class="num">2</td><td class="num">1</td>');
+    expect(withLocked).toContain('<td>Locked</td><td class="num">1</td><td class="num">1</td><td class="num">0</td>');
+    // Everyone in the window locked: still not "no applications".
+    const onlyLocked = { ...volume, days: [{ day: "2026-10-09", total: 1, bySource: {} }, { day: "2026-10-10", total: 0, bySource: {} }], totals: { total: 1, bySource: {} }, sources: [] };
+    const words = render(client([[["company"], { settings: { verifiedAt: "2026-10-01T00:00:00.000Z" } }], [["postings", "r1"], postings], [["volume", "r1"], onlyLocked]]), createElement(PostingTab, { roleId: "r1", roleStatus: "open", canManage: true }));
+    expect(words).not.toContain("No applications in the last 14 days.");
+    expect(words).toContain('<td>Locked</td><td class="num">1</td><td class="num">1</td><td class="num">0</td>');
   });
 });
 

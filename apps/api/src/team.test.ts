@@ -6,7 +6,7 @@ import { applications, auditRecords, candidates, entitlements, events, integrati
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { putOnInterview, signInAs, signInWithIdentity, usePlan } from "./test-helpers";
+import { putOnInterview, signInAs, signInWithIdentity, usePlan, useTrial } from "./test-helpers";
 
 /**
  * Team invitations, members and per-role permissions (docs/spec/21, area A, and section 7 P0): an invitation is a row
@@ -439,7 +439,7 @@ describe("team invitations, members and roles", () => {
     expect(told[0].title).toBe("Wes Leaving was removed; an interview was cancelled");
     expect(told[0].body).toContain("Working interview: Wes Leaving was the only interviewer, so that interview was cancelled.");
     expect(told[0].body).toContain("The candidate was told the interview is off.");
-    expect(told[0].body).toContain("approve a new interview with another interviewer");
+    expect(told[0].body).toContain("set a date and time with another interviewer");
     expect(told[0].body).toContain("Chairside interview: goes ahead with the other interviewers.");
     expect(told[0].body).not.toContain("add an interviewer");
     expect(await container.db.select().from(events).where(and(eq(events.type, "member.removed"), eq(events.subjectId, wesId)))).toHaveLength(1);
@@ -674,6 +674,7 @@ describe("people on the Trial plan", () => {
     app = createApp(container);
     owner = await signInWithIdentity(app, container, { email: "olga@seats.test", name: "Olga Owner", provider: "google", aal2: false });
     companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Seat Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    await useTrial(container, companyId);
   });
   afterAll(async () => {
     await container.close();

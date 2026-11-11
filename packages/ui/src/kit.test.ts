@@ -208,6 +208,18 @@ describe("the kit's round-3 options", () => {
     expect((Button({ children: "Save" }) as El).props["aria-keyshortcuts"]).toBeUndefined();
   });
 
+  it("Button `ariaDisabled` greys it and it can still be pressed, with `describedBy` naming the words that say why; left out, neither attribute is written", () => {
+    const onClick = () => undefined;
+    const greyed = Button({ children: "Approve", variant: "primary", ariaDisabled: true, describedBy: "why", onClick }) as El;
+    expect(greyed.props).toMatchObject({ "aria-disabled": true, "aria-describedby": "why", onClick, className: "btn primary" });
+    // not the kit's `disabled`, which would take it out of the keyboard's way and stop the press
+    expect(greyed.props.disabled).toBeFalsy();
+    const live = Button({ children: "Approve", variant: "primary", ariaDisabled: false, describedBy: "why" }) as El;
+    expect(Object.keys(live.props)).toEqual(Object.keys((Button({ children: "Save" }) as El).props));
+    expect(live.props).not.toHaveProperty("aria-disabled");
+    expect(live.props).not.toHaveProperty("aria-describedby");
+  });
+
   it("IconChip comes in 28px (`xs`) with a 14px icon; Eyebrow can be a section's H2 or H3", () => {
     const xs = IconChip({ icon: "sparkles", tone: "peach", size: "xs" }) as El;
     expect(xs.props).toMatchObject({ className: "icon-chip peach xs", "aria-hidden": "true" });
@@ -307,7 +319,8 @@ describe("the kit without inline styles", () => {
     const styles = (file: string) => (readFileSync(new URL(file, import.meta.url), "utf8").match(/style=\{/g) ?? []).length;
     expect(styles("./index.tsx")).toBe(1); // the pipeline's widths and colours per stage
     expect(styles("./score-bars.tsx")).toBe(1); // a bar's width
-    expect(styles("./menu.tsx")).toBe(1); // a menu placed against the window inside a table's scrolling box
+    // a menu placed against the window inside a table's scrolling box; a menu's list height inside a dialog (--menu-max)
+    expect(styles("./menu.tsx")).toBe(2);
     for (const file of ["./sheet.tsx", "./tabs.tsx", "./toast.tsx", "./split-view.tsx", "./auto-textarea.tsx", "./motion-provider.tsx"]) expect(styles(file), file).toBe(0);
   });
 });

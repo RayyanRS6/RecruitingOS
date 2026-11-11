@@ -6,9 +6,10 @@ import { Alert, Avatar, Button, Card, Field } from "@ros/ui";
 import { api, ApiError, type ActionResult, type ApplicationDetail, type ClosingMessagePreview, type HireFollowUp, type OfferMadeResult } from "../../api/client";
 import { toast } from "../../toast";
 import { ClosingMessageCard } from "../../components/ClosingMessage";
-import { closeRoleToast, type PanelStep } from "../../talent-actions";
+import { closeRoleToast, hireSheetLead, type PanelStep } from "../../talent-actions";
 import { useCompanyTimeZone } from "../../components/use-company-time-zone";
 import { hireConfirmText, hireFollowUpView, hireToast, keepWarmToast, offerAnswerToast, offerDateBounds, offerMadeToast, offerNote, offerStepText, waitingOnCandidateText } from "../../hiring";
+import { cannotSeeYetWords } from "../../upgrade";
 import { firstSentence } from "./helpers";
 import { useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
 import { LEAD, STEP, Why } from "./why";
@@ -122,14 +123,14 @@ export function WaitingOnCandidateCard({ a, roleId, onAccepted }: { a: Applicati
   );
 }
 
-/** What the hire answers: the backups and closing the role (plan H1). */
-type HireAnswer = { hire?: HireFollowUp | null; roleId?: string };
+/** What the hire answers: the backups and closing the role (plan H1), and their interviews still to come it called off. */
+type HireAnswer = { hire?: HireFollowUp | null; roleId?: string; interviewsEnded?: number };
 
 /**
  * The hire sheet (plan H1), one sheet: the start date, the day they accepted the offer (optional), a confirmation, and
- * then what to do with the role and the others still in the running: close it now and tell them (the one closing message,
+ * then what to do with the job and the others still in the running: close it now and tell them (the one closing message,
  * seen before it goes), or keep them warm until the start date. After an interview with no decision yet, the hire is
- * recorded as that interview's decision too.
+ * recorded as that interview's decision too. Its words say "job", like every other button (the lead's D1, 11 November 2026).
  */
 export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail; roleId: string; /** May tell candidates a decision (application.reject): HR closes the role but does not send the closing message. */ mayTell: boolean; onClose: () => void }) {
   const qc = useQueryClient();
@@ -151,7 +152,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
       ? api.post<HireAnswer>(`/api/v1/applications/${a.id}/decision`, { decision: "hired", hireDate: startDate, offerAcceptedAt: acceptedOn || undefined, note: note.trim() || undefined })
       : api.post<HireAnswer>(`/api/v1/applications/${a.id}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: startDate, offerAcceptedAt: acceptedOn || undefined, note: note.trim() || undefined }),
     onSuccess: async (r) => {
-      const t = hireToast({ name, startDate });
+      const t = hireToast({ name, startDate, interviewsEnded: r.interviewsEnded });
       toast(t.title, t.detail);
       setConfirming(false);
       const follow = r.hire ?? null;
@@ -162,7 +163,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
     onError: (e) => { setConfirming(false); toast(e instanceof ApiError ? e.message : "Could not record the hire."); },
   });
   const close = useMutation({
-    mutationFn: (path: string) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: ClosingMessagePreview | null }>(path, { outcome: "filled", confirm: true }),
+    mutationFn: (path: string) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: ClosingMessagePreview | null }>(path, { outcome: "filled", confirm: true }),
     onSuccess: async (r) => {
       const t = closeRoleToast(r, undefined, mayTell);
       toast(t.title, t.detail);
@@ -170,13 +171,13 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
       if (mayTell && r.closingMessage && r.closingMessage.count > 0) setClosing(r.closingMessage);
       else onClose();
     },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the job."),
   });
   if (closing) return <ClosingMessageCard roleId={roleId} preview={closing} onDone={onClose} />;
   if (after) {
     const v = hireFollowUpView(after, a.candidate.firstName || name);
     return (
-      <Card needsYou lift title={`${name} is hired: what about the role?`} className={STEP}>
+      <Card needsYou lift title={`${name} is hired: what about the job?`} className={STEP}>
         <p className={LEAD}>{v.startLine}</p>
         {v.backupsLine ? (
           <div className="grid gap-2">
@@ -184,23 +185,25 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
             <ul className="grid gap-1.5" aria-label="Still in the running">
               {v.people.map((p) => <li key={p.applicationId} className="flex flex-wrap items-center gap-2 text-sm"><Avatar name={p.name} size="sm" /><span className="font-semibold">{p.name}</span><span className="muted small">{p.stageLabel}</span></li>)}
             </ul>
+            {after.backups.locked ? <p className="small muted">{cannotSeeYetWords(after.backups.locked)}</p> : null}
           </div>
         ) : null}
         {/* the ways forward, side by side on a desk: each its own card with its one button */}
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(220px,100%),1fr))] gap-3">
           {v.mayClose && after.closeRole ? (
             <div className={CHOICE}>
-              <strong className="text-[15px]">{mayTell ? "Close the role now and tell them" : "Close the role now"}</strong>
+              {/* job words, like every other button (10 November 2026); "and tell them" only when someone the team can tell is still in process */}
+              <strong className="text-[15px]">{mayTell && after.closeRole.stillInProcess > 0 ? "Close the job now and tell them" : "Close the job now"}</strong>
               <p className="small muted">{v.closeWords}</p>
               <Button size="sm" variant="primary" loading={close.isPending} onClick={() => close.mutate(after.closeRole!.path)}>Close it now</Button>
             </div>
           ) : null}
           {v.keepWarmWords ? (
             <div className={CHOICE}>
-              {/* a start date already past has no Today reminder to promise (plan H1) */}
-              <strong className="text-[15px]">{v.started ? "Leave the role open for now" : "Keep them warm until the start date"}</strong>
+              {/* a start date already past has no Today reminder to promise (plan H1), and with nobody to keep warm there are no backups to name */}
+              <strong className="text-[15px]">{v.keepsBackups && !v.started ? "Keep them warm until the start date" : "Leave the job open for now"}</strong>
               <p className="small muted">{v.keepWarmWords}</p>
-              <Button size="sm" onClick={() => { const t = keepWarmToast(a.candidate.firstName || name, after.startDate); toast(t.title, t.detail); onClose(); }}>{v.started ? "Leave it open" : "Keep the role open"}</Button>
+              <Button size="sm" onClick={() => { const t = keepWarmToast(a.candidate.firstName || name, after.startDate, undefined, after.backups.count); toast(t.title, t.detail); onClose(); }}>{v.keepsBackups && !v.started ? "Keep the job open" : "Leave it open"}</Button>
             </div>
           ) : null}
         </div>
@@ -211,7 +214,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
   const valid = !!startDate;
   return (
     <Card needsYou lift title={`Hire ${name}`} className={STEP}>
-      <p className={LEAD}>Recorded with your name. Nothing is sent to anyone.</p>
+      <p className={LEAD}>{hireSheetLead(a.candidate.firstName, a.interviews)}</p>
       <Why>You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</Why>
       <div className="stack gap-3">
         <Field label="Start date (agreed with them)" htmlFor="hire-start"><input ref={first} id="hire-start" className="input" type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setConfirming(false); }} /></Field>

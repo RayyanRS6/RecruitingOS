@@ -88,6 +88,22 @@ describe("release-1 security coverage", () => {
     expect(rowsSeenByB.some((r) => r.id === applicationA)).toBe(false);
     expect((await json(ownerB, "GET", "/api/v1/interviews")).status).toBe(200);
     expect(((await (await json(ownerB, "GET", "/api/v1/interviews")).json()) as unknown[]).length).toBe(0);
+    // and the routes of 6 November 2026: a date and time set on either path, a time booked for them, the form's defaults,
+    // and the benefits typed on the approval card. An interview of company A's, called off so it holds nothing up later.
+    const setTime = { date: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10), time: "14:00", durationMinutes: 30, place: { kind: "phone" } };
+    const [ivA] = await withTenant(container.db, companyA, (tx) => tx.insert(interviews).values({ companyId: companyA, applicationId: applicationA, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 30, status: "cancelled", timezone: "America/Los_Angeles" }).returning());
+    for (const [method, path, body] of [
+      ["POST", `/api/v1/applications/${applicationA}/interviews`, { roundKey: "x", interviewerUserIds: [ownerAId], setTime }],
+      ["GET", `/api/v1/applications/${applicationA}/interview-draft`, undefined],
+      ["POST", `/api/v1/interviews/${ivA.id}/set-time`, setTime],
+      ["POST", `/api/v1/interviews/${ivA.id}/book-on-behalf`, { slotId: "any" }],
+      ["POST", `/api/v1/roles/${roleA}/packets/1/benefits`, { text: "Health insurance and paid time off." }],
+    ] as const) {
+      const r = await json(ownerB, method, path, body);
+      expect(r.status, `${method} ${path}`).toBe(404);
+      // the route's own refusal, so a path that does not exist cannot pass for one
+      expect(((await r.json()) as { error: { code: string } }).error.code, `${method} ${path}`).toBe("not_found");
+    }
   });
 
   it("candidate-link authorization: a token opens only its own application; a guessed or foreign token is refused; the schedule token is separate", async () => {

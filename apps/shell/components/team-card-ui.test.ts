@@ -117,14 +117,43 @@ describe("Team card: pending invitations", () => {
   });
 });
 
+describe("Team card: an invitation whose email did not arrive (6 November 2026)", () => {
+  const failedOne = (myRole: string, myUserId: string) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+    qc.setQueryData(["members"], members);
+    qc.setQueryData(["invitations"], [{ ...invitation("i-hm", "hiring_manager", "hal@bright.test"), emailState: "failed" }, { ...invitation("i-admin", "admin", "ann@bright.test"), emailState: "sent" }]);
+    return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(TeamCard, { myRole, myUserId })));
+  };
+
+  it("says Email failed on its row and offers the link to copy and send by hand; a sent one says nothing", () => {
+    const html = failedOne("owner", "u-owner");
+    const halRow = html.slice(html.indexOf("hal@bright.test"), html.indexOf("ann@bright.test"));
+    expect(halRow).toMatch(/<span class="chip caution[^"]*">Email failed<\/span>/);
+    expect(halRow).toContain(">Copy invitation link</button>");
+    expect(halRow).toContain(">Send again</button>");
+    const annRow = html.slice(html.indexOf("ann@bright.test"));
+    expect(annRow).not.toContain("Email failed");
+    expect(annRow).not.toContain("Copy invitation link");
+    expect(html.match(/>Copy invitation link</g)).toHaveLength(1);
+  });
+
+  it("only someone who may give that invitation gets the buttons; the words are there for anyone who manages the team", () => {
+    const html = failedOne("hr", "u-hr");
+    const halRow = html.slice(html.indexOf("hal@bright.test"), html.indexOf("ann@bright.test"));
+    expect(halRow).toContain("Email failed");
+    expect(halRow).toContain(">Copy invitation link</button>");
+    expect(html.slice(html.indexOf("ann@bright.test"))).not.toContain(">Send again</button>");
+  });
+});
+
 describe("Team card: the Trial plan's people (founder decision L-02 B)", () => {
   const INVITE_OPEN = /<button type="submit" class="btn primary"(?! disabled)[^>]*>Invite<\/button>/;
   const INVITE_WAITS = /<button type="submit" class="btn primary" disabled=""[^>]*>Invite<\/button>/;
-  const withSeats = (seats: { used: number; limit: number | null }) => {
+  const withSeats = (seats: { used: number; limit: number | null }, planKey = "trial") => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
     qc.setQueryData(["members"], members.slice(0, 2));
     qc.setQueryData(["invitations"], []);
-    return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(TeamCard, { myRole: "owner", myUserId: "u-owner", seats })));
+    return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(TeamCard, { myRole: "owner", myUserId: "u-owner", seats, planKey })));
   };
 
   it("says above the invite form how many people are in use, invitations not yet answered included", () => {
@@ -143,8 +172,19 @@ describe("Team card: the Trial plan's people (founder decision L-02 B)", () => {
   });
 
   it("on a plan with no limit of people there is no line and nothing waits", () => {
-    const html = withSeats({ used: 7, limit: null });
+    const html = withSeats({ used: 7, limit: null }, "ultra");
     expect(text(html)).not.toContain("Your trial includes");
+    expect(text(html)).not.toContain("Your plan includes");
     expect(html).toMatch(INVITE_OPEN);
+  });
+
+  it("on any other plan the same line and the same wait, in the plan's words, and no word about a trial", () => {
+    const words = text(withSeats({ used: 1, limit: 2 }, "free"));
+    expect(words).toContain("Your plan includes 2 people: 1 in use, counting invitations not yet answered.");
+    expect(words).not.toContain("trial");
+    const html = withSeats({ used: 2, limit: 2 }, "free");
+    expect(text(html)).toContain("Your plan includes 2 people. Upgrade to add more.");
+    expect(text(html)).not.toContain("trial");
+    expect(html).toMatch(INVITE_WAITS);
   });
 });

@@ -35,14 +35,19 @@ env:
   CSP_MODE: report-only
 
 jobs:
-  verify:
-    name: verify # the required status check on main: lockfile install, secret scans, audit, typecheck, migration validation, tests, evals, build, browser journeys with accessibility checks
+  # `verify` is the required status check on main. Since 9 November 2026 it is the last job: it passes only when `checks`
+  # (everything that used to run inside it) and every part of `flows` (the whole hire and the whole application, the
+  # owner's "please test it thoroughly ... test both these flows" of 6 November 2026) passed. The three run side by side,
+  # each inside its own time limit, so the gate covers the long flows without pushing any one job past its limit, and the
+  # branch protection keeps the same check name.
+  checks:
+    name: checks # lockfile install, secret scans, audit, typecheck, migration validation, tests, evals, build, browser journeys with accessibility checks
     # Pinned (12 October 2026): ubuntu-latest moves to Ubuntu 26.04 from 19 October, where /tmp is held in memory
     # (actions/runner-images#14777) and the browsers keep their profiles and traces there. Revisit when #14777 is fixed
     # or GitHub announces an end date for 24.04: one green run on a branch with ubuntu-26.04, then switch.
     runs-on: ubuntu-24.04
-    # 32 browser journeys run one at a time against `next dev`, in three runs with a server each (about 50 minutes),
-    # after about 20 minutes of other checks.
+    # The browser journeys run one at a time against `next dev`, in four runs with a server each (about 50 minutes),
+    # after about 20 minutes of other checks. The whole flows are not among them: they are the `flows` job's.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -96,20 +101,21 @@ jobs:
       - name: Playwright browsers
         run: pnpm --filter @ros/e2e exec playwright install --with-deps chromium
 
-      # In three runs, each with a dev server of its own: one server for all 32 journeys grew until the runner was shut
-      # down mid-run twice (10 October 2026), and the route inventory, which compiles every page in one test, needs a
-      # fresh server of its own to stay under the heap limit. Each run writes its own report; all are uploaded below.
-      # The later two run even when the first half fails (so every failure is reported), but only once the browser
-      # journeys have actually started: an earlier failing step (lint, tests, build) skips all three.
+      # In four runs, each with a dev server of its own: one server for all 32 journeys grew until the runner was shut
+      # down mid-run twice (10 October 2026), the route inventory, which compiles every page in one test, needs a fresh
+      # server of its own to stay under the heap limit, and the sign-up mode is the server's, so the journey that asks for
+      # approval has one too (the other runs skip it). Each run writes its own report; all are uploaded below. The later
+      # three run even when the first half fails (so every failure is reported), but only once the browser journeys have
+      # actually started: an earlier failing step (lint, tests, build) skips all four.
       - name: End-to-end journeys with accessibility checks (first half)
         id: e2e_first
-        run: pnpm --filter @ros/e2e exec playwright test --shard=1/2 --grep-invert "route inventory"
+        run: pnpm --filter @ros/e2e exec playwright test --project=chromium --project=phone --shard=1/2 --grep-invert "route inventory"
         env:
           E2E_REPORT_DIR: report/1
 
       - name: End-to-end journeys with accessibility checks (second half)
         if: ${{ !cancelled() && steps.e2e_first.outcome != 'skipped' }}
-        run: pnpm --filter @ros/e2e exec playwright test --shard=2/2 --grep-invert "route inventory"
+        run: pnpm --filter @ros/e2e exec playwright test --project=chromium --project=phone --shard=2/2 --grep-invert "route inventory"
         env:
           E2E_REPORT_DIR: report/2
 
@@ -119,6 +125,13 @@ jobs:
         env:
           E2E_REPORT_DIR: report/3
 
+      - name: First sign-in asks for approval (a server in SIGNUP_MODE=approval)
+        if: ${{ !cancelled() && steps.e2e_first.outcome != 'skipped' }}
+        run: pnpm --filter @ros/e2e exec playwright test specs/access-approval.spec.ts
+        env:
+          E2E_REPORT_DIR: report/4
+          SIGNUP_MODE: approval
+
       - name: Playwright report (synthetic data only)
         if: always()
         uses: actions/upload-artifact@v7
@@ -127,3 +140,77 @@ jobs:
           path: tests/e2e/report
           retention-days: 7
           if-no-files-found: warn
+
+  # The whole flows (tests/e2e/specs/flow-*.spec.ts, the Playwright projects "flows" and "flows-phone"): each walks a whole
+  # hire or a whole application through the real screens and reads every email by its words, so each takes minutes. They
+  # run in parts, each with a dev server of its own, beside `checks`. The sign-up mode and the email provider are the
+  # server's, so the specs that need SIGNUP_MODE=approval, or an email provider that never delivers, have a part each (and
+  # skip themselves in the others).
+  flows:
+    name: flows (${{ matrix.part }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: sign-up by approval
+            args: specs/flow-whole-hire.spec.ts specs/flow-owner-signup-approval.spec.ts
+            signup: approval
+          - part: 1 of 3
+            args: --shard=1/3
+          - part: 2 of 3
+            args: --shard=2/3
+          - part: 3 of 3
+            args: --shard=3/3
+          - part: email down
+            args: specs/flow-email-down.spec.ts
+            email: postmark
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v5 # reads "packageManager" from package.json
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install from the lockfile only
+        run: pnpm install --frozen-lockfile
+
+      - name: Playwright browsers
+        run: pnpm --filter @ros/e2e exec playwright install --with-deps chromium
+
+      - name: The whole flows (${{ matrix.part }})
+        run: pnpm --filter @ros/e2e exec playwright test --project=flows --project=flows-phone ${{ matrix.args }}
+        env:
+          E2E_REPORT_DIR: report/flows-${{ strategy.job-index }}
+          # empty in the parts that do not set them: open sign-up and the fake email adapter
+          SIGNUP_MODE: ${{ matrix.signup }}
+          E2E_EMAIL_PROVIDER: ${{ matrix.email }}
+
+      - name: Playwright report (synthetic data only)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-flows-${{ strategy.job-index }}
+          path: tests/e2e/report
+          retention-days: 7
+          if-no-files-found: warn
+
+  verify:
+    name: verify # the required status check on main: green only when `checks` and every part of `flows` passed
+    needs: [checks, flows]
+    # Runs whatever became of the jobs it waits for, a cancelled run included, so the check reads failed and never skipped:
+    # GitHub counts a job skipped by its condition as a success, so a skipped required check would let a merge through with no
+    # test run (the release review, 11 November 2026). It only reads the two results, so it cannot hang.
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every check and every whole flow passed
+        run: |
+          echo "checks: ${{ needs.checks.result }}; flows: ${{ needs.flows.result }}"
+          test "${{ needs.checks.result }}" = "success"
+          test "${{ needs.flows.result }}" = "success"

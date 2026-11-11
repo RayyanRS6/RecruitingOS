@@ -15,7 +15,13 @@ import { AnthropicProvider, CALL_BUDGET_MS, CORRECTION_FLOOR_MS, ROUTE_RESERVE_M
 type Sent = Record<string, unknown> & { output_config?: { format?: unknown; effort?: string }; system?: Array<{ text: string }>; messages?: Array<{ role: string; content: string }> };
 type Options = { timeout?: number; signal?: AbortSignal };
 type Reply = ReturnType<typeof reply>;
-type Answer = Reply | Error | ((options: Options) => Reply | Promise<Reply>);
+type Answer = Reply | Error | Cut | Silent | ((options: Options) => Reply | Promise<Reply>);
+/** A reply that began to arrive (the stream said "connect"), then was lost: an error thrown part-way through. */
+class Cut {
+  constructor(readonly error: Error) {}
+}
+/** A provider that never answers: no "connect", and nothing at all until the call is stopped. */
+class Silent {}
 
 function reply(over: { text?: string; stop?: string } = {}) {
   return {
@@ -35,13 +41,23 @@ function fakeClient(answers: Answer[]) {
         sent.push(params);
         options.push(opts ?? {});
         const next = answers.shift();
-        return {
+        // As the SDK does: "connect" once the provider began to answer, never for a failure before that.
+        let connected = () => {};
+        const stream = {
+          on(event: string, listener: () => void) {
+            if (event === "connect") connected = listener;
+            return stream;
+          },
           finalMessage: async () => {
             if (!next) throw new Error("no answer queued");
             if (next instanceof Error) throw next;
+            if (next instanceof Silent) return new Promise<Reply>((_, reject) => opts?.signal?.addEventListener("abort", () => reject(new Anthropic.APIUserAbortError())));
+            connected();
+            if (next instanceof Cut) throw next.error;
             return typeof next === "function" ? next(opts ?? {}) : next;
           },
         };
+        return stream;
       },
       parse() {
         throw new Error("the adapter must stream, not call messages.parse");
@@ -192,6 +208,79 @@ describe("the Anthropic adapter", () => {
     const { client } = fakeClient([reply({ stop: "refusal" })]);
     const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-opus-5");
     expect(out.kind).toBe("refused");
+  });
+});
+
+describe("whether a failed call says its usage may be more than it recorded", () => {
+  const schema = z.object({ count: z.number() });
+  const asked = (answers: Answer[]) => new AnthropicProvider(undefined, fakeClient(answers).client).structured(request(schema), "claude-haiku-5-5");
+
+  it("a connection that never opened: nothing was billed, and the usage is exact", async () => {
+    const out = await asked([new Anthropic.APIConnectionError({ message: undefined })]);
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: Connection error.", final: true });
+    expect(out).not.toHaveProperty("usageUnknown");
+  });
+
+  it("an answer with an HTTP status: nothing was written, and the usage is exact", async () => {
+    const out = await asked([new Anthropic.InternalServerError(529, { type: "overloaded_error" }, undefined, new Headers())]);
+    expect(out.kind === "invalid" && out.error).toMatch(/^provider error: 529\b/);
+    expect(out).not.toHaveProperty("usageUnknown");
+  });
+
+  it("a local error before anything is sent: the usage is exact", async () => {
+    const client = { messages: { stream() { throw new TypeError("Cannot read properties of undefined (reading 'type')"); } } } as unknown as Anthropic;
+    const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-haiku-5-5");
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: Cannot read properties of undefined (reading 'type')" });
+    expect(out).not.toHaveProperty("usageUnknown");
+  });
+
+  it("a reply that began and was then lost: it may be billed for what it wrote, and it says so", async () => {
+    const out = await asked([new Cut(new Anthropic.APIConnectionError({ message: "terminated" }))]);
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: terminated", final: true, usageUnknown: true });
+  });
+
+  it("a correction turn lost before any reply: the first reply's usage is all of it", async () => {
+    const out = await asked([reply({ text: '{"count":"three"}' }), new Anthropic.APIConnectionError({ message: undefined })]);
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: Connection error.", usage: { inputTokens: 10, outputTokens: 5 } });
+    expect(out).not.toHaveProperty("usageUnknown");
+  });
+
+  it("a correction turn cut part-way: the first reply's usage is not all of it", async () => {
+    const out = await asked([reply({ text: '{"count":"three"}' }), new Cut(new Error("terminated"))]);
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: terminated", usage: { inputTokens: 10, outputTokens: 5 }, usageUnknown: true });
+  });
+
+  it("a call stopped at the deadline after a reply began says so: it may be billed for what it wrote", async () => {
+    vi.useFakeTimers();
+    const hangs = (opts: Options) => new Promise<Reply>((_, reject) => opts.signal?.addEventListener("abort", () => reject(new Anthropic.APIUserAbortError())));
+    const pending = asked([hangs]);
+    await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
+    expect(await pending).toMatchObject({ kind: "invalid", error: "provider error: the model did not finish within 270 seconds, so the call was stopped", usageUnknown: true });
+  });
+
+  it("a call stopped at the deadline before any answer: a provider that never answered billed nothing, and the usage is exact", async () => {
+    // an outage where the connection hangs rather than fails: each try waits out its 270 seconds, and costs what it recorded
+    vi.useFakeTimers();
+    const pending = asked([new Silent()]);
+    await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
+    const out = await pending;
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: the model did not finish within 270 seconds, so the call was stopped", final: true, usage: { inputTokens: 0, outputTokens: 0 } });
+    expect(out).not.toHaveProperty("usageUnknown");
+  });
+
+  it("a correction turn stopped at the deadline before it was answered: the first reply's usage is all of it", async () => {
+    vi.useFakeTimers();
+    const pending = asked([reply({ text: '{"count":"three"}' }), new Silent()]);
+    await vi.advanceTimersByTimeAsync(CALL_BUDGET_MS);
+    const out = await pending;
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: the model did not finish within 270 seconds, so the call was stopped", usage: { inputTokens: 10, outputTokens: 5 } });
+    expect(out).not.toHaveProperty("usageUnknown");
+  });
+
+  it("a request with no time left is never sent: the usage is exact", async () => {
+    const out = await new AnthropicProvider(undefined, fakeClient([]).client).structured({ ...request(schema), deadlineAt: Date.now() + ROUTE_RESERVE_MS }, "claude-haiku-5-5");
+    expect(out).toMatchObject({ kind: "invalid", error: "provider error: the request had no time left for the model, so it was not asked" });
+    expect(out).not.toHaveProperty("usageUnknown");
   });
 });
 

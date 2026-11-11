@@ -37,9 +37,12 @@ export const PROBLEMS_EMPTY = "None.";
 export function ackIsForAnother(a: Pick<AlertRow, "kind" | "details" | "target">, myUserId: string | null | undefined): boolean {
   return !!myUserId && a.kind.startsWith("platform_role.") && (a.details?.actorId === myUserId || a.target?.id === myUserId);
 }
-/** AI interview notices: they belong to the customer (Customers › Running low), and Overview gives each its own row. */
-export const SCREENING_ALERT_KINDS: ReadonlySet<string> = new Set(["billing.screens_warning", "billing.screens_used_up"]);
-/** An alert that waits for a person: open, and not an AI interview notice. Overview and the Alerts tab count the same ones. */
+/**
+ * Notices about what a customer's plan has used: they belong to the customer. AI interviews have Customers › Running low and
+ * a row each on Overview; the AI credit has its chip and its dollar line on the customer (the plans of 5 November 2026, Rule 4).
+ */
+export const SCREENING_ALERT_KINDS: ReadonlySet<string> = new Set(["billing.screens_warning", "billing.screens_used_up", "billing.ai_credit_warning", "billing.ai_credit_used_up"]);
+/** An alert that waits for a person: open, and not such a notice. Overview and the Alerts tab count the same ones. */
 export function needsAPerson(a: Pick<AlertRow, "status" | "kind">): boolean {
   return a.status === "open" && !SCREENING_ALERT_KINDS.has(a.kind);
 }

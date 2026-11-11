@@ -7,7 +7,7 @@ import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, Ico
 import type { EscalationThreadEntry } from "@ros/contracts";
 import { api, ApiError, type Me, type PostingTaskDetail } from "../api/client";
 import { POSTING_TASK_BEFORE_ACCEPT, isPostingTaskKind, queueKindLabel } from "../publishing";
-import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
+import { CANDIDATE_ASKED_FOR_PERSON, LOCKED_ANSWER_LABEL, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST, callNotesButton, callNotesHint, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
 import { toast } from "../toast";
 import { BoardSnapshotCard } from "./board/BoardSnapshot";
 import { snapshotOf } from "./board/board-model";
@@ -15,7 +15,7 @@ import { snapshotOf } from "./board/board-model";
 /** Exactly what a recruiter sees before accepting (correction 11): no customer words, nothing from a candidate record. */
 type Preview = { id: string; status: string; kind: string; urgency: "low" | "normal" | "high" | "critical"; requiredExpertise: string; summary: string; companyName: string; roleTitle: string | null; slaDueAt: string | null; slaRemainingMinutes: number | null; businessMinutesRemaining: number | null; overdue: boolean; createdAt: string; claimedByMe: boolean; claimed: boolean };
 /** `postingTask`: an accepted ITS posting task (plan D3), the job ad and the board only; it never opens anything about candidates. */
-type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } }; postingTask?: PostingTaskDetail };
+type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; lockedForCompany?: boolean; /** A candidate who asked for a person: whether the call's notes go on their AI interview tab now, or (false) on their Notes tab. */ callNotesOnAiInterview?: boolean | null; /** A talk about the plan: what they wrote opens, with no grant and no access to their hiring. */ planRequest?: boolean; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } } | null; postingTask?: PostingTaskDetail };
 
 const URGENCY_TONE: Record<Preview["urgency"], Tone> = { low: "neutral", normal: "accent", high: "caution", critical: "critical" };
 /** Urgency in plain words (Wave S6): the API's "critical" is what the customer chose as "Urgent". */
@@ -29,6 +29,10 @@ export function queueStatusWord(e: Pick<Preview, "status" | "claimedByMe">): { l
   if (e.status === "open") return { label: "Waiting for someone", tone: "caution" };
   return { label: "Another recruiter has it", tone: "neutral" };
 }
+
+/** An accepted talk about the plan: only an administrator changes a plan, and doing that answers the request by itself. */
+const PLAN_REQUEST_ADMIN = "Change the plan in the console. That tells the company and closes this request.";
+const PLAN_REQUEST_RECRUITER = "An ITS administrator changes the plan in the console. You have no access to this customer's hiring.";
 
 /**
  * Before accepting (founder decision I11): what Accept shows, then the access it gives. The preview never names the
@@ -417,18 +421,20 @@ function EscalationDetail({ id }: { id: string }) {
   const [reply, setReply] = useState("");
   const refresh = () => { qc.invalidateQueries({ queryKey: ["escalation", id] }); qc.invalidateQueries({ queryKey: ["escalations"] }); qc.invalidateQueries({ queryKey: ["me"] }); };
   // A posting task grants nothing (plan D3): accepting it opens the job ad and the board's link only.
-  const claim = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/claim`), onSuccess: () => { toast(isPostingTaskKind(q.data?.kind ?? "") ? "Accepted. The job ad and the board's apply link are open; nothing about candidates is." : "Accepted. Your access to this customer is now active."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not accept.") });
+  // A talk about the plan grants nothing either: its answer has no grant.
+  const claim = useMutation({ mutationFn: () => api.post<{ grant: unknown }>(`/api/v1/escalations/${id}/claim`), onSuccess: (r) => { toast(isPostingTaskKind(q.data?.kind ?? "") ? "Accepted. The job ad and the board's apply link are open; nothing about candidates is." : r?.grant ? "Accepted. Your access to this customer is now active." : "Accepted. What they wrote is open; nothing about their hiring is."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not accept.") });
   const task = isPostingTaskKind(q.data?.kind ?? "");
-  const release = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/release`), onSuccess: () => { toast(task ? "Given back to the queue for another recruiter." : "Released. Your access ended."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not release.") });
+  const release = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/release`), onSuccess: () => { toast(task || q.data?.planRequest ? "Given back to the queue for another recruiter." : "Released. Your access ended."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not release.") });
   // Platform administrators can also open the customer in the console (Wave S6); ITS recruiters cannot open the console.
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const isAdmin = me.data?.user.platformRole === "platform_admin";
-  const resolve = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/resolve`, { resolution, minutesSpent: minutes ? Number(minutes) : undefined }), onSuccess: () => { toast(task ? "Task closed with your note. The customer sees it on the job's Share tab." : "Resolved. The customer has your answer in full; your access ends in 24 hours."); setResolution(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve.") });
+  // Who reads an answer is the API's to say (`lockedForCompany`), so a page open for a while never says the customer has it.
+  const resolve = useMutation({ mutationFn: () => api.post<{ lockedForCompany?: boolean }>(`/api/v1/escalations/${id}/resolve`, { resolution, minutesSpent: minutes ? Number(minutes) : undefined }), onSuccess: (r) => { toast(task ? "Task closed with your note. The customer sees it on the job's Share tab." : q.data?.planRequest ? "Resolved. The customer has your answer in full." : r?.lockedForCompany ? LOCKED_RESOLVED_TOAST : "Resolved. The customer has your answer in full; your access ends in 24 hours."); setResolution(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve.") });
   // A message without resolving (plan B5): a question back, or progress. The person who asked and the owners read it in full.
-  const write = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/messages`, { body: reply.trim() }), onSuccess: () => { toast("Sent to the customer."); setReply(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send.") });
+  const write = useMutation({ mutationFn: () => api.post<{ lockedForCompany?: boolean }>(`/api/v1/escalations/${id}/messages`, { body: reply.trim() }), onSuccess: (r) => { toast(r?.lockedForCompany ? LOCKED_NOTE_TOAST : "Sent to the customer."); setReply(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send.") });
   const refreshFrame = useRefresh();
   const enter = useMutation({
-    mutationFn: async (e: Detail) => { await api.post("/api/v1/auth/switch", { companyId: e.companyId }); return e; },
+    mutationFn: async (e: Detail & { message?: boolean }) => { await api.post("/api/v1/auth/switch", { companyId: e.companyId }); return e; },
     // Another company now: nothing read for the previous one may show (the cache is emptied), and the frame around the
     // page (the access notice, the company chip) is drawn again from the new session. A request about a draft opens that
     // draft in the job builder (C12); one about a role opens its candidates.
@@ -441,9 +447,9 @@ function EscalationDetail({ id }: { id: string }) {
   const ctx = (e.contextSnapshot ?? {}) as { company?: { name: string; vertical: string; sizeBand: string }; role?: { title: string; status: string }; packet?: { version: number; packet: { compensation: { basis: string; min: number; max: number; ceiling: number }; requirements: { mustHaves: Array<{ text: string }>; eligibility: Array<{ question: string }> }; description: { publicJobDescription: string } } }; candidate?: { name: string; email: string | null; phone: string | null }; application?: { stage: string }; resumeText?: string | null; assessments?: Array<{ kind: string; overall: string; result: { summary: string } }>; hiddenTextNote?: string | null; communications?: Array<{ direction: string; subject: string | null; at: string }>; timeline?: Array<{ type: string; at: string }>; intakeSession?: HandedOverDraft | null };
   const st = queueStatusWord(e);
   // The customer drawer in the console (Wave S6, 2.3): only once the request is accepted, and only for administrators.
-  const consoleHref = isAdmin && e.companyId ? `/admin/customers?open=${encodeURIComponent(e.companyId)}` : null;
+  const consoleHref = isAdmin && e.companyId ? `/admin/customers?open=${encodeURIComponent(e.companyId)}${e.planRequest ? "&tab=plan" : ""}` : null;
   // One action strip at the top (Wave S6, 2.3): Accept, then Open in the customer's workspace and Release under a grant.
-  const hasActions = e.status === "open" || !!e.grant || !!consoleHref;
+  const hasActions = e.status === "open" || !!e.grant || !!e.planRequest || !!consoleHref;
   // "What the request is about": the context cards, folded, with how many there are.
   const aboutCount = [ctx.company, ctx.intakeSession, ctx.role && ctx.packet, snapshotOf(e.contextSnapshot), ctx.candidate].filter(Boolean).length;
   const stillOpen = e.status !== "resolved" && e.status !== "cancelled";
@@ -453,14 +459,17 @@ function EscalationDetail({ id }: { id: string }) {
     <div className="stack gap-4">
       <Card title={`${queueKindLabel(e.kind)} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row justify-end gap-1.5"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{URGENCY_WORD[e.urgency]}</Pill><Pill size="sm" tone={st.tone}>{st.label}</Pill></div>}>
         {e.accessGranted && ctx.candidate?.name ? <p className="mb-2"><strong>About:</strong> {ctx.candidate.name}{aboutRole ? ` · ${aboutRole}` : ""}</p> : null}
+        {/* Rule 3 of the plans: words cannot be checked by a machine, so the person writing them is told. */}
+        {e.accessGranted && e.lockedForCompany ? <div className="mb-4"><Alert tone="caution">Locked for the company. Do not name them to the company.</Alert></div> : null}
         {hasActions ? (
           <div className="row mb-4">
             {e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>{isPostingTaskKind(e.kind) ? "Accept this task" : "Accept this request"}</Button> : null}
             {e.grant ? <Button size="sm" variant="secondary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open in the customer's workspace</Button> : null}
-            {e.grant ? <Button size="sm" variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Release</Button> : null}
-            {consoleHref ? <Link to={consoleHref} className="btn ghost sm">See this customer in the console</Link> : null}
+            {e.grant || (e.planRequest && stillOpen) ? <Button size="sm" variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Release</Button> : null}
+            {consoleHref ? <Link to={consoleHref} className="btn ghost sm">{e.planRequest ? "Change the plan in the console" : "See this customer in the console"}</Link> : null}
           </div>
         ) : null}
+        {e.planRequest && stillOpen ? <p className="small mb-4 text-ink-2">{isAdmin ? PLAN_REQUEST_ADMIN : PLAN_REQUEST_RECRUITER}</p> : null}
         <p>{e.summary}</p>
         <p className="small muted mt-1.5">Needs {e.requiredExpertise} · {remainingText(e)}{e.slaDueAt ? ` · respond by ${new Date(e.slaDueAt).toLocaleString()}` : ""}{e.firstResponseAt ? ` · first response ${new Date(e.firstResponseAt).toLocaleString()}` : ""}</p>
         {e.grant ? <p className="small mt-2 text-ink-2">Your access covers {e.grant.scope.applicationId ? "this candidate" : e.grant.scope.roleId ? "this role" : "this customer"} and ends {new Date(e.grant.expiresAt).toLocaleString()}.</p> : null}
@@ -501,8 +510,9 @@ function EscalationDetail({ id }: { id: string }) {
           {/* A candidate who chose a person over the assistant (plan E3, Q16): the call, then the notes on their AI interview tab. */}
           {e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId && e.status !== "resolved" ? (
             <Card needsYou title="After you talk with them">
-              <p className="small text-ink-2">{CALL_NOTES_HINT}</p>
-              {e.grant ? <div className="row mt-4"><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open the candidate's AI interview tab</Button></div> : null}
+              {/* true wherever they are: past screening the call's notes go on their Notes tab (10 November 2026) */}
+              <p className="small text-ink-2">{callNotesHint(e)}</p>
+              {e.grant ? <div className="row mt-4"><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>{callNotesButton(e)}</Button></div> : null}
             </Card>
           ) : null}
           {aboutCount ? (
@@ -542,7 +552,9 @@ function EscalationDetail({ id }: { id: string }) {
           {e.status !== "resolved" ? (
             <Card title="Your answer">
               <div className="stack gap-6">
-                {stillOpen ? (
+                {/* Someone the company cannot read: nobody there can answer a question or read this, so the way to help is to write to them. */}
+                {stillOpen && e.lockedForCompany ? <div><Button variant="secondary" icon="mail" loading={enter.isPending} onClick={() => enter.mutate({ ...e, message: true })}>Write to the candidate</Button></div> : null}
+                {stillOpen && !e.lockedForCompany ? (
                   <section aria-labelledby="answer-write" className="stack gap-3">
                     {/* who reads it: an eye with the words as its name and tooltip, beside the heading */}
                     <div className="flex items-center gap-2">
@@ -555,7 +567,7 @@ function EscalationDetail({ id }: { id: string }) {
                 ) : null}
                 <section aria-labelledby="answer-resolve" className={cn("stack gap-3", stillOpen && "border-t border-line pt-6")}>
                   <h3 id="answer-resolve" className="text-[15px]">Resolve</h3>
-                  <Field label="What you did or advised (the customer reads this in full)" htmlFor="res"><textarea id="res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} /></Field>
+                  <Field label={e.lockedForCompany ? LOCKED_ANSWER_LABEL : "What you did or advised (the customer reads this in full)"} htmlFor="res"><textarea id="res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} /></Field>
                   <Field label="Minutes spent" htmlFor="mins"><input id="mins" className="input max-w-[160px]" type="number" min={0} max={1440} value={minutes} onChange={(ev) => setMinutes(ev.target.value)} /></Field>
                   <div><Button variant="primary" loading={resolve.isPending} disabled={!resolution.trim()} onClick={() => resolve.mutate()}>Mark resolved</Button></div>
                 </section>

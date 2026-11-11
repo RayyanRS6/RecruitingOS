@@ -269,13 +269,13 @@ describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () =
     }
   });
 
-  it("never lowers the score: 25 with no skill shown, 32 with one partly shown, 36 with both", () => {
+  it("never lowers the score: 14 with no skill shown, 25 with one partly shown, 36 with both", () => {
     const none = outcome([noneShown, noneShown, noneShown]);
     const one = outcome([shownOnDuty, noneShown, noneShown]);
     const patientsOnDuty = read(skill("clinical", "not_evidenced"), skill("patients", "partially_evidenced", DUTY));
     const both = orders([shownOnDuty, patientsOnDuty, noneShown]).map((o) => outcome(o));
-    expect(scoreOf(none)?.score).toBe(25);
-    expect(scoreOf(one)?.score).toBe(32);
+    expect(scoreOf(none)?.score).toBe(14);
+    expect(scoreOf(one)?.score).toBe(25);
     for (const out of both) {
       expect(out.competencyFindings.map((f) => `${f.competencyKey}:${f.finding}`)).toEqual(["clinical:partially_evidenced", "patients:partially_evidenced"]);
       expect(scoreOf(out)?.score).toBe(36);
@@ -320,7 +320,7 @@ describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () =
   it("never lifts on a dated job line or a yes/no answer on the form", () => {
     const jobLine = read(skill("clinical", "partially_evidenced", JOB_LINE), skill("patients", "not_evidenced"));
     expect(skillOf(outcome([jobLine, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
-    expect(scoreOf(outcome([jobLine, noneShown, noneShown]))?.score).toBe(25);
+    expect(scoreOf(outcome([jobLine, noneShown, noneShown]))?.score).toBe(14);
     // a part of the job line is read with the whole line
     const employer = read(skill("clinical", "partially_evidenced", "Registered Dental Hygienist at Bayside Dental"), skill("patients", "not_evidenced"));
     expect(skillOf(outcome([employer, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");

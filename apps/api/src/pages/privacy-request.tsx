@@ -9,6 +9,7 @@ import { applications, candidates, companies, dataRequests, uuidv7, withPlatform
 import { mailbox } from "@ros/integrations";
 import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
+import { isAccessRequestCompany } from "../services/access-requests";
 import { addressMatch } from "../services/applications";
 import { Icon } from "./icons";
 import { Layout } from "./layout";
@@ -119,7 +120,8 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
     for (const m of matches) if (!byCompany.has(m.companyId)) byCompany.set(m.companyId, { id: m.id, email: m.email });
     if (parsed.data.company) {
       const [named] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.slug, parsed.data.company)).limit(1);
-      if (named && !byCompany.has(named.id)) byCompany.set(named.id, null);
+      // A request for access, waiting or declined, is named nowhere in public: this form answers as if it did not exist.
+      if (named && !byCompany.has(named.id) && !(await isAccessRequestCompany(tx, named.id))) byCompany.set(named.id, null);
     }
     // The confirmation goes to the address the employer has on file (the typed one may only fold to it); otherwise to the typed one.
     const out: Array<{ companyId: string; companyName: string; candidateId: string | null; applicationId: string | null; to: string }> = [];

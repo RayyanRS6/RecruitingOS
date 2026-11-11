@@ -8,6 +8,6 @@
 4. **Acting.** Access: an export of the candidate's own data (never other candidates' data or internal rationale). Correction: the field changed with before/after recorded. Deletion: anonymization in place of deletion where a retention duty may apply; runs only after a recorded counsel decision and an administrator's confirmation; never automatic. Stop texts: immediate. Human review: an ITS recruiter escalation. Withdrawal: immediate.
 5. **Confirmation** to the requester stating what was done and what was retained and why.
 6. **Escalation to counsel** for litigation holds, hired candidates, disputes, or any uncertainty.
-7. **What the employer sees:** that a request of a given kind exists and was fulfilled; never its content.
+7. **What the employer sees:** that a request of a given kind exists and was fulfilled; never its content. While an application is locked by a plan's limit (since 5 November 2026) the employer sees nothing of the request. The candidate's copy says whether the hiring team can read the application and since when, with no word about a plan. Whether that is enough is counsel register item 30.
 
 [Counsel: confirm the deadline and extension, the verification standard, the anonymization approach, and the employer/ITS split of responsibility under CCPA/CPRA.]

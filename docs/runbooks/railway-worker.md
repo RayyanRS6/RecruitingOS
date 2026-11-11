@@ -126,7 +126,7 @@ Secrets, one **New Variable** each, then **Seal**:
 Not set on purpose: `DATABASE_URL` (the worker uses `WORKER_DATABASE_URL` and refuses to start without it),
 `MIGRATE_DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SENTRY_DSN` (no project yet), `BOOTSTRAP_ADMIN_EMAILS` (the
 worker never signs anyone in), `SIGNUP_MODE` and `SIGNUP_ALLOWED_EMAILS` (the worker never opens a company, though a
-`SIGNUP_MODE` other than `open` or `invite` would stop it), and `COOKIE_DOMAIN`.
+`SIGNUP_MODE` other than `open`, `invite` or `approval` would stop it), and `COOKIE_DOMAIN`.
 
 ## Screen 4: deploy and verify
 
@@ -218,7 +218,7 @@ Outages (Wave S5, 15 October 2026):
   Twilio calls time out after 30 seconds; a Postmark send whose reply was cut off is marked "unknown" and never sent
   again, with a delivery-unknown alert.
 - **The hourly check** (`ops.health_check`) also marks sends left in `sending` for more than five minutes as unknown,
-  and raises one `escalation.overdue` alert for each recruiter request still unclaimed after its reply-by time
+  closes an AI call left `running` for an hour as interrupted (its hold stays as its cost), and raises one `escalation.overdue` alert for each recruiter request still unclaimed after its reply-by time
   (critical when the request is critical, otherwise high; the request's words never go in the alert).
 - **The ITS queue mailbox** (`ITS_QUEUE_EMAIL`) now also gets the recruiter requests the product raises itself
   (a candidate asking for a person, a screening hand-off, a stopped workflow, an eligibility hold, a privacy review,

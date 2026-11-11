@@ -85,13 +85,50 @@ describe("Home's top", () => {
   });
 
   it("says all caught up when nothing needs you, and shows the quiet day's card on its own", () => {
-    const empty = { kind: "empty", title: "Nothing needs you right now", body: "Applicants are being acknowledged and screened. I will tell you when someone is worth your time.", actions: [{ label: "See your roles", method: "GET", path: "/roles" }] };
+    // the quiet day's words as the server writes them (6 November 2026): no promise about email, no judgement of anyone
+    const empty = { kind: "empty", title: "Nothing needs you right now", body: "New applicants, and anything that waits on you, show up here.", actions: [{ label: "See your jobs", method: "GET", path: "/roles" }] };
     const html = render({ cards: [empty] });
     expect(html).toContain('<p class="page-header-sub">All caught up</p>');
     expect(html).toMatch(/<h2 class="[^"]*">Nothing needs you right now<\/h2>/);
-    expect(text(html)).toContain("Applicants are being acknowledged and screened.");
-    expect(text(html)).toContain("I will tell you when someone is worth your time.");
+    expect(text(html)).toContain("New applicants, and anything that waits on you, show up here.");
+    expect(text(html)).not.toContain("worth your time");
     expect(html).not.toContain(">Needs you</h2>");
+  });
+});
+
+describe("someone whose own company asked for access, at work in another company (the review of 6 November 2026)", () => {
+  const signup = (status?: "requested" | "declined") => ({ signup: { mode: "approval", allowed: false, contact: "recruiting@its.example", door: "request", ...(status ? { request: { status, companyName: "Harbor Dental", email: "dana@bright.test", emailedAt: null } } : {}) } });
+  const drawn = (config: unknown) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+    qc.setQueryData(["me"], me("interviewer"));
+    qc.setQueryData(["brief"], { generatedAt: "2026-10-14T09:00:00Z", summary: "", cards: [] });
+    qc.setQueryData(["escalations", "mine"], []);
+    qc.setQueryData(["auth", "config", "own request"], config);
+    return { qc, html: renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(Home))) };
+  };
+
+  it("Home says in one line where their own request stands, waiting or declined, since the waiting screen never shows again", () => {
+    const waiting = drawn(signup("requested")).html;
+    expect(text(waiting)).toContain("Your own company's request is waiting for approval.");
+    expect(text(waiting)).not.toContain("Questions?");
+    const declined = drawn(signup("declined")).html;
+    expect(text(declined)).toContain("We can't offer access to your own company right now. Questions? recruiting@its.example");
+    expect(declined).toContain('<a href="mailto:recruiting@its.example">recruiting@its.example</a>');
+    // with no request of their own, or before the answer, nothing
+    for (const none of [signup(), undefined]) {
+      const words = text(drawn(none).html);
+      expect(words).not.toContain("Your own company's request");
+      expect(words).not.toContain("your own company right now");
+    }
+  });
+
+  it("looks again on focus and every minute while there is a request, never in a hidden tab, so the line goes once it is accepted", () => {
+    const { qc } = drawn(signup("requested"));
+    const query = qc.getQueryCache().find({ queryKey: ["auth", "config", "own request"], exact: true })!;
+    const options = query.options as { refetchOnWindowFocus?: boolean; refetchIntervalInBackground?: boolean; refetchInterval?: (q: unknown) => number | false };
+    expect(options).toMatchObject({ refetchOnWindowFocus: true, refetchIntervalInBackground: false });
+    expect(options.refetchInterval?.(query)).toBe(60_000);
+    expect(options.refetchInterval?.({ state: { data: signup() } })).toBe(false);
   });
 });
 
@@ -278,5 +315,39 @@ describe("the rest of Home", () => {
     expect(html).not.toContain(">Start a hire</a>");
     expect(html).not.toContain("Who are you hiring?");
     expect(html).toContain(">Needs you</h2>");
+  });
+});
+
+describe("emails to candidates that did not arrive (6 November 2026)", () => {
+  const unreached = {
+    kind: "unreached",
+    title: "3 emails to candidates did not arrive",
+    body: "Phone each of them, or write to them yourself.\nAna Reyes (Dental Hygienist): ana@people.test, +17145550101\nBen Ortiz (Dental Hygienist): no email address on file",
+    actions: [],
+    unreached: [
+      { applicationId: "a1", roleId: "r1", roleTitle: "Dental Hygienist", name: "Ana Reyes", email: "ana@people.test", phone: "+17145550101", emails: 2 },
+      { applicationId: "a2", roleId: "r1", roleTitle: "Dental Hygienist", name: "Ben Ortiz", email: null, phone: null, emails: 1 },
+    ],
+  };
+
+  it("is a row that needs you, with each person in view: their name opens their page, their address and phone are right there", () => {
+    const html = render({ cards: [unreached] });
+    const words = text(html);
+    expect(html).toContain('<p class="page-header-sub">1 thing needs you</p>');
+    expect(words).toContain("3 emails to candidates did not arrive Email failed Phone each of them, or write to them yourself.");
+    expect(html).toMatch(/<span class="pill caution sm"><span class="dot" aria-hidden="true"><\/span>Email failed<\/span>/);
+    expect(html).toContain('<ul class="grid w-full gap-2" aria-label="Who did not get an email">');
+    expect(html).toContain('<a href="/roles/r1/talent?open=a1" class="link-like">Ana Reyes</a>');
+    expect(html).toContain('<a href="tel:+17145550101">+17145550101</a>');
+    expect(words).toContain("ana@people.test");
+    expect(html).toContain('<a href="/roles/r1/talent?open=a2" class="link-like">Ben Ortiz</a>');
+    expect(words).toContain("No email address on file");
+    // the people are never behind a fold
+    expect(html).not.toContain('aria-label="Why: 3 emails to candidates did not arrive"');
+  });
+
+  it("counts the rest when more did not get one than the card names", () => {
+    const html = render({ cards: [{ ...unreached, body: `${unreached.body}\nAnd 4 more.` }] });
+    expect(text(html)).toContain("And 4 more.");
   });
 });

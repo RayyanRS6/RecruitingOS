@@ -8,9 +8,11 @@
 
 **Why:** to consider you for this role, to communicate with you about it, to schedule interviews, to keep records the law requires, and to consider you for future roles with the employer unless you tell us not to.
 
+**Proposed since 5 November 2026 (not in the product's notice; `docs/spec/11` items 27 and 28):** "Many people may apply for a job. The employer may not be able to review every application. If yours is not reviewed we will email you to say so, at the latest 30 days after you apply. We keep your information on the same schedule either way." The form on a job past its limit already shows a line like the first three sentences, as DRAFT WORDING PENDING COUNSEL. It never names a plan.
+
 **AI assistance:** software organizes your application, extracts facts from your resume with the exact words they came from, asks approved screening questions, and drafts summaries for the hiring team. People make every decision about your application; no one is declined by software. You can ask for a person at any time by replying HUMAN to any message.
 
-**Who sees it:** the employer's hiring team; ITS recruiters when the employer asks for help (access limited to your application and recorded); the service providers that run the software, email, text messaging, and calendars, listed at [link to subprocessor list]. We do not sell your information.
+**Who sees it:** the employer's hiring team; ITS recruiters when the employer asks for help (access limited to your application and recorded); the service providers that run the software, email, text messaging, and calendars, listed at [link to subprocessor list]. We do not sell your information. [Counsel, 5 November 2026: if the employer's plan does not let it read an application, the employer's hiring team does not see it, no AI reads it, and a person at ITS may see it when the candidate asks for a person, with nobody at the employer bringing ITS in. Reword this section, and "Why" above, as item 27 answers.]
 
 **How long:** [per the retention schedule counsel approves]; you can ask us to delete it sooner (below).
 

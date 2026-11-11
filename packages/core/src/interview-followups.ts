@@ -410,6 +410,7 @@ async function notifyNewTimesSent(q: Queryable, f: FollowUpRow): Promise<void> {
   if (!who) return;
   await notify(q, {
     companyId: f.companyId,
+    about: f.applicationId,
     kind: "interview.new_times_sent",
     title: `New times went to ${who.full}`,
     body: `${who.first} cancelled the ${titleMidSentence(who.title)} and asked for new times. They went out today. This was their one automatic set; if ${who.first} does not pick a time, they stay under Cancelled for you to decide.`,
@@ -431,6 +432,7 @@ export async function notifyNewTimesNotSent(q: Queryable, input: { followUp: Fol
   const next = input.reason === "company_not_checked" ? "you can send new times once ITS confirms your company, or decide" : "send new times when you are ready, or decide";
   await notify(q, {
     companyId: f.companyId,
+    about: f.applicationId,
     kind: "interview.new_times_not_sent",
     title: `New times for ${who.full} were not sent`,
     body: `${who.first} asked for new times${due}.${why ? ` ${why}` : ""} They are under Cancelled: ${next}.`,
@@ -465,7 +467,7 @@ export function newTimesSettingOf(settings: CompanySettings | null | undefined):
 const REASON_TEXT: Partial<Record<AutoNewTimesReason, string>> = {
   switched_off: "Automatic new times are off in Settings.",
   already_used: "They already had their one automatic set of new times.",
-  reschedules_used: "They had already moved this interview twice, so a person arranges the next time.",
+  reschedules_used: "They had already asked twice for a different time, so a person arranges the next time.",
   takeover: "An ITS recruiter is running this role, so nothing was sent automatically.",
   was_on_hold: "You had put them on hold, so nothing goes automatically.",
   stopped_by_team: "Someone on your team stopped the automatic new times.",
@@ -475,6 +477,7 @@ const REASON_TEXT: Partial<Record<AutoNewTimesReason, string>> = {
   no_interviewers: "Nobody who ran the interview is still on your team.",
   no_email: "We have no email address for them, or the email did not reach them.",
   interview_changed: "The interview changed in the meantime.",
+  no_hours: "Not everyone on the interview has hours to offer, so nothing goes automatically: set a date and time from their page.",
 };
 
 /**

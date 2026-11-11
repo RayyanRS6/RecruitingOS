@@ -53,7 +53,7 @@ The full list, with each provider's role, is in the subprocessor list you receiv
 
 ## 4. How ITS recruiters get access and how you end it
 
-- Access exists only after someone on your team presses **Bring in a recruiter**, or after the product itself brings a recruiter in because a candidate asked for a person or a held application waited three days.
+- Access exists only after someone on your team presses **Bring in a recruiter**, or after the product itself brings a recruiter in because a candidate asked for a person or a held application waited three days. A request to upgrade your plan gives ITS no access to your hiring at all. Someone past your plan's candidates per job is locked for your team, and for a recruiter brought in on a role or on all of your hiring; a person at ITS reads them only when they ask for a person, and you are not told who.
 - Before a recruiter accepts the request, they see only your company name, the role title, the kind of request, its urgency, the skill it needs, the time remaining and a generic one-line summary. They do not see your words or any candidate information.
 - When they accept, their access covers what the request names: one candidate (and the role they applied for), or one role and its candidates. Other roles and candidates are refused, including on Today and in the activity list. A request covers all of your hiring only when someone on your team chose "All of your hiring" when asking. A request the product raises on its own always names the candidate or role involved; a failed step with nothing attached goes to ITS administrators instead of a recruiter.
 - You are told as soon as a recruiter starts, with what they can see and until when.

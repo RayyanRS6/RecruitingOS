@@ -9,7 +9,7 @@ import { createContainer, type Container } from "./container";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { otherRolesFor } from "./services/profile-facts";
 import { settleTrials } from "./services/trial";
-import { followApply, signInAdmin, useOneVisitApplyFlow } from "./test-helpers";
+import { followApply, signInAdmin, useOneVisitApplyFlow, useTrial } from "./test-helpers";
 
 /**
  * The Trial plan's 30 days (founder decision L-02 B, 16 October 2026), end to end with the ITS check on
@@ -104,6 +104,8 @@ describe("the Trial plan's 30 days", () => {
     const r = await json(owner, "POST", "/api/v1/companies", { name: "Harbor Smile Dental", vertical: "dental", sizeBand: "1-19", ownerName: "Olive Owner", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(r.status).toBe(201);
     ({ id: companyId, slug } = (await r.json()) as { id: string; slug: string });
+    // a new company starts on Free; this one is on Trial, as a company that signed up earlier is
+    await useTrial(container, companyId);
     // the conversation in the same visit as the form (a pilot company), so a chat can be under way when the trial ends
     await useOneVisitApplyFlow(container, companyId);
     // ITS raised this company's roles at a time to 3, so a second job can wait for approval beside the live one
@@ -362,6 +364,7 @@ describe("the Trial plan's 30 days", () => {
   it("a confirmed company already on Trial with no dates gets 30 days from the hourly check, never an instant lock", async () => {
     const other = await signIn("omar@oldtrial.test");
     const made = (await (await json(other, "POST", "/api/v1/companies", { name: "Old Trial Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
+    await useTrial(container, made.id);
     // confirmed before trial dates existed: the confirmation, and no dates
     await withPlatform(container.db, (tx) => tx.update(companies).set({ settings: { careersPage: { enabled: true }, verifiedAt: new Date(BASE - 60 * DAY).toISOString(), verifiedBy: { kind: "system", id: "test" } } }).where(eq(companies.id, made.id)));
     expect(((await (await json(other, "GET", "/api/v1/companies/current")).json()) as { trial: TrialStanding }).trial).toMatchObject({ started: false, ended: false });
@@ -399,9 +402,9 @@ describe("the Trial plan's 30 days", () => {
     await withPlatform(container.db, (tx) => settleTrials(tx, now()));
     expect((await container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "billing.trial_ended"), eq(adminAlerts.companyId, companyId), eq(adminAlerts.status, "open"))))).toHaveLength(1);
     expect(await (await inbound("Held Again")).json()).toMatchObject({ held: true });
-    const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "growth", reason: "The owner chose Growth." });
+    const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "pro", reason: "The owner chose Pro." });
     expect(r.status, await r.clone().text()).toBe(200);
-    expect(await r.json()).toMatchObject({ planKey: "growth", status: "active", trialEnded: true });
+    expect(await r.json()).toMatchObject({ planKey: "pro", status: "active", trialEnded: true });
     await container.drain();
     expect((await inboundRow("Held Again")).status).toBe("matched");
     expect((await container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "billing.trial_ended"), eq(adminAlerts.companyId, companyId), eq(adminAlerts.status, "open"))))).toHaveLength(0);
@@ -411,6 +414,6 @@ describe("the Trial plan's 30 days", () => {
     expect(await (await json(owner, "GET", "/api/v1/intake/room")).json()).toMatchObject({ ok: true });
     expect(((await (await json(owner, "GET", "/api/v1/intake/room")).json()) as { trialEnded?: boolean }).trialEnded).toBeUndefined();
     const latest = (await container.db.select().from(events).where(and(eq(events.companyId, companyId), eq(events.type, "plan.changed"))).orderBy(desc(events.occurredAt)))[0];
-    expect(latest.payload).toMatchObject({ from: "trial", to: "growth", trialEnded: true });
+    expect(latest.payload).toMatchObject({ from: "trial", to: "pro", trialEnded: true });
   });
 });

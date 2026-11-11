@@ -1,12 +1,12 @@
 import { and, eq, inArray } from "drizzle-orm";
-import type { Actor, PolicyDecision, SuggestMessageLine, SuggestedLine } from "@ros/contracts";
+import { NO_WORK_WHILE_LOCKED, type Actor, type PolicyDecision, type SuggestMessageLine, type SuggestedLine } from "@ros/contracts";
 import { DEFAULT_POLICIES, audit, emit, gate, notify, resolvePolicy } from "@ros/core";
 import { aiRuns, applications, approvalRequests, candidates, companies, interviews, rolePackets, roles, uuidv7, withTenant, type Tx } from "@ros/db";
 import { HELD_REASON, UndoError, freeformFooter, sendFreeformMessage, suggestMessageLine, undoQueuedMessage } from "@ros/agents";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
-import { undoUntil } from "./application-actions";
+import { NO_APPROVER_WHILE_LOCKED, undoUntil } from "./application-actions";
 
 /**
  * Messages a person writes to a candidate (docs/spec/21 F11). The text is the person's own; the product adds the
@@ -57,6 +57,13 @@ function waitsForApprover(policy: Pick<PolicyDecision, "level" | "approverRoles"
 }
 
 /**
+ * ITS staff writing to someone locked, under a grant naming them or break glass: nobody at the company may read this person,
+ * so nobody there can approve a message to them, and someone who asked for a person must not wait for an upgrade. The company's
+ * rule does not apply, and the send is on the record (`NO_APPROVER_WHILE_LOCKED`).
+ */
+const pastApprovalRule = (app: Pick<App, "lockedAt">, t: Pick<Tenant, "staff">): boolean => !!app.lockedAt && !!t.staff;
+
+/**
  * What the sheet shows around the text box: who the message goes to, the footer that follows it (and the one it gets
  * when the person keeps a line the assistant suggested, `aiFooter`), whether a reply comes back into the product, and
  * how long the Undo lasts after Send.
@@ -73,7 +80,7 @@ export async function composeMessagePreview(tx: Tx, container: Container, input:
     repliesComeBack: container.integrations.env.emailInConfigured,
     policyLevel: policy.level,
     /** True when this person's message would wait for one of the approver roles before it goes out. */
-    needsApproval: waitsForApprover(policy, input.tenant.role),
+    needsApproval: !pastApprovalRule(input.app, input.tenant) && waitsForApprover(policy, input.tenant.role),
     undoSeconds: container.env.MESSAGE_UNDO_SECONDS,
   };
 }
@@ -102,7 +109,7 @@ async function queueMessage(tx: Tx, container: Container, input: { app: App; bun
 /** The message waits for an approver: the approver roles are told, the request is audited, and the writer gets a 202. */
 async function holdForApprover(tx: Tx, input: { app: App; roleTitle: string; tenant: Tenant; actor: Actor; proposal: MessageProposal; approvalRequestId: string; approverRoles: string[] }): Promise<Extract<SendMessageResult, { status: "pending_approval" }>> {
   const { proposal } = input;
-  await notify(tx, { companyId: input.tenant.companyId, kind: "message.approval_requested", title: `Send this message to ${proposal.candidateName}?`, body: `${proposal.senderName} wrote to ${proposal.candidateName} about ${input.roleTitle}. Read it on Home or the candidate's page and decide; nothing goes out until you do.`, action: { label: "Read the message", href: `/roles/${input.app.roleId}/talent?open=${input.app.id}` }, roles: input.approverRoles });
+  await notify(tx, { companyId: input.tenant.companyId, about: input.app.id, kind: "message.approval_requested", title: `Send this message to ${proposal.candidateName}?`, body: `${proposal.senderName} wrote to ${proposal.candidateName} about ${input.roleTitle}. Read it on Home or the candidate's page and decide; nothing goes out until you do.`, action: { label: "Read the message", href: `/roles/${input.app.roleId}/talent?open=${input.app.id}` }, roles: input.approverRoles });
   await audit(tx, { companyId: input.tenant.companyId, actor: input.actor, action: "message.approval_requested", target: { type: "application", id: input.app.id }, details: { approvalRequestId: input.approvalRequestId, subject: proposal.subject, requiredRoles: input.approverRoles } });
   return { ok: true, status: "pending_approval", approvalRequestId: input.approvalRequestId };
 }
@@ -129,6 +136,10 @@ export async function sendCandidateMessage(tx: Tx, container: Container, input: 
   const proposal: MessageProposal = { subject: input.body.subject?.trim() || null, text: input.body.text.trim(), senderName, senderUserId: t.userId, candidateName, ...(aiHelped ? { aiHelped: true, suggestionRunId: suggestionRunId ?? input.body.suggestionRunId ?? null } : {}) };
   const subject = { type: "application", id: app.id } as const;
   const rationale = `${senderName} wrote to ${candidateName} about ${b.role.title}.`;
+  if (pastApprovalRule(app, t)) {
+    await audit(tx, { companyId: t.companyId, actor, action: "message.approval_skipped", target: subject, reason: NO_APPROVER_WHILE_LOCKED, details: { actionType: "message.send_freeform" } });
+    return queueMessage(tx, container, { app, bundle: b, sender: actor, auditActor: actor, tenant: t, proposal, idempotencyKey: `freeform:${app.id}:${uuidv7()}`, approvalRequestId: null, approvedBy: null, holdForUndo: true });
+  }
   const d = await gate(tx, { companyId: t.companyId, roleId: app.roleId, applicationId: app.id, actionType: "message.send_freeform", subject, proposal, rationale, requestedBy: actor });
   const open = `/roles/${app.roleId}/talent?open=${app.id}`;
   if (d.outcome === "wait_for_approval") {
@@ -151,7 +162,7 @@ export async function sendCandidateMessage(tx: Tx, container: Container, input: 
   }
   const sent = await queueMessage(tx, container, { app, bundle: b, sender: actor, auditActor: actor, tenant: t, proposal, idempotencyKey: `freeform:${app.id}:${uuidv7()}`, approvalRequestId: null, approvedBy: null, holdForUndo: true });
   if (d.outcome === "execute" && d.notify) {
-    await notify(tx, { companyId: t.companyId, kind: "message.sent", title: `${senderName} wrote to ${candidateName}`, body: `About ${b.role.title}${proposal.subject ? `: "${proposal.subject}"` : ""}. The message is on the candidate's page.`, action: { label: "Open the candidate", href: open } });
+    await notify(tx, { companyId: t.companyId, about: app.id, kind: "message.sent", title: `${senderName} wrote to ${candidateName}`, body: `About ${b.role.title}${proposal.subject ? `: "${proposal.subject}"` : ""}. The message is on the candidate's page.`, action: { label: "Open the candidate", href: open } });
   }
   return sent;
 }
@@ -172,7 +183,7 @@ export async function settleMessageApproval(tx: Tx, container: Container, input:
   const open = `/roles/${app.roleId}/talent?open=${app.id}`;
   const approver = input.actor.name ?? "An approver";
   if (input.status === "rejected") {
-    if (writerIds.length) await notify(tx, { companyId: input.tenant.companyId, kind: "message.declined", title: `Your message to ${candidateName} was not sent`, body: `${approver} decided not to send it${input.note ? `: ${input.note}` : "."} You can write a new one from the candidate's page.`, action: { label: "Open the candidate", href: open }, userIds: writerIds });
+    if (writerIds.length) await notify(tx, { companyId: input.tenant.companyId, about: app.id, kind: "message.declined", title: `Your message to ${candidateName} was not sent`, body: `${approver} decided not to send it${input.note ? `: ${input.note}` : "."} You can write a new one from the candidate's page.`, action: { label: "Open the candidate", href: open }, userIds: writerIds });
     return null;
   }
   const b = await loadBundle(tx, app);
@@ -182,7 +193,7 @@ export async function settleMessageApproval(tx: Tx, container: Container, input:
   const sent = await queueMessage(tx, container, { app, bundle: b, sender: writer, auditActor: input.actor, tenant: input.tenant, proposal: full, idempotencyKey: `freeform:approval:${input.req.id}`, approvalRequestId: input.req.id, approvedBy: input.tenant.userId, holdForUndo: false });
   if (writerIds.length) {
     const held = sent.status === "held";
-    await notify(tx, { companyId: input.tenant.companyId, kind: "message.sent", title: held ? `Your message to ${candidateName} was approved` : `Your message to ${candidateName} was sent`, body: held ? `${approver} approved it. It goes out under your name as soon as ITS confirms your company.` : `${approver} approved it; it went out under your name.`, action: { label: "Open the candidate", href: open }, userIds: writerIds });
+    await notify(tx, { companyId: input.tenant.companyId, about: app.id, kind: "message.sent", title: held ? `Your message to ${candidateName} was approved` : `Your message to ${candidateName} was sent`, body: held ? `${approver} approved it. It goes out under your name as soon as ITS confirms your company.` : `${approver} approved it; it went out under your name.`, action: { label: "Open the candidate", href: open }, userIds: writerIds });
   }
   return sent.status;
 }
@@ -216,6 +227,8 @@ export async function suggestLine(container: Container, input: { tenant: Tenant;
   const facts = await withTenant(container.db, input.tenant.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(eq(applications.id, input.applicationId)).limit(1);
     if (!app) return null;
+    // It sees nothing about them, but the call is on the company's credit, and nothing spends that on someone locked.
+    if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
     const b = await loadBundle(tx, app);
     if (input.body.purpose !== "interview_invite") return { companyName: b.company.name, roleTitle: b.packet.identity.title, interviewTitle: null };
     // The round being approved names the interview; otherwise the one already being set up.

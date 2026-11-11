@@ -1,4 +1,4 @@
-import { NEXT_STEP_LABEL, type ApplicationStage, type BoardColumn, type BoardPlacement, type InterviewInScore, type MarkKind, type MatchCriterion, type MatchScore, type MustHaveSummary, type NextStep, type NextStepKind, type OwnerStage, type ReadingVersion, type RejectReason } from "@ros/contracts";
+import { MIN_COVERAGE_TO_JUDGE, NEXT_STEP_LABEL, tooLittleToGoOn, type ApplicationStage, type BoardColumn, type BoardPlacement, type InterviewInScore, type MarkKind, type MatchCriterion, type MatchScore, type MustHaveSummary, type NextStep, type NextStepKind, type OwnerStage, type ReadingVersion, type RejectReason } from "@ros/contracts";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, LOW_CONFIDENCE_TEXT, RESUME_UNREADABLE_TEXT, insufficientEvidence, type AssessmentLike, type EvidenceView } from "./evidence";
 
 /**
@@ -8,22 +8,26 @@ import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, LOW_CONFIDENCE_TEXT, RE
  * and apply, privately, and every decline needs a reason.
  *
  * - High or very high score, read with confidence, every must-have known → Shortlist. A must-have only partly shown
- *   that the score counted at the rest's level (Wave S7: it costs nothing there) → Longlist, ticked, asking for more.
+ *   → Longlist, ticked, asking for more.
  * - Medium score → Longlist.
  * - Low score, or a must-have the candidate's own words show is not met → Not moving forward.
  * - Needs a closer look → Longlist, unticked, with the reason ("Needs your eye"), whatever the score says: the reading
  *   disagrees with its findings or says too little (a résumé reading or a scorecard, at any stage), low confidence, no
  *   reading, nothing to score, an unreadable résumé, a must-have said to be missing with nothing quoted, held on an
  *   eligibility answer, or a must-have not yet known on an otherwise strong reading.
- * - A decline never starts ticked on thin or moving ground: a low score with must-haves not yet known or from under half
- *   the requirements, an open screening conversation whose answers would count most, a reading made against an older
- *   version of the role whose must-haves have changed, or a reading that itself suggested a step forward. The same goes
- *   for the Shortlist when the reading itself suggested holding back.
+ * - A must-have the role checks only in the team's own interviews is out of the number, and not known until a reading
+ *   shows it in full (`checkInInterview`): on the Shortlist the next step is the interview, saying to check it there.
+ * - A decline never starts ticked on thin or moving ground: a low score with must-haves not yet known (one checked only in
+ *   the team's own interviews included), from under half the requirements, or with half the points, or enough to lift it out
+ *   of Low, still open (`tooLittleToGoOn`, the rule the verdict word reads too: a requirement not shown is never a decline), an
+ *   open screening conversation whose answers would count most, a reading made against an older version of the role whose
+ *   must-haves have changed, or a reading that itself suggested a step forward. The same goes for the Shortlist when the
+ *   reading itself suggested holding back.
  * - No AI interview yet (20 Oct 2026, R20-7: being read, invited, started, a link that lapsed or a chat left part-way)
  *   → a read-only lane of its own, never placed and never suggested: scored after the AI interview. A person's mark
  *   still sorts them (below).
  * - Like with like (R20-9): anyone else whose score does not count an AI interview they were offered (`interview`: not
- *   done yet, being scored, or closed without being sent, as after "Stop this AI interview", or never sent because the
+ *   done yet, being scored, not scored, its scorecard could not be written, or closed without being sent, as after "Stop this AI interview", or never sent because the
  *   month's AI interviews stayed used up, Q17) joins that lane too, so a résumé-only number is never ranked or
  *   suggested beside interviewed people (B4 is narrowed to match). Marks and decisions still show where they are; never
  *   offered one (`none`: an application from before 20 October 2026) keeps the rules above.
@@ -47,8 +51,8 @@ export type PlacementInput = {
   readingVersion?: Pick<ReadingVersion, "readAgainst" | "mustHavesChanged"> | null;
 };
 
-/** Below this share of the requirements judged, a low score alone is too little to suggest a decline on. */
-export const MIN_COVERAGE_TO_DECLINE = 0.5;
+/** Below this share of the requirements judged, a low score alone is too little to suggest a decline on (`tooLittleToGoOn`). */
+export const MIN_COVERAGE_TO_DECLINE = MIN_COVERAGE_TO_JUDGE;
 
 /** Days without a decision after which a person shows up under "Who might I be overlooking?". */
 export const OVERLOOKED_AFTER_DAYS = 7;
@@ -58,22 +62,26 @@ export const NO_AI_INTERVIEW_LANE = { label: "No AI interview yet", reason: "Sco
  * The same lane's words for someone out of that column whose score still has no AI interview in it (R20-9), by where it
  * stands. Neutral like the column's: never how far anyone got or what closed it.
  */
-export const INTERVIEW_APART: Record<"not_done_yet" | "being_scored" | "not_done", { label: string; reason: string }> = {
+export const INTERVIEW_APART: Record<"not_done_yet" | "being_scored" | "not_scored" | "scoring_failed" | "not_done", { label: string; reason: string }> = {
   not_done_yet: { label: "AI interview not done yet", reason: NO_AI_INTERVIEW_LANE.reason },
   being_scored: { label: "AI interview being scored", reason: "Their AI interview is in and being scored: they join the board when it is." },
+  not_scored: { label: "AI interview not scored", reason: "Their AI interview is in, but your plan's AI help is used up, so it was not scored. Read their answers and decide from their own page." },
+  scoring_failed: { label: "AI interview could not be scored", reason: "Their AI interview is in, but its AI review could not be written, so it was not scored. Read their answers and decide from their own page." },
   not_done: { label: "No AI interview", reason: "Their score is from the résumé only, so the board keeps them apart from interviewed people and suggests nothing. Decide from their own page." },
 };
 
 const step = (kind: NextStepKind, reason: string): NextStep => ({ kind, label: NEXT_STEP_LABEL[kind], reason });
 
 /**
- * "Match score 62: Perio charting partly shown." The costliest requirement in a line, or one not met in full that cost
- * nothing (a partly shown one counted at the rest's level, `PARTLY_SHOWN_RULE`); the score alone when every one is met.
+ * "Match score 62: Perio charting partly shown." The costliest requirement judged in a line, or one not met in full whose
+ * cost rounds to nothing. When every one judged is met, what keeps the number down is what nothing has shown yet, counted and
+ * never named ("Match score 33: 4 of 6 requirements not shown yet."); with nothing open, the score alone.
  */
 function scoreLine(match: MatchScore): string {
   const top = costliest(match) ?? match.breakdown.find((c) => c.pctMet < 100) ?? null;
   const head = `Match score ${match.score}`;
-  return top ? `${head}: ${top.label} ${top.finding.toLowerCase()}.` : `${head}: every requirement judged so far is met.`;
+  if (top) return `${head}: ${top.label} ${top.finding.toLowerCase()}.`;
+  return match.unknown.length ? `${head}: ${match.unknown.length} of ${match.coverage.total} requirements not shown yet.` : `${head}: every requirement judged so far is met.`;
 }
 
 function costliest(match: MatchScore | null): MatchCriterion | null {
@@ -137,7 +145,7 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
     return { column: "longlist", state: "suggested", doneLabel: null, confident: false, needsYourEye: "Held on an eligibility answer: keep them in or decline from their page.", reason: "An eligibility answer did not match the role's rule.", nextStep: step("check_eligibility", "Only a person can keep them in or decline them."), suggestedAction: null, declineReason: null };
   }
   const interview = input.interview ?? input.match?.interview ?? null;
-  if (interview === "not_done_yet" || interview === "being_scored" || interview === "not_done") return done(null, INTERVIEW_APART[interview].label, INTERVIEW_APART[interview].reason, "waiting");
+  if (interview === "not_done_yet" || interview === "being_scored" || interview === "not_scored" || interview === "scoring_failed" || interview === "not_done") return done(null, INTERVIEW_APART[interview].label, INTERVIEW_APART[interview].reason, "waiting");
   if (!latest) {
     return { column: "longlist", state: "suggested", doneLabel: null, confident: false, needsYourEye: ASSESSMENT_UNAVAILABLE_TEXT, reason: "No AI review to go on.", nextStep: step("read_yourself", "Open the résumé and answers; nothing was read for you."), suggestedAction: "longlist", declineReason: null };
   }
@@ -151,10 +159,17 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
 
   // What sends them to the Longlist for a person's eye instead, unticked: the first that applies says why.
   const unknownMust = match?.unknown.filter((u) => u.mustHave) ?? [];
+  // A must-have the role checks only in the team's own interviews, not shown in full yet: out of the number, still not known.
+  const toCheck = (match?.checkInInterview ?? []).map((m) => m.label);
   const unquotedNo = unknownMust.filter((u) => u.unquotedNo);
   const leans = readingLeans(latest);
   const coverage = match?.coverage ?? { known: 0, total: 0 };
-  const thin = column === "not_moving_forward" && !missing.length && (unknownMust.length > 0 || coverage.known < coverage.total * MIN_COVERAGE_TO_DECLINE);
+  // Low on too little to go on (`tooLittleToGoOn`, the rule the verdict word reads too, so "Weak match" never sits beside
+  // it): a must-have not known yet, half the points open or enough to lift them out of Low, or under half judged. Never a
+  // ticked decline.
+  const thin = column === "not_moving_forward" && !missing.length && !!match && tooLittleToGoOn(match);
+  // Where to ask: in the AI interview while it can still be done, on a call once it has been (a second one is never offered).
+  const askWhere = latest.kind === "screen" ? "on a call" : "in the AI interview";
   const readYourself = (why: string, reasonForStep: string) => ({ why, next: step("read_yourself", reasonForStep) });
   const eye = ((): { why: string; next: NextStep } | null => {
     if (input.evidence.needsCloserLook) return readYourself(input.evidence.reason ?? CLOSER_LOOK_LABEL, "The AI review needs a person to check it before anything else happens.");
@@ -166,15 +181,15 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
     if (input.evidence.lowConfidence) return readYourself(LOW_CONFIDENCE_TEXT, "The assistant was not confident; your own read counts most here.");
     if (input.evidence.resumeUnreadable && match?.basedOn !== "screen") return readYourself(`${RESUME_UNREADABLE_TEXT} Open the file yourself before deciding.`, "The file may say more than the written answers did.");
     if (unquotedNo.length) return readYourself(`The assistant says ${listOf(unquotedNo.map((u) => u.label))} ${unquotedNo.length === 1 ? "is" : "are"} not met but quoted nothing from the candidate's own words, so it does not count either way.`, `Check for yourself whether they have ${unquotedNo[0].label}.`);
-    if (score === null) return { why: "Nothing to score yet: the application does not speak to the requirements either way.", next: step("ask_more", input.openScreen ? "The AI interview is open; their answers will fill this in." : "Ask them about the must-haves in the AI interview.") };
+    if (score === null) return { why: "Nothing to score yet: the application does not speak to the requirements either way.", next: step("ask_more", input.openScreen ? "The AI interview is open; their answers will fill this in." : `Ask them about the must-haves ${askWhere}.`) };
     if (column === "not_moving_forward" && input.openScreen && latest.kind !== "screen") return { why: "Their AI interview is still open, and its answers count most. Wait for it, or read it yourself before deciding.", next: step("ask_more", "The AI interview is open; their answers will fill this in.") };
     if (column === "not_moving_forward" && input.readingVersion?.mustHavesChanged) return readYourself(`Read against version ${input.readingVersion.readAgainst} of the role, and the must-haves have changed since. Check them against the role as it is now.`, "The role's must-haves changed after they were read.");
     if (column === "not_moving_forward" && leans === "forward") return readYourself(`The assistant suggested ${latest.kind === "screen" ? "an interview" : "an AI interview"}, but the score puts them lower. Read before deciding.`, "The AI review and the score disagree; your own read decides.");
     if (column === "shortlist" && leans === "back") return readYourself(`The assistant suggested ${latest.kind === "screen" ? "not moving forward" : "holding back"}, but the score puts them higher. Read before deciding.`, "The AI review and the score disagree; your own read decides.");
     if (thin) {
-      return unknownMust.length
-        ? { why: `${mustHavesNotKnown(unknownMust.map((u) => u.label))} A low score without them is not enough to go on.`, next: step("ask_more", `Their application does not say whether they have ${unknownMust[0].label}.`) }
-        : { why: `Only ${coverage.known} of ${coverage.total} requirements could be judged; a low score from so little is not enough to go on.`, next: step("ask_more", "Ask them about the role's requirements in the AI interview.") };
+      if (unknownMust.length) return { why: `${mustHavesNotKnown(unknownMust.map((u) => u.label))} A low score without them is not enough to go on.`, next: step("ask_more", `Their application does not say whether they have ${unknownMust[0].label}.`) };
+      if (toCheck.length) return readYourself(`${toCheck.length === 1 ? "A must-have is" : `${toCheck.length} must-haves are`} still to be checked in your own interviews: ${listOf(toCheck)}. A low score without ${toCheck.length === 1 ? "it" : "them"} is not enough to go on.`, `Read their application, then decide whether to check ${toCheck[0]} in an interview.`);
+      return { why: `Only ${coverage.known} of ${coverage.total} requirements could be judged; a low score from so little is not enough to go on.`, next: step("ask_more", `Ask them about the role's requirements ${askWhere}.`) };
     }
     if (column === "shortlist" && unknownMust.length) return { why: mustHavesNotKnown(unknownMust.map((u) => u.label)), next: step("ask_more", `Their application does not say whether they have ${unknownMust[0].label}.`) };
     return null;
@@ -183,9 +198,8 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
   let next: NextStep | null = eye?.next ?? null;
   if (needsYourEye) column = "longlist";
 
-  // A must-have only partly shown costs the score nothing when the rest of the evidence is strong (`PARTLY_SHOWN_RULE`,
-  // Wave S7): the board asks for more instead of suggesting the Shortlist on it.
-  const partlyMust = column === "shortlist" && !next ? (match?.breakdown ?? []).filter((c) => c.mustHave && c.countedPct !== undefined) : [];
+  // A must-have only partly shown: the board asks for more instead of suggesting the Shortlist on it, however strong the rest.
+  const partlyMust = column === "shortlist" && !next ? (match?.breakdown ?? []).filter((c) => c.mustHave && c.pctMet === 50) : [];
   if (partlyMust.length) {
     column = "longlist";
     next = step("ask_more", `Their application only partly shows ${listOf(partlyMust.map((c) => c.label))}.`);
@@ -194,7 +208,8 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
   if (!next) {
     if (column === "shortlist") {
       const screened = latest.kind === "screen";
-      next = screened || (band === "very_high" && match?.confidence === "high") ? step("interview", screened ? "Good evidence on every must-have, and the AI interview is done." : "Strong evidence on every must-have.") : step("phone_call", "Good evidence on the must-haves; a short call would confirm it.");
+      // A must-have only their own interview checks is not shown yet: that interview is the next step, and it says what to check.
+      next = toCheck.length ? step("interview", `Check ${listOf(toCheck)} in your interview.`) : screened || (band === "very_high" && match?.confidence === "high") ? step("interview", screened ? "Good evidence on every must-have, and the AI interview is done." : "Strong evidence on every must-have.") : step("phone_call", "Good evidence on the must-haves; a short call would confirm it.");
     } else if (column === "not_moving_forward") {
       next = step("not_moving_forward", missing.length ? `Their own words show they do not meet ${missing[0].label}.` : reason);
     } else {

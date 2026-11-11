@@ -1,26 +1,28 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import type { ZodError } from "zod";
 import {
-  ApplyRequirementFixes, CompanyQuestionsEdit, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
+  AI_HELP_BUSY_LINE, AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DescribeBenefits, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag, type PacketRevisionProposal, type RequirementsCheck, type RolePacket,
 } from "@ros/contracts";
 import {
   IntakeSessionError, RequirementFixError, applyRequirementFixes, checkRequirements, decideRevision, loadRevision, loadTeam, mergeRevision, packetFingerprint, payChanged, proposeRevision, sessionView, storeDraftPacket,
   type IntakeSessionRow, type MergedRevision, type StoredRevision,
 } from "@ros/agents";
-import { assertCan, can, closingDateProblem, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
-import { companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
+import { assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
+import { approvalRequests, companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
-import { actorOf, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
+import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
+import { aiCreditAnswer } from "../services/ai-credit";
 import { jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
 import { eventTargets, inStaffScope, staffScopeOf } from "../services/staff-scope";
 import { applyCompanyQuestionsEdit, applyFieldEdit } from "../services/packet-fields";
+import { withoutLockedEvents } from "../services/locked-visibility";
 import { withoutUnsentChats } from "../services/screen-visibility";
 import { CLOSED_ROLE_MESSAGE, cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, materialChanges, mayApproveRoles, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
 import type { Container } from "../container";
-import { loadDraft } from "./intake";
+import { assertRoomForDraft, loadDraft } from "./intake";
 
 /**
  * The role page's Interview plan and Activity tabs, and "Request approval again" (docs/spec/21 section 7: B8, B9,
@@ -135,7 +137,8 @@ rolePacketRoutes.post("/:id/request-approval", requireTenant, async (c) => {
  * a grant reads only the events it covers, by the rule of the activity list (GET /events): a grant about one candidate
  * sees the role's own events and that candidate's, never another applicant's application or outcome. Like the activity
  * list, nothing is shown about a screening chat the candidate has not sent: no entry about a single answer, no count of
- * what was answered, and no entry about a reading the team may not see (`withoutUnsentScreenEvents`).
+ * what was answered, and no entry about a reading the team may not see (`withoutUnsentScreenEvents`). Nor about anyone
+ * past the plan's candidates per job (Rule 3, `withoutLockedEvents`).
  */
 rolePacketRoutes.get("/:id/timeline", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -157,10 +160,10 @@ rolePacketRoutes.get("/:id/timeline", requireTenant, async (c) => {
         ),
       ))
       .orderBy(desc(events.occurredAt), desc(events.id))
-      // Scoped: read further back, keep what the grant covers, and answer with the same number at most.
-      .limit(scope ? TIMELINE_LIMIT * 10 : TIMELINE_LIMIT);
-    const shown = await withoutUnsentChats(tx, found);
-    if (!scope) return shown;
+      // Scoped, or with people past the plan's limit whose entries come out: read further back, keep what may be shown, and answer with the same number at most.
+      .limit(scope || (await companyHasLocked(tx, t.companyId)) ? TIMELINE_LIMIT * 10 : TIMELINE_LIMIT);
+    const shown = await withoutLockedEvents(tx, { companyId: t.companyId, reader: t }, await withoutUnsentChats(tx, found));
+    if (!scope) return shown.slice(0, TIMELINE_LIMIT);
     const targets = await eventTargets(tx, shown);
     return shown.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, TIMELINE_LIMIT);
   });
@@ -230,9 +233,13 @@ function takesEffect(role: RoleRow, mayApprove: boolean, openFlags: number, mate
 
 const AI_FAILED = "The assistant could not work out that change. Nothing was changed. Try again, or make the change in the editor.";
 
-/** A failed model call is recorded as an event on what it was about, then answered plainly; nothing was changed. */
-async function revisionFailed(container: Container, companyId: string, subject: { type: "role" | "intake_session"; id: string }, out: { runId: string; reason: string; error: string }): Promise<never> {
-  await withTenant(container.db, companyId, (tx) => emit(tx, { type: "ai.run_failed", companyId, actor: { kind: "agent", id: "intake", runId: out.runId }, subject, payload: { task: "packet.revise", reason: out.reason, error: out.error } }));
+/**
+ * A failed model call is recorded as an event on what it was about, then answered plainly; nothing was changed. No AI credit
+ * left is no failure: nothing goes on the record and there is nothing to try again, and the editor needs no model.
+ */
+async function revisionFailed(container: Container, t: Pick<Tenant, "companyId" | "role">, subject: { type: "role" | "intake_session"; id: string }, out: { runId: string; reason: string; error: string; refusedHoldUsd?: number }): Promise<never> {
+  if (out.reason === "no_credit") throw await aiCreditAnswer(container, t, out.refusedHoldUsd ?? 0, { usedUp: AI_HELP_LINE.revise, busy: AI_HELP_BUSY_LINE.revise });
+  await withTenant(container.db, t.companyId, (tx) => emit(tx, { type: "ai.run_failed", companyId: t.companyId, actor: { kind: "agent", id: "intake", runId: out.runId }, subject, payload: { task: "packet.revise", reason: out.reason, error: out.error } }));
   throw new HttpError(502, "ai_failed", AI_FAILED, { aiRunId: out.runId });
 }
 
@@ -287,7 +294,7 @@ rolePacketRoutes.post("/:id/revisions", requireTenant, async (c) => {
   const subject = { type: "role" as const, id: loaded.role.id };
   const declined = base.packet.provenance.declinedCriteria ?? [];
   const out = await proposeRevision(container.db, container.ai, { companyId: t.companyId, companyName: loaded.company.name, actor, target: { kind: "role", roleId: loaded.role.id, baseVersion: base.version, roleStatus: loaded.role.status }, packet: base.packet, message: body.message, declined });
-  if (!out.ok) return revisionFailed(container, t.companyId, subject, out);
+  if (!out.ok) return revisionFailed(container, t, subject, out);
   const merged = mergeRevision<DraftRolePacket>(base.packet, out.output, "role");
   const guarded = guardedChange(base.packet, merged.packet, { company: loaded.company, actor, declined, full: true });
   if (!guarded.ok) return revisionInvalid(container, t.companyId, subject, out.runId, guarded.problem);
@@ -467,6 +474,38 @@ rolePacketRoutes.post("/:id/packets/:version/flags/keep", requireTenant, async (
 });
 
 /**
+ * The benefits, written on the approval card (plan D5): the one thing the law asks of the ad that a person fixes by typing.
+ * Like keeping a flag, it fills in the version waiting and starts no new one, so the approval already asked for stands and
+ * whoever typed it may still decide. It only fills a blank: words already on the version change through Edit, as a new
+ * version. The legal check reads it from then on; nothing is public until someone approves.
+ */
+rolePacketRoutes.post("/:id/packets/:version/benefits", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "packet.edit");
+  const body = DescribeBenefits.parse(await c.req.json());
+  const container = c.get("container");
+  const actor = actorOf(c);
+  const out = await withTenant(container.db, t.companyId, async (tx) => {
+    const { role, versions } = await loadRolePackets(tx, c.req.param("id") ?? "", { forWrite: true });
+    refuseClosed(role);
+    const pv = versions.find((v) => String(v.version) === c.req.param("version"));
+    if (!pv) throw new HttpError(404, "version_not_found", "That version does not exist.");
+    const notWaiting = () => new HttpError(409, "not_waiting", "Only the version waiting for approval takes this.");
+    const [req] = await tx.select({ proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending"))).limit(1);
+    if (!req || Number((req.proposal as { version?: number }).version) !== pv.version || pv.status !== "proposed") throw notWaiting();
+    if (pv.packet.compensation.benefitsSummary?.trim()) throw new HttpError(409, "already_described", "This version already describes the benefits. Change them with Edit.");
+    const packet = structuredClone(pv.packet);
+    packet.compensation.benefitsSummary = body.text;
+    // Still undecided is checked again in the write itself, as approving does: a yes landing at this moment is never given words nobody saw.
+    const [wrote] = await tx.update(rolePackets).set({ packet }).where(and(eq(rolePackets.id, pv.id), isNull(rolePackets.approvedAt))).returning({ id: rolePackets.id });
+    if (!wrote) throw notWaiting();
+    await emit(tx, { type: "role_packet.edited", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${pv.version}` }, payload: { roleId: role.id, version: pv.version, changeSummary: "Benefits written on the approval card", takesEffect: "after_approval", openFlags: unresolvedFlags(packet).length } });
+    return { version: pv.version };
+  });
+  return c.json(out);
+});
+
+/**
  * The plain-field editor (C11): title, places, job type, schedule, work model, pay (basis, range, private ceiling), the
  * screening questions (3 to 12, added, removed and reordered as one list), the eligibility questions (from the allowed
  * kinds only), deal-breakers, the decision maker (a team member who may approve) and the message tone. Starts from
@@ -560,10 +599,14 @@ async function reloadSession(container: Container, companyId: string, sessionId:
   return row ? sessionView(row, viewer) : null;
 }
 
-/** Change the draft by chat (C10): the same proposal as for a role, worked out on the draft as it is now. Pay stays on the pay card. */
+/**
+ * Change the draft by chat (C10): the same proposal as for a role, worked out on the draft as it is now. Pay stays on the
+ * pay card. A company with no room for another job is refused before the model is called.
+ */
 draftPacketRoutes.post("/sessions/:id/revisions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const { row, draft } = await draftOf(c);
+  await assertRoomForDraft(c, row);
   const body = PacketRevisionRequest.parse(await c.req.json());
   const container = c.get("container");
   const actor = actorOf(c);
@@ -571,7 +614,7 @@ draftPacketRoutes.post("/sessions/:id/revisions", requireTenant, async (c) => {
   const subject = { type: "intake_session" as const, id: row.id };
   const declined = draftDeclined(row, draft);
   const out = await proposeRevision(container.db, container.ai, { companyId: t.companyId, companyName: company?.name ?? "", actor, target: { kind: "draft", sessionId: row.id, baseHash: packetFingerprint(draft) }, packet: draft, message: body.message, declined });
-  if (!out.ok) return revisionFailed(container, t.companyId, subject, out);
+  if (!out.ok) return revisionFailed(container, t, subject, out);
   const merged = mergeRevision(draft, out.output, "draft");
   const guarded = guardedChange(draft, merged.packet, { company: { name: company?.name ?? "", locations: company?.locations ?? [] }, actor, declined, full: false });
   if (!guarded.ok) return revisionInvalid(container, t.companyId, subject, out.runId, guarded.problem);

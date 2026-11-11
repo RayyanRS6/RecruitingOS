@@ -1,16 +1,19 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, mayDecideApproval, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, lockedAndWaiting, inCancelled, interviewsInMotionFor, isBoardChannel, isPlanRequest, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { withoutLockedApprovals, withoutLockedEvents } from "./locked-visibility";
+import { askToViewMore } from "../middleware/candidate-lock";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
-import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
-import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
+import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, MORE_CANDIDATES_LINE, PLAN_REQUEST_OPEN_LINE, companyOnboarding, companyVerifiedAt, moreAppliedTitle, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
+import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, interviewParticipants, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
 import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
-import { boardView, loadPool, shownLatestReadings } from "./pool";
+import { boardView, fitsOf, loadPool } from "./pool";
 import { aiInterviewsFor } from "./screens";
-import { backupsWarmCards } from "./hire-sheet";
+import { backupsWarmCards, closeAfterHireCards } from "./hire-sheet";
+import { emailsOf, unreachedCandidates, type UnreachedPerson } from "./email-health";
 
 /**
  * What a decision card says for an approval that has no card of its own: a question in plain words (never an action
@@ -41,10 +44,12 @@ const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page"
  * `closing_date`: a role's closing date stopped applications, or stops them tonight or tomorrow night (plan D7), with
  * "Extend by two weeks" (a POST), another date, or closing the role. `share`: the day a job opens, the moment to share it (D8).
  * `pool_ready`: a role's pool is sorted on the board and waiting for Review and apply (plan F7), with the summary.
- * `hire`: a recorded hire whose start date has not passed, with the people still in the running to keep warm (plan H1).
+ * `hire`: a recorded hire whose start date has not passed, with the people still in the running to keep warm (plan H1),
+ * and once it has, a job still live asks to be closed. `unreached`: emails to candidates that did not arrive, with each
+ * person and their address and phone to hand (6 November 2026).
  */
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready" | "hire";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready" | "hire" | "unreached";
   title: string;
   body: string;
   roleId?: string;
@@ -55,7 +60,37 @@ export type BriefCard = {
   gettingStarted?: GettingStarted;
   /** Only on the pool_ready card: the board's summary, the same as above the board. */
   pool?: PoolSummary;
+  /** Only on the unreached card: who did not get an email, each with the way to open them and reach them another way. */
+  unreached?: UnreachedPerson[];
 };
+
+/** The quiet day's line on Home, when jobs are open and nothing waits. */
+export const QUIET_DAY_LINE = "New applicants, and anything that waits on you, show up here.";
+
+/** At most this many people are named on the unreached card; the rest are counted. */
+export const UNREACHED_NAMED = 8;
+
+/**
+ * "N emails to candidates did not arrive" (6 November 2026): every candidate step after the first page lives in an email,
+ * so a failed one is a person waiting on nothing. One card for the company, for those who read applications, naming each
+ * person with their address and phone, each opening their page. Never someone the team may not read (`unreachedCandidates`).
+ */
+async function unreachedCard(tx: Tx, companyId: string, now: Date, scope: StaffScope | null): Promise<BriefCard | null> {
+  const people = await unreachedCandidates(tx, { companyId, now, inScope: (x) => inStaffScope(scope, x) });
+  if (!people.length) return null;
+  const n = emailsOf(people);
+  const named = people.slice(0, UNREACHED_NAMED);
+  const lines = named.map((p) => `${p.name} (${p.roleTitle}): ${p.email ?? "no email address on file"}${p.phone ? `, ${p.phone}` : ""}`);
+  const more = people.length > named.length ? [`And ${people.length - named.length} more.`] : [];
+  return {
+    kind: "unreached",
+    title: `${n} ${n === 1 ? "email" : "emails"} to candidates did not arrive`,
+    body: [`Phone ${people.length === 1 ? "them" : "each of them"}, or write to them yourself.`, ...lines, ...more].join("\n"),
+    ...(people.length === 1 ? { roleId: people[0].roleId, applicationId: people[0].applicationId } : {}),
+    actions: named.length === 1 ? [{ label: `Open ${named[0].name}`, method: "GET", path: `/roles/${named[0].roleId}/talent?open=${named[0].applicationId}` }] : [],
+    unreached: named,
+  };
+}
 
 /** A pool is ready to review once at least this many people wait to be sorted on the board. */
 export const POOL_READY_MIN = 2;
@@ -109,7 +144,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // posting route refuses anyone else, so a hiring manager or HR never gets a card they cannot act on.
   const managesPostings = !viewer || can(viewer.role, "role.manage");
   // Closing a role records its outcome (outcome.record): an owner, an admin, the hiring manager or HR. A recruiter, an
-  // ITS recruiter under a grant among them, manages the closing date but is never offered "Close the role".
+  // ITS recruiter under a grant among them, manages the closing date but is never offered "Close the job".
   const closesRoles = !viewer || can(viewer.role, "outcome.record");
   // "Bring in a recruiter" about a whole role is offered only to someone POST /escalations accepts it from: an ITS recruiter
   // given one candidate may not ask about the whole role (staff-scope.ts, staffMayAsk).
@@ -119,7 +154,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const now = new Date();
   // Only the requests the viewer may decide (`staffMayAsk`, the rule POST /approvals/:id/decide applies): an ITS recruiter
   // given one candidate gets no card for a request about the whole role, such as a closing message naming every applicant.
-  const pending = (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId }));
+  // Home never names or counts anyone past the plan's candidates per job, whoever reads it (Rule 3): this is built here, so
+  // the job builder's conversation, which answers with these cards, follows too.
+  const pending = await withoutLockedApprovals(tx, null, (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId })));
   // The candidates the waiting requests are about, in one query, so a card can name the person instead of an action key.
   const pendingAppIds = [...new Set(pending.map((p) => p.applicationId).filter((x): x is string => !!x))];
   const pendingNames = pendingAppIds.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, pendingAppIds)) : [];
@@ -173,13 +210,19 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     }
   }
 
+  // Emails to candidates that did not arrive (6 November 2026): for those who read applications, before the work of each job.
+  if (!viewer || can(viewer.role, "application.read")) {
+    const unreached = await unreachedCard(tx, companyId, now, scope);
+    if (unreached) cards.push(unreached);
+  }
+
   // Telling candidates a private decision (founder decision B6) is offered to those who may decline.
   const tells = !viewer || can(viewer.role, "application.reject");
   // The pool board's card (plan F7) goes to those who can apply its suggestions (Review and apply needs application.act).
   const sortsPools = !viewer || can(viewer.role, "application.act");
   // Who posts on the boards (plan D3): when ITS does, the posting and taking-down work is ITS's, not a card for the team.
   const [company] = await tx.select({ settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
-  const teamPosts = boardPostingOf(company?.settings) === "self";
+  const teamPosts = (await whoPostsBoards(tx, companyId, company?.settings)) === "self";
   // Sharing a job is open to those who manage postings and those who approve roles (routes/postings.ts, share-links).
   const shares = !viewer || can(viewer.role, "role.manage") || can(viewer.role, "role.approve");
   for (const card of closingDateCards(openRoles, company?.timezone ?? null, now, managesPostings, closesRoles)) cards.push(card);
@@ -191,10 +234,13 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (shares && publicSince !== null && publicSince >= Date.parse(since)) {
       cards.push({ kind: "share", title: `${role.title} is live. Share it now`, body: "Send it to people you know, a school or a local group. Each place gets its own link, so you can see where applicants come from.", roleId: role.id, actions: [{ label: "Share the job", method: "GET", path: `/roles/${role.id}?tab=posting#share` }] });
     }
-    // A recruiter given one candidate counts and names only that candidate, never the rest of the role's applicants.
-    const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, role.id)))).filter((a) => inStaffScope(scope, { roleId: role.id, applicationId: a.id }));
+    // A recruiter given one candidate counts and names only that candidate, never the rest of the role's applicants. Nobody
+    // past the plan's candidates per job counts here or is named (Rule 2), so what the cards say about those they count is true.
+    const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, role.id), notLocked()))).filter((a) => inStaffScope(scope, { roleId: role.id, applicationId: a.id }));
     const marks = await activeMarksFor(tx, apps.map((a) => a.id));
     const followUps = await activeFollowUpsFor(tx, apps.map((a) => a.id));
+    // An interview booked or with times out waits on nobody at the company (6 November 2026); one with no time does.
+    const inMotion = await interviewsInMotionFor(tx, apps.map((a) => a.id));
     // People under Cancelled (founder decisions 1A to 4A) have the role's one Cancelled card below, and only while nothing
     // is in motion for them; nobody gets two cards.
     const underCancelled = (a: { id: string; stage: ApplicationStage }) => inCancelled(a.stage, followUps.get(a.id));
@@ -203,7 +249,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     // are not counted here a second time; a running hold waits on nobody, and an ended one has its own card (stuck detector).
     const parked = (id: string) => { const m = marks.get(id); return m?.mark === "on_hold" || m?.mark === "not_a_fit_for_now"; };
     // Someone still being read is under "No AI interview yet" (R20-7) and waits on nobody: never "needs your review".
-    const waiting = apps.filter((a) => !parked(a.id) && !underCancelled(a) && ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete" && a.stage !== "ineligible");
+    const waiting = apps.filter((a) => !parked(a.id) && !underCancelled(a) && !inMotion.has(a.id) && ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete" && a.stage !== "ineligible");
     const ineligible = apps.filter((a) => a.stage === "ineligible");
     const decidedNotTold = tells ? apps.filter((a) => DECISION_STAGES.includes(a.stage) && a.toldState === "not_told") : [];
     // someone whose details were deleted at their request is never written to, so nobody is asked to tell them
@@ -218,6 +264,10 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (cancelledCard) cards.push(cancelledCard);
     if (fresh.length) {
       cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "Each gets the AI interview link by email once their résumé is read.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
+    }
+    // People past the plan's candidates per job (Rule 3): that more applied, in a neutral line and no number, and the way to read them. Not for ITS staff, who cannot ask for a company's plan.
+    if (viewer?.role !== "recruiter" && (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, role.id), lockedAndWaiting(), gte(applications.createdAt, since))).limit(1)).length) {
+      cards.push({ kind: "new_applicants", title: moreAppliedTitle(role.title), body: MORE_CANDIDATES_LINE, roleId: role.id, actions: [...(!viewer || can(viewer.role, "escalation.create") ? [askToViewMore] : []), { label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
     if (waiting.length) {
       const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, waiting.slice(0, 5).map((a) => a.candidateId)));
@@ -253,7 +303,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // however long ago it closed, so nobody drops out of sight (the untold safety net). One query for every closed role.
   if (tells) {
     const closedRoles = (await tx.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "closed")))).filter((r) => inStaffScope(scope, { roleId: r.id }));
-    const untoldClosed = closedRoles.length ? await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(inArray(applications.roleId, closedRoles.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt))) : [];
+    // Someone locked hears by themselves, and the team never hears their name (Rule 2).
+    const untoldClosed = closedRoles.length ? await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(inArray(applications.roleId, closedRoles.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt), notLocked())) : [];
     // whose message (their own, or the closing message's one request) waits for an approver: on the approver's card instead
     const waitingClosed = await decisionsWaitingApproval(tx, untoldClosed.map((a) => a.id));
     for (const role of closedRoles) {
@@ -321,17 +372,23 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
 
   // "Keep your backups warm" until a new hire starts (plan H1); the cards filter by application.read and the staff scope.
   for (const card of await backupsWarmCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner", scope }, now })) cards.push(card);
+  // Then, once every hire on a job has started, "Close this job?" until it is closed (6 November 2026).
+  for (const card of await closeAfterHireCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner", scope }, now })) cards.push(card);
   for (const card of await draftCards(tx, companyId, viewer)) cards.push(card);
 
   // ITS posting tasks are ITS's own work, shown with each board on the Posting tab, not as the team's requests (plan D3).
-  const escalations = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e) && !isPostingTask(e.kind));
+  const openRequests = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e) && !isPostingTask(e.kind));
+  // A request about someone locked stays with ITS (Rule 3): its question names them. "Your recruiter requests" says only that it exists.
+  const aboutLocked = await lockedAmong(tx, openRequests.flatMap((e) => (e.applicationId ? [e.applicationId] : [])));
+  const escalations = openRequests.filter((e) => !e.applicationId || !aboutLocked.has(e.applicationId));
   // Each open request leads to itself in "Your recruiter requests" on Today, where its thread, notes and (once it comes)
   // the answer in full are; answered requests are shown there for two weeks, so the brief needs no card of its own.
   const readsRequests = !viewer || can(viewer.role, "escalation.create");
   for (const e of escalations) {
     // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
-    // request from before 13 October 2026 in plain words, never the technical error (before it is cut to length).
-    cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: withoutSentimentWords(plainRequestText(e.question, e.requestedBy.kind)).slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
+    // request from before 13 October 2026 in plain words, never the technical error (before it is cut to length). A talk about
+    // the plan is with ITS, as the upgrade sheet said: no recruiter is working on their hiring.
+    cards.push({ kind: "escalation", title: isPlanRequest(e) ? PLAN_REQUEST_OPEN_LINE : e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: withoutSentimentWords(plainRequestText(e.question, e.requestedBy.kind)).slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
   }
   // Getting started leads Today until the company is set up; its steps step aside once real decisions are waiting. Its
   // "Start your first role" makes the empty card's "Start a hire" redundant, so that card is left out while it shows.
@@ -341,21 +398,25 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     // A brand-new company's first screen always offers the way forward; so does a quiet day.
     const startsHires = !viewer || (can(viewer.role, "role.create") && can(viewer.role, "compensation.read") && !scope);
     const actions: BriefCard["actions"] = openRoles.length ? [{ label: "See your jobs", method: "GET", path: "/roles" }] : startsHires ? [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }] : [];
-    cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : startsHires ? "Tell me who you need to hire" : "No jobs are open yet", body: openRoles.length ? "Applicants are being acknowledged and reviewed. I will tell you when someone is worth your time." : startsHires ? "Describe the job in a sentence or two and I will ask what I need to know." : "When someone on your team opens a job, its applicants and decisions show up here.", actions });
+    // A quiet day says what is true (6 November 2026): no promise about emails that may not arrive, and no judgement of
+    // who is "worth your time", which the app does not make.
+    cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : startsHires ? "Tell me who you need to hire" : "No jobs are open yet", body: openRoles.length ? QUIET_DAY_LINE : startsHires ? "Describe the job in a sentence or two and I will ask what I need to know." : "When someone on your team opens a job, its applicants and decisions show up here.", actions });
   }
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
-  const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review").length;
-  // Strong by each person's latest reading only (plan F5): an earlier Strong résumé reading a scorecard has since replaced
-  // does not count. A reading of a conversation the candidate never sent is never theirs to be counted by (9 October
-  // 2026): they count by the newest reading left, their résumé's, as the Talent list and the board show them.
-  const strongIds = new Set([...(await shownLatestReadings(tx, { companyId })).values()].filter((r) => r.overall === "strong").map((r) => r.applicationId));
-  const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(eq(applications.companyId, companyId))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
-  const companyMarks = await activeMarksFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
-  const companyFollowUps = await activeFollowUpsFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
-  const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && groupFor(a, companyMarks.get(a.id), now, companyFollowUps.get(a.id)) === "waiting_on_you").length;
-  const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.length;
+  const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review" || c.kind === "unreached").length;
+  // Strong in the same word the list shows beside their number (`fit`, 6 November 2026): worked out from both readings, never
+  // from one reading's stored word, and never someone the list shows as "Needs a closer look" (11 November 2026). A reading of
+  // a conversation the candidate never sent is never counted (9 October 2026).
+  const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage, packetVersion: applications.packetVersion, latestAssessmentId: applications.latestAssessmentId }).from(applications).where(and(eq(applications.companyId, companyId), notLocked()))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
+  const companyMarks = await activeMarksFor(tx, companyApps.map((a) => a.id));
+  const companyFollowUps = await activeFollowUpsFor(tx, companyApps.map((a) => a.id));
+  const companyInMotion = await interviewsInMotionFor(tx, companyApps.map((a) => a.id));
+  const waitingOnYou = companyApps.filter((a) => groupFor(a, companyMarks.get(a.id), now, companyFollowUps.get(a.id), companyInMotion.has(a.id)) === "waiting_on_you");
+  const strongWaiting = [...(await fitsOf(tx, waitingOnYou)).values()].filter((fit) => fit === "strong").length;
+  // A request to upgrade puts no hire at risk.
+  const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.filter((e) => !isPlanRequest(e)).length;
   const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);
-  const recent = await tx.select({ type: events.type, actor: events.actor, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since)));
+  const recent = await withoutLockedEvents(tx, { companyId, reader: null }, await tx.select({ id: events.id, type: events.type, actor: events.actor, subjectType: events.subjectType, subjectId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since))));
   // Under a scoped grant, only what was done about the role or the candidate in scope is counted.
   const inScopeSubjects = scope ? new Set<string>([...openRoles.map((r) => r.id), ...companyApps.map((a) => a.id)]) : null;
   const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent") && (!inScopeSubjects || inScopeSubjects.has(e.subjectId))).length;
@@ -367,7 +428,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
  * The closing-date cards (founder decision Q12, plan D7), for those who manage postings: a role whose date stopped
  * applications (extend it, choose another date, or close the role, which stays a person's decision), and a role whose
  * date ends tonight or tomorrow night. "Extend by two weeks" posts the new date straight to the closing-date route.
- * "Close the role" goes only to those who may close one (`closes`: outcome.record); the others are told who can.
+ * "Close the job" (a job word, like every other button: 10 November 2026) goes only to those who may close one (`closes`:
+ * outcome.record); the others are told who can.
  */
 function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZone: string | null, now: Date, manages: boolean, closes: boolean): BriefCard[] {
   if (!manages) return [];
@@ -381,9 +443,9 @@ function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZo
       out.push({
         kind: "closing_date",
         title: `${role.title} stopped taking applications`,
-        body: `Its closing date${closesOn ? `, ${closingDayWords(closesOn)},` : ""} has passed. Nobody was turned away: people who had started could finish, and everyone who applied is where they were. ${closes ? "Extend the date to take applications again, or close the role when you are ready." : "Extend the date to take applications again. Closing the role is up to the company's owner, an admin, the hiring manager or HR."}`,
+        body: `Its closing date${closesOn ? `, ${closingDayWords(closesOn)},` : ""} has passed. Nobody was turned away: people who had started could finish, and everyone who applied is where they were. ${closes ? "Extend the date to take applications again, or close the job when you are ready." : "Extend the date to take applications again. Closing the job is up to the company's owner, an admin, the hiring manager or HR."}`,
         roleId: role.id,
-        actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(today, 14) } }, pickDate, ...(closes ? [{ label: "Close the role", method: "GET" as const, path: `/roles/${role.id}?close=1` }] : [])],
+        actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(today, 14) } }, pickDate, ...(closes ? [{ label: "Close the job", method: "GET" as const, path: `/roles/${role.id}?close=1` }] : [])],
       });
     } else if (closesOn && role.acceptingApplications && closesOn >= today && closesOn <= addCalendarDays(today, 1)) {
       out.push({
@@ -498,17 +560,8 @@ async function gettingStartedSteps(tx: Tx, companyId: string, role: MembershipRo
       actions: [{ label: "Invite people", method: "GET", path: "/setup#setup-team" }],
     });
   }
-  if (can(role, "scorecard.write")) {
-    const [hours] = await tx.select({ id: interviewerAvailability.id }).from(interviewerAvailability).where(and(eq(interviewerAvailability.companyId, companyId), sql`jsonb_array_length(${interviewerAvailability.windows}) > 0`)).limit(1);
-    const [calendar] = hours ? [] : await tx.select({ id: integrations.id }).from(integrations).where(and(eq(integrations.companyId, companyId), eq(integrations.kind, "calendar"), eq(integrations.status, "live"))).limit(1);
-    steps.push({
-      key: "interview_hours",
-      title: "Set when you can interview, or connect your calendar",
-      why: "Candidates are offered interview times only from the hours or calendars your team has set.",
-      done: !!hours || !!calendar,
-      actions: [{ label: "Set my hours", method: "GET", path: "/setup#setup-availability" }],
-    });
-  }
+  // No step for interview hours (6 November 2026): a person sets each interview's date and time, so hours are optional and
+  // nothing here asks for them. They still let the candidate pick from free times, from Settings, Notifications.
   if (can(role, "role.create") && can(role, "compensation.read")) {
     const [anyRole] = await tx.select({ id: roles.id }).from(roles).where(eq(roles.companyId, companyId)).limit(1);
     const [draft] = anyRole ? [] : await tx.select({ id: intakeSessions.id }).from(intakeSessions).where(and(eq(intakeSessions.companyId, companyId), ne(intakeSessions.status, "abandoned"))).limit(1);
@@ -526,7 +579,9 @@ async function gettingStartedSteps(tx: Tx, companyId: string, role: MembershipRo
       actions: [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }, ...askRecruiter],
     });
   }
-  if (can(role, "integration.manage")) {
+  // Only while ITS posts for the company (Rule 6): on a plan with no ITS staff time this step would never finish, and it
+  // would tell the owner to add ITS to LinkedIn for nothing.
+  if (can(role, "integration.manage") && (await whoPostsBoards(tx, companyId, settings)) === "its") {
     steps.push({
       key: "job_boards",
       title: "Give ITS access to your job boards",
@@ -599,7 +654,8 @@ async function longWaitCard(tx: Tx, d: { roleId: string; roleTitle: string; titl
   const [first] = await tx.select({ id: applications.id, stageChangedAt: applications.stageChangedAt, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(applications.id, applicationIds[0])).limit(1);
   if (!first) return null;
   const name = `${first.firstName} ${first.lastName}`.trim() || "A candidate";
-  const days = Math.max(0, Math.floor((Date.now() - Date.parse(first.stageChangedAt)) / 86_400_000));
+  // From when the team could act on them: someone a change of plan opened has waited since then (Rule 2).
+  const days = Math.max(0, Math.floor((Date.now() - waitingSince(first.stageChangedAt, (await unlockedAtFor(tx, [first.id])).get(first.id))) / 86_400_000));
   const others = applicationIds.length - 1;
   const open = `/roles/${d.roleId}/talent?open=${first.id}`;
   const narrowed = askRecruiter === null;
@@ -671,7 +727,7 @@ async function afterInterviewCards(tx: Tx, role: { id: string; title: string }, 
       continue;
     }
     const latest = mine.find((i) => ["completed", "no_show"].includes(i.status));
-    if (who.requests && latest?.decision === "next_round") out.push({ kind: "decision", title: `Set up the next round: ${name}`, body: `You chose the next round after ${latest.title}. Approve it from the candidate's page and times go out to them.`, roleId: role.id, applicationId: app.id, actions: [{ label: "Approve the next round", method: "GET", path: `${open}&step=interview` }] });
+    if (who.requests && latest?.decision === "next_round") out.push({ kind: "decision", title: `Set up the next round: ${name}`, body: `You chose the next round after ${latest.title}. Set its date and time from the candidate's page.`, roleId: role.id, applicationId: app.id, actions: [{ label: "Set a date and time", method: "GET", path: `${open}&step=interview` }] });
   }
   return out;
 }
@@ -685,11 +741,11 @@ async function interviewerBrief(tx: Tx, companyId: string, viewer: BriefViewer):
   const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
   const tz = company?.timezone ?? "UTC";
   const rows = await tx
-    .select({ id: interviews.id, title: interviews.title, status: interviews.status, outcome: interviews.outcome, startsAt: interviews.startsAt, candidateId: applications.candidateId, roleId: applications.roleId })
+    .select({ id: interviews.id, title: interviews.title, status: interviews.status, outcome: interviews.outcome, startsAt: interviews.startsAt, offered: sql<number>`jsonb_array_length(${interviews.offeredSlots})`, candidateId: applications.candidateId, roleId: applications.roleId })
     .from(interviews)
     .innerJoin(interviewParticipants, eq(interviewParticipants.interviewId, interviews.id))
     .innerJoin(applications, eq(applications.id, interviews.applicationId))
-    .where(and(eq(interviews.companyId, companyId), eq(interviewParticipants.userId, viewer.userId), inArray(interviews.status, ["proposed", "scheduling", "scheduled", "completed"])));
+    .where(and(eq(interviews.companyId, companyId), eq(interviewParticipants.userId, viewer.userId), inArray(interviews.status, ["proposed", "scheduling", "scheduled", "completed"]), notLocked()));
   const names = rows.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, [...new Set(rows.map((r) => r.candidateId))])) : [];
   const titles = rows.length ? await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, [...new Set(rows.map((r) => r.roleId))])) : [];
   const nameOf = (candidateId: string) => { const n = names.find((x) => x.id === candidateId); return `${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim() || "A candidate"; };
@@ -701,14 +757,15 @@ async function interviewerBrief(tx: Tx, companyId: string, viewer: BriefViewer):
   if (upcoming.length || offering.length) {
     const lines = [
       ...upcoming.map((r) => `${nameOf(r.candidateId)}: ${r.title} for ${roleOf(r.roleId)}${r.startsAt ? `, ${whenIn(r.startsAt, tz)} (${tz})` : ""}`),
-      ...offering.map((r) => `${nameOf(r.candidateId)}: ${r.title} for ${roleOf(r.roleId)}, times being offered to the candidate`),
+      // times offered only when there are some (6 November 2026): otherwise it has no time yet, and the team sets one
+      ...offering.map((r) => `${nameOf(r.candidateId)}: ${r.title} for ${roleOf(r.roleId)}, ${r.status === "scheduling" && Number(r.offered) > 0 ? "times offered to the candidate" : "no time yet"}`),
     ];
     cards.push({ kind: "interviews", title: upcoming.length ? `${upcoming.length} ${upcoming.length === 1 ? "interview" : "interviews"} coming up` : `${offering.length} ${offering.length === 1 ? "interview" : "interviews"} being scheduled`, body: lines.join("\n"), actions: [{ label: "Open interviews", method: "GET", path: "/interviews" }] });
   }
   for (const r of toRecord) {
     cards.push({ kind: "interviews", title: `Did the interview with ${nameOf(r.candidateId)} take place?`, body: `${r.title} for ${roleOf(r.roleId)}${r.startsAt ? `, ${whenIn(r.startsAt, tz)}` : ""}. Tell us if it happened or someone did not show; it keeps the record straight.`, roleId: r.roleId, actions: [{ label: "Record what happened", method: "GET", path: `/interviews/${r.id}` }] });
   }
-  if (!cards.length) cards.push({ kind: "empty", title: "Nothing needs you right now", body: "Your interviews appear here as soon as you are put on one. Keep your calendar or declared hours up to date in Settings so times can be offered.", actions: [{ label: "My availability", method: "GET", path: "/setup" }] });
+  if (!cards.length) cards.push({ kind: "empty", title: "Nothing needs you right now", body: "Your interviews appear here as soon as you are put on one. Hours or a calendar in Settings let candidates pick a time with you.", actions: [{ label: "My availability", method: "GET", path: "/setup#setup-availability" }] });
   const summary = `${upcoming.length} ${upcoming.length === 1 ? "interview" : "interviews"} coming up · ${offering.length} being scheduled · ${toRecord.length} to record.`;
   return { generatedAt: new Date().toISOString(), cards, summary };
 }

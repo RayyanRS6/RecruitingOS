@@ -177,9 +177,9 @@ test.describe("candidate journey on a phone", () => {
         await page.getByRole("button", { name: "Skip this question" }).first().click();
       } else if (await page.getByRole("button", { name: "Yes", exact: true }).isVisible()) {
         await page.getByRole("button", { name: "Yes", exact: true }).click();
-      } else if (await page.getByLabel("From").isVisible()) {
-        await page.getByLabel("From").fill("50");
-        await page.getByLabel("To (optional)").fill("54");
+      } else if (await page.getByLabel("From", { exact: true }).isVisible()) {
+        await page.getByLabel("From", { exact: true }).fill("50");
+        await page.getByLabel("To (optional)", { exact: true }).fill("54");
         await page.getByRole("button", { name: "Send", exact: true }).first().click();
       } else if (await page.getByLabel("The earliest day you could start").isVisible()) {
         await page.getByLabel("The earliest day you could start").fill(new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10));

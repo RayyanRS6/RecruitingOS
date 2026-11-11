@@ -40,3 +40,17 @@ export function estimateCostUsd(model: string, usage: Usage): number {
   const cost = (usage.inputTokens * p.input + usage.outputTokens * p.output + usage.cacheReadTokens * p.cacheRead + write * p.cacheWrite) / 1_000_000;
   return Math.round(cost * 1_000_000) / 1_000_000;
 }
+
+/** The output tokens a request may use when its prompt names no ceiling of its own. */
+export const DEFAULT_MAX_TOKENS = 16_000;
+
+/**
+ * What one call may cost at worst, held against the company's AI credit before it starts (packages/core/src/ai-credit.ts):
+ * two full requests at the task's ceiling of output tokens, because a reply that does not validate gets one correction
+ * turn (providers/anthropic.ts), with the prompt counted at two characters a token, about twice what it really takes, which
+ * also covers writing it to the prompt cache. About $0.02 for a call on Haiku 5.5, and about $0.80 for a draft on Sonnet 5.5.
+ */
+export function creditHoldUsd(model: string, input: { promptChars: number; maxTokens?: number }): number {
+  const request = estimateCostUsd(model, { inputTokens: Math.ceil(input.promptChars / 2), outputTokens: input.maxTokens ?? DEFAULT_MAX_TOKENS, cacheReadTokens: 0 });
+  return Math.round(request * 2 * 1_000_000) / 1_000_000;
+}

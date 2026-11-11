@@ -1,36 +1,38 @@
-import { MATCH_WEIGHT, SCORE_BASIS_INTERVIEW_ONLY, SCORE_BASIS_WORDS, importanceOf, matchBand, weighRequirements, type Confidence, type EvidenceAssessment, type Importance, type InterviewInScore, type MatchCriterion, type MatchScore, type MatchUnknown, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
+import { MATCH_WEIGHT, SCORE_BASIS_INTERVIEW_ONLY, SCORE_BASIS_WORDS, fitOf, importanceOf, matchBand, weighRequirements, type Confidence, type EvidenceAssessment, type Importance, type InterviewInScore, type MatchCriterion, type MatchScore, type MatchUnknown, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
 
 /**
- * The match score (founder decision B2; plan-adjustments section 1): a 0-100 number worked out by code from the stored,
- * quote-checked findings, never written by the model. Pure, and imports nothing but the contracts, so the list, the
- * board, the candidate panel and the evals (packages/evals) all read the same function over the same rows.
+ * The match score (founder decision B2; plan-adjustments section 1; the owner, 6 November 2026: "should it not rank the
+ * candidate according to their CV/resume against the Job description?"): a 0-100 number worked out by code from the stored,
+ * quote-checked findings, never written by the model. Pure, and imports nothing but the contracts, so the list, the board,
+ * the candidate panel and the evals (packages/evals) all read the same function over the same rows.
  *
  * - Each must-have and each skill of the role is a requirement. Must-haves count most; a skill counts by its importance
- *   (Essential, Important, Helpful; plan F3).
- * - A requirement the evidence says nothing about is set aside, not penalised: it is left out of the score and shown as
- *   coverage ("based on 5 of 7 requirements") and as an open question.
- * - Met counts in full, not met counts nothing. A must-have counts as not met, and a skill as going against the
- *   candidate, only on a verified quote from their own words; anything else is "not known".
- * - Partly met counts half, or as much as the rest of the evidence when that is higher (`PARTLY_SHOWN_RULE`, Wave S7):
- *   the score is monotonic, so showing some evidence never scores below showing none. The fairness run of 15 Oct 2026
- *   found two twin résumés 11 points apart because one reading said a skill was "partly evidenced" and the other "not
- *   evidenced" from the same quote: set aside, the skill left the twin at 94; counted at half, it took the other to 83.
- *   Now both are 94. A partly shown requirement still shows in the breakdown at 50% ("Partly shown"), with the share the
- *   score counted (`countedPct`) when that was more. Monotonic: moving any one requirement up the order not met, not
- *   known, partly, met never lowers the score (match-score.test.ts checks it over many random cases).
+ *   (Essential, Important, Helpful; plan F3). The number is the points earned over the points of all of them.
+ * - Shown counts in full, partly shown counts half. A requirement the evidence says nothing about earns nothing so far, is
+ *   never called "not met", is never named on a decline, and shows as coverage ("based on 5 of 7 requirements") and as an
+ *   open question: a thin résumé reads low, and the AI interview lifts it.
+ * - A must-have counts as not met, and a skill as going against the candidate, only on a verified quote from their own
+ *   words; that earns nothing too. Anything else is "not known".
+ * - Monotonic: moving any one requirement up the order not met, not known, partly, met never lowers the score
+ *   (match-score.test.ts checks it over many random cases).
  * - Met with nothing quoted (no quote at all, or one the evidence rules marked `unquoted`: not found, or too short to
  *   show anything) counts as partly met, never on its own in full, and the breakdown says "no quote" (Wave S5, 15 Oct
- *   2026): it never raises the score above what the checked evidence shows.
+ *   2026).
  * - A must-have shown not met holds the score at 54 at most and is named ("Missing must-have: ...").
  * - A skill the role checks only in the team's own interviews (`evaluatedIn: "interview"`; the editor says "Only in your
  *   own interviews", so it is never read as "the AI interview does not count") is not part of the score: the owner was
- *   told it is judged there, so no reading of a résumé or an AI interview moves the number with it.
- * - Per requirement the AI interview's finding wins where it has one with a checked quote (the candidate spoke to it
- *   directly); then the résumé reading's checked one; a finding with nothing quoted counts only when neither reading has
- *   a checked one (the AI interview's first).
+ *   told it is judged there, so no reading of a résumé or an AI interview moves the number with it. A must-have checked
+ *   only there is asked by nobody here, so no reading moves the number with it either, whatever it found: only their own
+ *   quoted "no" counts, as for any must-have (it earns nothing and holds the score at 54). Counting it once a reading spoke
+ *   to it scored someone who showed part of it below someone who said nothing (the release review, 11 November 2026). Until
+ *   a reading shows it in full it is still not known (`checkInInterview`): the verdict word and the board treat it so.
+ * - Doing the AI interview never costs points. Per requirement its checked "no" wins (their own latest words); otherwise
+ *   the better of the two checked findings counts, the AI interview's on a tie; a finding with nothing quoted counts only
+ *   when neither reading has a checked one (the AI interview's first).
  * - The score counts both once the AI interview is scored (20 October 2026, R20-9). Before that the number is the
- *   résumé's alone and its label says so (`interview`, `basis`: "Résumé only: AI interview not done yet"); the label never
- *   changes the number, and nothing here asks the AI anything.
+ *   résumé's alone, a floor, and its label says so (`interview`, `basis`: "Résumé only: AI interview not done yet"); the
+ *   label never changes the number, and nothing here asks the AI anything.
+ * - `fit` is the one verdict word beside the number (`fitOf` in the contracts), from the same numbers.
  * - The sums themselves (`weighRequirements`) live in packages/contracts, so the weights preview on the job's page
  *   (founder decision L-07 A), which cannot import this package, runs the same code over the same findings.
  */
@@ -72,14 +74,26 @@ function requirementStatus(met: string, e: Evidence): Status {
 function competencyStatus(finding: string, e: Evidence): Status {
   if (finding === "evidenced") return verified(e) ? "yes" : "partly";
   if (finding === "partially_evidenced") return "partly";
-  // "not evidenced" is missing information, set aside; "goes against it" needs the candidate's own words
+  // "not evidenced" is not known yet, never a no; "goes against it" needs the candidate's own words
   return finding === "contradicted" && verified(e) ? "no" : "unknown";
 }
 
+const STRENGTH: Record<Status, number> = { unknown: -1, no: 0, partly: 1, yes: 2 };
+
 /**
- * The finding for one requirement, ranked by evidence first and source second: a checked screen finding, then a checked
- * résumé finding, then an unquoted screen finding, then an unquoted résumé finding. So a scorecard "yes" that lost its
- * quote never replaces the résumé's checked "yes" (or checked "no") with "partly".
+ * Which checked finding counts when both readings have one, so doing the AI interview never costs points (a short answer
+ * read as "partly" never replaces the résumé's "yes"): the AI interview's "no" wins, because those are their own latest words;
+ * otherwise the better of the two, the AI interview's on a tie.
+ */
+function checkedFinding(screen: Resolved | null, resume: Resolved | null): Resolved | null {
+  if (!screen || !resume || screen.status === "no") return screen ?? resume;
+  return STRENGTH[resume.status] > STRENGTH[screen.status] ? resume : screen;
+}
+
+/**
+ * The finding for one requirement, ranked by evidence first: the checked findings (`checkedFinding`), then an unquoted
+ * screen finding, then an unquoted résumé finding. So a scorecard "yes" that lost its quote never replaces the résumé's
+ * checked "yes" (or checked "no") with "partly".
  */
 function resolve(pair: ReadingPair, find: (r: Findings) => Found | null): Resolved {
   const pick = (r: ScoredReading | null, source: "resume" | "screen"): Resolved | null => {
@@ -90,7 +104,7 @@ function resolve(pair: ReadingPair, find: (r: Findings) => Found | null): Resolv
   const resume = pick(pair.resume, "resume");
   const checked = (r: Resolved | null) => (r && !r.unquoted ? r : null);
   const unquotedNo = [pair.screen, pair.resume].some((r) => !!r && !!find(r.result)?.saidNo);
-  return checked(screen) ?? checked(resume) ?? screen ?? resume ?? { status: "unknown", source: pair.screen && !pair.resume ? "screen" : "resume", quote: null, unquoted: true, unquotedNo };
+  return checkedFinding(checked(screen), checked(resume)) ?? screen ?? resume ?? { status: "unknown", source: pair.screen && !pair.resume ? "screen" : "resume", quote: null, unquoted: true, unquotedNo };
 }
 
 const mustHaveFound = (m: { key: string }) => (r: Findings): Found | null => {
@@ -112,8 +126,15 @@ export function scoredSkill(c: { evaluatedIn?: string | null }): boolean {
   return c.evaluatedIn !== "interview";
 }
 
+/** A must-have checked only in the team's own interviews: neither the résumé reading nor the AI interview asks about it. */
+function onlyInOwnInterviews(m: { evidencedBy?: readonly string[] | null }): boolean {
+  return !!m.evidencedBy?.length && m.evidencedBy.every((e) => e === "interview");
+}
+
 function requirementsOf(pair: ReadingPair, packet: Pick<RolePacket, "requirements" | "competencies">): Requirement[] {
-  const must = packet.requirements.mustHaves.map((m): Requirement => ({ key: m.key, label: m.text, mustHave: true, importance: null, weight: MATCH_WEIGHT.must_have, found: resolve(pair, mustHaveFound(m)) }));
+  // A must-have checked only in the team's own interviews joins the sum only on their own quoted "no": not known, partly
+  // shown and shown all leave the number where it is, so showing more of it never lowers it.
+  const must = packet.requirements.mustHaves.map((m): Requirement => ({ key: m.key, label: m.text, mustHave: true, importance: null, weight: MATCH_WEIGHT.must_have, found: resolve(pair, mustHaveFound(m)) })).filter((r, i) => r.found.status === "no" || !onlyInOwnInterviews(packet.requirements.mustHaves[i]));
   const skills = packet.competencies.filter(scoredSkill).map((c): Requirement => {
     const importance = importanceOf(c);
     return {
@@ -154,30 +175,38 @@ function interviewFor(pair: ReadingPair, given: InterviewInScore | null | undefi
 export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirements" | "competencies">, opts: { packetVersion?: number | null; interview?: InterviewInScore | null } = {}): MatchScore | null {
   if (!pair.resume && !pair.screen) return null;
   const all = requirementsOf(pair, packet);
-  const known = all.filter((r) => r.found.status !== "unknown");
-  // the sums (shares, the partly shown rule, the six-place rounding and the hold at 54) live in the contracts
-  const { score, capped, parts } = weighRequirements(known.map((r) => ({ weight: r.weight, status: r.found.status as Exclude<Status, "unknown">, mustHave: r.mustHave })));
-  const breakdown: MatchCriterion[] = known.map((r, i) => {
+  // the sums (shares, the six-place rounding and the hold at 54) live in the contracts
+  const { score, capped, parts } = weighRequirements(all.map((r) => ({ weight: r.weight, status: r.found.status, mustHave: r.mustHave })));
+  const scored = all.map((r, i) => ({ r, part: parts[i] }));
+  const known = scored.filter(({ r }) => r.found.status !== "unknown");
+  const open = scored.filter(({ r }) => r.found.status === "unknown");
+  const breakdown: MatchCriterion[] = known.map(({ r, part }) => {
     const status = r.found.status as Exclude<Status, "unknown">;
-    const { share, counted, lost } = parts[i];
-    return { key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(share), pctMet: PCT[status], ...(status === "partly" && counted > PCT.partly ? { countedPct: Math.round(counted) } : {}), pointsLost: Math.round(lost), finding: (r.mustHave ? MUST_HAVE_WORDS : SKILL_WORDS)[status], source: r.found.source, quote: r.found.quote, unquoted: r.found.unquoted };
+    return { key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(part.share), pctMet: PCT[status], pointsLost: Math.round(part.lost), finding: (r.mustHave ? MUST_HAVE_WORDS : SKILL_WORDS)[status], source: r.found.source, quote: r.found.quote, unquoted: r.found.unquoted };
   });
   // The costliest first; then must-haves, the heavier, and by name, so the order never depends on the input's.
   breakdown.sort((a, b) => b.pointsLost - a.pointsLost || Number(b.mustHave) - Number(a.mustHave) || b.weightPct - a.weightPct || a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
-  const missingMustHave = known.filter((r) => r.mustHave && r.found.status === "no").map((r) => ({ key: r.key, label: r.label, quote: r.found.quote ?? "" }));
+  const missingMustHave = known.filter(({ r }) => r.mustHave && r.found.status === "no").map(({ r }) => ({ key: r.key, label: r.label, quote: r.found.quote ?? "" }));
   const band = matchBand(score);
-  const unknown: MatchUnknown[] = all.filter((r) => r.found.status === "unknown").map((r) => ({ key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, ...(r.found.unquotedNo ? { unquotedNo: true } : {}) }));
-  const sources = new Set(known.map((r) => r.found.source));
+  const unknown: MatchUnknown[] = open.map(({ r, part }) => ({ key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(part.share), pointsLost: Math.round(part.lost), ...(r.found.unquotedNo ? { unquotedNo: true } : {}) }));
+  const openPoints = Math.round(Number(open.reduce((n, { part }) => n + part.lost, 0).toFixed(6)));
+  // Out of the number, but not known until a reading shows it in full: still to check in the team's own interview.
+  const checkInInterview = packet.requirements.mustHaves.filter(onlyInOwnInterviews).filter((m) => { const s = resolve(pair, mustHaveFound(m)).status; return s === "unknown" || s === "partly"; }).map((m) => ({ key: m.key, label: m.text }));
+  const sources = new Set(known.map(({ r }) => r.found.source));
   const basedOn = sources.size === 2 || (!sources.size && pair.resume && pair.screen) ? "resume_and_screen" : sources.has("screen") || (!sources.size && pair.screen) ? "screen" : "resume";
   const latest = latestOf(pair);
   const interview = interviewFor(pair, opts.interview);
+  const coverage = { known: known.length, total: all.length, words: coverageWords(known.length, all.length) };
   return {
     score,
     band: band?.band ?? null,
     bandLabel: band?.label ?? null,
-    coverage: { known: known.length, total: all.length, words: coverageWords(known.length, all.length) },
+    fit: fitOf({ score, missingMustHave, openPoints, coverage, breakdown, unknown, checkInInterview }),
+    coverage,
     breakdown,
     unknown,
+    openPoints,
+    checkInInterview,
     fullMarks: breakdown.filter((c) => c.pctMet === 100).length,
     missingMustHave,
     capped,

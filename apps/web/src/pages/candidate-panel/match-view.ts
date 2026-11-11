@@ -1,13 +1,14 @@
 import { IMPORTANCE_LABEL, MISSING_MUST_HAVE_CAP, type BoardPlacement, type Importance, type MatchCriterion, type MatchScore, type MustHaveSummary, type OwnerStage, type ReadingVersion } from "@ros/contracts";
+import type { Tone } from "@ros/ui";
 import type { ApplicationDetail } from "../../api/client";
-import { scoreBasis } from "../../talent-list";
+import { READING, scoreBasis } from "../../talent-list";
 
 /**
  * The match score on the candidate panel (founder decision B2; docs/spec/22 section 5), kept free of React so it can be
  * tested (tests/web/match-panel.test.ts): the words around the number, the bars (the costliest first, then "N more at
- * full marks"), what was left out of the score, the version label (plan F4), and the order the evidence is listed in
- * (plan F2). The number itself comes from the API (`matchScore`, worked out by code in packages/core from the checked
- * findings); nothing here works it out again.
+ * full marks"), what is not known yet, the version label (plan F4), and the order the evidence is listed in (plan F2). The
+ * number itself comes from the API (`matchScore`, worked out by code in packages/core from the checked findings); nothing
+ * here works it out again.
  */
 
 export const MATCH_TITLE = "Against your must-haves";
@@ -16,6 +17,9 @@ export const MATCH_PROMISE = "A match score worked out from checked evidence, wi
 
 /** The verdict's line when the AI review could not be made at all (the card above the verdict says what to do). */
 export const NO_REVIEW_LINE = "No match score: the AI review could not be made, so read this one yourself.";
+
+/** The verdict's line when AI never reads their résumé: our email with the AI notice did not reach an emailed-in applicant (known-bugs row 16). */
+export const NO_AI_NOTICE_LINE = "No match score: our email with the AI notice did not reach them, so the assistant does not read their résumé.";
 
 /** What GET /applications/:id carries since Wave F; an older answer leaves it out, and the panel then shows nothing for it. */
 type ScoredDetail = { matchScore?: MatchScore | null; readingVersion?: ReadingVersion | null; mustHaves?: MustHaveSummary | null; placement?: BoardPlacement | null };
@@ -39,29 +43,41 @@ export function suggestedStepOf(a: ApplicationDetail): { label: string; reason: 
 /** The button beside the suggested next step: a stage move (it opens the same step as the stage button), a section, or writing to them. */
 export type NextStepAction = { kind: "move"; to: OwnerStage; label: string } | { kind: "tab"; tab: "resume"; label: string } | { kind: "write"; label: string };
 
-const MOVE_WORDS: Partial<Record<OwnerStage, string>> = { shortlist: "Move to Shortlist", longlist: "Move to Longlist", interviewing: "Approve an interview", not_moving_forward: "Not moving forward" };
+const MOVE_WORDS: Partial<Record<OwnerStage, string>> = { shortlist: "Move to Shortlist", longlist: "Move to Longlist", interviewing: "Set a date and time", not_moving_forward: "Not moving forward" };
 
 /**
- * What the one button beside the suggested next step does (Wave S1): the board's suggestion applied the way the stage
- * button would (an interview opens the approval, Not moving forward opens the private decline; nothing moves by itself),
- * the résumé for "Read it yourself", or the message box for "Ask for more detail". Null when there is nothing to press:
- * no suggestion, or a move the API does not allow now.
+ * The buttons beside the suggested next step (Wave S1), the first the main one: the board's suggestion applied the way the
+ * stage button would (Not moving forward opens the private decline; nothing moves by itself), the résumé for "Read it
+ * yourself", or the message box for "Ask for more detail". An interview offers Shortlist first and then "Set a date and
+ * time", as the owner works ("Nadine reads and shortlists", 6 November 2026); a time can still be set from New. Empty when
+ * there is nothing to press: no suggestion, or moves the API does not allow now.
  */
-export function nextStepAction(a: Pick<ApplicationDetail, "stageMoves" | "candidate"> & ScoredDetail): NextStepAction | null {
+export function nextStepActions(a: Pick<ApplicationDetail, "stageMoves" | "candidate"> & ScoredDetail): NextStepAction[] {
   const p = a.placement;
-  if (p?.state !== "suggested" || !p.nextStep) return null;
+  if (p?.state !== "suggested" || !p.nextStep) return [];
   const may = (to: OwnerStage) => a.stageMoves.some((m) => m.to === to && m.allowed && !m.current);
   const move = (to: OwnerStage): NextStepAction | null => (may(to) && MOVE_WORDS[to] ? { kind: "move", to, label: MOVE_WORDS[to]! } : null);
+  // the buttons given, in order, each move once
+  const some = (...xs: Array<NextStepAction | null>) => {
+    const out: NextStepAction[] = [];
+    for (const x of xs) if (x && !out.some((y) => y.kind === "move" && x.kind === "move" && y.to === x.to)) out.push(x);
+    return out;
+  };
   switch (p.nextStep.kind) {
     case "read_yourself":
-      return { kind: "tab", tab: "resume", label: "Open the résumé" };
+      return [{ kind: "tab", tab: "resume", label: "Open the résumé" }];
     case "interview":
-      return move("interviewing") ?? (p.suggestedAction ? move(p.suggestedAction) : null);
+      return some(move("shortlist"), move("interviewing"), p.suggestedAction ? move(p.suggestedAction) : null).slice(0, 2);
     case "ask_more":
-      return a.candidate.email ? { kind: "write", label: `Write to ${a.candidate.firstName || "them"}` } : null;
+      return a.candidate.email ? [{ kind: "write", label: `Write to ${a.candidate.firstName || "them"}` }] : [];
     default:
-      return p.suggestedAction ? move(p.suggestedAction) : null;
+      return some(p.suggestedAction ? move(p.suggestedAction) : null);
   }
+}
+
+/** The main button beside the suggested next step, or null (`nextStepActions`). */
+export function nextStepAction(a: Pick<ApplicationDetail, "stageMoves" | "candidate"> & ScoredDetail): NextStepAction | null {
+  return nextStepActions(a)[0] ?? null;
 }
 
 /**
@@ -97,13 +113,15 @@ export function skillLabels(a: Pick<ApplicationDetail, "packetLabels">): Labelle
 
 /**
  * What the match card shows: nothing for an answer from before the score existed (`hidden`), a line when there is no
- * reading yet (`unread`) or when the reading does not speak to any requirement (`nothing`), otherwise the score.
+ * reading yet (`unread`) or when the reading does not speak to any requirement (`nothing`), otherwise the score. A review
+ * that will not come by itself (`noReading`, 10 November 2026) is said as it is, never as one a minute or two away.
  */
 export type MatchCardState = { kind: "hidden" } | { kind: "unread"; text: string } | { kind: "nothing"; text: string; m: MatchScore } | { kind: "scored"; score: number; m: MatchScore };
 
 export function matchCardState(a: ApplicationDetail): MatchCardState {
   const m = matchOf(a);
   if (m === undefined) return { kind: "hidden" };
+  if (!m && a.noReading) return { kind: "unread", text: a.noReading === "no_ai_notice" ? NO_AI_NOTICE_LINE : NO_REVIEW_LINE };
   if (!m) return { kind: "unread", text: a.assessments.length ? "No match score yet: there is no AI review of this application against the job's requirements." : a.stage === "ineligible" ? "No match score yet. It comes from the AI review, which starts once someone keeps them in." : "No match score yet. It comes from the AI review, which usually comes a minute or two after they apply." };
   if (m.score === null) return { kind: "nothing", text: m.coverage.words, m };
   return { kind: "scored", score: m.score, m };
@@ -129,6 +147,11 @@ export function basisLine(m: MatchScore | null | undefined): string | null {
   if (!m || m.score === null) return null;
   const basis = scoreBasis(m);
   return basis ? `${basis}.` : null;
+}
+
+/** The one verdict word beside the number, in the list's words and colours; null on an older answer without it. */
+export function fitWord(m: Pick<MatchScore, "fit"> | null | undefined): { label: string; tone: Tone } | null {
+  return m?.fit ? READING[m.fit] : null;
 }
 
 const CONFIDENCE_WORD: Record<string, string> = { high: "High", medium: "Medium", low: "Low" };
@@ -189,14 +212,20 @@ export function cappedLine(m: MatchScore): string | null {
   return m.capped ? `A must-have their own words show is not met holds the score at ${MISSING_MUST_HAVE_CAP} at most.` : null;
 }
 
-/** The requirements the evidence says nothing about: left out of the score, never counted against them. */
+/** Where the AI interview was sent, scored or not: no second one is offered. */
+const SENT_INTERVIEW: ReadonlyArray<MatchScore["interview"]> = ["done", "being_scored", "not_scored", "scoring_failed"];
+
+/**
+ * The requirements the evidence says nothing about: no points so far, and never read as a no. Where to ask follows where the
+ * AI interview stands: once they sent it no second one is offered, so it is a call (scored or not: D2, 11 November 2026).
+ */
 export function leftOut(m: MatchScore): { heading: string; items: Array<{ key: string; label: string; tag: string }>; note: string } | null {
   if (!m.unknown.length) return null;
   const n = m.unknown.length;
   return {
     heading: n === 1 ? "1 requirement not known yet" : `${n} requirements not known yet`,
     items: m.unknown.map((u) => ({ key: u.key, label: u.label, tag: criterionTag(u) })),
-    note: `Left out of the score, never counted against them. Ask about ${n === 1 ? "it" : "them"} in the AI interview or a call.`,
+    note: `Not shown yet: no points so far, never counted as a no. Ask about ${n === 1 ? "it" : "them"} ${SENT_INTERVIEW.includes(m.interview) ? "on a call" : "in the AI interview or a call"}.`,
   };
 }
 

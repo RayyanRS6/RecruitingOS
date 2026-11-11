@@ -1,4 +1,4 @@
-import { IMPORTANCE_LABEL, type MatchScore, type ReadingVersion } from "@ros/contracts";
+import { IMPORTANCE_LABEL, MATCH_FIT_LABEL, type MatchScore, type ReadingVersion } from "@ros/contracts";
 import type { CompareCandidate, CompareResponse } from "../../api/client";
 import { scoreBasis, scoreRank } from "../../talent-list";
 
@@ -21,9 +21,8 @@ export const COMPARE_ORDERS: ReadonlyArray<{ value: CompareOrder; label: string 
 ];
 
 /**
- * The columns: as chosen, or the highest score first, like with like as "Sort: Score" on the list (R20-9, `scoreRank`):
- * scores that count the AI interview (or an older answer that does not say) first, then résumé-only scores, then no
- * score yet; within each, the highest first, the chosen order among equals.
+ * The columns: as chosen, or the highest score first, as "Sort: Score" on the list (`scoreRank`): final numbers first, then
+ * people whose AI interview is still coming, then no score yet; within each, the highest first, the chosen order among equals.
  */
 export function orderCandidates<T extends { score?: MatchScore | null }>(cands: readonly T[], order: CompareOrder): T[] {
   if (order === "chosen") return [...cands];
@@ -33,19 +32,19 @@ export function orderCandidates<T extends { score?: MatchScore | null }>(cands: 
 }
 
 /**
- * What the top line of a column says: the number and its band, what it rests on (the coverage, and the label, R20-9:
- * "Résumé only: AI interview not done yet" beside an interviewed person's "From the résumé and the AI interview"), and
- * any missing must-have.
+ * What the top line of a column says: the number and its one verdict word (the band's on an older answer without it), what
+ * it rests on (the coverage, and the label, R20-9: "Résumé only: AI interview not done yet" beside an interviewed person's
+ * "From the résumé and the AI interview"), and any missing must-have.
  */
-export function scoreSummary(c: CompareCandidateView): { score: number | null; band: string | null; coverage: string | null; basis: string | null; missing: string[] } {
+export function scoreSummary(c: CompareCandidateView): { score: number | null; verdict: string | null; coverage: string | null; basis: string | null; missing: string[] } {
   const m = c.score;
-  if (!m) return { score: null, band: null, coverage: "No AI review yet", basis: null, missing: [] };
-  return { score: m.score, band: m.bandLabel, coverage: m.coverage.words, basis: scoreBasis(m), missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`) };
+  if (!m) return { score: null, verdict: null, coverage: "No AI review yet", basis: null, missing: [] };
+  return { score: m.score, verdict: m.fit ? MATCH_FIT_LABEL[m.fit] : m.bandLabel, coverage: m.coverage.words, basis: scoreBasis(m), missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`) };
 }
 
 /**
  * One cell: what the score counted for this requirement (`judged`, with % met and the points it cost), a requirement
- * the evidence says nothing about (`unknown`, left out of the score), a finding the score could not use because the
+ * the evidence says nothing about (`unknown`, no points so far), a finding the score could not use because the
  * reading was made against an earlier version of the role (`raw`, the words only), or nothing at all (`none`).
  */
 export type CompareCell =
@@ -59,7 +58,7 @@ const RAW_WORDS: Record<string, string> = { yes: "Shown", partially: "Partly sho
 export function criterionCell(c: CompareCandidateView, key: string, mustHave: boolean): CompareCell {
   const judged = c.score?.breakdown.find((b) => b.key === key && b.mustHave === mustHave);
   if (judged) return { state: "judged", words: judged.finding, pctMet: judged.pctMet, pointsLost: judged.pointsLost, mustHave, quote: judged.quote };
-  if (c.score?.unknown.some((u) => u.key === key && u.mustHave === mustHave)) return { state: "unknown", words: "Not known yet, left out of the score" };
+  if (c.score?.unknown.some((u) => u.key === key && u.mustHave === mustHave)) return { state: "unknown", words: "Not known yet, no points so far" };
   const raw = mustHave ? c.mustHaves[key]?.met : c.competencies[key]?.finding;
   if (raw) return { state: "raw", words: RAW_WORDS[raw] ?? raw.replace(/_/g, " "), quote: mustHave ? (c.mustHaves[key]?.quote ?? null) : null };
   return { state: "none", words: "No evidence yet" };
@@ -97,15 +96,15 @@ export function hasTeamNotes(cands: ReadonlyArray<Pick<CompareCandidateView, "no
 
 /**
  * The line beside the order switch while "Highest score first" is on: how the columns are ranked, and that people
- * decide. The order as chosen needs no line (the switch shows it). `mixed`: some scores count the AI interview and some
- * are résumé-only (`mixedScores`), so the line says why a lower number can come first (R20-9).
+ * decide. The order as chosen needs no line (the switch shows it). `mixed`: some numbers are final and some wait for an AI
+ * interview still to come (`mixedScores`), so the line says why a lower number can come first.
  */
 export function orderLine(count: number, mixed = false): string {
   const who = count === 1 ? "1 person" : `${count} people`;
-  return `${who}, the highest match score first${mixed ? ", scores with the AI interview in them before résumé-only ones" : ""}. A score helps you read; it never decides.`;
+  return `${who}, the highest match score first${mixed ? ", anyone whose AI interview is still coming after them" : ""}. A score helps you read; it never decides.`;
 }
 
-/** Whether the people compared have both kinds of score: one that counts the AI interview and one from the résumé only. */
+/** Whether the people compared have both kinds of score: a final number and one whose AI interview is still coming. */
 export function mixedScores(cands: ReadonlyArray<{ score?: MatchScore | null }>): boolean {
   const ranks = new Set(cands.filter((c) => c.score?.score !== null && c.score?.score !== undefined).map((c) => scoreRank({ score: c.score!.score, interview: c.score!.interview ?? null })));
   return ranks.size > 1;

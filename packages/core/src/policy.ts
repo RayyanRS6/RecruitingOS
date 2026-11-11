@@ -76,7 +76,13 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   /** Fixed since 20 Oct 2026 (R20-4): every applicant gets the AI interview; the team hears once it is scored. */
   "application.invite_screen": { level: "auto", approverRoles: [] },
   "screen.conduct": { level: "auto", approverRoles: [] },
-  "application.recommend_interview": { level: "auto_notify", approverRoles: [] },
+  /**
+   * A person decides who to interview (the owner, 6 November 2026: "nadine sets date and time from the shortlisted
+   * candidates"): after the AI interview someone stays in New, whichever way the assistant leans, and the team is told once
+   * (definitions/screen.ts). No row is written until someone chooses (routes/policies.ts is the only writer), so every company
+   * that never chose reads this at once; one that saved "Do it and tell me" keeps it, because its row overrides this default.
+   */
+  "application.recommend_interview": { level: "human_only", approverRoles: [] },
   "interview.request": { level: "approval", approverRoles: ["owner", "hiring_manager", "recruiter"] },
   "interview.schedule": { level: "auto", approverRoles: [] },
   "interview.reschedule": { level: "auto_notify", approverRoles: [] },

@@ -9,11 +9,11 @@ import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { useCompanyCheck } from "../components/use-company-check";
-import { canApproveRole, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canTryWeights } from "../roles";
+import { canApproveRole, canChangeCompany, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canTryWeights } from "../roles";
 import { outdatedBoardsLine } from "../publishing";
 import { payShownLabel } from "../role-words";
 import { REASON_WORD } from "./new-role/rules";
-import { jobTabFrom, jobTabHref, jobTabs, type JobPageTab } from "../role-status";
+import { CLOSABLE, defaultCloseOutcome, jobTabFrom, jobTabHref, jobTabs, type JobPageTab } from "../role-status";
 import { MUST_HAVES_SCORE_LINE, SCORE_WEIGHTS_LINE, checkedInLabel, editorFocusFrom, importanceLabel, type EditorFocus } from "../skills-form";
 import { SAFETY_NET_NOTE } from "../talent-list";
 import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
@@ -124,14 +124,14 @@ export function RoleDetail() {
   const [afterApproval, setAfterApproval] = useState<{ editWhileOpen: boolean } | null>(null);
 
   const [closing, setClosing] = useState<{ outcome: string } | null>(null);
-  // "Close the role" on Home's closing-date card links here with `?close=1`: the close form opens, nothing is closed yet.
+  // "Close the job" on Home's closing-date card links here with `?close=1`: the close form opens, nothing is closed yet.
   const wantsClose = search.get("close") === "1";
   const closeAsked = useRef(false);
   useEffect(() => {
     if (!wantsClose || closeAsked.current || !role.data || !me.data) return;
     closeAsked.current = true;
     const mine = me.data.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
-    if (canRecordOutcome(mine) && ["open", "paused"].includes(role.data.status)) setClosing({ outcome: "no_hire" });
+    if (canRecordOutcome(mine) && CLOSABLE.includes(role.data.status)) setClosing({ outcome: defaultCloseOutcome(role.data, "no_hire") });
   }, [wantsClose, role.data, me.data]);
   // "Send the closing message" on Home's card for a closed role links here with `?closingMessage=1` (founder decision Q30).
   const wantsClosingMessage = search.get("closingMessage") === "1";
@@ -174,7 +174,8 @@ export function RoleDetail() {
   const newestVersion = Math.max(0, ...r.packetVersions.map((v) => v.version));
   const openEditor = (focus: EditorFocus | null = null) => { if (editSource) setEditBase({ version: editSource.version, packet: editSource.packet, proposed: !!proposed && editSource === proposed, newestAtOpen: newestVersion, focus }); };
   const share = canShareJob(myRole);
-  const applicants = r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0;
+  // Everyone at a stage, and those past the plan's candidates per job, who are at none: the same number as the Candidates page's tab.
+  const applicants = (r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0) + (r.lockedCount ?? 0);
   const tabItems = jobTabs({ seesCandidates: talent, candidates: applicants });
   // Only with someone to put in order, and never on an ITS grant about one candidate (roles.ts canTryWeights).
   const mayTryWeights = canTryWeights(myRole, me.data?.staffAccess?.scope) && !!current && applicants > 0;
@@ -203,7 +204,7 @@ export function RoleDetail() {
                 edit: editSource ? () => openEditor() : undefined,
                 preview: shown && talent ? () => setPreviewOpen(true) : undefined,
                 weights: mayTryWeights ? () => setWeightsOpen(true) : undefined,
-                close: () => setClosing({ outcome: "filled_outside_platform" }),
+                close: () => setClosing({ outcome: defaultCloseOutcome(r) }),
                 // Not while the close card is up (it shows the closing message, then its Undo): the sheet would not open under it.
                 "closing-message": () => setClosingMessage(true),
                 "hire-again": () => again.hireAgain(r.id),
@@ -227,7 +228,7 @@ export function RoleDetail() {
       {closing ? <CloseRoleCard roleId={r.id} initialOutcome={closing.outcome} mayTell={canDecline(myRole)} onClose={() => setClosing(null)} /> : null}
       {closingMessage && !closing && r.status === "closed" && canDecline(myRole) ? <ClosingMessageCard roleId={r.id} onDone={() => { setClosingMessage(false); if (search.get("closingMessage")) navigate(`/roles/${r.id}`, { replace: true }); }} /> : null}
 
-      {p ? <PacketApprovalCard role={r} onEdit={() => openEditor()} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); setApprovedVersion(r.packetApproval?.pending?.version ?? newestVersion); }} /> : null}
+      {p ? <PacketApprovalCard role={r} onEdit={(focus) => openEditor(focus ?? null)} canEdit={editPacket} canManage={manage} canChangeCompany={canChangeCompany(myRole)} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); setApprovedVersion(r.packetApproval?.pending?.version ?? newestVersion); }} /> : null}
 
       {p ? (
         <>
@@ -288,7 +289,7 @@ export function RoleDetail() {
                 <Card title="What we look for">
                   <ul className={ROWS}>{p.competencies.map((c) => <li key={c.key} className={cn(ROW, "grid gap-1")}><span className="flex flex-wrap items-center gap-x-2 gap-y-1"><strong>{c.name}</strong> <span className="sbar-tag">{importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip></span><span className="small muted">{c.definition}</span></li>)}</ul>
                   {/* Kept visible for everyone, not only in the editor: how the levels weigh in the match score and the
-                      fairness rule (unknown is never counted against anyone). e2e match-panel.spec.ts reads it here. */}
+                      fairness rule (not shown yet is never read as a no). e2e match-panel.spec.ts reads it here. */}
                   <p className="small muted mt-4">{SCORE_WEIGHTS_LINE}</p>
                   {editPacket ? <div className="row mt-4"><Button size="sm" icon="edit" onClick={() => openEditor("skills")}>Change the skills or how much each counts</Button>{mayTryWeights ? <Button size="sm" onClick={() => setWeightsOpen(true)}>Try different weights</Button> : null}</div> : null}
                 </Card>

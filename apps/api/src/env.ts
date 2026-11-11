@@ -109,17 +109,21 @@ export type Env = {
    * Who may create a company (GATE-V2, GAP3-2). "open" (the default; founder decision B7): anyone signed in who has no
    * company yet. "invite": a platform administrator, or an address SIGNUP_ALLOWED_EMAILS names; anyone else is refused
    * with 403 `signup_invite_only`, and the company step says so instead of showing its form. Signing in and accepting a
-   * team invitation work either way. Any other value is refused at start-up, so a misspelling never leaves sign-up open,
-   * and the production app refuses to start without it, so leaving it out never does either.
+   * team invitation work either way. "approval" (6 November 2026): a platform administrator or an address on the list
+   * goes in directly, as under "invite"; anyone else signed in may send the company form, and their company starts as a
+   * request a platform administrator accepts or declines (services/access-requests.ts). Any other value is refused at
+   * start-up, so a misspelling never leaves sign-up open, and the production app refuses to start without it, so leaving
+   * it out never does either.
    */
-  SIGNUP_MODE: "open" | "invite";
-  /** Who may still create a company under SIGNUP_MODE=invite: full addresses and "@domain" entries (that domain only), lower-cased. */
+  SIGNUP_MODE: "open" | "invite" | "approval";
+  /** Who may still create a company directly under SIGNUP_MODE=invite or approval: full addresses and "@domain" entries (that domain only), lower-cased. */
   SIGNUP_ALLOWED_EMAILS: string[];
   /**
    * The one-time ITS check of a company that signs itself up (founder decision B7): "its" (the default, and the only
    * value production accepts) keeps the careers page, job pages, Google listing and first candidate emails waiting until
    * ITS confirms the company in the admin console; "auto" confirms every new company at once (the default under
-   * NODE_ENV=test, and for local journeys that need a public page straight away). Recorded either way.
+   * NODE_ENV=test, and for local journeys that need a public page straight away). Recorded either way. A request for access
+   * (SIGNUP_MODE=approval) is never confirmed by "auto": Accept confirms it.
    */
   COMPANY_CHECK: "its" | "auto";
   /**
@@ -164,14 +168,14 @@ function namesRootCert(url: string | null): boolean {
 }
 
 /**
- * SIGNUP_MODE as loadEnv reads it (GATE-V2): "open" when unset or empty, "invite" when set so, and any other value
- * refused. The public welcome page reads it with this too, without starting the API's container.
+ * SIGNUP_MODE as loadEnv reads it (GATE-V2): "open" when unset or empty, "invite" or "approval" when set so, and any other
+ * value refused. The public welcome page reads it with this too, without starting the API's container.
  */
 export function signupModeOf(source: Record<string, string | undefined>): Env["SIGNUP_MODE"] {
   const mode = source.SIGNUP_MODE ?? "";
   if (mode === "" || mode === "open") return "open";
-  if (mode === "invite") return "invite";
-  throw new Error(`SIGNUP_MODE must be "open" or "invite" (it is ${JSON.stringify(mode)}): "invite" lets only platform administrators and the addresses on SIGNUP_ALLOWED_EMAILS create a company; leave it unset for open sign-up`);
+  if (mode === "invite" || mode === "approval") return mode;
+  throw new Error(`SIGNUP_MODE must be "open" or "invite" (it is ${JSON.stringify(mode)}), or "approval": "invite" lets only platform administrators and the addresses on SIGNUP_ALLOWED_EMAILS create a company; "approval" also lets anyone else signed in send a request, which a platform administrator accepts or declines; leave it unset for open sign-up`);
 }
 
 export function loadEnv(source: Record<string, string | undefined> = process.env, opts: { role?: EnvRole } = {}): Env {
@@ -238,7 +242,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   // while sign-up is open lets everyone in all the same.
   const notAnEntry = env.SIGNUP_ALLOWED_EMAILS.find((e) => !/^[^\s@]*@[^\s@.]+(?:\.[^\s@.]+)+$/.test(e));
   if (notAnEntry !== undefined) throw new Error(`SIGNUP_ALLOWED_EMAILS takes full addresses and "@domain" entries, comma-separated (${JSON.stringify(notAnEntry)} is neither): write "@example.com" for everyone at example.com`);
-  if (env.SIGNUP_ALLOWED_EMAILS.length && env.SIGNUP_MODE === "open") console.warn("[env] SIGNUP_ALLOWED_EMAILS is set but SIGNUP_MODE is not \"invite\", so anyone signed in may still create a company. Set SIGNUP_MODE=invite to use the list, or remove it.");
+  if (env.SIGNUP_ALLOWED_EMAILS.length && env.SIGNUP_MODE === "open") console.warn("[env] SIGNUP_ALLOWED_EMAILS is set but SIGNUP_MODE is not \"invite\", so anyone signed in may still create a company. Set SIGNUP_MODE=invite or approval to use the list, or remove it.");
   const role = opts.role ?? "app";
   if (env.NODE_ENV === "production") {
     if (env.SESSION_SECRET.startsWith("dev-only")) throw new Error("SESSION_SECRET must be set in production");
@@ -300,7 +304,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
       if (source[name]?.toLowerCase().includes(STAGING_SUPABASE_REF)) throw new Error(`${name} names staging's Supabase project (${STAGING_SUPABASE_REF}) on the production deployment: production has a project of its own; copy the value from it`);
     }
     // GATE-V2: who may open a company is decided on purpose on the production app, never left to the default (open).
-    if (role === "app" && !source.SIGNUP_MODE) throw new Error("SIGNUP_MODE must be set on the production deployment: \"invite\" (only platform administrators and the addresses on SIGNUP_ALLOWED_EMAILS open a company) until trials open, then \"open\"");
+    if (role === "app" && !source.SIGNUP_MODE) throw new Error("SIGNUP_MODE must be set on the production deployment: \"invite\" (only platform administrators and the addresses on SIGNUP_ALLOWED_EMAILS open a company) or \"approval\" (anyone else signed in sends a request, which a platform administrator accepts or declines) until trials open, then \"open\"");
     // The internal email link opens sessions outside the identity service and the checks made on its sign-ins.
     if (env.MAGIC_LINK_ENABLED) throw new Error("MAGIC_LINK_ENABLED must not be true on the production deployment: the identity service handles sign-in, and the internal email link would open sessions outside its checks. Remove it");
     // Needed once, for the first administrator's first sign-in, so a warning on every start rather than a refusal.

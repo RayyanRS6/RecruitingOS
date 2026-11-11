@@ -232,6 +232,20 @@ export function QuickStart({ scope }: { scope: QuickScope | null }) {
   const primary = step === "review" ? "Write the job post" : state.fromReview ? "Back to review" : "Next";
   const hint = STEP_HINT[step];
 
+  // No room whatever is closed (the plan's one job is used, or too little AI help is left): nobody answers ten questions for
+  // nothing. The answers already kept stay in this browser for after the upgrade.
+  if (full && room?.upgrade) {
+    return (
+      <div className="start mx-auto grid w-full max-w-[760px] gap-4">
+        <Card className="grid gap-5 rounded-[20px] sm:p-8 md:[&>h1]:text-[38px]">
+          <h1>Start a hire</h1>
+          <RoomAlert room={room} ask={limit?.ask ?? null} />
+          <div className="row"><Link to={NEW_ROLE_FRESH_HREF} className="btn ghost">Other ways to start</Link></div>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     // .start is a hook only: the frame (AppShell) gives a page holding it 1440px
     <div className="start mx-auto grid w-full max-w-[760px] gap-4">

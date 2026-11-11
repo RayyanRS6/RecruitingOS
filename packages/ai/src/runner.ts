@@ -1,19 +1,55 @@
-import { aiRuns, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
-import { estimateCostUsd } from "./pricing";
+import { aiRuns, isLockTimeout, uuidv7, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
+import { creditHoldUsd, estimateCostUsd } from "./pricing";
 import { promptHash, type PromptDef } from "./prompts/registry";
 import { ALLOWED_MODELS, TASK_TIER, effortForTask, effortsFromEnv, isAllowedModel, modelForTask, modelTableFromEnv, type Effort, type ModelTable } from "./routing";
 import type { AiProvider, StructuredResult, Tier } from "./types";
 
-/** `efforts`: a tier's effort when the environment sets one (AI_EFFORT_*), in place of TIER_EFFORT. */
+/** An `ai_runs` row as it is written. */
+export type AiRunValues = typeof aiRuns.$inferInsert;
+
+/**
+ * The AI credit, as the runner meets it: the rules are in @ros/core (ai-credit.ts) and the process wires them in
+ * (apps/api/src/container.ts). `hold` is one short transaction: it locks the company's credit row, and either writes
+ * `runs` (each `running`, with its hold as its cost, so money in flight is already in the sum the next call reads) and
+ * answers "held", or writes nothing and answers "refused". "unmetered" (no credit row with a limit): nothing was written,
+ * and the call takes the path it took before any of this. `settle` gives a held call's row its real numbers.
+ */
+export type AiCreditGate = {
+  hold(db: Db, input: { companyId: string; holdUsd: number; runs: AiRunValues[] }): Promise<"unmetered" | "held" | "refused">;
+  settle(db: Db, input: { companyId: string; runId: string; values: Partial<AiRunValues> }): Promise<void>;
+};
+
+/**
+ * `efforts`: a tier's effort when the environment sets one (AI_EFFORT_*), in place of TIER_EFFORT. `credit`: the AI credit
+ * (see `AiCreditGate`); left out, as in the evaluations and in tests that build a runtime by hand, nothing is metered.
+ */
 export type AiRuntime = {
   provider: AiProvider;
   models: ModelTable;
   efforts?: Partial<Record<Tier, Effort>>;
+  credit?: AiCreditGate;
 };
 
+/**
+ * `no_credit`: the company's AI credit has no room for this call, so the model was not asked and no run was written (its
+ * `runId` names no row). Never an outage, never a failure, never retried: each caller has its own way on. The text must
+ * never start with "provider", which is how the engine knows an outage (packages/workflows/src/engine.ts, `providerProblem`).
+ * `refusedHoldUsd`: what was asked for and refused, side-by-side calls together: with what is actually spent, it says whether
+ * the credit is really gone or only held for calls still running (`aiCreditRoomSoon` in packages/core/src/ai-credit.ts).
+ */
 export type RunOutcome<T> =
   | { ok: true; output: T; runId: string; model: string }
-  | { ok: false; runId: string; model: string; reason: "refused" | "invalid" | "error"; error: string };
+  | { ok: false; runId: string; model: string; reason: "refused" | "invalid" | "error" | "no_credit"; error: string; refusedHoldUsd?: number };
+
+/** Why a call was not made when the company's AI credit has no room for it (`RunOutcome`). */
+export const AI_CREDIT_USED_UP = "AI credit used up";
+/** Why a call was not made when the credit's row could not be read in time. Never starts with "provider": this is no outage. */
+export const AI_CREDIT_BUSY = "the AI credit could not be read in time, so the model was not asked";
+
+/** Whether the model was not asked because the company's AI credit has no room: not a failure of any kind. */
+export function outOfCredit<T>(out: RunOutcome<T>): out is Extract<RunOutcome<T>, { ok: false }> & { reason: "no_credit"; refusedHoldUsd: number } {
+  return !out.ok && out.reason === "no_credit";
+}
 
 /** `deadlineAt`: the deadline of the HTTP request the call serves (`routeDeadline`), shared by every call in it. */
 export type RunMeta = { companyId: string | null; workflowRunId?: string | null; inputRef?: Record<string, unknown>; maxTokens?: number; deadlineAt?: number };
@@ -87,49 +123,117 @@ export async function callPrompt<TInput, TOutput>(rt: AiRuntime, prompt: PromptD
   return { result, model, hash, attempts };
 }
 
+/** What a call's row says about what it is, known before the model is asked. */
+function runIdentity<TInput, TOutput>(rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, meta: RunMeta, model: string, hash: string) {
+  return { companyId: meta.companyId, agent: prompt.agent, task: prompt.task, provider: rt.provider.id, model, promptKey: prompt.key, promptVersion: prompt.version, promptHash: hash, workflowRunId: meta.workflowRunId ?? null };
+}
+
+/** What a call's row says about how it ended: tokens, cost, time, the answer, and how it went. */
+function endedValues<TOutput>(meta: RunMeta, call: PromptCall<TOutput>) {
+  const { result, model, attempts } = call;
+  const usage = result.usage;
+  return {
+    inputRef: { ...(meta.inputRef ?? {}), attempts },
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    costUsd: String(estimateCostUsd(model, usage)),
+    latencyMs: result.latencyMs,
+    structuredOutput: result.kind === "ok" ? (result.output as unknown as Record<string, unknown>) : null,
+    confidence: result.kind === "ok" ? extractConfidence(result.output) : null,
+    status: result.kind === "ok" ? "ok" : result.kind === "refused" ? "refused" : result.error.startsWith("provider") ? "error" : "invalid_output",
+    error: result.kind === "ok" ? null : result.kind === "refused" ? result.reason : result.error,
+  };
+}
+
+function outcomeOf<TOutput>(runId: string, call: PromptCall<TOutput>): RunOutcome<TOutput> {
+  const { result, model } = call;
+  if (result.kind === "ok") return { ok: true, output: result.output, runId, model };
+  if (result.kind === "refused") return { ok: false, runId, model, reason: "refused", error: result.reason };
+  return { ok: false, runId, model, reason: result.error.startsWith("provider") ? "error" : "invalid", error: result.error };
+}
+
 /** Records an `ai_runs` row for a call (docs/16: what did the AI see, conclude, why) and turns it into an outcome. */
 export async function recordRun<TInput, TOutput>(q: Queryable, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, meta: RunMeta, call: PromptCall<TOutput>): Promise<RunOutcome<TOutput>> {
-  const { result, model, hash, attempts } = call;
-  const usage = result.usage;
   const [row] = await q
     .insert(aiRuns)
-    .values({
-      companyId: meta.companyId,
-      agent: prompt.agent,
-      task: prompt.task,
-      provider: rt.provider.id,
-      model,
-      promptKey: prompt.key,
-      promptVersion: prompt.version,
-      promptHash: hash,
-      inputRef: { ...(meta.inputRef ?? {}), attempts },
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      cacheReadTokens: usage.cacheReadTokens,
-      costUsd: String(estimateCostUsd(model, usage)),
-      latencyMs: result.latencyMs,
-      structuredOutput: result.kind === "ok" ? (result.output as unknown as Record<string, unknown>) : null,
-      confidence: result.kind === "ok" ? extractConfidence(result.output) : null,
-      status: result.kind === "ok" ? "ok" : result.kind === "refused" ? "refused" : result.error.startsWith("provider") ? "error" : "invalid_output",
-      error: result.kind === "ok" ? null : result.kind === "refused" ? result.reason : result.error,
-      workflowRunId: meta.workflowRunId ?? null,
-    })
+    .values({ ...runIdentity(rt, prompt, meta, call.model, call.hash), ...endedValues(meta, call) })
     .returning({ id: aiRuns.id });
-
-  if (result.kind === "ok") return { ok: true, output: result.output, runId: row.id, model };
-  if (result.kind === "refused") return { ok: false, runId: row.id, model, reason: "refused", error: result.reason };
-  return { ok: false, runId: row.id, model, reason: result.error.startsWith("provider") ? "error" : "invalid", error: result.error };
+  return outcomeOf(row.id, call);
 }
 
 /**
- * Call, then record, on a connection that holds nothing while the model thinks: the call happens first, and the
- * `ai_runs` row is written afterwards in its own short transaction (tenant-scoped when the run belongs to a company).
- * The row is written whether the call succeeded or not, so every call is accounted for even when the caller's later
- * work fails. This is the entry point for every production path.
+ * Whether a call that failed may have cost more than the usage it recorded, so its hold stays as its cost: the provider says so
+ * (a reply that had begun was stopped at the deadline or dropped part-way, `usageUnknown`, providers/anthropic.ts), or a provider
+ * threw. Everything else is exact: a connection that never opened, a provider that had not answered by the deadline and an answer
+ * with an HTTP status wrote nothing, a call never sent cost nothing, and a local error never reached anyone, so an hour's outage
+ * costs the company nothing.
  */
-export async function runPromptDetached<TInput, TOutput>(db: Db, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, input: TInput, meta: RunMeta): Promise<RunOutcome<TOutput>> {
+function usageUnknown<TOutput>(result: StructuredResult<TOutput>): boolean {
+  if (result.kind !== "invalid" || !result.error.startsWith("provider")) return false;
+  return !!result.usageUnknown || /^provider threw: (?!\d{3}\b)/.test(result.error);
+}
+
+/** The call as it was before the AI credit: the model first, then its row, in its own short transaction. */
+async function callThenRecord<TInput, TOutput>(db: Db, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, input: TInput, meta: RunMeta): Promise<RunOutcome<TOutput>> {
   const call = await callPrompt(rt, prompt, input, meta);
   return meta.companyId ? withTenant(db, meta.companyId, (q) => recordRun(q, rt, prompt, meta, call)) : withPlatform(db, (q) => recordRun(q, rt, prompt, meta, call));
+}
+
+/**
+ * Several calls of one prompt on one input, side by side (the readings of a résumé or of a chat), with the AI credit asked
+ * for all of them at once: they all go, or none does, so nobody is read once where the next applicant is read three
+ * times because the credit ran out between two of them. Every call of the same prompt holds the same amount.
+ */
+export async function runPromptsDetached<TInput, TOutput>(db: Db, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, input: TInput, metas: readonly RunMeta[]): Promise<Array<RunOutcome<TOutput>>> {
+  const companyId = metas[0]?.companyId ?? null;
+  const gate = companyId ? rt.credit : undefined;
+  if (!companyId || !gate) return Promise.all(metas.map((meta) => callThenRecord(db, rt, prompt, input, meta)));
+  const model = modelForTask(prompt.task, rt.models);
+  const system = prompt.system(input);
+  const promptChars = [...system.map((b) => b.text), ...prompt.messages(input).map((m) => m.content)].reduce((n, text) => n + text.length, 0);
+  const holds = metas.map((meta) => creditHoldUsd(model, { promptChars, maxTokens: meta.maxTokens }));
+  const runIds = metas.map(() => uuidv7());
+  const hash = promptHash(system);
+  const holdUsd = holds.reduce((sum, hold) => sum + hold, 0);
+  let verdict: Awaited<ReturnType<AiCreditGate["hold"]>>;
+  try {
+    verdict = await gate.hold(db, {
+      companyId,
+      holdUsd,
+      runs: metas.map((meta, i) => ({ id: runIds[i], ...runIdentity(rt, prompt, meta, model, hash), inputRef: meta.inputRef ?? {}, costUsd: String(holds[i]), status: "running" })),
+    });
+  } catch (err) {
+    // The credit's row stayed locked past the lock timeout: the model was not asked, and nothing was written. An ordinary failed
+    // call, so each caller has its own way on (a chat's "send that again"), and not a word that any credit is gone.
+    if (!isLockTimeout(err)) throw err;
+    return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "error", error: AI_CREDIT_BUSY }));
+  }
+  if (verdict === "unmetered") return Promise.all(metas.map((meta) => callThenRecord(db, rt, prompt, input, meta)));
+  if (verdict === "refused") return metas.map((): RunOutcome<TOutput> => ({ ok: false, runId: uuidv7(), model, reason: "no_credit", error: AI_CREDIT_USED_UP, refusedHoldUsd: holdUsd }));
+  return Promise.all(
+    metas.map(async (meta, i) => {
+      const call = await callPrompt(rt, prompt, input, meta);
+      const values = endedValues(meta, call);
+      await gate.settle(db, { companyId, runId: runIds[i], values: usageUnknown(call.result) ? { ...values, costUsd: String(Math.max(Number(values.costUsd), holds[i])) } : values });
+      return outcomeOf(runIds[i], call);
+    }),
+  );
+}
+
+/**
+ * The entry point for every production path. No transaction is held while the model thinks: a company with an AI credit
+ * first takes a hold in one short transaction (`AiCreditGate`), which writes the `ai_runs` row as `running` with the hold
+ * as its cost, or refuses (`no_credit`, with no model call and no row); the row then takes the real numbers, or keeps the
+ * hold as its cost when the real usage cannot be known, or stays as it is when the process goes away during the call. So
+ * money in flight is always in the sum, and no number of calls at once can pass the limit. Any other company's call
+ * happens first and its row is written afterwards in its own short transaction (tenant-scoped when it belongs to a
+ * company). Either way the row is written whether the call succeeded or not, so every call is accounted for even when
+ * the caller's later work fails.
+ */
+export async function runPromptDetached<TInput, TOutput>(db: Db, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, input: TInput, meta: RunMeta): Promise<RunOutcome<TOutput>> {
+  const [out] = await runPromptsDetached(db, rt, prompt, input, [meta]);
+  return out;
 }
 
 /**

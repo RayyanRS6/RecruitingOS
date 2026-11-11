@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { EvidenceAssessment, MatchScore, MustHaveSummary } from "@ros/contracts";
+import type { EvidenceAssessment, MatchScore, MustHaveSummary, RolePacket } from "@ros/contracts";
 import { boardPlacement, declineReasonFor, type PlacementInput } from "./board";
 import type { AssessmentLike } from "./evidence";
+import { matchScore, mustHaveSummary } from "./match-score";
 
 /**
  * The board's placement (plan F6): every rule, in our words. Pure over the score and the evidence view, so the board,
@@ -17,9 +18,11 @@ const score = (n: number | null, over: Partial<MatchScore> = {}): MatchScore => 
   score: n,
   band: n === null ? null : n >= 85 ? "very_high" : n >= 70 ? "high" : n >= 55 ? "medium" : "low",
   bandLabel: null,
+  fit: n === null ? "insufficient" : n >= 70 ? "strong" : n >= 55 ? "potential" : "weak",
   coverage: { known: 4, total: 4, words: "Based on all 4 requirements" },
-  breakdown: [{ key: "perio", label: "Perio charting", mustHave: true, importance: null, weightPct: 40, pctMet: 50, pointsLost: n === null ? 0 : 100 - n, finding: "Partly shown", source: "resume", quote: "some perio", unquoted: false }],
+  breakdown: [{ key: "perio", label: "Perio charting", mustHave: false, importance: "important", weightPct: 40, pctMet: 50, pointsLost: n === null ? 0 : 100 - n, finding: "Partly shown", source: "resume", quote: "some perio", unquoted: false }],
   unknown: [],
+  openPoints: 0,
   fullMarks: 1,
   missingMustHave: [],
   capped: false,
@@ -48,7 +51,7 @@ describe("boardPlacement", () => {
 
   it("puts a medium score on the Longlist, ticked, to keep as backup or to ask for more detail", () => {
     expect(place({ match: score(62) })).toMatchObject({ column: "longlist", confident: true, suggestedAction: "longlist", nextStep: { kind: "keep_as_backup", label: "Keep as backup" } });
-    const asking = place({ match: score(62, { unknown: [{ key: "license", label: "Active CA RDH license", mustHave: true, importance: null }] }) });
+    const asking = place({ match: score(62, { unknown: [{ key: "license", label: "Active CA RDH license", mustHave: true, importance: null, weightPct: 30, pointsLost: 30 }] }) });
     expect(asking.nextStep).toMatchObject({ kind: "ask_more", label: "Ask for more detail", reason: "Their application does not say whether they have Active CA RDH license." });
   });
 
@@ -67,13 +70,13 @@ describe("boardPlacement", () => {
     expect(closer).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The reading says Strong match, but...", nextStep: { kind: "read_yourself" } });
     expect(place({ match: score(30), evidence: { ...quiet, lowConfidence: true } })).toMatchObject({ column: "longlist", confident: false, needsYourEye: expect.stringContaining("not confident") });
     expect(place({ match: score(null) })).toMatchObject({ column: "longlist", confident: false, needsYourEye: expect.stringContaining("Nothing to score yet") });
-    expect(place({ match: score(88, { unknown: [{ key: "license", label: "Active CA RDH license", mustHave: true, importance: null }] }) })).toMatchObject({ column: "longlist", confident: false, needsYourEye: "A must-have is not yet known: Active CA RDH license.", nextStep: { kind: "ask_more" } });
+    expect(place({ match: score(88, { unknown: [{ key: "license", label: "Active CA RDH license", mustHave: true, importance: null, weightPct: 12, pointsLost: 12 }] }) })).toMatchObject({ column: "longlist", confident: false, needsYourEye: "A must-have is not yet known: Active CA RDH license.", nextStep: { kind: "ask_more" } });
     // a scorecard that left too much open
     expect(place({ latest: { ...screen, overall: "unknown", result: { ...result, recommendation: "hold" } as unknown as EvidenceAssessment } })).toMatchObject({ column: "longlist", confident: false });
   });
 
   it("never starts a decline ticked on a low score from too little evidence: must-haves not known, or under half the requirements", () => {
-    const unknownLicense = { key: "license", label: "Active CA RDH license", mustHave: true, importance: null } as const;
+    const unknownLicense = { key: "license", label: "Active CA RDH license", mustHave: true, importance: null, weightPct: 30, pointsLost: 30 } as const;
     const thin = place({ latest: holding, match: score(50, { coverage: { known: 1, total: 4, words: "Based on 1 of 4 requirements" }, unknown: [unknownLicense] }) });
     expect(thin).toMatchObject({ column: "longlist", confident: false, suggestedAction: "longlist", declineReason: null, nextStep: { kind: "ask_more", reason: "Their application does not say whether they have Active CA RDH license." } });
     expect(thin.needsYourEye).toBe("A must-have is not yet known: Active CA RDH license. A low score without them is not enough to go on.");
@@ -84,6 +87,25 @@ describe("boardPlacement", () => {
     expect(place({ latest: holding, match: score(40, { coverage: { known: 2, total: 4, words: "Based on 2 of 4 requirements" } }) }).column).toBe("not_moving_forward");
     // a must-have shown missing by their own words stands even on little evidence
     expect(place({ latest: holding, match: score(54, { coverage: { known: 1, total: 4, words: "x" }, unknown: [unknownLicense], missingMustHave: [{ key: "perio", label: "Perio charting", quote: "never charted" }] }) })).toMatchObject({ column: "not_moving_forward", confident: true });
+  });
+
+  it("never starts a decline ticked when what nothing was said about could still lift them out of Low (6 November 2026)", () => {
+    const open = (n: number, openPoints: number) => place({ latest: holding, match: score(n, { openPoints, coverage: { known: 3, total: 4, words: "Based on 3 of 4 requirements" }, unknown: [{ key: "s", label: "A skill", mustHave: false, importance: "helpful", weightPct: openPoints, pointsLost: openPoints }] }) });
+    // every must-have shown, skills not shown: 50 + 10 could reach Medium, so a person looks, and nobody is declined on it
+    expect(open(50, 10)).toMatchObject({ column: "longlist", confident: false, suggestedAction: "longlist", declineReason: null });
+    expect(open(50, 10).needsYourEye).toBe("Only 3 of 4 requirements could be judged; a low score from so little is not enough to go on.");
+    expect(open(40, 15).column).toBe("longlist");
+    // 40 + 14 could not leave Low: the low score stands, and what cost it is named, never what nobody spoke to
+    const stands = open(40, 14);
+    expect(stands).toMatchObject({ column: "not_moving_forward", confident: true });
+    expect(stands.declineReason?.note).toBe("Match score 40/100. Cost the most: Perio charting (partly shown).");
+    expect(stands.declineReason?.note).not.toContain("A skill");
+    // where to ask: in the AI interview while it can still be done, on a call once it has been (no second one is offered)
+    expect(open(50, 10).nextStep).toMatchObject({ kind: "ask_more", reason: "Ask them about the role's requirements in the AI interview." });
+    const scorecard = { ...screen, overall: "weak", result: { ...result, recommendation: "decline_recommended" } as unknown as EvidenceAssessment };
+    expect(place({ latest: scorecard, match: score(50, { openPoints: 10, coverage: { known: 3, total: 4, words: "Based on 3 of 4 requirements" } }) }).nextStep).toMatchObject({ kind: "ask_more", reason: "Ask them about the role's requirements on a call." });
+    expect(place({ latest: scorecard, match: score(null) }).nextStep).toMatchObject({ kind: "ask_more", reason: "Ask them about the must-haves on a call." });
+    expect(place({ match: score(null) }).nextStep).toMatchObject({ kind: "ask_more", reason: "Ask them about the must-haves in the AI interview." });
   });
 
   it("asks a person to look when the reading and the score disagree, either way", () => {
@@ -117,21 +139,109 @@ describe("boardPlacement", () => {
     expect(place({ latest: holding, match: score(40), evidence: { ...quiet, resumeUnreadable: true } })).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The résumé could not be read; the written answers were used. Open the file yourself before deciding." });
     // the screening conversation's reading carries the score: the unreadable file matters less
     expect(place({ latest: screen, match: score(90, { basedOn: "screen" }), evidence: { ...quiet, resumeUnreadable: true } }).column).toBe("shortlist");
-    const said = place({ latest: holding, match: score(30, { unknown: [{ key: "license", label: "Active CA RDH license", mustHave: true, importance: null, unquotedNo: true }] }) });
+    const said = place({ latest: holding, match: score(30, { unknown: [{ key: "license", label: "Active CA RDH license", mustHave: true, importance: null, weightPct: 30, pointsLost: 30, unquotedNo: true }] }) });
     expect(said).toMatchObject({ column: "longlist", confident: false, nextStep: { kind: "read_yourself", reason: "Check for yourself whether they have Active CA RDH license." } });
     expect(said.needsYourEye).toBe("The assistant says Active CA RDH license is not met but quoted nothing from the candidate's own words, so it does not count either way.");
     const unsure = { ...triage, result: { ...result, recommendation: "review_manually" as const } };
     expect(place({ stage: "screen_invited", latest: unsure, match: score(30) })).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The assistant could not say enough from the application to go on." });
   });
 
-  it("asks for more instead of the Shortlist when a must-have is only partly shown and cost nothing (Wave S7)", () => {
-    // the rest of the evidence is all met, so the partly shown must-have counted at 100 and the score is 100
-    const partly = score(100, { breakdown: [{ key: "perio", label: "Perio charting", mustHave: true, importance: null, weightPct: 40, pctMet: 50, countedPct: 100, pointsLost: 0, finding: "Partly shown", source: "resume", quote: "some perio", unquoted: false }] });
-    expect(place({ match: partly })).toMatchObject({ column: "longlist", confident: true, needsYourEye: null, suggestedAction: "longlist", reason: "Match score 100: Perio charting partly shown.", nextStep: { kind: "ask_more", reason: "Their application only partly shows Perio charting." } });
-    // a skill partly shown at the rest's level keeps the Shortlist; the line still names it
-    const skill = score(100, { breakdown: [{ ...partly.breakdown[0]!, mustHave: false, importance: "helpful" }] });
-    expect(place({ match: skill })).toMatchObject({ column: "shortlist", reason: "Match score 100: Perio charting partly shown." });
+  it("asks for more instead of the Shortlist when a must-have is only partly shown, however high the number", () => {
+    const partly = score(86, { breakdown: [{ key: "perio", label: "Perio charting", mustHave: true, importance: null, weightPct: 29, pctMet: 50, pointsLost: 14, finding: "Partly shown", source: "resume", quote: "some perio", unquoted: false }] });
+    expect(place({ match: partly })).toMatchObject({ column: "longlist", confident: true, needsYourEye: null, suggestedAction: "longlist", reason: "Match score 86: Perio charting partly shown.", nextStep: { kind: "ask_more", reason: "Their application only partly shows Perio charting." } });
+    // a skill partly shown keeps the Shortlist; the line still names it
+    const skill = score(86, { breakdown: [{ ...partly.breakdown[0]!, mustHave: false, importance: "helpful" }] });
+    expect(place({ match: skill })).toMatchObject({ column: "shortlist", reason: "Match score 86: Perio charting partly shown." });
     expect(place({ match: score(100, { breakdown: [] }) }).reason).toBe("Match score 100: every requirement judged so far is met.");
+    // everything judged is met and the number is low all the same: the line says why, counting what is open and naming none of it
+    const open = { key: "s", label: "A skill", mustHave: false, importance: "helpful", weightPct: 30, pointsLost: 30 } as const;
+    const thin = place({ latest: holding, match: score(33, { breakdown: [], unknown: [open, { ...open, key: "t" }], openPoints: 67, coverage: { known: 2, total: 4, words: "Based on 2 of 4 requirements" } }) });
+    expect(thin.reason).toBe("Match score 33: 2 of 4 requirements not shown yet.");
+    expect(thin.reason).not.toContain("A skill");
+  });
+
+  /**
+   * The release review (11 November 2026): a must-have the role checks only in the team's own interviews is out of the
+   * number, but it is not known until a reading shows it, so the board never ticks a decline on a low score while it is
+   * open, and on the Shortlist it says to check it in the interview, never "Strong evidence on every must-have".
+   */
+  it("keeps a must-have checked only in the team's own interviews open: no ticked decline beside it, and the Shortlist says to check it", () => {
+    const cooking = [{ key: "cook", label: "Passes our practical cooking test" }];
+    const strong = place({ match: score(100, { breakdown: [], confidence: "high", checkInInterview: cooking }) });
+    expect(strong).toMatchObject({ column: "shortlist", confident: true, needsYourEye: null, nextStep: { kind: "interview", label: "Interview", reason: "Check Passes our practical cooking test in your interview." } });
+    expect(place({ match: score(80, { checkInInterview: cooking }) }).nextStep).toMatchObject({ kind: "interview", reason: "Check Passes our practical cooking test in your interview." });
+    const low = place({ latest: holding, match: score(50, { checkInInterview: cooking }) });
+    expect(low).toMatchObject({ column: "longlist", confident: false, suggestedAction: "longlist", declineReason: null, nextStep: { kind: "read_yourself", reason: "Read their application, then decide whether to check Passes our practical cooking test in an interview." } });
+    expect(low.needsYourEye).toBe("A must-have is still to be checked in your own interviews: Passes our practical cooking test. A low score without it is not enough to go on.");
+    // with none open, the same low score stands
+    expect(place({ latest: holding, match: score(50) })).toMatchObject({ column: "not_moving_forward", confident: true });
+  });
+
+  it("places the review's two cooks alike, whether their résumé says nothing about the practical test or partly shows it", () => {
+    const role = {
+      requirements: { mustHaves: [{ key: "kitchen", text: "Two years in a commercial kitchen", rationale: "r", evidencedBy: ["resume", "screen"] }, { key: "cook", text: "Passes our practical cooking test", rationale: "r", evidencedBy: ["interview"] }] },
+      competencies: [{ key: "knife", name: "Knife work", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "safety", name: "Food safety", definition: "d", weight: 3, evaluatedIn: "both", indicators: ["x"] }],
+    } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+    const cv = (rest: "yes" | "partially", cook: "unknown" | "partially") => {
+      const r: EvidenceAssessment = { ...result, requirementFindings: [{ requirementKey: "kitchen", met: rest, evidence: { source: "resume", quote: "four years at a bistro" } }, { requirementKey: "cook", met: cook, ...(cook === "unknown" ? {} : { evidence: { source: "resume", quote: "I passed a stage at a bistro" } }) }], competencyFindings: [{ competencyKey: "knife", finding: rest === "yes" ? "evidenced" : "partially_evidenced", evidence: { source: "resume", quote: "julienne daily" } }, { competencyKey: "safety", finding: rest === "yes" ? "evidenced" : "partially_evidenced", evidence: { source: "resume", quote: "ServSafe 2025" } }] };
+      return { kind: "triage", confidence: "high", createdAt: "2026-11-01T10:00:00Z", packetVersion: 1, result: r };
+    };
+    const placed = (rest: "yes" | "partially", cook: "unknown" | "partially", latest: AssessmentLike) => {
+      const pair = { resume: cv(rest, cook), screen: null };
+      const match = matchScore(pair, role)!;
+      return { score: match.score, fit: match.fit, placement: boardPlacement({ stage: "screen_complete", base: "new", stageLabel: "AI interview done", latest, evidence: quiet, match, mustHaves: mustHaveSummary(pair, role) }) };
+    };
+    const strongLatest: AssessmentLike = { kind: "triage", overall: "strong", confidence: "high", result };
+    const ana = placed("yes", "unknown", strongLatest);
+    const ben = placed("yes", "partially", strongLatest);
+    expect(ana).toEqual(ben);
+    expect(ana).toMatchObject({ score: 100, fit: "potential", placement: { column: "shortlist", nextStep: { kind: "interview", reason: "Check Passes our practical cooking test in your interview." } } });
+    // a thin résumé on the same job: never a decline ticked while the test is still to come
+    for (const cook of ["unknown", "partially"] as const) {
+      const cara = placed("partially", cook, holding);
+      expect(cara, cook).toMatchObject({ score: 50, fit: "insufficient", placement: { column: "longlist", confident: false, declineReason: null } });
+    }
+  });
+
+  /**
+   * The release review (11 November 2026): the verdict word and the board's tick read two rules, so "Weak match" sat over
+   * "a low score from so little is not enough to go on". One rule (`tooLittleToGoOn`) decides both now.
+   */
+  it("ticks a decline on a low score exactly when the verdict word is Weak match, over many random cases", () => {
+    let seed = 20261111;
+    const rand = () => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return seed / 4294967296;
+    };
+    const levels = ["yes", "partly", "no", "unknown"] as const;
+    const pick = () => levels[Math.floor(rand() * levels.length)]!;
+    let low = 0;
+    let weak = 0;
+    for (let n = 0; n < 1500; n++) {
+      const mustKeys = Array.from({ length: Math.floor(rand() * 3) }, (_, i) => `m${i}`);
+      const skillKeys = Array.from({ length: 1 + Math.floor(rand() * 4) }, (_, i) => `s${i}`);
+      const role = {
+        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: rand() < 0.2 ? ["interview"] : ["resume"] })) },
+        competencies: skillKeys.map((key) => ({ key, name: `Skill ${key}`, definition: "d", weight: 1 + Math.floor(rand() * 5), evaluatedIn: "both", indicators: ["x"] })),
+      } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+      const met = { yes: "yes", partly: "partially", no: "no", unknown: "unknown" } as const;
+      const finding = { yes: "evidenced", partly: "partially_evidenced", no: "contradicted", unknown: "not_evidenced" } as const;
+      const r: EvidenceAssessment = {
+        ...result,
+        requirementFindings: mustKeys.map((k) => { const l = pick(); return { requirementKey: k, met: met[l], ...(l === "unknown" ? {} : { evidence: { source: "resume" as const, quote: `${k} in their words` } }) }; }),
+        competencyFindings: skillKeys.map((k) => { const l = pick(); return { competencyKey: k, finding: finding[l], ...(l === "unknown" ? {} : { evidence: { source: "resume" as const, quote: `${k} in their words` } }) }; }),
+      };
+      const pair = { resume: { kind: "triage", confidence: "medium", result: r }, screen: null };
+      const match = matchScore(pair, role)!;
+      if (match.band !== "low" || match.missingMustHave.length) continue;
+      low += 1;
+      const p = boardPlacement({ stage: "screen_complete", base: "new", stageLabel: "AI interview done", latest: holding, evidence: quiet, match, mustHaves: mustHaveSummary(pair, role) });
+      if (match.fit === "weak") weak += 1;
+      expect(p.confident, JSON.stringify([match.score, match.openPoints, match.coverage, match.fit, p.needsYourEye])).toBe(match.fit === "weak");
+      expect(p.column).toBe(match.fit === "weak" ? "not_moving_forward" : "longlist");
+    }
+    expect(low).toBeGreaterThan(300);
+    expect(weak).toBeGreaterThan(30);
   });
 
   it("holds an eligibility answer for a person, with nothing to apply", () => {
@@ -158,6 +268,10 @@ describe("boardPlacement", () => {
       expect(place({ interview: "not_done_yet", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview not done yet", reason: "Scored after the AI interview: they join the board when they finish it." });
       expect(place({ stage: "screen_complete", interview: "being_scored", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview being scored", reason: "Their AI interview is in and being scored: they join the board when it is." });
       expect(place({ interview: "not_done", latest: holding, match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "No AI interview" });
+      // sent, and its scorecard waits for the company's AI credit: the team reads the answers, so it never says "being scored" for ever
+      expect(place({ stage: "screen_complete", interview: "not_scored", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview not scored", reason: "Their AI interview is in, but your plan's AI help is used up, so it was not scored. Read their answers and decide from their own page." });
+      // sent, and its scorecard could not be written, for good: kept apart too, in words that say so (D2, 11 November 2026)
+      expect(place({ stage: "screen_complete", interview: "scoring_failed", match: score(s) }), `${s}`).toMatchObject({ ...apart, doneLabel: "AI interview could not be scored", reason: "Their AI interview is in, but its AI review could not be written, so it was not scored. Read their answers and decide from their own page." });
     }
     expect(place({ interview: "not_done" }).reason).toBe("Their score is from the résumé only, so the board keeps them apart from interviewed people and suggests nothing. Decide from their own page.");
     // the score's own label says it when the caller passes none

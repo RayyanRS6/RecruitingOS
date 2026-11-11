@@ -84,7 +84,8 @@ const UNAVAILABLE_WORDS = /connection|timed? ?out|timeout|did not finish|overloa
  * What kind of provider trouble a step's error is, from the runner's "provider ..." error:
  * - "outage": the provider did not answer (a 5xx or 529, a 408, 409 or 429, no connection, a timeout);
  * - "account": a problem with the whole account that waiting alone will not fix but that hits every application the same
- *   way (a 401 or 403, "credit balance is too low"): held like an outage, with an alert saying to check the key or billing;
+ *   way (a 401, 402 or 403, "credit balance is too low"): held like an outage, with an alert saying to check the key or
+ *   billing. Never one company's AI credit, which reaches no provider at all and never says "provider" (`RunOutcome`);
  * - null: anything else, such as a request the provider refused as malformed, or a local error the Anthropic adapter
  *   wraps as "provider error: <message>" (a TypeError, a schema conversion): that fails like any other error, so a
  *   fixed bug is not retried for an hour and held under an alert that says the provider is down.
@@ -98,7 +99,7 @@ export function providerProblem(error: string): "outage" | "account" | null {
   if (kind === "account") return "account";
   if (kind === "unavailable") return "outage";
   const status = /^(\d{3})\b/.exec(rest)?.[1];
-  if (status === "401" || status === "403" || /credit balance/i.test(rest)) return "account";
+  if (status === "401" || status === "402" || status === "403" || /credit balance/i.test(rest)) return "account";
   if (status) return status.startsWith("4") && !["408", "409", "429"].includes(status) ? null : "outage";
   if (kind === "threw") return "outage";
   return UNAVAILABLE_WORDS.test(rest) ? "outage" : null;
@@ -172,6 +173,7 @@ export class WorkflowEngine {
   async start(q: Queryable, input: StartInput): Promise<{ runId: string; created: boolean }> {
     const def = this.defs.get(input.workflowKey);
     if (!def) throw new Error(`unknown workflow ${input.workflowKey}`);
+    if (input.startStep && !def.steps[input.startStep]) throw new Error(`workflow ${input.workflowKey} has no step ${input.startStep}`);
     if (input.idempotencyKey) {
       const existing = await q.select({ id: workflowRuns.id }).from(workflowRuns).where(eq(workflowRuns.idempotencyKey, input.idempotencyKey)).limit(1);
       if (existing[0]) return { runId: existing[0].id, created: false };
@@ -184,7 +186,7 @@ export class WorkflowEngine {
         workflowVersion: def.version,
         subject: input.subject,
         status: "running",
-        currentStep: def.initialStep,
+        currentStep: input.startStep ?? def.initialStep,
         state: input.state ?? {},
         idempotencyKey: input.idempotencyKey ?? null,
       })

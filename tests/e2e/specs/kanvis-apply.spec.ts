@@ -116,9 +116,9 @@ test.describe("the Kanvis-style application", () => {
         const asked = (await cand.locator("li.msg.assistant.now").textContent()) ?? "";
         if (await cand.getByRole("button", { name: "Yes", exact: true }).isVisible()) {
           await cand.getByRole("button", { name: "Yes", exact: true }).click();
-        } else if (await cand.getByLabel("From").isVisible()) {
-          await cand.getByLabel("From").fill("50");
-          await cand.getByLabel("To (optional)").fill("54");
+        } else if (await cand.getByLabel("From", { exact: true }).isVisible()) {
+          await cand.getByLabel("From", { exact: true }).fill("50");
+          await cand.getByLabel("To (optional)", { exact: true }).fill("54");
           await cand.getByRole("button", { name: "Send", exact: true }).first().click();
         } else if (await cand.getByLabel("The earliest day you could start").isVisible()) {
           await cand.getByLabel("The earliest day you could start").fill(new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10));

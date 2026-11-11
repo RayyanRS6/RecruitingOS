@@ -1,19 +1,23 @@
 "use client";
 
-import { type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, cn, Drawer, ErrorState, Field, Icon, Menu, nextSort, Pill, Segmented, Skeleton, type SortDir, type SortKind, sortAnnouncement, sortRows, Table, type TableHead, TabPanel, Tabs } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { type AllowanceAlert, allowanceAlerts, allowanceChip } from "../../allowance";
 import { EVERY_APPLICANT_LINE, REASON_MIN, reasonReady } from "../../apply-flow";
+import { verticalWords, websiteHref } from "../../company-setup";
+import { focusLost } from "../../focus-after";
 import { useNavigate, useSearchParams } from "../../nav";
 import { RECRUITER_ASKS_OVER_CHIP } from "../../recruiter-requests";
+import { useSignInWhenSessionEnds } from "../../session-ended";
 import { toast } from "../../toast";
+import { TODAY_REFRESH } from "../../today";
 import { trialDate } from "../../trial";
 import { CustomerReportPanel } from "../AdminCustomerReport";
-import { type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
+import { adminKeys, adminReason, type AiCreditLine, type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
 import { activityWords, exactMoney, exactWhen, money, planStatusWords, planWords, trialWords, whenWords } from "./admin-words";
-import type { TrialStanding, TrialTerm } from "@ros/contracts";
+import type { CustomerAccessAnswer, CustomerAccessChange, CustomerAccessRequest, TrialStanding, TrialTerm } from "@ros/contracts";
 import { Outcomes } from "./outcomes";
 
 /*
@@ -23,22 +27,47 @@ import { Outcomes } from "./outcomes";
  * Fewer words (founder, 23 Oct 2026): a fact is said once (the drawer's header carries the company's facts, a plan's
  * standing is left out when it only repeats the plan), and an explanation staff need folds under "How this works";
  * what the law asks for, what a change does to candidates and what the customer will see stay in view.
+ *
+ * First sign-in asks for approval (SIGNUP_MODE=approval, 6 November 2026): a request for access is a company whose
+ * `accessRequest` is "requested", and it waits like any company waiting for the ITS check, with Accept and Decline in place
+ * of the check; a declined one waits for nothing, and stays reachable under its own pill. Neither is a customer yet, and
+ * every control that acts on a customer gives way until a request is accepted (the API refuses them too).
  */
 
 export const CUSTOMER_SORT = { company: (c: CustomerRow) => c.name, applicants: (c: CustomerRow) => c.applications, cost: (c: CustomerRow) => c.aiCostUsd, activity: (c: CustomerRow) => (c.lastActivityAt ? Date.parse(c.lastActivityAt) : null) };
-type CheckedRow = { verifiedAt: string | null; createdAt: string };
+type CheckedRow = { verifiedAt: string | null; createdAt: string; accessRequest?: { status: string } | null };
 
-/** Companies waiting for the ITS check, the longest waiting first (founder decision B7). */
+/** Whether a company waits for someone here: not confirmed yet, or asking for access. A declined one waits for nothing. */
+function waits(c: CheckedRow): boolean {
+  return c.accessRequest ? c.accessRequest.status === "requested" : !c.verifiedAt;
+}
+
+/** Companies waiting for the ITS check, requests for access among them (accepting one is the check), the longest waiting first (founder decision B7). */
 export function waitingCustomers<T extends CheckedRow>(rows: readonly T[]): T[] {
-  return rows.filter((c) => !c.verifiedAt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return rows.filter(waits).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** The requests for access, the longest waiting first. */
+export function accessRequests<T extends CheckedRow>(rows: readonly T[]): T[] {
+  return waitingCustomers(rows).filter((c) => c.accessRequest);
+}
+
+/** The companies waiting for the ITS check itself, the longest waiting first: no request for access, which has its own two buttons. */
+export function waitingForCheck<T extends CheckedRow>(rows: readonly T[]): T[] {
+  return waitingCustomers(rows).filter((c) => !c.accessRequest);
+}
+
+/** The customers: every company but a request for access, waiting or declined. */
+export function realCustomers<T extends CheckedRow>(rows: readonly T[]): T[] {
+  return rows.filter((c) => !c.accessRequest);
 }
 
 /**
  * The customers table's order (founder decision B7): the companies waiting for the ITS check on top whatever order a
- * heading gives, the longest waiting first, then the confirmed ones in the chosen order (`sortConfirmed`).
+ * heading gives, the longest waiting first, then the rest in the chosen order (`sortConfirmed`).
  */
 export function customerOrder<T extends CheckedRow>(rows: readonly T[], sortConfirmed: (confirmed: T[]) => T[]): T[] {
-  return [...waitingCustomers(rows), ...sortConfirmed(rows.filter((c) => c.verifiedAt))];
+  return [...waitingCustomers(rows), ...sortConfirmed(rows.filter((c) => !waits(c)))];
 }
 
 /** What a screen reader hears after a sort; while any company waits, also that the waiting ones stay on top. */
@@ -79,12 +108,13 @@ export function sortedCustomers(rows: readonly CustomerRow[], sort: CustomerSort
 }
 
 /** The filter pills above the list, each its own `?show=` (none for All). */
-export type CustomerFilter = "all" | "waiting" | "low" | "quiet";
+export type CustomerFilter = "all" | "waiting" | "low" | "quiet" | "declined";
 export const CUSTOMER_FILTERS: ReadonlyArray<{ id: CustomerFilter; label: string }> = [
   { id: "all", label: "All" },
   { id: "waiting", label: "Waiting for the ITS check" },
   { id: "low", label: "Running low" },
   { id: "quiet", label: "Quiet" },
+  { id: "declined", label: "Declined" },
 ];
 
 export function customerFilterFrom(value: string | null): CustomerFilter {
@@ -93,20 +123,24 @@ export function customerFilterFrom(value: string | null): CustomerFilter {
 
 /**
  * Whether a customer belongs under a pill: Waiting, not confirmed yet; Running low, an open allowance alert (80% of the
- * screening chats, or used up); Quiet, no activity for more than 7 days (the console's churn rule, admin-words.ts).
+ * screening chats, or used up) or its AI credit at the same lines; Quiet, no activity for more than 7 days (the console's
+ * churn rule, admin-words.ts). A request for access is under All and Waiting only, as nobody has used anything yet; a
+ * declined company only under its own pill, so the list stays the companies someone can do something for.
  */
 export function customerInFilter(c: CustomerRow, filter: CustomerFilter, low: ReadonlyMap<string, unknown>, now: number = Date.now()): boolean {
+  if (c.accessRequest) return c.accessRequest.status === "declined" ? filter === "declined" : filter === "all" || filter === "waiting";
+  if (filter === "declined") return false;
   if (filter === "waiting") return !c.verifiedAt;
-  if (filter === "low") return low.has(c.id);
+  if (filter === "low") return low.has(c.id) || !!c.aiCredit?.level;
   if (filter === "quiet") return activityWords(c.lastActivityAt, now).state !== "active";
   return true;
 }
 
-/** Whether a customer matches what was typed in the search box: its name, kind of business, address or website. */
+/** Whether a customer matches what was typed in the search box: its name, kind of business, address or website, or who is asking. */
 export function customerMatches(c: CustomerRow, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return [c.name, c.vertical, c.slug, c.settings.website ?? ""].some((v) => v.toLowerCase().includes(q));
+  return [c.name, c.vertical, c.slug, c.settings.website ?? "", c.accessRequest?.person.name ?? "", c.accessRequest?.person.email ?? ""].some((v) => v.toLowerCase().includes(q));
 }
 
 /** The customer drawer's tabs, each its own `&tab=` (none for the Overview). */
@@ -176,10 +210,202 @@ function TrialStandingLine({ c }: { c: Pick<CustomerRow, "trial" | "timezone"> }
   return c.trial.ended ? <Chip tone="caution">{words}</Chip> : <div className="small muted">{words}</div>;
 }
 
+/** "$1.20 of $10 AI credit", or "$4.00 of $20 AI credit this month, resets December 5": dollars, which only ITS reads. */
+export function aiCreditDollars(a: Pick<AiCreditLine, "monthly" | "spentUsd" | "limitUsd" | "resetsAt">): string {
+  const limit = Number.isInteger(a.limitUsd) ? `$${a.limitUsd.toLocaleString("en-US")}` : money(a.limitUsd);
+  const resets = a.resetsAt ? `, resets ${new Date(a.resetsAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}` : "";
+  return `${money(a.spentUsd)} of ${limit} AI credit${a.monthly ? ` this month${resets}` : ""}`;
+}
+
+/** "3 locked": how many the plan's candidates per job left locked, a count and never who. */
+export function lockedWords(n: number): string {
+  return `${n} locked`;
+}
+
+/** The chip when a company's AI credit is at 80% or used up, and when it has asked ITS to upgrade. */
+export function aiCreditChip(level: AiCreditLine["level"]): string | null {
+  return level === "used_up" ? "AI credit used up" : level === "warning" ? "80% of AI credit used" : null;
+}
+export const ASKED_TO_UPGRADE_CHIP = "Asked to upgrade";
+
+/** What a customer's plan has come to, under its name in the list and on the Overview: the AI credit in dollars, the people locked, and the chips. */
+function PlanFacts({ c }: { c: Pick<CustomerRow, "aiCredit" | "lockedApplicants" | "planRequestSince"> }) {
+  const credit = c.aiCredit ? aiCreditChip(c.aiCredit.level) : null;
+  return (
+    <>
+      {c.aiCredit ? <div className="small muted">{aiCreditDollars(c.aiCredit)}</div> : null}
+      {c.lockedApplicants ? <div className="small muted">{lockedWords(c.lockedApplicants)}</div> : null}
+      {credit ? <Chip tone="caution">{credit}</Chip> : null}
+      {c.planRequestSince ? <span title={`Since ${exactWhen(c.planRequestSince)}`}><Chip tone="accent">{ASKED_TO_UPGRADE_CHIP}</Chip></span> : null}
+    </>
+  );
+}
+
+/** The chip on a request for access, wherever the list or the drawer names one. */
+export const ASKING_FOR_ACCESS_CHIP = "Asking for access";
+
+/** One fact in a line of them: words, and the address they may link to (only a typed website has one, and only when `websiteHref` lets it). */
+export type LineFact = { text: string; href?: string };
+
+const websiteFact = (website: string): LineFact => ({ text: website, href: websiteHref(website) ?? undefined });
+
+type AccessFactsOf = Pick<CustomerRow, "accessRequest" | "vertical" | "sizeBand" | "locations" | "settings" | "createdAt">;
+
+/**
+ * What a request says, in the parts its two places choose from. The address their sign-in proved comes first, then the name
+ * they typed, so a name cannot pass for someone else's address (the review of 6 November 2026).
+ */
+function accessFactParts(c: AccessFactsOf, now: number) {
+  const person = c.accessRequest?.person;
+  const where = c.locations?.[0];
+  const website = c.settings.website?.trim();
+  const place = [where?.city, where?.region].filter(Boolean).join(", ");
+  return {
+    who: [person?.email, person?.name].filter((v): v is string => !!v).map((text) => ({ text })),
+    place: place ? [{ text: place }] : [],
+    website: website ? [websiteFact(website)] : [],
+    waited: c.accessRequest?.status === "requested" ? [{ text: waitingWords(c.createdAt, now) }] : [],
+  };
+}
+
+/**
+ * The Overview's row: the person's email and name, the kind of business, the size, the city and state, the website, and how
+ * long they have waited. All of it but the email was typed by a stranger, so it is only ever drawn as text and the checked link.
+ */
+export function accessFacts(c: AccessFactsOf, now: number = Date.now()): LineFact[] {
+  const { who, place, website, waited } = accessFactParts(c, now);
+  return [...who, { text: verticalWords(c.vertical) }, { text: `${c.sizeBand} employees` }, ...place, ...website, ...waited];
+}
+
+/** The drawer's check tab: what its header does not say already. */
+export function accessPanelFacts(c: AccessFactsOf, now: number = Date.now()): LineFact[] {
+  const { who, place, waited } = accessFactParts(c, now);
+  return [...who, ...place, ...waited];
+}
+
+/** Facts in one line that wraps like a sentence; a website is a link that opens apart and tells search engines nothing. */
+export function FactsLine({ facts }: { facts: readonly LineFact[] }) {
+  return (
+    <>
+      {facts.map((f, i) => (
+        <Fragment key={`${i}-${f.text}`}>
+          {i ? " · " : null}
+          {f.href ? <a href={f.href} target="_blank" rel="noopener noreferrer nofollow">{f.text}<span className="sr-only"> (opens in a new tab)</span></a> : f.text}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+type AccessDecision = CustomerAccessChange["decision"];
+
+/** The second press's question: "Accept Harbor Dental?". */
+export function accessQuestion(decision: AccessDecision, company: string): string {
+  return `${decision === "accept" ? "Accept" : "Decline"} ${company}?`;
+}
+
+/**
+ * What a press that was refused says, as a toast. A 409 means someone else got there first (declining a company another
+ * administrator has just accepted, or accepting from a row that still showed a request just declined, which says who and
+ * when), said as plainly as the API says it; anything else is an error, in the API's words when there are any. Never a
+ * claim about what the person was told.
+ */
+export function accessPressRefused(e: unknown): { title: string; tone?: "critical" } {
+  if (!(e instanceof ApiError)) return { title: "Could not record that. Try again.", tone: "critical" };
+  return e.status === 409 ? { title: e.message } : { title: e.message, tone: "critical" };
+}
+
+/**
+ * What a press sends: the decision, and where the request stood on this row (`from`) at its first press, the one that asked
+ * the question, so a press on a row someone else has just decided changes nothing and is told who decided (the first press
+ * wins). Only a declined company's Accept, the undo, says `declined`.
+ */
+export function accessPress(company: Pick<CustomerRow, "accessRequest">, decision: AccessDecision): CustomerAccessChange {
+  return { decision, from: company.accessRequest?.status ?? "requested", confirm: true };
+}
+
+/** Accept and Decline, or the second press in their place: "Accept Harbor Dental?" with Yes and No. Accept alone for a declined company. */
+export function AccessChoice(props: { company: Pick<CustomerRow, "name" | "accessRequest">; asking: AccessDecision | null; pending: boolean; onPress: (decision: AccessDecision) => void; onYes: () => void; onNo: () => void }) {
+  const { company, asking, pending } = props;
+  if (asking) {
+    return (
+      <>
+        <span className="min-w-0 text-sm font-semibold text-ink wrap-anywhere">{accessQuestion(asking, company.name)}</span>
+        <span className="row">
+          <Button size="sm" variant="primary" loading={pending} ariaLabel={`Yes, ${asking} ${company.name}`} onClick={props.onYes}>Yes</Button>
+          <Button size="sm" variant="quiet" disabled={pending} ariaLabel={`No, do not ${asking} ${company.name}`} onClick={props.onNo}>No</Button>
+        </span>
+      </>
+    );
+  }
+  return (
+    <>
+      <Button size="sm" variant="primary" ariaLabel={`Accept ${company.name}`} onClick={() => props.onPress("accept")}>Accept</Button>
+      {company.accessRequest?.status === "requested" ? <Button size="sm" variant="quiet" ariaLabel={`Decline ${company.name}`} onClick={() => props.onPress("decline")}>Decline</Button> : null}
+    </>
+  );
+}
+
+/**
+ * The press on a request for access, from the Overview's row and the drawer alike (POST /admin/customers/:id/access): the
+ * question, then a toast in the API's own words, and the list read again, so the row leaves. A second administrator who got
+ * there first reads the API's calm answer and the row refreshes the same way. An error is a toast and the row stays.
+ * `onDecided` runs once the new list is drawn, either way, for the place around it to look after focus should the row have
+ * left with it. Swapping the buttons removes the one that had focus: it goes to Yes, and after No back to the button that
+ * asked.
+ *
+ * The question keeps what its first press sends, `from` included: where the request stood then (the review of 9 November
+ * 2026). It stands only while the request still stands there, so the list read again under it with another
+ * administrator's decision takes it away, and its Yes never sends where this row stands now (a Decline undone by mistake).
+ */
+export function AccessButtons({ company, onDecided }: { company: Pick<CustomerRow, "id" | "name" | "accessRequest">; onDecided?: () => void }) {
+  const qc = useQueryClient();
+  const [asking, setAsking] = useState<CustomerAccessChange | null>(null);
+  if (asking && asking.from !== company.accessRequest?.status) setAsking(null);
+  const box = useRef<HTMLSpanElement>(null);
+  const focusButton = useRef<number | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asking` is what swaps the buttons, and this runs once they are drawn
+  useEffect(() => {
+    if (focusButton.current === null) return;
+    box.current?.querySelectorAll("button")[focusButton.current]?.focus();
+    focusButton.current = null;
+  }, [asking]);
+  const ask = (decision: AccessDecision | null) => {
+    focusButton.current = !decision && asking?.decision === "decline" ? 1 : 0;
+    setAsking(decision ? accessPress(company, decision) : null);
+  };
+  const decide = useMutation({
+    mutationFn: (press: CustomerAccessChange) => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, press, adminReason("access request")),
+    onSuccess: async (answer) => {
+      toast(answer.message);
+      await qc.invalidateQueries({ queryKey: adminKeys.customers });
+      setAsking(null);
+      onDecided?.();
+    },
+    onError: async (e) => {
+      const refused = accessPressRefused(e);
+      toast(refused.title, refused.tone ? { tone: refused.tone } : undefined);
+      ask(null);
+      await qc.invalidateQueries({ queryKey: adminKeys.customers });
+      onDecided?.();
+    },
+  });
+  return (
+    <span ref={box} className="flex max-w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+      <AccessChoice company={company} asking={asking?.decision ?? null} pending={decide.isPending} onPress={ask} onYes={() => asking && decide.mutate(asking)} onNo={() => ask(null)} />
+    </span>
+  );
+}
+
+/** When a request was declined and by whom: "Nov 6, 2026, 3:10 PM by Ada Admin". */
+export function declinedWhen(declined: CustomerAccessRequest["declined"]): string {
+  return declined ? `${exactWhen(declined.at)}${declined.by ? ` by ${declined.by}` : ""}` : "";
+}
+
 /** A row's first line: 14 px in ink (redesign spec 3.3); its second lines are `.small.muted` (13 px, --ink-3). */
 const LINE = "text-sm text-ink";
 /** The company's name, which opens its drawer: a plain button that reads as the row's title (40 px tall under a finger). */
-const NAME = "inline-flex items-center border-0 bg-transparent p-0 text-left font-sans text-sm leading-snug font-semibold text-ink break-words transition-colors duration-150 ease-soft hover:text-primary hover:underline pointer-coarse:min-h-10";
+const NAME = "inline-flex items-center border-0 bg-transparent p-0 text-left font-sans text-sm leading-snug font-semibold text-ink wrap-anywhere transition-colors duration-150 ease-soft hover:text-primary hover:underline pointer-coarse:min-h-10";
 /** Stacked lines in a table cell or a glance value: the first line, then the quieter ones and the chips, each on its own line. */
 const CELL = "grid justify-items-start gap-1";
 /** The fields and buttons under a card's explanation (a Segmented in it takes className="justify-self-start", keeping its own width). */
@@ -198,9 +424,13 @@ const TINTED = "border-line-tint bg-tint shadow-none";
 export function Customers() {
   const [search] = useSearchParams();
   const nav = useNavigate();
-  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason) });
+  // A tab left open stays true, as the Overview's does (the review of 6 November 2026): on focus, and every minute while it
+  // is visible, never in a hidden tab, because each read is recorded. A form in the drawer keeps what was typed.
+  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason), ...TODAY_REFRESH });
   // Companies at 80% of their screening conversations, or past them (Q17): from the alerts ITS was sent.
-  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason) });
+  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason), ...TODAY_REFRESH });
+  // A tab left open past the staff session goes to sign in, as the Overview does (10 November 2026).
+  useSignInWhenSessionEnds([q.error, alerts.error]);
   const low = allowanceAlerts(alerts.data ?? []);
   const [filter, setFilter] = useState<CustomerFilter>(() => customerFilterFrom(search.get("show")));
   const [query, setQuery] = useState(() => search.get("q") ?? "");
@@ -236,6 +466,7 @@ export function Customers() {
   const now = Date.now();
   // Companies waiting for the ITS check come first, the longest waiting at the top (founder decision B7).
   const waiting = waitingCustomers(rows);
+  const forTheCheck = waitingForCheck(rows);
   const lowCompanies = rows.filter((c) => low.has(c.id));
   const count = (f: CustomerFilter) => rows.filter((c) => customerInFilter(c, f, low, now)).length;
   const shown = sortedCustomers(rows.filter((c) => customerInFilter(c, filter, low, now) && customerMatches(c, query)), sort);
@@ -266,11 +497,11 @@ export function Customers() {
           <Menu label={sort ? `Sort: ${sortChoice(sort.key).label}` : "Sort"} heading="Sort customers" align="end" currentLabel="Now" items={CUSTOMER_SORT_CHOICES.map((c) => ({ id: c.id, label: c.label, current: sort?.key === c.id }))} onSelect={(id) => sortBy(id as CustomerSortKey, "chip")} />
         </div>
       </div>
-      {waiting.length ? (
+      {forTheCheck.length ? (
         <Alert tone="caution">
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <span className="min-w-0 flex-1 basis-80">
-              {waiting.length === 1 ? "1 company is" : `${waiting.length} companies are`} waiting for the ITS check: {waiting.map((c) => c.name).join(", ")}. Until you confirm a company, its careers page, job pages and Google listing are offline and its emails to candidates wait.
+            <span className="min-w-0 flex-1 basis-80 wrap-anywhere">
+              {forTheCheck.length === 1 ? "1 company is" : `${forTheCheck.length} companies are`} waiting for the ITS check: {forTheCheck.map((c) => c.name).join(", ")}. Until you confirm a company, its careers page, job pages and Google listing are offline and its emails to candidates wait.
             </span>
             {filter !== "waiting" ? <Button size="sm" onClick={() => pick("waiting")}>Show only these</Button> : null}
           </div>
@@ -278,7 +509,7 @@ export function Customers() {
       ) : null}
       {filter === "low" && lowCompanies.length ? (
         <Card needsYou title="AI interviews running low">
-          <ul className="grid list-disc gap-1 pl-5 text-[15px] marker:text-ink-3">
+          <ul className="grid list-disc gap-1 pl-5 text-[15px] wrap-anywhere marker:text-ink-3">
             {lowCompanies.map((c) => {
               const a = low.get(c.id);
               return a ? <li key={c.id}><strong>{c.name}</strong>: {allowanceChip(a)}, since {new Date(a.since).toLocaleDateString()}</li> : null;
@@ -310,10 +541,14 @@ export function Customers() {
 
 /**
  * One customer in the list (screenshot 7's Businesses): a square initial and the name over its kind of business, the ITS
- * check as a pill with a dot, plan and use, last active, and one button.
+ * check as a pill with a dot, plan and use, last active, and one button. A name can be one very long word, so it breaks
+ * anywhere, and its column keeps room for an ordinary name on a phone, whose table scrolls inside its own box.
  */
 function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: AllowanceAlert | undefined; now: number; onOpen: (tab: CustomerTab) => void }) {
   const verified = !!c.verifiedAt;
+  const access = c.accessRequest?.status ?? null;
+  const declined = access === "declined";
+  const action = access === "requested" ? "Review" : verified || declined ? "Open" : "Confirm";
   const activity = activityWords(c.lastActivityAt, now);
   const usage = c.screeningConversations;
   return (
@@ -321,15 +556,16 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
       <td>
         <div className="flex items-center gap-3">
           <Avatar name={c.name} shape="square" />
-          <div className="grid min-w-0 justify-items-start gap-0.5">
-            <button type="button" className={NAME} onClick={() => onOpen("overview")}>{c.name}</button>
+          <div className="grid min-w-36 justify-items-start gap-0.5 wrap-anywhere">
+            <button type="button" className={NAME} onClick={() => onOpen(access ? "check" : "overview")}>{c.name}</button>
             <div className="small muted">{c.vertical} · {c.sizeBand}</div>
           </div>
         </div>
       </td>
       <td>
         <div className={CELL}>
-          {verified ? <Pill tone="good" size="sm">Confirmed</Pill> : <Pill tone="caution" size="sm" title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt, now)}</Pill>}
+          {declined ? <Pill tone="neutral" size="sm" title={declinedWhen(c.accessRequest?.declined ?? null) || undefined}>Declined</Pill> : verified ?<Pill tone="good" size="sm">Confirmed</Pill> : <Pill tone="caution" size="sm" title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt, now)}</Pill>}
+          {access === "requested" ? <Chip tone="accent">{ASKING_FOR_ACCESS_CHIP}</Chip> : null}
           {c.heldMessages ? <div className="small muted">{plural(c.heldMessages, "message", "messages")} held</div> : null}
         </div>
       </td>
@@ -338,7 +574,8 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
           <div className={LINE}>{planLine(c, true)}</div>
           {/* The Trial plan's 30 days (L-02 B): when they end, or that they ended and new applications are paused. */}
           <TrialStandingLine c={c} />
-          {usage ? <div className="small muted">{usage.used}{usage.limit !== null ? ` of ${usage.limit}` : ""} chats this month</div> : null}
+          {usage && usage.limit !== null ? <div className="small muted">{usage.used} of {usage.limit} chats this month</div> : usage && !c.aiCredit ? <div className="small muted">{usage.used} chats this month</div> : null}
+          <PlanFacts c={c} />
           {low ? <span title={allowanceChip(low)}><Chip tone="caution">{low.level === "used_up" ? "Used up" : "Running low"}</Chip></span> : null}
         </div>
       </td>
@@ -350,21 +587,28 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
         </div>
       </td>
       <td className="text-right">
-        <Button size="sm" variant={verified ? "secondary" : "primary"} ariaLabel={`${verified ? "Open" : "Confirm"} ${c.name}`} onClick={() => onOpen(verified ? "overview" : "check")}>{verified ? "Open" : "Confirm"}</Button>
+        <Button size="sm" variant={verified || declined ? "secondary" : "primary"} ariaLabel={`${action} ${c.name}`} onClick={() => onOpen(verified ? "overview" : "check")}>{action}</Button>
       </td>
     </tr>
   );
 }
+
+/** A request for access, waiting or declined, has only these tabs: nothing on the others can be used until it is accepted. */
+const ACCESS_REQUEST_TABS: ReadonlySet<CustomerTab> = new Set(["overview", "check"]);
 
 /**
  * One customer (redesign spec 3.2): a 640 px drawer named by the company, its facts under the name, and five tabs: the
  * Overview, then the bodies of the four sheets the console had before (ITS check, Plan, How people apply, Report), with
  * the same actions; their words follow the fewer-words rule (23 Oct 2026). Every "Change" on the Overview switches to
  * its tab. The header is the one place the company's facts are said, so a missing website is said there too ("no
- * website given"): the ITS check asks staff to look at the website.
+ * website given"): the ITS check asks staff to look at the website, so a real one is a link. Everything but the Report's
+ * tables breaks a very long name or address anywhere rather than pushing the drawer sideways.
  */
 function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: CustomerRow; low: AllowanceAlert | undefined; tab: CustomerTab; onTab: (tab: CustomerTab) => void; onClose: () => void }) {
-  const sub = [company.vertical, `${company.sizeBand} employees`, company.settings.website || "no website given", `signed up ${whenWords(company.createdAt)}`].filter(Boolean).join(" · ");
+  const website = company.settings.website?.trim();
+  const sub = <FactsLine facts={[{ text: company.vertical }, { text: `${company.sizeBand} employees` }, website ? websiteFact(website) : { text: "no website given" }, { text: `signed up ${whenWords(company.createdAt)}` }]} />;
+  const tabs = company.accessRequest ? CUSTOMER_TABS.filter((t) => ACCESS_REQUEST_TABS.has(t.id)) : CUSTOMER_TABS;
+  const shown = tabs.some((t) => t.id === tab) ? tab : "check";
   // The button pressed on the Overview goes with it: focus moves to the tab it opened.
   const switchTo = (next: CustomerTab) => {
     onTab(next);
@@ -377,16 +621,45 @@ function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: Custom
       title={company.name}
       sub={sub}
       leading={<Avatar name={company.name} shape="square" letters={1} size="lg" />}
-      tabs={<Tabs idBase="customer-drawer" label="Customer sections" value={tab} onChange={(v) => onTab(customerTabFrom(v))} items={CUSTOMER_TABS} />}
+      tabs={<Tabs idBase="customer-drawer" label="Customer sections" value={shown} onChange={(v) => onTab(customerTabFrom(v))} items={tabs} />}
     >
-      <TabPanel key={company.id} idBase="customer-drawer" value={tab}>
-        {tab === "overview" ? <CustomerOverview c={company} low={low} onTab={switchTo} /> : null}
-        {tab === "check" ? <CompanyCheckPanel company={company} /> : null}
-        {tab === "plan" ? <PlanPanel company={company} onDone={() => switchTo("overview")} /> : null}
-        {tab === "apply" ? <ApplyFlowPanel company={company} /> : null}
-        {tab === "report" ? <CustomerReportPanel companyId={company.id} /> : null}
+      <TabPanel key={company.id} idBase="customer-drawer" value={shown}>
+        {shown === "report" ? <CustomerReportPanel companyId={company.id} /> : (
+          <div className="wrap-anywhere">
+            {shown === "overview" ? <CustomerOverview c={company} low={low} onTab={switchTo} /> : null}
+            {shown === "check" ? (company.accessRequest ? <AccessRequestPanel company={company} request={company.accessRequest} /> : <CompanyCheckPanel company={company} />) : null}
+            {shown === "plan" ? <PlanPanel company={company} onDone={() => switchTo("overview")} /> : null}
+            {shown === "apply" ? <ApplyFlowPanel company={company} /> : null}
+          </div>
+        )}
       </TabPanel>
     </Drawer>
+  );
+}
+
+/**
+ * The ITS check of a request for access: who is asking, with Accept and Decline in place of "Confirm the company"; for a
+ * declined one when and by whom, and Accept, which is the undo. Accepting counts as the check, so there is one approval.
+ */
+function AccessRequestPanel({ company, request }: { company: CustomerRow; request: CustomerAccessRequest }) {
+  const declined = request.status === "declined";
+  // Its access was taken away (6 November 2026): a declined company like any other, and Accept brings everyone back as they
+  // were, on their own plan.
+  const removed = declined && !!request.removed;
+  return (
+    <Card title={declined ? "Declined" : ASKING_FOR_ACCESS_CHIP}>
+      <div className="grid gap-1.5">
+        {declined && request.declined ? <p className="text-sm text-ink">{declinedWhen(request.declined)}</p> : null}
+        <p className="text-sm text-ink-2"><FactsLine facts={accessPanelFacts(company)} /></p>
+      </div>
+      <div className="mt-4">
+        <AccessButtons company={company} onDecided={() => requestAnimationFrame(() => { if (focusLost(document.activeElement, document.body)) document.getElementById("customer-drawer-tab-check")?.focus(); })} />
+      </div>
+      <details className="more mt-3">
+        <summary>How this works</summary>
+        <p className="small text-ink-2">{removed ? "Accept brings back everyone who lost access, on the same plan, and confirms the company again." : <>Accept lets them in on the Free plan and counts as the ITS check.{declined ? "" : " Decline keeps them out, and you can still accept later."}</>}</p>
+      </details>
+    </Card>
   );
 }
 
@@ -409,6 +682,8 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
   const verified = !!c.verifiedAt;
   const activity = activityWords(c.lastActivityAt);
   const asks = c.recruiterAsks;
+  // A request for access, waiting or declined: its one way on is the ITS check tab, and nothing else here can be changed.
+  const access = c.accessRequest ?? null;
   return (
     <div className="stack gap-5">
       {/*
@@ -420,20 +695,27 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
         <dl className="glance">
           <dt>ITS check</dt>
           <dd>
-            <Fact action={<Button size="sm" variant={verified ? "secondary" : "primary"} ariaLabel={verified ? "Change the ITS check" : undefined} onClick={() => onTab("check")}>{verified ? "Change" : "Confirm"}</Button>}>
-              {/* the sign-up date is in the drawer's header; its exact time is the tooltip */}
-              {verified ? `Confirmed ${exactWhen(c.verifiedAt)}${c.verifiedBy?.name ? ` by ${c.verifiedBy.name}` : ""}` : <span title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt)}</span>}
-            </Fact>
+            {access ? (
+              <Fact action={<Button size="sm" variant={access.status === "requested" ? "primary" : "secondary"} onClick={() => onTab("check")}>Review</Button>}>
+                {access.status === "requested" ? <span className={CELL}><span title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt)}</span><Chip tone="accent">{ASKING_FOR_ACCESS_CHIP}</Chip></span> : `Declined ${declinedWhen(access.declined)}`.trim()}
+              </Fact>
+            ) : (
+              <Fact action={<Button size="sm" variant={verified ? "secondary" : "primary"} ariaLabel={verified ? "Change the ITS check" : undefined} onClick={() => onTab("check")}>{verified ? "Change" : "Confirm"}</Button>}>
+                {/* the sign-up date is in the drawer's header; its exact time is the tooltip */}
+                {verified ? `Confirmed ${exactWhen(c.verifiedAt)}${c.verifiedBy?.name ? ` by ${c.verifiedBy.name}` : ""}` : <span title={exactWhen(c.createdAt)}>{waitingWords(c.createdAt)}</span>}
+              </Fact>
+            )}
           </dd>
           <dt>Job boards</dt>
-          <dd>{c.jobBoardsConfirmedAt ? "ITS can sign in" : "Not confirmed yet"}</dd>
+          <dd>{c.whoPosts === "self" ? "Their team posts them" : c.jobBoardsConfirmedAt ? "ITS can sign in" : "Not confirmed yet"}</dd>
           <dt>Plan</dt>
           <dd className={CELL}>
-            <Fact action={<Button size="sm" variant="secondary" onClick={() => onTab("plan")}>Change plan</Button>}>{planLine(c)}</Fact>
+            <Fact action={access ? undefined : <Button size="sm" variant="secondary" onClick={() => onTab("plan")}>Change plan</Button>}>{planLine(c)}</Fact>
             <TrialStandingLine c={c} />
             {c.seats && c.seats.limit !== null ? <div className="small muted" title={SEATS_NOTE}>{seatsWords(c.seats)}</div> : null}
             {extensionLines(c.trialTerm, c.timezone).map((line) => <div key={line.key} className="small muted">{line.text}</div>)}
             {c.screeningConversations ? <div className="small muted">{screeningLine(c.screeningConversations)}</div> : null}
+            <PlanFacts c={c} />
             {low ? <Chip tone="caution">{allowanceChip(low)}</Chip> : null}
           </dd>
           <dt>How people apply</dt>
@@ -442,7 +724,7 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
           </dd>
           <dt>Applicants' match score</dt>
           <dd>
-            <Fact action={<Button size="sm" variant="secondary" ariaLabel="Change whether applicants see their match score" onClick={() => onTab("apply")}>Change</Button>}>{candidateScoreWords(candidateScoreOn(c))}</Fact>
+            <Fact action={access ? undefined : <Button size="sm" variant="secondary" ariaLabel="Change whether applicants see their match score" onClick={() => onTab("apply")}>Change</Button>}>{candidateScoreWords(candidateScoreOn(c))}</Fact>
           </dd>
           <dt>Jobs</dt>
           <dd>{plural(c.roles, "job", "jobs")} · {plural(c.applications, "applicant", "applicants")}</dd>
@@ -460,9 +742,11 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
           <dd>{c.heldMessages ? `${plural(c.heldMessages, "message", "messages")} to candidates` : "None"}</dd>
         </dl>
       </Card>
-      <div className="flex flex-wrap gap-2">
-        <Button icon="chart" onClick={() => onTab("report")}>See the report</Button>
-      </div>
+      {access ? null : (
+        <div className="flex flex-wrap gap-2">
+          <Button icon="chart" onClick={() => onTab("report")}>See the report</Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -473,17 +757,45 @@ export function screeningLine(u: { used: number; limit: number | null; resetsAt?
   return `${u.used}${u.limit !== null ? ` of ${u.limit}` : ""} AI interviews this month${resets}`;
 }
 
-export type PlanOption = { key: string; name: string; limits: Record<string, number | null> };
-const LIMIT_WORDS: Array<[string, string]> = [["active_roles", "active jobs"], ["text_screens", "AI interviews a month"], ["recruiter_asks", "recruiter requests a month"], ["seats", "seats"]];
+export type PlanOption = { key: string; name: string; prices?: Record<string, number>; limits: Record<string, number | null> };
+const dollars = (cents: number) => `$${(cents / 100).toLocaleString("en-US")}`;
 
-/** What a plan includes, in one line: "3 active jobs · 300 screening chats a month · 10 recruiter requests a month · unlimited seats". */
+/**
+ * What a plan includes, in one line, in dollars for ITS: "1 job ever · 5 candidates a job · $10 AI credit in all · 1 recruiter
+ * request a month · 2 seats · the team posts its own boards". A key the plan does not name is left out, and so is a limit that
+ * says nothing there: no limit of jobs ever or of candidates a job, the jobs at a time beside one job ever, and unlimited AI
+ * interviews on a plan the AI credit meters.
+ */
 export function planLimitsLine(limits: Record<string, number | null>): string {
-  return LIMIT_WORDS.filter(([k]) => k in limits).map(([k, words]) => `${limits[k] === null ? "unlimited" : limits[k]} ${words}`).join(" · ");
+  const count = (key: string, one: string, many: string) => (key in limits ? `${limits[key] === null ? "unlimited" : limits[key]} ${limits[key] === 1 ? one : many}` : null);
+  const total = limits.ai_credit_total_cents;
+  const monthly = limits.ai_credit_monthly_cents;
+  const jobsEver = limits.jobs_total;
+  const metered = typeof total === "number" || typeof monthly === "number";
+  return [
+    typeof jobsEver === "number" ? `${jobsEver} ${jobsEver === 1 ? "job" : "jobs"} ever` : count("active_roles", "active job", "active jobs"),
+    typeof limits.candidates_per_job === "number" ? `${limits.candidates_per_job} candidates a job` : null,
+    metered && limits.text_screens === null ? null : count("text_screens", "AI interview a month", "AI interviews a month"),
+    typeof total === "number" ? `${dollars(total)} AI credit in all` : typeof monthly === "number" ? `${dollars(monthly)} AI credit a month` : null,
+    count("recruiter_asks", "recruiter request a month", "recruiter requests a month"),
+    count("seats", "seat", "seats"),
+    limits.its_work === 0 ? "the team posts its own boards" : null,
+  ].filter(Boolean).join(" · ");
 }
 
-/** The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B). */
-export function planChangedToast(company: string, plan: string, endedTrial = false): { title: string; detail: string } {
-  const limits = "The new limits apply at once. This month's usage stays; the reset date does not move.";
+/** What a plan costs, for the console's list: "$49 a month", "$0 a month". */
+export function planPriceLine(prices: Record<string, number> | undefined): string | null {
+  return typeof prices?.monthlyUsd === "number" ? `$${prices.monthlyUsd.toLocaleString("en-US")} a month` : null;
+}
+
+/**
+ * The toast after a plan change; `endedTrial` when the change took the customer off the Trial plan (founder decision L-02 B);
+ * `opened` how many locked candidates the new plan opened; `aiMonthStarted` when the move started a monthly AI credit's first
+ * month, the one thing a change of plan does start again.
+ */
+export function planChangedToast(company: string, plan: string, endedTrial = false, opened = 0, aiMonthStarted = false): { title: string; detail: string } {
+  const people = opened ? ` ${opened === 1 ? "1 locked candidate opens" : `${opened} locked candidates open`} now.` : "";
+  const limits = `The new limits apply at once. ${aiMonthStarted ? "AI help starts a new month today; other allowances keep their dates." : "This month's usage stays; the reset date does not move."}${people}`;
   return { title: `${company} is on ${plan} now.`, detail: endedTrial ? `The trial has ended; new applications are open again. ${limits}` : limits };
 }
 
@@ -529,18 +841,34 @@ export function trialExtendedToast(to: string, timeZone?: string | null): string
  * The Plan control (Wave S2 F1; founder decision F8), platform admins only: pick a plan, say why, confirm. The new limits
  * apply at once (POST /admin/customers/:id/plan); the change is audited with the reason and the customer sees it in
  * their history. Design Partner starts the 90-day pilot. Once changed, the drawer goes back to its Overview.
+ *
+ * The pick starts from the plan the company is on, and starts again from it when the list read again brings another
+ * administrator's change of plan (the review of 9 November 2026), so the panel never offers to undo that change unasked;
+ * the reason typed stays.
  */
-function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => void }) {
+export function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => void }) {
   const qc = useQueryClient();
   const plans = useQuery({ queryKey: ["admin", "plans"], queryFn: () => api.get<PlanOption[]>("/api/v1/admin/plans", reason) });
   const [pick, setPick] = useState(company.planKey);
   const [why, setWhy] = useState("");
   const [confirming, setConfirming] = useState(false);
-  const chosen = (plans.data ?? []).find((p) => p.key === pick) ?? null;
+  const [pickedOn, setPickedOn] = useState(company.planKey);
+  if (pickedOn !== company.planKey) {
+    setPickedOn(company.planKey);
+    setPick(company.planKey);
+    setConfirming(false);
+  }
+  // A retired plan the company is still on stays in the list, or the list would draw its first option as if chosen and
+  // offer no change to it. The API offers nothing else, so it can only be left as it is.
+  const offered = plans.data ?? [];
+  const options: PlanOption[] = offered.some((p) => p.key === company.planKey) ? offered : [...offered, { key: company.planKey, name: planWords(company.planKey), limits: {} }];
+  const chosen = options.find((p) => p.key === pick) ?? null;
+  const price = planPriceLine(chosen?.prices);
+  const includes = chosen ? [price, planLimitsLine(chosen.limits)].filter(Boolean).join(" · ") : "";
   const save = useMutation({
-    mutationFn: () => api.post<{ trialEnded?: boolean }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
-    onSuccess: (r) => {
-      const t = planChangedToast(company.name, chosen?.name ?? pick, !!r?.trialEnded);
+    mutationFn: (planKey: string) => api.post<{ trialEnded?: boolean; unlocked?: number; aiCreditMonthStarted?: boolean }>(`/api/v1/admin/customers/${company.id}/plan`, { planKey, reason: why.trim() }, reason),
+    onSuccess: (r, planKey) => {
+      const t = planChangedToast(company.name, options.find((p) => p.key === planKey)?.name ?? planKey, !!r?.trialEnded, r?.unlocked ?? 0, !!r?.aiCreditMonthStarted);
       toast(t.title, t.detail);
       setWhy("");
       setConfirming(false);
@@ -558,15 +886,15 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
           <div className={FORM}>
             <Field label="Plan" htmlFor="plan-pick">
               <select id="plan-pick" className="select" value={pick} onChange={(e) => { setPick(e.target.value); setConfirming(false); }}>
-                {(plans.data ?? []).map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
+                {options.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
               </select>
             </Field>
-            {chosen ? <p className="rounded-xl bg-surface-2 px-3.5 py-2.5 text-[13px] text-ink-2">{planLimitsLine(chosen.limits)}</p> : null}
+            {includes ? <p className="rounded-xl bg-surface-2 px-3.5 py-2.5 text-[13px] text-ink-2">{includes}</p> : null}
             {pick !== company.planKey ? (
               <>
                 <Field label="Why (required, kept with the change)" htmlFor="plan-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="plan-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
                 {confirming ? (
-                  <Alert tone="caution"><div className={CONFIRM}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+                  <Alert tone="caution"><div className={CONFIRM}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate(pick)}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
                 ) : <div className="row"><Button variant="primary" disabled={!reasonReady(why)} onClick={() => setConfirming(true)}>Change plan</Button><Button variant="quiet" onClick={() => { setPick(company.planKey); setWhy(""); }}>Cancel</Button></div>}
               </>
             ) : null}
@@ -583,12 +911,21 @@ function PlanPanel({ company, onDone }: { company: CustomerRow; onDone: () => vo
  * started: a number of days (1 to 90) and a reason, then a second press to confirm. The new end counts from the later of
  * the old end and today (POST /admin/customers/:id/trial); the extension is audited with the reason, the owners are told,
  * the "trial ended" alert is resolved and a paused company takes applications again.
+ *
+ * The question stands on the end it was asked on (the review of 9 November 2026): another administrator's extension read in
+ * under it takes it away, so its date never moves under a pending Yes that would add the days a second time; the days and
+ * the reason typed stay.
  */
-function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: TrialStanding }) {
+export function TrialExtensionCard({ company, trial }: { company: CustomerRow; trial: TrialStanding }) {
   const qc = useQueryClient();
   const [days, setDays] = useState("14");
   const [why, setWhy] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [askedOn, setAskedOn] = useState(trial.endsAt);
+  if (askedOn !== trial.endsAt) {
+    setAskedOn(trial.endsAt);
+    setConfirming(false);
+  }
   const count = Number(days);
   const ready = extensionDaysOk(count) && reasonReady(why);
   const to = trialExtendedTo(trial, extensionDaysOk(count) ? count : 0);
@@ -660,12 +997,20 @@ type ScoreChoice = "shown" | "hidden";
  * company. Every change needs a reason, which is audited and kept with who made it (POST
  * /admin/customers/:id/candidate-score). Counsel items 1 and 21: a lawyer reviews it before real candidates in NYC, IL,
  * CA or CO.
+ *
+ * The choice starts from the switch as it is, and starts again from it when another administrator's change is read in
+ * (the review of 9 November 2026), so the panel never shows the old setting with a Save that would turn it back.
  */
-function CandidateScorePanel({ company }: { company: CustomerRow }) {
+export function CandidateScorePanel({ company }: { company: CustomerRow }) {
   const qc = useQueryClient();
   const current: ScoreChoice = candidateScoreOn(company) ? "shown" : "hidden";
   const [choice, setChoice] = useState<ScoreChoice>(current);
   const [why, setWhy] = useState("");
+  const [chosenOn, setChosenOn] = useState(current);
+  if (chosenOn !== current) {
+    setChosenOn(current);
+    setChoice(current);
+  }
   const setBy = company.settings.candidateScoreSetBy;
   const save = useMutation({
     mutationFn: () => api.post<{ shown: boolean; changed: boolean }>(`/api/v1/admin/customers/${company.id}/candidate-score`, { shown: choice === "shown", reason: why.trim() }, reason),
@@ -700,21 +1045,41 @@ function CandidateScorePanel({ company }: { company: CustomerRow }) {
 }
 
 /**
+ * The toast after the ITS check was pressed, from what the press asked for (`verified`) and whether it changed anything: a
+ * press another administrator got to first changes nothing and says so (the review of 9 November 2026).
+ */
+export function companyCheckToast(company: string, verified: boolean, r: { changed: boolean; releasedMessages: number }): { title: string; detail: string } {
+  const n = r.releasedMessages;
+  const released = n ? `${n} held ${n === 1 ? "message is" : "messages are"} on ${n === 1 ? "its" : "their"} way` : "";
+  if (!r.changed) return verified ? { title: `${company} was already confirmed.`, detail: released ? `${released}.` : "Nothing changed." } : { title: `${company}'s confirmation was already taken back.`, detail: "Nothing changed." };
+  return verified
+    ? { title: `${company} is confirmed.`, detail: `Its pages are public now${released ? ` and ${released}` : ""}. The owners were told.` }
+    : { title: `${company} is no longer confirmed.`, detail: "Its public pages are offline and its messages to candidates wait. The owners were told." };
+}
+
+/**
  * The one-time ITS check of a company (founder decision B7): confirm it after checking it is real, or take a confirmation
  * back; both need a reason, which the customer sees in their own history, and a second press to confirm. Below, whether
  * ITS can sign in to the company's job boards, which ticks the owner's getting-started step.
+ *
+ * The question keeps what its first press asked for (`to`) and the confirmation it was asked on (`at`), the review of 9
+ * November 2026: the list read again under it with another administrator's confirmation, or its taking back, takes the
+ * question away and keeps the reason typed, so its Yes never sends the opposite of what was asked.
  */
-function CompanyCheckPanel({ company }: { company: CustomerRow }) {
+export function CompanyCheckPanel({ company }: { company: CustomerRow }) {
   const qc = useQueryClient();
   const [why, setWhy] = useState("");
-  const [confirming, setConfirming] = useState(false);
+  const [asked, setAsked] = useState<{ to: boolean; at: string | null } | null>(null);
   const verified = !!company.verifiedAt;
+  const at = company.verifiedAt ?? null;
+  if (asked && asked.at !== at) setAsked(null);
   const change = useMutation({
-    mutationFn: () => api.post<{ changed: boolean; releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: !verified, reason: why.trim(), confirm: true }, reason),
-    onSuccess: (r) => {
-      toast(verified ? `${company.name} is no longer confirmed.` : `${company.name} is confirmed.`, verified ? "Its public pages are offline and its messages to candidates wait. The owners were told." : `Its pages are public now${r.releasedMessages ? ` and ${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way` : ""}. The owners were told.`);
+    mutationFn: (to: boolean) => api.post<{ changed: boolean; releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: to, reason: why.trim(), confirm: true }, reason),
+    onSuccess: (r, to) => {
+      const t = companyCheckToast(company.name, to, r);
+      toast(t.title, t.detail);
       setWhy("");
-      setConfirming(false);
+      setAsked(null);
       qc.invalidateQueries({ queryKey: ["admin", "customers"] });
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the check."),
@@ -725,10 +1090,12 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record it."),
   });
   // A confirmed company with messages still held (one held while the confirmation was being made): confirming again sends them.
+  // Only that (`heldOnly`, the review of 9 November 2026): once someone took the confirmation back, the API confirms nothing
+  // and says so, and the card is read again.
   const release = useMutation({
-    mutationFn: () => api.post<{ releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: true, reason: "Held messages sent after the company was confirmed.", confirm: true }, reason),
+    mutationFn: () => api.post<{ releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: true, heldOnly: true, reason: "Held messages sent after the company was confirmed.", confirm: true }, reason),
     onSuccess: (r) => { toast(r.releasedMessages ? `${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way.` : "Nothing was held any more."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the held messages."),
+    onError: (e) => { toast(e instanceof ApiError ? e.message : "Could not send the held messages."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
   });
   return (
     <div className="stack gap-4">
@@ -752,12 +1119,13 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
         <p className="small muted">{verified ? "Its careers page, job pages and feeds go offline at once and its messages to candidates wait again. Roles, candidates and decisions are kept." : "Confirm only after checking the company is real: the kick-off call, its website, a phone number. Its pages go public, approved roles are published and held messages go out."} The owners are told, and they see your reason in their activity history.</p>
         <div className={FORM}>
           <Field label={verified ? "Why you are taking it back" : "How you checked the company"} htmlFor="co-check-why"><input id="co-check-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
-          {confirming ? (
-            <Alert tone="caution"><div className={CONFIRM}><span>{verified ? `Take back the confirmation of ${company.name}?` : `Confirm ${company.name} and make its pages public?`}</span><span className="row"><Button size="sm" variant={verified ? "destructive" : "primary"} loading={change.isPending} onClick={() => change.mutate()}>{verified ? "Yes, take it back" : "Yes, confirm it"}</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
-          ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setConfirming(true)}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
+          {asked ? (
+            <Alert tone="caution"><div className={CONFIRM}><span>{asked.to ? `Confirm ${company.name} and make its pages public?` : `Take back the confirmation of ${company.name}?`}</span><span className="row"><Button size="sm" variant={asked.to ? "primary" : "destructive"} loading={change.isPending} onClick={() => change.mutate(asked.to)}>{asked.to ? "Yes, confirm it" : "Yes, take it back"}</Button><Button size="sm" variant="quiet" onClick={() => setAsked(null)}>No</Button></span></div></Alert>
+          ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setAsked({ to: !verified, at })}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
         </div>
       </Card>
-      <Card title="Job-board access">
+      {/* no ITS staff time on the company's plan: its team posts, so there is nothing for ITS to sign in to */}
+      {company.whoPosts === "self" ? null : <Card title="Job-board access">
         {/* the button says what it records; when to press it, and what it ticks for the owner, folds */}
         <details className="more">
           <summary>How this works</summary>
@@ -768,8 +1136,77 @@ function CompanyCheckPanel({ company }: { company: CustomerRow }) {
             ? <><Chip tone="good">ITS can sign in</Chip><Button size="sm" variant="secondary" loading={boards.isPending} onClick={() => boards.mutate(false)}>No longer confirmed</Button></>
             : <Button size="sm" variant="primary" loading={boards.isPending} onClick={() => boards.mutate(true)}>ITS can sign in to the job boards</Button>}
         </div>
-      </Card>
+      </Card>}
+      <TakeAwayAccess company={company} />
     </div>
+  );
+}
+
+/** The second press's question for taking an accepted company's access away (6 November 2026). */
+export function takeAwayQuestion(company: string): string {
+  return `Take away access from ${company}?`;
+}
+
+/** The toast after it: the API's words, and that the owner was emailed only when the email really left. */
+export function takeAwayToast(answer: Pick<CustomerAccessAnswer, "message" | "people" | "emailed">): { title: string; detail?: string } {
+  const people = answer.people ? `${answer.people === 1 ? "1 person" : `${answer.people} people`} can no longer sign in to it.` : "";
+  return { title: answer.message, detail: [people, answer.emailed ? "We emailed the owner." : ""].filter(Boolean).join(" ") || undefined };
+}
+
+/**
+ * Take away access (6 November 2026): for an accepted company, a quiet button at the foot of the ITS check, then the
+ * console's second press ("Take away access from Harbor Dental?", Yes and No), then a toast. Everyone on the company can no
+ * longer sign in to it, its pages go offline and its emails to candidates wait; from then on it is a declined company,
+ * and Accept brings everyone back (POST /admin/customers/:id/access, `remove`).
+ */
+function TakeAwayAccess({ company }: { company: CustomerRow }) {
+  const qc = useQueryClient();
+  const [asking, setAsking] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  // Swapping the buttons removes the one that had focus: it goes to Yes, and after No back to the button that asked.
+  const swapped = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asking` is what swaps the buttons, and this runs once they are drawn
+  useEffect(() => {
+    if (!swapped.current) return;
+    swapped.current = false;
+    box.current?.querySelector("button")?.focus();
+  }, [asking]);
+  const ask = (next: boolean) => { swapped.current = true; setAsking(next); };
+  const remove = useMutation({
+    mutationFn: () => api.post<CustomerAccessAnswer>(`/api/v1/admin/customers/${encodeURIComponent(company.id)}/access`, { decision: "remove", confirm: true }, adminReason("take away access")),
+    onSuccess: async (answer) => {
+      const t = takeAwayToast(answer);
+      toast(t.title, t.detail);
+      setAsking(false);
+      await qc.invalidateQueries({ queryKey: adminKeys.customers });
+      // The tab now shows the declined company with Accept: the keyboard's place goes to the tab, not the page.
+      requestAnimationFrame(() => { if (focusLost(document.activeElement, document.body)) document.getElementById("customer-drawer-tab-check")?.focus(); });
+    },
+    onError: async (e) => {
+      const refused = accessPressRefused(e);
+      toast(refused.title, refused.tone ? { tone: refused.tone } : undefined);
+      ask(false);
+      await qc.invalidateQueries({ queryKey: adminKeys.customers });
+    },
+  });
+  return (
+    <Card title="Access">
+      <div ref={box} className={CONFIRM}>
+        {asking ? (
+          <>
+            <span className="min-w-0 text-sm font-semibold text-ink wrap-anywhere">{takeAwayQuestion(company.name)}</span>
+            <span className="row">
+              <Button size="sm" variant="destructive" loading={remove.isPending} ariaLabel={`Yes, take away access from ${company.name}`} onClick={() => remove.mutate()}>Yes</Button>
+              <Button size="sm" variant="quiet" disabled={remove.isPending} ariaLabel={`No, keep access for ${company.name}`} onClick={() => ask(false)}>No</Button>
+            </span>
+          </>
+        ) : <Button size="sm" variant="quiet" onClick={() => ask(true)}>Take away access</Button>}
+      </div>
+      <details className="more mt-3">
+        <summary>How this works</summary>
+        <p className="small text-ink-2">Everyone on the company can no longer sign in to it, its pages go offline and its emails to candidates wait. Nothing of theirs is deleted. Accept brings everyone back.</p>
+      </details>
+    </Card>
   );
 }
 

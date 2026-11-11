@@ -410,7 +410,7 @@ describe("interview scheduling", () => {
     expect(await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "interview_new_times"))).toHaveLength(0);
     const notes = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_show")))).filter((x) => x.title === "Tom Berg did not come to the interview");
     expect(notes).toHaveLength(1);
-    expect(notes[0].body).toBe(`${row.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: send new times for the same round, or decide.`);
+    expect(notes[0].body).toBe(`${row.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: set a new date and time from their page, or decide.`);
     expect(notes[0].action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${cand.id}` });
     expect(await decide("Tom Berg")).toHaveLength(0);
     // a second outcome on the same interview is refused, as today, and writes nothing more
@@ -427,7 +427,7 @@ describe("interview scheduling", () => {
     expect(await decide("Lena Vogel")).toHaveLength(0);
     const missed = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.decision")))).filter((x) => x.title === "Lena Vogel's interview did not happen");
     expect(missed).toHaveLength(1);
-    expect(missed[0].body).toContain("Approve the same round again");
+    expect(missed[0].body).toContain("Set the same round again");
     expect(missed[0].action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${other.id}&step=interview` });
     // the approval card proposes the same round; the new invitation says sorry, and the missed interview stops asking for a decision
     const draft = (await (await json(owner, "GET", `/api/v1/applications/${other.id}/interview-draft`)).json()) as { roundKey: string; nextRound: boolean; sameRoundAgain?: string };
@@ -721,6 +721,39 @@ describe("interview scheduling", () => {
     expect(rowA.offeredSlots.some((s) => s.startsAt === shared.startsAt)).toBe(false);
     const stuck = await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.stuck")));
     expect(stuck.filter((x) => x.title.includes("Lia"))).toHaveLength(0);
+    for (const id of [ivA.id, ivB.id]) await json(owner, "POST", `/api/v1/interviews/${id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+  });
+
+  // Found by the whole-flow walks in a real browser (10 November 2026): two people offered the same times, one picked a
+  // time, and "Book this for them" on that same time for the other said "Booking that time for them" while the run that
+  // waits for a pick was told; it found the clash only when it booked, and offered the times again. A person booking for
+  // them is told at once instead, and nothing moves.
+  it("a booking for them on a time booked for another interview since is refused plainly while a run still waits for a pick, and nothing is offered again", async () => {
+    const lia = await apply("Lia", "Moss");
+    const max = await apply("Max", "Reed");
+    const ivA = await requestInterview(lia.id);
+    const ivB = await requestInterview(max.id);
+    const rowA = await interview(ivA.id);
+    const rowB = await interview(ivB.id);
+    const shared = rowA.offeredSlots.find((s) => rowB.offeredSlots.some((x) => x.startsAt === s.startsAt))!;
+    expect(shared).toBeTruthy();
+    // Max picks the shared time on his own page
+    await pick(rowB.scheduleToken!, rowB.offeredSlots.find((x) => x.startsAt === shared.startsAt)!.id);
+    expect((await interview(ivB.id)).status).toBe("scheduled");
+    const before = outbox().length;
+    // the owner, on the phone with Lia, books that same time for her: refused in words, and her interview is as it was
+    const refused = await json(owner, "POST", `/api/v1/interviews/${ivA.id}/book-on-behalf`, { slotId: shared.id, note: "agreed by phone" });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "slot_taken", message: "That time is no longer free: an interviewer was booked for another interview then. Choose another time." } });
+    await container.drain();
+    expect(await interview(ivA.id)).toMatchObject({ status: "scheduling", selectedSlot: null, attempt: rowA.attempt });
+    expect(outbox().slice(before).filter((m) => m.to === lia.email).map((m) => m.subject)).toEqual([]);
+    // another of her times still books for her
+    const other = rowA.offeredSlots.find((s) => s.startsAt !== shared.startsAt && Math.abs(Date.parse(s.startsAt) - Date.parse(shared.startsAt)) > 3 * H)!;
+    expect((await json(owner, "POST", `/api/v1/interviews/${ivA.id}/book-on-behalf`, { slotId: other.id, note: "agreed by phone" })).status).toBe(200);
+    await container.drain();
+    expect(await interview(ivA.id)).toMatchObject({ status: "scheduled" });
     for (const id of [ivA.id, ivB.id]) await json(owner, "POST", `/api/v1/interviews/${id}/cancel`, { reason: "test cleanup" });
     await container.drain();
   });

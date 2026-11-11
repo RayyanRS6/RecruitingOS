@@ -43,7 +43,7 @@ export const VERIFICATION_WORDS: Readonly<Record<string, string>> = { pending: "
 export const verificationWords = (code: string) => wordFor(VERIFICATION_WORDS, code);
 
 /** A customer's plan, by its key (the plans table). */
-export const PLAN_WORDS: Readonly<Record<string, string>> = { trial: "Trial", core: "Core", growth: "Growth", company: "Company", design_partner: "Design Partner" };
+export const PLAN_WORDS: Readonly<Record<string, string>> = { free: "Free", basic: "Basic", pro: "Pro", ultra: "Ultra", trial: "Trial", core: "Core", growth: "Growth", company: "Company", design_partner: "Design Partner" };
 export const planWords = (key: string) => wordFor(PLAN_WORDS, key);
 
 /**
@@ -77,8 +77,10 @@ export const WORKFLOW_WORDS: Readonly<Record<string, string>> = {
 export const workflowWords = (key: string) => wordFor(WORKFLOW_WORDS, key);
 
 /** An AI run's status (packages/ai/src/runner.ts), the same on System › AI runs and Problems › Failed work. */
-export const AI_STATUS_WORDS: Readonly<Record<string, string>> = { ok: "OK", refused: "Refused", error: "Provider error", invalid_output: "Answer not usable" };
+export const AI_STATUS_WORDS: Readonly<Record<string, string>> = { ok: "OK", running: "Running", refused: "Refused", error: "Provider error", invalid_output: "Answer not usable" };
 export const aiStatusWords = (code: string) => wordFor(AI_STATUS_WORDS, code);
+/** An AI run's chip: a call still running has not failed; its cost is the hold on the customer's AI credit until it ends. */
+export const aiStatusTone = (code: string): "good" | "neutral" | "critical" => (code === "ok" ? "good" : code === "running" ? "neutral" : "critical");
 
 /** A workflow step's status (packages/workflows/src/engine.ts), as it reads inside a sentence. */
 export const STEP_STATUS_WORDS: Readonly<Record<string, string>> = { ok: "done", error: "failed" };

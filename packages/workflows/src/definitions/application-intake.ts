@@ -1,21 +1,23 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { ResumeExtraction, type EvidenceAssessment } from "@ros/contracts";
-import type { RunOutcome } from "@ros/ai";
+import { outOfCredit, type RunOutcome } from "@ros/ai";
 import { ASSESSMENT_UNAVAILABLE_TEXT, createEscalation, evaluateEligibility, emit, gate, notify, resolvePolicy, transition } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, communications, companies, documents, rolePackets, roles, screens, type ConsentRecord, type Tx } from "@ros/db";
 import { assessApplication, extractResume, verifyQuotes } from "@ros/agents";
 import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
+import { waitForCredit } from "../credit-wait";
 import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
 import { FORM_READ_EVENT, FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, linkFormReading } from "../form-reading";
 import { settleSuggestion, type SuggestionState } from "../suggestions";
-import { interviewRunOn, offerInterview, readingSettledSignal, startInterviewAgain } from "../with-application";
+import { interviewRunOn, offerInterview, readingSettledSignal, sendOnFileEmail, startInterviewAgain } from "../with-application";
 
 /**
  * `formUploadId`, `formReadAskedAt` (20 Oct, R20-1): the upload the apply form sent and when the form asked for its
  * reading, so `extract` ties a reading that finished after Send, or waits a little for one still running, instead of
- * reading the file a second time.
+ * reading the file a second time. `creditWaitSince`: when the reading started waiting for the company's AI credit; nobody
+ * waits for it but the reading itself (`readingSettled`).
  */
-type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number; noticeWaitSince?: string; noAiReading?: boolean; formUploadId?: string; formReadAskedAt?: string } & SuggestionState;
+type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number; noticeWaitSince?: string; noAiReading?: boolean; formUploadId?: string; formReadAskedAt?: string; creditWaitSince?: string } & SuggestionState;
 
 /** What `extract` found before its transaction: a reading (the form's, tied by its upload, or a new one), or a form reading still running. */
 type Extracted = { kind: "read"; documentId: string; out: RunOutcome<ResumeExtraction>; tieUpload?: string } | { kind: "wait"; documentId: string; until: string };
@@ -51,6 +53,10 @@ export const heldDecisionSignal = (applicationId: string): string => `${applicat
  * reading (`readingSettledSignal`, sent at the end of `ready`, when nothing is read by AI, and when an answer holds the
  * application) and then sends the one email with the link. The reading moves no stage while that run is on.
  *
+ * 5 November 2026 (the plans, Rule 2): a locked application goes acknowledge (the one email, in its on-file form) → validate
+ * (the file is still scanned) and stops. No AI interview's run, no AI, no eligibility step, no notice, no timer: nothing
+ * about them moves until a change of plan opens them (`unlockApplicants`), which starts an intake that comes this way again.
+ *
  * The steps that call a provider (`validate` the malware scanner and storage, `extract` and `ready` the model) do so in
  * a prepare phase with no transaction open; their transaction only writes what came back.
  */
@@ -74,6 +80,10 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const { app, candidate, role } = loaded;
       if (app.stage !== "applied") return { kind: "next", step: "validate" };
       await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "received", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
+      if (app.lockedAt) {
+        await sendOnFileEmail(ctx.q, { integrations: ctx.services.integrations, jobsBaseUrl: ctx.services.env.jobsBaseUrl }, { ...loaded, app: { ...app, stage: "received" } }, { now: ctx.now, actor: ctx.actor, correlationId: ctx.run.id, workflowRunId: null });
+        return { kind: "next", step: "validate" };
+      }
       const interview = { applicationId: app.id, roleId: role.id, invitedBy: "system", flow: "one_visit" as const, channel: "web" as const };
       if (byEmailNotice(candidate)) {
         const offer = await offerInterview(ctx.q, { integrations: ctx.services.integrations, jobsBaseUrl: ctx.services.env.jobsBaseUrl }, { ...loaded, app: { ...app, stage: "received" } }, { now: ctx.now, actor: ctx.actor, correlationId: ctx.run.id, workflowRunId: null });
@@ -119,8 +129,13 @@ export const applicationIntake: WorkflowDefinition<State> = {
     /**
      * Known-bugs row 16: an emailed-in applicant's application is read by AI only once the acknowledgment, which carries
      * the AI notice, has gone to them (see `AI_NOTICE_SENT_EVENT`). Anyone who applied on a form saw the notice there.
+     *
+     * A locked application stops here, with the file scanned. The row is held while that is read, so a change of plan either
+     * opens it first, and it goes on, or waits for this run to end and starts it a new one: never neither.
      */
     async ai_notice(ctx) {
+      const [lock] = await ctx.q.select({ lockedAt: applications.lockedAt }).from(applications).where(eq(applications.id, ctx.state.applicationId)).limit(1).for("update");
+      if (lock?.lockedAt) return { kind: "complete" };
       const loaded = await load(ctx.q, ctx.state.applicationId);
       if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
       const { app, candidate, role } = loaded;
@@ -140,7 +155,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       // admitted straight to the talent pool (a closed role) asks nothing of the team now. The reason is recorded where
       // the application is triaged (`ready`).
       if (app.stage !== "talent_pool") {
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${candidate.firstName} ${candidate.lastName}'s application was not read by AI`, body: "They applied by email, and our email telling them how AI is used did not reach them, so the assistant does not read their application. Their résumé and answers are on their page: please review it yourself.", action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.needs_review", title: `${candidate.firstName} ${candidate.lastName}'s application was not read by AI`, body: "They applied by email, and our email telling them how AI is used did not reach them, so the assistant does not read their application. Their résumé and answers are on their page: please review it yourself.", action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
       }
       return { kind: "next", step: "eligibility", state: { noticeWaitSince: undefined, noAiReading: true } };
     },
@@ -157,6 +172,8 @@ export const applicationIntake: WorkflowDefinition<State> = {
         const doc = await ctx.read(async (q) => {
           const loaded = await load(q, ctx.state.applicationId);
           if (!loaded || loaded.app.extraction || !loaded.app.resumeDocumentId) return null;
+          // Back from waiting for AI credit: nobody who has left the process since is read, and no credit is spent on them.
+          if (ctx.state.creditWaitSince && !(await readyToAssess(q, loaded.app))) return null;
           const [d] = await q.select().from(documents).where(eq(documents.id, loaded.app.resumeDocumentId)).limit(1);
           return d && d.status === "clean" && d.textExtracted ? d : null;
         });
@@ -185,6 +202,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
         const { app } = loaded;
         if (app.extraction) return { kind: "next", step: "eligibility" };
         if (!app.resumeDocumentId) return { kind: "next", step: "eligibility" };
+        if (ctx.state.creditWaitSince && !(await readyToAssess(ctx.q, app))) return { kind: "next", step: "eligibility" };
         const [doc] = await ctx.q.select().from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1);
         if (doc && doc.status !== "clean") return { kind: "next", step: "eligibility" }; // refused or still quarantined: nothing to read
         if (!doc?.textExtracted) {
@@ -199,6 +217,9 @@ export const applicationIntake: WorkflowDefinition<State> = {
           return { kind: "wait", wait: { kind: "event", eventTypes: [FORM_READ_EVENT], subjectId: uploadId, until: prepared.until, reason: "the apply form's own reading of this résumé is still running; it is used instead of reading the file a second time" }, resumeStep: "extract" };
         }
         const out = prepared.out;
+        // No AI credit left: on to eligibility, which is code, so nobody waits and nothing is declined. Nothing failed, so
+        // the team's history says nothing. After an upgrade `ready` comes back here, while the extraction is still empty.
+        if (outOfCredit(out)) return { kind: "next", step: "eligibility" };
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
           await emit(ctx.q, { type: "resume.extraction_failed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { reason: out.error, aiRunId: out.runId }, correlationId: ctx.run.id });
@@ -246,7 +267,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       });
       const { candidate, role } = loaded;
       const name = `${candidate.firstName} ${candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_hold", title: `${name} answered no to an eligibility question`, body: `Held for your decision (${result.failedRules.map((f) => f.reason).join("; ")}). They get a thank-you without the AI interview link. Override if the answer was a mistake: "Keep them in" sends them the link. No decision is sent to them, even if you decline, until someone sends the decision message.`, action: { label: "Review", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.ineligible_hold", title: `${name} answered no to an eligibility question`, body: `Held for your decision (${result.failedRules.map((f) => f.reason).join("; ")}). They get a thank-you without the AI interview link. Override if the answer was a mistake: "Keep them in" sends them the link. No decision is sent to them, even if you decline, until someone sends the decision message.`, action: { label: "Review", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       // The AI interview's run sends the neutral thank-you now and waits for "Keep them in" (R20-10).
       await settleReading(ctx, null);
       if (g.outcome === "human_only") return { kind: "next", step: "ready" }; // reminders disabled by policy; the hold stays visible in Today
@@ -272,7 +293,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const hoursHeld = Math.round((ctx.now.getTime() - Date.parse(heldAt)) / 3600_000);
       const remindersSent = (ctx.state.remindersSent ?? 0) + 1;
       const name = `${candidate.firstName} ${candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them, even if you decline, until someone sends the decision message.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them, even if you decline, until someone sends the decision message.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       await emit(ctx.q, { type: "application.hold_reminded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { hoursHeld, remindersSent }, correlationId: ctx.run.id });
       if (hoursHeld >= escalateAfter) {
         await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, kind: "review", question: `${name} answered no to an eligibility question for ${role.title} and has waited ${hoursHeld} hours for a decision. Please review it with the customer; only they can decline.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, now: ctx.now });
@@ -343,6 +364,20 @@ export const applicationIntake: WorkflowDefinition<State> = {
         }
         if (!prepared) return { kind: "fail", error: "the application became eligible after the read phase; assessing again", retryable: true };
         const out = prepared.out;
+        // No AI credit left: not a failure, and no candidate waits on money. The application moves on as an unreadable
+        // reading's does (once, however often the run looks again), the one email goes now, and nobody is told about this
+        // person: the owner's one notice is about the company. The run waits, and comes back through `extract` after an
+        // upgrade or at the next month, where a late reading is stored beside whatever happened since and moves nothing.
+        if (outOfCredit(out)) {
+          const { roomSoon, wait } = await waitForCredit(ctx, "extract", out.refusedHoldUsd, { creditWaitSince: ctx.state.creditWaitSince ?? ctx.now.toISOString() });
+          if (!ctx.state.creditWaitSince && !beside) {
+            const why = roomSoon ? "the plan's AI help is finishing other work" : "the plan's AI help is used up";
+            if (!withInterview && !(await interviewNow(ctx))) await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: `not read by AI: ${why}; manual review`, correlationId: ctx.run.id });
+            await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { assessmentId: null, recommendation: "review_manually", reason: why }, correlationId: ctx.run.id });
+          }
+          await settleReading(ctx, null);
+          return wait;
+        }
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
           // Invalid or refused twice: the owner reviews without an assessment; nothing is hidden, and the owner is told in so many words.
@@ -352,7 +387,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
           if (!withInterview && !(await interviewNow(ctx))) await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "assessment unavailable; manual review", correlationId: ctx.run.id });
           await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { assessmentId: null, recommendation: "review_manually", reason: "assessment unavailable" }, correlationId: ctx.run.id });
           const name = `${candidate.firstName} ${candidate.lastName}`;
-          await notify(ctx.q, { companyId: ctx.companyId, kind: "application.assessment_unavailable", title: `We could not assess ${name} automatically; please review`, body: `${ASSESSMENT_UNAVAILABLE_TEXT} The assistant's answer was not usable after two tries. Nothing is hidden: the application, the résumé and the answers are on ${candidate.firstName}'s page.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+          await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.assessment_unavailable", title: `We could not assess ${name} automatically; please review`, body: `${ASSESSMENT_UNAVAILABLE_TEXT} The assistant's answer was not usable after two tries. Nothing is hidden: the application, the résumé and the answers are on ${candidate.firstName}'s page.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
           return settleReading(ctx, { kind: "complete" });
         }
         // The model writes no number (plan 0.9); the column stays for a score worked out in code later.

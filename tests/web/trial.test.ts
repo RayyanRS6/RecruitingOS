@@ -49,8 +49,10 @@ describe("the Plan line", () => {
 
 describe("the people line above the invite form", () => {
   it("counts the invitations not yet answered too, and says nothing on a plan without a limit", () => {
-    expect(seatLine({ used: 2, limit: 3 })).toBe("Your trial includes 3 people: 2 in use, counting invitations not yet answered.");
-    expect(seatLine({ used: 7, limit: null })).toBeNull();
+    expect(seatLine({ used: 2, limit: 3 }, "trial")).toBe("Your trial includes 3 people: 2 in use, counting invitations not yet answered.");
+    expect(seatLine({ used: 1, limit: 2 }, "free")).toBe("Your plan includes 2 people: 1 in use, counting invitations not yet answered.");
+    expect(seatLine({ used: 1, limit: 2 })).toBe("Your plan includes 2 people: 1 in use, counting invitations not yet answered.");
+    expect(seatLine({ used: 7, limit: null }, "ultra")).toBeNull();
     expect(seatLine(undefined)).toBeNull();
   });
 
@@ -59,6 +61,7 @@ describe("the people line above the invite form", () => {
     expect(seatsAllUsed({ used: 3, limit: 3 })).toBe(true);
     expect(seatsAllUsed({ used: 5, limit: 3 })).toBe(true);
     expect(seatsAllUsed({ used: 9, limit: null })).toBe(false);
-    expect(seatsFullWords({ used: 3, limit: 3 })).toBe("Your trial includes 3 people. Choose a plan to add more.");
+    expect(seatsFullWords({ used: 3, limit: 3 }, "trial")).toBe("Your trial includes 3 people. Choose a plan to add more.");
+    expect(seatsFullWords({ used: 2, limit: 2 }, "free")).toBe("Your plan includes 2 people. Upgrade to add more.");
   });
 });

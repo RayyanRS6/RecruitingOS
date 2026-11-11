@@ -1,7 +1,7 @@
 import { and, desc, eq, gt } from "drizzle-orm";
 import { isCompanyVerified } from "@ros/contracts";
 import { queueCommunication } from "@ros/agents";
-import { BOARD_NAME, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, applyLinkUrl, boardPostingOf, canTransitionPosting, createApplicationLink, emit, findPostingLink, isBoardChannel, jobUrlsFor, openPostingTask, publishChannelsFor, sourceForChannel, transitionPosting, type PostingState } from "@ros/core";
+import { BOARD_NAME, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, applyLinkUrl, canTransitionPosting, createApplicationLink, emit, findPostingLink, isBoardChannel, jobUrlsFor, openPostingTask, publishChannelsFor, sourceForChannel, transitionPosting, whoPostsBoards, type PostingState } from "@ros/core";
 import { companies, events, postings, randomToken, rolePackets, roles, uuidv7, type Tx } from "@ros/db";
 import { intakeAddress, mailbox, type PublishResult } from "@ros/integrations";
 import type { StepContext, WorkflowDefinition } from "../types";
@@ -77,7 +77,7 @@ export const publishRole: WorkflowDefinition<State> = {
       const attemptsByChannel = { ...(ctx.state.attemptsByChannel ?? {}) };
       const chosen = ctx.run.workflowVersion >= CHOSEN_BOARDS_SINCE_VERSION ? publishChannelsFor(role, pv.packet, company.settings) : CHANNEL_ORDER;
       const asked = new Set(ctx.state.prepare ?? []);
-      const itsPosts = boardPostingOf(company.settings) === "its";
+      const itsPosts = (await whoPostsBoards(ctx.q, ctx.companyId, company.settings)) === "its";
       const newTasks: string[] = [];
       for (const channel of CHANNEL_ORDER) {
         if (!(chosen as readonly string[]).includes(channel)) continue;

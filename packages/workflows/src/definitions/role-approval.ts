@@ -39,6 +39,8 @@ export const roleApproval: WorkflowDefinition<State> = {
     async request_approval(ctx) {
       const [role] = await ctx.q.select().from(roles).where(eq(roles.id, ctx.state.roleId)).limit(1);
       if (!role) return { kind: "fail", error: "role not found", retryable: false };
+      // Closed before this step ran: nobody is asked to approve a closed role.
+      if (role.status === "closed") return { kind: "complete" };
       const [pv] = await ctx.q.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, ctx.state.packetVersion))).limit(1);
       if (!pv) return { kind: "fail", error: `packet version ${ctx.state.packetVersion} not found`, retryable: false };
       const wasOpen = ctx.state.wasOpen ?? role.status === "open";
@@ -109,6 +111,8 @@ export const roleApproval: WorkflowDefinition<State> = {
       if (status === "cancelled") return { kind: "complete" };
       // Rejected or expired: the role goes back to draft (or, for an edit to an open role, the proposed version is retired), with the note where the owner sees it.
       const [role] = await ctx.q.select().from(roles).where(eq(roles.id, ctx.state.roleId)).limit(1);
+      // A closed role stays closed: going back to a draft would take a place again, past the plan's limit, with no check.
+      if (role?.status === "closed") return { kind: "complete" };
       const wasOpen = ctx.state.wasOpen ?? false;
       if (role && wasOpen) {
         await ctx.q.update(rolePackets).set({ status: "superseded" }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, ctx.state.packetVersion), eq(rolePackets.status, "proposed")));
@@ -132,6 +136,8 @@ export const roleApproval: WorkflowDefinition<State> = {
       const now = ctx.now.toISOString();
       const [role] = await ctx.q.select().from(roles).where(eq(roles.id, ctx.state.roleId)).limit(1);
       if (!role) return { kind: "fail", error: "role not found", retryable: false };
+      // An approval never opens a closed role, on any plan: reopening one is ITS's correction of its outcome, and nothing else.
+      if (role.status === "closed") return { kind: "complete" };
       const versions = await ctx.q.select().from(rolePackets).where(eq(rolePackets.roleId, role.id));
       const approved = versions.find((v) => v.version === ctx.state.packetVersion);
       for (const v of versions) {

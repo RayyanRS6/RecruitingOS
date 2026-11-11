@@ -34,8 +34,10 @@ export type SendResult =
   /**
    * `uncertain`: the provider may have taken the message but its reply was cut off (a timeout after the request was
    * sent): never sent again on a guess; the outbox marks it unknown for a person to check (additive, Wave S5 review).
+   * `aboutAddress`: refused because of this one address (it is stopped, or not a real address), so other messages still
+   * go; any other refusal is about the provider or the account, and ITS is told (6 November 2026).
    */
-  | { status: "failed"; error: string; retryable: boolean; uncertain?: boolean };
+  | { status: "failed"; error: string; retryable: boolean; uncertain?: boolean; aboutAddress?: boolean };
 
 export type InboundAttachment = { filename: string; contentType: string; contentBase64: string; sizeBytes: number };
 

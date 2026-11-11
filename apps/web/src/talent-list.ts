@@ -1,4 +1,4 @@
-import { AI_INTERVIEW_GROUP_LABEL, AiInterviewGroup as AiInterviewGroupEnum, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, RESUME_ONLY_CHIP } from "@ros/contracts";
+import { AI_INTERVIEW_GROUP_LABEL, AiInterviewGroup as AiInterviewGroupEnum, MATCH_FIT_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, RESUME_ONLY_CHIP, scoreRank, type MatchFit } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
 import type { AiInterviewGroup, AiInterviewView, ApplicationSummary, CancelledReason, OwnerStage, RoleSummary, StageStripCounts, ToldState } from "./api/client";
 import { cancelledReasonFrom } from "./cancelled";
@@ -18,24 +18,26 @@ import { SAFETY_NET_WORKING_DAYS } from "./telling";
  */
 export const SAFETY_NET_NOTE = `If nobody tells them within ${SAFETY_NET_WORKING_DAYS} working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).`;
 
-/** The latest reading in a word: the chip on each row and the reading filter. */
-export type Reading = "strong" | "potential" | "weak" | "missing_must_have" | "closer_look" | "insufficient" | "none";
+/** The one verdict word: the chip on each row and the Match filter. */
+export type Reading = MatchFit | "closer_look" | "none";
 export const READING: Record<Exclude<Reading, "none">, { label: string; tone: Tone }> = {
-  strong: { label: "Strong match", tone: "good" },
-  potential: { label: "Potential match", tone: "accent" },
-  weak: { label: "Weak match", tone: "neutral" },
+  strong: { label: MATCH_FIT_LABEL.strong, tone: "good" },
+  potential: { label: MATCH_FIT_LABEL.potential, tone: "accent" },
+  weak: { label: MATCH_FIT_LABEL.weak, tone: "neutral" },
   // red only for a must-have the evidence shows is missing (plan adjustments §5)
-  missing_must_have: { label: "Missing a must-have", tone: "critical" },
+  missing_must_have: { label: MATCH_FIT_LABEL.missing_must_have, tone: "critical" },
   closer_look: { label: "Needs a closer look", tone: "caution" },
-  insufficient: { label: "Not enough evidence", tone: "neutral" },
+  insufficient: { label: MATCH_FIT_LABEL.insufficient, tone: "neutral" },
 };
 
 /**
- * One reading per row, from the latest reading only: "needs a closer look" first (the assistant could not say enough),
- * then a must-have the evidence shows is missing, then the overall reading.
+ * One word per row: "needs a closer look" first (it is about the AI disagreeing with itself, not fit, so it can sit beside
+ * any number), then the word worked out from the same numbers as the score (`fit`, 6 November 2026), so a word and a number
+ * can never disagree. An older answer without `fit`: a must-have the evidence shows is missing, then the latest reading's word.
  */
-export function readingOf(a: Pick<ApplicationSummary, "assessment" | "evidence">): Reading {
+export function readingOf(a: Pick<ApplicationSummary, "fit" | "assessment" | "evidence">): Reading {
   if (a.evidence?.needsCloserLook) return "closer_look";
+  if (a.fit) return a.fit;
   if (a.evidence?.hasProvenMiss) return "missing_must_have";
   switch (a.assessment?.overall) {
     case "strong":
@@ -61,8 +63,8 @@ export const READING_FILTERS: ReadonlyArray<{ id: ReadingFilter; label: string }
 ];
 
 /**
- * `score`: the match score, people whose score counts the AI interview first, then résumé-only scores (R20-9), each
- * highest first; people with no score yet last, newest first among equals.
+ * `score`, the order the list opens on: the match score, final numbers first, then people whose AI interview is still coming
+ * (`scoreRank`), each highest first; people with no score yet last; the longest wait first among equals.
  */
 export type Order = "score" | "newest" | "waiting" | "name";
 export const ORDERS: ReadonlyArray<{ id: Order; label: string }> = [
@@ -129,8 +131,10 @@ export function waitingOnYouCount(counts: Pick<StageStripCounts, "byGroup"> | nu
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* The score's label and "Sort: Score" (20 Oct 2026, R20-9: like with like)                                       */
+/* The score's label and "Sort: Score"                                                                            */
 /* ------------------------------------------------------------------------------------------------------------ */
+
+export { scoreRank };
 
 /** An older answer has no `basis`: which reading the counted findings came from, in the words the board used then. */
 const OLDER_BASIS: Record<string, string> = { resume: "From the AI review of the résumé", screen: "From the AI interview", resume_and_screen: "From the résumé and the AI interview" };
@@ -160,25 +164,16 @@ export function resumeOnlyChip(a: Pick<ApplicationSummary, "score" | "interview"
   return { label: RESUME_ONLY_CHIP, title: a.basis ?? RESUME_ONLY_CHIP };
 }
 
-/**
- * "Sort: Score" groups like with like: 0 a score that counts the AI interview (or an older answer that does not say),
- * 1 a résumé-only score, 2 no score yet. The API's `order=score` uses the same rule (apps/api/src/routes/roles.ts).
- */
-export function scoreRank(a: Pick<ApplicationSummary, "score" | "interview">): number {
-  if (a.score === null || a.score === undefined) return 2;
-  return !a.interview || a.interview === "done" ? 0 : 1;
-}
-
 const OWNER_STAGES = OwnerStageEnum.options as readonly OwnerStage[];
 const TOLD = ["not_told", "queued", "sent", "told_in_person"] as const;
 
 /**
  * The view the page opens on: what the link asks for (`?ownerStage=`, `?stage=`, `?told=`, `?order=`, `?cancelled=` for
  * one reason under Cancelled, and `?aiInterview=` for one group under "No AI interview yet"; an older `?applying=1`
- * opens that column), otherwise "Waiting on you", longest wait first, when anyone waits on you (plan A3), and everyone,
- * newest first, when nobody does. `counts` are the ones the page shows.
+ * opens that column), otherwise everyone, best first (the owner, 6 November 2026: "we should be able to sort the candidates
+ * no???"). The order is the score whatever else is on, and "Waiting on you" is a filter chip, off until someone presses it.
  */
-export function defaultView(params: { get: (k: string) => string | null }, counts: Pick<StageStripCounts, "byGroup"> | null | undefined): TalentView {
+export function defaultView(params: { get: (k: string) => string | null }): TalentView {
   const stageParam = params.get("ownerStage");
   const asked = stageParam && (OWNER_STAGES as readonly string[]).includes(stageParam) ? (stageParam as OwnerStage) : params.get("applying") === "1" ? "no_ai_interview" : "all";
   // a reason belongs to the Cancelled column: on its own it opens that column, beside another column it means nothing
@@ -191,11 +186,9 @@ export function defaultView(params: { get: (k: string) => string | null }, count
   const toldParam = params.get("told");
   const told = toldParam && (TOLD as readonly string[]).includes(toldParam) ? (toldParam as ToldState) : null;
   const internalStage = params.get("stage") || null;
-  const linked = stage !== "all" || !!told || !!internalStage;
-  const waiting = !linked && (counts?.byGroup.waiting_on_you ?? 0) > 0;
   const orderParam = params.get("order");
-  const order: Order = ORDERS.some((o) => o.id === orderParam) ? (orderParam as Order) : waiting ? "waiting" : "newest";
-  return { stage, waiting, reading: "any", query: "", order, internalStage, told, cancelledReason, aiInterview };
+  const order: Order = ORDERS.some((o) => o.id === orderParam) ? (orderParam as Order) : "score";
+  return { stage, waiting: false, reading: "any", query: "", order, internalStage, told, cancelledReason, aiInterview };
 }
 
 /** Lower case without accents, so "José" is found by "jose". */
@@ -232,7 +225,7 @@ export function orderRows(rows: readonly ApplicationSummary[], order: Order): Ap
   const out = [...rows];
   if (order === "waiting") out.sort((x, y) => when(x.stageChangedAt) - when(y.stageChangedAt));
   else if (order === "name") out.sort((x, y) => name(x).localeCompare(name(y), undefined, { sensitivity: "base" }));
-  else if (order === "score") out.sort((x, y) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1) || newest(x, y));
+  else if (order === "score") out.sort((x, y) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1) || when(x.stageChangedAt) - when(y.stageChangedAt));
   else out.sort(newest);
   return out;
 }
@@ -256,6 +249,9 @@ export function stripParts(counts: Pick<StageStripCounts, "total" | "byOwnerStag
   return { shown: all.filter(keep), more: all.filter((i) => !keep(i)) };
 }
 
+/** The internal steps of someone chosen as a finalist after their interview: still under Interviewing, read as "Finalist". */
+const FINALIST_STAGES: readonly string[] = ["finalist", "reference_check"];
+
 /** A chip on a candidate's row: a word, its colour, and (for a short one) the full words it stands for. */
 export type RowChip = { key: string; label: string; tone: Tone; title?: string; kind: "pill" | "chip" };
 /** At most this many chips on a row, besides the score and the stage button (Wave S1); the rest are counted in "+N". */
@@ -264,20 +260,22 @@ export const ROW_CHIP_LIMIT = 2;
 /**
  * Everything a row could say in a chip, most pressing first: where they stand with the AI interview under "No AI
  * interview yet" (R20-7), where new times stand under Cancelled, a tag ("Check eligibility", "Hold ended"), whether the
- * decision was told, the AI review's word for the match, and a low-confidence review ("Check", its full words as the
- * title). The page shows the first ROW_CHIP_LIMIT. "Not told yet" carries the day-5 safety net as its title (founder
- * decision D-03).
+ * decision was told, the one verdict word, and a low-confidence review ("Check", its full words as the title), only beside
+ * Strong or Potential: beside any other word it says nothing new. The page shows the first ROW_CHIP_LIMIT. "Not told yet"
+ * carries the day-5 safety net as its title (founder decision D-03). A finalist reads "Finalist" (6 November 2026): under
+ * Interviewing they looked like everyone still being interviewed.
  */
-export function rowChips(a: Pick<ApplicationSummary, "aiInterview" | "ownerStage" | "cancelled" | "tags" | "toldState" | "decisionMessageWaiting" | "assessment" | "evidence">, words: { onItsWay: string; lowConfidence: string; notToldTitle?: string }): RowChip[] {
+export function rowChips(a: Pick<ApplicationSummary, "aiInterview" | "ownerStage" | "cancelled" | "tags" | "toldState" | "decisionMessageWaiting" | "fit" | "assessment" | "evidence"> & { stage?: string }, words: { onItsWay: string; lowConfidence: string; notToldTitle?: string }): RowChip[] {
   const out: RowChip[] = [];
   const reading = readingOf(a);
   if (a.ownerStage === "no_ai_interview" && a.aiInterview) out.push({ key: "ai-interview", label: aiInterviewChipLabel(a.aiInterview), tone: "neutral", title: a.aiInterview.label, kind: "pill" });
   if (a.ownerStage === "cancelled" && a.cancelled) out.push({ key: "cancelled", label: a.cancelled.status, tone: "neutral", kind: "chip" });
+  if (a.ownerStage === "interviewing" && FINALIST_STAGES.includes(a.stage ?? "")) out.push({ key: "finalist", label: "Finalist", tone: "accent", kind: "chip" });
   for (const t of a.tags) out.push({ key: `tag-${t}`, label: t, tone: "caution", kind: "chip" });
   if (a.toldState === "not_told") out.push({ key: "told", label: a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet", tone: "neutral", title: a.decisionMessageWaiting ? undefined : words.notToldTitle ?? SAFETY_NET_NOTE, kind: "chip" });
   if (a.toldState === "queued") out.push({ key: "told", label: words.onItsWay, tone: "neutral", kind: "chip" });
   if (reading !== "none") out.push({ key: "reading", label: READING[reading].label, tone: READING[reading].tone, kind: "pill" });
-  if (a.evidence?.lowConfidence && reading !== "closer_look") out.push({ key: "low", label: "Check", tone: "caution", title: words.lowConfidence, kind: "chip" });
+  if (a.evidence?.lowConfidence && (reading === "strong" || reading === "potential")) out.push({ key: "low", label: "Check", tone: "caution", title: words.lowConfidence, kind: "chip" });
   return out;
 }
 

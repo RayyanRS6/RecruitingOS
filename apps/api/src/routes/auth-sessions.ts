@@ -110,6 +110,18 @@ authSessionRoutes.post("/reauth/start", requireUser, async (c) => {
 });
 
 /**
+ * A re-authentication the identity service sent back refused (Cancel pressed at the provider, or the provider or the
+ * service said no) ends as its other failures do: back where it started with `reauth=failed`, the marker and the PKCE
+ * cookie cleared, nothing changed. The trailing `#` keeps the service's copy of the refusal (the fragment, which a
+ * browser carries through a redirect that names none) out of the app's address.
+ */
+export function refusedReauth(c: Context<Vars>, container: Container, marker: ReauthMarker): Response {
+  clearReauthCookies(c);
+  const to = withParam(marker.returnTo, "reauth", "failed");
+  return c.redirect(`${container.env.APP_BASE_URL}${to}${to.includes("#") ? "" : "#"}`, 302);
+}
+
+/**
  * The callback's re-authentication branch: the identity the provider vouched for must be the signed-in person (same
  * verified address, and the same subject when the account is linked to a provider it holds), through a provider the
  * deployment offers and the one this browser started with (identityForSignIn, as for a sign-in). Then the session is

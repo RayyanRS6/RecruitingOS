@@ -103,7 +103,8 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       expect((await json(owner, "POST", `/api/v1/applications/${ana.id}/offer`, { confirm: true, terms: { salary: 1 } })).status).toBe(400);
       const tooEarly = await json(owner, "POST", `/api/v1/applications/${early.id}/offer`, { confirm: true });
       expect(tooEarly.status).toBe(409);
-      expect(((await tooEarly.json()) as { error: { message: string } }).error.message).toMatch(/once they are a finalist/);
+      // the refusal says the way on, in plain words (6 November 2026)
+      expect(((await tooEarly.json()) as { error: { message: string } }).error.message).toBe("Interview them first, or mark them Hired.");
       expect((await json(owner, "POST", `/api/v1/applications/${ana.id}/offer`, { confirm: true, madeOn: addCalendarDays(today(), 3) })).status).toBe(400);
       const madeOn = addCalendarDays(today(), -1);
       const r = await json(hm, "POST", `/api/v1/applications/${ana.id}/offer`, { confirm: true, madeOn, note: "Offered on the phone." });
@@ -170,6 +171,9 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       const active = (await container.db.select({ id: applications.id, stage: applications.stage }).from(applications).where(eq(applications.roleId, roleId))).filter((a) => !["hired", "declined", "rejected", "withdrawn", "talent_pool"].includes(a.stage));
       expect(body.hire.closeRole).toMatchObject({ path: `/api/v1/roles/${roleId}/outcome`, outcome: "filled", stillInProcess: active.length });
       expect(body.hire.closeRole!.words).toMatch(/privately: nobody is told/);
+      // in job words, like every other button (the lead's D1, 11 November 2026)
+      expect(body.hire.closeRole!.words).toMatch(/^Close the job as filled\. /);
+      expect(body.hire.closeRole!.words).not.toMatch(/\brole\b/);
       const [offer] = await container.db.select().from(offers).where(eq(offers.applicationId, cara));
       expect(offer.status).toBe("accepted");
     });

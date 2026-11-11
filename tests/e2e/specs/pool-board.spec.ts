@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn, statusPathFromEmail } from "./helpers";
+import { PERSONAS, createCompanyThroughTheForm, expectAccessible, sendTheAiInterview, signIn, skipWithoutFakeSignIn, statusPathFromEmail } from "./helpers";
 
 async function noHorizontalOverflow(page: Page, name: string) {
   const { scrollWidth, innerWidth } = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
@@ -19,75 +19,8 @@ async function noHorizontalOverflow(page: Page, name: string) {
  * stack. Everything is synthetic.
  */
 const run = Date.now().toString(36);
-const RESUMES = {
-  strong: "Registered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPeriodontal charting, scaling and root planing, Dentrix\nThorough, gentle clinical care to high standards\nPatient communication: explains findings plainly and builds trust\nKeeps to time without cutting corners\nShows up consistently and communicates early",
-  possible: "Dental Hygienist at Coastal Smiles 2022 - present\nRDH license CA active\nCharting in Dentrix, patient reminders",
-  weak: "Dental Hygienist at Pacific Dental 2010 - 2020\nI do not hold a CA RDH license\nPeriodontal charting, Dentrix",
-};
-type Persona = keyof typeof RESUMES;
-
-/**
- * What each of them says in the AI interview: the same story as their résumé, in their own words. `licence` answers a
- * yes-or-no question about the license, `licenceWords` a question about it in words; `work` and `story` everything else.
- */
-const SAYS: Record<Persona, { licence: "Yes" | "No"; licenceWords: string; work: string; story: string }> = {
-  strong: {
-    licence: "Yes",
-    licenceWords: "Yes, I hold an active CA RDH license and have since 2019.",
-    work: "At Harbor Dental I see about nine patients a day: periodontal charting, scaling and root planing, all charted in Dentrix.",
-    story: "A nervous patient was shaking before a deep cleaning, so I explained each step plainly and we agreed a hand signal to pause; she finished and rebooked with me.",
-  },
-  possible: {
-    licence: "Yes",
-    licenceWords: "Yes, I hold an active CA RDH license.",
-    work: "At Coastal Smiles since 2022 I chart in Dentrix and send the patient reminders for about eight patients a day.",
-    story: "A patient was worried about the cost of a cleaning, so I walked her through it with the front desk before we started and she stayed.",
-  },
-  weak: {
-    licence: "No",
-    licenceWords: "No, I do not hold a CA RDH license.",
-    work: "At Pacific Dental from 2010 to 2020 I did periodontal charting in Dentrix for about eight patients a day.",
-    story: "A patient at Pacific Dental was anxious about a long visit, so I explained each step first and she came back for the next one.",
-  },
-};
-
-/**
- * The AI interview on the candidate's own pages, from its introduction to Send: a tap where the page offers one, their
- * own words otherwise (the fake model answers each turn), then Review & send as it stands.
- */
-async function sendTheAiInterview(cand: Page, persona: Persona) {
-  const says = SAYS[persona];
-  await expect(cand.getByText("Your application is sent.")).toBeVisible({ timeout: 30_000 });
-  await cand.getByRole("button", { name: "Start" }).click();
-  await expect(cand.getByRole("heading", { level: 1, name: /^Your chat about the / })).toBeVisible({ timeout: 30_000 });
-  const chatEnd = cand.getByRole("button", { name: "Review and send" });
-  for (let i = 0; i < 30; i++) {
-    if (await chatEnd.isVisible()) break;
-    const asked = (await cand.locator("li.msg.assistant.now").textContent()) ?? "";
-    const aboutLicence = /licen[cs]e/i.test(asked);
-    if (await cand.getByRole("button", { name: "Yes", exact: true }).isVisible()) {
-      await cand.getByRole("button", { name: aboutLicence ? says.licence : "Yes", exact: true }).click();
-    } else if (await cand.getByLabel("From").isVisible()) {
-      await cand.getByLabel("From").fill("50");
-      await cand.getByLabel("To (optional)").fill("54");
-      await cand.getByRole("button", { name: "Send", exact: true }).first().click();
-    } else if (await cand.getByLabel("The earliest day you could start").isVisible()) {
-      await cand.getByLabel("The earliest day you could start").fill(new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10));
-      await cand.getByRole("button", { name: "Send", exact: true }).first().click();
-    } else if (await cand.getByRole("group", { name: "Tick every day you can work" }).isVisible()) {
-      await cand.getByLabel("Monday").check();
-      await cand.getByRole("button", { name: "Send", exact: true }).first().click();
-    } else {
-      await cand.getByLabel(/^Your reply/).fill(aboutLicence ? says.licenceWords : /nervous|patient|difficult|time when|a time/i.test(asked) ? says.story : says.work);
-      await cand.getByRole("button", { name: "Send", exact: true }).click();
-    }
-  }
-  await expect(cand.getByText("Your chat is complete.")).toBeVisible({ timeout: 30_000 });
-  await chatEnd.click();
-  await expect(cand.getByRole("heading", { level: 1, name: "Check what you're sending" })).toBeVisible({ timeout: 60_000 });
-  await cand.getByRole("button", { name: "Send my answers" }).click();
-  await expect(cand.getByRole("heading", { level: 1, name: "Thanks, your answers are sent" })).toBeVisible({ timeout: 60_000 });
-}
+/** The résumés, and what each says in the AI interview: the same story in their own words (helpers.ts, PERSONAS). */
+type Persona = keyof typeof PERSONAS;
 
 /**
  * A hygienist role with two must-haves, approved, and three applicants who each answer every eligibility question "yes",
@@ -95,10 +28,6 @@ async function sendTheAiInterview(cand: Page, persona: Persona) {
  * the board places them once it is scored.
  */
 async function seedPool(request: APIRequestContext, browser: Browser, base: string) {
-  // This team sorts the pool itself: "Recommend who to interview" is "Only a person", so a strong AI interview stays in
-  // New for the board instead of moving on to "Recommended for interview" by itself (the default, "Do it and tell me").
-  const policy = await request.put(`${base}/api/v1/policies`, { data: { actionType: "application.recommend_interview", level: "human_only", approverRoles: [] } });
-  expect(policy.ok(), await policy.text()).toBeTruthy();
   const s = (await (await request.post(`${base}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license, periodontal charting. Just draft it." } })).json()) as { session: { id: string } };
   const { roleId } = (await (await request.post(`${base}/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string };
   expect((await request.post(`${base}/api/v1/roles/${roleId}/approve`, { data: { version: 1, note: "Looks right." } })).ok()).toBeTruthy();
@@ -114,7 +43,7 @@ async function seedPool(request: APIRequestContext, browser: Browser, base: stri
       emails[first] = email;
       const multipart: Record<string, string | { name: string; mimeType: string; buffer: Buffer }> = {
         firstName: first, lastName: last, email, locationText: "Tustin, CA",
-        resume: { name: "resume.txt", mimeType: "text/plain", buffer: Buffer.from(`${first} ${last}, RDH\n${RESUMES[persona]}`) },
+        resume: { name: "resume.txt", mimeType: "text/plain", buffer: Buffer.from(`${first} ${last}, RDH\n${PERSONAS[persona].resume}`) },
         noticeVersionsShown: "ai_use@2026-09-01,privacy@2026-09-01",
         acknowledged: "yes",
       };
@@ -137,7 +66,7 @@ async function seedPool(request: APIRequestContext, browser: Browser, base: stri
       await c.page.goto(c.waitingRoom);
       await c.page.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/, { timeout: 150_000 });
     }));
-    for (const c of candidates) await sendTheAiInterview(c.page, c.persona);
+    for (const c of candidates) await sendTheAiInterview(c.page, PERSONAS[c.persona].says);
   } finally {
     await Promise.all(contexts.map((c) => c.close()));
   }
@@ -160,22 +89,31 @@ test.describe("the pool board", () => {
     await createCompanyThroughTheForm(page, `Board Dental ${run}`);
     const { roleId, emails } = await seedPool(page.request, browser, baseURL!);
 
-    // The list: the strip offers to sort the pool; each row has its match score, and the list sorts by it
+    // The list opens on everyone, best first: each row has its match score, and the only control that says Sort sorts (the
+    // owner, 6 Nov 2026); the Board / List switch is the way to the board
     await page.goto(`/roles/${roleId}/talent`);
-    // no sentence in the bar (founder, 23 Oct 2026): what sorting does, and that nothing is sent, is the button's title
-    await expect(page.getByRole("region", { name: "Sort the pool" }).getByRole("button", { name: "Sort the pool" })).toHaveAttribute("title", /Nothing moves until you apply it, and nothing is sent to anyone\.$/, { timeout: 30_000 });
+    await expect(page.getByRole("region", { name: "Board or list" }).getByRole("button", { name: "List", exact: true, pressed: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Sort the pool" })).toHaveCount(0);
     await expect(page.locator(".talent-row .score-slot .score").first()).toBeVisible({ timeout: 30_000 });
-    // the order is a dropdown chip (Wave S6): its list ticks the order in force, and choosing Score sorts by it
-    await page.getByRole("button", { name: /^Sort: / }).click();
+    await expect(page.locator(".talent-row")).toHaveCount(3);
+    await expect(page.locator(".talent-row .talent-name").first()).toHaveText("Ana Holt");
+    await expect(page.getByRole("button", { name: /^Waiting on you/, pressed: false })).toBeVisible();
+    // the order is a dropdown chip (Wave S6): it opens on Score, its list ticks the order in force, and choosing one sorts by it
+    await page.getByRole("button", { name: "Sort: Score" }).click();
     await expect(page.locator('[role="menuitemradio"][aria-checked="true"] svg')).toHaveCount(1);
+    await page.getByRole("menuitemradio", { name: /^Name/ }).click();
+    await expect(page.getByRole("button", { name: "Sort: Name" })).toBeVisible();
+    await page.getByRole("button", { name: "Sort: Name" }).click();
     await page.getByRole("menuitemradio", { name: /^Score/ }).click();
     await expect(page.getByRole("button", { name: "Sort: Score" })).toBeVisible();
-    await expectAccessible(page, "talent list with the sort strip");
+    await expectAccessible(page, "talent list with the Board / List switch");
 
     // The board: three columns in our words, the summary, a card per person with the reason
-    await page.getByRole("region", { name: "Sort the pool" }).getByRole("button", { name: "Sort the pool" }).click();
+    await page.getByRole("region", { name: "Board or list" }).getByRole("button", { name: "Board", exact: true }).click();
     await expect(page).toHaveURL(/view=board/);
     await expect(page.getByRole("button", { name: "Board", exact: true, pressed: true })).toBeVisible();
+    // no sentence in the bar (founder, 23 Oct 2026): what the board does, and that nothing is sent, is Refresh's title
+    await expect(page.getByRole("region", { name: "Board or list" }).getByRole("button", { name: "Refresh" })).toHaveAttribute("title", /Nothing moves until you apply it, and nothing is sent to anyone\.$/, { timeout: 30_000 });
     await expect(page.getByText(/^To sort: \d+ shortlist · \d+ longlist · \d+ not moving forward( · \d+ already sorted or decided)?$/)).toBeVisible({ timeout: 30_000 });
     for (const column of ["Shortlist", "Longlist", "Not moving forward"]) await expect(page.getByRole("heading", { level: 3, name: new RegExp(`^${column} \\d+$`) })).toBeVisible();
     await expect(page.getByRole("heading", { name: "What the pool looks like" })).toBeVisible();
@@ -184,11 +122,15 @@ test.describe("the pool board", () => {
     const cleoCard = page.locator(".board-card").filter({ hasText: "Cleo Park" });
     await expect(cleoCard.locator(".chip.critical")).toHaveText(/^Missing must-have: /);
     await expect(page.locator(".board-col[data-column='not_moving_forward']")).toContainText("Cleo Park");
-    await expect(page.locator(".board-card").filter({ hasText: "Ana Holt" }).locator(".board-card-score")).toContainText(/(Very high|High|Medium|Low) · \d+/);
-    // each card says what its score rests on, and the reading's own confidence sits apart
+    // one verdict word beside the number
+    const anaCard = page.locator(".board-card").filter({ hasText: "Ana Holt" });
+    await expect(anaCard.locator(".board-card-score")).toContainText(/Strong match · \d+/);
+    await expect(cleoCard.locator(".board-card-score")).toContainText(/Missing a must-have · \d+/);
+    // each card says what its score rests on, and the reading's own confidence sits apart, beside Strong or Potential only
     await expect(cleoCard.locator(".board-card-facts")).toContainText(/Must-haves: \d+ of \d+ shown/);
     await expect(cleoCard.locator(".board-card-facts")).toContainText("From the résumé and the AI interview");
-    await expect(cleoCard.getByText(/^(High|Medium|Low) confidence$/)).toBeVisible();
+    await expect(anaCard.getByText(/^(High|Medium|Low) confidence$/)).toBeVisible();
+    await expect(cleoCard.getByText(/^(High|Medium|Low) confidence$/)).toHaveCount(0);
     await expectAccessible(page, "the pool board");
 
     // "Have a recruiter check this" opens the request filled in; nothing is sent until Send

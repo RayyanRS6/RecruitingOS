@@ -45,7 +45,7 @@ export const roleClosingDate: WorkflowDefinition<State> = {
         companyId: ctx.companyId,
         kind: "applications.closed",
         title: `${role.title} stopped taking new applications`,
-        body: `Its closing date, ${closingDayWords(ctx.state.closesOn)}, has passed. The job page stays up and says applications are closed. Anyone who had already started applying can still finish, and nobody was turned away. Extend the date to take applications again, or close the role when you are ready.`,
+        body: `Its closing date, ${closingDayWords(ctx.state.closesOn)}, has passed. The job page stays up and says applications are closed. Anyone who had already started applying can still finish, and nobody was turned away. Extend the date to take applications again, or close the job when you are ready.`,
         action: { label: "Extend or close", href: `/roles/${role.id}?tab=posting` },
       });
       return { kind: "complete" };

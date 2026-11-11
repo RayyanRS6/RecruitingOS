@@ -5,7 +5,7 @@ import type { RolePacket } from "@ros/contracts";
 import { approvalRequests, entitlements, events, notifications, policies, rolePackets, roles, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { putOnInterview, signInAs, signInWithIdentity } from "./test-helpers";
+import { putOnInterview, signInAs, signInWithIdentity, usePlan } from "./test-helpers";
 
 /**
  * Role packets over HTTP (docs/spec/21 section 7: B1 to B13, J7, J14): the simple editor's shape saves as a valid
@@ -60,7 +60,8 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Packet Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     companyId = co.id;
     ownerId = (await me(owner)).user.id;
-    // the trial plan allows one active role; this file drafts several (and the Wave S5 tests a few more)
+    // the Free plan allows one job; this file drafts several (and the Wave S5 tests a few more)
+    await usePlan(container, companyId);
     await withTenant(container.db, companyId, (tx) => tx.update(entitlements).set({ limit: 40 }).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "active_roles"))));
   });
   afterAll(async () => {

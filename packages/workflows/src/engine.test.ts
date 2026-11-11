@@ -83,6 +83,25 @@ describe("the workflow engine across builds", () => {
     expect((await alertsOf(OUTDATED_WORKER_ALERT_KIND)).map((a) => a.status)).toEqual(["resolved"]);
   });
 
+  it("a run may begin past the first step: an older worker puts it back rather than running a first step that would fail it, and a step no build has is refused at the start", async () => {
+    const newer = engine("worker-newer");
+    const ran: string[] = [];
+    newer.register({ key: "test.past_first", version: 2, initialStep: "first", steps: { first: async () => { ran.push("first"); return { kind: "complete" }; }, added: async () => { ran.push("added"); return { kind: "complete" }; } } });
+    const older = engine("worker-older");
+    older.register({ key: "test.past_first", version: 1, initialStep: "first", steps: { first: async () => ({ kind: "fail", error: "nothing to do here", retryable: false }) } });
+    await expect(withTenant(handle.db, companyId, (tx) => newer.start(tx, { workflowKey: "test.past_first", companyId, subject: { type: "application", id: randomUUID() }, startStep: "no_such_step" }))).rejects.toThrow("workflow test.past_first has no step no_such_step");
+    const { runId } = await withTenant(handle.db, companyId, (tx) => newer.start(tx, { workflowKey: "test.past_first", companyId, subject: { type: "application", id: randomUUID() }, startStep: "added" }));
+    expect(await runOf(runId)).toMatchObject({ status: "running", currentStep: "added" });
+    const tick = await tickOf(runId);
+    expect(await older.runPending(10)).toBe(1);
+    expect(await jobOf(tick.id)).toMatchObject({ status: "queued", attempts: 0, lastError: 'this worker build does not know step "added" of workflow test.past_first' });
+    expect((await runOf(runId)).status).toBe("running");
+    later(NEWER_BUILD_RETRY_MS);
+    expect(await newer.runPending(10)).toBe(1);
+    expect(ran).toEqual(["added"]);
+    expect((await runOf(runId)).status).toBe("completed");
+  });
+
   it("a tick for a step this build does not have goes back the same way, before anything is written", async () => {
     const newer = engine("worker-newer");
     newer.register({ key: "test.grown", version: 2, initialStep: "first", steps: { first: async () => ({ kind: "next", step: "added" }), added: async () => ({ kind: "complete" }) } });

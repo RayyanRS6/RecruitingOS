@@ -129,8 +129,9 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     // every one of the job's screening questions is answered (the chat also keeps its closing answer and any must-have
     // the CV did not show under their own keys)
     expect(Object.keys(done.answers)).toEqual(expect.arrayContaining(questions.map((q) => q.key)));
+    // a person decides who to interview (6 November 2026): a good AI interview leaves them in New
     const after = (await container.db.select().from(applications).where(eq(applications.id, a.id)))[0];
-    expect(after.stage).toBe("interview_recommended");
+    expect(after.stage).toBe("screen_complete");
     const screenAsmt = (await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).find((x) => x.kind === "screen")!;
     expect((screenAsmt.result as { compensationExpectation: { withinRange: string } }).compensationExpectation.withinRange).toBe("yes");
     // one email: thank you and the AI interview's link (R20-5); no separate invitation
@@ -149,7 +150,7 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     form.set("acknowledged", "yes");
     await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     await container.drain();
-    const rosa = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).find((x) => x.stage !== "interview_recommended")!;
+    const rosa = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).find((x) => x.stage !== "screen_complete")!;
     const asmt = (await container.db.select().from(assessments).where(eq(assessments.applicationId, rosa.id))).find((x) => x.kind === "triage")!;
     expect(asmt.overall).not.toBe("weak");
     expect(asmt.result.recommendation).not.toBe("hold");

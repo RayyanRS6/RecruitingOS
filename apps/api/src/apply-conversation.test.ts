@@ -10,7 +10,7 @@ import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { applyVisitNext, conversationEdit, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
 import { screenDeps } from "./services/screens";
-import { signInAs, signInStaff, useOneVisitApplyFlow } from "./test-helpers";
+import { signInAs, signInStaff, useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * Wave E over the API and the workflows, through the functions the apply page and the conversation page call (the pages
@@ -94,6 +94,8 @@ describe("Wave E: applying and the conversation in one visit", () => {
     await signIn();
     const co = (await (await json("POST", "/api/v1/companies", { name: "One Visit Dental", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     companyId = co.id;
+    // Far more people apply to this one job here than Free's five, and each of them goes on to the AI interview: a plan with no candidate limit.
+    await usePlan(container, companyId, "ultra");
     // A pilot company: ITS switched the one-visit flow on for it (a company without a setting takes the later path).
     await useOneVisitApplyFlow(container, companyId);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };

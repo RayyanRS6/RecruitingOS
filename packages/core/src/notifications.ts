@@ -30,11 +30,18 @@ export function setNotifyClock(next: () => Date): void {
  * this transaction commits, through the outbox; the rest wait for their summary or stay in the app only.
  * `emailedSeparatelyTo`: the people the caller emails about this itself (the stuck-role ladder, which emails only those
  * who want the group as it happens); their copy counts as emailed, and everyone else's follows their own setting.
+ * `about`: the application a notice is about. Every notice that names a candidate says so (tests/policy/candidate-readers
+ * pins it), because the text is written by the time it gets here: past the plan's candidates per job (Rule 3) nothing is
+ * written at all, so no email and no summary's count follows either.
  */
 export async function notify(
   q: Queryable,
-  input: { companyId: string; kind: string; title: string; body: string; action?: { label: string; href: string } | null; roles?: string[]; userIds?: string[]; emailedSeparatelyTo?: readonly string[] },
+  input: { companyId: string; kind: string; title: string; body: string; action?: { label: string; href: string } | null; roles?: string[]; userIds?: string[]; emailedSeparatelyTo?: readonly string[]; about?: string | null },
 ): Promise<number> {
+  if (input.about) {
+    const [person] = await q.select({ lockedAt: applications.lockedAt }).from(applications).where(eq(applications.id, input.about)).limit(1);
+    if (person?.lockedAt) return 0;
+  }
   const roles = input.roles ?? ["owner", "admin", "hiring_manager"];
   const members = input.userIds?.length
     ? await q.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.companyId, input.companyId), inArray(memberships.userId, input.userIds), eq(memberships.status, "active")))

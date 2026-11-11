@@ -7,7 +7,7 @@ import { Alert, Button, Card, Chip, cn, Field, Pill, type Tone } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { useSearchParams } from "../nav";
 import { ACCESS_DAYS, accessWords } from "../recruiter-access";
-import { REOPEN_MIN, STATE_WORDS, aboutWords, askedByWords, latestAnswer, pickedUpWords, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, type RequestState } from "../recruiter-requests";
+import { REOPEN_MIN, aboutWords, askedByWords, latestAnswer, pickedUpWords, reopenHint, replyByWords, requestActions, requestState, requestStateWords, splitRequests, threadHeading, type RequestState } from "../recruiter-requests";
 import { TODAY_REFRESH } from "../today";
 import { toast } from "../toast";
 import { useAskRole } from "./use-ask-role";
@@ -116,7 +116,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
         <span className="row gap-1.5">
           {r.urgency === "high" || r.urgency === "critical" ? <Chip tone="caution">Urgent</Chip> : null}
           {r.reopenedCount ? <Chip>Reopened</Chip> : null}
-          <Pill size="sm" tone={STATE_TONE[state]}>{STATE_WORDS[state]}</Pill>
+          <Pill size="sm" tone={STATE_TONE[state]}>{requestStateWords(r)}</Pill>
         </span>
       </div>
       <p className="small muted mt-0.5">{[askedByWords(r.askedBy), replyByWords(r, now), picked].filter(Boolean).join(" · ")}</p>
@@ -128,7 +128,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
       ) : <p className="small mt-2 whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{r.question}</p>}
       {said ? <div className="mt-3"><Alert tone="info">{said}</Alert></div> : null}
       <div className="row mt-3 gap-1.5">
-        <Button size="sm" variant="quiet" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide the conversation" : `Show the conversation (${r.thread.length})`}</Button>
+        {r.locked ? null : <Button size="sm" variant="quiet" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide the conversation" : `Show the conversation (${r.thread.length})`}</Button>}
         {may.note && mode !== "note" ? <Button size="sm" variant="secondary" onClick={() => { setMode("note"); setText(""); setSaid(null); }}>Add a note for the recruiter</Button> : null}
         {may.reopen && mode !== "reopen" ? <Button size="sm" variant="secondary" onClick={() => { setMode("reopen"); setText(""); setSaid(null); }}>This didn't solve it</Button> : null}
       </div>
@@ -146,7 +146,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
           <Field label="What is still missing?" htmlFor={fieldId}>
             <textarea id={fieldId} className="textarea" value={text} onChange={(e) => setText(e.target.value)} />
           </Field>
-          <p className="small muted">{reopenHint(r.recruiterName, accessWords(r.scope), ACCESS_DAYS)}</p>
+          <p className="small muted">{reopenHint(r.recruiterName, r.topic === "plan" ? null : accessWords(r.scope), ACCESS_DAYS)}</p>
           <div className="row"><Button size="sm" variant="primary" disabled={text.trim().length < REOPEN_MIN} loading={reopen.isPending} onClick={() => reopen.mutate()}>Reopen the request</Button><Button size="sm" variant="quiet" onClick={() => setMode(null)}>Keep it closed</Button></div>
         </div>
       ) : null}

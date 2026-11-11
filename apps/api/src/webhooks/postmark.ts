@@ -1,13 +1,13 @@
 import { Hono, type Context } from "hono";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
-import { MAX_RESUME_BYTES, trialPaused, type Actor } from "@ros/contracts";
+import { MAX_RESUME_BYTES, MORE_CANDIDATES_LINE, moreAppliedTitle, trialPaused, type Actor } from "@ros/contracts";
 import { claimWebhookReceipt, notify } from "@ros/core";
 import { handleEmailEvent } from "@ros/agents";
 import { companies, inboundEmails, notifications, postings, roles, withPlatform, withTenant, type Tx } from "@ros/db";
 import { extractApplicantFromInbound, extractIntakeToken, extractReplyToken, parsePostmarkEvent, parsePostmarkInbound, verifyPostmarkWebhookAuth, type InboundEmail } from "@ros/integrations";
 import type { Container } from "../container";
 import type { Vars } from "../middleware/session";
-import { createApplication, type NewApplication, type ResumeInput } from "../services/applications";
+import { createApplication, withNewApplication, type NewApplication, type ResumeInput } from "../services/applications";
 import { handleSubscriptionChange } from "../services/email-subscriptions";
 import { receiveCandidateReply } from "../services/replies";
 
@@ -72,7 +72,7 @@ postmarkWebhook.post("/inbound", async (c) => {
   const attachment = resumeAttachment(mail);
   const resume: ResumeInput | null = attachment ? { kind: "bytes", filename: attachment.filename, mime: attachment.contentType, bytes: new Uint8Array(Buffer.from(attachment.contentBase64, "base64")), via: "email" } : null;
   try {
-    const result = await withTenant(container.db, posting.companyId, (tx) => createApplication(tx, container, applicationFromEmail({ companyId: posting.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR));
+    const result = await withNewApplication(container, posting.companyId, (tx, files) => createApplication(tx, container, applicationFromEmail({ companyId: posting.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR, { files }));
     await container.db.update(inboundEmails).set({ status: "matched", companyId: posting.companyId, applicationId: result.application.id }).where(eq(inboundEmails.id, inbound.id));
     await container.kick();
     return c.json({ ok: true, matched: true, applicationId: result.application.id, duplicate: result.duplicate });
@@ -167,8 +167,8 @@ export async function retryFailedEmail(container: Container, inboundId: string):
   const bytes = row.rawStorageKey ? await container.integrations.storage.get(row.rawStorageKey) : null;
   const resume: ResumeInput | null = bytes && parsed.resume ? { kind: "bytes", filename: parsed.resume.filename, mime: parsed.resume.contentType, bytes, via: "email" } : null;
   try {
-    const result = await withTenant(container.db, role.companyId, async (tx) => {
-      const created = await createApplication(tx, container, applicationFromEmail({ companyId: role.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR);
+    const result = await withNewApplication(container, role.companyId, async (tx, files) => {
+      const created = await createApplication(tx, container, applicationFromEmail({ companyId: role.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR, { files });
       await tx.update(inboundEmails).set({ status: "matched", applicationId: created.application.id, rawStorageKey: null, error: null }).where(eq(inboundEmails.id, row.id));
       return created;
     });
@@ -267,7 +267,9 @@ async function holdInboundEmail(container: Container, input: { inbound: InboundR
  * accepting switch reopens and after a resume; a no-op while either gate is still shut, so both callers are safe. Each
  * email runs on its own so one bad one does not stop the rest; the outcome lands on its inbound row exactly as a live
  * email's would (matched with the application id, or error with the reason), the parked résumé leaves storage, and the
- * team's held notice is updated to say what happened. Never rejects anyone.
+ * team's held notice is updated to say what happened. Never rejects anyone. Anyone among them past the plan's candidates per
+ * job (Rule 3) is not on the role's list for the team to read, so the notice counts only who is: of the rest it says that more
+ * applied, as `settleHeldEmailsOnClose` does.
  */
 export async function replayHeldEmails(container: Container, input: { companyId: string; roleId: string }): Promise<{ replayed: number; failed: number }> {
   const { companyId, roleId } = input;
@@ -280,14 +282,15 @@ export async function replayHeldEmails(container: Container, input: { companyId:
     return { role, held: await heldEmailsFor(tx, container, companyId, roleId) };
   });
   if (!found?.held.length) return { replayed: 0, failed: 0 };
-  const { replayed, failed } = await admitHeldEmails(container, { companyId, roleId, held: found.held });
+  const { replayed, failed, locked } = await admitHeldEmails(container, { companyId, roleId, held: found.held });
+  const kept = replayed - locked;
   await withTenant(container.db, companyId, async (tx) => {
     const unread = await unreadHeldNotices(tx, companyId, roleId);
     if (!unread.length) return;
-    const one = replayed === 1;
-    const added = replayed ? `Applications for ${found.role.title} are open again, so the ${one ? "application" : `${replayed} applications`} that arrived by email while they were closed ${one ? "has" : "have"} been added to the role's applications.` : `Applications for ${found.role.title} are open again.`;
+    const one = kept === 1;
+    const added = kept ? `Applications for ${found.role.title} are open again, so the ${one ? "application" : `${kept} applications`} that arrived by email while they were closed ${one ? "has" : "have"} been added to the role's applications.${locked ? ` ${MORE_CANDIDATES_LINE}` : ""}` : locked ? MORE_CANDIDATES_LINE : `Applications for ${found.role.title} are open again.`;
     const trouble = failed ? ` ${failed === 1 ? "One email" : `${failed} emails`} could not be read as an application and ${failed === 1 ? "is" : "are"} kept for a person to look at.` : "";
-    await tx.update(notifications).set({ title: replayed ? `${one ? "A held email application was" : `${replayed} held email applications were`} added to ${found.role.title}` : `Held email applications for ${found.role.title} need a look`, body: added + trouble }).where(inArray(notifications.id, unread));
+    await tx.update(notifications).set({ title: kept ? `${one ? "A held email application was" : `${kept} held email applications were`} added to ${found.role.title}` : locked ? moreAppliedTitle(found.role.title) : `Held email applications for ${found.role.title} need a look`, body: added + trouble }).where(inArray(notifications.id, unread));
   });
   await container.kick();
   return { replayed, failed };
@@ -298,19 +301,22 @@ export async function replayHeldEmails(container: Container, input: { companyId:
  * inbound row exactly as a live email's would (matched with the application id, or error with the reason) and the
  * parked résumé leaves storage once it travelled with its application.
  */
-async function admitHeldEmails(container: Container, input: { companyId: string; roleId: string; held: InboundRow[]; intoTalentPool?: boolean }): Promise<{ replayed: number; failed: number }> {
+async function admitHeldEmails(container: Container, input: { companyId: string; roleId: string; held: InboundRow[]; intoTalentPool?: boolean }): Promise<{ replayed: number; failed: number; locked: number }> {
   const { companyId, roleId } = input;
   let replayed = 0;
   let failed = 0;
+  // How many came in past the plan's candidates per job (Rule 3): the team hears that more applied, and does not keep them.
+  let locked = 0;
   for (const row of input.held) {
     const parsed = row.parsed as HeldParsed;
     const mail: InboundEmail = { to: row.toAddress, from: row.fromAddress, fromName: parsed.fromName ?? undefined, subject: row.subject ?? "", text: parsed.text ?? "", attachments: [], receivedAt: row.createdAt };
     const bytes = row.rawStorageKey ? await container.integrations.storage.get(row.rawStorageKey) : null;
     const resume: ResumeInput | null = bytes && parsed.resume ? { kind: "bytes", filename: parsed.resume.filename, mime: parsed.resume.contentType, bytes, via: "email" } : null;
     try {
-      await withTenant(container.db, companyId, async (tx) => {
-        const result = await createApplication(tx, container, applicationFromEmail({ companyId, roleId, mail, resume }), EMAIL_IN_ACTOR, { intoTalentPool: input.intoTalentPool });
+      await withNewApplication(container, companyId, async (tx, files) => {
+        const result = await createApplication(tx, container, applicationFromEmail({ companyId, roleId, mail, resume }), EMAIL_IN_ACTOR, { intoTalentPool: input.intoTalentPool, files });
         await tx.update(inboundEmails).set({ status: "matched", applicationId: result.application.id, rawStorageKey: null }).where(eq(inboundEmails.id, row.id));
+        if (result.application.lockedAt) locked += 1;
       });
       if (row.rawStorageKey) await container.integrations.storage.delete(row.rawStorageKey);
       replayed += 1;
@@ -319,7 +325,7 @@ async function admitHeldEmails(container: Container, input: { companyId: string;
       failed += 1;
     }
   }
-  return { replayed, failed };
+  return { replayed, failed, locked };
 }
 
 /**
@@ -327,7 +333,8 @@ async function admitHeldEmails(container: Container, input: { companyId: string;
  * reopened. The notice had promised the team they would be added on their own, so they are: each becomes an
  * application and goes straight to the talent pool, where the role's other active candidates went when it closed, and
  * nobody is told the role is still hiring. The team's held notice says what happened. Called after the close commits;
- * a no-op for a role that is not closed or has nothing held.
+ * a no-op for a role that is not closed or has nothing held. Anyone among them past the plan's candidates per job (Rule 3) is
+ * not in the team's talent pool, so they are not counted as if they were: the team hears only that more applied.
  */
 export async function settleHeldEmailsOnClose(container: Container, input: { companyId: string; roleId: string }): Promise<{ addedToTalentPool: number; failed: number }> {
   const { companyId, roleId } = input;
@@ -337,19 +344,21 @@ export async function settleHeldEmailsOnClose(container: Container, input: { com
     return { role, held: await heldEmailsFor(tx, container, companyId, roleId) };
   });
   if (!found?.held.length) return { addedToTalentPool: 0, failed: 0 };
-  const { replayed, failed } = await admitHeldEmails(container, { companyId, roleId, held: found.held, intoTalentPool: true });
+  const { replayed, failed, locked } = await admitHeldEmails(container, { companyId, roleId, held: found.held, intoTalentPool: true });
+  const kept = replayed - locked;
   await withTenant(container.db, companyId, async (tx) => {
-    const one = replayed === 1;
-    const title = replayed ? `${one ? "A held email application" : `${replayed} held email applications`} for ${found.role.title} ${one ? "is" : "are"} in your talent pool` : `Held email applications for ${found.role.title} need a look`;
-    const added = replayed ? `${found.role.title} was closed while ${one ? "an application that arrived by email was" : `${replayed} applications that arrived by email were`} waiting for applications to reopen. ${one ? "It was" : "They were"} added to the role and moved to your talent pool, with the role's other candidates who were still in process, so you can consider ${one ? "them" : "those people"} for a later opening. Nobody was sent a message saying the role is still hiring.` : `${found.role.title} was closed while applications that arrived by email were waiting.`;
+    const one = kept === 1;
+    const title = kept ? `${one ? "A held email application" : `${kept} held email applications`} for ${found.role.title} ${one ? "is" : "are"} in your talent pool` : locked ? moreAppliedTitle(found.role.title) : `Held email applications for ${found.role.title} need a look`;
+    const added = kept ? `${found.role.title} was closed while ${one ? "an application that arrived by email was" : `${kept} applications that arrived by email were`} waiting for applications to reopen. ${one ? "It was" : "They were"} added to the role and moved to your talent pool, with the role's other candidates who were still in process, so you can consider ${one ? "them" : "those people"} for a later opening. Nobody was sent a message saying the role is still hiring.${locked ? ` ${MORE_CANDIDATES_LINE}` : ""}` : locked ? MORE_CANDIDATES_LINE : `${found.role.title} was closed while applications that arrived by email were waiting.`;
     const trouble = failed ? ` ${failed === 1 ? "One email" : `${failed} emails`} could not be read as an application and ${failed === 1 ? "is" : "are"} kept for a person to look at.` : "";
     const notice = { title, body: added + trouble };
     const unread = await unreadHeldNotices(tx, companyId, roleId);
     if (unread.length) await tx.update(notifications).set(notice).where(inArray(notifications.id, unread));
-    else await notify(tx, { companyId, kind: HELD_EMAIL_NOTIFICATION_KIND, ...notice, action: { label: "Open the talent pool", href: "/talent" } });
+    // With nobody to keep, the neutral notice of each of them already said all there is.
+    else if (kept || failed || !locked) await notify(tx, { companyId, kind: HELD_EMAIL_NOTIFICATION_KIND, ...notice, action: { label: "Open the talent pool", href: "/talent" } });
   });
   await container.kick();
-  return { addedToTalentPool: replayed, failed };
+  return { addedToTalentPool: kept, failed };
 }
 
 /**

@@ -64,6 +64,11 @@ export const POLICIES = {
    * room. The page asks once per set of answers; this caps a script or a stuck page.
    */
   intakeSuggest: { name: "intake.suggest", rules: [{ by: "user", windowMs: HOUR, limit: 30 }, { by: "tenant", windowMs: HOUR, limit: 200 }] },
+  /**
+   * A request for access (SIGNUP_MODE=approval, the review of 6 November 2026): each one is a company row and two emails, and
+   * one account makes one request, so many accounts from one address are what this bounds. The direct door is not limited.
+   */
+  accessRequest: { name: "access.request", rules: [{ by: "ip", windowMs: HOUR, limit: 5 }] },
 } satisfies Record<string, Policy>;
 
 /** A field of a posted form (the invitation page's token, for instance). Hono caches the parsed body, so the handler reads it again for free. */

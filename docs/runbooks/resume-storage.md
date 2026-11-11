@@ -17,7 +17,11 @@ Status: built and tested against the in-memory store and the fake scanner on 22 
    road as the form. Nothing about the person leaves the page except the file's name, size and type. A grant attaches
    its file to one submission (`document.upload_used` on the role); sent again it is refused like an expired grant,
    before the file is looked at, so the answer never shows whether the first submission was new or a repeat. A repeat
-   submission's file is deleted at once.
+   submission's file is deleted at once. A file nobody sends goes a day later: the authorization queues a discard job
+   before the file can exist, and the job leaves anything a live document row points at. A file that arrived through the
+   application itself is stored before the job's lock, so a slow write holds up nobody else applying, and is removed if
+   its transaction does not commit (`withNewApplication`). Only a process that dies between the two, or a removal the store
+   refuses, can leave one behind.
 2. **Quarantine.** Every file first lives under `quarantine/<company>/<role>/<random>.<ext>` with the document row in
    status `quarantined`. Nobody can open it: the staff download route answers 409 for anything not `clean`.
 3. **Check and scan (worker).** The intake workflow's `validate` step (`packages/workflows/src/documents.ts`) reads the

@@ -1,11 +1,12 @@
-import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
-import { BOARD_COLUMN_LABEL, BoardColumn, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, interviewInScore, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
+import { and, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { BOARD_COLUMN_LABEL, BoardColumn, MATCH_FIT_LABEL, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchFit, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
+import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, hiddenFrom, interviewInScore, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, visibleTo, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, documents, events, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
 import { INTERVIEW_ACTIVE_STATUSES, SCREEN_OPEN_STATUSES } from "./application-actions";
+import { screensForScore } from "./screen-scorecards";
 import { aiInterviewsFor } from "./screens";
 
 /**
@@ -82,7 +83,7 @@ export type ScoredPerson = { latest: AssessmentRow | null; evidence: EvidenceVie
  * a résumé-only score off the board's columns; it never changes the number. `allowanceLapsed`: the interview never came
  * because the month's AI interviews stayed used up (Q17, `interviewsLapsedOnAllowance`), so it reads as not done.
  */
-export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessmentId" | "packetVersion">; assessments: readonly AssessmentRow[]; screens: ReadonlyArray<{ status: string }>; allowanceLapsed?: boolean; packets: Map<number, RolePacket>; currentVersion: number | null; mark: Pick<ActiveMark, "mark" | "remindAt"> | null; resumeUnreadable: boolean; openScreen: boolean }): ScoredPerson {
+export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessmentId" | "packetVersion">; assessments: readonly AssessmentRow[]; screens: Parameters<typeof interviewInScore>[0]; allowanceLapsed?: boolean; packets: Map<number, RolePacket>; currentVersion: number | null; mark: Pick<ActiveMark, "mark" | "remindAt"> | null; resumeUnreadable: boolean; openScreen: boolean }): ScoredPerson {
   const { app } = input;
   const latest = input.assessments.find((x) => x.id === app.latestAssessmentId) ?? null;
   const pair = readingPair(input.assessments);
@@ -100,11 +101,41 @@ export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessme
 }
 
 /**
- * The list rows' score fields (founder decision B2): the number, its band, the coverage and the missing must-haves, and
- * (R20-9) whether the AI interview is in it (`interview`) and the label (`basis`); null both without a score.
+ * The list rows' score fields (founder decision B2): the number, its band, the one verdict word (`fit`), the coverage and
+ * the missing must-haves, and (R20-9) whether the AI interview is in it (`interview`) and the label (`basis`); null without
+ * a reading.
  */
 export function scoreFields(match: MatchScore | null) {
-  return { score: match?.score ?? null, band: match?.band ?? null, bandLabel: match?.bandLabel ?? null, coverage: match?.coverage ?? null, missingMustHave: match?.missingMustHave ?? [], interview: match?.interview ?? null, basis: match?.basis ?? null };
+  return { score: match?.score ?? null, band: match?.band ?? null, bandLabel: match?.bandLabel ?? null, fit: match?.fit ?? null, coverage: match?.coverage ?? null, missingMustHave: match?.missingMustHave ?? [], interview: match?.interview ?? null, basis: match?.basis ?? null };
+}
+
+/**
+ * The one word the list shows for each application given, for counts over many people (Home's "N strong candidates ready"):
+ * worked out as the list works it out, from the readings the team may see (never one of a conversation the candidate did not
+ * send) against the version of the role they were read against. "closer_look" first, as the list puts "Needs a closer look"
+ * before the verdict word and its Strong filter leaves such a person out (the release review, 11 November 2026: Home counted
+ * a strong candidate the owner could not find). One query per kind of fact. An application with no reading, or no packet to
+ * read it against, is left out.
+ */
+export async function fitsOf(tx: Tx, apps: ReadonlyArray<Pick<AppRow, "id" | "roleId" | "stage" | "packetVersion" | "latestAssessmentId">>): Promise<Map<string, MatchFit | "closer_look">> {
+  const out = new Map<string, MatchFit | "closer_look">();
+  if (!apps.length) return out;
+  const appIds = apps.map((a) => a.id);
+  const asmts = await tx.select().from(assessments).where(inArray(assessments.applicationId, appIds)).orderBy(desc(assessments.createdAt));
+  if (!asmts.length) return out;
+  const scr = await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds));
+  const hidden = unsentScreenReadings(scr, asmts);
+  const versions = await tx.select({ roleId: rolePackets.roleId, version: rolePackets.version, packet: rolePackets.packet }).from(rolePackets).where(inArray(rolePackets.roleId, [...new Set(apps.map((a) => a.roleId))]));
+  const packetOf = (roleId: string, version: number) => versions.find((v) => v.roleId === roleId && v.version === version)?.packet ?? null;
+  for (const loaded of apps) {
+    const { app, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hidden);
+    const latest = own.find((x) => x.id === app.latestAssessmentId) ?? null;
+    const packet = packetOf(app.roleId, latest?.packetVersion ?? app.packetVersion) ?? packetOf(app.roleId, app.packetVersion);
+    const match = packet ? matchScore(readingPair(own), packet) : null;
+    // the list's own rule (`readingOf` in apps/web/src/talent-list.ts): a reading held for a person's eye reads so, whatever the number
+    if (match) out.set(app.id, evidenceView({ stage: app.stage, latest, resumeUnreadable: false, packet }).needsCloserLook ? "closer_look" : match.fit);
+  }
+  return out;
 }
 
 export type PoolRow = ScoredPerson & {
@@ -127,7 +158,8 @@ export type PoolRow = ScoredPerson & {
   activeInterview: boolean;
 };
 
-export type Pool = { role: typeof roles.$inferSelect; packet: RolePacket | null; packets: Map<number, RolePacket>; currentVersion: number | null; rows: PoolRow[] };
+/** `lockedCount`: how many applied past the plan's candidates per job and are not among `rows`: a number, never who (Rule 3). */
+export type Pool = { role: typeof roles.$inferSelect; packet: RolePacket | null; packets: Map<number, RolePacket>; currentVersion: number | null; rows: PoolRow[]; lockedCount: number };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (s: string) => UUID.test(s);
@@ -135,18 +167,24 @@ export const isUuid = (s: string) => UUID.test(s);
 /**
  * Everything the board knows about a role's applicants, in one query per kind of fact. An ITS recruiter given one
  * candidate sees that candidate only (`tenant.staff`, or `scopeApplicationId` for Today's viewer). `onlyIds` narrows the
- * load to some applications (Review and apply).
+ * load to some applications (Review and apply). The one line the board, its summary, the questions, Review and apply, the
+ * report's must-haves, Home's pool card and a recruiter's board snapshot all go through: nobody past the plan's candidates per
+ * job is loaded (Rule 3), so a locked id in a body reads as someone who is not a candidate of this role.
  */
 export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Tenant, "staff"> | null; scopeApplicationId?: string | null; onlyIds?: readonly string[]; now?: Date }): Promise<Pool> {
   const [role] = isUuid(input.roleId) ? await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1) : [];
   if (!role) throw new HttpError(404, "not_found", "Role not found.");
   const scope = input.scopeApplicationId ?? input.tenant?.staff?.scope.applicationId ?? null;
+  const reader = input.tenant?.staff ? input.tenant : scope ? { staff: { kind: "escalation", scope: { applicationId: scope } } } : null;
   // An id that is not one names nobody (Postgres would refuse it for the column).
   const only = input.onlyIds?.filter(isUuid);
-  const where = only ? and(eq(applications.roleId, role.id), inArray(applications.id, only.length ? only : ["00000000-0000-0000-0000-000000000000"])) : eq(applications.roleId, role.id);
+  const where = only ? and(eq(applications.roleId, role.id), inArray(applications.id, only.length ? only : ["00000000-0000-0000-0000-000000000000"]), visibleTo(reader)) : and(eq(applications.roleId, role.id), visibleTo(reader));
   const apps = (await tx.select().from(applications).where(where).orderBy(desc(applications.createdAt))).filter((a) => !scope || a.id === scope);
+  const pastTheLimit = only || scope ? null : hiddenFrom(reader);
+  const [lockedRow] = pastTheLimit ? await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, role.id), pastTheLimit)) : [];
+  const lockedCount = Number(lockedRow?.n ?? 0);
   const { byVersion, current, currentVersion } = await packetsOf(tx, role);
-  if (!apps.length) return { role, packet: current, packets: byVersion, currentVersion, rows: [] };
+  if (!apps.length) return { role, packet: current, packets: byVersion, currentVersion, rows: [], lockedCount };
   const appIds = apps.map((a) => a.id);
   const names = new Map((await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId)))).map((c) => [c.id, `${c.firstName} ${c.lastName}`.trim()]));
   const asmts = await tx.select().from(assessments).where(inArray(assessments.applicationId, appIds)).orderBy(desc(assessments.createdAt));
@@ -154,7 +192,7 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
   const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
   const marks = await activeMarksFor(tx, appIds);
   const followUps = await activeFollowUpsFor(tx, appIds);
-  const scr = await tx.select({ id: screens.id, applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds)).orderBy(desc(screens.createdAt));
+  const scr = await screensForScore(tx, appIds);
   const hidden = unsentScreenReadings(scr, asmts);
   const interviewsNow = await aiInterviewsFor(tx, apps, input.now ?? new Date());
   // Whose AI interview never came because the month's allowance stayed used up (Q17): kept apart like a closed link.
@@ -188,7 +226,7 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
       activeInterview: ivs.some((i) => i.applicationId === app.id && INTERVIEW_ACTIVE_STATUSES.includes(i.status)),
     };
   });
-  return { role, packet: current, packets: byVersion, currentVersion, rows };
+  return { role, packet: current, packets: byVersion, currentVersion, rows, lockedCount };
 }
 
 /** The person as the summary and the questions read them. */
@@ -198,8 +236,6 @@ export function poolPersonOf(row: PoolRow): PoolPerson {
 
 /** Where a person opens: their panel on the role's Talent page. */
 export const openPath = (roleId: string, applicationId: string) => `/roles/${roleId}/talent?open=${applicationId}`;
-
-const READING_WORDS: Record<string, string> = { strong: "Strong match", potential: "Potential match", weak: "Weak match", unknown: "Insufficient evidence" };
 
 export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
   const { app, latest, match } = row;
@@ -217,12 +253,12 @@ export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
     stage: app.stage,
     stageLabel: row.evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[app.stage],
     ownerStage: strip,
-    ownerStageLabel: ownerStageLabel(strip, row.mark, row.followUp, row.aiInterview),
+    ownerStageLabel: ownerStageLabel(strip, row.mark, row.followUp, row.aiInterview, app.stage),
     mark: row.mark,
     score: match,
     mustHaves: row.mustHaves,
     confidence: match?.confidence ?? null,
-    reading: latest ? (row.evidence.needsCloserLook ? CLOSER_LOOK_LABEL : READING_WORDS[latest.overall] ?? null) : null,
+    reading: latest ? (row.evidence.needsCloserLook ? CLOSER_LOOK_LABEL : match ? MATCH_FIT_LABEL[match.fit] : null) : null,
     strengths: (latest?.result.strengths ?? []).slice(0, 2).map(quoteOf),
     gap,
     placement: row.placement,
@@ -254,6 +290,7 @@ export function boardView(pool: Pool, now: Date): BoardView {
     noAiInterview,
     stillApplying: noAiInterview,
     summary: poolSummary(pool.rows.map(poolPersonOf), pool.packet, { roleId: pool.role.id, now }),
+    lockedCount: pool.lockedCount,
     generatedAt: now.toISOString(),
   };
 }

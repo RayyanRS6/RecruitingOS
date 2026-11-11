@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  activityWords, aiStatusWords, exactMoney, exactWhen, money, planStatusWords, planWords, plainCode, privacyStatusWords, runStatusWords, severityWords, STEP_STATUS_WORDS, trialWords, verificationWords, whenWords, workflowWords,
+  activityWords, aiStatusTone, aiStatusWords, exactMoney, exactWhen, money, planStatusWords, planWords, plainCode, privacyStatusWords, runStatusWords, severityWords, STEP_STATUS_WORDS, trialWords, verificationWords, whenWords, workflowWords,
 } from "../../apps/web/src/pages/admin/admin-words";
 
 /** The ITS console's plain words (redesign spec 3.3), one file every console section imports (Wave S6, S6-0). */
@@ -60,6 +60,9 @@ describe("the console's plain words", () => {
 
   it("names AI-run and step statuses the same on every screen", () => {
     expect(["ok", "refused", "error", "invalid_output"].map(aiStatusWords)).toEqual(["OK", "Refused", "Provider error", "Answer not usable"]);
+    // a call still running is neither OK nor a failure: its cost is the hold on the customer's AI credit until it ends
+    expect(aiStatusWords("running")).toBe("Running");
+    expect(["ok", "running", "error", "refused", "invalid_output"].map(aiStatusTone)).toEqual(["good", "neutral", "critical", "critical", "critical"]);
     expect(STEP_STATUS_WORDS).toEqual({ ok: "done", error: "failed" });
   });
 

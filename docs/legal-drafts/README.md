@@ -15,5 +15,8 @@
 | 07 | Recruiter-access summary | 17 | pilot agreement exhibit (item 14); Setup page |
 | 08 | Candidate privacy-request runbook (summary) | 6 | `docs/runbooks/privacy-requests.md` |
 | 09 | Subprocessor list | 19 (and exhibit to 14; input to 16) | pilot agreement exhibit; privacy notice |
-| 10 | Proposed retention schedule | 9 | `docs/readiness/09` |
+| 10 | Proposed retention schedule | 9, 31, 35 | `docs/readiness/09` |
 | 11 | Founding Partner Agreement additions (fees, term, support, limitations, security, data processing, subprocessors, job boards) | 14 (paid conversion; R-LEGAL-1 stop point) | drafted 30 September 2026 for counsel or the founder's separate acceptance before the first invoice; exhibits reference `docs/customer/01` to `03` |
+| 12 | Free plan terms for testers | 15, 32 (R-LEGAL-1 raised again 5 November 2026) | drafted 6 November 2026 for counsel; to be signed by each tester before a real job, once the founder has accepted the risk or counsel has answered |
+
+**The plans of 5 November 2026** (`docs/workflow-decisions.md`) change what several of these drafts describe: software now hides some applicants from the employer by a plan limit. Drafts 01, 02, 03, 06, 08, 10 and 11 carry a dated note where this bears on them; the questions are items 27 to 34 of `docs/spec/11`. Nothing in those notes is approved or in force.

@@ -269,6 +269,12 @@ describe("the production deployment's own checks (DEPLOY_ENV)", () => {
     expect(refusal({ ...production, MAGIC_LINK_ENABLED: "false" })).toBeNull();
   });
 
+  it("starts the production app and worker with SIGNUP_MODE=approval, and the words for a missing mode name it", () => {
+    expect(refusal({ ...production, SIGNUP_MODE: "approval" })).toBeNull();
+    expect(refusal({ ...worker, SIGNUP_MODE: "approval" }, "worker")).toBeNull();
+    expect(refusal({ ...production, SIGNUP_MODE: undefined })).toMatch(/"approval" \(anyone else signed in sends a request, which a platform administrator accepts or declines\)/);
+  });
+
   it("refuses the production worker on the fake scanner or ClamAV without its host; the app, which never scans, is not asked", () => {
     expect(refusal({ ...worker, SCAN_PROVIDER: "fake" }, "worker")).toMatch(/^SCAN_PROVIDER must be "clamav" with CLAMAV_HOST on the production worker \(SCAN_PROVIDER is "fake"\)/);
     expect(refusal({ ...worker, SCAN_PROVIDER: undefined, CLAMAV_HOST: undefined }, "worker")).toMatch(/^SCAN_PROVIDER must be "clamav" with CLAMAV_HOST on the production worker \(SCAN_PROVIDER is "fake", CLAMAV_HOST is not set\)/);

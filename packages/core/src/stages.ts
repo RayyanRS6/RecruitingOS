@@ -1,6 +1,6 @@
-import { and, asc, eq, inArray, isNull, like } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, type ActorKind, type ApplicationStage, type Actor, type CandidateStep, type MarkKind, type OwnerGroup, type OwnerStage, type ToldState } from "@ros/contracts";
-import { applicationMarks, applications, communications, events, type Queryable } from "@ros/db";
+import { applicationMarks, applications, communications, events, interviews, type Queryable } from "@ros/db";
 import { emit } from "./events";
 import { CANCEL_STAGES, followUpInMotion, inCancelled, resolveOpenFollowUp, restoreFollowUpAfterUndo, type FollowUpStrip } from "./interview-followups";
 
@@ -252,7 +252,9 @@ export type MarkView = { mark: MarkKind; remindAt?: string | null } | null | und
 export const AI_INTERVIEW_PHASE: readonly ApplicationStage[] = ["applied", "received", "eligible", "screen_invited", "screening"];
 /** New: the AI interview done, the team reviewing without it (the reading failed, or "Stop this screening chat"), or held on an eligibility answer. */
 const NEW_PHASE: readonly ApplicationStage[] = ["ineligible", "triaged", "screen_complete"];
-// interview_recommended is the decision to interview (a person's, or the assistant's under the company's settings), so it sits with the interviews
+// "Interviewing" means a person decided (6 November 2026): an interview is being arranged, is booked, was held or is being
+// decided on. interview_recommended is that decision, so it sits with the interviews; the assistant writes it only for a
+// company that chose "Do it and tell me" (policy application.recommend_interview).
 const INTERVIEW_PHASE: readonly ApplicationStage[] = ["interview_recommended", "interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check"];
 const OFFER_PHASE: readonly ApplicationStage[] = ["offer_draft", "offer_approval", "offer_sent", "negotiation", "accepted", "onboarding"];
 
@@ -313,17 +315,49 @@ export function holdEnded(mark: MarkView, now: Date = new Date()): boolean {
  * a running hold waits on nobody, so it is in process; once its date passes the person waits on you again; someone set
  * aside as not a fit for now counts as not moving forward. Someone under Cancelled waits on you only when nothing is in
  * motion for them: a promised automatic set, or new times being prepared or out, wait on nobody at the company.
+ * `interviewInMotion` (6 November 2026; `interviewsInMotionFor`): an open interview with a time booked or times out to
+ * pick from is in process, not waiting on you; one with no time (set up with nobody's hours, reopened with nothing to
+ * offer) still waits on a person, who sets the date and time.
  */
-export function groupFor(app: { stage: ApplicationStage }, mark?: MarkView, now: Date = new Date(), followUp?: FollowUpStrip | null): OwnerGroup {
+export function groupFor(app: { stage: ApplicationStage }, mark?: MarkView, now: Date = new Date(), followUp?: FollowUpStrip | null, interviewInMotion = false): OwnerGroup {
   const g = ownerGroup(app.stage);
   if (g === "hired" || g === "not_moving_forward") return g;
   if (inCancelled(app.stage, followUp)) return followUpInMotion(followUp) ? "in_process" : "waiting_on_you";
-  if (!mark) return g;
+  const moving = (x: OwnerGroup): OwnerGroup => (interviewInMotion && x === "waiting_on_you" ? "in_process" : x);
+  if (!mark) return moving(g);
   if (mark.mark === "not_a_fit_for_now") return "not_moving_forward";
   if (holdRunning(mark, now)) return "in_process";
   if (holdEnded(mark, now)) return "waiting_on_you";
-  return g;
+  return moving(g);
 }
+
+/**
+ * Which of these applications have an open interview in motion: a time booked, or times offered to pick from whose email
+ * did not fail (it is on its way, delivered, or waiting for the ITS check). The fact `groupFor` takes; one read for a whole
+ * list. Times whose email could not be delivered, or that had no address to go to, reached nobody: a person sets the time,
+ * so they still wait on the team, unless the email bounced softly and a retry of it arrived. The same condition, in SQL, for
+ * a count that groups rows itself (`IN_MOTION_SQL`).
+ */
+export async function interviewsInMotionFor(q: Queryable, applicationIds: readonly string[]): Promise<Set<string>> {
+  if (!applicationIds.length) return new Set();
+  const rows = await q.select({ applicationId: interviews.applicationId }).from(interviews).where(and(inArray(interviews.applicationId, [...applicationIds]), or(eq(interviews.status, "scheduled"), and(eq(interviews.status, "scheduling"), sql`jsonb_array_length(${interviews.offeredSlots}) > 0`, sql`${TIMES_REACH_THEM(sql`${interviews.id}`, sql`${interviews.attempt}`, sql`${interviews.applicationId}`)}`))));
+  return new Set(rows.map((r) => r.applicationId));
+}
+
+/**
+ * Times offered whose email can reach them: there is an address on file, and the email with them (`slots:<id>:<attempt>`)
+ * did not fail, or it bounced softly and a retry of it arrived (a soft bounce is tried twice, packages/agents email-failures.ts;
+ * the second retry is a retry of the first), as the panel reads it (`reachedOnRetry`; the release review's second reading,
+ * 11 November 2026). A retry in one of `DID_NOT_REACH`'s statuses (packages/agents outbox.ts) reached nobody. Only whether an
+ * address exists is read, never the address or the person.
+ */
+function TIMES_REACH_THEM(id: ReturnType<typeof sql>, attempt: ReturnType<typeof sql>, applicationId: ReturnType<typeof sql>) {
+  const notReached = sql`('queued', 'held', 'failed', 'cancelled', 'bounced')`;
+  return sql`(NOT EXISTS (SELECT 1 FROM communications c WHERE c.idempotency_key = 'slots:' || ${id}::text || ':' || ${attempt}::text AND c.status IN ('failed', 'bounced', 'unknown') AND NOT EXISTS (SELECT 1 FROM communications r1 LEFT JOIN communications r2 ON r2.retry_of = r1.id WHERE r1.retry_of = c.id AND (r1.status NOT IN ${notReached} OR r2.status NOT IN ${notReached}))) AND EXISTS (SELECT 1 FROM applications a2 JOIN candidates p2 ON p2.id = a2.candidate_id WHERE a2.id = ${applicationId} AND p2.email IS NOT NULL))`;
+}
+
+/** `interviewsInMotionFor` for one application row in a grouped count: true when it has an open interview in motion. */
+export const IN_MOTION_SQL = sql<boolean>`EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = ${applications.id} AND (i.status = 'scheduled' OR (i.status = 'scheduling' AND jsonb_array_length(i.offered_slots) > 0 AND ${TIMES_REACH_THEM(sql`i.id`, sql`i.attempt`, sql`i.application_id`)})))`;
 
 /** The small tags a row carries next to its stage: what the person has to do about it. */
 export const OWNER_TAG = { checkEligibility: "Check eligibility", holdEnded: "Hold ended" } as const;
@@ -338,10 +372,13 @@ export function ownerTags(app: { stage: ApplicationStage }, mark?: MarkView, now
  * The owner-stage label, with the mark's own words for a mark the strip has no column for, under Cancelled why they are
  * there ("Asked for new times", "No longer interested", "No-show"), and under "No AI interview yet" where they stand
  * with it (`aiInterview`, `aiInterviewOf`: "Invited (not started)", "Link expired"…), the sub-label on the stage button.
+ * `internal`: the application's own stage. Under Not moving forward, the candidate's own choice reads as theirs, "Withdrew"
+ * or "Declined the offer", never as if the team said no (6 November 2026).
  */
-export function ownerStageLabel(stage: OwnerStage, mark?: MarkView, followUp?: FollowUpStrip | null, aiInterview?: { label: string } | null): string {
+export function ownerStageLabel(stage: OwnerStage, mark?: MarkView, followUp?: FollowUpStrip | null, aiInterview?: { label: string } | null, internal?: ApplicationStage | null): string {
   if (stage === "cancelled" && followUp) return CANCELLED_REASON_LABEL[followUp.reason];
   if (stage === "no_ai_interview" && aiInterview) return aiInterview.label;
+  if (stage === "not_moving_forward" && (internal === "withdrawn" || internal === "declined")) return STAGE_LABEL[internal];
   return mark?.mark === "not_a_fit_for_now" && stage === "not_moving_forward" ? MARK_LABEL.not_a_fit_for_now : OWNER_STAGE_LABEL[stage];
 }
 
@@ -368,9 +405,12 @@ export function decisionTold(toldState: ToldState | string | null | undefined): 
 
 /**
  * The step a candidate sees on their status page (plan A1): Received, Under review, Interview or Decision. Steps the
- * team uses internally (recommended for interview, finalist, held on eligibility) read as Under review. A decision the
- * team made privately (declined, talent pool) shows only once the candidate was told; until then they see the step they
- * were at before it (`before`, the stage the decision was made from; Under review when unknown). Marks are never read.
+ * team uses internally (recommended for interview, held on eligibility) read as Under review. After a real interview the
+ * step stays Interview until a decision they hold (6 November 2026): a finalist, or someone whose references are being
+ * checked, had read Review again with the interview not ticked, as if it never happened; "finalist" itself is never
+ * named. A decision the team made privately (declined, talent pool) shows only once the candidate was told; until then
+ * they see the step they were at before it (`before`, the stage the decision was made from; Under review when unknown).
+ * Marks are never read.
  */
 export function candidateStep(stage: ApplicationStage, toldState: ToldState | string | null | undefined, before?: ApplicationStage | null): CandidateStep {
   if (DECISION_STAGES.includes(stage)) {
@@ -380,7 +420,7 @@ export function candidateStep(stage: ApplicationStage, toldState: ToldState | st
   // the candidate's own acts and an offer they hold are known to them
   if (["hired", "withdrawn", "declined", "offer_sent", "negotiation", "accepted", "onboarding"].includes(stage)) return "decision";
   if (stage === "applied" || stage === "received") return "received";
-  if (["interview_scheduled", "interview_complete", "debrief"].includes(stage)) return "interview";
+  if (["interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval"].includes(stage)) return "interview";
   return "under_review";
 }
 
@@ -399,7 +439,7 @@ export const STAGE_LABEL: Record<ApplicationStage, string> = {
   screen_invited: "Invited to an AI interview",
   screening: "In the AI interview",
   screen_complete: "AI interview done",
-  interview_recommended: "Recommended for interview",
+  interview_recommended: "Interview to set up",
   interview_scheduled: "Interviewing",
   interview_complete: "Interview done: decision needed",
   debrief: "Deciding",

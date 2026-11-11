@@ -32,6 +32,24 @@ export async function clashesWithBookings(q: Queryable, input: { companyId: stri
 }
 
 /**
+ * Which of these people already have another booked interview overlapping this time (no buffer): what a person setting a
+ * date and time is told, by first name, with "Book anyway" (the interviewer may know it is fine). Booked interviews only:
+ * no calendar is read here, since only the worker may read a connection's credential.
+ */
+export async function clashingInterviewers(q: Queryable, input: { companyId: string; interviewId?: string | null; userIds: string[]; slot: { startsAt: string; endsAt: string } }): Promise<Array<{ userId: string; firstName: string }>> {
+  if (!input.userIds.length) return [];
+  const rows = await q.select({ id: interviews.id, startsAt: interviews.startsAt, endsAt: interviews.endsAt, userId: interviewParticipants.userId, name: users.name, email: users.email }).from(interviews).innerJoin(interviewParticipants, eq(interviewParticipants.interviewId, interviews.id)).innerJoin(users, eq(users.id, interviewParticipants.userId)).where(and(eq(interviews.companyId, input.companyId), inArray(interviewParticipants.userId, input.userIds), eq(interviews.status, "scheduled")));
+  const start = Date.parse(input.slot.startsAt);
+  const end = Date.parse(input.slot.endsAt);
+  const out = new Map<string, { userId: string; firstName: string }>();
+  for (const r of rows) {
+    if (r.id === input.interviewId || !r.startsAt || !r.endsAt) continue;
+    if (Date.parse(r.startsAt) < end && Date.parse(r.endsAt) > start) out.set(r.userId, { userId: r.userId, firstName: (r.name ?? r.email).split(/[\s@]/)[0] });
+  }
+  return [...out.values()];
+}
+
+/**
  * Interviews already on this person's plate inside the range: busy time and a per-day count for the daily maximum. The
  * count is kept by the person's own local day (`timeZone`), the day the maximum is checked against
  * (core `freeRangesForDay`), so an evening interview never counts toward the next day's maximum.
@@ -160,7 +178,7 @@ export async function createInterviewEvents(
         start: new Date(input.interview.startsAt!).toISOString(), end: new Date(input.interview.endsAt!).toISOString(), timeZone: input.companyTimezone,
         attendees: [{ email: p.email, name: p.name }],
         conference: input.interview.linkSource === "calendar" && !meetingUrl ? "auto" : null,
-        location: meetingUrl,
+        location: meetingUrl ?? input.interview.selectedSlot?.address ?? null,
       });
       refs[p.userId] = ref;
       if (!meetingUrl && ref.meetingUrl) meetingUrl = ref.meetingUrl;

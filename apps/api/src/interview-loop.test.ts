@@ -187,7 +187,7 @@ describe("the loop after an interview", () => {
     const nudge = (await brief(owner)).cards.find((c) => c.applicationId === cand.id);
     expect(nudge).toMatchObject({ kind: "decision", title: "Set up the next round: Ana Silva" });
     // the card opens the interview approval itself, filled in with the next round from the plan
-    expect(nudge!.actions[0]).toEqual({ label: "Approve the next round", method: "GET", path: `/roles/${roleId}/talent?open=${cand.id}&step=interview` });
+    expect(nudge!.actions[0]).toEqual({ label: "Set a date and time", method: "GET", path: `/roles/${roleId}/talent?open=${cand.id}&step=interview` });
     const next = await requestInterview(cand.id, { roundKey: body.nextRoundKey });
     expect((await interview(next.id)).roundKey).toBe(plan[1].key);
     expect((await brief(owner)).cards.find((c) => c.applicationId === cand.id)).toBeUndefined();
@@ -311,7 +311,8 @@ describe("the loop after an interview", () => {
     const othersNames = ["Maria Reyes", "Luis Ortega", "Ana Silva", "Ben Okafor", "Chloe Nguyen", "Priya Raman", "Omar Haddad"];
     let b = await brief(interviewer);
     expect(b.cards.every((c) => c.kind === "interviews" || c.kind === "empty")).toBe(true);
-    expect(b.cards.some((c) => c.kind === "interviews" && c.body.includes("Sofia Marin") && /being offered/.test(c.body))).toBe(true);
+    // times offered only once there are some (6 November 2026); before that it has no time yet
+    expect(b.cards.some((c) => c.kind === "interviews" && c.body.includes("Sofia Marin") && /times offered to the candidate/.test(c.body))).toBe(true);
     for (const c of b.cards) for (const name of othersNames) { expect(c.title).not.toContain(name); expect(c.body).not.toContain(name); }
     expect(b.summary).toContain("1 being scheduled");
     // the owner's brief is the company's day, with candidate names and decisions
@@ -580,13 +581,15 @@ describe("the loop after an interview", () => {
   });
 
   it("the status page speaks in the candidate's steps (the progress line's names), never the team's stage names", async () => {
-    const cases: Array<[ApplicationStage, string]> = [["applied", "Applied"], ["received", "Applied"], ["ineligible", "Review"], ["triaged", "Review"], ["screen_complete", "Review"], ["interview_recommended", "Review"], ["interview_complete", "Interview"], ["finalist", "Review"], ["offer_sent", "Decision"], ["hired", "Decision"], ["withdrawn", "Decision"]];
+    // a finalist stays at the interview they had (6 November 2026): it read Review again, as if it never happened; the
+    // word Finalist itself is still never shown
+    const cases: Array<[ApplicationStage, string]> = [["applied", "Applied"], ["received", "Applied"], ["ineligible", "Review"], ["triaged", "Review"], ["screen_complete", "Review"], ["interview_recommended", "Review"], ["interview_complete", "Interview"], ["finalist", "Interview"], ["offer_sent", "Decision"], ["hired", "Decision"], ["withdrawn", "Decision"]];
     for (const [stage, word] of cases) {
       const html = await statusPage(await seed(stage));
       expect(statusWord(html), stage).toBe(word);
       expect(html, stage).toContain('aria-current="step"');
       expect(html, stage).toContain("make every decision about your application");
-      expect(html, stage).not.toMatch(/Recommended for interview|Finalist|eligibility answers did not match|reactivate/i);
+      expect(html, stage).not.toMatch(/Interview to set up|Recommended for interview|Finalist|eligibility answers did not match|reactivate/i);
     }
   });
 

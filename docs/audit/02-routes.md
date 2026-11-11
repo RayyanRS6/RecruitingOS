@@ -262,6 +262,7 @@ Applies to every route below: a change under `/api` is refused if the browser sa
 | GET /:id/packets/diff | members | role.read; pay only with compensation.read | version diff (API only) |
 | GET /:id/requirements-check; POST /:id/requirements-check/apply | read: members; apply: packet.edit | role.read / packet.edit | requirements check (RoleRefine) |
 | POST /:id/packets/:version/flags/keep | packet editors | packet.edit | keep a flagged phrase (RolePlan) |
+| POST /:id/packets/:version/benefits | packet editors | packet.edit | write the benefits on the version waiting (RolePlan) |
 | GET /:id/report; GET /:id/report.csv; GET /:id/report/summary.csv | not interviewer | role.read + application.read; CSV audited | Report tab |
 | GET /:id/compare | not interviewer | application.read | ComparePanel |
 | GET /:id/interviews | members | role.read only (see bug 1) | API only |
@@ -291,7 +292,7 @@ Applies to every route below: a change under `/api` is refused if the browser sa
 |---|---|---|---|
 | GET /api/v1/interviews | members | role.read; interviewer and staff filtered | Interviews |
 | GET /api/v1/interviews/:id | members | role.read; interviewer must be a participant; interviewScopeGuard | interview sheet |
-| POST /api/v1/interviews/:id/reschedule; /cancel; /book-on-behalf | owner, admin, HM, recruiter | interview.manage | interview sheet |
+| POST /api/v1/interviews/:id/set-time; /reschedule; /cancel; /book-on-behalf | owner, admin, HM, recruiter | interview.manage | interview sheet |
 | POST /api/v1/interviews/:id/outcome | managers or participants | interview.manage or participant | "did it take place" |
 | GET /api/v1/me/calendar; PUT /api/v1/me/availability | members | tenant | Setup "Your availability" |
 
@@ -365,7 +366,7 @@ Applies to every route below: a change under `/api` is refused if the browser sa
 | POST /c/screen/:token, /start, /later, /person, /human (legacy), /withdraw, /answers/:key, /submit | candidate | token + rate limits | answer, start, finish later, ask for a person, withdraw, change an answer, send |
 | GET /c/screen/:token/later, /person, /review (redirect), /answers/:key | candidate | token | sub-pages |
 | GET, POST /c/confirm-answers/:token | candidate (owner of the email) | token; POST rate limited | confirm a repeat submission's answers |
-| GET /c/schedule/:token; POST /c/schedule/:token; POST /none-work; GET /confirmed; GET /ics; POST /reschedule; POST /cancel; GET /cancelled | candidate | schedule token + rate limits | pick, confirm, reschedule, cancel an interview |
+| GET /c/schedule/:token; POST /c/schedule/:token; POST /none-work; GET /confirmed; GET /ics; POST /reschedule; POST /cancel; GET /cancelled; POST /timezone; POST /accommodation | candidate | schedule token + rate limits | pick, confirm, reschedule, cancel an interview; ask for a change, save a time zone, ask for an accommodation |
 | GET /a/:token | candidate | link token; bots not counted | tracked link → job page or form |
 | GET /sitemap.xml, /robots.txt, /feeds/jobs.xml, /feeds/jobs.json, /feeds/linkedin.xml | search engines, boards | public; only open, accepting roles of ITS-confirmed companies; 5-minute cache | sitemap, robots, feeds |
 | POST /webhooks/postmark/inbound | machine (Postmark) | basic-auth secret; 503 in production when unset | inbound applications and candidate replies |

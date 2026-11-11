@@ -230,6 +230,8 @@ function ChatEndPage(props: { view: ConversationView }) {
 
 /** After Send (spec step 8): where the match score and everything sent can be seen, the same for every applicant. */
 export const SENT_RECORD_LINE = "Your match score and everything you sent will be on your application page. Its link is in the email we sent you when you applied.";
+/** The same when no score can come: ITS switched it off for the company, or nothing can read them for now. No reason is given (PL-10). */
+export const SENT_RECORD_NO_SCORE_LINE = "Everything you sent will be on your application page. Its link is in the email we sent you when you applied.";
 
 /** What a closed conversation says, by how it closed (plan E3, E4, E5, A7, A9). Never why a team stopped it. */
 function closedWords(view: ConversationView): { title: string; lines: string[] } {
@@ -239,7 +241,7 @@ function closedWords(view: ConversationView): { title: string; lines: string[] }
       // Finished by a recruiter's notes from a call: the candidate's own answers were never sent, so it never says they were.
       if (view.finishedOnACall) return { title: "This conversation is closed", lines: [`Someone working with the hiring team at ${co} went through the questions with you. People on the team make every decision, and you will hear from them either way.`, "Nothing else is needed from you here."] };
       // The same words for a first application and a repeat one: never the application's own link (a repeat's copy must not reveal it).
-      return { title: "Thanks, your answers are sent", lines: [`The hiring team at ${co} reads them with your application. People on the team make every decision, and you will hear from them either way.`, SENT_RECORD_LINE, "If anything else is needed from you, we will email you."] };
+      return { title: "Thanks, your answers are sent", lines: [`The hiring team at ${co} reads them with your application. People on the team make every decision, and you will hear from them either way.`, view.scoreComes ? SENT_RECORD_LINE : SENT_RECORD_NO_SCORE_LINE, "If anything else is needed from you, we will email you."] };
     case "human_requested": {
       // The time promised when they asked, never a new one each visit. Past it, the page cannot tell whether someone
       // already called (the status stays the same), so it says how to chase it rather than that nobody did.

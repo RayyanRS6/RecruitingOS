@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * The Candidates page and the candidate panel (Wave A; founder decisions B3 and B6; Wave S1) as the server first draws
  * them, from answers shaped like the API's: the job's shared header and tab strip (also on the job page), the stage
- * strip with its counts and "More stages", the calm rows with at most two chips, the "waiting on you" view it opens on,
+ * strip with its counts and "More stages", the calm rows with at most two chips, the list of everyone, best first, it opens on,
  * the panel's header with the stage button, what needs you, and the steps a stage choice opens; and the Jobs page.
  */
 const nav = vi.hoisted(() => ({ search: "", params: { id: "r1" } as Record<string, string> }));
@@ -43,7 +43,7 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString
 
 const maria = {
   id: "a1", stage: "triaged", stageLabel: "Ready for your review", group: "waiting_on_you", source: "careers_page", createdAt: daysAgo(4), eligibility: { passed: true, failedRules: [], unverifiable: [] },
-  ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [] as string[], stageMoves: moves("new", { offer: 'Record an offer once they are a finalist (they are at "Ready for your review").' }), toldState: null as string | null,
+  ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [] as string[], stageMoves: moves("new", { offer: "Interview them first, or mark them Hired." }), toldState: null as string | null,
   candidate: { id: "c1", name: "Maria Reyes", email: "maria@example.com", phone: null, locationText: "Tustin, CA" }, extractionSummary: null,
   assessment: { overall: "strong", confidence: "high", summary: "Active RDH license.", strengths: [], concerns: [] }, evidence,
   appliedAt: daysAgo(4), stageChangedAt: daysAgo(3), daysInStage: 3, candidateToldAt: null, decisionMessageWaiting: false, score: 91 as number | null, cancelled: null,
@@ -96,7 +96,7 @@ const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(create
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
 describe("the Candidates page", () => {
-  it("heads the page with the job's shared header and tabs, and opens on the people waiting on you", () => {
+  it("heads the page with the job's shared header and tabs, and opens on everyone, best first", () => {
     nav.search = "";
     const html = render(client([]), createElement(People));
     // no "Job · company" eyebrow above the title (fewer words, 23 Oct 2026): the rail names the company
@@ -124,10 +124,12 @@ describe("the Candidates page", () => {
     expect(html).not.toContain('data-label="Longlist"');
     expect(html).not.toContain('data-label="On hold"');
     expect(html).toContain('aria-label="More stages"');
-    // waiting on you is on, so only Maria is listed; the decision nobody has told is one click away
-    expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="true">Waiting on you/);
+    // everyone is listed, Maria's score first and Luis, with none, after her; waiting on you is a chip, off until pressed; the
+    // decision nobody has told is one click away
+    expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="false">Waiting on you/);
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
-    expect(html).not.toContain('class="talent-name">Luis Ortega</button>');
+    expect(html).toContain('class="talent-name">Luis Ortega</button>');
+    expect(html.indexOf('class="talent-name">Maria Reyes</button>')).toBeLessThan(html.indexOf('class="talent-name">Luis Ortega</button>'));
     expect(text(html)).toContain("Not told yet 1");
     expect(text(html)).toContain("Waiting on you 3 days");
     expect(text(html)).toContain("Applied 4 days ago");
@@ -135,16 +137,16 @@ describe("the Candidates page", () => {
     // the stage button on the row, and the match score's badge (founder decision B2)
     expect(html).toContain('aria-label="Stage: New. Move to another stage"');
     expect(html).toMatch(/<span class="score-slot"><span class="score good sm" title="Match score 91 out of 100">/);
-    // Match and the order are dropdown chips naming the choice in force (Wave S6): the people waiting longest first here
+    // Match and the order are dropdown chips naming the choice in force (Wave S6): the score, best first, here
     expect(html).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Match: All matches<svg');
-    expect(html).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Sort: Waiting longest<svg');
+    expect(html).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Sort: Score<svg');
     expect(html).not.toContain("<select");
-    // the filter in force is a chip that removes it, with Clear all beside it
-    expect(text(html)).toContain("Filters on");
-    expect(html).toContain('<button type="button" class="toggle-chip"><span class="sr-only">Remove the filter: </span>Waiting on you<svg');
-    expect(text(html)).toContain("Clear all");
-    // the strip above the list offers to sort the pool onto the board
-    expect(text(html)).toContain("Sort the pool");
+    // no filter is in force, so nothing offers to remove one
+    expect(text(html)).not.toContain("Filters on");
+    expect(html).not.toContain("Remove the filter: ");
+    expect(text(html)).not.toContain("Clear all");
+    // the switch above the list is the way to the board; no button there says Sort
+    expect(text(html)).not.toContain("Sort the pool");
     expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">List<\/button>/);
   });
 
@@ -178,11 +180,11 @@ describe("the Candidates page", () => {
     expect(text(html).match(/Clear filters/g)).toHaveLength(1);
     expect(text(html)).not.toContain("Show everyone");
     // an empty view with closer words of its own keeps them, with the same one way out
-    nav.search = "";
+    nav.search = "ownerStage=cancelled";
     const qc = client([]);
     qc.setQueryData(["applications", "r1"], { applications: [luis], counts });
     const none = text(render(qc, createElement(People)));
-    expect(none).toContain("Nobody is waiting on you");
+    expect(none).toContain("Nobody is under Cancelled");
     expect(none.match(/Clear filters/g)).toHaveLength(1);
   });
 
@@ -233,8 +235,8 @@ describe("the Candidates page", () => {
     expect(text(html)).not.toMatch(/Applied \w{3} \d{1,2}, \d{4} · Dental Hygienist/);
     expect(text(html)).toContain("Email");
     expect(html.match(/aria-label="Stage: New\. Move to another stage"/g)?.length).toBe(2);
-    // the list it opened from: one person, so next and previous say so
-    expect(text(html)).toContain("1 of 1");
+    // the list it opened from: everyone, so next and previous say where she is in it
+    expect(text(html)).toContain("1 of 2");
     // the assistant's suggestion, with Yes and Not now (there is no "Invite to a screen?" card since 20 Oct 2026, R20-4)
     expect(text(html)).toContain("The assistant suggests an interview");
     expect(text(html)).toContain("Yes, interview");
@@ -483,27 +485,42 @@ describe("the steps a stage choice opens", () => {
     expect(text(html)).toContain("Confirm: not moving forward");
   });
 
-  it("someone already at the interview step, with nothing in motion, can still have an interview approved", () => {
+  it("someone already at the interview step, with nothing in motion, can still have a date and time set", () => {
     const iv = (over: Record<string, unknown>) => ({ id: "iv1", roundKey: "r1", title: "Working interview", status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 1, outcome: null, decision: null, offeredSlots: [], createdAt: daysAgo(2), ...over });
     const at = (stage: string, interviews: unknown[], over: Record<string, unknown> = {}) => detail({ ...maria, stage }, { interviews, ...over });
     const open = (d: ReturnType<typeof detail>, step: "interview" | null = null) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
-    // an interview cancelled from the Interviews page
+    // an interview cancelled from the Interviews page: the card says so, and "Set a date and time" is its one button
     const cancelled = open(at("interview_recommended", [iv({})]));
     expect(cancelled).toContain("The interview was cancelled");
-    expect(cancelled).toContain("The Working interview with Maria was cancelled. Approve a new interview and fresh times go out to them.");
-    expect(cancelled).toContain("Approve an interview");
-    // times the candidate let expire
+    expect(cancelled).toContain("The Working interview with Maria was cancelled.");
+    expect(cancelled).toContain("Set a date and time");
+    // no promise of times nobody may have the hours to offer (6 November 2026)
+    expect(cancelled).not.toMatch(/times go out|Approve an interview/);
+    // times the candidate let expire, and times that never reached them, which never blames them
     expect(open(at("interview_recommended", [iv({ status: "offer_expired" })]))).toContain("Maria did not pick a time for the Working interview.");
-    // "Next round" recorded, with the round still to approve
+    const lost = open(at("interview_recommended", [iv({ status: "offer_expired", candidateEmail: "failed" })]));
+    expect(lost).toContain("The times never reached them");
+    expect(lost).not.toContain("did not pick a time");
+    // "Next round" recorded, with the round still to set
     const next = open(at("interview_complete", [iv({ status: "completed", outcome: "happened", decision: "next_round" })]));
     expect(next).toContain("Set up the next round");
-    expect(next).toContain("Approve the next round");
+    expect(next).toContain("Set a date and time");
     // recommended after a screen (no suggestion card when the company's settings let that through on its own)
     expect(open(at("interview_recommended", []))).toContain("Maria is ready to interview.");
-    // the approval itself replaces the card while it is open
+    // the form itself replaces the card while it is open
     const step = open(at("interview_recommended", [iv({})]), "interview");
-    expect(step).toContain("Approve and offer times");
+    expect(step).toContain("Book and email Maria");
     expect(step).not.toContain("The interview was cancelled");
+  });
+
+  it("on the shortlist, Set a date and time is the main button, the same as at the interview step", () => {
+    const shortlisted = detail({ ...maria, stage: "screen_complete", ownerStage: "shortlist", ownerStageLabel: "Shortlist" }, { mark: { id: "m1", mark: "shortlist", label: "Shortlist", remindAt: null, note: null, source: "person", setAt: daysAgo(1), setBy: { kind: "user", id: "u1" } }, pendingApprovals: [] });
+    const html = render(client([shortlisted]), createElement(CandidatePanel, { id: shortlisted.id, roleId: "r1", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+    expect(text(html)).toContain("Ready to interview Maria is on your shortlist. Set a date and time");
+    expect(html).toMatch(/<section class="card needs-you grid gap-3 p-5 sm:p-6 \[&amp;&gt;\.card-title\]:mb-0"><div class="card-title"><h2>Ready to interview<\/h2><\/div><p class="small text-ink-2">Maria is on your shortlist\.<\/p><div class="row"><button type="button" class="btn primary sm">Set a date and time<\/button><\/div><\/section>/);
+    // the API leaves "interview" out (a role that may not set up interviews): no card
+    const noLeave = detail({ ...maria, stage: "screen_complete", ownerStage: "shortlist" }, { mark: { id: "m1", mark: "shortlist", label: "Shortlist", remindAt: null, note: null, source: "person", setAt: daysAgo(1), setBy: { kind: "user", id: "u1" } }, pendingApprovals: [], allowedActions: ["reject", "set_mark"] });
+    expect(text(render(client([noLeave]), createElement(CandidatePanel, { id: noLeave.id, roleId: "r1", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })))).not.toContain("Ready to interview");
   });
 
   it("does not offer a new interview while a decision waits, one is in motion, or the role may not request one", () => {
@@ -512,15 +529,15 @@ describe("the steps a stage choice opens", () => {
     // a finished interview nobody has decided about: the decision card, not a new interview
     const deciding = open(detail({ ...maria, stage: "interview_complete" }, { interviews: [iv], allowedActions: ["interview", "record_decision", "reject", "record_outcome", "set_mark"] }));
     expect(deciding).toContain("How did the interview go?");
-    expect(deciding).not.toContain("Approve an interview");
+    expect(deciding).not.toContain("Set a date and time");
     // the role cannot request interviews (the API leaves "interview" out)
     expect(open(detail({ ...maria, stage: "interview_recommended" }, { interviews: [], allowedActions: ["reject", "record_outcome"] }))).not.toContain("Ready to interview");
     // on hold: nothing waits on anyone until the date
     expect(open(detail({ ...maria, stage: "interview_recommended" }, { interviews: [], mark: { id: "m1", mark: "on_hold", label: "On hold", remindAt: "2026-12-01", note: null, source: "person", setAt: daysAgo(1), setBy: { kind: "user", id: "u1" } } }))).not.toContain("Ready to interview");
   });
 
-  it("Interviewing opens the interview approval, and Hired the one-sheet hire (plan H1)", () => {
-    expect(text(panel("interview"))).toContain("Approve an interview");
+  it("Interviewing opens Set a date and time, and Hired the one-sheet hire (plan H1)", () => {
+    expect(text(panel("interview"))).toContain("Set a date and time");
     const hire = text(panel("hire"));
     expect(hire).toContain("Hire Maria Reyes");
     expect(hire).toContain("Start date (agreed with them)");
@@ -538,7 +555,7 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
     ...over,
   });
   const ana = {
-    ...maria, id: "a3", stage: "interview_recommended", stageLabel: "Recommended for interview", group: "in_process", ownerStage: "cancelled", ownerStageLabel: "Asked for new times", stageMoves: moves("cancelled"), score: 70,
+    ...maria, id: "a3", stage: "interview_recommended", stageLabel: "Interview to set up", group: "in_process", ownerStage: "cancelled", ownerStageLabel: "Asked for new times", stageMoves: moves("cancelled"), score: 70,
     candidate: { id: "c3", name: "Ana Lopez", email: "ana@example.com", phone: null, locationText: null }, cancelled: view(),
   };
   const cleo = {
@@ -604,7 +621,9 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
     expect(panel).toContain("Send new times");
     expect(panel).toContain("Don't send automatically");
     expect(panel).not.toContain("The interview was cancelled");
-    expect(panel).not.toContain("Approve an interview");
+    // the card's own "Set a date and time" comes first, and no second card offers one
+    expect(panel.split("Set a date and time").length - 1).toBe(1);
+    expect(panel.indexOf("Set a date and time")).toBeLessThan(panel.indexOf("Send new times"));
     // without the API's leave, the buttons are not offered
     const quiet = open(detail(ana, { interviews: [iv()], allowedActions: ["interview", "reject"] }));
     expect(quiet).toContain("Ana cancelled and asked for new times");

@@ -21,7 +21,8 @@ test("getting started guides a new owner; taking the ITS confirmation back puts 
   await expect(setup.getByText("Start your first role")).toBeVisible();
   await expect(setup.getByRole("link", { name: "Start a hire" })).toBeVisible();
   await expect(setup.getByRole("button", { name: "Draft it with an ITS recruiter" })).toBeVisible();
-  await expect(setup.getByText("Give ITS access to your job boards")).toBeVisible();
+  // the Free plan has no ITS staff time, so its team posts on the boards and this step would never finish
+  await expect(setup.getByText("Give ITS access to your job boards")).toHaveCount(0);
   await expectAccessible(page, "today with getting started");
   // drafting with a recruiter opens the request form first: what they would see is on screen, and nothing is sent yet
   await setup.getByRole("button", { name: "Draft it with an ITS recruiter" }).click();
