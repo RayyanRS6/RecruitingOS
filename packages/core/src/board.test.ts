@@ -209,7 +209,10 @@ describe("boardPlacement", () => {
    */
   it("ticks a decline on a low score exactly when the verdict word is Weak match, over many random cases", () => {
     let seed = 20261111;
-    const rand = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296);
+    const rand = () => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return seed / 4294967296;
+    };
     const levels = ["yes", "partly", "no", "unknown"] as const;
     const pick = () => levels[Math.floor(rand() * levels.length)]!;
     let low = 0;

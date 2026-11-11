@@ -65,7 +65,10 @@ describe("a person sets the date and time", () => {
   const instant = (date: string, time: string) => { const [y, m, d] = date.split("-").map(Number); const [hh, mm] = time.split(":").map(Number); return zonedToUtc(y, m, d, hh, mm, TZ).getTime(); };
   /** A day far enough ahead of every clock move below, one per booking, so bookings never clash unless a case means them to. */
   let nextDay = 20;
-  const fresh = () => ({ date: dayIn((nextDay += 1)), time: "14:00" });
+  const fresh = () => {
+    nextDay += 1;
+    return { date: dayIn(nextDay), time: "14:00" };
+  };
   const setTime = (over: Record<string, unknown> = {}) => ({ ...fresh(), durationMinutes: 45, place: { kind: "link", url: "https://meet.example/room" }, ...over });
 
   const apply = async (first: string, last: string, opts: { phone?: string } = {}) => {

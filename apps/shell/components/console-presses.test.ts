@@ -219,7 +219,7 @@ describe("a question asked in the company check", () => {
   const field = (tree: unknown) => {
     const input = [...elements(tree)].find((e) => e.type === "input" && e.props.id === "co-check-why");
     const label = [...elements(tree)].find((e) => e.type === Field && e.props.htmlFor === "co-check-why");
-    return { value: input?.props.value, label: label?.props.label, type: (text: string) => (input?.props.onChange as (e: unknown) => void)({ target: { value: text } }) };
+    return { value: input?.props.value, label: label?.props.label, type: (text: string) => (input!.props.onChange as (e: unknown) => void)({ target: { value: text } }) };
   };
   /** Types the reason and presses the card's button: the question, and its Yes as drawn then. */
   const ask = (verifiedAt: string | null, reasonTyped: string, press: string) => {

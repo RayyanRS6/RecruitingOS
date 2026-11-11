@@ -87,7 +87,7 @@ describe("the benefits, written on the approval card", () => {
       expect(refused.status).toBe(409);
       const err = await errorOf(refused);
       expect(err.code).toBe("legal_check");
-      expect((err.details?.missing as Array<{ key: string }>).map((m) => m.key)).toEqual(["benefits"]);
+      expect((err.details!.missing as Array<{ key: string }>).map((m) => m.key)).toEqual(["benefits"]);
       const viaDecide = await post(owner, `/api/v1/approvals/${pending.id}/decide`, { decision: "approve" });
       expect(viaDecide.status).toBe(409);
       expect((await errorOf(viaDecide)).code).toBe("legal_check");
