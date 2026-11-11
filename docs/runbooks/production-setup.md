@@ -751,7 +751,8 @@ The Anthropic workspace's monthly limit (step 1) stays the guard over the whole 
   deployment and **Promote** it.
 - **The worker**: Railway, the worker, **Deployments**, the last good deployment, the three-dot menu, **Redeploy**. An
   older worker leaves work it does not know in the queue ("An older worker build is running") for up to a day; after
-  that the work fails like any other job, so release the fix within the day, or roll the app back too.
+  that the work fails like any other job, so release the fix within the day, or roll the app back too. A build from before
+  0037 also brings back the old default for who to interview: see "The worker back past 0037" below.
 - **The database is never rolled back.** Every migration works with the release before it, so the older code runs on
   the newer schema. A wrong migration is corrected by the next numbered one, in a normal release.
 - **One company**: **Console, Customers**, the company, **Take back the confirmation**: its pages, feeds and candidate
@@ -759,6 +760,14 @@ The Anthropic workspace's monthly limit (step 1) stays the guard over the whole 
 - **Back past the plans.** A build from before them does not read `locked_at` and has no AI credit: anyone locked becomes
   readable by their team, a company's AI spend has no limit, and new companies start on Trial again. With testers on, take back
   each one's confirmation first, and release the fix soon. The plan rows stay; the older build rewrites only the five it knows.
+- **The worker back past 0037.** A build from before it moves anyone who finishes an AI interview to
+  "Interview to set up" under the old default again, and tells the owner they are "ready to interview". 0037 has already run, so
+  nothing puts them back to New, where they can be shortlisted. Prefer fixing forward, or keep the rollback short, and write down
+  when it began. Once the new worker is back, run 0037's statement once by hand on production, with one more condition after
+  `WHERE a.stage = 'interview_recommended'`:
+  `AND a.stage_changed_at >= '<when the rollback began>'`. It puts back only the people moved meanwhile whose last move
+  there was `workflow:screen`'s, at a company that did not choose "Do it" or "Do it and tell me", records each in their
+  history, and sends nothing.
 - **Back past first sign-in asks for approval.** A build from before it refuses to start on `SIGNUP_MODE=approval` (step 6's
   table). If its log says so, set `SIGNUP_MODE=invite` and redeploy that build. On it someone waiting reads the by-invitation line,
   and their company reads as an ordinary one waiting for the ITS check: do not confirm it there, because that makes it public with

@@ -55,6 +55,19 @@ describe("the release runbook", () => {
     expect(later).toContain("stop the old worker first");
     expect(read("packages/db/migrations/0037_person_decides_who_to_interview.sql")).toContain("It puts back only the moves made before it runs");
   });
+
+  /**
+   * The release review's second reading (11 November 2026, S-6): the Rollback section's own worker step brings back a build from
+   * before 0037, which moves anyone who finishes an AI interview to "Interview to set up" under the old default again, and 0037
+   * has already run, so nobody would put them back. The section says so, and how to put back only the people moved meanwhile.
+   */
+  it("says rolling the worker back past 0037 brings the old default back, and how to put back the people it moved meanwhile", () => {
+    const runbook = read("docs/runbooks/production-setup.md");
+    const rollback = runbook.slice(runbook.indexOf("## Rollback"), runbook.indexOf("## Hotfix"));
+    const bullet = rollback.split("\n- ").find((b) => b.startsWith("**The worker back past 0037.**")) ?? "";
+    expect(bullet).not.toBe("");
+    for (const said of ["\"Interview to set up\"", "under the old default", "0037 has already run", "Prefer fixing forward", "`AND a.stage_changed_at >= '<when the rollback began>'`", "`workflow:screen`", "sends nothing"]) expect(bullet, said).toContain(said);
+  });
 });
 
 describe("the API contracts", () => {
