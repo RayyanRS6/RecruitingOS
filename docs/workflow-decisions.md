@@ -446,7 +446,7 @@ The review fixes were merged into `plans` (`f708bdf`) and the lead of that work 
 
 ## 11 November 2026: the release review's fixes
 
-An independent review of `plans` before production read the score, the board, the candidate's own page and the interview life cycle (findings L1 and L2), then the owner's path and ITS's console, the candidate's path, and security, privacy and release safety (L3 to L5), and found sentences and numbers that were not true. These are the calls made in fixing them, on the owner's standing instruction ("Think for yourself what is best and implement"), with the lead's D1 to D4. Each fix came with a test that failed without it; tested against fake providers only, and nothing here has run on production. What was found and not fixed is in `docs/audit/known-bugs.md`, rows 153 to 160 (row 149 is fixed with RR-11).
+An independent review of `plans` before production read the score, the board, the candidate's own page and the interview life cycle (findings L1 and L2), then the owner's path and ITS's console, the candidate's path, and security, privacy and release safety (L3 to L5), and found sentences and numbers that were not true. These are the calls made in fixing them, on the owner's standing instruction ("Think for yourself what is best and implement"), with the lead's D1 to D4. Each fix came with a test that failed without it; tested against fake providers only, and nothing here has run on production. What was found and not fixed is in `docs/audit/known-bugs.md`, rows 153 to 160 (row 149 is fixed with RR-11). A second reading of those fixes the same day (S-1 to S-6) gave RR-21 to RR-24 and rows 161 to 164: two need the lead or counsel (row 161, words in a block under counsel; row 162, the release's history before its first push).
 
 | Id | Decision | Source | Where it is built |
 |---|---|---|---|
@@ -477,7 +477,7 @@ An independent review of `plans` before production read the score, the board, th
 
 ## Still to decide
 
-Open: the product's new name and its domain, which the founder is choosing and the real email address waits for (see 4 November above); the plans' questions for the owner and the lawyer, PQ-1 to PQ-18 (see 5 November above); and what we keep about a declined request, AQ-1 (see 6 November above). The closing message's words after a hire and how the panel shows a hire date were decided on 10 November 2026 (LF-1, LF-B). Put off ("not now"), and open to asking again: D-02, D-05, L-03 (hiring managers see every job), L-14 (no bot check on the apply form), L-15 (house voice), L-16 (our own second sign-in step) and migration 0040.
+Open: the product's new name and its domain, which the founder is choosing and the real email address waits for (see 4 November above); the plans' questions for the owner and the lawyer, PQ-1 to PQ-18 (see 5 November above); and what we keep about a declined request, AQ-1 (see 6 November above). Before the first push of `plans`: whether its history is rewritten so the full name 1179e2b replaced is never published, or the name may be (known-bugs row 162). The closing message's words after a hire and how the panel shows a hire date were decided on 10 November 2026 (LF-1, LF-B). Put off ("not now"), and open to asking again: D-02, D-05, L-03 (hiring managers see every job), L-14 (no bot check on the apply form), L-15 (house voice), L-16 (our own second sign-in step) and migration 0040.
 
 ---
 
