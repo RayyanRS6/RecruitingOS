@@ -159,6 +159,8 @@ div.card.status { display: grid; grid-template-columns: repeat(auto-fit, minmax(
 .bars .partial progress::-moz-progress-bar { background: var(--caution); }
 .bars .short progress::-webkit-progress-value { background: var(--critical); }
 .bars .short progress::-moz-progress-bar { background: var(--critical); }
+.bars .shown progress::-webkit-progress-value { background: var(--primary); }
+.bars .shown progress::-moz-progress-bar { background: var(--primary); }
 .said { display: grid; gap: 14px; margin: 10px 0 0; padding: 0; list-style: none; }
 .said > li + li { padding-top: 14px; border-top: 1px solid var(--line); }
 .said-q { margin: 0 0 4px; color: var(--ink); font-weight: 600; }
@@ -450,7 +452,8 @@ function DecisionCard(props: { headline: string; since: string; messages: boolea
  * One bar of the breakdown: the requirement's public name, how much of it was met in words and as a bar, its colour band.
  * The folded line ("Other things the team looks for") counts what nothing showed at no points, so it carries the view's own
  * words, "55% shown" (`candidateScoreView`, under counsel with this block), in the bar and to a screen reader: never "met",
- * which read a requirement nothing showed as not met (the release review, 11 November 2026).
+ * which read a requirement nothing showed as not met (the release review, 11 November 2026). Its bar is one neutral colour
+ * (`shown`, the brand's own) at any share, never the red a must-have not met gets (the review's second reading, the same day).
  */
 function ScoreBar(props: { row: CandidateScoreRow }) {
   const { row } = props;

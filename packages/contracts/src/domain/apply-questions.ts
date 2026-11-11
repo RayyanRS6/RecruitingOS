@@ -231,8 +231,12 @@ export const CANDIDATE_SCORE_OTHER_LABEL = "Other things the team looks for";
 /** What the candidate's score rests on (R20-9), in their words: the team's label (`SCORE_BASIS_WORDS`) said to them. */
 export const CANDIDATE_SCORE_BASIS = { both: "From your résumé and your AI interview", resumeOnly: "From your résumé only" } as const;
 
-/** One bar of the breakdown: the requirement's public name (or the folded line), how much of it was met, its colour band. */
-export type CandidateScoreRow = { key: string; label: string; pctMet: number; tone: "strong" | "partial" | "short"; words: string };
+/**
+ * One bar of the breakdown: the requirement's public name (or the folded line), how much of it was met, its colour band. The
+ * folded line's bar says how much was shown, never how much was met, so it is `shown`, one neutral colour at any share: never the
+ * red of a must-have not met for what nothing showed (the release review's second reading, 11 November 2026).
+ */
+export type CandidateScoreRow = { key: string; label: string; pctMet: number; tone: "strong" | "partial" | "short" | "shown"; words: string };
 
 /**
  * The match score as the candidate sees it after sending (founder decision S7-1): the existing match score

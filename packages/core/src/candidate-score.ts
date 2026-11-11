@@ -20,14 +20,16 @@ export function candidateScoreView(score: MatchScore | null | undefined, packet:
   const others = score.breakdown.filter(notPublic);
   const weight = others.reduce((n, c) => n + c.weightPct, 0) + score.unknown.filter(notPublic).reduce((n, u) => n + u.weightPct, 0);
   const pct = weight > 0 ? Math.round(others.reduce((n, c) => n + c.pctMet * c.weightPct, 0) / weight) : null;
-  const other: CandidateScoreRow | null = pct === null ? null : { key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: pct, tone: toneOf(pct), words: `${pct}% shown` };
+  // Its words say how much was shown (what nothing showed counts at no points), so its bar takes one neutral colour, never the
+  // red of a must-have not met (the release review's second reading, 11 November 2026).
+  const other: CandidateScoreRow | null = pct === null ? null : { key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: pct, tone: "shown", words: `${pct}% shown` };
   const notYetShown = score.unknown.filter((u) => u.mustHave && publicKeys.includes(u.key)).map((u) => packet.requirements.mustHaves.find((m) => m.key === u.key)?.text ?? u.label);
   // R20-9: whether their AI interview is in the number, as the team's label says it.
   const basis = score.interview === "done" ? CANDIDATE_SCORE_BASIS.both : CANDIDATE_SCORE_BASIS.resumeOnly;
   return { score: score.score, band: score.band, bandLabel: score.bandLabel, rows, other, notYetShown, coverage: score.coverage.words, basis, capped: score.capped };
 }
 
-/** The bar's colour band: green from 80, amber from 40, red below. */
+/** A must-have bar's colour band: green from 80, amber from 40, red below. */
 function toneOf(pct: number): CandidateScoreRow["tone"] {
   return pct >= 80 ? "strong" : pct >= 40 ? "partial" : "short";
 }

@@ -146,8 +146,9 @@ describe("the score a candidate sees", () => {
       { key: "licence", label: "An active CA RDH license", pctMet: 100, tone: "strong", words: "Shown" },
       { key: "perio", label: "Periodontal charting", pctMet: 50, tone: "partial", words: "Partly shown" },
     ]);
-    // weighted as the score weighs them, what nothing showed at nothing: (50 x 23 + 100 x 15 + 0 x 10) / 48
-    expect(view.other).toEqual({ key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: 55, tone: "partial", words: "55% shown" });
+    // weighted as the score weighs them, what nothing showed at nothing: (50 x 23 + 100 x 15 + 0 x 10) / 48; one neutral tone,
+    // since the line says how much was shown, never how much was met
+    expect(view.other).toEqual({ key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: 55, tone: "shown", words: "55% shown" });
     expect(JSON.stringify(view)).not.toMatch(/PRIVATE/);
   });
 
@@ -157,8 +158,24 @@ describe("the score a candidate sees", () => {
     const publicOnly = score.breakdown.filter((c) => c.mustHave);
     expect(candidateScoreView({ ...score, breakdown: publicOnly, unknown: score.unknown.filter((u) => u.mustHave) }, packet)?.other).toBeNull();
     // nothing shown of the rest yet: the line says so, rather than leaving the number unexplained
-    expect(candidateScoreView({ ...score, breakdown: publicOnly }, packet)?.other).toEqual({ key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: 0, tone: "short", words: "0% shown" });
+    expect(candidateScoreView({ ...score, breakdown: publicOnly }, packet)?.other).toEqual({ key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet: 0, tone: "shown", words: "0% shown" });
     expect(candidateScoreView({ ...score, breakdown: [{ ...score.breakdown[0], pctMet: 0, finding: "Not met" }] }, packet)?.rows[0].tone).toBe("short");
+  });
+
+  /**
+   * The release review's second reading (11 November 2026, S-3): the folded line's words became "N% shown" (coverage), but its bar
+   * still took the red a must-have "Not met" gets below 40%, right under "never read as a no". It now has one neutral tone at any
+   * share; a must-have's own bar keeps its colour band.
+   */
+  it("gives the folded line one neutral tone at any share, never the red of a must-have not met; a must-have's bar keeps its band", () => {
+    const publicOnly = score.breakdown.filter((c) => c.mustHave);
+    const skill = score.breakdown.find((c) => !c.mustHave)!;
+    for (const pctMet of [0, 17, 39, 40, 79, 80, 100]) {
+      const view = candidateScoreView({ ...score, breakdown: [...publicOnly, { ...skill, pctMet }], unknown: score.unknown.filter((u) => u.mustHave) }, packet)!;
+      expect(view.other, String(pctMet)).toEqual({ key: "other", label: CANDIDATE_SCORE_OTHER_LABEL, pctMet, tone: "shown", words: `${pctMet}% shown` });
+    }
+    const toneOfMust = (pctMet: number) => candidateScoreView({ ...score, breakdown: [{ ...score.breakdown[0], pctMet }] }, packet)?.rows.find((r) => r.key === "perio")?.tone;
+    expect([toneOfMust(0), toneOfMust(50), toneOfMust(100)]).toEqual(["short", "partial", "strong"]);
   });
 
   it("says whether their AI interview is in the number, in their words (R20-9); the number is the same either way", () => {
@@ -182,7 +199,7 @@ describe("the score a candidate sees", () => {
     ]);
     expect(view.notYetShown).toEqual(["Dentrix"]);
     // (50 x 17 + 100 x 6 + 0 x 11) / 34: never 100% beside a low number
-    expect(view.other).toMatchObject({ pctMet: 43, tone: "partial" });
+    expect(view.other).toMatchObject({ pctMet: 43, tone: "shown" });
     // every bar weighted as the score weighs it, the must-have not shown at nothing, adds up to the number
     const shareOf = (key: string) => m.breakdown.find((c) => c.key === key)?.weightPct ?? 0;
     const fromBars = (view.rows.reduce((n, r) => n + r.pctMet * shareOf(r.key), 0) + view.other!.pctMet * 34) / 100;

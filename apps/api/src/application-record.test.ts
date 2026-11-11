@@ -212,6 +212,10 @@ describe("the application record (status page) after sending", () => {
     const score = html.slice(html.indexOf('<section class="card" id="score"'), html.indexOf("</section>", html.indexOf('id="score"')));
     expect(score).toContain('<span>Other things the team looks for</span><span>0% shown</span></div><progress max="100" value="0" aria-label="Other things the team looks for: 0% shown">0%</progress>');
     expect(score).not.toMatch(/(^|[^\d])0% met/);
+    // and its bar is one neutral colour, never the red of a must-have not met (the second reading, 11 November 2026, S-3)
+    expect(score).toContain('<li class="shown"><div class="bar-head"><span>Other things the team looks for</span>');
+    expect(html).toContain(".bars .shown progress::-webkit-progress-value { background: var(--primary); }");
+    expect(html).toContain(".bars .shown progress::-moz-progress-bar { background: var(--primary); }");
     // the must-have their résumé shows still reads as met, with its finding
     expect(score).toContain(`<span>${must.text}</span><span>100% met · Shown</span>`);
   });
