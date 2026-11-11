@@ -545,6 +545,16 @@ describe("interviewInScore: where the AI interview stands, from the screens in a
     expect(interviewInScore([{ status: "completed" }], "screen_complete", { allowanceLapsed: true })).toBe("being_scored");
   });
 
+  it("reads a request for a person as still coming only while a recruiter's call can finish the AI interview (the release review, 11 November 2026)", () => {
+    // at the screening steps a recruiter's notes from the call finish it and write its scorecard
+    for (const stage of ["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"]) expect(interviewInScore([{ status: "human_requested" }], stage), stage).toBe("not_done_yet");
+    // past them (an interview set up, a decision) the notes go nowhere near it (`not_screening`): nothing will score it
+    for (const stage of ["interview_recommended", "interview_scheduled", "interview_complete", "finalist", "hired", "rejected", "talent_pool", "withdrawn"]) expect(interviewInScore([{ status: "expired" }, { status: "human_requested" }], stage), stage).toBe("not_done");
+    // a link still open there is theirs to send, so it still counts; and without a stage nothing changes
+    expect(interviewInScore([{ status: "in_progress" }], "interview_scheduled")).toBe("not_done_yet");
+    expect(interviewInScore([{ status: "human_requested" }])).toBe("not_done_yet");
+  });
+
   it("gives the same answer whatever order the screens come in (the list loads them unordered)", () => {
     const screens = [{ status: "cancelled" }, { status: "reminded" }, { status: "expired" }];
     expect(interviewInScore([...screens].reverse())).toBe(interviewInScore(screens));

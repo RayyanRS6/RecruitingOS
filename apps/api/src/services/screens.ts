@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { NOTE_BODY_MAX, type Actor, type AiInterviewView, type ApplicationStage, type RecruiterCallNotes, type ScreeningFunnel, type ScreenTranscriptEntry } from "@ros/contracts";
-import { AI_INTERVIEW_PHASE, AI_INTERVIEW_REMIND_EXTENDS_HOURS, aiInterviewCanRemind, aiInterviewOf, audit, disclosureLine, emit, isOneVisitFlow, notLocked, screeningFunnel, transition, unsentScreenReadings, writtenQuestionsOf, type AiInterviewScreen } from "@ros/core";
+import { AI_INTERVIEW_PHASE, AI_INTERVIEW_REMIND_EXTENDS_HOURS, CALL_NOTES_STAGES, aiInterviewCanRemind, aiInterviewOf, audit, disclosureLine, emit, isOneVisitFlow, notLocked, screeningFunnel, transition, unsentScreenReadings, writtenQuestionsOf, type AiInterviewScreen } from "@ros/core";
 import { HELD_REASON, createScreen, deliver, linkEmailWaiting, linkEmailsWaiting, loadScreenBundle, sendConversationIdleReminder, sendConversationNotStartedReminder, sendConversationReviewReminder, sendScreenReminder, type ScreenDeps } from "@ros/agents";
 import { interviewsWaitingForMore } from "@ros/workflows";
 import { applicationNotes, applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
@@ -53,8 +53,11 @@ export async function stopScreenInvitation(tx: Tx, container: Container, input: 
 
 /** Statuses a recruiter's call notes can be added to: everything except a conversation that is already complete, withdrawn or stopped. */
 const NOTES_ALLOWED: readonly string[] = ["invited", "reminded", "in_progress", "paused", "human_requested", "unfinished", "expired", "declined_by_candidate"];
-/** The stages a recruiter's call notes go on the AI interview at: past screening the route answers `not_screening`. */
-const NOTES_STAGES: readonly string[] = ["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"];
+/**
+ * The stages a recruiter's call notes go on the AI interview at: past screening the route answers `not_screening`. The one list
+ * in @ros/core, which the score reads too: a request for a person counts as still to come only at these stages.
+ */
+const NOTES_STAGES: readonly string[] = CALL_NOTES_STAGES;
 
 /**
  * Whether a recruiter's notes from a call go on the candidate's AI interview tab now, by the rules `addRecruiterCallNotes`

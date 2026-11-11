@@ -93,13 +93,29 @@ export function aiInterviewCanRemind(screen: AiInterviewScreen, now: Date): bool
 const OPEN_FOR_SCORE: readonly string[] = ["invited", "reminded", "in_progress", "paused", "human_requested"];
 
 /**
+ * The stages at which a recruiter's notes from a call go on the AI interview and can finish it (`addRecruiterCallNotes` in
+ * apps/api/src/services/screens.ts reads this list): past them, with an interview set up or a decision made, the route answers
+ * `not_screening`. So the call someone asked for in the AI interview ("a person instead", or HUMAN in a reply) can give it a
+ * scorecard only while the application is at one of these (the release review, 11 November 2026).
+ */
+export const CALL_NOTES_STAGES: readonly ApplicationStage[] = ["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"];
+
+/** Whether a screen still counts as open for the score at this stage: a request for a person only while the call can finish it. */
+function openForScore(status: string, stage: ApplicationStage | string | null | undefined): boolean {
+  if (!OPEN_FOR_SCORE.includes(status)) return false;
+  return status !== "human_requested" || !stage || CALL_NOTES_STAGES.includes(stage as ApplicationStage);
+}
+
+/**
  * Where the AI interview stands for the match score's label (R20-9; `InterviewInScore`), from every screen of one
  * application in any order (the list loads them unordered) and its stage. Any sent one: `being_scored` (`matchScore`
  * makes it `done` once its scorecard is in the readings), or `not_scored` when its scorecard waits for the company's AI
  * credit (`scoreWaitsForCredit`, on the screen's progress or as the caller selected it alone), so nobody reads "being
  * scored" for ever, or `scoring_failed` when every sent one's scorecard could not be written, for good (`scoreFailed`: its
- * run gave up, as the caller read it; the lead's D2, 11 November 2026). Else any open one, or none yet while the stage says it is being prepared: `not_done_yet`. Else any
- * other (lapsed, left part-way, said no, stopped): `not_done`, one wording whatever closed it; so too an interview that
+ * run gave up, as the caller read it; the lead's D2, 11 November 2026). Else any open one, or none yet while the stage says it is being prepared: `not_done_yet`. A
+ * request for a person is open only while the recruiter's call can still finish it (`CALL_NOTES_STAGES`; with no stage given,
+ * always): once a person has set up an interview or decided, nothing will score it (the release review, 11 November 2026). Else any
+ * other (lapsed, left part-way, said no, stopped, or that request): `not_done`, one wording whatever closed it; so too an interview that
  * never came because the month's AI interviews stayed used up for the whole wait (`allowanceLapsed`: the run's
  * `screen.allowance_lapsed`, Q17, as the caller read it), since it was offered. No screen at all otherwise: `none` (never
  * offered one, as before 20 October 2026). It reads the status only, never answers, counts or times.
@@ -107,7 +123,7 @@ const OPEN_FOR_SCORE: readonly string[] = ["invited", "reminded", "in_progress",
 export function interviewInScore(screens: ReadonlyArray<{ status: string; scoreWaitsForCredit?: string | null; scoreFailed?: boolean; progress?: { scoreWaitsForCredit?: string } | null }>, stage?: ApplicationStage | string | null, opts: { allowanceLapsed?: boolean } = {}): Exclude<InterviewInScore, "done"> {
   const sent = screens.filter((s) => s.status === "completed");
   if (sent.length) return sent.some((s) => s.scoreWaitsForCredit ?? s.progress?.scoreWaitsForCredit) ? "not_scored" : sent.every((s) => s.scoreFailed) ? "scoring_failed" : "being_scored";
-  if (screens.some((s) => OPEN_FOR_SCORE.includes(s.status))) return "not_done_yet";
+  if (screens.some((s) => openForScore(s.status, stage))) return "not_done_yet";
   if (screens.length) return "not_done";
   if (stage && AI_INTERVIEW_PHASE.includes(stage as ApplicationStage)) return "not_done_yet";
   return opts.allowanceLapsed ? "not_done" : "none";

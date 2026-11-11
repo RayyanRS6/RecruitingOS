@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { ApplicationStage, RolePacket, ScreenProgress, ScreenTranscriptEntry, ToldState } from "@ros/contracts";
 import { TRIAGE_READINGS } from "@ros/agents";
 import { suppressAddress } from "@ros/core";
-import { applications, assessments, auditRecords, communications, screens, withTenant, workflowRuns } from "@ros/db";
+import { applications, assessments, auditRecords, communications, screens, users, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { decisionHeadline } from "./pages/application-record";
@@ -313,6 +313,59 @@ describe("the application record (status page) after sending", () => {
     html = await scoreOf();
     expect(html).toContain("Your match score is ready");
     expect(html).toMatch(/<p class="meta">From your résumé and your AI interview\. Based on /);
+  });
+
+  /**
+   * The release review's second reading (11 November 2026, S-1): the call someone asked for is still to come only while it can
+   * finish their AI interview. Once a person books them, or decides, a recruiter's notes no longer go on it (`not_screening`),
+   * and nothing will score it: "Not ready yet ... once it is ready" would stand for good, through the interview and the hire.
+   * Their page shows the résumé's number and says so, as before 186af29, and the team's label reads the AI interview as not done.
+   * A private decision changes nothing on their page (B6), so there it still reads as before the decision.
+   */
+  it("someone who asked for a person and was then booked, or hired, sees the résumé's number 'From your résumé only', never 'Not ready yet' for good; a private decision changes nothing", async () => {
+    const [me] = await container.db.select({ id: users.id }).from(users).where(eq(users.email, "owner@record.test"));
+    const scoreCard = async (token: string) => {
+      const { html } = await page(`/c/status/${token}`);
+      const from = html.indexOf('<section class="card" id="score"');
+      expect(from, "the score card").toBeGreaterThan(-1);
+      return html.slice(from, html.indexOf("</section>", from));
+    };
+    const askedForAPerson = (a: typeof applications.$inferSelect) => container.db.update(screens).set({ status: "human_requested", humanRequestedAt: at(0) }).where(eq(screens.applicationId, a.id));
+    const team = async (id: string) => ((await (await json("GET", `/api/v1/applications/${id}`)).json()) as { matchScore: { interview: string; basis: string } }).matchScore;
+
+    const a = await applyAs("Mia", "mia.record@example.com");
+    await readingFor(a);
+    await askedForAPerson(a);
+    expect(await scoreCard(a.statusToken)).toContain('<h2 id="score-h">Not ready yet</h2>');
+    // the owner phones them and books the interview themselves ("Set a date and time")
+    const day = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+    const booked = await json("POST", `/api/v1/applications/${a.id}/interviews`, { roundKey: packet.interviews.plan[0].key, interviewerUserIds: [me.id], setTime: { date: day, time: "10:00", durationMinutes: 45, place: { kind: "phone" } } });
+    expect(booked.status, await booked.clone().text()).toBe(201);
+    await container.drain();
+    expect((await container.db.select().from(applications).where(eq(applications.id, a.id)))[0].stage).toBe("interview_scheduled");
+    // a recruiter's notes can no longer finish it, so nothing will score it: the résumé's number, saying so
+    let card = await scoreCard(a.statusToken);
+    expect(card).toContain('<p class="eyebrow">Your match score is ready</p>');
+    expect(card).toContain('<p class="meta">From your résumé only. Based on ');
+    expect(card).not.toMatch(/Not ready yet|once it is ready/);
+    // the team reads it the same way: no AI interview, a final number, never "not done yet" for good
+    expect(await team(a.id)).toMatchObject({ interview: "not_done", basis: "Résumé only: no AI interview" });
+    // hired and told: the same
+    await container.db.update(applications).set({ stage: "hired", toldState: "sent" }).where(eq(applications.id, a.id));
+    card = await scoreCard(a.statusToken);
+    expect(card).toContain('<p class="meta">From your résumé only. Based on ');
+    expect(card).not.toMatch(/Not ready yet|once it is ready/);
+
+    // a private decision while the call is still to come: their page stands where it was (B6), "Not ready yet"
+    const b = await applyAs("Ned", "ned.record@example.com");
+    await readingFor(b);
+    await askedForAPerson(b);
+    const before = await scoreCard(b.statusToken);
+    expect(before).toContain('<h2 id="score-h">Not ready yet</h2>');
+    const declined = await json("POST", `/api/v1/applications/${b.id}/actions`, { action: "reject", reason: "not_a_match_experience" });
+    expect(declined.status, await declined.clone().text()).toBe(200);
+    expect((await container.db.select().from(applications).where(eq(applications.id, b.id)))[0]).toMatchObject({ stage: "rejected", toldState: "not_told" });
+    expect(await scoreCard(b.statusToken)).toBe(before);
   });
 
   /**

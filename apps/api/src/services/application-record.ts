@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { candidateScoreShown, type ApplicationStage, type CandidateScoreView, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type WriteupAnswer } from "@ros/contracts";
-import { DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
+import { CALL_NOTES_STAGES, DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
 import { chatPacket } from "@ros/agents";
 import { applications, assessments, events, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import { interviewRunOn } from "@ros/workflows";
@@ -32,7 +32,9 @@ export const REVIEWING_REFRESH_SECONDS = 15;
  *   read), or a sent AI interview whose scorecard is not written yet, for as long as that takes: never a résumé-only number
  *   for someone who did it. One waiting for the plan's AI help is `off` instead. The same for an AI interview a recruiter
  *   finished on a call until its scorecard is written, and while the call someone asked for in the AI interview is still to
- *   come (11 November 2026): the team reads both as still to come.
+ *   come (11 November 2026): the team reads both as still to come. That call is still to come only while its notes can finish
+ *   the AI interview (`CALL_NOTES_STAGES`): once a person has set up an interview or decided, nothing will score it, so the
+ *   résumé's number shows, saying so, as the team reads it.
  * - `not_coming`: nothing will work a number out by itself (10 November 2026): no reading gives one, the résumé's could not be
  *   made or AI does not read it (`readingWontCome`), and no AI interview is open, being written up or still on its way. Said at
  *   once, never "Working out…" or "Not ready yet" for ever. Since 11 November 2026 (the lead's D2) also a finished AI interview
@@ -80,9 +82,10 @@ export async function packetOf(tx: Tx, roleId: string, version: number): Promise
  * block, which says the team sees it and is under counsel word for word, stays away whole. The same while there is no reading
  * and what would write one waits for the plan's AI help (PL-10): nobody is told that, and "under a minute" would not be true.
  * And the same while a sent AI interview's scorecard waits for it, reading or not: the résumé's number never stands in for that
- * scorecard (6 November 2026).
+ * scorecard (6 November 2026). `stageShown`: the stage their page stands at, which under a private decision is the stage it was
+ * made from, so whether a call is still to come is read as it was before the decision, and nothing on the page changes with it.
  */
-export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; now: Date }): Promise<RecordScore> {
+export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; stageShown?: ApplicationStage | null; now: Date }): Promise<RecordScore> {
   if (!candidateScoreShown(input.companySettings) || input.app.lockedAt) return { state: "off", view: null };
   const { app } = input;
   const rows = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
@@ -112,8 +115,12 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   if (sent && scorecardDue && (await failedScorecards(tx, [sent])).size) return { state: "not_coming", view: null };
   // They asked for a person in the AI interview: a recruiter's call is still to come, and its notes write the scorecard, so the
   // résumé's number is only a floor, as the team reads it ("Résumé only: AI interview not done yet"). "Not ready yet", never
-  // "under a minute": the call is a person's (the release review, 11 November 2026).
-  const callComing = last?.status === "human_requested";
+  // "under a minute": the call is a person's (the release review, 11 November 2026). Only while those notes can still finish it,
+  // the rule `addRecruiterCallNotes` applies: once a person has booked them or decided, they go nowhere near it (`not_screening`)
+  // and nothing will score it, so "Not ready yet" would stand for good, through the interview and the hire. A private decision
+  // is read from the stage it was made from (B6). Without a stage to read there, as before: still to come.
+  const stageNow = input.hiddenDecision ? input.stageShown ?? null : app.stage;
+  const callComing = last?.status === "human_requested" && (!stageNow || CALL_NOTES_STAGES.includes(stageNow));
   // Nothing will give a number by itself (10 November 2026): said at once, a moment after applying too.
   if (!view && !scorecardDue && !callComing && (await readingWontCome(tx, app.id)) && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
   // The readings are in and judged nothing (every requirement not known: no number at all), and nothing else will give one by

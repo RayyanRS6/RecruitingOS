@@ -709,7 +709,7 @@ candidatePages.get("/c/status/:token", async (c) => {
     const packet = await packetOf(tx, app.roleId, app.packetVersion);
     return {
       packet,
-      score: await recordScoreFor(tx, { app, companySettings: company?.settings, screens: all, hiddenDecision: view.hidden, now: container.engine.clock() }),
+      score: await recordScoreFor(tx, { app, companySettings: company?.settings, screens: all, hiddenDecision: view.hidden, stageShown: shownStage, now: container.engine.clock() }),
       sent: sentAnswersFor({ app, packet, screens: all }),
       others: await otherApplicationsFor(tx, { companyId: app.companyId, candidateId: app.candidateId, exceptId: app.id }),
       facts: await learnedFactsFor(tx, { companyId: app.companyId, candidateId: app.candidateId }),
