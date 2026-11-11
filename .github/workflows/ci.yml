@@ -98,8 +98,16 @@ jobs:
       - name: Next.js production build
         run: pnpm --filter @ros/shell build
 
+      # The browser's system packages come from Ubuntu's package mirror. On 11 November 2026 the runners could not
+      # resolve it for hours, and every journey failed here before it ran, so a failed package install falls back to the
+      # browser alone: the runner image already carries the libraries Chromium needs, and a missing one fails the
+      # journeys themselves, never passes them.
       - name: Playwright browsers
-        run: pnpm --filter @ros/e2e exec playwright install --with-deps chromium
+        run: |
+          pnpm --filter @ros/e2e exec playwright install --with-deps chromium || {
+            echo "::warning::Ubuntu's package mirror could not be reached; installing the browser without its system packages"
+            pnpm --filter @ros/e2e exec playwright install chromium
+          }
 
       # In four runs, each with a dev server of its own: one server for all 32 journeys grew until the runner was shut
       # down mid-run twice (10 October 2026), the route inventory, which compiles every page in one test, needs a fresh
@@ -179,8 +187,16 @@ jobs:
       - name: Install from the lockfile only
         run: pnpm install --frozen-lockfile
 
+      # The browser's system packages come from Ubuntu's package mirror. On 11 November 2026 the runners could not
+      # resolve it for hours, and every journey failed here before it ran, so a failed package install falls back to the
+      # browser alone: the runner image already carries the libraries Chromium needs, and a missing one fails the
+      # journeys themselves, never passes them.
       - name: Playwright browsers
-        run: pnpm --filter @ros/e2e exec playwright install --with-deps chromium
+        run: |
+          pnpm --filter @ros/e2e exec playwright install --with-deps chromium || {
+            echo "::warning::Ubuntu's package mirror could not be reached; installing the browser without its system packages"
+            pnpm --filter @ros/e2e exec playwright install chromium
+          }
 
       - name: The whole flows (${{ matrix.part }})
         run: pnpm --filter @ros/e2e exec playwright test --project=flows --project=flows-phone ${{ matrix.args }}
