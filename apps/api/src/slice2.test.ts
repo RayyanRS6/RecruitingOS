@@ -571,4 +571,24 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(row.evidence.reason).toContain("but its AI review says Weak match");
     expect(row.stageLabel).toBe("Needs a closer look");
   });
+
+  /**
+   * The live test of 12 November 2026: the AI interview asks only about what the résumé does not show, and its scorecard
+   * wrote the silence about a must-have the résumé shows as a concern, with nothing quoted. It is not stored; a concern
+   * quoting the candidate is.
+   */
+  it("a scorecard concern that is only the AI interview's silence about what the résumé shows is never stored", async () => {
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { mustHaves: Array<{ key: string; text: string }> } } } };
+    const licence = role.currentPacket.packet.requirements.mustHaves.find((m) => /licen/i.test(m.text))!;
+    const silence = `${licence.text} was not discussed in the AI interview.`;
+    for (let i = 0; i < SCORECARD_READINGS; i++) container.fake!.scriptNext("screen.assess", { overall: "potential", confidence: "medium", summary: "Answered every question.", strengths: [], concerns: [{ claim: silence, evidence: { source: "screen" } }, { claim: "Sees eight patients a day", evidence: { source: "screen", quote: "I see eight patients a day" } }], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "Scripted." });
+    const a = await apply({ first: "Yara", last: "Shown", email: "yara.shown@example.com", resume: "Yara Shown\nRegistered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPerio charting, Dentrix" });
+    await finishScreen(a.id);
+    container.fake!.clearScripts();
+    // the résumé's AI review shows the licence on a checked quote
+    const [resume] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, a.id), eq(assessments.kind, "triage")));
+    expect(resume!.result.requirementFindings.find((f) => f.requirementKey === licence.key)).toMatchObject({ met: "yes", evidence: { quote: "RDH license CA active" } });
+    const [card] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, a.id), eq(assessments.kind, "screen")));
+    expect(card!.result.concerns.map((c) => c.claim)).toEqual(["Sees eight patients a day"]);
+  });
 });

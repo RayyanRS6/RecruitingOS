@@ -1,4 +1,4 @@
-import { MATCH_WEIGHT, importanceOf, matchWeightOf, previewMatch, type Importance, type WeighableRequirement } from "@ros/contracts";
+import { MATCH_WEIGHT, importanceOf, matchWeightOf, previewMatch, skillsInScore, type Importance, type WeighableRequirement } from "@ros/contracts";
 import type { BoardCard, BoardView, RolePacket } from "./api/client";
 import { READ_FROM_NOW_ON, type EditorFocus } from "./skills-form";
 
@@ -32,12 +32,13 @@ const SKILL_CHOICES: WeightLevel[] = ["essential", "important", "helpful", "off"
 
 /**
  * The rows to weigh, from the version the job runs on: its must-haves first (a must-have, or left out), then the skills
- * the score counts (Essential, Important, Helpful, or left out). A skill checked only in your own interviews is not in the
- * score, so it is not here (INTERVIEW_ONLY_LINE says so).
+ * the score counts (Essential, Important, Helpful, or left out; `skillsInScore` in the contracts). A skill checked only in
+ * your own interviews is not in the score, so it is not here (INTERVIEW_ONLY_LINE says so); nor is a skill named as a
+ * must-have, which the score counts once, as that must-have, so its row would change nothing (the live test, 12 November 2026).
  */
 export function weightRows(packet: Pick<RolePacket, "requirements" | "competencies">): WeightRow[] {
   const must = packet.requirements.mustHaves.map((m): WeightRow => ({ id: `m:${m.key}`, key: m.key, label: m.text, mustHave: true, level: "must_have", choices: MUST_HAVE_CHOICES }));
-  const skills = packet.competencies.filter((c) => c.evaluatedIn !== "interview").map((c): WeightRow => ({ id: `s:${c.key}`, key: c.key, label: c.name, mustHave: false, level: importanceOf(c), choices: SKILL_CHOICES }));
+  const skills = skillsInScore(packet).map((c): WeightRow => ({ id: `s:${c.key}`, key: c.key, label: c.name, mustHave: false, level: importanceOf(c), choices: SKILL_CHOICES }));
   return [...must, ...skills];
 }
 

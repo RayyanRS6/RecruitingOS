@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, interviewsInMotionFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings, visibleTo } from "@ros/core";
+import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, countedFinding, groupFor, interviewInScore, interviewsInMotionFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings, visibleTo } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
@@ -53,6 +53,10 @@ export type CompareCandidate = {
 
 export const COMPARE_REMINDER = "People decide. Each match score is worked out from checked evidence, with the breakdown on the person's page. A blank cell means the evidence has not spoken yet.";
 
+/** A finding the match score counts (`countedFinding` in @ros/core), in a reading's own words. */
+const MET_OF = { yes: "yes", partly: "partially", no: "no", unknown: "unknown" } as const;
+const FOUND_OF = { yes: "evidenced", partly: "partially_evidenced", no: "contradicted" } as const;
+
 /**
  * The comparison itself, for the route below and for the board's "Compare these" (plan F10). Every candidate shown is
  * audited as viewed. Null when the role is not visible.
@@ -95,16 +99,25 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
     const screen = (own.find((x) => x.kind === "screen") as (AssessmentRow & { result: ScreenAssessment }) | undefined) ?? null;
     const resume = (own.find((x) => x.kind !== "screen") as (AssessmentRow & { result: EvidenceAssessment }) | undefined) ?? null;
     const newest = own[0] ?? null;
-    // The screen's finding wins where both looked at the same thing: the candidate spoke to it directly.
+    // Each cell is the finding the match score counts (`countedFinding`), so it never disagrees with the breakdown on their
+    // page (the live test, 12 November 2026: an AI interview that never asked about a must-have hid the résumé's "yes").
+    // Where the score counts nothing, a reading's own entry (the AI interview's first) still shows that it looked; with no
+    // entry at all the cell stays blank.
+    const pair = { resume, screen };
+    const readingOf = (source: "resume" | "screen") => (source === "screen" ? screen : resume);
     const mh: CompareCandidate["mustHaves"] = {};
     for (const m of mustHaves) {
-      const f = screen?.result.requirementFindings?.find((r) => r.requirementKey === m.key) ?? resume?.result.requirementFindings?.find((r) => r.requirementKey === m.key);
-      if (f) mh[m.key] = { met: f.met, quote: f.evidence?.quote ?? null };
+      const f = countedFinding(pair, { key: m.key, mustHave: true });
+      if (f.status !== "unknown") mh[m.key] = { met: MET_OF[f.status], quote: f.quote };
+      else if ([screen, resume].some((r) => r?.result.requirementFindings?.some((x) => x.requirementKey === m.key))) mh[m.key] = { met: MET_OF.unknown, quote: null };
     }
     const comp: CompareCandidate["competencies"] = {};
     for (const x of competencies) {
-      const f = screen?.result.competencyFindings?.find((r) => r.competencyKey === x.key) ?? resume?.result.competencyFindings?.find((r) => r.competencyKey === x.key);
-      if (f) comp[x.key] = { finding: f.finding, note: f.note ?? null };
+      const f = countedFinding(pair, { key: x.key, mustHave: false });
+      const entryOf = (r: AssessmentRow | null) => r?.result.competencyFindings?.find((y) => y.competencyKey === x.key);
+      const raw = f.status === "unknown" ? entryOf(screen) ?? entryOf(resume) : entryOf(readingOf(f.source));
+      if (f.status !== "unknown") comp[x.key] = { finding: FOUND_OF[f.status], note: raw?.note ?? null };
+      else if (raw) comp[x.key] = { finding: raw.finding, note: raw.note ?? null };
     }
     const unknownCount = mustHaves.filter((m) => !mh[m.key] || mh[m.key].met === "unknown").length + competencies.filter((x) => !comp[x.key]).length + (newest?.result.unknowns.length ?? 0);
     await audit(tx, { companyId: t.companyId, actor: input.actor, action: "candidate.viewed", target: { type: "application", id: a.id }, reason: "comparison view" });

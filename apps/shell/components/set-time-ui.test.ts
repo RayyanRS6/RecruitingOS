@@ -258,6 +258,18 @@ describe("the Interviews page", () => {
     expect(t).toContain("Interview again? This interview was cancelled. Set a new date and time");
     expect(t).not.toMatch(/approve a new interview|fresh times go out/i);
   });
+
+  it("the brief says a skill checked only in your own interviews is for this interview, never 'not assessed yet' (live test, 12 November 2026)", () => {
+    const skill = (key: string, name: string, evaluatedIn: string, finding: string | null = null) => ({ key, name, definition: `${name} defined.`, indicators: [], finding, note: null, evaluatedIn });
+    const brief = { candidateFirstName: "Maria", round: { key: "r1", title: "Working interview", purpose: "See the work.", durationMinutes: 30, format: "video" }, competencies: [skill("software", "Practice software", "interview"), skill("chairside", "Chairside skill", "both"), skill("patients", "Patient care", "both", "evidenced")], questions: [], mustHaves: [{ key: "mh_dr", text: "Digital radiography", met: "yes", quote: "Bitewing X-rays with digital sensors", source: "resume" }], strengths: [], concerns: [], screen: null, pay: null, includesPay: true };
+    const t = text(page(base({ brief })));
+    expect(t).toContain("Practice software : Practice software defined. for this interview");
+    expect(t).not.toContain("Practice software defined. not assessed yet");
+    // a skill the AI reviews read keeps its words: nothing found yet, or what was found
+    expect(t).toContain("Chairside skill : Chairside skill defined. not assessed yet");
+    expect(t).toContain("Patient care : Patient care defined. seen");
+    expect(t).toContain('Digital radiography met "Bitewing X-rays with digital sensors"');
+  });
 });
 
 /**

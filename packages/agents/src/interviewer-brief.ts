@@ -1,8 +1,9 @@
 import { desc, eq } from "drizzle-orm";
 import type { EvidenceAssessment, RolePacket, ScreenAssessment } from "@ros/contracts";
-import { screenAnswersSent, unsentScreenReadings } from "@ros/core";
+import { countedFinding, screenAnswersSent, unsentScreenReadings } from "@ros/core";
 import { assessments, screens, type Queryable } from "@ros/db";
 import { answersOf } from "./screen-focus";
+import { withoutResumeShownConcerns } from "./screening";
 
 /**
  * The interviewer's brief (docs/spec/21 F7 and F8). Everything a person needs to walk into the room: what this round
@@ -25,7 +26,12 @@ export type BriefScreenAnswer = { question: string; answer: string; aboutPay: bo
 export type InterviewerBrief = {
   candidateFirstName: string;
   round: { key: string; title: string; purpose: string; durationMinutes: number; format: string };
-  competencies: Array<{ key: string; name: string; definition: string; indicators: string[]; finding: CompetencyFinding | null; note: string | null }>;
+  /**
+   * `evaluatedIn` is the skill's own (null for a round key the role has no skill for): one checked only in the team's own
+   * interviews ("interview") is read by no AI review, so with nothing found it reads "for this interview", never "not
+   * assessed yet" (the live test, 12 November 2026).
+   */
+  competencies: Array<{ key: string; name: string; definition: string; indicators: string[]; finding: CompetencyFinding | null; note: string | null; evaluatedIn: RolePacket["competencies"][number]["evaluatedIn"] | null }>;
   /** The questions the interview plan suggests for this round, if the packet has any. */
   questions: string[];
   mustHaves: Array<{ key: string; text: string; met: MustHaveFinding; quote: string | null; source: string | null }>;
@@ -60,10 +66,19 @@ function mergeFindings(first: Finding[], second: Finding[], cap: number, aboutPa
   return out;
 }
 
+/** A finding the match score counts (`countedFinding` in @ros/core), in a reading's own words. */
+const MET_OF: Record<"yes" | "partly" | "no" | "unknown", MustHaveFinding> = { yes: "yes", partly: "partially", no: "no", unknown: "unknown" };
+const FOUND_OF: Record<"yes" | "partly" | "no", CompetencyFinding> = { yes: "evidenced", partly: "partially_evidenced", no: "contradicted" };
+
 /**
  * Composes the brief for one round of an application from the packet and the newest resume and screen assessments.
- * Returns null when the round is not in the packet. The screen's findings take precedence over the resume's for a
- * must-have or competency both looked at, because the candidate spoke to it directly.
+ * Returns null when the round is not in the packet. Each must-have and skill shows the finding the match score counts
+ * (`countedFinding`), with its quote, so the brief never disagrees with the score's breakdown: the AI interview's own
+ * "no" first, then the better checked finding of the two readings (the live test, 12 November 2026: an AI interview that
+ * never asked about a must-have the résumé shows had hidden the résumé's "yes" behind "unknown so far"). A skill nothing
+ * counts keeps what the readings wrote (the AI interview's first), so "not seen yet" still says a reading looked. The
+ * scorecard's concerns come without those that are only the chat's silence about what the résumé shows
+ * (`withoutResumeShownConcerns`).
  */
 export async function composeInterviewerBrief(q: Queryable, input: { applicationId: string; candidateFirstName: string; packet: RolePacket; roundKey: string }): Promise<InterviewerBrief | null> {
   const round = input.packet.interviews.plan.find((r) => r.key === input.roundKey);
@@ -81,8 +96,23 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
   // their answers under the written questions' keys: the brief names them in the company's words, never by key.
   const questionText = (key: string) => answered?.progress.focusQuestions?.find((f) => f.key === key)?.question ?? input.packet.screening.questions.find((x) => x.key === key)?.question ?? input.packet.companyQuestions?.written?.find((w) => w.key === key)?.question ?? key.replace(/_/g, " ");
 
-  const requirementFinding = (key: string) => screenAsmt?.result.requirementFindings?.find((r) => r.requirementKey === key) ?? resumeAsmt?.result.requirementFindings?.find((r) => r.requirementKey === key) ?? null;
-  const competencyFinding = (key: string) => screenAsmt?.result.competencyFindings?.find((c) => c.competencyKey === key) ?? resumeAsmt?.result.competencyFindings?.find((c) => c.competencyKey === key) ?? null;
+  const pair = { resume: resumeAsmt, screen: screenAsmt };
+  const readingOf = (source: "resume" | "screen") => (source === "screen" ? screenAsmt : resumeAsmt);
+  const requirementOf = (r: AssessmentRow | null, key: string) => r?.result.requirementFindings?.find((f) => f.requirementKey === key) ?? null;
+  const competencyOf = (r: AssessmentRow | null, key: string) => r?.result.competencyFindings?.find((f) => f.competencyKey === key) ?? null;
+  const mustHaveFinding = (key: string) => {
+    const counted = countedFinding(pair, { key, mustHave: true });
+    if (counted.status === "unknown") return { met: MET_OF.unknown, quote: null, source: null };
+    return { met: MET_OF[counted.status], quote: counted.quote, source: requirementOf(readingOf(counted.source), key)?.evidence?.source ?? counted.source };
+  };
+  const competencyFinding = (key: string): { finding: CompetencyFinding | null; note: string | null } => {
+    const counted = countedFinding(pair, { key, mustHave: false });
+    const raw = counted.status === "unknown" ? competencyOf(screenAsmt, key) ?? competencyOf(resumeAsmt, key) : competencyOf(readingOf(counted.source), key);
+    return { finding: counted.status === "unknown" ? raw?.finding ?? null : FOUND_OF[counted.status], note: raw?.note ?? null };
+  };
+  // The newest scorecard with the newest résumé reading: a concern stored before 12 November 2026 that is only the chat's
+  // silence about what the résumé shows reads as if it had been stored since.
+  const screenConcerns = screenAsmt ? withoutResumeShownConcerns(screenAsmt.result, resumeAsmt?.result, input.packet).concerns : [];
 
   // What the candidate said about pay: their answer to each compensation question, and the expectation the scorecard recorded.
   const payKeys = new Set(input.packet.screening.questions.filter((x) => x.kind === "compensation").map((x) => x.key));
@@ -96,16 +126,12 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
     round: { key: round.key, title: round.title, purpose: round.purpose, durationMinutes: round.durationMinutes, format: round.format },
     competencies: round.competencyKeys.map((key) => {
       const c = input.packet.competencies.find((x) => x.key === key);
-      const f = competencyFinding(key);
-      return { key, name: c?.name ?? key.replace(/_/g, " "), definition: c?.definition ?? "", indicators: c?.indicators ?? [], finding: f?.finding ?? null, note: f?.note ?? null };
+      return { key, name: c?.name ?? key.replace(/_/g, " "), definition: c?.definition ?? "", indicators: c?.indicators ?? [], ...competencyFinding(key), evaluatedIn: c?.evaluatedIn ?? null };
     }),
     questions: round.suggestedQuestions ?? [],
-    mustHaves: input.packet.requirements.mustHaves.map((m) => {
-      const f = requirementFinding(m.key);
-      return { key: m.key, text: m.text, met: f?.met ?? "unknown", quote: f?.evidence?.quote ?? null, source: f?.evidence?.source ?? null };
-    }),
+    mustHaves: input.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text, ...mustHaveFinding(m.key) })),
     strengths: mergeFindings(screenAsmt?.result.strengths ?? [], resumeAsmt?.result.strengths ?? [], 6, findingAboutPay),
-    concerns: mergeFindings(screenAsmt?.result.concerns ?? [], resumeAsmt?.result.concerns ?? [], 6, findingAboutPay),
+    concerns: mergeFindings(screenConcerns, resumeAsmt?.result.concerns ?? [], 6, findingAboutPay),
     screen: answered ? { completedAt: answered.completedAt, answers: Object.entries(answered.all).map(([key, answer]) => ({ question: questionText(key), answer: String(answer), aboutPay: payKeys.has(key) || repeatsPay(String(answer)) })) } : null,
     pay: screenAsmt ? { expectation: screenAsmt.result.compensationExpectation?.stated ?? null, withinRange: screenAsmt.result.compensationExpectation?.withinRange ?? "unknown" } : null,
     includesPay: true,
@@ -138,7 +164,7 @@ export function renderInterviewerBriefText(brief: InterviewerBrief): string {
   lines.push(`What this round is for: ${brief.round.purpose}`);
   lines.push("");
   lines.push("What to look for:");
-  for (const c of brief.competencies) lines.push(`- ${c.name}: ${c.definition}${c.finding ? ` (so far: ${FINDING_WORDS[c.finding]}${c.note ? `; ${c.note}` : ""})` : " (not assessed yet)"}`);
+  for (const c of brief.competencies) lines.push(`- ${c.name}: ${c.definition}${c.finding ? ` (so far: ${FINDING_WORDS[c.finding]}${c.note ? `; ${c.note}` : ""})` : c.evaluatedIn === "interview" ? " (for this interview)" : " (not assessed yet)"}`);
   if (brief.questions.length) {
     lines.push("");
     lines.push("Questions the plan suggests:");

@@ -194,6 +194,17 @@ describe("the overall reading, worked out from the settled findings (Wave S7)", 
     expect(settledOverall(f("yes", "yes", "evidenced"), PACKET, { hasWork: false })).toBe("unknown");
   });
 
+  it("counts a skill named as a must-have once, as the must-have, as the match score does (live test, 12 November 2026)", () => {
+    // the draft's Essential skill "Periodontal therapy" beside the must-have of the same name, and a second skill
+    const twin = { ...PACKET, competencies: [...PACKET.competencies, { key: "perio_skill", name: "Periodontal Therapy", definition: "d", weight: 5, evaluatedIn: "both" as const, indicators: ["x"] }, { key: "software", name: "Practice software", definition: "d", weight: 3, evaluatedIn: "both" as const, indicators: ["x"] }] } as unknown as Parameters<typeof settledOverall>[1];
+    const reading = {
+      requirementFindings: [{ requirementKey: "licence", met: "yes" as const, evidence: { source: "resume" as const, quote: "RDH license CA active" } }, { requirementKey: "perio", met: "yes" as const, evidence: { source: "resume" as const, quote: "Periodontal therapy daily" } }],
+      competencyFindings: [{ competencyKey: "chairside", finding: "evidenced" as const, evidence: { source: "resume" as const, quote: "Chairside assisting daily" } }, { competencyKey: "perio_skill", finding: "evidenced" as const, evidence: { source: "resume" as const, quote: "Periodontal therapy daily" } }, { competencyKey: "software", finding: "not_evidenced" as const }],
+    };
+    // every must-have shown and one of the two skills the score counts: strong, as for the role without the twin
+    expect(settledOverall(reading, twin, { hasWork: true })).toBe("strong");
+  });
+
   it("gives the recommendation that goes with it, by the prompt's rule", () => {
     expect(settledRecommendation("unknown", { eligible: true })).toBe("review_manually");
     expect(settledRecommendation("weak", { eligible: true })).toBe("hold");

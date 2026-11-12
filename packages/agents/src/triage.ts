@@ -1,5 +1,5 @@
 import { inArray, eq } from "drizzle-orm";
-import { importanceOf, type CompanyQuestions, type Confidence, type EligibilityResult, type Evidence, type EvidenceAssessment, type EvidenceSource, type Overall, type ResumeExtraction, type RolePacket } from "@ros/contracts";
+import { importanceOf, skillsInScore, type CompanyQuestions, type Confidence, type EligibilityResult, type Evidence, type EvidenceAssessment, type EvidenceSource, type Overall, type ResumeExtraction, type RolePacket } from "@ros/contracts";
 import { outOfCredit, resumeExtractPrompt, runPromptDetached, runPromptsDetached, triageAssessPrompt, type AiRuntime, type RunMeta, type RunOutcome, type TriageInput } from "@ros/ai";
 import { applicationAnswerSentences, errorForLog, matchScore, quickQuestionsOf, scoredSkill } from "@ros/core";
 import { aiRuns, withTenant, type Db, type Queryable } from "@ros/db";
@@ -291,7 +291,8 @@ export function settledOverall(reading: Pick<EvidenceAssessment, "requirementFin
   if (score.missingMustHave.length) return "weak";
   const musts = score.breakdown.filter((c) => c.mustHave);
   const mustUnknown = score.unknown.some((u) => u.mustHave);
-  const skills = packet.competencies.filter(scoredSkill);
+  // the skills the score counts: a skill named as a must-have is that must-have, never shown twice (the live test, 12 November 2026)
+  const skills = skillsInScore(packet);
   const shownSkills = score.breakdown.filter((c) => !c.mustHave && c.pctMet === 100).length;
   const essential = new Set(skills.filter((c) => importanceOf(c) === "essential").map((c) => c.key));
   const essentialAgainst = score.breakdown.some((c) => !c.mustHave && c.pctMet === 0 && essential.has(c.key));

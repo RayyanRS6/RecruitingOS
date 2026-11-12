@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { MATCH_FIT_LABEL, MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, matchWeightOf, previewMatch, scoreRank, type EvidenceAssessment, type MatchCriterion, type MatchFit, type MatchScore, type RolePacket, type WeighableRequirement } from "@ros/contracts";
+import { MATCH_FIT_LABEL, MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, matchWeightOf, onlyInOwnInterviews, previewMatch, repeatsMustHave, scoreRank, skillsInScore, type EvidenceAssessment, type MatchCriterion, type MatchFit, type MatchScore, type RolePacket, type WeighableRequirement } from "@ros/contracts";
 import { interviewInScore } from "./ai-interview";
-import { coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, scoredSkill, type ScoredReading } from "./match-score";
+import { countedFinding, coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, scoredSkill, type ScoredReading } from "./match-score";
 
 /**
  * The match score (founder decision B2; the owner, 6 November 2026): worked out by code from the stored, quote-checked
@@ -724,5 +724,189 @@ describe("a preview with other weights (L-07 A)", () => {
       expect(previewMatch({ breakdown: order as MatchCriterion[], unknown: m.unknown }, weightOf)).toEqual(want);
       expect(previewMatch({ breakdown: order as MatchCriterion[], unknown: m.unknown }, matchWeightOf).score).toBe(m.score);
     }
+  });
+});
+
+/**
+ * The live test of 12 November 2026: the job draft wrote the Essential skill "Digital radiography" beside the owner's
+ * must-have of the same name, so one requirement counted twice (4 + 3 points) among the "9 requirements". It counts once,
+ * as the must-have: what the owner chose, the heavier, and the one whose quoted no holds the score at 54.
+ */
+describe("a skill named as a must-have counts once, as the must-have (live test, 12 November 2026)", () => {
+  const twinRole = (evidencedBy: string[] = ["resume", "screen"]) => ({
+    requirements: { mustHaves: [{ key: "mh_dr", text: "Digital radiography", rationale: "r", evidencedBy }, { key: "sterile", text: "Sterilization and OSHA compliance", rationale: "r", evidencedBy: ["resume", "screen"] }] },
+    competencies: [
+      { key: "digital_radiography", name: "Digital Radiography.", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] },
+      { key: "chairside", name: "Chairside skill", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] },
+      { key: "scanning", name: "Digital radiography and intraoral scanning", definition: "d", weight: 3, evaluatedIn: "both", indicators: ["x"] },
+    ],
+  }) as unknown as Pick<RolePacket, "requirements" | "competencies">;
+  const radiography = must("mh_dr", "yes", "Take full-mouth and bitewing X-rays with digital sensors");
+  const sterile = must("sterile", "yes", "Run the sterilization center");
+  const keysOf = (m: MatchScore) => [...m.breakdown.map((c) => c.key), ...m.unknown.map((u) => u.key)];
+
+  it("is not a requirement of its own: in neither the breakdown nor what is open, and one fewer in the coverage", () => {
+    const m = matchScore(pair(reading("triage", [radiography, sterile], [skill("digital_radiography", "evidenced", "digital sensors"), skill("chairside", "evidenced", "Chairside assisting"), skill("scanning", "partially_evidenced", "digital sensors")])), twinRole())!;
+    expect(keysOf(m)).not.toContain("digital_radiography");
+    expect(m.coverage).toEqual({ known: 4, total: 4, words: "Based on all 4 requirements" });
+    // must-haves 4 + 4, chairside 3, scanning half of 2: 12 of 13 (counting the twin as well read 15 of 16, 94)
+    expect(m.score).toBe(92);
+    expect(m.breakdown.find((c) => c.key === "mh_dr")).toMatchObject({ label: "Digital radiography", mustHave: true, pctMet: 100, quote: "Take full-mouth and bitewing X-rays with digital sensors" });
+    // a skill that only begins with the must-have's words is a skill of its own
+    expect(m.breakdown.find((c) => c.key === "scanning")).toMatchObject({ mustHave: false, pctMet: 50 });
+  });
+
+  it("keeps the hold at 54 on the must-have's quoted no, whatever the twin shows", () => {
+    const m = matchScore(pair(reading("triage", [must("mh_dr", "no", "I have never taken digital X-rays"), sterile], [skill("digital_radiography", "evidenced", "digital sensors"), skill("chairside", "evidenced", "Chairside assisting"), skill("scanning", "evidenced", "digital sensors")])), twinRole())!;
+    // 9 of 13 is 69, held at 54
+    expect(m).toMatchObject({ score: MISSING_MUST_HAVE_CAP, capped: true, fit: "missing_must_have", missingMustHave: [{ key: "mh_dr", label: "Digital radiography", quote: "I have never taken digital X-rays" }] });
+    expect(keysOf(m)).not.toContain("digital_radiography");
+  });
+
+  it("earns nothing on the twin while the must-have is not known", () => {
+    const of = (twin: Comp) => matchScore(pair(reading("triage", [must("mh_dr", "unknown"), sterile], [twin, skill("chairside", "evidenced", "Chairside assisting"), skill("scanning", "evidenced", "digital sensors")])), twinRole())!;
+    const shown = of(skill("digital_radiography", "evidenced", "digital sensors"));
+    expect(shown.score).toBe(of(skill("digital_radiography", "not_evidenced")).score);
+    // 9 of 13, the must-have still open
+    expect(shown).toMatchObject({ score: 69, fit: "potential" });
+    expect(shown.unknown.map((u) => [u.key, u.mustHave])).toEqual([["mh_dr", true]]);
+  });
+
+  it("keeps the skill a requirement of its own beside a must-have checked only in the team's own interviews, which counts only on their own quoted no", () => {
+    const role = twinRole(["interview"]);
+    const skills = [skill("digital_radiography", "evidenced", "digital sensors"), skill("chairside", "evidenced", "Chairside assisting"), skill("scanning", "evidenced", "digital sensors")];
+    // the must-have is in no sum, so dropping the skill would leave the requirement out of the score altogether: sterile 4,
+    // the skill 3, chairside 3, scanning 2, all shown
+    for (const finding of [must("mh_dr", "unknown"), must("mh_dr", "partially", "some digital X-rays"), must("mh_dr", "yes", "digital sensors")]) {
+      const m = matchScore(pair(reading("triage", [finding, sterile], skills)), role)!;
+      expect(m.score, finding.met).toBe(100);
+      expect(keysOf(m).sort(), finding.met).toEqual(["chairside", "digital_radiography", "scanning", "sterile"]);
+    }
+    expect(matchScore(pair(reading("triage", [must("mh_dr", "unknown"), sterile], [skill("digital_radiography", "not_evidenced"), ...skills.slice(1)])), role)).toMatchObject({ score: 75, unknown: [{ key: "digital_radiography", mustHave: false }] });
+    // their own quoted no counts the must-have as for any must-have: it earns nothing and holds the score at 54
+    const no = matchScore(pair(reading("triage", [must("mh_dr", "no", "I have never taken digital X-rays"), sterile], skills)), role)!;
+    expect(no).toMatchObject({ score: MISSING_MUST_HAVE_CAP, capped: true, missingMustHave: [{ key: "mh_dr" }] });
+    expect(keysOf(no)).toEqual(expect.arrayContaining(["mh_dr", "digital_radiography"]));
+  });
+
+  it("stays monotonic with twins, whichever must-haves are checked only in the team's own interviews, and with a scorecard beside the résumé", () => {
+    const rand = seeded(20261112);
+    type Level = "no" | "unknown" | "partly" | "yes";
+    const ORDER: Level[] = ["no", "unknown", "partly", "yes"];
+    const pickLevel = (): Level => ORDER[Math.floor(rand() * ORDER.length)]!;
+    const MUST: Record<Level, (k: string) => Req> = { no: (k) => must(k, "no", `I have never done ${k}`), unknown: (k) => must(k, "unknown"), partly: (k) => must(k, "partially", `some ${k} work`), yes: (k) => must(k, "yes", `${k} every day`) };
+    const SKILL: Record<Level, (k: string) => Comp> = { no: (k) => skill(k, "contradicted", `I avoid ${k}`), unknown: (k) => skill(k, "not_evidenced"), partly: (k) => skill(k, "partially_evidenced", `some ${k}`), yes: (k) => skill(k, "evidenced", `${k} daily`) };
+    let checked = 0;
+    let twins = 0;
+    for (let n = 0; n < 300; n++) {
+      const mustKeys = Array.from({ length: 1 + Math.floor(rand() * 3) }, (_, i) => `m${i}`);
+      const skillKeys = Array.from({ length: 1 + Math.floor(rand() * 4) }, (_, i) => `s${i}`);
+      const ownOnly = new Set(mustKeys.filter(() => rand() < 0.4));
+      // now and then a skill is named as one of the must-haves, in other case and punctuation
+      const twinOf = new Map(skillKeys.flatMap((k) => (rand() < 0.5 ? [[k, mustKeys[Math.floor(rand() * mustKeys.length)]!] as const] : [])));
+      twins += twinOf.size;
+      const role = {
+        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: ownOnly.has(key) ? ["interview"] : ["resume", "screen"] })) },
+        competencies: skillKeys.map((key) => ({ key, name: twinOf.has(key) ? `MUST ${twinOf.get(key)}.` : `Skill ${key}`, definition: "d", weight: 1 + Math.floor(rand() * 5), evaluatedIn: "both", indicators: ["x"] })),
+      } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+      const keys = [...mustKeys, ...skillKeys];
+      const resume = new Map<string, Level>(keys.map((k) => [k, pickLevel()]));
+      const card = rand() < 0.5 ? new Map<string, Level>(keys.map((k) => [k, pickLevel()])) : null;
+      const readingOf = (kind: "triage" | "screen", ls: Map<string, Level>) => reading(kind, mustKeys.map((k) => MUST[ls.get(k)!](k)), skillKeys.map((k) => SKILL[ls.get(k)!](k)), kind === "screen" ? { createdAt: "2026-10-02T10:00:00Z" } : {});
+      const scoreOf = (r: Map<string, Level>, s: Map<string, Level> | null) => matchScore(pair(readingOf("triage", r), s ? readingOf("screen", s) : null), role)!.score;
+      const before = scoreOf(resume, card);
+      for (const which of ["resume", "screen"] as const) {
+        const ls = which === "resume" ? resume : card;
+        if (!ls) continue;
+        for (const key of keys) {
+          for (const up of ORDER.slice(ORDER.indexOf(ls.get(key)!) + 1)) {
+            const moved = new Map(ls).set(key, up);
+            const after = which === "resume" ? scoreOf(moved, card) : scoreOf(resume, moved);
+            if (before === null || after === null) continue;
+            expect(after, `${which} ${JSON.stringify([...ls])} twins ${JSON.stringify([...twinOf])} own interviews ${JSON.stringify([...ownOnly])}: ${key} ${ls.get(key)} → ${up}`).toBeGreaterThanOrEqual(before);
+            checked += 1;
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(1500);
+    expect(twins).toBeGreaterThan(200);
+  });
+
+  it("matches names exactly, case, accents and punctuation aside, and lists the skills the score counts", () => {
+    const mh = [{ text: "Digital radiography" }];
+    expect(repeatsMustHave({ name: "Digital Radiography." }, mh)).toBe(true);
+    expect(repeatsMustHave({ name: "  digital   RADIOGRAPHY " }, mh)).toBe(true);
+    expect(repeatsMustHave({ name: "Radiografía digital" }, [{ text: "Radiografia digital" }])).toBe(true);
+    // never on part of the words
+    expect(repeatsMustHave({ name: "Digital radiography and intraoral scanning" }, mh)).toBe(false);
+    expect(repeatsMustHave({ name: "Digital radiography" }, [{ text: "Digital radiography certificate" }])).toBe(false);
+    expect(repeatsMustHave({ name: "Perio skill" }, [{ text: "Perio charting experience" }])).toBe(false);
+    // a name with no words in it, or no must-haves, is never a twin
+    expect(repeatsMustHave({ name: "..." }, [{ text: "!!" }])).toBe(false);
+    expect(repeatsMustHave({ name: "Digital radiography" }, [])).toBe(false);
+    // the skills the score counts: never one checked only in the team's own interviews, nor the twin of a must-have that counts
+    const withOwn = { ...twinRole(), competencies: [...twinRole().competencies, { key: "manner", name: "Chairside manner", definition: "d", weight: 5, evaluatedIn: "interview", indicators: ["x"] }] } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+    expect(skillsInScore(withOwn).map((c) => c.key)).toEqual(["chairside", "scanning"]);
+    expect(skillsInScore(twinRole(["interview"])).map((c) => c.key)).toEqual(["digital_radiography", "chairside", "scanning"]);
+    expect([["interview"], ["resume", "interview"], [], undefined].map((evidencedBy) => onlyInOwnInterviews({ evidencedBy }))).toEqual([true, false, false, false]);
+  });
+});
+
+/**
+ * The live test of 12 November 2026: the brief said "Digital radiography unknown so far" beside the breakdown's "Shown, from
+ * the AI review of the résumé", because it took the AI interview's entry first whatever it said. The brief and Compare now
+ * show the finding the score counts.
+ */
+describe("the finding the score counts, for the brief and Compare (countedFinding)", () => {
+  const resume = reading("triage", [must("rdh_license", "yes", "RDH license CA active"), must("perio", "yes")], [skill("chairside", "evidenced", "Chairside assisting daily")]);
+  const said = (requirementFindings: Req[], competencyFindings: Comp[] = []) => reading("screen", requirementFindings, competencyFindings, { createdAt: "2026-10-02T10:00:00Z" });
+
+  it("takes the résumé's checked yes over an AI interview that never asked about it", () => {
+    const silent = said([must("rdh_license", "unknown")], [{ competencyKey: "chairside", finding: "not_evidenced", note: "Not asked about in this AI interview." }]);
+    expect(countedFinding(pair(resume, silent), { key: "rdh_license", mustHave: true })).toEqual({ status: "yes", source: "resume", quote: "RDH license CA active", unquoted: false });
+    expect(countedFinding(pair(resume, silent), { key: "chairside", mustHave: false })).toEqual({ status: "yes", source: "resume", quote: "Chairside assisting daily", unquoted: false });
+  });
+
+  it("lets the AI interview's quoted no win over the résumé's yes, and its checked yes on a tie", () => {
+    expect(countedFinding(pair(resume, said([must("rdh_license", "no", "My license lapsed")])), { key: "rdh_license", mustHave: true })).toEqual({ status: "no", source: "screen", quote: "My license lapsed", unquoted: false });
+    expect(countedFinding(pair(resume, said([must("rdh_license", "yes", "Yes, it is active in California")])), { key: "rdh_license", mustHave: true })).toMatchObject({ status: "yes", source: "screen", quote: "Yes, it is active in California" });
+  });
+
+  it("takes a checked partly from the chat over a résumé yes with nothing quoted", () => {
+    expect(countedFinding(pair(resume, said([must("perio", "partially", "I chart perio sometimes")])), { key: "perio", mustHave: true })).toEqual({ status: "partly", source: "screen", quote: "I chart perio sometimes", unquoted: false });
+    // alone, the résumé's yes with nothing quoted is partly met, and says so
+    expect(countedFinding(pair(resume), { key: "perio", mustHave: true })).toEqual({ status: "partly", source: "resume", quote: null, unquoted: true });
+  });
+
+  it("is not known when no reading says anything either way, or says no with nothing quoted", () => {
+    expect(countedFinding(pair(resume, said([])), { key: "patients", mustHave: false })).toMatchObject({ status: "unknown", quote: null });
+    expect(countedFinding(pair(reading("triage", [must("rdh_license", "no")])), { key: "rdh_license", mustHave: true })).toMatchObject({ status: "unknown", quote: null });
+    expect(countedFinding(pair(null, said([])), { key: "rdh_license", mustHave: true })).toMatchObject({ status: "unknown", source: "screen" });
+  });
+
+  it("agrees with the breakdown on every requirement, over 400 random cases with screening chats and interview-only skills", () => {
+    const rand = seeded(20261113);
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)] as T;
+    const MUST: Array<(k: string) => Req> = [(k) => must(k, "no", `I have never done ${k}`), (k) => must(k, "no"), (k) => must(k, "unknown"), (k) => must(k, "partially", `some ${k} work`), (k) => must(k, "yes", `${k} every day`), (k) => must(k, "yes")];
+    const SKILL: Array<(k: string) => Comp> = [(k) => skill(k, "contradicted", `I avoid ${k}`), (k) => skill(k, "not_evidenced"), (k) => skill(k, "partially_evidenced", `some ${k}`), (k) => skill(k, "evidenced", `${k} daily`), (k) => skill(k, "evidenced")];
+    const STATUS: Record<number, string> = { 100: "yes", 50: "partly", 0: "no" };
+    let compared = 0;
+    for (let n = 0; n < 400; n++) {
+      const mustKeys = Array.from({ length: Math.floor(rand() * 4) }, (_, i) => `m${i}`);
+      const skillKeys = Array.from({ length: Math.floor(rand() * 5) }, (_, i) => `s${i}`);
+      const role = {
+        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: ["resume", "screen"] })) },
+        competencies: skillKeys.map((key) => ({ key, name: `Skill ${key}`, definition: "d", weight: 1 + Math.floor(rand() * 5), evaluatedIn: pick(["both", "screen", "interview"]), indicators: ["x"] })),
+      } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+      const p = pair(reading("triage", mustKeys.map((k) => pick(MUST)(k)), skillKeys.map((k) => pick(SKILL)(k))), rand() < 0.5 ? reading("screen", mustKeys.filter(() => rand() < 0.6).map((k) => pick(MUST)(k)), skillKeys.filter(() => rand() < 0.6).map((k) => pick(SKILL)(k)), { createdAt: "2026-10-02T10:00:00Z" }) : null);
+      const m = matchScore(p, role)!;
+      for (const c of m.breakdown) {
+        expect(countedFinding(p, c), c.key).toEqual({ status: STATUS[c.pctMet], source: c.source, quote: c.quote, unquoted: c.unquoted });
+        compared += 1;
+      }
+      for (const u of m.unknown) expect(countedFinding(p, u).status, u.key).toBe("unknown");
+    }
+    expect(compared).toBeGreaterThan(500);
   });
 });

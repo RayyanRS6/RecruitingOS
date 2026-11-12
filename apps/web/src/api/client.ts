@@ -336,11 +336,14 @@ export type CandidateEmailState = "held" | "failed" | "no_email" | null;
  * the interview, what may be said about the email (never that it left), and whether that email says the time moved.
  */
 export type InterviewBooked = InterviewSummary & { candidateNotice?: "queued" | "held" | "not_sent_no_email" | null; moved?: boolean; /** The same day, time, length and place again: nothing changed and no email goes (11 November 2026). */ unchanged?: boolean; /** The same start with new details: the email says the details changed, never that it moved (11 November 2026). */ changed?: boolean };
-/** The interviewer's brief (F7, F8): what the round is for, what it covers, what the evidence says so far. `pay` is present only for roles that may see it (packages/agents/src/interviewer-brief.ts). */
+/**
+ * The interviewer's brief (F7, F8): what the round is for, what it covers, what the evidence says so far. `pay` is present only for roles that may see it (packages/agents/src/interviewer-brief.ts).
+ * Each must-have's `met` and each skill's `finding` is the one the match score counts (12 November 2026). A skill's `evaluatedIn` is "interview" when it is checked only in the team's own interviews (read by no AI review); older answers leave it out.
+ */
 export type InterviewerBrief = {
   candidateFirstName: string;
   round: { key: string; title: string; purpose: string; durationMinutes: number; format: string };
-  competencies: Array<{ key: string; name: string; definition: string; indicators: string[]; finding: string | null; note: string | null }>;
+  competencies: Array<{ key: string; name: string; definition: string; indicators: string[]; finding: string | null; note: string | null; evaluatedIn?: string | null }>;
   questions: string[];
   mustHaves: Array<{ key: string; text: string; met: string; quote: string | null; source: string | null }>;
   strengths: Array<{ claim: string; quote: string | null; source: string | null }>;

@@ -42,6 +42,38 @@ export const MISSING_MUST_HAVE_CAP = 54;
 /** How much each kind of requirement counts: must-haves most, then the skills by their importance. */
 export const MATCH_WEIGHT = { must_have: 4, essential: 3, important: 2, helpful: 1 } as const;
 
+/** A name as the twin rule compares it: case, accents and punctuation aside. */
+const sameWords = (s: string): string => s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * A skill named exactly as one of the must-haves given (the live test, 12 November 2026: the job draft wrote the Essential
+ * skill "Digital radiography" beside the owner's must-have of the same name, so one requirement counted 4 + 3 points and
+ * the breakdown listed it twice). The score counts the two once, as the must-have, because that is what the owner chose,
+ * it weighs most, and only its quoted no holds the score at 54. Exact words only, case, accents and punctuation aside:
+ * "Digital radiography and intraoral scanning" stays a skill of its own, and so does a skill that only shares a key.
+ */
+export function repeatsMustHave(skill: { name: string }, mustHaves: ReadonlyArray<{ text: string }>): boolean {
+  const name = sameWords(skill.name);
+  return !!name && mustHaves.some((m) => sameWords(m.text) === name);
+}
+
+/** A must-have the role checks only in the team's own interviews: neither the résumé reading nor the AI interview asks about it. */
+export function onlyInOwnInterviews(m: { evidencedBy?: readonly string[] | null }): boolean {
+  return !!m.evidencedBy?.length && m.evidencedBy.every((e) => e === "interview");
+}
+
+/**
+ * The skills the match score counts on a role (`matchScore` in packages/core), as the weights preview lists them and the
+ * AI review's own labels count them: each one a résumé reading or an AI interview reads (not one checked only in the
+ * team's own interviews), less one named as a must-have the score counts (`repeatsMustHave`). A must-have checked only in
+ * the team's own interviews joins the sum only on their own quoted no, so beside one the skill stays a requirement of its
+ * own; one list for every reading of the role keeps the score monotonic.
+ */
+export function skillsInScore<C extends { name: string; evaluatedIn?: string | null }>(packet: { requirements: { mustHaves: ReadonlyArray<{ text: string; evidencedBy?: readonly string[] | null }> }; competencies: readonly C[] }): C[] {
+  const counted = packet.requirements.mustHaves.filter((m) => !onlyInOwnInterviews(m));
+  return packet.competencies.filter((c) => c.evaluatedIn !== "interview" && !repeatsMustHave(c, counted));
+}
+
 /**
  * The one verdict word beside the number (the owner, 6 November 2026), worked out in code from the same numbers by `fitOf`,
  * so it can never disagree with them. Wherever a word sits beside the score it is this one: the band stays in the data for

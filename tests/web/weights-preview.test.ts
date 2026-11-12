@@ -76,6 +76,26 @@ describe("the rows to weigh", () => {
     expect(both.map(weightFieldId)).toEqual(["weights-m-perio", "weights-s-perio"]);
     expect(changedRows(both, { "m:perio": "must_have", "s:perio": "helpful" }).map((r) => r.id)).toEqual(["s:perio"]);
   });
+
+  it("lists a skill named as a must-have once, as the must-have the score counts, and still gives every real score back (live test, 12 November 2026)", () => {
+    const twin = {
+      requirements: { mustHaves: [{ key: "mh_dr", text: "Digital radiography", rationale: "r", evidencedBy: ["resume", "screen"] }, { key: "demo", text: "A steady hand in a working interview", rationale: "r", evidencedBy: ["interview"] }] },
+      competencies: [{ key: "dr", name: "Digital Radiography.", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "hand", name: "a steady hand in a working interview", definition: "d", weight: 3, evaluatedIn: "both", indicators: ["x"] }, ...packet.competencies],
+    } as unknown as RolePacket;
+    const twinRows = weightRows(twin);
+    // the skill "Digital Radiography." is the must-have, so its row would change nothing; the one beside a must-have checked
+    // only in your own interviews stays, as that must-have counts only on their own quoted no
+    expect(twinRows.map((r) => r.id)).toEqual(["m:mh_dr", "m:demo", "s:hand", "s:chairside", "s:patients", "s:software"]);
+    const people = [
+      scoreOf(reading([must("mh_dr", "yes", "digital sensors")], [skill("dr", "evidenced", "digital sensors"), skill("hand", "evidenced", "steady"), skill("chairside", "evidenced", "x")]), twin),
+      scoreOf(reading([must("mh_dr", "no", "I have never taken digital X-rays")], [skill("dr", "evidenced", "digital sensors"), skill("patients", "evidenced", "y")]), twin),
+      scoreOf(reading([must("mh_dr", "partially", "some"), must("demo", "no", "I shake")], [skill("hand", "contradicted", "I shake"), skill("software", "evidenced", "z")]), twin),
+    ];
+    // 9 of 12; 2 of 12 (their quoted no on digital radiography); 3 of 16, with their own quoted no on the working-interview must-have
+    expect(people.map((m) => m.score)).toEqual([75, 17, 19]);
+    const order = previewOrder(boardOf(people.map((m, i) => card(`t${i}`, `Twin ${i}`, m))), twinRows, jobLevels(twinRows));
+    expect(order.rows.map((p) => [p.now, p.preview])).toEqual([[75, 75], [19, 19], [17, 17]]);
+  });
 });
 
 describe("the order the weights give", () => {

@@ -365,7 +365,8 @@ function BriefCard({ brief }: { brief: InterviewerBrief }) {
         <div>
           <Eyebrow as="h3" className="mb-2 flex">What to look for</Eyebrow>
           <ul className={BRIEF_LIST}>
-            {brief.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong>: {c.definition} <Chip tone={c.finding ? FINDING_TONE[c.finding] ?? "neutral" : "neutral"}>{c.finding ? FINDING_LABEL[c.finding] ?? c.finding : "not assessed yet"}</Chip>{c.note ? <span className="muted"> {c.note}</span> : null}</li>)}
+            {/* a skill checked only in the team's own interviews is read by no AI review: it is for this interview, never "not assessed yet" (live test, 12 November 2026) */}
+            {brief.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong>: {c.definition} <Chip tone={c.finding ? FINDING_TONE[c.finding] ?? "neutral" : "neutral"}>{c.finding ? FINDING_LABEL[c.finding] ?? c.finding : c.evaluatedIn === "interview" ? "for this interview" : "not assessed yet"}</Chip>{c.note ? <span className="muted"> {c.note}</span> : null}</li>)}
           </ul>
         </div>
         {brief.questions.length ? (

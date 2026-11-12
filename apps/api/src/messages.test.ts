@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
+import { NOT_ASKED_NOTE, composeInterviewerBrief } from "@ros/agents";
 import { anonymizeCandidate, entitlements } from "@ros/core";
-import { applications, approvalRequests, assessments, auditRecords, communications, inboundEmails, interviews, notifications, recruiterEscalations, screens, users, withTenant } from "@ros/db";
+import { applications, approvalRequests, assessments, auditRecords, communications, inboundEmails, interviews, notifications, recruiterEscalations, rolePackets, screens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -443,6 +444,61 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     // the interview page's "Message the candidate" leads to the sheet with the text box open
     const sheet = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { interviews: Array<{ id: string }> };
     expect(sheet.interviews.some((i) => i.id === iv.id)).toBe(true);
+  });
+
+  /**
+   * The live test of 12 November 2026: the AI interview asks only about what the résumé does not show, so its scorecard
+   * said "unknown" on a must-have the résumé shows and wrote that silence as a concern. The brief read "unknown so far" and
+   * Compare the same, beside the breakdown's "Shown, from the AI review of the résumé"; the Overview listed the concern.
+   */
+  it("the brief and Compare show the finding the score counts, and a scorecard's silence about what the résumé shows is no concern", async () => {
+    const cand = await apply("Maya", "Lindqvist");
+    const [pv] = await container.db.select().from(rolePackets).where(eq(rolePackets.roleId, roleId));
+    const full = pv.packet;
+    const round = full.interviews.plan[0]!;
+    const must = full.requirements.mustHaves.find((m) => /licen/i.test(m.text)) ?? full.requirements.mustHaves[0]!;
+    const skill = full.competencies.find((c) => c.evaluatedIn !== "interview" && round.competencyKeys.includes(c.key))!;
+    expect(skill, "the first round covers a skill the AI reviews read").toBeTruthy();
+    // newer than the reading written on apply, and in this order
+    const later = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+    const resumeQuote = "Active CA RDH license #55321, Coastal Family Dentistry";
+    const resumeReading = { overall: "strong", confidence: "high", summary: "Shows the licence and the skill.", strengths: [], concerns: [], unknowns: [], competencyFindings: [{ competencyKey: skill.key, finding: "evidenced", evidence: { source: "resume", quote: "Periodontal charting at every recall visit" } }], requirementFindings: [{ requirementKey: must.key, met: "yes", evidence: { source: "resume", quote: resumeQuote } }], anomalies: [], recommendation: "screen", rationale: "x" };
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "triage", packetVersion: cand.row.packetVersion, result: resumeReading as never, overall: "strong", confidence: "high", createdAt: later(1) });
+    // a scorecard stored before 12 November 2026: the chat never touched either, and its silence is under concerns
+    const silence = { claim: `${must.text} is not described in the AI interview.`, evidence: { source: "screen", unquoted: true } };
+    const quoted = { claim: "Wants a four-day week", evidence: { source: "screen", quote: "I would like to work four days a week" } };
+    const scorecard = (requirementFindings: unknown[], competencyFindings: unknown[]) => ({ overall: "potential", confidence: "medium", summary: "Answered the questions.", strengths: [], concerns: [silence, quoted], unknowns: [], competencyFindings, requirementFindings, anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "x" });
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard([{ requirementKey: must.key, met: "unknown" }], [{ competencyKey: skill.key, finding: "not_evidenced", note: NOT_ASKED_NOTE }]) as never, overall: "potential", confidence: "medium", createdAt: later(2) });
+    const briefOf = async () => (await withTenant(container.db, companyId, (tx) => composeInterviewerBrief(tx, { applicationId: cand.id, candidateFirstName: "Maya", packet: full, roundKey: round.key })))!;
+    type Compared = { candidates: Array<{ mustHaves: Record<string, { met: string; quote: string | null }>; competencies: Record<string, { finding: string; note: string | null }> }> };
+    const compared = async () => ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/compare?ids=${cand.id}`)).json()) as Compared).candidates[0]!;
+
+    // the brief: the résumé's "yes" with its quote, as the score counts it, and none of the chat's silence
+    const brief = await briefOf();
+    expect(brief.mustHaves.find((m) => m.key === must.key)).toMatchObject({ met: "yes", quote: resumeQuote, source: "resume" });
+    expect(brief.competencies.find((c) => c.key === skill.key)).toMatchObject({ finding: "evidenced", evaluatedIn: skill.evaluatedIn });
+    expect(brief.concerns.map((c) => c.claim)).toEqual([quoted.claim]);
+    // Compare reads the same
+    const cell = await compared();
+    expect(cell.mustHaves[must.key]).toEqual({ met: "yes", quote: resumeQuote });
+    expect(cell.competencies[skill.key]?.finding).toBe("evidenced");
+    // the candidate's page: the newest reading (the scorecard) without that concern, beside the breakdown that shows it
+    const detail = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { assessments: Array<{ kind: string; result: { concerns: Array<{ claim: string }> } }>; matchScore: { breakdown: Array<{ key: string; source: string; finding: string }> } };
+    expect(detail.assessments[0]!.kind).toBe("screen");
+    expect(detail.assessments[0]!.result.concerns.map((c) => c.claim)).toEqual([quoted.claim]);
+    expect(detail.matchScore.breakdown.find((c) => c.key === must.key)).toMatchObject({ source: "resume", finding: "Shown" });
+    // the rule reads the stored scorecard; nothing in it is rewritten
+    const [stored] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, cand.id), eq(assessments.kind, "screen")));
+    expect((stored!.result as { concerns: unknown[] }).concerns).toHaveLength(2);
+
+    // the AI interview's own quoted no wins, as in the score: their own latest words
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard([{ requirementKey: must.key, met: "no", evidence: { source: "screen", quote: "My RDH license lapsed last year" } }], [{ competencyKey: skill.key, finding: "contradicted", evidence: { source: "screen", quote: "I have never charted perio" } }]) as never, overall: "weak", confidence: "medium", createdAt: later(3) });
+    const after = await briefOf();
+    expect(after.mustHaves.find((m) => m.key === must.key)).toMatchObject({ met: "no", quote: "My RDH license lapsed last year", source: "screen" });
+    expect(after.competencies.find((c) => c.key === skill.key)?.finding).toBe("contradicted");
+    const cellAfter = await compared();
+    expect(cellAfter.mustHaves[must.key]).toEqual({ met: "no", quote: "My RDH license lapsed last year" });
+    expect(cellAfter.competencies[skill.key]?.finding).toBe("contradicted");
   });
 
   it("the comparison view answers owners with the columns in the chosen order, refuses interviewers and takes five at most", async () => {

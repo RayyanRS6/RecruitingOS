@@ -5,7 +5,7 @@ import { CHAT_WRAP_KEY, chatCounter, tapFormatFor } from "@ros/core";
 import { ALL_PLAYBOOKS } from "@ros/playbooks";
 import {
   CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, currentTapFormat, enforceChatTurn, enforceTurnRules, gapQuestion,
-  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, tapWords, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, type ChatFacts,
+  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, tapWords, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, withoutResumeShownConcerns, type ChatFacts,
 } from "./screening";
 import { answerInContext, credentialMustHaves } from "./triage";
 import { FOCUS_INTRO, focusQuestionsFrom, focusedPacket, packetForFocusedInvite, unfairQuestion } from "./screen-focus";
@@ -537,6 +537,78 @@ describe("the scorecard reads each answer for its own question, and settles a st
     // nothing shown at all is never a strong interview
     const bare = { ...PACKET, requirements: { ...PACKET.requirements, mustHaves: [] }, competencies: [] } as unknown as RolePacket;
     expect(settledScreenRecommendation(strong, bare)).toBe("interview");
+  });
+
+  it("counts a skill named as a must-have once, as the must-have, as the match score does (live test, 12 November 2026)", () => {
+    // the draft's skill "Experience with periodontal charting and therapy" beside the must-have of the same name
+    const twin = { ...PACKET, competencies: [...PACKET.competencies, { ...skill("perio_skill"), name: "Experience with Periodontal Charting and Therapy." }] } as unknown as RolePacket;
+    // two skills of four evidenced is not most, and the twin's evidence never makes it so: the must-have already counted it
+    const two = reading("partially_evidenced", "not_evidenced", "strong_interview");
+    const withTwin = { ...two, competencyFindings: [...two.competencyFindings, { competencyKey: "perio_skill", finding: "evidenced" as const, evidence: { source: "screen" as const, quote: "I do full perio charting and radiographs" } }] };
+    expect(settledScreenRecommendation(withTwin, twin)).toBe("interview");
+    expect(settledScreenRecommendation(withTwin, PACKET)).toBe("interview");
+    // three of four is most, with or without the twin beside them
+    expect(settledScreenRecommendation({ ...withTwin, competencyFindings: withTwin.competencyFindings.map((f) => (f.competencyKey === "efficiency_time" ? { ...f, finding: "evidenced" as const } : f)) }, twin)).toBe("strong_interview");
+  });
+});
+
+/**
+ * The live test of 12 November 2026: the chat never asks about what the résumé shows (`chatGaps`), so its scorecard wrote
+ * that silence as a concern, "Digital radiography work is not described, and the x-ray certificate's current status is not
+ * stated.", with nothing quoted, beside the breakdown's "Shown, from the AI review of the résumé". Such a concern goes; one
+ * quoting the candidate stays.
+ */
+describe("the scorecard leaves out a concern that is only the chat's silence about what the résumé shows", () => {
+  const packet = {
+    requirements: { mustHaves: [{ key: "mh_dr", text: "Digital radiography", rationale: "r", evidencedBy: ["resume", "screen"] }, { key: "mh_rda", text: "Active California RDA license", rationale: "law", evidencedBy: ["resume", "screen"] }], niceToHaves: [], eligibility: [] },
+    competencies: [{ key: "chairside", name: "Chairside skill", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "software", name: "Practice software", definition: "d", weight: 3, evaluatedIn: "interview", indicators: ["x"] }],
+  } as unknown as RolePacket;
+  const silence = { claim: "Digital radiography work is not described, and the x-ray certificate's current status is not stated.", evidence: { source: "screen" as const, unquoted: true } };
+  const pay = { claim: "Pay expectation is above the posted range", evidence: { source: "screen" as const, unquoted: true } };
+  const card = (concerns: ScreenAssessment["concerns"]): ScreenAssessment => ({ overall: "strong", confidence: "medium", summary: "s", strengths: [], concerns, unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: "mh_dr", met: "unknown" }], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "r" });
+  type Resume = Parameters<typeof withoutResumeShownConcerns>[1];
+  const resume = (met: "yes" | "partially", quote?: string, chairside?: "evidenced" | "partially_evidenced"): Resume => ({
+    requirementFindings: [{ requirementKey: "mh_dr", met, ...(quote ? { evidence: { source: "resume" as const, quote } } : {}) }],
+    competencyFindings: chairside ? [{ competencyKey: "chairside", finding: chairside, evidence: { source: "resume" as const, quote: "Chairside assisting for Dr Lee" } }] : [],
+  });
+  const shown = resume("yes", "Take full-mouth and bitewing X-rays with digital sensors");
+
+  it("removes the live concern when the résumé reading shows the must-have on a checked quote, and keeps the rest", () => {
+    const out = withoutResumeShownConcerns(card([silence, pay]), shown, packet);
+    expect(out.concerns).toEqual([pay]);
+    // the rest of the scorecard is as it was
+    expect({ ...out, concerns: [] }).toEqual({ ...card([silence, pay]), concerns: [] });
+  });
+
+  it("keeps a concern on the same thing that quotes the candidate, or a recruiter's note", () => {
+    const quoted = { claim: "Digital radiography was only on film at their last office", evidence: { source: "screen" as const, quote: "we only had film X-rays" } };
+    const noted = { claim: "Digital radiography not used since 2019", evidence: { source: "recruiter_note" as const, quote: "Said no digital X-rays since 2019" } };
+    expect(withoutResumeShownConcerns(card([quoted, noted]), shown, packet).concerns).toEqual([quoted, noted]);
+  });
+
+  it("keeps the concern when the résumé shows it only in part, or with nothing quoted, or not at all", () => {
+    for (const r of [resume("partially", "some digital X-rays"), resume("yes"), { requirementFindings: [{ requirementKey: "mh_dr", met: "yes" as const, evidence: { source: "resume" as const, unquoted: true } }], competencyFindings: [] }, { requirementFindings: [], competencyFindings: [] }]) {
+      expect(withoutResumeShownConcerns(card([silence]), r, packet).concerns).toEqual([silence]);
+    }
+  });
+
+  it("removes a concern naming a skill the résumé shows evidenced, and only when it names all of the skill", () => {
+    const chairside = { claim: "Chairside work was not discussed", evidence: { source: "screen" as const, unquoted: true } };
+    const licence = { claim: "The RDA license status is not stated", evidence: { source: "screen" as const, unquoted: true } };
+    expect(withoutResumeShownConcerns(card([chairside, licence]), resume("yes", "Take full-mouth and bitewing X-rays with digital sensors", "evidenced"), packet).concerns).toEqual([licence]);
+    // shown only in part, it stays
+    expect(withoutResumeShownConcerns(card([chairside]), resume("yes", "digital sensors", "partially_evidenced"), packet).concerns).toEqual([chairside]);
+    // "RDA license" alone is not all of "Active California RDA license", even when the résumé shows that one
+    const rda: Resume = { requirementFindings: [{ requirementKey: "mh_rda", met: "yes", evidence: { source: "resume", quote: "RDA license CA #12345, active" } }], competencyFindings: [] };
+    expect(withoutResumeShownConcerns(card([licence]), rda, packet).concerns).toEqual([licence]);
+  });
+
+  it("returns the same scorecard when nothing goes, or with no résumé reading", () => {
+    const c = card([silence, pay]);
+    expect(withoutResumeShownConcerns(c, null, packet)).toBe(c);
+    expect(withoutResumeShownConcerns(c, undefined, packet)).toBe(c);
+    const kept = card([pay]);
+    expect(withoutResumeShownConcerns(kept, shown, packet)).toBe(kept);
   });
 });
 

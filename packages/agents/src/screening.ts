@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
-import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, skillsInScore, type Actor, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, errorForLog, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, scoredSkill, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
+import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, errorForLog, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, companies, documents, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
@@ -1904,6 +1904,10 @@ export function scorecardInput(ctx: ScreenContext, identity: ScoringIdentity): {
  * A reading lost to an outage is asked once more; one still lost fails the step, which the engine retries. Every run is
  * linked to the one the stored scorecard keeps (`linkReadingRuns`). The readings ask the AI credit together: with no room
  * for all of them none is made, and the `screen` run waits for credit.
+ *
+ * The chat asks only about what the résumé does not show (`chatGaps`), so its scorecard never hears about the rest: a
+ * concern with nothing quoted, about a must-have or skill the newest résumé reading shows on a checked quote, is that
+ * silence, not a concern, and is not stored (`withoutResumeShownConcerns`; the live test, 12 November 2026).
  */
 export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<ScreenAssessment>> {
   const b = await withTenant(db, input.companyId, (q) => loadScreenBundle(q, input.screenId));
@@ -1918,7 +1922,10 @@ export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: st
   if (noCredit) return noCredit;
   const outage = settled.find((r) => !r.ok && r.reason === "error");
   if (outage) return outage;
-  const out = scorecardReadings(settled, view, screen, b.packet);
+  const combined = scorecardReadings(settled, view, screen, b.packet);
+  // the newest résumé reading, the one the match score pairs with this scorecard, read in its own short transaction
+  const resume = combined.ok ? await withTenant(db, input.companyId, async (q) => (await q.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, b.app.id), ne(assessments.kind, "screen"))).orderBy(desc(assessments.createdAt)).limit(1))[0]?.result ?? null) : null;
+  const out = combined.ok ? { ...combined, output: withoutResumeShownConcerns(combined.output, resume, b.packet) } : combined;
   await linkReadingRuns(db, b.company.id, out, settled);
   return out;
 }
@@ -2013,6 +2020,33 @@ const PLAIN_WORDS = new Set(["the", "and", "you", "your", "are", "have", "has", 
 const topicWords = (s: string): string[] => (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => w.length > 2 && !PLAIN_WORDS.has(w));
 /** What a finding or a question is about, for the scorecard: `topicWords`, with "licence" and "license" one word (a packet may spell it either way). */
 const findingWords = (s: string): string[] => topicWords(s.replace(/licen[cs]/gi, "licens"));
+
+/**
+ * The scorecard without the concerns that are only the chat's silence about what the résumé already shows (the live test,
+ * 12 November 2026: "Digital radiography work is not described" sat under Concerns beside the breakdown's "Shown, from the
+ * AI review of the résumé"). The chat never asks about what the résumé shows (`chatGaps`), so the scorecard never hears
+ * about it. A concern goes when it has nothing checked quoted and its words hold every topic word of a must-have the
+ * résumé reading shows met, or of a skill it shows evidenced, each on a checked quote. A concern quoting the chat or a
+ * recruiter's note always stays, and so does one about something the résumé shows only in part or with nothing quoted.
+ * With nothing left out, the same scorecard. One rule wherever a scorecard is read: when it is stored (`assessScreen`),
+ * and paired with the newest résumé reading when one stored before it is read (the candidate's page, the interviewer's
+ * brief). Exported for the tests.
+ */
+export function withoutResumeShownConcerns<T extends Pick<ScreenAssessment, "concerns">>(card: T, resume: Pick<EvidenceAssessment, "requirementFindings" | "competencyFindings"> | null | undefined, packet: Pick<RolePacket, "requirements" | "competencies">): T {
+  if (!resume || !card.concerns?.length) return card;
+  const checked = (e: { quote?: string; unquoted?: boolean } | undefined) => !!e?.quote?.trim() && !e.unquoted;
+  const met = new Set((resume.requirementFindings ?? []).filter((f) => f.met === "yes" && checked(f.evidence)).map((f) => f.requirementKey));
+  const evidenced = new Set((resume.competencyFindings ?? []).filter((f) => f.finding === "evidenced" && checked(f.evidence)).map((f) => f.competencyKey));
+  const subjects = [...packet.requirements.mustHaves.filter((m) => met.has(m.key)).map((m) => findingWords(m.text)), ...packet.competencies.filter((c) => evidenced.has(c.key)).map((c) => findingWords(c.name))].filter((words) => words.length > 0);
+  if (!subjects.length) return card;
+  const silence = (c: ScreenAssessment["concerns"][number]) => {
+    if (checked(c.evidence)) return false;
+    const said = new Set(findingWords(c.claim));
+    return subjects.some((words) => words.every((w) => said.has(w)));
+  };
+  const concerns = card.concerns.filter((c) => !silence(c));
+  return concerns.length === card.concerns.length ? card : { ...card, concerns };
+}
 
 /**
  * A short quote read with the question it answers (`answerInContext`), for the evidence rules: only when the quote is
@@ -2255,7 +2289,8 @@ export function settledScreenRecommendation(reading: ScreenAssessment, packet: P
   const screened = packet.requirements.mustHaves.filter((m) => m.evidencedBy.includes("screen"));
   const musts = screened.every((m) => reading.requirementFindings.some((f) => f.requirementKey === m.key && f.met === "yes" && shownByQuote(f.evidence)));
   const notMet = reading.requirementFindings.some((f) => f.met === "no" && shownByQuote(f.evidence));
-  const skills = packet.competencies.filter(scoredSkill);
+  // the skills the match score counts: a skill named as a must-have is that must-have (the live test, 12 November 2026)
+  const skills = skillsInScore(packet);
   const shown = skills.filter((c) => reading.competencyFindings.some((f) => f.competencyKey === c.key && f.finding === "evidenced" && shownByQuote(f.evidence))).length;
   const most = shown * 2 > skills.length;
   const fits = reading.compensationExpectation.withinRange !== "above" && reading.availability.matchesSchedule !== "no" && reading.availability.matchesSchedule !== "partially";
