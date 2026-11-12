@@ -149,6 +149,36 @@ describe("tap answers (plan E12)", () => {
     expect(tapFormatFor({ kind: "availability", question: "Which days of the week can you work?" }, comp)).toMatchObject({ kind: "days" });
   });
 
+  // The review of the live-test fixes (12 November 2026): the playbooks' licence questions, which the quick start offers in
+  // the same words, end with a "where" that only says which state is meant, and lost their buttons when asked in the AI
+  // interview; a saved hygienist job's old "…state and whether it is currently active?" kept them, and a bare Yes says
+  // neither.
+  it("a relative clause after a noun asks nothing open, while 'whether' does", () => {
+    const tapped = [
+      "Do you hold an active dental hygiene (RDH) license in the state where this office is located?",
+      "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?",
+      "Do you hold an active dental license (DDS/DMD) in the state where this office is located?",
+      "Is your RDH license active in the state this office is in?",
+      "Can you get to the office where you would work by 8 AM?",
+      "Are you able to commute to the office where you would work?",
+    ];
+    for (const question of tapped) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toEqual({ kind: "yes_no" });
+    expect(tapFormatFor({ kind: "logistics", question: "Are you able to commute to the office where you would work?" }, comp)).toEqual({ kind: "yes_no" });
+    const typed = [
+      "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?",
+      "Which certifications do you hold (x-ray, coronal polishing, RDA, BLS)?",
+      "Can you confirm your RDH license state and whether it is currently active?",
+      "Can you confirm whether your license is active?",
+      "Do you know who issued your license?",
+      // a second question after the clause is still read
+      "Do you hold a license in the state where this office is located, and which number is it?",
+      "Do you hold a license in the state where this office is located and which number is it?",
+      // a wh-word after a preposition asks which
+      "Do you have a preference for which days you work?",
+    ];
+    for (const question of typed) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toBeNull();
+  });
+
   it("records a tap as fixed words, and refuses one that does not fit the question", () => {
     const now = new Date("2026-10-08T12:00:00Z");
     expect(tapAnswerText({ kind: "yes_no" }, { kind: "yes_no", choice: "yes" })).toBe("Yes");

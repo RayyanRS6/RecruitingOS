@@ -147,7 +147,15 @@ export function syncChatPlan(plan: ChatPlan, progress: Pick<ScreenProgress, "ask
 export const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
 const YES_NO = /^(do|does|are|is|can|could|will|would|have|has|did)\b/i;
-const OPEN_ENDED = /\b(what|which|when|how|why|where|who|whose|tell (?:me|us)|describe|walk (?:me|us)|explain|list|share)\b/i;
+const OPEN_ENDED = /\b(what|which|when|how|why|where|who|whose|whether|tell (?:me|us)|describe|walk (?:me|us)|explain|list|share)\b/i;
+/**
+ * A relative clause after a noun ("in the state where this office is located", "the office where you would work"): it
+ * says which state or office is meant and asks nothing open. A determiner, one or two words of the noun (never "and",
+ * "or" or a preposition: "a preference for which days" asks which), then where, when, which, who, whom or whose. It runs
+ * to a comma, a semicolon, the question mark or an "and", "or" or "but", so a second question after it ("…, and which
+ * number is it?") is still read.
+ */
+const RELATIVE_CLAUSE = /\b(?:the|a|an|any|this|that|these|those|your|our|their|its|each|every)\s+(?:(?!(?:and|or|but|nor|of|in|on|at|to|for|from|with|by|about|as|than|if|whether)\b)[\w-]+\s+){1,2}(?:where|when|which|who|whom|whose)\b.*?(?=[,;?]|\s(?:and|or|but)\b|$)/gi;
 const START = /\b(start|begin|starting|earliest)\b/i;
 const DAYS = /\b(days?|weekends?|weekdays?|which shifts?|schedule)\b/i;
 
@@ -156,8 +164,11 @@ const DAYS = /\b(days?|weekends?|weekdays?|which shifts?|schedule)\b/i;
  * pay questions take a range; "when could you start" a date; "which days" the days of the week; a factual question
  * (eligibility, availability, logistics) that can only be answered yes or no, because it starts "Do you", "Are you",
  * "Can you"… and asks nothing open, two buttons. Its kind alone never makes it one: "Which certifications do you hold…?"
- * asks them to list, so it is typed (live test, 12 November 2026). Skills, examples and motivation are always typed: they
- * need the candidate's own words.
+ * asks them to list, so it is typed (live test, 12 November 2026), and so is one that asks "whether" beside something
+ * else ("Can you confirm your RDH license state and whether it is currently active?"), which a bare Yes does not answer.
+ * A relative clause after a noun asks nothing open (`RELATIVE_CLAUSE`): "Do you hold an active RDA license in the state
+ * where this office is located?" keeps its buttons (the review of the live-test fixes). Skills, examples and motivation
+ * are always typed: they need the candidate's own words.
  */
 export function tapFormatFor(question: Pick<ScreeningQuestion, "kind" | "question">, compensation: Pick<RolePacket["compensation"], "basis" | "currency">): TapFormat | null {
   const text = question.question.trim();
@@ -169,7 +180,7 @@ export function tapFormatFor(question: Pick<ScreeningQuestion, "kind" | "questio
   if (asksStart && asksDays) return null;
   if (asksStart) return { kind: "start_date" };
   if (asksDays) return { kind: "days", options: [...WEEK_DAYS] };
-  return YES_NO.test(text) && !OPEN_ENDED.test(text.replace(/^\S+\s/, "")) ? { kind: "yes_no" } : null;
+  return YES_NO.test(text) && !OPEN_ENDED.test(text.replace(/^\S+\s/, "").replace(RELATIVE_CLAUSE, " ")) ? { kind: "yes_no" } : null;
 }
 
 function money(n: number, currency: string): string {

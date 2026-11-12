@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import type { FakeHandler, StructuredRequest } from "@ros/ai";
-import { entitlements as plans } from "@ros/core";
-import { applications, approvalRequests, assessments, candidates, communications, entitlements, events, notifications, postings, screens, unconfirmedScreens, withTenant, workflowRuns } from "@ros/db";
+import { HOLD_DECIDED, entitlements as plans } from "@ros/core";
+import { applications, approvalRequests, assessments, candidates, communications, entitlements, escalationMessages, events, notifications, policies, postings, recruiterEscalations, screens, unconfirmedScreens, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { READING_WAIT_MINUTES, readingSettledSignal } from "@ros/workflows";
 import { createApp } from "./app";
@@ -586,6 +586,9 @@ describe("every applicant's AI interview, in one email", () => {
     const act =(applicationId: string, body: Record<string, unknown>) => json("POST", `/api/v1/applications/${applicationId}/actions`, body);
     const detailOf = async (applicationId: string) => (await (await json("GET", `/api/v1/applications/${applicationId}`)).json()) as { allowedActions: string[]; blockedReasons: Record<string, string> };
     const PREPARING = "Their AI interview is being prepared, and its link goes to them by itself.";
+    /** The application's requests to ITS, and its first intake run (`application_intake:<id>`). */
+    const requestsOf = (applicationId: string) => container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, applicationId));
+    const intakeOf = async (applicationId: string) => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.idempotencyKey, `application_intake:${applicationId}`)))[0];
 
     it("while the résumé is read 'Send a new AI interview link' waits; a link a person sent anyway is the one the one email carries", async () => {
       providerDown("triage.assess");
@@ -747,10 +750,107 @@ describe("every applicant's AI interview, in one email", () => {
       expect((await act(a.id, { action: "override_eligibility", note: "She has her licence." })).status).toBe(200);
       await later(0);
       expect((await appOf(email)).stage).toBe("screen_invited");
+      // the reading that ended with the hold's escalation is started again (review of the live-test fixes, finding #16)
+      expect(await triageOf(a.id)).toHaveLength(1);
+      expect((await requestsOf(a.id)).map((e) => [e.kind, e.status])).toEqual([["review", "resolved"]]);
       const [scr] = await screensOf(a.id);
       const mail = mailTo(email);
       expect(mail).toHaveLength(2);
       expect(linkIn(mail[1].text)).toBe(scr.token);
+    });
+
+    /**
+     * The review of the live-test fixes (12 November 2026, finding #16): a hold that waits 72 hours goes to ITS and its
+     * reading's run ends there, so "Keep them in" sent the link with no résumé ever read, the score rested on the interview
+     * alone, and ITS's request stayed open with its overdue alert.
+     */
+    it("'Keep them in' after the hold went to ITS at 72 hours: the résumé is read, then the link goes, and ITS's request is closed", async () => {
+      const email = "ola.escalated@example.com";
+      await applyAs({ first: "Ola", email, no: true });
+      await later(0);
+      const a = await appOf(email);
+      expect(a.stage).toBe("ineligible");
+      await later(80 * HOUR);
+      // before the click: the reading's run ended with the escalation, the AI interview's run still waits, ITS was asked
+      expect((await intakeOf(a.id)).status).toBe("completed");
+      expect((await interviewRun(a.id)).status).toBe("waiting");
+      const [asked] = await requestsOf(a.id);
+      expect(asked).toMatchObject({ kind: "review", status: "open" });
+      expect(await triageOf(a.id)).toHaveLength(0);
+      const readsBefore = reads.length;
+      const kept = await act(a.id, { action: "override_eligibility", note: "She has her licence; she misread the question." });
+      expect(kept.status).toBe(200);
+      const body = (await kept.json()) as { stage: string; ownerStage: string; workflowRunId: string };
+      expect(body).toMatchObject({ stage: "eligible", ownerStage: "no_ai_interview" });
+      const [again] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, body.workflowRunId));
+      expect(again).toMatchObject({ workflowKey: "application_intake", subject: { type: "application", id: a.id } });
+      await later(0);
+      expect((await appOf(email)).stage).toBe("screen_invited");
+      expect(await triageOf(a.id)).toHaveLength(1);
+      const [scr] = await screensOf(a.id);
+      const mail = mailTo(email);
+      expect(mail).toHaveLength(2);
+      expect(linkIn(mail[1].text)).toBe(scr.token);
+      // every reading of the résumé came before the email with the link
+      const readings = reads.slice(readsBefore).filter((r) => r.task === "triage.assess");
+      expect(readings.length).toBeGreaterThan(0);
+      expect(readings.every((r) => r.sent <= outbox().indexOf(mail[1]))).toBe(true);
+      // ITS's request is answered and closed: nothing more is needed
+      expect((await requestsOf(a.id)).map((e) => [e.status, e.resolution])).toEqual([["resolved", HOLD_DECIDED]]);
+      const thread = await container.db.select().from(escalationMessages).where(eq(escalationMessages.escalationId, asked.id));
+      expect(thread.map((m) => [m.side, m.kind, m.body])).toEqual([["recruiter", "answer", HOLD_DECIDED]]);
+    });
+
+    it("declining someone whose hold went to ITS closes ITS's request too; one a recruiter took stays theirs, with the line as a note", async () => {
+      const declined = "pat.declined@example.com";
+      const taken = "rae.taken@example.com";
+      await applyAs({ first: "Pat", email: declined, no: true });
+      await applyAs({ first: "Rae", email: taken, no: true });
+      await later(0);
+      const pat = await appOf(declined);
+      const rae = await appOf(taken);
+      await later(80 * HOUR);
+      expect((await requestsOf(pat.id)).map((e) => e.status)).toEqual(["open"]);
+      const [raeAsk] = await requestsOf(rae.id);
+      // as if an ITS recruiter had accepted Rae's
+      await container.db.update(recruiterEscalations).set({ status: "claimed" }).where(eq(recruiterEscalations.id, raeAsk.id));
+      expect((await act(pat.id, { action: "reject", reason: "eligibility" })).status).toBe(200);
+      expect((await act(rae.id, { action: "override_eligibility", note: "She has her licence." })).status).toBe(200);
+      await later(0);
+      expect((await requestsOf(pat.id)).map((e) => [e.status, e.resolution])).toEqual([["resolved", HOLD_DECIDED]]);
+      expect(await triageOf(pat.id)).toHaveLength(0);
+      expect(mailTo(declined)).toHaveLength(1);
+      expect((await requestsOf(rae.id)).map((e) => [e.status, e.resolution])).toEqual([["claimed", null]]);
+      expect((await container.db.select().from(escalationMessages).where(eq(escalationMessages.escalationId, raeAsk.id))).map((m) => [m.side, m.kind, m.body])).toEqual([["recruiter", "reply", HOLD_DECIDED]]);
+      expect((await appOf(taken)).stage).toBe("screen_invited");
+      expect(await triageOf(rae.id)).toHaveLength(1);
+    });
+
+    it("'Keep them in' under an 'Only a person' hold, whose reading ended at once: the résumé is read, then the link goes", async () => {
+      const onlyAPerson = (on: boolean) => withTenant(container.db, companyId, async (tx) => {
+        await tx.delete(policies).where(and(eq(policies.companyId, companyId), eq(policies.roleId, other.id), eq(policies.actionType, "application.hold_ineligible")));
+        if (on) await tx.insert(policies).values({ companyId, roleId: other.id, actionType: "application.hold_ineligible", level: "human_only", approverRoles: [], createdBy: { kind: "system", id: "test" } });
+      });
+      await onlyAPerson(true);
+      const email = "sol.person@example.com";
+      try {
+        await applyAs({ first: "Sol", email, no: true, to: other });
+        await later(0);
+        const a = await appOf(email, other);
+        expect(a.stage).toBe("ineligible");
+        expect((await intakeOf(a.id)).status).toBe("completed");
+        expect(await requestsOf(a.id)).toEqual([]);
+        expect((await act(a.id, { action: "override_eligibility", note: "He has his licence." })).status).toBe(200);
+        await later(0);
+        expect((await appOf(email, other)).stage).toBe("screen_invited");
+        expect(await triageOf(a.id)).toHaveLength(1);
+        const [scr] = await screensOf(a.id);
+        const mail = mailTo(email);
+        expect(mail).toHaveLength(2);
+        expect(linkIn(mail[1].text)).toBe(scr.token);
+      } finally {
+        await onlyAPerson(false);
+      }
     });
   });
 });

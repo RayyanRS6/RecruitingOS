@@ -71,7 +71,7 @@ const dental: PlaybookInput = {
       ],
       screeningQuestions: [
         // One question answered yes or no, so the AI interview's Yes and No buttons fit it; it used to ask for the state as
-        // well (live test, 12 Nov 2026). No "where": a question that says where, which or what is typed (`tapFormatFor`).
+        // well (live test, 12 Nov 2026). A question that asks where, which, what or whether is typed (`tapFormatFor`).
         { key: "license_confirm", question: "Is your RDH license active in the state this office is in?", kind: "eligibility", modelAnswer: "Yes, active in this state; can name the license number on request." },
         { key: "perio", question: "Walk me through how you handle a new patient with generalized moderate periodontitis.", kind: "skills", competencyKey: "clinical_quality", modelAnswer: "Full perio charting, radiographs, treatment plan discussion with the dentist, scaling and root planing by quadrant, re-evaluation." },
         { key: "anxious", question: "Tell me about a time a patient was anxious or resistant. What did you do?", kind: "behavioral", competencyKey: "patient_communication", modelAnswer: "Specific example; slowed down; explained; checked in; outcome." },

@@ -7,7 +7,7 @@ import {
   CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, currentTapFormat, enforceChatTurn, enforceTurnRules, gapQuestion,
   newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, tapWords, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, withoutResumeShownConcerns, type ChatFacts,
 } from "./screening";
-import { answerInContext, credentialMustHaves } from "./triage";
+import { answerInContext, closedAnswer, credentialMustHaves } from "./triage";
 import { FOCUS_INTRO, focusQuestionsFrom, focusedPacket, packetForFocusedInvite, unfairQuestion } from "./screen-focus";
 import { registerFakeHandlers } from "./fake-handlers";
 
@@ -359,6 +359,40 @@ describe("a plain yes or no to the licence question settles the licence", () => 
     for (const q of ["Do you have a valid driver's license and a reliable car?", "Are you licensed to drive a forklift?"]) expect(plainCredentialAnswers([asked(q, "drive"), said("Yes")], new Set(["rn"]), rn).size, q).toBe(0);
     // while the question about the job's own licence still settles it
     expect([...plainCredentialAnswers([asked("Do you hold an RN license?", "rn_check"), said("Yes")], new Set(["rn"]), rn)]).toEqual([["rn", { met: "yes", quote: "Yes" }]]);
+  });
+
+  // The review of the live-test fixes (12 November 2026): "Which certifications do you hold, such as x-ray, …?" has "do
+  // you hold" in it, so a typed "yes" read as "I hold , such as x-ray, coronal polishing, RDA or BLS": the x-ray
+  // certificate was settled as shown in code, and a model "yes" quoting it stood as evidence for the RDA licence.
+  it("a bare 'yes' to a question that asks them to name something settles nothing, and is no quote", () => {
+    const xray = new Map([["xray", "X-ray certification"]]);
+    const which = ["Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?", "Thanks. Which certifications do you hold (x-ray, coronal polishing, RDA, BLS)?", "And which certifications do you hold, such as x-ray or BLS?"];
+    for (const q of which) {
+      for (const m of ["yes", "Yes, I do", "yes, I have", "No"]) expect(plainCredentialAnswers([asked(q, "certs"), said(m)], new Set(["xray"]), xray).size, `${q} ${m}`).toBe(0);
+      expect(closedAnswer(q, "yes"), q).toBeNull();
+      expect(answerInContext(q, "yes"), q).toBeNull();
+      expect(screenAnswerOf("yes", "Active California RDA license", [asked(q, "certs"), said("yes")]), q).toBeNull();
+    }
+    for (const q of ["What certifications do you hold?", "How long have you held your RDH license?", "When did you get your RDA license?", "Where are you licensed?", "Who issued your license?", "Whose name is the license under?", "So, which license do you have?"]) {
+      expect(closedAnswer(q, "Yes"), q).toBeNull();
+      expect(answerInContext(q, "Yes"), q).toBeNull();
+    }
+    // a model "yes" quoting the bare "yes" stays "no quote", never shown in full, and nothing settles the x-ray certificate
+    const transcript = [asked(which[0]!, "certs"), said("yes")];
+    const both = new Map([["rda", "Active California RDA license"], ["xray", "X-ray certification"]]);
+    const read = verifyScreenQuotes(card([{ requirementKey: "rda", met: "yes", evidence: { source: "screen", quote: "yes" } }]), "yes", { transcript, subjects: both, credentials: new Set(["rda", "xray"]) });
+    expect(read.requirementFindings).toEqual([{ requirementKey: "rda", met: "yes", evidence: { source: "screen", unquoted: true } }]);
+  });
+
+  it("a closed question still settles from its start: after 'And' or 'So', and after a sentence before it", () => {
+    for (const q of ["Do you hold a California RDH license?", "And do you hold a California RDH license?", "So, do you hold a California RDH license?", "Thanks. Next: Do you hold a California RDH license?", "Got it.\n\nAre you licensed as an RDH in California?"]) {
+      expect([...plainCredentialAnswers([asked(q, "licence_check"), said("Yes")], credentialMustHaves(packet), subjects)], q).toEqual([["licence", { met: "yes", quote: "Yes" }]]);
+    }
+    expect(closedAnswer("So do you have an active RDH license?", "No, I don't")).toEqual({ held: false, statement: "I do not have an active RDH license" });
+    // "do you have" further on in a question that starts otherwise is not the question asked
+    expect(closedAnswer("Could you list what you hold, and do you have BLS?", "yes")).toBeNull();
+    // a yes or no to any other closed question is still read with it
+    expect(answerInContext("Is your license active?", "Yes")).toBe("Is your license active? Yes");
   });
 });
 
@@ -1757,6 +1791,14 @@ describe("Yes and No in the AI interview only for a question asked as yes or no 
     expect(certs.kind).toBe("eligibility");
     expect(tapFormatFor(asQuestion(certs), comp)).toBeNull();
     expect(tapFormatFor(asQuestion(roleQuestion("rdh", "license_confirm")), comp)).toEqual({ kind: "yes_no" });
+  });
+
+  // The review of the live-test fixes: the form's licence questions end "in the state where this office is located", and
+  // a chat change or the owner can ask one in the AI interview instead, where its "where" took the buttons away.
+  it("every playbook form question asked in the AI interview keeps Yes and No", () => {
+    const form = ALL_PLAYBOOKS.flatMap((p) => p.roles.flatMap((r) => r.eligibility.map((e) => ({ role: `${p.vertical} ${r.key}`, question: e.question }))));
+    expect(form.filter((q) => /\bwhere\b/.test(q.question)).length).toBeGreaterThanOrEqual(3);
+    for (const q of form) expect(tapFormatFor(asQuestion({ question: q.question, kind: "eligibility" }), comp), `${q.role}: ${q.question}`).toEqual({ kind: "yes_no" });
   });
 
   it("a Yes posted for the certificates question fits nothing, so nothing is saved; the check-your-answers page offers the box", () => {

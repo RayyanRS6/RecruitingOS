@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray, isNull, like, lt, sql } from "drizzle-orm"
 import type { Actor, EscalationThreadEntry } from "@ros/contracts";
 import {
   adminAlerts, applications, assessments, candidates, communications, companies, documents, escalationMessages, events, intakeSessions, interviews, jobs, memberships, recruiterEscalations,
-  rolePackets, roles, scorecards, screens, staffAccessGrants, users, type EscalationMessageKind, type EscalationMessageSide, type Queryable,
+  rolePackets, roles, scorecards, screens, staffAccessGrants, users, workflowRuns, type EscalationMessageKind, type EscalationMessageSide, type Queryable,
 } from "@ros/db";
 import { raiseAlert } from "./alerts";
 import { emit } from "./events";
@@ -251,6 +251,52 @@ export async function settleRetriedRunRequest(q: Queryable, input: { escalationI
   const readers = [...new Set([...(e.requestedBy.kind === "user" ? [e.requestedBy.id] : []), ...owners.map((m) => m.userId)])];
   await notify(q, { companyId: e.companyId, kind: "recruiter.resolved", title: "A stopped step is working again", body: RETRIED_RUN_FINISHED, action: { label: "Read the answer", href: `/?request=${e.id}` }, userIds: readers });
   return "resolved";
+}
+
+/** What a held application's request says once a person kept them in or declined them. */
+export const HOLD_DECIDED = "Someone has now decided about this application, so nothing more is needed.";
+/** The intake's own run raises a held application's request (`ineligible_review`), as Recruiting OS. */
+const HOLD_RAISED_BY = "workflow:application_intake";
+const HOLD_ACTOR: Actor = { kind: "system", id: HOLD_RAISED_BY, name: "Recruiting OS" };
+
+/**
+ * The request a held application raised, once a person kept them in or declined them (the review of the live-test fixes,
+ * 12 November 2026): when a "No" on the form waits past the hold's escalation threshold, the intake asks ITS to review it
+ * with the customer (kind `review`, raised by the intake's run; never a stopped run's request, which its run names in
+ * `workflow_runs.escalation_id`). A person's decision leaves ITS nothing to do. One nobody has picked up is answered and
+ * closed with HOLD_DECIDED, so it leaves the queue and no overdue alert is raised for it; nobody is told, since the person
+ * who decided knows. One a recruiter accepted stays theirs to resolve: it gets the same line as a note on its thread, as
+ * `settleRetriedRunRequest` does. Runs in the company's transaction. Returns how many were closed and how many noted.
+ */
+export async function settleHoldRequests(q: Queryable, input: { companyId: string; applicationId: string; now: Date }): Promise<{ resolved: number; noted: number }> {
+  const held = await q
+    .select()
+    .from(recruiterEscalations)
+    .where(and(
+      eq(recruiterEscalations.companyId, input.companyId),
+      eq(recruiterEscalations.applicationId, input.applicationId),
+      eq(recruiterEscalations.kind, "review"),
+      inArray(recruiterEscalations.status, STILL_OPEN),
+      sql`${recruiterEscalations.requestedBy}->>'id' = ${HOLD_RAISED_BY}`,
+      sql`NOT EXISTS (SELECT 1 FROM ${workflowRuns} WHERE ${workflowRuns.escalationId} = ${recruiterEscalations.id})`,
+    ))
+    .orderBy(asc(recruiterEscalations.createdAt))
+    .for("update");
+  const at = input.now.toISOString();
+  let resolved = 0;
+  let noted = 0;
+  for (const e of held) {
+    if (e.status !== "open") {
+      await addEscalationReply(q, { escalation: e, side: "recruiter", author: HOLD_ACTOR, body: HOLD_DECIDED, now: input.now });
+      noted += 1;
+      continue;
+    }
+    await q.update(recruiterEscalations).set({ status: "resolved", resolvedAt: at, resolution: HOLD_DECIDED }).where(eq(recruiterEscalations.id, e.id));
+    await recordEscalationAnswer(q, { escalation: e, author: HOLD_ACTOR, body: HOLD_DECIDED, now: input.now });
+    await emit(q, { type: "recruiter.resolved", companyId: e.companyId, actor: HOLD_ACTOR, subject: { type: "escalation", id: e.id }, payload: { resolution: HOLD_DECIDED, minutesSpent: null, responseMinutes: null, holdDecided: true } });
+    resolved += 1;
+  }
+  return { resolved, noted };
 }
 
 /** What a request's thread says when the candidate it is about writes back: never their words, which stay on the application's own thread. */
