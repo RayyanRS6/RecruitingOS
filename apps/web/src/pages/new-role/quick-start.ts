@@ -1,4 +1,4 @@
-import { formatPayRange, INTAKE_FIRST_MESSAGE_MAX, type IntakeAnswer, type IntakeFacts, type IntakeFactsPatch, type IntakeQuestion, type IntakeQuestionField } from "@ros/contracts";
+import { formatPayRange, INTAKE_FIRST_MESSAGE_MAX, mustHaveOf, type IntakeAnswer, type IntakeFacts, type IntakeFactsPatch, type IntakeQuestion, type IntakeQuestionField } from "@ros/contracts";
 import { closingDateProblem, closingDateRequiredFor } from "../../publishing";
 import { GENERAL_QUESTIONS, guideRoleFor } from "./quick-starts";
 import { aiSuggestFor, readAiSuggest, type AiSuggest } from "./quick-suggest";
@@ -45,13 +45,16 @@ export const STEP_QUESTION: Readonly<Record<QuickStepId, string>> = {
 
 /**
  * A short line under a question, only where the question alone would not say how its answers are used (fewer words,
- * 23 October 2026): the pay is always published (pay transparency, a required notice; founder decision Q9), and the
- * must-haves are what every applicant is checked against. The other steps say it with their question, their choices and
- * their field labels (a question added on the screening step is labelled as one for the AI interview).
+ * 23 October 2026): the pay is always published (pay transparency, a required notice; founder decision Q9), the
+ * must-haves are what every applicant is checked against, and a "no" to a question on the form holds the application
+ * for the owner (every question on a draft's form does; live test, 12 Nov 2026). The other steps say it with their
+ * question, their choices and their field labels (a question added on the screening step is labelled as one for the AI
+ * interview).
  */
 export const STEP_HINT: Readonly<Partial<Record<QuickStepId, string>>> = {
   pay: "Pay is always shown on your job ad.",
   musts: "Every applicant is checked against these.",
+  questions: 'A "no" holds the application for your decision.',
 };
 
 export const EMPLOYMENT_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
@@ -111,9 +114,16 @@ export type QuickAnswers = {
    * openly as a must-have, after the fairness check, unless the person says not). An unticked one judges nobody.
    */
   dealBreakersPrivate: string[];
+  /**
+   * The person's own wording of a deal-breaker as a must-have ("As a must-have"), by the deal-breaker's words in lower
+   * case; without one it is the requirement the deal-breaker rules people out on (`mustHaveOf`).
+   */
+  dealBreakerMusts: Record<string, string>;
   noDealBreakers: boolean;
   /** Suggested questions the person unticked (suggestions start ticked). */
   questionsOff: string[];
+  /** Offered questions the person ticked themselves: what makes one that is the owner's call (offered unticked) stay on. */
+  questionsOn: string[];
   ownQuestions: string[];
   /**
    * The assistant's suggestions for a job no hiring guide knows (Wave S3, G3), with the answers they were made from
@@ -132,7 +142,7 @@ export function emptyQuickAnswers(): QuickAnswers {
   return {
     title: "", ad: "", employmentType: "", remotePolicy: "", place: "", experience: "", below: "",
     pay: { basis: "", min: "", max: "", ceiling: "" }, closesOn: "", noClosingDate: false,
-    mustHaves: [], adMustHaves: [], dealBreakers: [], dealBreakersPrivate: [], noDealBreakers: false, questionsOff: [], ownQuestions: [],
+    mustHaves: [], adMustHaves: [], dealBreakers: [], dealBreakersPrivate: [], dealBreakerMusts: {}, noDealBreakers: false, questionsOff: [], questionsOn: [], ownQuestions: [],
     aiSuggest: null,
   };
 }
@@ -180,17 +190,42 @@ export function experienceNiceToHave(a: Pick<QuickAnswers, "experience" | "below
   return `${n}+ year${n === 1 ? "" : "s"} of relevant experience`;
 }
 
-type DealBreakerAnswers = Partial<Pick<QuickAnswers, "dealBreakers" | "dealBreakersPrivate" | "noDealBreakers" | "mustHaves">>;
+type DealBreakerAnswers = Partial<Pick<QuickAnswers, "dealBreakers" | "dealBreakersPrivate" | "dealBreakerMusts" | "noDealBreakers" | "mustHaves">>;
+
+/** Where a deal-breaker's own wording as a must-have is kept (`QuickAnswers.dealBreakerMusts`). */
+export const dealBreakerKey = (d: string) => d.trim().toLowerCase();
+
+/** A deal-breaker's wording as a must-have, as the person is typing it ("As a must-have"), else `mustHaveOf`'s. */
+export function dealBreakerWording(a: Pick<DealBreakerAnswers, "dealBreakerMusts">, d: string): string {
+  const own = a.dealBreakerMusts && Object.hasOwn(a.dealBreakerMusts, dealBreakerKey(d)) ? a.dealBreakerMusts[dealBreakerKey(d)] : undefined;
+  return typeof own === "string" ? own : mustHaveOf(d);
+}
+
+/**
+ * The must-have a deal-breaker counts as: the person's own wording ("As a must-have"), else the requirement it rules
+ * people out on ("No active California RDA license" is "Active California RDA license", `mustHaveOf`). Never the
+ * deal-breaker's negative words (live test, 12 Nov 2026). Empty when the person cleared the wording.
+ */
+export function dealBreakerMustHave(a: Pick<DealBreakerAnswers, "dealBreakerMusts">, d: string): string {
+  return dealBreakerWording(a, d).trim().replace(/\s+/g, " ");
+}
+
+/** Takes a deal-breaker off the step, with its tick and its wording as a must-have. */
+export function removeDealBreaker(a: Pick<QuickAnswers, "dealBreakers" | "dealBreakersPrivate" | "dealBreakerMusts">, t: string): Pick<QuickAnswers, "dealBreakers" | "dealBreakersPrivate" | "dealBreakerMusts"> {
+  const { [dealBreakerKey(t)]: _gone, ...musts } = a.dealBreakerMusts;
+  return { dealBreakers: a.dealBreakers.filter((d) => d !== t), dealBreakersPrivate: a.dealBreakersPrivate.filter((d) => !same(d, t)), dealBreakerMusts: musts };
+}
 
 /**
  * The deal-breakers that count openly as must-haves (founder decision Q19): every one the person added and left ticked,
- * unless it is already one of their must-haves. Each still passes the server's fairness check.
+ * unless it is already one of their must-haves, in its own words or as the must-have it counts as. Each still passes the
+ * server's fairness check.
  */
 export function openDealBreakers(a: DealBreakerAnswers): string[] {
   if (a.noDealBreakers) return [];
   const priv = a.dealBreakersPrivate ?? [];
   const musts = a.mustHaves ?? [];
-  return (a.dealBreakers ?? []).filter((d) => !priv.some((p) => same(p, d)) && !musts.some((m) => same(m, d)));
+  return (a.dealBreakers ?? []).filter((d) => !priv.some((p) => same(p, d)) && !musts.some((m) => same(m, d) || same(m, dealBreakerMustHave(a, d))));
 }
 
 /** How many skills may still be ticked: six in all, one fewer when the experience is a must-have, and one fewer for each deal-breaker counted openly. */
@@ -198,11 +233,14 @@ export function mustHavesRoom(a: Pick<QuickAnswers, "experience" | "below"> & De
   return MUST_HAVES_MAX - (experienceMustHave(a) ? 1 : 0) - openDealBreakers(a).length;
 }
 
-/** Every must-have the draft will carry, in order: the skills, the experience when it counts, the deal-breakers counted openly. */
+/**
+ * Every must-have the draft will carry, in order: the skills, the experience when it counts, and each deal-breaker
+ * counted openly as the must-have it counts as (`dealBreakerMustHave`), never in its negative words.
+ */
 export function allMustHaves(a: Pick<QuickAnswers, "experience" | "below" | "mustHaves"> & DealBreakerAnswers): string[] {
   const exp = experienceMustHave(a);
   const out: string[] = [];
-  for (const m of [...a.mustHaves, ...(exp ? [exp] : []), ...openDealBreakers(a)]) if (!out.some((x) => same(x, m))) out.push(m);
+  for (const m of [...a.mustHaves, ...(exp ? [exp] : []), ...openDealBreakers(a).map((d) => dealBreakerMustHave(a, d))]) if (m && !out.some((x) => same(x, m))) out.push(m);
   return out;
 }
 
@@ -219,13 +257,43 @@ export function suggestedQuestions(vertical: string | null | undefined, title: s
 type QuestionAnswers = Pick<QuickAnswers, "questionsOff" | "title"> & Partial<QuickAnswers>;
 
 /**
- * Every yes/no question offered on the screening step, ticked unless the person unticked it: the guide's for a job it
- * knows; else the general ones, then the assistant's for these very answers (Wave S3, G3), each once.
+ * Every yes/no question offered on the screening step: the guide's for a job it knows; else the general ones, then the
+ * assistant's for these very answers (Wave S3, G3), each once. Each starts ticked, except one that is the owner's call
+ * (`questionOn`).
  */
 export function offeredQuestions(a: QuestionAnswers, vertical: string | null | undefined): readonly string[] {
   if (guideRoleFor(vertical, a.title)) return suggestedQuestions(vertical, a.title);
   const ai = aiSuggestFor(a)?.questions ?? [];
   return [...GENERAL_QUESTIONS, ...ai.filter((q) => !GENERAL_QUESTIONS.some((g) => same(g, q)))];
+}
+
+/** Every must-have the draft will carry, from answers that may be partly given (`allMustHaves`). */
+function mustHavesOf(a: QuestionAnswers): string[] {
+  return allMustHaves({ experience: a.experience ?? "", below: a.below ?? "", mustHaves: a.mustHaves ?? [], dealBreakers: a.dealBreakers, dealBreakersPrivate: a.dealBreakersPrivate, dealBreakerMusts: a.dealBreakerMusts, noDealBreakers: a.noDealBreakers });
+}
+
+const literally = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Whether a text names a word or a phrase, whole, in any case ("RDA" in "Active California RDA license", never in "Rdash"). */
+const names = (text: string, word: string) => new RegExp(`(?:^|[^a-z0-9])${literally(word)}(?![a-z0-9])`, "i").test(text);
+
+/**
+ * Whether a question offered on the screening step is ticked. A question that is the owner's call (the guide's
+ * `optional`: the Dental Assistant's RDA licence) starts unticked, and ticks itself once a must-have names it, such as a
+ * deal-breaker counted openly ("No active California RDA license"); a deal-breaker that judges nobody never does. What
+ * the person ticked or unticked always stands. Every other question starts ticked (live test, 12 Nov 2026).
+ */
+export function questionOn(a: QuestionAnswers, q: string, vertical: string | null | undefined): boolean {
+  const optional = guideRoleFor(vertical, a.title)?.optional?.find((o) => same(o.question, q));
+  if ((a.questionsOn ?? []).some((x) => same(x, q))) return true;
+  if (a.questionsOff.some((x) => same(x, q))) return false;
+  return !optional || mustHavesOf(a).some((m) => optional.mentions.some((w) => names(m, w)));
+}
+
+/** Ticks or unticks one offered question: what the person chose is kept, over any default. */
+export function toggleQuestion(a: QuestionAnswers, q: string, vertical: string | null | undefined): Pick<QuickAnswers, "questionsOn" | "questionsOff"> {
+  const on = (a.questionsOn ?? []).filter((x) => !same(x, q));
+  const off = a.questionsOff.filter((x) => !same(x, q));
+  return questionOn(a, q, vertical) ? { questionsOn: on, questionsOff: [...off, q] } : { questionsOn: [...on, q], questionsOff: off };
 }
 
 /** The one edit carries at most twenty list items (IntakeFactsPatch.add). */
@@ -236,17 +304,22 @@ const PATCH_ADD_MAX = 20;
  * a nice-to-have, deal-breakers, the person's own questions): an offered question is what gives way, never the person's own words.
  */
 function formQuestionsRoom(a: QuestionAnswers): number {
-  const exp = { experience: a.experience ?? "", below: a.below ?? "" } as const;
-  const musts = allMustHaves({ ...exp, mustHaves: a.mustHaves ?? [], dealBreakers: a.dealBreakers, dealBreakersPrivate: a.dealBreakersPrivate, noDealBreakers: a.noDealBreakers }).slice(0, MUST_HAVES_MAX).length;
-  const nice = experienceNiceToHave(exp) ? 1 : 0;
+  const musts = mustHavesOf(a).slice(0, MUST_HAVES_MAX).length;
+  const nice = experienceNiceToHave({ experience: a.experience ?? "", below: a.below ?? "" }) ? 1 : 0;
   const deals = a.noDealBreakers ? 0 : Math.min((a.dealBreakers ?? []).length, DEAL_BREAKERS_MAX);
   const own = Math.min((a.ownQuestions ?? []).length, OWN_QUESTIONS_MAX);
   return Math.max(0, PATCH_ADD_MAX - musts - nice - deals - own);
 }
 
-/** The offered questions still ticked, as many as the one edit has room for. */
+/** The offered questions ticked (`questionOn`), as many as the one edit has room for. */
 export function chosenQuestions(a: QuestionAnswers, vertical: string | null | undefined): string[] {
-  return offeredQuestions(a, vertical).filter((q) => !a.questionsOff.some((x) => same(x, q))).slice(0, formQuestionsRoom(a));
+  return offeredQuestions(a, vertical).filter((q) => questionOn(a, q, vertical)).slice(0, formQuestionsRoom(a));
+}
+
+/** The offered questions left unticked, with where each came from: our hiring guide (the general ones too) or the assistant. */
+export function untickedQuestions(a: QuestionAnswers, vertical: string | null | undefined): Array<{ question: string; origin: "playbook" | "assistant" }> {
+  const guide = !!guideRoleFor(vertical, a.title);
+  return offeredQuestions(a, vertical).filter((q) => !questionOn(a, q, vertical)).map((question) => ({ question, origin: guide || GENERAL_QUESTIONS.some((g) => same(g, question)) ? "playbook" : "assistant" }));
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */
@@ -282,6 +355,7 @@ export function stepProblem(step: QuickStepId, a: QuickAnswers, today: string): 
     }
     case "dealbreakers":
       if (!a.noDealBreakers && !a.dealBreakers.length) return "Add what rules someone out, or choose None.";
+      if (openDealBreakers(a).some((d) => !dealBreakerMustHave(a, d))) return "Write each ticked deal-breaker as a must-have, or untick it.";
       if (allMustHaves(a).length > MUST_HAVES_MAX) return `Six must-haves at most, with your skills. Untick one here, or take a skill off.`;
       return null;
     case "questions":
@@ -333,7 +407,8 @@ export function reviewRows(a: QuickAnswers, vertical: string | null | undefined)
   const inChat = a.ownQuestions.length;
   const questions = [...(onForm ? [`${onForm} on the form`] : []), ...(inChat ? [`${inChat} in the AI interview`] : [])].join(" · ");
   const open = openDealBreakers(a);
-  const deal = a.dealBreakers.map((d) => (open.some((o) => same(o, d)) || a.mustHaves.some((m) => same(m, d)) ? `${d} (must-have)` : `${d} (not used to judge)`));
+  // one already a skill, in its own words or as the must-have it counts as, judges as that skill does
+  const deal = a.dealBreakers.map((d) => (open.some((o) => same(o, d)) || a.mustHaves.some((m) => same(m, d) || same(m, dealBreakerMustHave(a, d))) ? `${d} (must-have)` : `${d} (not used to judge)`));
   const musts = allMustHaves(a);
   const where = a.remotePolicy ? `${labelOf(WORK_MODEL_CHOICES, a.remotePolicy)}${a.place.trim() ? ` · ${a.place.trim()}` : ""}` : "Not answered";
   const rows: Array<[QuickStepId, string]> = [
@@ -409,7 +484,9 @@ const EXPERIENCE_LINE = /\b\d{1,2}\s*\+?\s*(?:years?|yrs?)\b.*\bexperience\b|\be
  * person's choice, all of them: anything the assistant read as a must-have from the first message or a pasted ad that
  * the person did not tick is taken out (they were offered the ad's on the must-haves step), and so is an experience line
  * it read as a nice-to-have that differs from the person's answer. Deal-breakers left ticked count openly as must-haves
- * (Q19). Suggested yes/no questions go with the eligibility, questions typed by the person with the screening chat.
+ * (Q19), as the must-have each counts as; the deal-breakers themselves keep the person's words. Suggested yes/no
+ * questions ticked go with the eligibility, and the ones left unticked as suggestions the draft never uses (`unticked`),
+ * so a question nobody chose never holds anyone; questions typed by the person go with the screening chat.
  */
 export function quickStartPatch(a: QuickAnswers, vertical: string | null | undefined, existing: (Pick<IntakeFacts, "mustHaves"> & Partial<Pick<IntakeFacts, "niceToHaves">>) | null): IntakeFactsPatch {
   const pay = payPayload(a.pay);
@@ -428,6 +505,7 @@ export function quickStartPatch(a: QuickAnswers, vertical: string | null | undef
     ...extraMusts.map((value) => ({ field: "mustHaves" as const, value: value.slice(0, 500) })),
     ...extraNice.map((value) => ({ field: "niceToHaves" as const, value: value.slice(0, 500) })),
   ].slice(0, 20);
+  const unticked = untickedQuestions(a, vertical).slice(0, 12).map((q) => ({ field: "eligibility" as const, value: q.question.slice(0, 500), origin: q.origin }));
   return {
     set: {
       title: a.title.trim(),
@@ -438,6 +516,7 @@ export function quickStartPatch(a: QuickAnswers, vertical: string | null | undef
     },
     ...(add.length ? { add } : {}),
     ...(remove.length ? { remove } : {}),
+    ...(unticked.length ? { unticked } : {}),
   };
 }
 
@@ -555,6 +634,16 @@ export function quickStartStorageKey(scope?: QuickScope | null): string {
 
 const str = (v: unknown, max = 20_000) => (typeof v === "string" ? v.slice(0, max) : "");
 const strs = (v: unknown, max: number) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.slice(0, ITEM_MAX)).slice(0, max) : []);
+/** The deal-breakers' own wordings as must-haves, text only: no more than the step holds deal-breakers, each no longer than an item. */
+const wordings = (v: unknown): Record<string, string> => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (Object.keys(out).length >= DEAL_BREAKERS_MAX) break;
+    if (typeof x === "string" && k.trim() && k !== "__proto__") out[k.slice(0, ITEM_MAX)] = x.slice(0, ITEM_MAX);
+  }
+  return out;
+};
 
 /**
  * Reads what was kept, or null when there is nothing (or storage cannot be read, or holds something else, or was kept
@@ -584,8 +673,10 @@ export function readQuickStart(storage: Pick<Storage, "getItem"> | null | undefi
       adMustHaves: strs(a.adMustHaves, 12),
       dealBreakers: strs(a.dealBreakers, DEAL_BREAKERS_MAX),
       dealBreakersPrivate: strs(a.dealBreakersPrivate, DEAL_BREAKERS_MAX),
+      dealBreakerMusts: wordings(a.dealBreakerMusts),
       noDealBreakers: a.noDealBreakers === true,
       questionsOff: strs(a.questionsOff, 12),
+      questionsOn: strs(a.questionsOn, 12),
       ownQuestions: strs(a.ownQuestions, OWN_QUESTIONS_MAX),
       aiSuggest: readAiSuggest(a.aiSuggest),
     };
@@ -632,6 +723,6 @@ export function clearAllQuickStarts(storage: Pick<Storage, "removeItem" | "key" 
 /** Whether any answer was given, so a fresh page is not mistaken for work in progress. */
 export function hasAnswers(a: QuickAnswers): boolean {
   const texts = [a.title, a.ad, a.employmentType, a.remotePolicy, a.place, a.experience, a.below, a.pay.basis, a.pay.min, a.pay.max, a.pay.ceiling, a.closesOn];
-  const lists = [a.mustHaves, a.adMustHaves, a.dealBreakers, a.dealBreakersPrivate, a.questionsOff, a.ownQuestions];
+  const lists = [a.mustHaves, a.adMustHaves, a.dealBreakers, a.dealBreakersPrivate, a.questionsOff, a.questionsOn, a.ownQuestions];
   return texts.some((t) => t.trim().length > 0) || lists.some((l) => l.length > 0) || a.noClosingDate || a.noDealBreakers;
 }

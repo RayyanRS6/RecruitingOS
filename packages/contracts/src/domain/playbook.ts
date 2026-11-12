@@ -52,6 +52,16 @@ export const PlaybookRole = z.object({
 });
 export type PlaybookRole = z.infer<typeof PlaybookRole>;
 
+/**
+ * A playbook question that is the owner's call: every place's expectation is optional, so it goes on the form only when
+ * the owner requires it (the Dental Assistant's RDA licence; live test, 12 November 2026). The quick start offers it
+ * unticked and the draft's prompt marks it so.
+ */
+export function ownersCall(rule: { expectationByJurisdiction?: Record<string, Record<string, unknown>> }): boolean {
+  const places = Object.values(rule.expectationByJurisdiction ?? {});
+  return places.length > 0 && places.every((x) => x?.optional === true);
+}
+
 export const Playbook = z.object({
   vertical: z.string(),
   version: z.number().int().min(1),

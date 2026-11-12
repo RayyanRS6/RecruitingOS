@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { INTAKE_FIRST_MESSAGE_MAX, IntakeAnswer, IntakeFactsPatch, type IntakeQuestion, type IntakeServerState } from "../../packages/contracts/src/index";
+import { INTAKE_FIRST_MESSAGE_MAX, IntakeAnswer, IntakeFactsPatch, ownersCall, type IntakeQuestion, type IntakeServerState } from "../../packages/contracts/src/index";
 import { applyFactsPatch, intakeReadiness, normalizeFacts } from "../../packages/core/src/intake-builder";
-import { findPlaybook, matchPlaybookRole } from "../../packages/playbooks/src/index";
+import { ALL_PLAYBOOKS, findPlaybook, matchPlaybookRole } from "../../packages/playbooks/src/index";
 import { NEW_ROLE_FRESH_HREF } from "../../apps/web/src/pages/new-role/rules";
 import { GENERAL_QUESTIONS, GUIDE_ROLES, guideRoleFor } from "../../apps/web/src/pages/new-role/quick-starts";
 import {
-  QUICK_STEPS, QUICK_START_STORAGE_KEY, STEP_QUESTION, addItem, allMustHaves, chosenQuestions, clearAllQuickStarts, clearQuickStart, emptyQuickAnswers, emptyQuickState, enterMovesOn, experienceMustHave,
-  experienceNiceToHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, isDealBreakerCard, mustHavesRoom, openDealBreakers, quickStartDraftKey, quickStartPatch, quickStartStorageKey, readAd, readQuickStart, reviewRows,
-  skippedAnswers, stepProblem, suggestedMustHaves, suggestedQuestions, toggleItem, writeQuickStart, type QuickAnswers,
+  QUICK_STEPS, QUICK_START_STORAGE_KEY, STEP_QUESTION, addItem, allMustHaves, chosenQuestions, clearAllQuickStarts, clearQuickStart, dealBreakerMustHave, emptyQuickAnswers, emptyQuickState, enterMovesOn, experienceMustHave,
+  experienceNiceToHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, isDealBreakerCard, mustHavesRoom, offeredQuestions, openDealBreakers, questionOn, quickStartDraftKey, quickStartPatch, quickStartStorageKey, readAd, readQuickStart,
+  removeDealBreaker, reviewRows, skippedAnswers, stepProblem, suggestedMustHaves, suggestedQuestions, toggleItem, toggleQuestion, writeQuickStart, type QuickAnswers,
 } from "../../apps/web/src/pages/new-role/quick-start";
 import { QUICK_START_HREF, START_HIRE_HREF } from "../../apps/web/src/start-hire";
 
@@ -122,7 +122,20 @@ describe("suggestions from our hiring guides", () => {
         expect([...r.aliases]).toEqual(p.aliases);
         expect([...r.mustHaves]).toEqual(p.commonQualifications);
         expect([...r.questions]).toEqual(p.eligibility.map((e) => e.question));
+        // the questions that are the owner's call (every expectation optional) are the ones offered unticked
+        expect((r.optional ?? []).map((o) => o.question), r.key).toEqual(p.eligibility.filter(ownersCall).map((e) => e.question));
       }
+    }
+    expect(GUIDE_ROLES.dental.find((r) => r.key === "da")?.optional?.map((o) => o.mentions)).toEqual([["RDA", "registered dental assistant"]]);
+  });
+
+  it("offer questions written for candidates, never words for the assistant about the owner (live test, 12 Nov 2026)", () => {
+    const AI_WORDS = /\b(?:owner|packet|playbook)\b|\(answer\b|\bif this (?:role|job) requires\b/i;
+    const questions = [...ALL_PLAYBOOKS.flatMap((p) => p.roles.flatMap((r) => r.eligibility.map((e) => e.question))), ...Object.values(GUIDE_ROLES).flatMap((roles) => roles.flatMap((r) => r.questions)), ...GENERAL_QUESTIONS];
+    expect(questions.length).toBeGreaterThan(10);
+    for (const q of questions) {
+      expect(q, q).not.toMatch(AI_WORDS);
+      expect(q.endsWith("?"), q).toBe(true);
     }
   });
 
@@ -158,8 +171,8 @@ describe("the review", () => {
     // where each question is asked: the suggested ones on the form, the person's own in the screening chat
     expect(rows.find((r) => r.label === "Screening questions")?.value).toBe(`${suggestedQuestions("dental", "Dental Hygienist").length} on the form · 1 in the AI interview`);
     expect(reviewRows(filled({ noClosingDate: true, noDealBreakers: true, dealBreakers: [] }), "dental").find((r) => r.label === "Deal-breakers")?.value).toBe("None");
-    // a deal-breaker left ticked shows among the must-haves, and says which way it counts
-    expect(rows.find((r) => r.label === "Must-have skills")?.value).toBe("Digital radiography and intraoral scanning; At least 3 years of relevant experience; Cannot work Saturdays");
+    // a deal-breaker left ticked shows among the must-haves as the must-have it counts as, and says which way it counts
+    expect(rows.find((r) => r.label === "Must-have skills")?.value).toBe("Digital radiography and intraoral scanning; At least 3 years of relevant experience; Able to work Saturdays");
     expect(rows.find((r) => r.label === "Deal-breakers")?.value).toBe("Cannot work Saturdays (must-have)");
     const priv = reviewRows(filled({ dealBreakersPrivate: ["Cannot work Saturdays"] }), "dental");
     expect(priv.find((r) => r.label === "Deal-breakers")?.value).toBe("Cannot work Saturdays (not used to judge)");
@@ -175,7 +188,7 @@ describe("deal-breakers count openly as must-haves (founder decision Q19)", () =
     // already a must-have: counted once
     expect(openDealBreakers(filled({ mustHaves: ["Cannot work Saturdays"] }))).toEqual([]);
     expect(mustHavesRoom(filled())).toBe(4);
-    expect(allMustHaves(filled())).toEqual(["Digital radiography and intraoral scanning", "At least 3 years of relevant experience", "Cannot work Saturdays"]);
+    expect(allMustHaves(filled())).toEqual(["Digital radiography and intraoral scanning", "At least 3 years of relevant experience", "Able to work Saturdays"]);
     // too many in all: the deal-breakers step says so, and so does the must-haves step
     const full = filled({ mustHaves: ["a", "b", "c", "d", "e"] });
     expect(stepProblem("dealbreakers", full, TODAY)).toMatch(/Six must-haves at most/);
@@ -186,13 +199,108 @@ describe("deal-breakers count openly as must-haves (founder decision Q19)", () =
   it("puts the ticked ones on the draft as must-haves, through the fairness check, and leaves the unticked ones out", () => {
     const a = filled({ dealBreakers: ["Cannot work Saturdays", "No recent grads", "Smokers"], dealBreakersPrivate: ["Smokers"] });
     const patch = quickStartPatch(a, "dental", { mustHaves: [] });
-    expect(patch.add).toContainEqual({ field: "mustHaves", value: "Cannot work Saturdays" });
+    // as the must-have each counts as; the deal-breakers keep the person's words
+    expect(patch.add).toContainEqual({ field: "mustHaves", value: "Able to work Saturdays" });
+    expect(patch.add).toContainEqual({ field: "dealBreakers", value: "Cannot work Saturdays" });
+    expect(patch.add).not.toContainEqual({ field: "mustHaves", value: "Cannot work Saturdays" });
     expect(patch.add).not.toContainEqual({ field: "mustHaves", value: "Smokers" });
     expect(patch.add).toContainEqual({ field: "dealBreakers", value: "Smokers" });
     const edit = applyFactsPatch(normalizeFacts({}), patch, []);
-    expect(edit.facts.mustHaves).toContain("Cannot work Saturdays");
+    expect(edit.facts.mustHaves).toContain("Able to work Saturdays");
     expect(edit.facts.mustHaves).not.toContain("No recent grads");
     expect(edit.facts.mustHaves).not.toContain("Smokers");
+  });
+});
+
+describe("a deal-breaker counts as the requirement it rules people out on (live test, 12 Nov 2026)", () => {
+  const assistant = (over: Partial<QuickAnswers> = {}) => filled({ title: "Dental assistant", mustHaves: ["Four-handed dentistry", "Digital radiography"], dealBreakers: ["No active California RDA license"], ...over });
+
+  it("goes on the draft as the requirement, never in the words that rule someone out, and keeps those words as the deal-breaker", () => {
+    const a = assistant();
+    expect(allMustHaves(a)).toEqual(["Four-handed dentistry", "Digital radiography", "At least 3 years of relevant experience", "Active California RDA license"]);
+    expect(allMustHaves(a).some((m) => /^no\b/i.test(m))).toBe(false);
+    const patch = quickStartPatch(a, "dental", { mustHaves: [] });
+    expect(patch.add).toContainEqual({ field: "mustHaves", value: "Active California RDA license" });
+    expect(patch.add).toContainEqual({ field: "dealBreakers", value: "No active California RDA license" });
+    expect(patch.add?.filter((x) => x.field === "mustHaves").map((x) => x.value)).not.toContain("No active California RDA license");
+    const rows = reviewRows(a, "dental");
+    expect(rows.find((r) => r.label === "Must-have skills")?.value).toBe("Four-handed dentistry; Digital radiography; At least 3 years of relevant experience; Active California RDA license");
+    expect(rows.find((r) => r.label === "Deal-breakers")?.value).toBe("No active California RDA license (must-have)");
+  });
+
+  it("takes the person's own wording first; an empty wording stops the step, and taking the deal-breaker off forgets it", () => {
+    const own = assistant({ dealBreakerMusts: { "no active california rda license": "  Active RDA license   (California) " } });
+    expect(dealBreakerMustHave(own, "No active California RDA license")).toBe("Active RDA license (California)");
+    expect(allMustHaves(own).at(-1)).toBe("Active RDA license (California)");
+    expect(stepProblem("dealbreakers", own, TODAY)).toBeNull();
+    const cleared = assistant({ dealBreakerMusts: { "no active california rda license": "  " } });
+    expect(stepProblem("dealbreakers", cleared, TODAY)).toBe("Write each ticked deal-breaker as a must-have, or untick it.");
+    expect(allMustHaves(cleared)).toEqual(["Four-handed dentistry", "Digital radiography", "At least 3 years of relevant experience"]);
+    // unticked, it needs no wording
+    expect(stepProblem("dealbreakers", { ...cleared, dealBreakersPrivate: ["No active California RDA license"] }, TODAY)).toBeNull();
+    expect(removeDealBreaker({ ...own, dealBreakersPrivate: ["no active california rda license"] }, "No active California RDA license")).toEqual({ dealBreakers: [], dealBreakersPrivate: [], dealBreakerMusts: {} });
+    // a wording kept for "constructor" or the like is never read off the object's prototype
+    expect(dealBreakerMustHave(emptyQuickAnswers(), "constructor")).toBe("constructor");
+  });
+
+  it("is counted once when a skill already is that requirement, and still says it judges (critic, 12 Nov 2026)", () => {
+    const a = assistant({ mustHaves: ["Four-handed dentistry", "Active California RDA license"] });
+    expect(openDealBreakers(a)).toEqual([]);
+    expect(allMustHaves(a)).toEqual(["Four-handed dentistry", "Active California RDA license", "At least 3 years of relevant experience"]);
+    expect(reviewRows(a, "dental").find((r) => r.label === "Deal-breakers")?.value).toBe("No active California RDA license (must-have)");
+  });
+});
+
+describe("a question that is the owner's call (live test, 12 Nov 2026)", () => {
+  const RDA = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+  const assistant = (over: Partial<QuickAnswers> = {}) => filled({ title: "Dental assistant", mustHaves: ["Four-handed dentistry"], dealBreakers: [], noDealBreakers: true, ...over });
+
+  it("is offered unticked, so an applicant without the licence is never held for it unless the owner wants it", () => {
+    const a = assistant();
+    expect(offeredQuestions(a, "dental")[0]).toBe(RDA);
+    expect(questionOn(a, RDA, "dental")).toBe(false);
+    expect(chosenQuestions(a, "dental")).toEqual(offeredQuestions(a, "dental").slice(1));
+    // the others start ticked, as before
+    for (const q of offeredQuestions(a, "dental").slice(1)) expect(questionOn(a, q, "dental"), q).toBe(true);
+    // it goes to the draft as a question left unticked, which the server keeps as one never to use
+    const patch = quickStartPatch(a, "dental", { mustHaves: [] });
+    expect(patch.unticked).toEqual([{ field: "eligibility", value: RDA, origin: "playbook" }]);
+    expect(IntakeFactsPatch.parse(patch)).toEqual(patch);
+    const edit = applyFactsPatch(normalizeFacts({}), patch, []);
+    expect(edit.facts.eligibilityNotes).not.toContain(RDA);
+    expect(edit.facts.suggestions).toEqual([{ field: "eligibility", text: RDA, origin: "playbook" }]);
+  });
+
+  it("ticks itself once a must-have names the licence, a deal-breaker counted openly too, never one that judges nobody", () => {
+    expect(questionOn(assistant({ mustHaves: ["Four-handed dentistry", "RDA license"] }), RDA, "dental")).toBe(true);
+    expect(questionOn(assistant({ mustHaves: ["Registered dental assistant license"] }), RDA, "dental")).toBe(true);
+    const open = assistant({ dealBreakers: ["No active California RDA license"], noDealBreakers: false });
+    expect(questionOn(open, RDA, "dental")).toBe(true);
+    expect(chosenQuestions(open, "dental")).toContain(RDA);
+    expect(quickStartPatch(open, "dental", null).unticked).toBeUndefined();
+    expect(questionOn({ ...open, dealBreakersPrivate: ["No active California RDA license"] }, RDA, "dental")).toBe(false);
+    // a word that only contains the letters is not the licence
+    expect(questionOn(assistant({ mustHaves: ["Ardashir charting"] }), RDA, "dental")).toBe(false);
+  });
+
+  it("stays as the person ticks it: on when ticked, off when unticked even once a must-have names it, and kept in this browser", () => {
+    const a = assistant();
+    const ticked = { ...a, ...toggleQuestion(a, RDA, "dental") };
+    expect(questionOn(ticked, RDA, "dental")).toBe(true);
+    expect(chosenQuestions(ticked, "dental")[0]).toBe(RDA);
+    const named = assistant({ mustHaves: ["RDA license"] });
+    const unticked = { ...named, ...toggleQuestion(named, RDA, "dental") };
+    expect(questionOn(unticked, RDA, "dental")).toBe(false);
+    expect({ ...unticked, ...toggleQuestion(unticked, RDA, "dental") }.questionsOff).toEqual([]);
+    // another question unticks and ticks as before
+    const xray = offeredQuestions(a, "dental")[1];
+    const off = { ...a, ...toggleQuestion(a, xray, "dental") };
+    expect(questionOn(off, xray, "dental")).toBe(false);
+    expect(questionOn({ ...off, ...toggleQuestion(off, xray, "dental") }, xray, "dental")).toBe(true);
+    const s = memoryStorage();
+    const state = { ...emptyQuickState(), step: 8, answers: { ...ticked, dealBreakerMusts: { "no rda license": "RDA license" } } };
+    writeQuickStart(s, state);
+    expect(readQuickStart(s)).toEqual(state);
   });
 });
 
@@ -231,8 +339,8 @@ describe("handing over to the job builder", () => {
     expect(edit.facts.remotePolicy).toBe("onsite");
     expect(edit.facts.compensationMin).toBe(45);
     expect(edit.pay?.via).toBe("edited");
-    // the deal-breaker left ticked counts openly as a must-have (Q19)
-    expect(edit.facts.mustHaves).toEqual(["Digital radiography and intraoral scanning", "At least 3 years of relevant experience", "Cannot work Saturdays"]);
+    // the deal-breaker left ticked counts openly as a must-have (Q19), as the requirement it rules people out on
+    expect(edit.facts.mustHaves).toEqual(["Digital radiography and intraoral scanning", "At least 3 years of relevant experience", "Able to work Saturdays"]);
     expect(edit.facts.dealBreakers).toEqual(["Cannot work Saturdays"]);
     // the fairness check refuses a proxy for age, with the reason, both as a must-have and as a deal-breaker
     expect([...new Set(edit.refused.map((r) => r.text))]).toEqual(["No recent grads"]);
@@ -265,7 +373,7 @@ describe("handing over to the job builder", () => {
       { field: "niceToHaves", value: "3+ years of experience" },
     ]);
     const after = applyFactsPatch(normalizeFacts({ mustHaves: ["Bachelor's degree", "3+ years of experience"], niceToHaves: ["3+ years of experience", "Spanish"] }), consider, []);
-    expect(after.facts.mustHaves).toEqual(["Digital radiography and intraoral scanning", "Cannot work Saturdays"]);
+    expect(after.facts.mustHaves).toEqual(["Digital radiography and intraoral scanning", "Able to work Saturdays"]);
     expect(after.facts.niceToHaves).toEqual(["Spanish", "3+ years of relevant experience"]);
     // nothing to take out when the assistant read only what the person chose
     expect(quickStartPatch(filled(), "dental", { mustHaves: ["Digital radiography and intraoral scanning"] }).remove).toBeUndefined();

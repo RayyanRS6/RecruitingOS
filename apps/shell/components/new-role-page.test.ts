@@ -341,6 +341,28 @@ describe("the quick start's lines on how answers are used", () => {
     const html = renderToStaticMarkup(createElement(StepBody, { step: "dealbreakers", a, set: () => undefined, vertical: "logistics", onEdit: () => undefined }));
     expect(html).toContain("Everyone is checked openly against must-haves. An unticked one is not used to judge anyone.");
     expect(html).toMatch(/<label class="option-row flex-wrap gap-y-1\.5">[\s\S]*?<span class="option-tag">Must-have<\/span><\/label>/);
+    // a ticked one counts as the requirement it rules people out on, in a field the person can reword (live test,
+    // 12 Nov 2026); the field is described by the deal-breaker's own words
+    expect(html).toContain('<label for="qs-deal-must-0">As a must-have</label>');
+    expect(html).toMatch(/<input id="qs-deal-must-0" class="input"[^>]*placeholder="e\.g\. Active California RDA license" aria-describedby="qs-deal-words-0" value="Able to work Saturdays"\/>/);
+    expect(html).toContain('<span id="qs-deal-words-0" class="min-w-0 flex-[1_1_8rem] wrap-anywhere">Cannot work Saturdays</span>');
+    // an unticked one judges nobody, so it has no must-have to word
+    const off = renderToStaticMarkup(createElement(StepBody, { step: "dealbreakers", a: { ...a, dealBreakersPrivate: ["Cannot work Saturdays"] }, set: () => undefined, vertical: "logistics", onEdit: () => undefined }));
+    expect(off).toContain('<span class="option-tag">Not used to judge</span>');
+    expect(off).not.toContain("qs-deal-must-0");
+    expect(off).not.toContain("As a must-have");
+  });
+
+  it("says a 'no' to a question on the form holds the application, and offers the RDA licence question unticked (live test, 12 Nov 2026)", () => {
+    expect(STEP_HINT.questions).toBe('A "no" holds the application for your decision.');
+    const a = { ...emptyQuickAnswers(), title: "Dental assistant" };
+    const html = renderToStaticMarkup(createElement(StepBody, { step: "questions", a, set: () => undefined, vertical: "dental", suggest: { kind: "guide" }, onEdit: () => undefined }));
+    expect(html).toMatch(/<input type="checkbox" aria-label="Do you hold an active Registered Dental Assistant \(RDA\) license in the state where this office is located\?" name="qs-questions" value="/);
+    expect(html).toMatch(/<input type="checkbox" aria-label="Do you hold a current radiation safety \/ x-ray certification and CPR\/BLS\?" name="qs-questions" checked=""/);
+    expect(html).not.toMatch(/owner|Answer &#x27;not required&#x27;/);
+    // a must-have that names the licence ticks it
+    const named = renderToStaticMarkup(createElement(StepBody, { step: "questions", a: { ...a, mustHaves: ["RDA license"] }, set: () => undefined, vertical: "dental", suggest: { kind: "guide" }, onEdit: () => undefined }));
+    expect(named).toMatch(/<input type="checkbox" aria-label="Do you hold an active Registered Dental Assistant \(RDA\) license in the state where this office is located\?" name="qs-questions" checked=""/);
   });
 });
 

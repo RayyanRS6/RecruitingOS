@@ -327,7 +327,8 @@ intakeRoutes.post("/sessions/:id/messages", requireTenant, async (c) => {
 /**
  * Tapped answers, panel edits and "draft it" (C6, C7). The answers set the facts (set / add / remove), one short summary
  * goes into the conversation, and the assistant takes its next turn unless `reply` is false. `refused` lists anything
- * typed that failed the fairness check: it was not used, and the reason says why.
+ * typed that failed the fairness check: it was not used, and the reason says why. `dealBreakersOffered` (the quick start):
+ * the edit's deal-breakers were already offered as must-haves, so the builder's card never offers them again.
  */
 intakeRoutes.post("/sessions/:id/answers", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -338,7 +339,7 @@ intakeRoutes.post("/sessions/:id/answers", requireTenant, async (c) => {
   const actor = actorOf(c);
   let edit: Awaited<ReturnType<typeof applyIntakeEdit>>;
   try {
-    edit = await applyIntakeEdit(container.db, { companyId: t.companyId, sessionId, actor, answers: body.answers, patch: body.patch, draftIt: body.draftIt, note: body.note });
+    edit = await applyIntakeEdit(container.db, { companyId: t.companyId, sessionId, actor, answers: body.answers, patch: body.patch, draftIt: body.draftIt, note: body.note, dealBreakersOffered: body.dealBreakersOffered });
   } catch (err) {
     return sessionErrors(err);
   }

@@ -105,10 +105,12 @@ const dental: PlaybookInput = {
       typicalEmploymentTypes: ["full_time", "part_time"],
       eligibility: [
         {
+          // The owner's call (every expectation optional, `ownersCall`): the quick start offers it unticked and the draft's
+          // prompt marks it, so the question itself is written for candidates (live test, 12 Nov 2026).
           type: "license",
-          question: "If this role requires a Registered Dental Assistant (RDA) license in your state, do you hold it? (Answer 'not required' if the owner did not require it.)",
+          question: "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?",
           expectationByJurisdiction: { "US-CA": { license: "RDA", board: "Dental Board of California", optional: true }, "*": { license: "DA", optional: true } },
-          rationale: "Some duties require licensure in some states; the owner decides whether the license is required at hire.",
+          rationale: "Some states require this license for some duties.",
         },
         {
           type: "certification",

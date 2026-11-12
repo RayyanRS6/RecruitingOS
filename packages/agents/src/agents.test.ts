@@ -289,6 +289,16 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
     expect(out[2].prompt).toMatch(/deal-breakers/);
   });
 
+  it("offers a deal-breaker back as the requirement it rules people out on, never its negative words, and lets the owner reword it (live test, 12 Nov 2026)", () => {
+    const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No active California RDA license", "Cannot work Saturdays", "Without an active California RDA license"] });
+    expect(out).toHaveLength(1);
+    expect(out[0].options).toEqual([
+      { label: "Active California RDA license", value: "Active California RDA license", origin: "owner" },
+      { label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "owner" },
+    ]);
+    expect(out[0].allowOwn).toBe(true);
+  });
+
   it("never shows a pay card once a person confirmed the pay", () => {
     expect(prepareQuestions([card({ field: "compensation", mode: "pay" })], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: [] })).toEqual([]);
   });
@@ -312,6 +322,8 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
     expect(fieldsKnownFromFacts(facts, false)).not.toContain("must_haves");
     expect(fieldsKnownFromFacts(facts, true)).toEqual(expect.arrayContaining(["compensation", "compensation_basis"]));
     expect(fieldsSetOnPanel({ set: { pay: { basis: "hourly", min: 15, max: 20 }, decisionMakerUserId: "u-owner" }, add: [{ field: "mustHaves", value: "SQL" }], clear: ["targetStartDate"] }).sort()).toEqual(["compensation", "compensation_basis", "decision_maker", "must_haves", "timeline"].sort());
+    // the quick start's questions for the form, every one left unticked: the owner went through them, so none is asked again
+    expect(fieldsSetOnPanel({ unticked: [{ field: "eligibility", value: "Do you hold an active RDA license?", origin: "playbook" }] })).toEqual(["eligibility"]);
     expect(settle(["title"], ["title", "location"])).toEqual(["title", "location"]);
   });
 

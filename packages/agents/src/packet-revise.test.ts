@@ -96,6 +96,24 @@ describe("the packet.revise prompt", () => {
     expect(mergeRevision(base, { summary: "Nothing.", changes: { identity: structuredClone(base.identity) }, notChanged: [] }, "role").sections).toEqual([]);
   });
 
+  it("on a draft every question on the form holds a 'no' for the owner's decision; on a saved job a person's choice is kept (live test, 12 Nov 2026)", () => {
+    const base = samplePacket();
+    const licence = { key: "ca_rda_license", type: "license" as const, question: "Do you hold an active California RDA license?", expectation: {}, rationale: "California requires it for some duties.", knockout: false };
+    const loosened: PacketRevision["changes"] = { requirements: { ...base.requirements, mustHaves: [...base.requirements.mustHaves, { key: "mh_rda", text: "Active California RDA license", rationale: "The owner's deal-breaker", evidencedBy: ["resume", "screen"] }], eligibility: [...base.requirements.eligibility.map((e) => ({ ...e, knockout: false })), licence] } };
+    const onDraft = mergeRevision(base, { summary: "Changed the requirements.", changes: loosened, notChanged: [] }, "draft");
+    expect(onDraft.sections).toEqual(["requirements"]);
+    expect(onDraft.packet.requirements.mustHaves.at(-1)?.text).toBe("Active California RDA license");
+    expect(onDraft.packet.requirements.eligibility.map((e) => [e.key, e.knockout])).toEqual([["schedule", true], ["ca_rda_license", true]]);
+    expect(onDraft.notChanged).toEqual([{ request: "Stop a question on the form from holding anyone", reason: 'On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.' }]);
+    // a proposal that only loosens a question changes nothing on a draft
+    const onlyLoosened = mergeRevision(base, { summary: "Changed the requirements.", changes: { requirements: { ...base.requirements, eligibility: base.requirements.eligibility.map((e) => ({ ...e, knockout: false })) } }, notChanged: [] }, "draft");
+    expect(onlyLoosened.sections).toEqual([]);
+    // on a saved job, whether a "no" holds stays the person's choice
+    const onRole = mergeRevision(base, { summary: "Changed the requirements.", changes: loosened, notChanged: [] }, "role");
+    expect(onRole.packet.requirements.eligibility.map((e) => [e.key, e.knockout])).toEqual([["schedule", false], ["ca_rda_license", false]]);
+    expect(onRole.notChanged).toEqual([]);
+  });
+
   it("takes away references to anything the change removed from what is looked for", () => {
     const base = samplePacket();
     const competencies = base.competencies.filter((c) => c.key !== "patients");

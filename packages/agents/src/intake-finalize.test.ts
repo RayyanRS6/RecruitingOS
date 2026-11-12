@@ -64,6 +64,24 @@ describe("finalizeDraft never keeps what the model says a person decided", () =>
     expect(after.description.publicJobDescription).toBe(before.description.publicJobDescription);
     expect(after.provenance.aiRunIds).toEqual(["r"]);
   });
+
+  it("makes every question on the form hold a 'no' for the owner's decision, on a fresh draft and on a saved one (live test, 12 Nov 2026)", () => {
+    const loose = (p: DraftRolePacket) => {
+      p.requirements.eligibility = [
+        { key: "ca_rda_license", type: "license", question: "Do you currently hold an active California RDA license?", expectation: { held: true }, rationale: "This position requires an active California RDA license.", knockout: false },
+        { key: "bls", type: "certification", question: "Do you hold current CPR/BLS certification?", expectation: { certification: "BLS" }, rationale: "Required for clinical staff.", knockout: false },
+        ...p.requirements.eligibility,
+      ];
+    };
+    const fresh = finalizeDraft(asDraft(samplePacket(loose)), ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    expect(fresh.requirements.eligibility.map((e) => [e.key, e.knockout])).toEqual([["ca_rda_license", true], ["bls", true], ["schedule", true]]);
+    // the words stay the model's; only whether a "no" holds is set by rule
+    expect(fresh.requirements.eligibility[0]).toMatchObject({ question: "Do you currently hold an active California RDA license?", expectation: { held: true } });
+    // a draft saved before the rule (or changed since) is brought into line when it is saved or sent for approval
+    const saved = structuredClone(fresh);
+    saved.requirements.eligibility[1].knockout = false;
+    expect(finalizeDraft(saved, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() }).requirements.eligibility.every((e) => e.knockout)).toBe(true);
+  });
 });
 
 describe("untrusted text cannot close its own data block", () => {
@@ -87,7 +105,7 @@ describe("untrusted text cannot close its own data block", () => {
 
 describe("the screening conversation follows the form in the same visit (plan E8)", () => {
   it("the draft aims for five or six questions and about ten minutes, and a packet without a length gets ten", () => {
-    expect(intakeCompilePrompt.version).toBe(5);
+    expect(intakeCompilePrompt.version).toBe(6);
     const compile = intakeCompilePrompt.system(ctx(facts())).map((b) => b.text).join("\n");
     expect(compile).toContain("aim for five or six questions and screening.maxMinutes 10");
     expect(RolePacket.shape.screening.parse({ questions: [{ key: "a", question: "A?", kind: "skills" }, { key: "b", question: "B?", kind: "skills" }, { key: "c", question: "C?", kind: "skills" }] }).maxMinutes).toBe(10);

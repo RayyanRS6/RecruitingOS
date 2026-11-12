@@ -82,9 +82,13 @@ test.describe("the quick start", () => {
     await page.getByRole("checkbox", { name: "None" }).check({ force: true });
     await next(page);
 
-    // 9. the suggested questions stay as they are
+    // 9. the suggested questions stay as they are: the RDA licence, the owner's call, waits unticked (no must-have names
+    // it), the others start ticked, and the line says what a "no" does (live test, 12 Nov 2026)
     await step(page, 9, "What should every applicant answer?");
-    await expect(page.getByRole("group", { name: "What should every applicant answer?" }).getByRole("checkbox").first()).toBeChecked();
+    await expect(page.getByText('A "no" holds the application for your decision.')).toBeVisible();
+    const questions = page.getByRole("group", { name: "What should every applicant answer?" }).getByRole("checkbox");
+    await expect(questions.first()).not.toBeChecked();
+    await expect(questions.nth(1)).toBeChecked();
     await next(page);
 
     // 10. the review: one row a step, each with its Edit

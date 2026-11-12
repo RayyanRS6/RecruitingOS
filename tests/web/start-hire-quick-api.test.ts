@@ -3,7 +3,7 @@ import { entitlements } from "../../packages/core/src/index";
 import type { IntakeSessionView } from "../../packages/contracts/src/index";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
-import { emptyQuickAnswers, firstMessage, quickStartPatch, skippedAnswers, type QuickAnswers } from "../../apps/web/src/pages/new-role/quick-start";
+import { emptyQuickAnswers, firstMessage, isDealBreakerCard, quickStartPatch, skippedAnswers, toggleQuestion, type QuickAnswers } from "../../apps/web/src/pages/new-role/quick-start";
 
 /**
  * "Write the job post" from the quick start (Wave S2, K2), through the real routes with the fake AI: the first message
@@ -56,9 +56,9 @@ describe("the quick start hands its answers to the job builder", () => {
     expect([...new Set(body.refused.map((r) => r.text))]).toEqual(["No recent grads"]);
     const f = body.session.facts;
     expect(f).toMatchObject({ title: "Dental Hygienist", employmentType: "part_time", remotePolicy: "onsite", locationText: "Irvine, CA", compensationBasis: "hourly", compensationMin: 45, compensationMax: 55, compensationCeiling: 58 });
-    // the must-haves are exactly the person's: the skills, the experience, and the deal-breaker counted openly (Q19);
-    // the refused one is a must-have nowhere
-    expect([...f.mustHaves].sort()).toEqual([...a.mustHaves, "At least 2 years of relevant experience", "Cannot work Saturdays"].sort());
+    // the must-haves are exactly the person's: the skills, the experience, and the deal-breaker counted openly (Q19), as
+    // the requirement it rules people out on; the refused one is a must-have nowhere
+    expect([...f.mustHaves].sort()).toEqual([...a.mustHaves, "At least 2 years of relevant experience", "Able to work Saturdays"].sort());
     expect(f.mustHaves).not.toContain("No recent grads");
     expect(f.dealBreakers).toContain("Cannot work Saturdays");
     expect(f.dealBreakers).not.toContain("No recent grads");
@@ -85,8 +85,75 @@ describe("the quick start hands its answers to the job builder", () => {
     expect(written.draft?.identity.title).toBeTruthy();
     expect(written.draft?.compensation).toMatchObject({ basis: "hourly", min: 45, max: 55 });
     const draftMusts = (written.draft?.requirements.mustHaves ?? []).map((m) => m.text);
-    expect(draftMusts).toContain("Cannot work Saturdays");
+    expect(draftMusts).toContain("Able to work Saturdays");
+    expect(draftMusts).not.toContain("Cannot work Saturdays");
     expect(draftMusts).not.toContain("No recent grads");
+    // the stand-in AI writes the CPR/BLS question as holding nobody; on a draft every question on the form holds a "no"
+    // for the owner's decision (live test, 12 Nov 2026)
+    const rules = written.draft?.requirements.eligibility ?? [];
+    expect(rules.some((e) => e.key === "bls")).toBe(true);
+    expect(rules.every((e) => e.knockout)).toBe(true);
+  });
+
+  const RDA = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+  const assistant = (over: Partial<QuickAnswers> = {}): QuickAnswers => ({
+    ...emptyQuickAnswers(),
+    title: "Dental Assistant",
+    employmentType: "full_time",
+    remotePolicy: "onsite",
+    place: "Irvine, CA",
+    experience: "none",
+    pay: { basis: "hourly", min: "24", max: "28", ceiling: "" },
+    noClosingDate: true,
+    mustHaves: ["Four-handed dentistry", "Digital radiography"],
+    ...over,
+  });
+  /** Starts a draft from the quick start's answers and writes it, as "Write the job post" does. */
+  const quickStart = async (a: QuickAnswers, dealBreakersOffered = true) => {
+    const { session } = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: firstMessage(a) })).json()) as { session: IntakeSessionView };
+    const edited = await json("POST", `/api/v1/intake/sessions/${session.id}/answers`, { answers: skippedAnswers(session.questions), patch: quickStartPatch(a, "dental", session.facts), draftIt: true, reply: false, dealBreakersOffered });
+    expect(edited.status).toBe(200);
+    const facts = ((await edited.json()) as { session: IntakeSessionView }).session.facts;
+    const drafted = await json("POST", `/api/v1/intake/sessions/${session.id}/draft`);
+    expect(drafted.status).toBe(200);
+    return { id: session.id, facts, written: ((await drafted.json()) as { session: IntakeSessionView }).session };
+  };
+  /** The builder's next cards after the remaining ones are answered (skipped) or, with none left, after a word. */
+  const nextCards = async (s: IntakeSessionView) => {
+    const body = s.questions.length ? { answers: s.questions.map((q) => ({ questionId: q.id, skipped: true })), reply: true } : { note: "Thanks.", reply: true };
+    const r = await json("POST", `/api/v1/intake/sessions/${s.id}/answers`, body);
+    expect(r.status).toBe(200);
+    return ((await r.json()) as { session: IntakeSessionView }).session.questions;
+  };
+
+  it("a missing licence as a deal-breaker: the licence is the must-have, its question is on the form and holds a 'no', and the builder does not ask again (live test, 12 Nov 2026)", async () => {
+    const a = assistant({ dealBreakers: ["No active California RDA license", "Smokers"], dealBreakersPrivate: ["Smokers"] });
+    const { facts, written } = await quickStart(a);
+    expect(facts.mustHaves).toEqual(["Four-handed dentistry", "Digital radiography", "Active California RDA license"]);
+    expect(facts.dealBreakers).toEqual(["No active California RDA license", "Smokers"]);
+    // the licence question ticked itself on step 9: a must-have names the licence
+    expect(facts.eligibilityNotes).toContain(RDA);
+    expect(facts.suggestions ?? []).toEqual([]);
+    const draft = written.draft!;
+    expect(draft.requirements.mustHaves.map((m) => m.text)).toContain("Active California RDA license");
+    expect(draft.requirements.mustHaves.some((m) => /^(?:no|without|cannot|not)\b/i.test(m.text))).toBe(false);
+    expect(draft.requirements.eligibility.filter((e) => e.type === "license" && /\bRDA\b/.test(e.question))).toEqual([expect.objectContaining({ question: RDA, knockout: true })]);
+    expect(draft.requirements.eligibility.every((e) => e.knockout)).toBe(true);
+    // step 8 already said which deal-breakers count openly: the builder's card never offers the unticked one again
+    expect((await nextCards(written)).some(isDealBreakerCard)).toBe(false);
+    // without that word from the quick start, the builder would have asked about it
+    const asked = (await nextCards((await quickStart(a, false)).written)).find(isDealBreakerCard);
+    expect(asked?.options.map((o) => o.label)).toEqual(["Smokers"]);
+  });
+
+  it("a licence question the owner unticked never goes on the form, even when a must-have names the licence (live test, 12 Nov 2026)", async () => {
+    const named = assistant({ mustHaves: ["Four-handed dentistry", "RDA license"], noDealBreakers: true });
+    const a = { ...named, ...toggleQuestion(named, RDA, "dental") };
+    const { facts, written } = await quickStart(a);
+    expect(facts.eligibilityNotes).not.toContain(RDA);
+    expect(facts.suggestions).toEqual([{ field: "eligibility", text: RDA, origin: "playbook" }]);
+    expect(written.draft!.requirements.eligibility.some((e) => /\bRDA\b/.test(e.question))).toBe(false);
+    expect(written.draft!.requirements.eligibility.every((e) => e.knockout)).toBe(true);
   });
 
   it("a question for every applicant that asks about a protected characteristic is refused on the questions step (Wave S7)", async () => {

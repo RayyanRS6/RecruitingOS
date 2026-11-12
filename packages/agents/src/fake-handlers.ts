@@ -1,5 +1,5 @@
-import type { DraftRolePacket, EvidenceAssessment, IntakeExtraction, IntakeFacts, IntakeQuestion, IntakeTurn, PacketRevision, ResumeExtraction, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
-import { ASKED_WORDS, type FakeProvider, type IntakeContext, type StructuredRequest } from "@ros/ai";
+import { mustHaveOf, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
+import { ASKED_WORDS, OWNERS_CALL_MARK, type FakeProvider, type IntakeContext, type StructuredRequest } from "@ros/ai";
 import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
 import { fakeScreenWriteup } from "./fake-writeup";
@@ -385,7 +385,10 @@ function fakeExtract(req: StructuredRequest<unknown>): IntakeExtraction {
 /**
  * intake.compile v4: the draft, with pay only when a person set or confirmed it (and never in the description), the
  * owner's own choices first, and a screening conversation of five or six questions and about ten minutes (more only for
- * the owner's own questions), since candidates answer it straight after the form (plan E8).
+ * the owner's own questions), since candidates answer it straight after the form (plan E8). v6: a must-have worded as
+ * what rules someone out is written as the requirement, a playbook question that is the owner's call goes on the form
+ * only when the owner chose it or a must-have names it (never when they left it unticked), and the description never
+ * says why the owner is hiring.
  */
 function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const f = c.facts;
@@ -395,7 +398,8 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const assumptions: string[] = [];
   const pbRole = playbookRoleFrom(c.req);
   const fromPlaybook = pbRole.qualifications.slice(0, 3);
-  const mustHaves = (f.mustHaves.length ? f.mustHaves : fromPlaybook.length ? fromPlaybook : [`${title} experience relevant to a ${c.vertical} setting`, "Reliable availability for the posted schedule"]).slice(0, 6);
+  const owners = f.mustHaves.map(mustHaveOf).filter((m, i, all) => m && all.findIndex((x) => normalizeCriterion(x) === normalizeCriterion(m)) === i);
+  const mustHaves = (owners.length ? owners : fromPlaybook.length ? fromPlaybook : [`${title} experience relevant to a ${c.vertical} setting`, "Reliable availability for the posted schedule"]).slice(0, 6);
   if (!f.mustHaves.length) assumptions.push("Must-haves were not chosen; drafted from the playbook and should be reviewed.");
   if (!f.reason) assumptions.push("Reason for the hire was not stated; assumed growth.");
   if (!f.interviewers.length) assumptions.push("Interviewers were not named; assumed the owner interviews.");
@@ -413,6 +417,19 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   if (f.targetStartDate) {
     const days = Math.max(7, Math.round((Date.parse(f.targetStartDate) - Date.now()) / 86_400_000));
     eligibility.push({ key: "start", type: "start_date", question: `Can you start within ${days} days?`, expectation: { withinDays: days }, rationale: "The owner needs coverage by the target date.", knockout: true });
+  }
+  // intake.compile v6: a playbook question marked as the owner's call goes on the form only when the owner chose it or a
+  // must-have names its licence (its letters in brackets, "(RDA)"), never one the owner left unticked.
+  for (const e of pbRole.eligibility) {
+    if (!e.question.endsWith(OWNERS_CALL_MARK)) continue;
+    const question = e.question.slice(0, -OWNERS_CALL_MARK.length);
+    const letters = [...question.matchAll(/\(([A-Z]{2,6})\)/g)].map((m) => m[1]);
+    const said = (text: string) => letters.some((l) => new RegExp(`\\b${l}\\b`, "i").test(text));
+    const same = (text: string) => normalizeCriterion(text) === normalizeCriterion(question);
+    if ((f.suggestions ?? []).some((s) => s.field === "eligibility" && same(s.text))) continue;
+    if (!f.eligibilityNotes.some(same) && !mustHaves.some(said)) continue;
+    if (eligibility.some((x) => said(x.question))) continue;
+    eligibility.push({ key: slug(`${letters[0] ?? e.type} ${e.type}`), type: e.type as DraftRolePacket["requirements"]["eligibility"][number]["type"], question, expectation: letters[0] ? { [e.type]: letters[0] } : {}, rationale: "This job requires it.", knockout: true });
   }
   const competencies: DraftRolePacket["competencies"] = rdh
     ? [
@@ -443,9 +460,10 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const pooled = [...ownQuestions, ...(playbookQuestions.length >= 3 ? playbookQuestions : defaults)];
   const questions = pooled.filter((q, i, arr) => arr.findIndex((x) => x.key === q.key) === i).slice(0, Math.min(12, Math.max(6, ownQuestions.length)));
   const first = f.responsibilities?.[0];
-  // intake.compile v3 and v4: no pay in the description (the job page shows the range a person set beside it).
+  // intake.compile v3 and v4: no pay in the description (the job page shows the range a person set beside it). v6: nor
+  // why the owner is hiring, which is for the team only.
   const benefitsLine = f.benefits ? ` Benefits include ${f.benefits.replace(/\.$/, "")}.` : "";
-  const description = `${c.companyName} is hiring a ${title}${locCity ? ` in ${locCity}${locRegion ? `, ${locRegion}` : ""}` : ""}. ${f.reason === "replacement" ? "We are filling an open chair on a team that values consistency and kindness." : "Our team is growing and we need someone who takes pride in careful, friendly work."} You will ${rdh ? "provide preventive care, periodontal therapy, and patient education for a loyal patient base, working alongside a dentist who respects your judgment" : `own ${title.toLowerCase()} outcomes end to end, work directly with the founder and a small team that moves quickly, and see the results of your decisions in the numbers`}.${first ? ` The first thing you will own: ${first.replace(/\.$/, "")}.` : ""} The schedule is ${f.employmentType === "part_time" ? "part time" : "full time"}${f.schedule ? ` (${f.schedule})` : ""}.${benefitsLine} We respond to every applicant within a day, keep the process short, and tell you where you stand at each step.`;
+  const description = `${c.companyName} is hiring a ${title}${locCity ? ` in ${locCity}${locRegion ? `, ${locRegion}` : ""}` : ""}. We are looking for someone who takes pride in careful, friendly work, on a team that values consistency and kindness. You will ${rdh ? "provide preventive care, periodontal therapy, and patient education for a loyal patient base, working alongside a dentist who respects your judgment" : `own ${title.toLowerCase()} outcomes end to end, work directly with the founder and a small team that moves quickly, and see the results of your decisions in the numbers`}.${first ? ` The first thing you will own: ${first.replace(/\.$/, "")}.` : ""} The schedule is ${f.employmentType === "part_time" ? "part time" : "full time"}${f.schedule ? ` (${f.schedule})` : ""}.${benefitsLine} We respond to every applicant within a day, keep the process short, and tell you where you stand at each step.`;
   const notSet = f.whatFailureLooksLike ? `What failure looks like: ${f.whatFailureLooksLike}` : undefined;
   return {
     schemaVersion: 1,

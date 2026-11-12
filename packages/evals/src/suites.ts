@@ -69,6 +69,25 @@ export const intakeGolden: IntakeCase[] = [
     expectPacket: (p) => (p.provenance.assumptions.length ? [] : ["assumptions must be listed when the owner said 'just draft it'"]),
   },
   {
+    // The live test of 12 Nov 2026 (H1, M1): a licence named in the words that rule someone out. The must-have is written
+    // as the requirement, the playbook's RDA question (the owner's call) goes on the form because a must-have names it,
+    // and every question on the form holds a "no" for the owner's decision.
+    id: "dental_assistant_license_in_negative_words",
+    provenance: "synthetic",
+    vertical: "dental",
+    ownerMessages: ["Dental assistant in Irvine, CA, full time, $24 to $28 an hour. It's growth. I decide and I interview. Just draft it. Must-haves: four-handed dentistry, digital radiography, no active California RDA license."],
+    expectPacket: (p) => {
+      const f: string[] = [];
+      const negative = p.requirements.mustHaves.filter((m) => /^(?:no|without|cannot|can['’]t|not)\b/i.test(m.text.trim()));
+      if (negative.length) f.push(`must-haves written as what rules someone out: ${negative.map((m) => m.text).join("; ")}`);
+      const rda = p.requirements.eligibility.some((e) => (e.type === "license" || e.type === "certification") && /\bRDA\b|registered dental assistant/i.test(`${e.question} ${JSON.stringify(e.expectation)}`));
+      if (!rda) f.push("no RDA license question on the form");
+      const holdsNobody = p.requirements.eligibility.filter((e) => !e.knockout);
+      if (holdsNobody.length) f.push(`questions on the form whose "no" holds nobody: ${holdsNobody.map((e) => e.key).join(", ")}`);
+      return f;
+    },
+  },
+  {
     id: "generic_marketing_director",
     provenance: "synthetic",
     vertical: "professional_services",

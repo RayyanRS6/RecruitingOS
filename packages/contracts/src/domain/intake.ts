@@ -67,6 +67,31 @@ export const IntakeFacts = z.object({
 });
 export type IntakeFacts = z.infer<typeof IntakeFacts>;
 
+/** Words that name a licence, certificate, permit or registration: the same test as `credentialMustHaves` (packages/agents). */
+const CREDENTIAL = /licen[cs]|certif|permit|registration|registered|credential/i;
+
+/**
+ * A deal-breaker as the must-have it rules people out on (live test, 12 November 2026: "No active California RDA
+ * license" became a must-have in those very words, so the job page asked for the opposite and nobody was held). Only
+ * clear shapes are turned round: "No …", "Without …" or "Does not have …" a licence, certificate, permit or registration;
+ * "Cannot …" or "Unable to …" ("Able to …"); "Not licensed …", "Not available …" and the like; "Won't …" ("Willing to
+ * …"). Anything else stays as written, so "No recent grads" is still refused by the fairness check, and the owner sees
+ * the words before they are used (the quick start's "As a must-have", the job builder's card).
+ */
+export function mustHaveOf(dealBreaker: string): string {
+  const t = dealBreaker.trim().replace(/\s+/g, " ");
+  const up = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const lacks = t.match(/^(?:no|without|lacks?|lacking|missing|(?:does|do)(?:\s+not|n['’]t)\s+(?:have|hold))\s+(?:an?\s+|any\s+|the\s+)?(.+)$/i);
+  if (lacks && CREDENTIAL.test(lacks[1])) return up(lacks[1]);
+  const cannot = t.match(/^(?:cannot|can\s+not|can['’]t|unable\s+to|not\s+able\s+to)\s+(.+)$/i);
+  if (cannot) return `Able to ${cannot[1]}`;
+  const not = t.match(/^not\s+((?:licen[cs]ed|certified|registered|authori[sz]ed|available|eligible)\b.*)$/i);
+  if (not) return up(not[1]);
+  const wont = t.match(/^(?:won['’]t|will\s+not|unwilling\s+to|not\s+willing\s+to)\s+(.+)$/i);
+  if (wont) return `Willing to ${wont[1]}`;
+  return t;
+}
+
 export const IntakeMissingFact = z.enum([
   "title",
   "location",

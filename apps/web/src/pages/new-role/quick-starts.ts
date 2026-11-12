@@ -53,12 +53,15 @@ export function quickStartsFor(vertical: string | null | undefined): readonly Qu
  * What the ten quick questions (Wave S2, K2) suggest for a role a hiring guide knows: its common qualifications as
  * must-haves to tick, and its yes/no eligibility questions. Mirrors each playbook role's `title`, `aliases`,
  * `commonQualifications` and `eligibility[].question` (packages/playbooks); tests/web/start-hire-quick.test.ts keeps
- * them equal, so a suggestion is always real playbook knowledge and never a guess.
+ * them equal, so a suggestion is always real playbook knowledge and never a guess. `optional` mirrors the questions that
+ * are the owner's call (every expectation optional, `ownersCall`): offered unticked, and ticked by themselves once a
+ * must-have names one of their `mentions` (live test, 12 Nov 2026).
  */
-export type GuideRole = { key: string; title: string; aliases: readonly string[]; mustHaves: readonly string[]; questions: readonly string[] };
+export type GuideRole = { key: string; title: string; aliases: readonly string[]; mustHaves: readonly string[]; questions: readonly string[]; optional?: ReadonlyArray<{ question: string; mentions: readonly string[] }> };
 
 const US_WORK = "Are you legally authorized to work in the United States for any employer?";
 const POSTED_SCHEDULE = "Are you available for the posted schedule and work model?";
+const DA_LICENSE = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
 
 export const GUIDE_ROLES: Readonly<Record<string, readonly GuideRole[]>> = {
   dental: [
@@ -74,7 +77,8 @@ export const GUIDE_ROLES: Readonly<Record<string, readonly GuideRole[]>> = {
       title: "Dental Assistant",
       aliases: ["dental assistant", "RDA", "registered dental assistant", "DA", "EFDA"],
       mustHaves: ["Four-handed dentistry", "Sterilization and OSHA compliance", "Digital radiography", "Impressions and provisional crowns", "Dentrix / Eaglesoft / Open Dental"],
-      questions: ["If this role requires a Registered Dental Assistant (RDA) license in your state, do you hold it? (Answer 'not required' if the owner did not require it.)", "Do you hold a current radiation safety / x-ray certification and CPR/BLS?", "Are you available for the days this office is open?"],
+      questions: [DA_LICENSE, "Do you hold a current radiation safety / x-ray certification and CPR/BLS?", "Are you available for the days this office is open?"],
+      optional: [{ question: DA_LICENSE, mentions: ["RDA", "registered dental assistant"] }],
     },
     {
       key: "front_office",

@@ -151,13 +151,19 @@ export const IntakeFactsPatch = z.object({
   add: z.array(z.object({ field: IntakeListFact, value: FactText })).max(20).optional(),
   remove: z.array(z.object({ field: IntakeListFact, value: z.string().max(500) })).max(20).optional(),
   clear: z.array(IntakeTextFact).max(20).optional(),
+  /**
+   * The yes/no questions for the form that were offered and left unticked (the quick start's step 9): kept as
+   * suggestions, which the draft never uses, as an answer left unticked on a card is (C6).
+   */
+  unticked: z.array(z.object({ field: z.enum(["eligibility"]), value: FactText, origin: z.enum(["playbook", "assistant"]) })).max(12).optional(),
 }).strict();
 export type IntakeFactsPatch = z.infer<typeof IntakeFactsPatch>;
 
 /**
  * POST /intake/sessions/:id/answers. The answers to the open cards, an optional panel edit, "draft it", and any words
  * typed beside them. The server writes one short summary to the conversation and, unless `reply` is false (a quiet
- * edit from the panel), asks the assistant for the next turn.
+ * edit from the panel), asks the assistant for the next turn. `dealBreakersOffered`: the person already said which of
+ * the edit's deal-breakers count openly as must-haves (the quick start's step 8), so the builder's card never asks again.
  */
 export const IntakeAnswersRequest = z.object({
   answers: z.array(IntakeAnswer).max(3).default([]),
@@ -165,6 +171,7 @@ export const IntakeAnswersRequest = z.object({
   draftIt: z.boolean().default(false),
   note: z.string().trim().max(INTAKE_MESSAGE_MAX).optional(),
   reply: z.boolean().default(true),
+  dealBreakersOffered: z.boolean().default(false),
 }).refine((b) => b.answers.length > 0 || !!b.patch || b.draftIt || !!b.note, { message: "Answer a question, change something or say what to do next." });
 export type IntakeAnswersRequest = z.infer<typeof IntakeAnswersRequest>;
 

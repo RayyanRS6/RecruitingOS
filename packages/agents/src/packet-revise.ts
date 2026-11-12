@@ -70,16 +70,23 @@ const NOT_BY_CHAT = {
   interviewers: "Who interviews is chosen from your team on the interview plan.",
   disclosure: "The line saying AI assists and the line on reaching a person stay as they are.",
   dealBreakers: "Deal-breakers in a draft are changed in the conversation or the panel beside it.",
+  knockout: 'On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.',
 } as const;
+
+/** A draft's questions on the form, each holding a "no" for the owner's decision, as `finalizeDraft` keeps every draft. */
+function holdingEveryNo(r: DraftRolePacket["requirements"]): DraftRolePacket["requirements"] {
+  return { ...r, eligibility: r.eligibility.map((e) => ({ ...e, knockout: true })) };
+}
 
 export type MergedRevision<T> = { packet: T; sections: RevisableSection[]; notChanged: RevisionNotDone[]; declined: DeclinedCriterion[] };
 
 /**
  * The proposal laid over the packet it was worked out on, deterministically, so what is shown is what is saved. Only
  * the sections allowed for the target are taken; what the server owns inside them is put back (who decides, who
- * interviews, the AI notice lines, and a draft's deal-breakers), with a plain line for each part of the request that was
- * not done. A section the model returned unchanged is not counted as a change. Requests the model refused because they
- * stand in for a protected trait are recorded on the packet as declined, so no later version brings them back.
+ * interviews, the AI notice lines, and a draft's deal-breakers, and on a draft every question on the form holds a "no"
+ * for the owner's decision), with a plain line for each part of the request that was not done. A section the model
+ * returned unchanged is not counted as a change. Requests the model refused because they stand in for a protected trait
+ * are recorded on the packet as declined, so no later version brings them back.
  */
 export function mergeRevision<T extends DraftRolePacket>(base: T, revision: PacketRevision, target: "role" | "draft"): MergedRevision<T> {
   const allowed = target === "role" ? REVISABLE_FOR_ROLE : REVISABLE_FOR_DRAFT;
@@ -132,7 +139,16 @@ export function mergeRevision<T extends DraftRolePacket>(base: T, revision: Pack
       // Whether a person stated the range stays as recorded; the figures are confirmed by whoever confirms this change.
       value.ownerStated = base.compensation.ownerStated;
     }
-    if (same(next, base[section])) continue;
+    // On a draft every question on the form holds a "no" for the owner's decision (`finalizeDraft`), so chat never makes
+    // one hold nobody; a saved job's own "asked, not required" stays the person's, in its editor.
+    const holding = section === "requirements" && target === "draft";
+    if (holding) {
+      const value = next as DraftRolePacket["requirements"];
+      const before = new Map(base.requirements.eligibility.map((e) => [e.key, e.knockout]));
+      if (value.eligibility.some((e) => e.knockout === false && before.get(e.key) !== false)) note("Stop a question on the form from holding anyone", NOT_BY_CHAT.knockout);
+      value.eligibility = value.eligibility.map((e) => ({ ...e, knockout: true }));
+    }
+    if (same(next, holding ? holdingEveryNo(base.requirements) : base[section])) continue;
     (packet as Record<string, unknown>)[section] = next;
     sections.push(section);
   }

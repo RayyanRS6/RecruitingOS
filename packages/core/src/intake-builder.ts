@@ -1,5 +1,5 @@
 import {
-  EmploymentType, HireReason, INTAKE_ESSENTIALS, RemotePolicy, formatPayRange,
+  EmploymentType, HireReason, INTAKE_ESSENTIALS, RemotePolicy, formatPayRange, mustHaveOf,
   type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakePayCard, type IntakeQuestion, type IntakeReadiness, type IntakeRefusal, type IntakeServerState, type PayOrigin, type RolePacket,
 } from "@ros/contracts";
@@ -622,6 +622,19 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
     if (field === "interviewers" && e.remove.length) f.interviewerUserIds = (f.interviewerUserIds ?? []).filter((id) => !e.remove.some((n) => same(team.find((m) => m.userId === id)?.name ?? "", n)));
     if (add.length) edit.summary.push(`${FACT_LABEL[field]}, added: ${add.join("; ")}`);
     if (e.remove.length) edit.summary.push(`${FACT_LABEL[field]}, taken out: ${e.remove.join("; ")}`);
+    // What the person added is theirs, never also an answer they left unticked (as on a card).
+    if (add.length && edit.facts.suggestions?.length) edit.facts.suggestions = edit.facts.suggestions.filter((s) => !(LIST_OF[s.field as IntakeQuestion["field"]] === field && add.some((v) => same(v, s.text))));
+  }
+  // Questions for the form offered and left unticked (the quick start's step 9) are kept as suggestions, which the draft
+  // never uses, and out of the form's list, as an answer left unticked on a card is; a tick in the same edit wins. They
+  // add no line to the conversation.
+  for (const u of patch.unticked ?? []) {
+    const list = LIST_OF[u.field];
+    if (!list || (patch.add ?? []).some((a) => a.field === list && same(a.value, u.value))) continue;
+    listSet(edit, list, [], [u.value]);
+    const suggestions = edit.facts.suggestions ?? [];
+    if (!suggestions.some((s) => s.field === u.field && same(s.text, u.value))) suggestions.push({ field: u.field, text: u.value, origin: u.origin });
+    edit.facts.suggestions = suggestions;
   }
   for (const k of patch.clear ?? []) {
     (f as Record<string, unknown>)[k] = undefined;
@@ -674,14 +687,17 @@ function plainFact(k: string, v: string): string {
 
 /**
  * Deal-breakers offered back as visible must-haves (C17, founder decision Q19): each one that passes the fairness check
- * becomes an option on a card; one that fails is declined with the reason, never offered and never used.
+ * becomes an option on a card, worded as the requirement it rules people out on (`mustHaveOf`); one that fails, in the
+ * owner's words or as that requirement, is declined with the reason, never offered and never used. One already a
+ * must-have, either way it is worded, is not offered again.
  */
 export function dealBreakerOffer(facts: IntakeFacts, alreadyOffered: string[]): { offer: string[]; declined: DeclinedCriterion[] } {
   const offer: string[] = [];
   const declined: DeclinedCriterion[] = [];
   for (const d of facts.dealBreakers) {
-    if (alreadyOffered.some((o) => same(o, d)) || facts.mustHaves.some((m) => same(m, d))) continue;
-    const hit = screenCriterion(d);
+    const need = mustHaveOf(d);
+    if (alreadyOffered.some((o) => same(o, d)) || facts.mustHaves.some((m) => same(m, d) || same(m, need))) continue;
+    const hit = screenCriterion(d) ?? screenCriterion(need);
     if (hit) declined.push({ requested: d, reason: hit.reason, alternative: hit.alternative, rule: hit.rule });
     else offer.push(d);
   }

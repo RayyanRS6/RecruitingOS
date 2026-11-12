@@ -355,4 +355,33 @@ describe("deal-breakers offered back as must-haves (plan C17, founder decision Q
     expect(first.declined).toEqual([expect.objectContaining({ requested: "No job hoppers under 30", rule: "age" })]);
     expect(dealBreakerOffer(facts, first.offer).offer).toEqual([]);
   });
+
+  it("knows a deal-breaker is already a must-have when the must-have is the requirement it rules people out on (live test, 12 Nov 2026)", () => {
+    const facts = { ...empty(), mustHaves: ["Active California RDA license"], dealBreakers: ["No active California RDA license", "Cannot work Saturdays"] };
+    expect(dealBreakerOffer(facts, []).offer).toEqual(["Cannot work Saturdays"]);
+    expect(dealBreakerOffer({ ...facts, mustHaves: [...facts.mustHaves, "Able to work Saturdays"] }, []).offer).toEqual([]);
+    // a proxy is declined in the owner's words, whatever it would read as
+    expect(dealBreakerOffer({ ...empty(), dealBreakers: ["No recent grads"] }, []).declined).toEqual([expect.objectContaining({ requested: "No recent grads" })]);
+  });
+});
+
+describe("questions for the form left unticked (live test, 12 Nov 2026)", () => {
+  const RDA = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+  const XRAY = "Do you hold a current radiation safety / x-ray certification and CPR/BLS?";
+
+  it("are kept as suggestions the draft never uses, out of the form's list, with no line in the conversation", () => {
+    const edit = applyFactsPatch({ ...empty(), eligibilityNotes: [RDA] }, { add: [{ field: "eligibilityNotes", value: XRAY }], unticked: [{ field: "eligibility", value: RDA, origin: "playbook" }] }, []);
+    expect(edit.facts.eligibilityNotes).toEqual([XRAY]);
+    expect(edit.facts.suggestions).toEqual([{ field: "eligibility", text: RDA, origin: "playbook" }]);
+    // the person took it out, so the assistant cannot put it back
+    expect(edit.removed).toEqual([{ field: "eligibilityNotes", value: RDA }]);
+    expect(edit.summary).toEqual([`Eligibility, added: ${XRAY}`]);
+    // ticked in the same edit, it is theirs; ticked later, it is no longer a suggestion
+    const both = applyFactsPatch(empty(), { add: [{ field: "eligibilityNotes", value: RDA }], unticked: [{ field: "eligibility", value: RDA, origin: "playbook" }] }, []);
+    expect(both.facts.eligibilityNotes).toEqual([RDA]);
+    expect(both.facts.suggestions ?? []).toEqual([]);
+    const later = applyFactsPatch(edit.facts, { add: [{ field: "eligibilityNotes", value: RDA }] }, []);
+    expect(later.facts.eligibilityNotes).toEqual([XRAY, RDA]);
+    expect(later.facts.suggestions).toEqual([]);
+  });
 });
