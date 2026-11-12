@@ -337,7 +337,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     },
   });
 
-  // The requirements check (C16): suggestions only, read again whenever the requirements or the wording change.
+  // The requirements check (C16): suggestions only, read again whenever what it reads changes, the very parts its base
+  // is worked out from (`checkSignature`), so an answer set on the draft by rule never leaves a fix to be refused.
   const check = useQuery({
     queryKey: ["intake", "check", sessionId, checkSignature(view?.draft)],
     queryFn: () => api.get<RequirementsCheck>(paths.check),

@@ -382,11 +382,13 @@ async function main() {
     results["board.determinism"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
-  // Change by chat (plan C10): each request against the golden packet, judged after the server's own merge.
+  // Change by chat (plan C10): each request against the golden packet (or the case's own copy of it), judged after the
+  // server's own merge.
   if (runs("packet.revise")) {
-    const base = await goldenPacket();
+    const golden = await goldenPacket();
     const out: (typeof results)[string]["cases"] = [];
     for (const c of reviseCases) {
+      const base = c.base ? c.base(structuredClone(golden)) : golden;
       const allowed = c.target === "role" ? REVISABLE_FOR_ROLE : REVISABLE_FOR_DRAFT;
       const r = await runPrompt(q, rt, packetRevisePrompt, { companyName: "Eval Co", target: c.target, roleStatus: c.target === "role" ? "open" : null, packet: editableView(base, allowed), allowed: [...allowed], declined: [], message: c.message }, { companyId: null, inputRef: { eval: c.id }, maxTokens: 16000 });
       if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`revise failed: ${r.error}`] }); continue; }

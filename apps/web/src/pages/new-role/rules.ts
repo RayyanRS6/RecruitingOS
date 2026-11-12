@@ -537,13 +537,15 @@ export function draftOutOfDate(view: Pick<IntakeSessionView, "readiness">): bool
 
 /**
  * What "Write it again" says before it replaces anything: the changes saved on the draft since it was written (by chat
- * or with a fix) are replaced by the new words, so the person is asked first. A change to what the answers hold too (the
- * title, the schedule, the job type, the workplace, the must-haves and nice-to-haves) went into the answers when it was
- * saved, so it is kept, and so are the parts set by rule. Null when there is nothing to lose.
+ * or with a fix) that the new words would replace, so the person is asked first. The server counts only those
+ * (`draftEdits`): a change to what the answers hold too (the title, the schedule, full or part time, the work model, why
+ * you are hiring, the wording of the must-haves and nice-to-haves) went into the answers when it was saved, so it is
+ * kept, and so are the parts set by rule; the warning names them as the owner sees them in Edit (review of the live-test
+ * fixes, 12 Nov 2026). Null when there is nothing to lose.
  */
 export function redraftWarning(r: Pick<IntakeReadiness, "draftEdits">): string | null {
   if (!r.draftEdits) return null;
-  return `Writing it again replaces the ${r.draftEdits === 1 ? "change" : `${r.draftEdits} changes`} you saved on the draft since it was written (by asking, or with a suggested fix), except changes to the title, schedule, job type, workplace, must-haves and nice-to-haves. Pay, why you are hiring, who interviews and decides, and the deal-breakers carry over. Ask for ${r.draftEdits === 1 ? "that change" : "those changes"} again afterwards if you still want ${r.draftEdits === 1 ? "it" : "them"}.`;
+  return `Writing it again replaces the ${r.draftEdits === 1 ? "change" : `${r.draftEdits} changes`} you saved on the draft since it was written (by asking, or with a suggested fix), except changes to the title, schedule, full or part time, work model, and the wording of the must-haves and nice-to-haves. Pay, why you are hiring, who interviews and decides, and the deal-breakers carry over. Ask for ${r.draftEdits === 1 ? "that change" : "those changes"} again afterwards if you still want ${r.draftEdits === 1 ? "it" : "them"}.`;
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */

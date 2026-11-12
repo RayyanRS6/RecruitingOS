@@ -448,10 +448,42 @@ export type ReviseCase = {
   provenance: "synthetic";
   target: "draft" | "role";
   message: string;
+  /**
+   * The packet the request is made on, from a copy of the golden one (left out: the golden packet itself), so a case can
+   * start from a job in the shape the live test met (review of the live-test fixes, 12 Nov 2026, #45).
+   */
+  base?: (golden: RolePacket) => RolePacket;
   expect: (out: { revision: PacketRevision; merged: MergedRevision<RolePacket>; base: RolePacket }) => string[];
 };
 
 const changedText = (out: { merged: MergedRevision<RolePacket> }) => JSON.stringify(out.merged.sections.map((s) => out.merged.packet[s])).toLowerCase();
+
+/**
+ * What the person reads of a proposal, in the model's own words, before the server's plain-words backstop: the summary,
+ * the question, and each part not done with its reason (live test, 12 Nov 2026: "...because the packet already says
+ * this."). Never "packet" or "section", a field name or a key.
+ */
+export function unplainWords(revision: PacketRevision): string[] {
+  const said = [revision.summary, revision.question ?? "", ...revision.notChanged.flatMap((n) => [n.request, n.reason])].join(" ");
+  return [
+    ...(/\bpackets?\b|\bsections?\b/i.test(said) ? [`said "packet" or "section" to the person: ${said}`] : []),
+    ...(/\b[a-z]+[A-Z]\w*\b|\b[a-z0-9]+_[a-z0-9_]+\b/.test(said) ? [`named a field or a key: ${said}`] : []),
+  ];
+}
+
+/** The live test's must-have, in the owner's negative words, as the draft held it (12 Nov 2026), on the hygienist's job. */
+export const RULE_OUT_LICENCE = "No active California RDH license";
+
+/**
+ * The golden packet with its licence must-have in the owner's negative words, first, as the live test's draft had it; the
+ * form's licence question stays as it is, so the job asks for the very licence its must-have rules out.
+ */
+export function withRuleOutLicence(golden: RolePacket): RolePacket {
+  const musts = golden.requirements.mustHaves;
+  const licence = musts.find((m) => /\bRDH\b|\blicen[cs]e\b/i.test(m.text));
+  const first = { ...(licence ?? { key: "rdh_license", rationale: "California requires an active license to practise.", evidencedBy: ["resume", "screen"] as RolePacket["requirements"]["mustHaves"][number]["evidencedBy"] }), text: RULE_OUT_LICENCE };
+  return { ...golden, requirements: { ...golden.requirements, mustHaves: [first, ...musts.filter((m) => m !== licence)] } };
+}
 
 export const reviseCases: ReviseCase[] = [
   {
@@ -506,18 +538,32 @@ export const reviseCases: ReviseCase[] = [
   },
   {
     // v2, the live test of 12 Nov 2026: "I did not change anything because the packet already says this." Judged on the
-    // model's own words, before the server's plain-words backstop (`plainRevision`), so the prompt's rule is what is measured.
+    // model's own words, before the server's plain-words backstop (`plainRevision`), so the prompt's rule is what is
+    // measured: the request it writes back too (review of the live-test fixes, #39). The golden packet already asks for
+    // an active RDH license, so nothing may change.
     id: "no_change_in_plain_words",
     provenance: "synthetic",
     target: "draft",
     message: "I meant the opposite: they must hold an active California RDH license. Someone without one is ruled out.",
-    expect: ({ revision }) => {
-      const said = [revision.summary, revision.question ?? "", ...revision.notChanged.map((n) => n.reason)].join(" ");
-      return [
-        ...(/\bpackets?\b|\bsections?\b/i.test(said) ? [`said "packet" or "section" to the person: ${said}`] : []),
-        ...(/\b[a-z]+[A-Z]\w*\b|\b[a-z0-9]+_[a-z0-9_]+\b/.test(said) ? [`named a field or a key: ${said}`] : []),
-      ];
-    },
+    expect: ({ revision, merged }) => [
+      ...unplainWords(revision),
+      ...(merged.sections.length ? [`changed ${merged.sections.join(", ")} although the job already asks for it`] : []),
+    ],
+  },
+  {
+    // The live test's own shape (review of the live-test fixes, #45): the draft's must-have said the opposite of what the
+    // owner meant, and the model answered that it already said it. Here "nothing to change" is wrong.
+    id: "opposite_of_a_rule_out_must_have",
+    provenance: "synthetic",
+    target: "draft",
+    message: "I meant the opposite: they must hold an active California RDH license. Someone without one is ruled out.",
+    base: withRuleOutLicence,
+    expect: ({ revision, merged }) => [
+      ...unplainWords(revision),
+      ...(merged.sections.includes("requirements") ? [] : ["did not change the must-have that says the opposite"]),
+      ...ruleOutMustHaves(merged.packet),
+      ...(merged.packet.requirements.mustHaves.some((m) => /\bRDH\b/i.test(m.text) && /\blicen[cs]e\b/i.test(m.text) && !rulesOut(m.text)) ? [] : ["no must-have asks for the RDH license"]),
+    ],
   },
 ];
 

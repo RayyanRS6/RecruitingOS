@@ -7,8 +7,8 @@ import {
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
-  DECIDER_ROLES, DRAFT_IT_WORDS, ESSENTIAL_LABEL, INTERVIEWERS_DEFAULT_NOTE, SOMEONE_NEW, applyAnswers, applyFactsPatch, basisFromText, dealBreakerOffer, draftFactsKey, draftKeyMatches,
-  emit, guardPacket, intakeReadiness, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, screenCriterion, setOnDraftByRule, typedByOwner, typedCeiling,
+  DECIDER_ROLES, DRAFT_IT_WORDS, ESSENTIAL_LABEL, INTERVIEWERS_DEFAULT_NOTE, IntakeEditError, MAX_MUST_HAVES, SOMEONE_NEW, applyAnswers, applyFactsPatch, basisFromText, dealBreakerOffer, draftFactsKey,
+  draftKeyMatches, emit, guardPacket, intakeReadiness, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, screenCriterion, setOnDraftByRule, typedByOwner, typedCeiling,
   unresolvedFlags, withoutRemoved, withoutServerOwned,
   type FactsEdit, type TeamMember,
 } from "@ros/core";
@@ -969,7 +969,7 @@ export function finalizeDraft(
   // own say "the job", never "the packet" (live test, 12 Nov 2026), as the owner reads them under "What the assistant
   // assumed".
   const done = new Set(readiness.essentials.filter((e) => e.done).map((e) => e.key));
-  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done) && !(madeToHold && saysFormHoldsNobody(a))).map(plainWords);
+  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done) && !(madeToHold && saysFormHoldsNobody(a))).map((a) => plainWords(a, ctx.company.name));
   packet.provenance = {
     ...packet.provenance,
     intakeSessionId: prov.sessionId,
@@ -1170,14 +1170,22 @@ const FACTS_ON_DRAFT = [
 ] as const;
 
 /**
+ * What a seventh must-have by chat (or by a fix) is told (review of the live-test fixes, 12 Nov 2026): with the draft
+ * behind answers that already hold six, the one added came seventh and every later read dropped it, with no word to
+ * anyone. Taking one out with Edit leaves the draft as it is, so the same change can be confirmed again.
+ */
+const TOO_MANY_MUST_HAVES = "Your answers already have six must-haves, the most a job can have. Take one out with Edit beside the draft, then try this change again.";
+
+/**
  * The answers after a change confirmed on the draft (by asking, or with a suggested fix): a change to what the answers
- * hold too (the title, the schedule, the job type, the workplace, the must-haves, the nice-to-haves) is written into them,
- * so writing the draft again keeps it (live test, 12 Nov 2026: a rewrite brought back the words a change by chat had
- * fixed). A draft written from these very answers gives its lists whole, in its own words; otherwise only what the change
- * added or took out moves, so an answer the draft does not have yet stays. A list value taken out is held out of what the
- * assistant sends back, one put back is no longer held, and what changed is not asked on a card again. A deal-breaker
- * counted openly as a must-have is recorded as offered, so a reworded must-have never brings it back as a card. A draft
- * up to date with the answers before the change stays so.
+ * hold too (the title, the schedule, full or part time, the work model, the must-haves, the nice-to-haves) is written
+ * into them, so writing the draft again keeps it (live test, 12 Nov 2026: a rewrite brought back the words a change by
+ * chat had fixed). A draft written from these very answers gives its lists whole, in its own words; otherwise only what
+ * the change added or took out moves, so an answer the draft does not have yet stays, and a change that would leave the
+ * answers more than six must-haves is refused (`too_many_must_haves`), never stored or cut short. A list value taken out
+ * is held out of what the assistant sends back, one put back is no longer held, and what changed is not asked on a card
+ * again. A deal-breaker counted openly as a must-have is recorded as offered, so a reworded must-have never brings it
+ * back as a card. A draft up to date with the answers before the change stays so.
  */
 export function answersFollowingChange(facts: IntakeFacts, state: IntakeServerState, before: DraftRolePacket, after: DraftRolePacket): { facts: IntakeFacts; state: IntakeServerState } {
   const f = normalizeFacts(structuredClone(facts));
@@ -1194,6 +1202,7 @@ export function answersFollowingChange(facts: IntakeFacts, state: IntakeServerSt
     changed = true;
     const mine = f[l.fact];
     const next = upToDate ? [...now] : [...mine.filter((v) => has(now, v) || !has(was, v)), ...now.filter((v) => !has(was, v) && !has(mine, v))];
+    if (l.fact === "mustHaves" && next.length > MAX_MUST_HAVES) throw new IntakeEditError("too_many_must_haves", TOO_MANY_MUST_HAVES);
     const out = [...was, ...mine].filter((v) => !has(next, v));
     for (const v of out) if (!s.removed.some((r) => r.field === l.fact && same(r.value, v))) s.removed.push({ field: l.fact, value: v });
     s.removed = s.removed.filter((r) => !(r.field === l.fact && has(next, r.value)));
@@ -1221,13 +1230,71 @@ export function answersFollowingChange(facts: IntakeFacts, state: IntakeServerSt
 }
 
 /**
+ * The answers after a change confirmed on the draft moved why you are hiring: the draft's reason and its words go into
+ * them before the draft is brought up to date with the answers, which set the reason by rule (review of the live-test
+ * fixes, 12 Nov 2026: a reason changed by chat was shown, confirmed and saved, then put back). Only when the change moved
+ * it from the draft as it was: a fix, or a change to anything else, never copies a reason the draft held over the answer.
+ * The reason is held as the owner's and not asked on a card again; a draft up to date with the answers stays so.
+ */
+export function reasonFollowingChange(facts: IntakeFacts, state: IntakeServerState, before: DraftRolePacket, after: DraftRolePacket): { facts: IntakeFacts; state: IntakeServerState } {
+  const detail = (p: DraftRolePacket) => p.business.reasonDetail?.trim() ?? "";
+  if (after.business.reason === before.business.reason && detail(after) === detail(before)) return { facts, state };
+  const f = structuredClone(facts);
+  const s = structuredClone(state);
+  const key = s.draft?.factsKey;
+  const upToDate = !!key && draftKeyMatches(key, f);
+  f.reason = after.business.reason;
+  if (detail(after)) f.reasonDetail = detail(after);
+  else delete f.reasonDetail;
+  s.answeredFacts = holdFacts(s.answeredFacts, ["reason", "reasonDetail"]);
+  s.settledFields = settle(s.settledFields, ["reason_for_hire"]);
+  if (upToDate && s.draft) s.draft = { ...s.draft, factsKey: draftFactsKey(f) };
+  return { facts: f, state: s };
+}
+
+/**
+ * The parts of a draft that writing it again writes afresh from the answers, to compare: everything but what the answers
+ * hold too (the title, the schedule, full or part time, the work model, why you are hiring, and the words of the
+ * must-haves and nice-to-haves), the parts set by rule (pay, who decides and who interviews, the deal-breakers, every
+ * question on the form holding) and the record (`provenance`). A must-have or nice-to-have whose words both drafts hold
+ * still counts for why it matters and how it is checked; one the change added or took out is carried by its words.
+ */
+function writtenAfresh(p: DraftRolePacket, other: DraftRolePacket): unknown {
+  const { provenance: _record, compensation: _pay, ...rest } = p;
+  const kept = (list: DraftRolePacket["requirements"]["mustHaves"], theirs: DraftRolePacket["requirements"]["mustHaves"]) =>
+    list
+      .filter((m) => theirs.some((t) => normalizeCriterion(t.text) === normalizeCriterion(m.text)))
+      .map((m) => ({ text: normalizeCriterion(m.text), rationale: m.rationale, evidencedBy: [...m.evidencedBy].sort() }))
+      .sort((a, b) => (a.text < b.text ? -1 : a.text > b.text ? 1 : 0));
+  return {
+    ...rest,
+    identity: { ...rest.identity, title: undefined, schedule: undefined, employmentType: undefined, remotePolicy: undefined },
+    business: { ...rest.business, reason: undefined, reasonDetail: undefined },
+    requirements: { ...rest.requirements, mustHaves: kept(p.requirements.mustHaves, other.requirements.mustHaves), niceToHaves: kept(p.requirements.niceToHaves, other.requirements.niceToHaves), eligibility: rest.requirements.eligibility.map((e) => ({ ...e, knockout: true })) },
+    interviews: { ...rest.interviews, plan: rest.interviews.plan.map((r) => ({ ...r, interviewerUserIds: [] })) },
+    preferences: { ...rest.preferences, decisionMakerName: undefined, decisionMakerUserId: undefined, dealBreakersInTheirWords: [] },
+  };
+}
+
+/**
+ * Whether writing the draft again would lose part of a change confirmed on it (review of the live-test fixes, 12 Nov
+ * 2026: "Write it again" warned that a must-have fixed by chat, which the answers kept, would be replaced): only such a
+ * change is counted, so the warning is there only when there is something to lose.
+ */
+export function lostOnRewrite(before: DraftRolePacket, after: DraftRolePacket): boolean {
+  return packetFingerprint(writtenAfresh(before, after)) !== packetFingerprint(writtenAfresh(after, before));
+}
+
+/**
  * Saves a revised draft before the role exists (for "change it by chat" and the requirements check's fixes, C10, C16):
  * through the packet guard, keeping who kept which flag, with pay only as confirmed. The caller has shown the change and
  * the person confirmed it. With `expectedHash` (the fingerprint of the draft the change was worked out on) the row is
  * locked and the save is refused (`stale_draft`) when the draft changed since, so two changes never overwrite each
  * other; `onSaved` records what the caller needs (the proposal's outcome, the event) in the same transaction. A change to
- * what the answers hold too goes into them (`answersFollowingChange`). The count of saved changes goes up by one: writing
- * the draft again would replace the rest of them, and the page says so first.
+ * why you are hiring goes into the answers first (`reasonFollowingChange`), and a change to what the answers hold too
+ * goes into them (`answersFollowingChange`, which refuses a seventh must-have before anything is saved). The count of
+ * saved changes goes up by one only when writing the draft again would lose part of this one (`lostOnRewrite`), and the
+ * page says so first.
  */
 export async function storeDraftPacket(
   db: Db,
@@ -1241,12 +1308,14 @@ export async function storeDraftPacket(
     if (loaded.session.status !== "active") throw new IntakeSessionError("not_active");
     const current = loaded.session.draftPacket;
     if (input.expectedHash !== undefined && (!current || packetFingerprint(current) !== input.expectedHash)) throw new IntakeSessionError("stale_draft");
-    const facts = normalizeFacts(loaded.session.facts);
+    const answered = normalizeFacts(loaded.session.facts);
+    const reasoned = current ? reasonFollowingChange(answered, loaded.state, current, input.draft) : { facts: answered, state: loaded.state };
+    const facts = reasoned.facts;
     const ctx = contextFrom(loaded, { benchmark: loaded.state.benchmark ?? null, gap: loaded.state.benchmarkGap });
-    const draft = finalizeDraft(input.draft, { ...ctx, facts }, { sessionId: loaded.session.id, aiRunId: loaded.state.draft?.aiRunId ?? "", state: loaded.state, actor: input.actor, previousFlags: current?.provenance.flags ?? [], benchmark: loaded.state.benchmark ?? null, messages: loaded.session.messages });
-    const followed = current ? answersFollowingChange(facts, loaded.state, current, draft) : { facts, state: loaded.state };
+    const draft = finalizeDraft(input.draft, { ...ctx, facts }, { sessionId: loaded.session.id, aiRunId: loaded.state.draft?.aiRunId ?? "", state: reasoned.state, actor: input.actor, previousFlags: current?.provenance.flags ?? [], benchmark: loaded.state.benchmark ?? null, messages: loaded.session.messages });
+    const followed = current ? answersFollowingChange(facts, reasoned.state, current, draft) : { facts, state: reasoned.state };
     const state = followed.state;
-    if (state.draft) state.draft = { ...state.draft, edits: (state.draft.edits ?? 0) + 1 };
+    if (state.draft && (!current || lostOnRewrite(current, draft))) state.draft = { ...state.draft, edits: (state.draft.edits ?? 0) + 1 };
     await q.update(intakeSessions).set({ draftPacket: draft, facts: followed.facts, serverState: state }).where(eq(intakeSessions.id, loaded.session.id));
     if (opts.onSaved) await opts.onSaved(q, draft);
     return draft;

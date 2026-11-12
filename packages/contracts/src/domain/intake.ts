@@ -300,8 +300,8 @@ export const IntakeServerState = z.object({
   progress: z.object({ stage: IntakeProgressStage, startedAt: z.string(), at: z.string() }).optional(),
   /**
    * The draft as last written: when, by which run, for whom, the pay it was written with, a key of the answers the
-   * assistant wrote it from (`draftFactsKey`: answers changed since make it out of date), and how many changes were saved
-   * on it since (by chat or with a fix), which writing it again would replace.
+   * assistant wrote it from (`draftFactsKey`: answers changed since make it out of date), and how many changes saved on it
+   * since (by chat or with a fix) writing it again would replace part of: a change the answers took in too is not counted.
    */
   draft: z.object({ at: z.string(), aiRunId: z.string(), by: Actor, payKey: z.string().nullable(), factsKey: z.string().optional(), edits: z.number().int().default(0) }).optional(),
   fromRole: z.object({ roleId: z.string(), version: z.number().int(), title: z.string() }).optional(),
@@ -323,7 +323,11 @@ export type IntakeReadiness = {
   hasDraft: boolean;
   /** Answers changed after the draft was written in a way only writing it again can carry (pay, why you are hiring, the team and deal-breakers carry over by themselves). */
   draftOutOfDate: boolean;
-  /** Changes saved on the draft since it was written (by chat or with a fix): writing it again replaces them. */
+  /**
+   * Changes saved on the draft since it was written (by chat or with a fix) that writing it again would replace part of;
+   * one to the title, the schedule, full or part time, the work model, why you are hiring or the wording of a must-have or
+   * nice-to-have went into the answers too, so it is not counted.
+   */
   draftEdits: number;
   openFlags: number;
   /** Whether "Ask for approval" works: a written, up-to-date draft, the six essentials, pay a person set or confirmed, and no open wording check. */

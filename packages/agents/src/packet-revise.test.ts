@@ -38,8 +38,17 @@ describe("the packet.revise prompt", () => {
     // deal-breakers and team are changed with Edit, never by chat
     expect(system).toContain('Write summary, notChanged and question to the person in plain words: the job (or the draft, before the role exists), never "packet", "section", a field name or a key. When nothing needs to change, say so and quote the words the job already has for it.');
     expect(system).toContain("Its deal-breakers, who interviews and who makes the final decision are changed with Edit beside the draft, never by chat: put such a request in notChanged.");
+    // still v2, not released yet (review of the live-test fixes, 12 Nov 2026): a draft's questions on the form always hold
+    // a "no", so a request to stop one holding is not done, and why the owner is hiring never goes on the job page
+    const holds = 'Every question on its form holds a "no" for the owner\'s decision: never set knockout false, on a new question too; put a request to stop one holding in notChanged, and offer to ask it in the AI interview (its screening questions) instead.';
+    const reasonLine = "The job description is public: never write why the owner is hiring into it; business is for the team only.";
+    expect(system).toContain(holds);
+    expect(system).toContain(reasonLine);
     const onRole = packetRevisePrompt.system({ ...input, target: "role", roleStatus: "open" }).map((b) => b.text).join("\n");
     expect(onRole).not.toMatch(/Edit beside the draft/);
+    // a saved job keeps a person's "asked, not required"; its description is public too
+    expect(onRole).not.toContain(holds);
+    expect(onRole).toContain(reasonLine);
     await ask(draft, "Add a must-have: forklift license", "draft");
     expect(fake.calls.at(-1)).toMatchObject({ task: "packet.revise", model: "fake", promptKey: "packet.revise", promptVersion: 2 });
   });
@@ -97,16 +106,38 @@ describe("the packet.revise prompt", () => {
     expect(merged.packet.interviews.plan.map((r) => r.interviewerUserIds)).toEqual([["u-1"], ["u-1"]]);
     expect(merged.packet.interviews.plan[0].durationMinutes).toBe(45);
     expect(merged.packet.communication).toMatchObject({ tone: "formal", disclosureText: base.communication.disclosureText });
-    // on a draft, who interviews and the deal-breakers are changed with Edit beside it: after the draft, typed words only
-    // ask for changes like this one, and the interview plan is a tab of the saved job (live test, 12 Nov 2026)
-    expect(merged.notChanged.map((n) => n.reason)).toEqual(expect.arrayContaining(["Who interviews is chosen from your team with Edit beside the draft.", expect.stringMatching(/line saying AI assists/), expect.stringMatching(/chosen from your team in the editor/), "Deal-breakers in a draft are changed with Edit beside the draft."]));
-    expect(merged.notChanged.map((n) => n.reason).join(" ")).not.toMatch(/the conversation|the interview plan/);
+    // on a draft, who interviews, who decides and the deal-breakers are changed with Edit beside it: after the draft, typed
+    // words only ask for changes like this one, and the interview plan is a tab of the saved job (live test, 12 Nov 2026);
+    // the draft has no control called the editor (review of the live-test fixes, 12 Nov 2026)
+    expect(merged.notChanged.map((n) => n.reason)).toEqual(expect.arrayContaining(["Who interviews is chosen from your team with Edit beside the draft.", expect.stringMatching(/line saying AI assists/), "Who makes the final decision is chosen from your team with Edit beside the draft.", "Deal-breakers in a draft are changed with Edit beside the draft."]));
+    expect(merged.notChanged.map((n) => n.reason).join(" ")).not.toMatch(/the conversation|the interview plan|the editor/);
+    // something is left to confirm, so the summary is the model's own
+    expect(merged.summary).toBe("Changed things.");
     // a saved job keeps its own places
     const onRole = mergeRevision(base, { summary: "Changed things.", changes, notChanged: [] }, "role");
     expect(onRole.notChanged.map((n) => n.reason)).toEqual(expect.arrayContaining(["Who interviews is chosen from your team on the interview plan.", expect.stringMatching(/chosen from your team in the editor/)]));
     expect(onRole.notChanged.map((n) => n.reason).join(" ")).not.toMatch(/Edit beside the draft|Deal-breakers/);
     // a section sent back unchanged is not a change
     expect(mergeRevision(base, { summary: "Nothing.", changes: { identity: structuredClone(base.identity) }, notChanged: [] }, "role").sections).toEqual([]);
+  });
+
+  it("never shows the model's summary of a change the server put back: 'Nothing was changed.' (review of the live-test fixes, 12 Nov 2026)", () => {
+    const base = samplePacket();
+    const decider = { ...base.preferences, decisionMakerUserId: "u-9", decisionMakerName: "Someone else" };
+    for (const target of ["role", "draft"] as const) {
+      const putBack = mergeRevision(base, { summary: "I made Someone else the one who decides.", changes: { preferences: decider }, notChanged: [] }, target);
+      expect(putBack.sections).toEqual([]);
+      expect(putBack.summary).toBe("Nothing was changed.");
+      expect(putBack.notChanged.map((n) => n.request)).toEqual(["Change who makes the final decision"]);
+    }
+    // pay on a draft, written by the model anyway
+    expect(mergeRevision(base, { summary: "I changed the pay to $26–$30 an hour.", changes: { compensation: { ...base.compensation, min: 26, max: 30 } }, notChanged: [] }, "draft").summary).toBe("Nothing was changed.");
+    // a reply that proposed nothing keeps its own words, the job's quoted ones too
+    const quoted = 'Nothing needs to change: the job already lists "Radiography certificate" as a must-have.';
+    expect(mergeRevision(base, { summary: quoted, changes: {}, notChanged: [] }, "draft").summary).toBe(quoted);
+    expect(mergeRevision(base, { summary: "I have not changed anything yet.", question: "Which days?", changes: {}, notChanged: [] }, "role").summary).toBe("I have not changed anything yet.");
+    // so does one that sent a section back as it was: the model changed nothing the server put back
+    expect(mergeRevision(base, { summary: quoted, changes: { identity: structuredClone(base.identity), requirements: structuredClone(base.requirements) }, notChanged: [] }, "draft").summary).toBe(quoted);
   });
 
   it("says 'the job' to the person, never 'packet', and keeps the person's own words (live test, 12 Nov 2026)", () => {
@@ -119,6 +150,35 @@ describe("the packet.revise prompt", () => {
     const revision = { summary: "The packet already requires it.", question: "Should the packet say more?", changes: {}, notChanged: [{ request: "Put it in the packet", reason: "The packet already has it." }] };
     expect(plainRevision(revision)).toEqual({ summary: "The job already requires it.", question: "Should the job say more?", changes: {}, notChanged: [{ request: "Put it in the packet", reason: "The job already has it." }] });
     expect(plainRevision({ summary: "Done.", changes: {}, notChanged: [] })).not.toHaveProperty("question");
+  });
+
+  it("keeps every other 'packet' as it is: another thing's, a quote, a name (review of the live-test fixes, 12 Nov 2026)", () => {
+    // the product's own word, after the, this, that, your, its, our, each, a or an, or role, job or draft
+    expect(plainWords("Your packet lists it, and this packet's pay stays. Each packet is checked.")).toBe("Your job lists it, and this job's pay stays. Each job is checked.");
+    // "I" after it is no name
+    expect(plainWords("I checked the packet I was given.")).toBe("I checked the job I was given.");
+    // after another word: the thing itself, as dental offices say it
+    for (const words of [
+      "I added a duty: prepare new patient packets.",
+      "I added a duty: prepare new patient packets before each visit.",
+      "Hand out welcome packets and the onboarding packet.",
+      "Pay packets go out on Fridays, with the new hire packet and the information packet.",
+      'Nothing needed to change: the job already says "Prepare new patient packets before each visit."',
+      "Nothing needed to change: the job already says “the packet goes out first”.",
+      // a name: before a capital, or the company's own
+      "Benefits follow Packet Dental's plan.",
+      "Packet Dental pays weekly.",
+    ]) expect(plainWords(words)).toBe(words);
+    expect(plainWords("You work at The Packet, and the packet lists it.", "The Packet")).toBe("You work at The Packet, and the job lists it.");
+    // what the person reads of each part not done is in plain words; the fairness record keeps the request as written
+    const base = samplePacket();
+    const merged = mergeRevision(base, { summary: "I did not change anything.", changes: {}, notChanged: [{ request: "Remove the deal-breaker from the packet", reason: "Deal-breakers in a draft are changed with Edit beside the draft." }, { request: "Recent graduates only, in the packet", reason: "That stands in for age." }] }, "draft");
+    expect(merged.notChanged.map((n) => n.request)).toEqual(["Remove the deal-breaker from the job", "Recent graduates only, in the job"]);
+    expect(merged.declined.map((d) => d.requested)).toEqual(["Recent graduates only, in the packet"]);
+    expect(merged.packet.provenance.declinedCriteria?.map((d) => d.requested)).toEqual(["Recent graduates only, in the packet"]);
+    // the company's name in a request keeps its word
+    const named = mergeRevision(base, { summary: "I did not change anything.", changes: {}, notChanged: [{ request: "Say The Packet pays weekly in the packet", reason: "Pay is set on the pay card." }] }, "draft", "The Packet");
+    expect(named.notChanged.map((n) => n.request)).toEqual(["Say The Packet pays weekly in the job"]);
   });
 
   it("tries once more, afresh, only when the replies held no usable answer and the request has the time (live test, 12 Nov 2026)", () => {
@@ -147,9 +207,18 @@ describe("the packet.revise prompt", () => {
     expect(onDraft.packet.requirements.mustHaves.at(-1)?.text).toBe("Active California RDA license");
     expect(onDraft.packet.requirements.eligibility.map((e) => [e.key, e.knockout])).toEqual([["schedule", true], ["ca_rda_license", true]]);
     expect(onDraft.notChanged).toEqual([{ request: "Stop a question on the form from holding anyone", reason: 'On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.' }]);
-    // a proposal that only loosens a question changes nothing on a draft
-    const onlyLoosened = mergeRevision(base, { summary: "Changed the requirements.", changes: { requirements: { ...base.requirements, eligibility: base.requirements.eligibility.map((e) => ({ ...e, knockout: false })) } }, notChanged: [] }, "draft");
+    // a proposal that only loosens a question changes nothing on a draft, says why, and never claims the change (review
+    // of the live-test fixes, 12 Nov 2026: "I changed the CPR question so a no no longer holds the application. Not done: ...")
+    const onlyLoosened = mergeRevision(base, { summary: "I changed the schedule question so a no no longer holds the application.", changes: { requirements: { ...base.requirements, eligibility: base.requirements.eligibility.map((e) => ({ ...e, knockout: false })) } }, notChanged: [] }, "draft");
     expect(onlyLoosened.sections).toEqual([]);
+    expect(onlyLoosened.notChanged).toEqual(onDraft.notChanged);
+    expect(onlyLoosened.summary).toBe("Nothing was changed.");
+    // a question the change adds is set to hold, with no "Not done" nobody asked for
+    const added = mergeRevision(base, { summary: "I added a question on the RDA license.", changes: { requirements: { ...base.requirements, eligibility: [...base.requirements.eligibility, licence] } }, notChanged: [] }, "draft");
+    expect(added.sections).toEqual(["requirements"]);
+    expect(added.packet.requirements.eligibility.map((e) => [e.key, e.knockout])).toEqual([["schedule", true], ["ca_rda_license", true]]);
+    expect(added.notChanged).toEqual([]);
+    expect(added.summary).toBe("I added a question on the RDA license.");
     // on a saved job, whether a "no" holds stays the person's choice
     const onRole = mergeRevision(base, { summary: "Changed the requirements.", changes: loosened, notChanged: [] }, "role");
     expect(onRole.packet.requirements.eligibility.map((e) => [e.key, e.knockout])).toEqual([["schedule", false], ["ca_rda_license", false]]);

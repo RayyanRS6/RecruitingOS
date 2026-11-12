@@ -424,7 +424,11 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     expect(before.rounds[0].interviewers).toEqual([]);
     expect(before.team.map((m) => m.name)).toEqual(expect.arrayContaining(["Hank Manager", "Priya Nair", "Dana Owner"]));
     const key = before.rounds[0].key;
-    expect((await errorOf(await json(olive, "PATCH", `/api/v1/roles/${opened.roleId}/interview-plan`, { rounds: [{ key: "no_such_round", interviewerUserIds: [hankId] }] }))).code).toBe("unknown_round");
+    // a step no longer on the job is said in plain words, never by its key (review of the live-test fixes, 12 Nov 2026)
+    const gone = await errorOf(await json(olive, "PATCH", `/api/v1/roles/${opened.roleId}/interview-plan`, { rounds: [{ key: "no_such_round", interviewerUserIds: [hankId] }] }));
+    expect(gone.code).toBe("unknown_round");
+    expect(gone.message).toBe("One of these interview steps is no longer on this job. Reload to see the plan as it is now.");
+    expect(gone.message).not.toContain("no_such_round");
     expect((await errorOf(await json(olive, "PATCH", `/api/v1/roles/${opened.roleId}/interview-plan`, { rounds: [{ key, interviewerUserIds: ["00000000-0000-0000-0000-000000000000"] }] }))).code).toBe("unknown_member");
     const r = await json(olive, "PATCH", `/api/v1/roles/${opened.roleId}/interview-plan`, { rounds: [{ key, interviewerUserIds: [hankId, priyaId] }] });
     expect(r.status).toBe(200);

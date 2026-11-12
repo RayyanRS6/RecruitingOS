@@ -3,7 +3,7 @@ import { OWNERS_CALL_MARK, intakeCompilePrompt, intakeExtractPrompt, packetRevis
 import { IntakeServerState, RolePacket, type Actor, type DraftRolePacket, type IntakeFacts } from "@ros/contracts";
 import { dealBreakerOffer, draftFactsKey, draftKeyMatches, normalizeFacts, unresolvedFlags } from "@ros/core";
 import { samplePacket } from "./fixtures/sample-packet";
-import { answersFollowingChange, finalizeDraft, saysFormHoldsNobody, withoutUntickedQuestions } from "./intake";
+import { answersFollowingChange, finalizeDraft, lostOnRewrite, reasonFollowingChange, saysFormHoldsNobody, withoutUntickedQuestions } from "./intake";
 
 /**
  * The deterministic part after the model (plan C1, C7, C15): what the model wrote about who decided what is never kept,
@@ -165,6 +165,14 @@ describe("finalizeDraft never keeps what the model says a person decided", () =>
     expect(draft.provenance.assumptions).toEqual(expect.arrayContaining(["The job assumes a Monday start.", "Job pay follows the playbook.", "Assumed the draft's schedule."]));
     expect(draft.provenance.assumptions.join(" ")).not.toMatch(/packet/i);
   });
+
+  it("keeps a packet that is the thing itself word for word, and the company's name (review of the live-test fixes, 12 Nov 2026)", () => {
+    const lines = ["New patient packets are prepared by the front desk.", "The office hands out a welcome packet on the first day.", "The Packet's front desk greets patients."];
+    const raw = asDraft(samplePacket((p) => { p.provenance.assumptions = [...lines, "The packet assumes a Monday start."]; }));
+    const named = { ...ctx(facts()), company: { ...ctx(facts()).company, name: "The Packet" } };
+    const draft = finalizeDraft(raw, named, { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    expect(draft.provenance.assumptions).toEqual(expect.arrayContaining([...lines, "The job assumes a Monday start."]));
+  });
 });
 
 // Review of the live-test fixes, 12 Nov 2026: only the prompt kept a question the owner unticked off the form, and
@@ -274,6 +282,92 @@ describe("a change confirmed on the draft goes into the answers too, so writing 
     const s = written(f);
     const out = answersFollowingChange(f, s, draft(), draft((p) => { p.description.publicJobDescription += " We close at noon on Fridays."; p.communication.tone = "formal"; }));
     expect(out).toEqual({ facts: normalizeFacts(f), state: s });
+  });
+
+  // Review of the live-test fixes, 12 Nov 2026 (#28, #69): the seventh, appended last, was dropped by every later read.
+  it("a change that would leave the answers a seventh must-have is refused, never stored or cut short", () => {
+    const five = ["Radiography certificate", "Chairside experience in a dental office", "Four-handed dentistry", "Infection control", "Eaglesoft experience"];
+    const drafted = facts({ mustHaves: five });
+    const six = { ...drafted, mustHaves: [...five, "Perio charting"] };
+    const before = draft((p) => { p.requirements.mustHaves = five.map(must); });
+    const after = draft((p) => { p.requirements.mustHaves = [...five.map(must), must("Dentrix experience")]; });
+    // the draft was written before "Perio charting" went into the answers, so it is out of date
+    let refused: unknown = null;
+    try {
+      answersFollowingChange(six, written(drafted), before, after);
+    } catch (err) {
+      refused = err;
+    }
+    expect(refused).toMatchObject({ code: "too_many_must_haves", message: "Your answers already have six must-haves, the most a job can have. Take one out with Edit beside the draft, then try this change again." });
+    expect(six.mustHaves).toHaveLength(6);
+    // written from these very answers, the draft's own list is taken whole, as it holds at most six
+    const upToDate = facts({ mustHaves: five });
+    expect(answersFollowingChange(upToDate, written(upToDate), before, after).facts.mustHaves).toEqual([...five, "Dentrix experience"]);
+  });
+});
+
+// Review of the live-test fixes, 12 Nov 2026 (#4, #27): a reason changed by chat was shown, confirmed and toasted
+// "Change saved", then put back by the reason set on the draft by rule.
+describe("why you are hiring, changed on the draft, goes into the answers first", () => {
+  const written = (f: IntakeFacts): IntakeServerState => confirmed({ draft: { at: "2026-11-12T09:00:00.000Z", aiRunId: "run", by: dana, payKey: null, factsKey: draftFactsKey(f), edits: 0 } });
+  const draft = (over: (p: DraftRolePacket) => void = () => {}) => asDraft(samplePacket(over));
+
+  it("takes the draft's reason and its words into the answers when the change moved them, held as the owner's", () => {
+    const f = facts({ reason: "growth", reasonDetail: "A second chair opens" });
+    const s = written(f);
+    const before = draft((p) => { p.business.reason = "growth"; p.business.reasonDetail = "A second chair opens"; });
+    const after = draft((p) => { p.business.reason = "replacement"; p.business.reasonDetail = "Maria leaves in December"; });
+    const out = reasonFollowingChange(f, s, before, after);
+    expect(out.facts).toMatchObject({ reason: "replacement", reasonDetail: "Maria leaves in December" });
+    expect(out.state.answeredFacts).toEqual(expect.arrayContaining(["reason", "reasonDetail"]));
+    expect(out.state.settledFields).toContain("reason_for_hire");
+    expect(draftKeyMatches(out.state.draft!.factsKey!, out.facts)).toBe(true);
+    // the draft brought up to date with those answers keeps the change
+    expect(finalizeDraft(after, ctx(out.facts), { sessionId: "s1", aiRunId: "r", state: out.state }).business).toMatchObject({ reason: "replacement", reasonDetail: "Maria leaves in December" });
+    // words taken out on the draft are taken out of the answers
+    const plain = reasonFollowingChange(f, s, before, draft((p) => { p.business.reason = "replacement"; delete p.business.reasonDetail; }));
+    expect(plain.facts.reason).toBe("replacement");
+    expect(plain.facts).not.toHaveProperty("reasonDetail");
+    // the input is not changed
+    expect(f).toMatchObject({ reason: "growth", reasonDetail: "A second chair opens" });
+  });
+
+  it("never copies a reason the change did not move: a fix, or a draft that still holds the model's own", () => {
+    const f = facts({ reason: "growth" });
+    const s = written(f);
+    // the draft kept the model's "other" (written before this release): a change to the timeline passes it through as it was
+    const before = draft((p) => { p.business.reason = "other"; p.business.reasonDetail = "Assumed"; });
+    const after = draft((p) => { p.business.reason = "other"; p.business.reasonDetail = "Assumed"; p.business.timeline.urgency = "high"; });
+    const out = reasonFollowingChange(f, s, before, after);
+    expect(out).toEqual({ facts: f, state: s });
+    expect(finalizeDraft(after, ctx(out.facts), { sessionId: "s1", aiRunId: "r", state: out.state }).business.reason).toBe("growth");
+  });
+});
+
+// Review of the live-test fixes, 12 Nov 2026 (#12, #65): "Write it again" warned that a must-have fixed by chat, which
+// the answers kept, would be replaced.
+describe("a change is counted for 'Write it again' only when writing it again would lose part of it", () => {
+  const base = () => asDraft(samplePacket());
+  const changed = (over: (p: DraftRolePacket) => void) => asDraft(samplePacket(over));
+  const must = (text: string) => ({ key: "mh_dentrix", text, rationale: "Added by the owner in the conversation", evidencedBy: ["resume" as const, "screen" as const] });
+
+  it("what the answers hold too, the parts set by rule and the record are never lost", () => {
+    expect(lostOnRewrite(base(), base())).toBe(false);
+    expect(lostOnRewrite(base(), changed((p) => { p.requirements.mustHaves.push(must("Dentrix experience")); }))).toBe(false);
+    expect(lostOnRewrite(base(), changed((p) => { p.requirements.mustHaves[0].text = "Active California RDA license"; }))).toBe(false);
+    expect(lostOnRewrite(base(), changed((p) => { p.requirements.mustHaves = p.requirements.mustHaves.slice(1); p.requirements.niceToHaves = []; }))).toBe(false);
+    expect(lostOnRewrite(base(), changed((p) => { p.identity.title = "Registered Dental Assistant"; p.identity.schedule = "Tuesday to Saturday, 7 to 4"; p.identity.employmentType = "part_time"; p.identity.remotePolicy = "hybrid"; }))).toBe(false);
+    expect(lostOnRewrite(base(), changed((p) => { p.business.reason = "growth"; p.business.reasonDetail = "A second chair opens"; }))).toBe(false);
+    expect(lostOnRewrite(base(), changed((p) => { p.provenance.aiRunIds = ["run-2"]; p.interviews.plan[0].interviewerUserIds = ["u-2"]; p.preferences.decisionMakerUserId = "u-2"; }))).toBe(false);
+  });
+
+  it("anything a rewrite writes afresh is lost: the messages, the description, where the job is, how a must-have is checked, a skill for the interview", () => {
+    expect(lostOnRewrite(base(), changed((p) => { p.communication.tone = "direct"; }))).toBe(true);
+    expect(lostOnRewrite(base(), changed((p) => { p.description.publicJobDescription += " We close at noon on Fridays."; }))).toBe(true);
+    expect(lostOnRewrite(base(), changed((p) => { p.identity.locations = [{ city: "Tustin", region: "CA", country: "US" }]; }))).toBe(true);
+    expect(lostOnRewrite(base(), changed((p) => { p.requirements.mustHaves[0].evidencedBy = ["interview"]; }))).toBe(true);
+    // the requirements check's "Ask about it in the interview instead": the must-have's words go, a skill comes
+    expect(lostOnRewrite(base(), changed((p) => { p.requirements.mustHaves = p.requirements.mustHaves.slice(1); p.competencies.push({ key: "ci_xray", name: "Radiography certificate", definition: "Radiography certificate", weight: 3, evaluatedIn: "interview", indicators: ["A concrete example from past work"] }); }))).toBe(true);
   });
 });
 

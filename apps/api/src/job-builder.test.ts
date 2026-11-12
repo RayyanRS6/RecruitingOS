@@ -543,10 +543,12 @@ describe("the job builder API", () => {
     // then the pay and the decision maker, on the pay card and the panel: set on the draft by rule, never out of date
     const pay = (await view(owner, id)).questions.find((q) => q.mode === "pay");
     const set = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { ...(pay ? { answers: [{ questionId: pay.id, pay: { basis: "hourly", min: 21, max: 25 } }] } : {}), patch: { set: { decisionMakerUserId: managerId, ...(pay ? {} : { pay: { basis: "hourly", min: 21, max: 25 } }) } }, reply: false }));
-    expect(set.session.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 1, mayAskForApproval: true });
+    // the must-have saved by chat is in the answers too, so writing the draft again would lose nothing of it (review of
+    // the live-test fixes, 12 Nov 2026)
+    expect(set.session.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0, mayAskForApproval: true });
     // why you are hiring is set on the draft by rule too, since the words never say it (live test, 12 Nov 2026)
     const reason = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch: { set: { reason: "replacement" } }, reply: false }));
-    expect(reason.session.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 1, mayAskForApproval: true });
+    expect(reason.session.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0, mayAskForApproval: true });
     expect(reason.session.draft?.business.reason).toBe("replacement");
     // an answer the words are written from, changed after drafting, holds approval until the draft is written again
     await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch: { add: [{ field: "niceToHaves", value: "Eaglesoft experience" }] }, reply: false });

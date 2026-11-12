@@ -1,4 +1,4 @@
-import { mustHaveOf, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
+import { mustHaveOf, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
 import { ASKED_WORDS, OWNERS_CALL_MARK, type FakeProvider, type IntakeContext, type StructuredRequest } from "@ros/ai";
 import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
@@ -959,7 +959,9 @@ function fakeScreenMustHaves(req: StructuredRequest<unknown>, user: string): Scr
 /**
  * packet.revise v2 (C10): the few kinds of change tests and local development ask for, answered the way the model is
  * told to: only the sections that change, each written out whole; wording that stands in for a protected trait refused
- * in notChanged; pay only where pay may change; a question back when the request is not one of these.
+ * in notChanged; pay only where pay may change; who decides pointed to Edit beside a draft; a must-have the request says
+ * they must hold, worded as what rules someone out, turned round, and one already worded as what they need quoted with
+ * nothing changed; a question back when the request is not one of these.
  */
 function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
   const text = req.messages.map((m) => m.content).join("\n");
@@ -988,7 +990,9 @@ function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
   const tone = request.match(/\b(warmer|friendlier|more formal|more direct)\b/i);
   const question = request.match(/\badd (?:a |another )?(?:screening )?question:?\s*(.+)$/i);
   const pay = /\bpay\b|\bwage\b|\bsalary\b|\brate\b/i.test(request) ? request.match(/\$?\s?(\d[\d,]*(?:\.\d+)?)\s*(?:-|–|to)\s*\$?\s?(\d[\d,]*(?:\.\d+)?)/i) : null;
-  if (/\bdecision maker\b|\bwho decides\b|\bfinal say\b/i.test(request)) notChanged.push({ request, reason: "Who makes the final decision is chosen from your team in the editor." });
+  const mustHold = /\b(?:must|need to|needs to|has to|have to)\s+(?:hold|have|be)\b/i.test(request);
+  // a draft is the one where pay may not change
+  if (/\bdecision maker\b|\bwho decides\b|\bfinal say\b/i.test(request)) notChanged.push({ request, reason: allowed.includes("compensation") ? "Who makes the final decision is chosen from your team in the editor." : "Who makes the final decision is chosen from your team with Edit beside the draft." });
   else if (pay) {
     const min = Number(pay[1].replace(/,/g, ""));
     const max = Number(pay[2].replace(/,/g, ""));
@@ -1049,6 +1053,20 @@ function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
     if (shorter.length >= 50 && shorter !== packet.description.publicJobDescription.trim()) {
       changes.description = { ...packet.description, publicJobDescription: shorter };
       done.push("I made the job description shorter.");
+    }
+  } else if (mustHold && packet.requirements?.mustHaves.some((m) => sameRequirement(m.text, request))) {
+    // "They must hold an active RDH license" (live test, 12 Nov 2026): the must-have it names, worded as what rules
+    // someone out, is turned round; one already worded as what they need is quoted, and nothing changes.
+    const named = packet.requirements.mustHaves.filter((m) => sameRequirement(m.text, request));
+    const ruling = named.find((m) => rulesOut(m.text) && !rulesOut(mustHaveOf(m.text)));
+    if (ruling) {
+      const need = mustHaveOf(ruling.text);
+      changes.requirements = { ...packet.requirements, mustHaves: packet.requirements.mustHaves.map((m) => (m.key === ruling.key ? { ...m, text: need } : m)) };
+      done.push(`I changed the must-have "${ruling.text}" to "${need}".`);
+    } else {
+      const already = named.find((m) => !rulesOut(m.text));
+      if (already) return { summary: `Nothing needs to change: the job already lists "${already.text}" as a must-have.`, changes: {}, notChanged: [] };
+      return { summary: "I have not changed anything yet.", changes: {}, notChanged: [], question: "How should that must-have read, as what they need?" };
     }
   } else if (!refuse(request)) {
     return { summary: "I have not changed anything yet.", changes: {}, notChanged: [], question: "What would you like to change? For example: add a must-have, change the schedule, or rename the job." };

@@ -3,13 +3,14 @@ import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import type { ZodError } from "zod";
 import {
   AI_HELP_BUSY_LINE, AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DescribeBenefits, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
+  requirementsCheckReads,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag, type PacketRevisionProposal, type RequirementsCheck, type RolePacket,
 } from "@ros/contracts";
 import {
   IntakeSessionError, RequirementFixError, applyRequirementFixes, checkRequirements, decideRevision, loadRevision, loadTeam, mergeRevision, packetFingerprint, payChanged, proposeRevision, sessionView, storeDraftPacket,
   type IntakeSessionRow, type MergedRevision, type StoredRevision,
 } from "@ros/agents";
-import { assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
+import { IntakeEditError, assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
 import { approvalRequests, companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
@@ -94,7 +95,8 @@ rolePacketRoutes.patch("/:id/interview-plan", requireTenant, async (c) => {
     const known = new Set(people.map((p) => p.userId));
     const plan = current.packet.interviews.plan;
     for (const r of body.rounds) {
-      if (!plan.some((p) => p.key === r.key)) throw new HttpError(400, "unknown_round", `There is no interview step "${r.key}" in this job.`);
+      // Plain words with no key: the page names a step by its title (review of the live-test fixes, 12 Nov 2026).
+      if (!plan.some((p) => p.key === r.key)) throw new HttpError(400, "unknown_round", "One of these interview steps is no longer on this job. Reload to see the plan as it is now.", { key: r.key });
       const stranger = r.interviewerUserIds.find((id) => !known.has(id));
       if (stranger) throw new HttpError(400, "unknown_member", "Every interviewer must be an active member of your team.");
     }
@@ -302,13 +304,13 @@ rolePacketRoutes.post("/:id/revisions", requireTenant, async (c) => {
   const declined = base.packet.provenance.declinedCriteria ?? [];
   const out = await proposeRevision(container.db, container.ai, { companyId: t.companyId, companyName: loaded.company.name, actor, target: { kind: "role", roleId: loaded.role.id, baseVersion: base.version, roleStatus: loaded.role.status }, packet: base.packet, message: body.message, declined });
   if (!out.ok) return revisionFailed(container, t, subject, out);
-  const merged = mergeRevision<DraftRolePacket>(base.packet, out.output, "role");
+  const merged = mergeRevision<DraftRolePacket>(base.packet, out.output, "role", loaded.company.name);
   const guarded = guardedChange(base.packet, merged.packet, { company: loaded.company, actor, declined, full: true });
   if (!guarded.ok) return revisionInvalid(container, t.companyId, subject, out.runId, guarded.problem);
   const live = currentVersionOf(loaded.role, loaded.versions);
   const material = (loaded.role.status === "open" || loaded.role.status === "paused") && !!live && materialChanges(live.packet, guarded.packet as RolePacket).length > 0;
   const mayApprove = await withTenant(container.db, t.companyId, (tx) => mayApproveRoles(tx, t, loaded.role.id));
-  const proposal = proposalOf({ runId: out.runId, target: { kind: "role", roleId: loaded.role.id, baseVersion: base.version }, base: base.packet, merged, guarded, question: out.output.question, summary: out.output.summary, takesEffect: takesEffect(loaded.role, mayApprove, guarded.flags.length, material), from: base.version });
+  const proposal = proposalOf({ runId: out.runId, target: { kind: "role", roleId: loaded.role.id, baseVersion: base.version }, base: base.packet, merged, guarded, question: out.output.question, summary: merged.summary, takesEffect: takesEffect(loaded.role, mayApprove, guarded.flags.length, material), from: base.version });
   await withTenant(container.db, t.companyId, (tx) => emit(tx, { type: "packet.revision_proposed", companyId: t.companyId, actor, subject, payload: { roleId: loaded.role.id, baseVersion: base.version, revisionId: out.runId, sections: merged.sections, notChanged: merged.notChanged.length, asked: !!out.output.question, newFlags: guarded.newFlags.length } }));
   return c.json(proposal);
 });
@@ -327,7 +329,7 @@ rolePacketRoutes.post("/:id/revisions/:revisionId/apply", requireTenant, async (
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const { role, versions, company } = await loadRolePackets(tx, c.req.param("id") ?? "", { forWrite: true });
     refuseClosed(role);
-    const stored = usableRevision(await loadRevision(tx, c.req.param("revisionId") ?? ""), (s) => s.target === "role" && s.roleId === role.id);
+    const stored = usableRevision(await loadRevision(tx, c.req.param("revisionId") ?? "", company.name), (s) => s.target === "role" && s.roleId === role.id);
     const base = versions[0];
     if (stored.baseVersion !== base.version) throw new HttpError(409, "stale_revision", `The role changed after this was suggested (it is on version ${base.version} now). Ask again, so the change is worked out on the latest version.`);
     const merged = mergeRevision<RolePacket>(base.packet, stored.revision, "role");
@@ -575,15 +577,27 @@ rolePacketRoutes.put("/:id/company-questions", requireTenant, async (c) => {
 
 export const draftPacketRoutes = new Hono<Vars>();
 
-/** The agent's draft errors as answers; `stale` is how this route says the draft moved on since the change was worked out. */
+/**
+ * The agent's draft errors as answers; `stale` is how this route says the draft moved on since the change was worked
+ * out. A change the answers refuse (`too_many_must_haves`: a seventh must-have) is a plain 400, and nothing is saved.
+ */
 function draftErrors(err: unknown, stale?: HttpError): never {
   if (err instanceof IntakeSessionError && err.code === "stale_draft" && stale) throw stale;
   if (err instanceof IntakeSessionError) throw err.code === "not_found" ? new HttpError(404, "not_found", "Intake session not found.") : err.code === "stale_draft" ? new HttpError(409, "stale_draft", "The draft changed a moment ago. Look at it again, then make your change.") : new HttpError(409, "not_active", "This draft has already produced a role, or it was set aside.");
+  if (err instanceof IntakeEditError) throw new HttpError(400, err.code, err.message);
   throw err;
 }
 
 const STALE_REVISION = () => new HttpError(409, "stale_revision", "The draft changed after this was suggested. Ask again, so the change is worked out on the draft as it is now.");
 const STALE_CHECK = () => new HttpError(409, "stale_check", "The draft changed after the check ran. Run the check again.");
+
+/**
+ * What a draft's requirements check ran on: a fingerprint of only what the check and its fixes read
+ * (`requirementsCheckReads`), so an answer that brings the draft's other parts up to date by rule leaves it good (review
+ * of the live-test fixes, 12 Nov 2026: the first fix after answering "Why are you hiring?" was refused). The save itself
+ * still checks the whole draft, on its locked row.
+ */
+const checkBaseOf = (draft: DraftRolePacket) => `d${packetFingerprint(requirementsCheckReads(draft))}`;
 
 /** The caller's draft (the intake routes' own access rule), active and with a draft packet written. */
 async function draftOf(c: Context<Vars>): Promise<{ row: IntakeSessionRow; draft: DraftRolePacket }> {
@@ -622,10 +636,10 @@ draftPacketRoutes.post("/sessions/:id/revisions", requireTenant, async (c) => {
   const declined = draftDeclined(row, draft);
   const out = await proposeRevision(container.db, container.ai, { companyId: t.companyId, companyName: company?.name ?? "", actor, target: { kind: "draft", sessionId: row.id, baseHash: packetFingerprint(draft) }, packet: draft, message: body.message, declined });
   if (!out.ok) return revisionFailed(container, t, subject, out);
-  const merged = mergeRevision(draft, out.output, "draft");
+  const merged = mergeRevision(draft, out.output, "draft", company?.name);
   const guarded = guardedChange(draft, merged.packet, { company: { name: company?.name ?? "", locations: company?.locations ?? [] }, actor, declined, full: false });
   if (!guarded.ok) return revisionInvalid(container, t.companyId, subject, out.runId, guarded.problem);
-  const proposal = proposalOf({ runId: out.runId, target: { kind: "draft", sessionId: row.id }, base: draft, merged, guarded, question: out.output.question, summary: out.output.summary, takesEffect: "draft", from: null });
+  const proposal = proposalOf({ runId: out.runId, target: { kind: "draft", sessionId: row.id }, base: draft, merged, guarded, question: out.output.question, summary: merged.summary, takesEffect: "draft", from: null });
   await withTenant(container.db, t.companyId, (tx) => emit(tx, { type: "packet.revision_proposed", companyId: t.companyId, actor, subject, payload: { revisionId: out.runId, sections: merged.sections, notChanged: merged.notChanged.length, asked: !!out.output.question, newFlags: guarded.newFlags.length } }));
   return c.json(proposal);
 });
@@ -725,17 +739,17 @@ draftPacketRoutes.get("/sessions/:id/preview", requireTenant, async (c) => {
   return c.json(jobPreview({ packet: draft, company, source: { kind: "draft", sessionId: row.id }, smsEnabled: container.env.SMS_ENABLED }));
 });
 
-/** The requirements check (C16) on the draft as it is now; the fixes apply only to this same draft. */
+/** The requirements check (C16) on the draft as it is now; the fixes apply only to a draft that reads the same to it. */
 draftPacketRoutes.get("/sessions/:id/requirements-check", requireTenant, async (c) => {
   const { draft } = await draftOf(c);
-  return c.json(checkRequirements(draft, `d${packetFingerprint(draft)}`) satisfies RequirementsCheck);
+  return c.json(checkRequirements(draft, checkBaseOf(draft)) satisfies RequirementsCheck);
 });
 
 draftPacketRoutes.post("/sessions/:id/requirements-check/apply", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const { row, draft } = await draftOf(c);
   const body = ApplyRequirementFixes.parse(await c.req.json());
-  if (body.base !== `d${packetFingerprint(draft)}`) throw STALE_CHECK();
+  if (body.base !== checkBaseOf(draft)) throw STALE_CHECK();
   const container = c.get("container");
   const actor = actorOf(c);
   let fixed: ReturnType<typeof applyRequirementFixes<DraftRolePacket>>;
@@ -753,5 +767,5 @@ draftPacketRoutes.post("/sessions/:id/requirements-check/apply", requireTenant, 
   } catch (err) {
     return draftErrors(err, STALE_CHECK());
   }
-  return c.json({ session: await reloadSession(container, t.companyId, row.id, t.userId), draft: saved, applied: fixed.applied, skipped: fixed.skipped, diff: diffPackets(draft, saved), check: checkRequirements(saved, `d${packetFingerprint(saved)}`) }, 201);
+  return c.json({ session: await reloadSession(container, t.companyId, row.id, t.userId), draft: saved, applied: fixed.applied, skipped: fixed.skipped, diff: diffPackets(draft, saved), check: checkRequirements(saved, checkBaseOf(saved)) }, 201);
 });

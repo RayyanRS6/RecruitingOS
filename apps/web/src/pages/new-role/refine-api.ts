@@ -1,4 +1,4 @@
-import { PACKET_REVISION_MESSAGE_MAX, type PacketFlag, type PacketRevisionProposal, type RequirementSuggestion, type RequirementsCheck, type RevisableSection } from "@ros/contracts";
+import { PACKET_REVISION_MESSAGE_MAX, requirementsCheckReads, type PacketFlag, type PacketRevisionProposal, type RequirementSuggestion, type RequirementsCheck, type RevisableSection } from "@ros/contracts";
 import { sectionOfPath, type SectionId } from "./rules";
 
 /**
@@ -119,12 +119,14 @@ export function suggestionsBySection(check: Pick<RequirementsCheck, "suggestions
 }
 
 /**
- * A short fingerprint of what the requirements check reads (the requirements, the description, the screening
- * questions), so the check is asked for again only when one of them changed, not on every edit.
+ * A short fingerprint of what the requirements check and its fixes read (`requirementsCheckReads`: the requirements, the
+ * description, the screening questions, what the interview looks for and the warning signs), the very parts a draft's
+ * check is based on, so the check is asked for again exactly when one of them changed, never on an answer that only
+ * brings the draft's other parts up to date (review of the live-test fixes, 12 Nov 2026).
  */
-export function checkSignature(packet: { requirements: unknown; description: { publicJobDescription: string }; screening: { questions: unknown } } | null | undefined): string {
+export function checkSignature(packet: Parameters<typeof requirementsCheckReads>[0] | null | undefined): string {
   if (!packet) return "none";
-  const text = JSON.stringify([packet.requirements, packet.description.publicJobDescription, packet.screening.questions]);
+  const text = JSON.stringify(requirementsCheckReads(packet));
   let h = 5381;
   for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
   return `${text.length}-${(h >>> 0).toString(36)}`;

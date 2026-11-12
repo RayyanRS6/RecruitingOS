@@ -377,8 +377,11 @@ describe("the draft beside the conversation", () => {
     expect(redraftWarning({ draftEdits: 0 })).toBeNull();
     expect(redraftWarning({ draftEdits: 1 })).toMatch(/^Writing it again replaces the change you saved on the draft/);
     expect(redraftWarning({ draftEdits: 3 })).toMatch(/replaces the 3 changes you saved/);
-    // a change to what the answers hold too went into them when it was saved, so it is kept (live test, 12 Nov 2026)
-    expect(redraftWarning({ draftEdits: 3 })).toMatch(/\), except changes to the title, schedule, job type, workplace, must-haves and nice-to-haves\. /);
+    // a change to what the answers hold too went into them when it was saved, so it is kept (live test, 12 Nov 2026), named
+    // as Edit names it, never by the chips' screen-reader names (review of the live-test fixes, 12 Nov 2026); the server
+    // counts only a change a rewrite would lose part of, so the warning comes only then
+    expect(redraftWarning({ draftEdits: 3 })).toMatch(/\), except changes to the title, schedule, full or part time, work model, and the wording of the must-haves and nice-to-haves\. /);
+    expect(redraftWarning({ draftEdits: 3 })).not.toMatch(/job type|workplace/);
     expect(redraftWarning({ draftEdits: 3 })).toMatch(/Pay, why you are hiring, who interviews and decides, and the deal-breakers carry over/);
   });
 
@@ -640,6 +643,12 @@ describe("change it by asking", () => {
     // a part not done is said with its reason after a question too, and a request's own full stop is not doubled
     expect(replyWords({ question: "Which days?", summary: "Nothing yet.", notChanged: [{ request: "Change the pay.", reason: "Pay is set on the pay card." }] })).toBe("Which days? Not done: Change the pay. Pay is set on the pay card.");
     expect(notDoneLine({ request: "Remove the deal-breaker", reason: "Deal-breakers in a draft are changed with Edit beside the draft." })).toBe("Not done: Remove the deal-breaker. Deal-breakers in a draft are changed with Edit beside the draft.");
+    // a change the server put back is never said to be done: the server's "Nothing was changed." leads (review of the
+    // live-test fixes, 12 Nov 2026: "I changed the CPR question so a no no longer holds the application. Not done: ...")
+    const heldBack = { question: null, summary: "Nothing was changed.", notChanged: [{ request: "Stop a question on the form from holding anyone", reason: 'On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.' }] };
+    expect(nothingToConfirm({ sections: [] })).toBe(true);
+    expect(replyWords(heldBack)).toBe('Nothing was changed. Not done: Stop a question on the form from holding anyone. On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.');
+    expect(replyWords(heldBack)).not.toMatch(/\bI changed\b/);
   });
 
   it("places each requirements-check suggestion under the part it is about, leaving out what was set aside", () => {
@@ -662,6 +671,20 @@ describe("change it by asking", () => {
     expect(checkSignature(a)).not.toBe(checkSignature(b));
     expect(checkSignature(a)).toBe(checkSignature(c));
     expect(checkSignature(null)).toBe("none");
+    // the parts an answer sets on the draft by rule are not read by the check, so its fixes stay good after one (review of
+    // the live-test fixes, 12 Nov 2026: the first fix after answering "Why are you hiring?" was refused)
+    const byRule = samplePacket((p) => {
+      p.business.reason = "growth";
+      p.business.reasonDetail = "A second chair opens";
+      p.preferences.decisionMakerUserId = "u-sam";
+      p.interviews.plan[0].interviewerUserIds = ["u-sam"];
+      if (p.compensation) p.compensation.max += 2;
+      p.provenance.assumptions = ["Not set yet: who interviews."];
+    });
+    expect(checkSignature(byRule)).toBe(checkSignature(a));
+    // what the check and its fixes read does count: the warning signs (named by their place) and what the interview looks for
+    expect(checkSignature(samplePacket((p) => { p.evaluation.redFlags = [...p.evaluation.redFlags, "Badmouths past employers"]; }))).not.toBe(checkSignature(a));
+    expect(checkSignature(samplePacket((p) => { p.competencies = p.competencies.slice(1); }))).not.toBe(checkSignature(a));
   });
 
 });
