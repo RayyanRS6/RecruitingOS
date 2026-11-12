@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { expireEmptyDrafts } from "@ros/agents";
@@ -394,6 +395,54 @@ describe("the job builder API", () => {
     expect((await json(owner, "POST", "/api/v1/intake/sessions", { fromRoleId: "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
     const [pending] = await container.db.select().from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "pending_approval")));
     expect((await json(owner, "POST", "/api/v1/intake/sessions", { fromRoleId: pending.id })).status).toBe(409);
+  });
+
+  // Review of the live-test fixes, 12 Nov 2026: hire again from a role approved before then put a deal-breaker's own words
+  // back among the must-haves, offered a deal-breaker decided on that role again, and left its RDA question off the form.
+  it("hire again restates a must-have in a deal-breaker's words, asks about none of the role's deal-breakers, and keeps its RDA question on the form", async () => {
+    // a Dental Assistant role approved then, closed since: its RDA question held nobody, and no must-have names the licence
+    const [base] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, 3)));
+    const [from] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    const packet = structuredClone(base.packet);
+    packet.identity.title = "Dental Assistant";
+    packet.compensation = { ...packet.compensation, min: 24, max: 28, ceiling: 30 };
+    packet.requirements.mustHaves = [
+      { key: "four_handed", text: "Four-handed dentistry", rationale: "The core of the job", evidencedBy: ["resume", "screen"] },
+      { key: "radiography", text: "Digital radiography", rationale: "Every visit", evidencedBy: ["resume"] },
+      { key: "saturdays", text: "Cannot work Saturdays", rationale: "A deal-breaker counted openly", evidencedBy: ["screen"] },
+    ];
+    packet.requirements.eligibility = [
+      { key: "ca_rda_license", type: "license", question: "Do you currently hold an active California RDA license?", expectation: { license: "RDA", jurisdiction: "CA" }, rationale: "Some duties need it.", knockout: false },
+      { key: "schedule", type: "schedule_availability", question: "Are you available Monday to Friday, 8 to 5?", expectation: {}, rationale: "The office hours.", knockout: true },
+    ];
+    packet.preferences = { ...packet.preferences, dealBreakersInTheirWords: ["Cannot work Saturdays", "No active California RDA license"] };
+    packet.provenance = { ...packet.provenance, flags: [] };
+    const oldRoleId = randomUUID();
+    const at = new Date().toISOString();
+    await container.db.insert(roles).values({ ...from, id: oldRoleId, title: "Dental Assistant", status: "closed", closedAt: at, currentPacketVersion: 1 });
+    await container.db.insert(rolePackets).values({ ...base, id: randomUUID(), roleId: oldRoleId, version: 1, packet, status: "approved", approvedAt: at });
+
+    const r = await json(owner, "POST", "/api/v1/intake/sessions", { fromRoleId: oldRoleId });
+    expect(r.status).toBe(201);
+    const { session } = await read<{ session: IntakeSessionView }>(r);
+    expect(session.fromRole).toMatchObject({ roleId: oldRoleId, version: 1 });
+    // the must-have in a deal-breaker's words comes back as what they need; the deal-breakers keep the owner's words
+    expect(session.facts.mustHaves).toEqual(["Four-handed dentistry", "Digital radiography", "Able to work Saturdays"]);
+    expect(session.facts.dealBreakers).toEqual(["Cannot work Saturdays", "No active California RDA license"]);
+    // both were decided on the old role: no card asks about either, though no must-have names the licence
+    expect(session.questions.filter((q) => q.prompt.startsWith("From your deal-breakers"))).toEqual([]);
+    const [row] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, session.id));
+    expect((row.serverState as { dealBreakersOffered?: string[] }).dealBreakersOffered).toEqual(["Cannot work Saturdays", "No active California RDA license"]);
+    // the old form's questions come back as the owner's choice
+    expect(session.facts).toMatchObject({ eligibilityNotes: ["Do you currently hold an active California RDA license?", "Are you available Monday to Friday, 8 to 5?"], formQuestionsChosen: true });
+    // once written, the draft keeps an RDA question on its form, holding a "no" for the owner's decision
+    expect((await json(owner, "POST", `/api/v1/intake/sessions/${session.id}/answers`, { patch: { set: { reason: "replacement", decisionMakerUserId: ownerId } }, reply: false })).status).toBe(200);
+    const drafted = await json(owner, "POST", `/api/v1/intake/sessions/${session.id}/draft`);
+    expect(drafted.status).toBe(200);
+    const { draft } = await read<{ draft: DraftRolePacket }>(drafted);
+    expect(draft.requirements.eligibility.filter((e) => /\bRDA\b/.test(e.question)).map((e) => e.knockout)).toEqual([true]);
+    expect(draft.requirements.mustHaves.map((m) => m.text)).toEqual(["Four-handed dentistry", "Digital radiography", "Able to work Saturdays"]);
+    await json(owner, "POST", `/api/v1/intake/sessions/${session.id}/abandon`);
   });
 
   it("'Bring in a recruiter' on a draft carries its conversation; the recruiter opens that draft and no other (C12)", async () => {

@@ -161,7 +161,8 @@ export type CompanyQuestionRefusal = { list: "quick" | "written"; index: number;
 /* The requirements check before approval (C16): suggestions only, never a score, nothing changes until a person taps. */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
-export const RequirementCheckKind = z.enum(["unprovable", "trait_as_skill", "duplicate", "proxy", "max_years"]);
+/** `rules_out`: a must-have or nice-to-have worded as what rules someone out ("No active California RDA license"). */
+export const RequirementCheckKind = z.enum(["unprovable", "trait_as_skill", "duplicate", "proxy", "max_years", "rules_out"]);
 export type RequirementCheckKind = z.infer<typeof RequirementCheckKind>;
 
 export const REQUIREMENT_CHECK_TITLE: Readonly<Record<RequirementCheckKind, string>> = {
@@ -170,6 +171,7 @@ export const REQUIREMENT_CHECK_TITLE: Readonly<Record<RequirementCheckKind, stri
   duplicate: "Said twice",
   proxy: "May shut people out unfairly",
   max_years: "A cap on experience",
+  rules_out: "Reads as what rules someone out",
 };
 
 /** One tap that fixes a suggestion: take the item out, reword it, or ask about it in the interview instead. */

@@ -270,10 +270,20 @@ export function payCard(facts: IntakeFacts, state: IntakeServerState): IntakePay
   return { basis, benchmark: null, gap, stated, confirmed, belowMarket: false, summary: gap.message };
 }
 
-/** The facts a new draft starts from when a role is hired for again (C14). Pay is carried over to be confirmed, never as confirmed. */
+/**
+ * The facts a new draft starts from when a role is hired for again (C14). Pay is carried over to be confirmed, never as
+ * confirmed. A must-have in the very words of one of the role's deal-breakers, as a role approved before 12 November 2026
+ * can hold ("No active California RDA license"), comes back as the requirement it rules people out on (`mustHaveOf`), once;
+ * the deal-breakers keep the owner's words. The form's questions come back as the owner's choice (`formQuestionsChosen`),
+ * so the new draft's form asks what the old one asked, and each holds a "no" there like every question on a draft's form
+ * (review of the live-test fixes, 12 Nov 2026: the RDA question was left off, and the negative words came back).
+ */
 export function packetToFacts(packet: RolePacket): IntakeFacts {
   const loc = packet.identity.locations[0];
   const rounds = packet.interviews.plan.flatMap((r) => r.interviewerRoles);
+  // a version stored before a list existed lacks it: read as empty
+  const dealBreakers = packet.preferences.dealBreakersInTheirWords ?? [];
+  const asNeed = (text: string) => (dealBreakers.some((d) => same(d, text)) ? mustHaveOf(text) : text);
   return {
     title: packet.identity.title,
     locationText: loc ? [loc.city, loc.region].filter(Boolean).join(", ") || undefined : undefined,
@@ -285,14 +295,15 @@ export function packetToFacts(packet: RolePacket): IntakeFacts {
     compensationMax: packet.compensation.max,
     compensationCeiling: packet.compensation.ceiling,
     benefits: packet.compensation.benefitsSummary,
-    mustHaves: packet.requirements.mustHaves.map((m) => m.text),
+    mustHaves: dedupe(packet.requirements.mustHaves.map((m) => asNeed(m.text))),
     niceToHaves: packet.requirements.niceToHaves.map((m) => m.text),
-    eligibilityNotes: [],
+    eligibilityNotes: dedupe((packet.requirements.eligibility ?? []).map((e) => e.question)),
+    formQuestionsChosen: true,
     interviewers: [...new Set(rounds)].filter((r) => r !== "owner"),
     decisionMaker: packet.preferences.decisionMakerName,
     decisionMakerUserId: packet.preferences.decisionMakerUserId,
     whatFailureLooksLike: packet.preferences.whatFailureLooksLike,
-    dealBreakers: packet.preferences.dealBreakersInTheirWords,
+    dealBreakers,
     declinedCriteria: (packet.provenance.declinedCriteria ?? []).map((d) => ({ requested: d.requested, reason: d.reason, ...(d.alternative ? { alternative: d.alternative } : {}) })),
     screeningQuestions: packet.screening.questions.map((q) => q.question),
   };

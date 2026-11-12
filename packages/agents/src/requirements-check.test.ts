@@ -43,6 +43,48 @@ describe("the requirements check", () => {
     expect(check.summary).toMatch(/Nothing changes unless you apply a fix/);
   });
 
+  // Review of the live-test fixes, 12 Nov 2026: drafts and jobs saved before the fix can keep a deal-breaker's own words as
+  // a must-have, which the job page lists as wanted; nothing found them.
+  it("finds a must-have or nice-to-have worded as what rules someone out, with the requirement it reads as when there is one", () => {
+    const p = samplePacket((x) => {
+      x.requirements.mustHaves.push(
+        { key: "mh_rda", text: "No active California RDA license", rationale: "Required", evidencedBy: ["resume", "screen"] },
+        { key: "mh_saturdays", text: "Cannot work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] },
+        { key: "mh_short", text: "No RDA", rationale: "Required", evidencedBy: ["resume"] },
+        { key: "mh_must", text: "Must work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] },
+      );
+      x.requirements.niceToHaves.push({ key: "nh_permit", text: "No x-ray permit", rationale: "Helpful", evidencedBy: ["resume"] });
+      x.requirements.niceToHaves.push({ key: "nh_grads", text: "No recent grads", rationale: "Experience", evidencedBy: ["resume"] });
+      x.preferences.dealBreakersInTheirWords = ["No active California RDA license", "Cannot work Saturdays"];
+    });
+    const check = checkRequirements(p, "v4", 4);
+    const by = (id: string) => check.suggestions.find((s) => s.id === id);
+    expect(by("rules_out:mustHaves:mh_rda")).toMatchObject({
+      kind: "rules_out",
+      title: "Reads as what rules someone out",
+      path: "requirements.mustHaves[mh_rda]",
+      text: "No active California RDA license",
+      why: expect.stringMatching(/says who is ruled out.*Write it as what they need\.$/),
+      fixes: [{ id: "rules_out:mustHaves:mh_rda:replace_text", op: "replace_text", label: 'Change it to "Active California RDA license"', after: "Active California RDA license" }],
+    });
+    expect(by("rules_out:mustHaves:mh_saturdays")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to work Saturdays"', after: "Able to work Saturdays" })]);
+    // a short form cannot be turned round: the person writes what they need
+    expect(by("rules_out:mustHaves:mh_short")).toMatchObject({ fixes: [], why: expect.stringMatching(/Write it as what they need\.$/) });
+    expect(by("rules_out:niceToHaves:nh_permit")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", after: "X-ray permit" })]);
+    // a requirement already worded as what they need is left alone, and a proxy keeps its own suggestion only
+    expect(check.suggestions.filter((s) => s.text === "Must work Saturdays")).toEqual([]);
+    expect(check.suggestions.filter((s) => s.text === "No recent grads").map((s) => s.kind)).toEqual(["proxy"]);
+    // a suggestion, never a block: nothing changes until a fix is tapped, and then only its words
+    const before = structuredClone(p);
+    const out = applyRequirementFixes(p, ["rules_out:mustHaves:mh_rda:replace_text", "rules_out:mustHaves:mh_saturdays:replace_text"]);
+    expect(p).toEqual(before);
+    expect(out.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Radiography certificate", "Chairside experience in a dental office", "Active California RDA license", "Able to work Saturdays", "No RDA", "Must work Saturdays"]);
+    expect(out.packet.preferences.dealBreakersInTheirWords).toEqual(["No active California RDA license", "Cannot work Saturdays"]);
+    expect(out.applied).toEqual(['Changed "No active California RDA license" to "Active California RDA license".', 'Changed "Cannot work Saturdays" to "Able to work Saturdays".']);
+    expect(checkRequirements(out.packet, "v5", 5).suggestions.filter((s) => s.kind === "rules_out").map((s) => s.id)).toEqual(["rules_out:mustHaves:mh_short", "rules_out:niceToHaves:nh_permit"]);
+    expect(RolePacketSchema.safeParse(out.packet).success).toBe(true);
+  });
+
   it("points at the packet guard's flag on the same words, so one fix clears both", () => {
     const p = samplePacket((x) => x.requirements.mustHaves.push({ key: "mh_english", text: "Native English speaker", rationale: "Patients", evidencedBy: ["screen"] }));
     const guarded = guardPacket(p, { companyName: "Harbor Dental", companyLocations: [] }).packet;

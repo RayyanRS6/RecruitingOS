@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { IntakeServerState, type IntakeFacts, type IntakeMessage, type IntakeQuestion } from "@ros/contracts";
-import { IntakeEditError, MAX_MUST_HAVES, amountsIn, applyAnswers, applyFactsPatch, basisFromText, daysWithin, dealBreakerOffer, draftFactsKey, draftFactsKeyWithReason, draftKeyMatches, intakeReadiness, looksLikePastedAd, normalizeFacts, payCard, payTyped, setOnDraftByRule, startDateFor, typedCeiling } from "./intake-builder";
+import { IntakeServerState, RolePacket, type IntakeFacts, type IntakeMessage, type IntakeQuestion } from "@ros/contracts";
+import { IntakeEditError, MAX_MUST_HAVES, amountsIn, applyAnswers, applyFactsPatch, basisFromText, daysWithin, dealBreakerOffer, draftFactsKey, draftFactsKeyWithReason, draftKeyMatches, intakeReadiness, looksLikePastedAd, normalizeFacts, packetToFacts, payCard, payTyped, setOnDraftByRule, startDateFor, typedCeiling } from "./intake-builder";
 
 const empty = (): IntakeFacts => ({ mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] });
 const owner = (content: string, kind?: IntakeMessage["kind"]): IntakeMessage => ({ role: "owner", content, at: "2026-10-08T09:00:00.000Z", ...(kind ? { kind } : {}) });
@@ -407,6 +407,71 @@ describe("deal-breakers offered back as must-haves (plan C17, founder decision Q
     const own = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Active license with no suspensions" }, { field: "dealBreakers", value: "No felonies or license suspensions" }] }, []);
     expect(own.facts.mustHaves).toEqual(["Active license with no suspensions"]);
     expect(own.refused.map((r) => r.field)).toEqual(["dealBreakers"]);
+  });
+});
+
+describe("hire again: the facts a new draft starts from (plan C14, review of the live-test fixes, 12 Nov 2026)", () => {
+  /** A Dental Assistant role approved before 12 Nov 2026: a must-have in a deal-breaker's own words, and an RDA question that held nobody. */
+  const approved = (over: (p: RolePacket) => void = () => {}): RolePacket => {
+    const p = RolePacket.parse({
+      identity: { title: "Dental Assistant", locations: [{ city: "Irvine", region: "CA", country: "US" }], employmentType: "full_time", schedule: "Monday to Friday, 8 to 5", remotePolicy: "onsite" },
+      business: { reason: "replacement", timeline: {} },
+      compensation: { basis: "hourly", min: 24, max: 28, ceiling: 30, discloseRange: true },
+      description: { publicJobDescription: "Harbor Dental is hiring a dental assistant in Irvine to work chairside beside two hygienists and a dentist." },
+      requirements: {
+        mustHaves: [
+          { key: "four_handed", text: "Four-handed dentistry", rationale: "The core of the job", evidencedBy: ["resume", "screen"] },
+          { key: "rda", text: "No active California RDA license", rationale: "A deal-breaker counted openly", evidencedBy: ["resume"] },
+          { key: "saturdays", text: "Must work Saturdays", rationale: "The Saturday clinic", evidencedBy: ["screen"] },
+          { key: "rda_again", text: "Active California RDA license", rationale: "Required for some duties", evidencedBy: ["resume"] },
+        ],
+        eligibility: [
+          { key: "ca_rda_license", type: "license", question: "Do you currently hold an active California RDA license?", expectation: { license: "RDA", jurisdiction: "CA" }, rationale: "Some duties need it.", knockout: false },
+          { key: "schedule", type: "schedule_availability", question: "Are you available Monday to Friday, 8 to 5?", expectation: {}, rationale: "The office hours.", knockout: true },
+        ],
+      },
+      competencies: [1, 2, 3].map((i) => ({ key: `c${i}`, name: `Competency ${i}`, definition: "Does the work well.", weight: 4, evaluatedIn: "both", indicators: ["Example"] })),
+      evaluation: { criteria: ["Evidence for each must-have"], redFlags: [] },
+      screening: { questions: ["Tell me about your chairside work.", "Which days can you work?", "What pay are you looking for?"].map((q, i) => ({ key: `q${i}`, question: q, kind: "skills" })) },
+      interviews: { plan: [{ key: "owner", title: "Conversation", purpose: "Fit.", durationMinutes: 30, format: "video", competencyKeys: ["c1"] }], scorecard: { scale: { min: 1, max: 4, labels: {} } } },
+      communication: { companyBlurb: "A family practice.", signature: "The team", disclosureText: "This message was written with help from an AI assistant. Reply HUMAN to reach a person.", humanAlternativeText: "Reply HUMAN for a person." },
+      approvals: {},
+      compliance: {},
+      sourcing: { summary: "Careers page.", channels: ["careers_page"] },
+      preferences: { dealBreakersInTheirWords: ["No active California RDA license", "Cannot work Saturdays"] },
+      provenance: {},
+    });
+    over(p);
+    return p;
+  };
+
+  it("restates a must-have in a deal-breaker's very words as the requirement it rules people out on, once, and keeps the deal-breakers in the owner's words", () => {
+    const facts = packetToFacts(approved());
+    // the restatement and the must-have already worded so are one; a must-have that is no deal-breaker stays as written
+    expect(facts.mustHaves).toEqual(["Four-handed dentistry", "Active California RDA license", "Must work Saturdays"]);
+    expect(facts.dealBreakers).toEqual(["No active California RDA license", "Cannot work Saturdays"]);
+    // words that cannot be turned round stay as they are (the requirements check asks for what they need)
+    expect(packetToFacts(approved((p) => { p.requirements.mustHaves[1].text = "No RDA"; p.preferences.dealBreakersInTheirWords = ["No RDA"]; })).mustHaves).toEqual(["Four-handed dentistry", "No RDA", "Must work Saturdays", "Active California RDA license"]);
+  });
+
+  it("carries the old form's questions as the owner's choice, so the new draft's form asks them too", () => {
+    const facts = packetToFacts(approved());
+    expect(facts.eligibilityNotes).toEqual(["Do you currently hold an active California RDA license?", "Are you available Monday to Friday, 8 to 5?"]);
+    expect(facts.formQuestionsChosen).toBe(true);
+    // a form that asked nothing asks nothing again
+    expect(packetToFacts(approved((p) => { p.requirements.eligibility = []; }))).toMatchObject({ eligibilityNotes: [], formQuestionsChosen: true });
+  });
+
+  it("leaves no deal-breaker to offer once the old role's are marked as offered, however its must-haves word them", () => {
+    const facts = packetToFacts(approved());
+    // restated, the licence is a must-have already; "Cannot work Saturdays" was decided on the old role ("Must work Saturdays")
+    expect(dealBreakerOffer(facts, []).offer).toEqual(["Cannot work Saturdays"]);
+    // the draft starts with them as offered (startIntakeSession), so no card asks about either again
+    expect(dealBreakerOffer(facts, facts.dealBreakers)).toEqual({ offer: [], declined: [] });
+    // and a must-have the owner reworded on the old role ("Current RDA license (California)") is no reason to ask again
+    const reworded = packetToFacts(approved((p) => { p.requirements.mustHaves = [p.requirements.mustHaves[0], { key: "rda", text: "Current RDA license (California)", rationale: "Required", evidencedBy: ["resume"] }]; }));
+    expect(dealBreakerOffer(reworded, []).offer).toEqual(["No active California RDA license", "Cannot work Saturdays"]);
+    expect(dealBreakerOffer(reworded, reworded.dealBreakers).offer).toEqual([]);
   });
 });
 

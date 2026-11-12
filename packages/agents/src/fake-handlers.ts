@@ -428,8 +428,10 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
     const days = Math.max(7, Math.round((Date.parse(f.targetStartDate) - Date.now()) / 86_400_000));
     eligibility.push({ key: "start", type: "start_date", question: `Can you start within ${days} days?`, expectation: { withinDays: days }, rationale: "The owner needs coverage by the target date.", knockout: true });
   }
-  // intake.compile v6: a playbook question marked as the owner's call goes on the form only when the owner chose it or a
-  // must-have names its licence (its letters in brackets, "(RDA)"), never one the owner left unticked.
+  // intake.compile v6: a playbook question marked as the owner's call goes on the form only when the owner chose it (its
+  // words, or a question of their own naming its licence, as "Hire again" carries the old job's "Do you currently hold an
+  // active California RDA license?") or a must-have names its licence (its letters in brackets, "(RDA)"), never one the
+  // owner left unticked.
   for (const e of pbRole.eligibility) {
     if (!e.question.endsWith(OWNERS_CALL_MARK)) continue;
     const question = e.question.slice(0, -OWNERS_CALL_MARK.length);
@@ -437,7 +439,7 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
     const said = (text: string) => letters.some((l) => new RegExp(`\\b${l}\\b`, "i").test(text));
     const same = (text: string) => normalizeCriterion(text) === normalizeCriterion(question);
     if ((f.suggestions ?? []).some((s) => s.field === "eligibility" && same(s.text))) continue;
-    if (!f.eligibilityNotes.some(same) && !mustHaves.some(said)) continue;
+    if (!f.eligibilityNotes.some((n) => same(n) || said(n)) && !mustHaves.some(said)) continue;
     if (eligibility.some((x) => said(x.question))) continue;
     eligibility.push({ key: slug(`${letters[0] ?? e.type} ${e.type}`), type: e.type as DraftRolePacket["requirements"]["eligibility"][number]["type"], question, expectation: letters[0] ? { [e.type]: letters[0] } : {}, rationale: "This job requires it.", knockout: true });
   }

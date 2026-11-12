@@ -532,7 +532,10 @@ export function factsFromExtraction(facts: IntakeFacts, x: IntakeExtraction): In
 
 /**
  * Starts a draft together with its first message (C3): a draft is never created empty. A long first message is kept as
- * a pasted ad (C5); "just draft it" in typed words is recorded; a "hire again" draft starts from that role's facts.
+ * a pasted ad (C5); "just draft it" in typed words is recorded; a "hire again" draft starts from that role's facts, and
+ * its deal-breakers count as already offered: they were decided on that role (counted openly or not used to judge), so
+ * no deal-breaker card asks about them again, however the role's must-haves word them (review of the live-test fixes,
+ * 12 Nov 2026).
  */
 export async function startIntakeSession(
   tx: Tx,
@@ -542,7 +545,10 @@ export async function startIntakeSession(
   const state: Partial<IntakeServerState> = {};
   if (input.message.kind === "pasted_ad") state.ad = { messageIndex: 0, chars: input.message.content.length, extracted: false, takenFromAd: [] };
   if (input.message.kind === "text" && DRAFT_IT_WORDS.test(input.message.content)) state.draftRequestedAt = at;
-  if (input.fromRole) state.fromRole = input.fromRole;
+  if (input.fromRole) {
+    state.fromRole = input.fromRole;
+    state.dealBreakersOffered = [...(input.facts?.dealBreakers ?? [])];
+  }
   const [session] = await tx
     .insert(intakeSessions)
     .values({ companyId: input.companyId, createdBy: input.actor, createdByUserId: input.userId, messages: [{ role: "owner", content: input.message.content, at, kind: input.message.kind }], facts: input.facts ?? EMPTY_FACTS, serverState: state })

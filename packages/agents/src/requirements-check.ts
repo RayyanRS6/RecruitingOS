@@ -1,4 +1,4 @@
-import { REQUIREMENT_CHECK_TITLE, type Competency, type DraftRolePacket, type RequirementCheckKind, type RequirementFix, type RequirementSuggestion, type RequirementsCheck } from "@ros/contracts";
+import { REQUIREMENT_CHECK_TITLE, mustHaveOf, rulesOut, type Competency, type DraftRolePacket, type RequirementCheckKind, type RequirementFix, type RequirementSuggestion, type RequirementsCheck } from "@ros/contracts";
 import { PROXY_RULES, normalizeCriterion } from "@ros/core";
 
 /**
@@ -10,7 +10,9 @@ import { PROXY_RULES, normalizeCriterion } from "@ros/core";
  * - personality traits presented as skills ("team player with a positive attitude");
  * - the same thing said twice, which counts it twice;
  * - wording that stands in for a protected trait (the packet guard's own phrase list);
- * - a maximum number of years of experience, which shuts out experienced, often older, people.
+ * - a maximum number of years of experience, which shuts out experienced, often older, people;
+ * - a must-have or nice-to-have worded as what rules someone out ("No active California RDA license"), which the job
+ *   page would list as wanted.
  */
 
 type ListName = "mustHaves" | "niceToHaves" | "eligibility" | "screening" | "redFlags";
@@ -77,6 +79,12 @@ function isTrait(text: string): boolean {
 
 const CULTURE_FIT = /\bcultur(?:e|al) fit\b/i;
 const APPEARANCE = /\bpresentable\b|\bpolished\b|\bprofessional appearance\b/i;
+
+/** Why words that rule someone out read wrong as a must-have or a nice-to-have, and what to do about it. */
+const RULES_OUT_WHY: Readonly<Record<"mustHaves" | "niceToHaves", string>> = {
+  mustHaves: "It says who is ruled out, but the job page lists it as what you are looking for, and applications are reviewed against it. Write it as what they need.",
+  niceToHaves: "It says who is ruled out, but the job page lists it as nice to have. Write it as what they need.",
+};
 
 /** A range of years of experience ("2-5 years of experience", "between 2 and 5 years"): its top end is a cap. */
 const YEAR_RANGE = /\b(?:between\s+)?(\d{1,2})\s*(?:-|–|to|and)\s*(\d{1,2})\s*\+?\s*(?:years?|yrs?)\b/i;
@@ -169,11 +177,21 @@ function find(p: DraftRolePacket): Found[] {
     }
     // A range of years of experience ("2-5 years of experience"): keep the floor, drop the cap.
     const range = !proxied && item.list !== "redFlags" && ABOUT_EXPERIENCE.test(item.text) ? item.text.match(YEAR_RANGE) : null;
-    if (range && Number(range[2]) > Number(range[1])) {
+    const capped = !!range && Number(range[2]) > Number(range[1]);
+    if (range && capped) {
       const floor = item.text.replace(range[0], `${range[1]} or more years`);
       add("max_years", item, "The top of this range works as a cap: someone with more experience would be turned away. Keep the minimum only.", [{ op: "replace_text", label: `Change it to "${floor}"`, text: floor }]);
     }
     if (!judged(item)) continue;
+    // Words that rule someone out on a list the job page shows as wanted ("No active California RDA license", a
+    // deal-breaker's own words, as drafts and jobs saved before 12 November 2026 can hold): the requirement it reads as is
+    // one tap when there is one (`mustHaveOf`), else the person writes what they need. Words found to shut people out
+    // unfairly, or to cap experience, have their own suggestion instead (review of the live-test fixes, 12 Nov 2026).
+    if (!proxied && !capped && rulesOut(item.text)) {
+      const need = mustHaveOf(item.text);
+      const turned = need !== item.text.trim().replace(/\s+/g, " ") && !rulesOut(need);
+      add("rules_out", item, RULES_OUT_WHY[item.list === "mustHaves" ? "mustHaves" : "niceToHaves"], turned ? [{ op: "replace_text", label: `Change it to "${need}"`, text: need }] : []);
+    }
     if (UNPROVABLE.test(item.text)) {
       add("unprovable", item, "Nothing a candidate sends or says can show this before they start, so it would come down to a hunch. Ask for an example from their past work in the interview instead.", [intoInterview, takeOut]);
     } else if (isTrait(item.text)) {
