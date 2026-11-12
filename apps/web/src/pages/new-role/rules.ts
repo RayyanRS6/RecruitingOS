@@ -108,10 +108,13 @@ export function picksOne(q: Pick<IntakeQuestion, "mode" | "field">): boolean {
   return q.mode === "single" || (q.mode === "team" && q.field === "decision_maker");
 }
 
-/** The line under the question: what kind of answer it takes. */
-export function pickHint(q: Pick<IntakeQuestion, "mode" | "field">): string {
+/**
+ * The line under the question: what kind of answer it takes. A card with nothing to pick, only the box for the owner's
+ * own words, takes typing (the deal-breaker card for "No RDA", review of the live test, 12 Nov 2026).
+ */
+export function pickHint(q: Pick<IntakeQuestion, "mode" | "field"> & { options?: readonly unknown[] }): string {
   if (q.mode === "pay") return "Set the pay";
-  if (q.mode === "free") return "Type your answer";
+  if (q.mode === "free" || ((q.mode === "single" || q.mode === "multi") && q.options?.length === 0)) return "Type your answer";
   return picksOne(q) ? "Pick one" : "Pick any that apply";
 }
 

@@ -299,6 +299,12 @@ describe("the quick start's suggestions for any job (Wave S3, G3)", () => {
     // a deal-breaker counted openly, and the experience when it is a must-have, are counted and named
     expect(draw({ kind: "guide" }, "musts", { ...rdh, dealBreakers: ["Cannot work Saturdays"] }, "dental")).toContain("4 chosen (up to 6), with 1 deal-breaker.");
     expect(draw({ kind: "guide" }, "musts", { ...rdh, experience: "2", below: "must" }, "dental")).toContain("4 chosen (up to 6), with the experience.");
+    // only for the must-have it adds (review of the live test, 12 Nov 2026): none while its wording is still to be
+    // written, and one for two worded as one requirement
+    for (const a of [{ ...rdh, dealBreakers: ["Cannot work Saturdays"], dealBreakerMusts: { "cannot work saturdays": "" } }, { ...rdh, dealBreakers: ["No RDA"] }]) {
+      expect(draw({ kind: "guide" }, "musts", a, "dental")).toContain('<p class="small muted" aria-live="polite">3 chosen (up to 6).</p>');
+    }
+    expect(draw({ kind: "guide" }, "musts", { ...rdh, dealBreakers: ["No RDA license", "Without an RDA license"] }, "dental")).toContain("4 chosen (up to 6), with 1 deal-breaker.");
   });
 
   it("says it is suggesting while the assistant works, with add your own still there", () => {
@@ -353,10 +359,15 @@ describe("the quick start's lines on how answers are used", () => {
     expect(html).toContain("Everyone is checked openly against must-haves. An unticked one is not used to judge anyone.");
     expect(html).toMatch(/<label class="option-row flex-wrap gap-y-1\.5">[\s\S]*?<span class="option-tag">Must-have<\/span><\/label>/);
     // a ticked one counts as the requirement it rules people out on, in a field the person can reword (live test,
-    // 12 Nov 2026); the field is described by the deal-breaker's own words
+    // 12 Nov 2026); the field is described by the deal-breaker's own words, and its example is the requirement of the
+    // step's own example, for any kind of business (review of the live test, 12 Nov 2026)
     expect(html).toContain('<label for="qs-deal-must-0">As a must-have</label>');
-    expect(html).toMatch(/<input id="qs-deal-must-0" class="input"[^>]*placeholder="e\.g\. Active California RDA license" aria-describedby="qs-deal-words-0" value="Able to work Saturdays"\/>/);
+    expect(html).toMatch(/<input id="qs-deal-must-0" class="input"[^>]*placeholder="e\.g\. Able to work Saturdays" aria-describedby="qs-deal-words-0" value="Able to work Saturdays"\/>/);
+    expect(html).not.toContain("RDA");
     expect(html).toContain('<span id="qs-deal-words-0" class="min-w-0 flex-[1_1_8rem] wrap-anywhere">Cannot work Saturdays</span>');
+    // one whose words cannot be turned round and still rule someone out starts empty, so the example shows
+    const cdl = renderToStaticMarkup(createElement(StepBody, { step: "dealbreakers", a: { ...a, dealBreakers: ["No CDL"] }, set: () => undefined, vertical: "logistics", onEdit: () => undefined }));
+    expect(cdl).toMatch(/<input id="qs-deal-must-0" class="input"[^>]*placeholder="e\.g\. Able to work Saturdays" aria-describedby="qs-deal-words-0" value=""\/>/);
     // an unticked one judges nobody, so it has no must-have to word
     const off = renderToStaticMarkup(createElement(StepBody, { step: "dealbreakers", a: { ...a, dealBreakersPrivate: ["Cannot work Saturdays"] }, set: () => undefined, vertical: "logistics", onEdit: () => undefined }));
     expect(off).toContain('<span class="option-tag">Not used to judge</span>');

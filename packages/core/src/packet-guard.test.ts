@@ -115,6 +115,22 @@ describe("what the owner was told could not be used never comes back (C1)", () =
     const phrase = guardPacket(packet((x) => { x.requirements.niceToHaves = [{ key: "n", text: "Prefer recent grads, honestly", rationale: "r", evidencedBy: ["resume"] }]; }), { ...ctx, declined });
     expect(phrase.packet.requirements.niceToHaves).toEqual([]);
   });
+
+  it("finds a declined request restated as the must-have it reads as too (review of the live test, 12 Nov 2026)", () => {
+    const visa = [{ requested: "No visa permit", reason: "Limiting a job to citizens is unlawful unless a law requires it." }];
+    const { packet: p, flags } = guardPacket(packet((x) => {
+      x.requirements.mustHaves.push({ key: "visa", text: "Valid visa permit", rationale: "r", evidencedBy: ["resume"] });
+      x.description.publicJobDescription += " A visa permit is a must.";
+    }), { ...ctx, declined: visa });
+    expect(p.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license"]);
+    expect(flags).toEqual([expect.objectContaining({ path: "description.publicJobDescription", rule: "declined", text: "No visa permit", declined: true })]);
+    // its own words are still found as before
+    expect(guardPacket(packet((x) => { x.preferences.dealBreakersInTheirWords = ["No visa permit"]; }), { ...ctx, declined: visa }).packet.preferences.dealBreakersInTheirWords).toEqual([]);
+    // only what it reads as: a declined "No children" never takes out work with children
+    const kids = guardPacket(packet((x) => { x.requirements.mustHaves.push({ key: "peds", text: "Experience with children", rationale: "r", evidencedBy: ["resume"] }); }), { ...ctx, declined: [{ requested: "No children", reason: "Family status and pregnancy cannot be hiring criteria." }] });
+    expect(kids.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "Experience with children"]);
+    expect(kids.flags).toEqual([]);
+  });
 });
 
 describe("a kept flag stays kept when the lists around it move (C1)", () => {

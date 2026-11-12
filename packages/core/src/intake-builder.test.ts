@@ -385,6 +385,29 @@ describe("deal-breakers offered back as must-haves (plan C17, founder decision Q
     // a proxy is declined in the owner's words, whatever it would read as
     expect(dealBreakerOffer({ ...empty(), dealBreakers: ["No recent grads"] }, []).declined).toEqual([expect.objectContaining({ requested: "No recent grads" })]);
   });
+
+  it("refuses a must-have that restates a deal-breaker the fairness check refuses in the same edit, with the same reason (review of the live test, 12 Nov 2026)", () => {
+    const edit = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Felonies or license suspensions" }, { field: "mustHaves", value: "Active RDH license" }, { field: "dealBreakers", value: "No felonies or license suspensions" }] }, []);
+    // no must-have is stored for it, and both are refused, for the criminal-record reason
+    expect(edit.facts.mustHaves).toEqual(["Active RDH license"]);
+    expect(edit.facts.dealBreakers).toEqual([]);
+    expect(edit.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Felonies or license suspensions"], ["dealBreakers", "No felonies or license suspensions"]]);
+    expect([...new Set(edit.refused.map((r) => r.reason))]).toEqual([expect.stringMatching(/fair-chance/)]);
+    expect(edit.facts.declinedCriteria.map((d) => d.requested)).toEqual(["Felonies or license suspensions", "No felonies or license suspensions"]);
+    expect(edit.summary).toEqual(["Must-haves, added: Active RDH license"]);
+    // the same for a licence word beside another proxy, in its words or as the requirement it reads as
+    for (const [deal, must] of [["No criminal record or license discipline", "Criminal record or license discipline"], ["No gaps in license", "Gaps in license"], ["No kids or lapsed licenses", "Kids or lapsed licenses"], ["No recent grads", "No recent grads"]]) {
+      const e = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: must }, { field: "dealBreakers", value: deal }] }, []);
+      expect(e.facts.mustHaves, deal).toEqual([]);
+      expect(e.refused.map((r) => r.field), deal).toEqual(["mustHaves", "dealBreakers"]);
+    }
+    // a lawful deal-breaker and the requirement it rules people out on are both kept, and so are words of the owner's own
+    const lawful = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Active California RDA license" }, { field: "dealBreakers", value: "No active California RDA license" }] }, []);
+    expect([lawful.facts.mustHaves, lawful.facts.dealBreakers, lawful.refused]).toEqual([["Active California RDA license"], ["No active California RDA license"], []]);
+    const own = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Active license with no suspensions" }, { field: "dealBreakers", value: "No felonies or license suspensions" }] }, []);
+    expect(own.facts.mustHaves).toEqual(["Active license with no suspensions"]);
+    expect(own.refused.map((r) => r.field)).toEqual(["dealBreakers"]);
+  });
 });
 
 describe("questions for the form left unticked (live test, 12 Nov 2026)", () => {

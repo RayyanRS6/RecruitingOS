@@ -67,29 +67,74 @@ export const IntakeFacts = z.object({
 });
 export type IntakeFacts = z.infer<typeof IntakeFacts>;
 
-/** Words that name a licence, certificate, permit or registration: the same test as `credentialMustHaves` (packages/agents). */
-const CREDENTIAL = /licen[cs]|certif|permit|registration|registered|credential/i;
+/** "No …", "Without …", "Lacks …", "Missing …" or "Does not have …", and what follows (an "a", "any" or "the" aside). */
+const LACKS = /^(?:no|without|lacks?|lacking|missing|(?:does|do)(?:\s+not|n['’]t)\s+(?:have|hold))\s+(?:an?\s+|any\s+|the\s+)?(.+)$/i;
+
+/**
+ * A licence, licensure, certificate, certification, permit, registration or credential named last ("…RDA license",
+ * "…BLS certifications."). A short form alone is not one ("No RDA", "No x-ray cert"): the owner writes what they need.
+ */
+const CREDENTIAL_LAST = /\b(?:licen[cs]es?|licensure|certificates?|certifications?|permits?|registrations?|credentials?)\.?$/i;
+
+/**
+ * Words that say the credential is not in force, or that name the problem itself ("expired", "unlicensed", "license
+ * issues", "registered sex offenders", "one without a licence"): after "No" they are what rules someone out, so dropping
+ * the "No" would ask for it (review of the live test, 12 Nov 2026: "No expired RDH license" became "Expired RDH
+ * license"). Words that only begin with the letters (under, unit, union, uniform, unique, universal) are not un- words.
+ */
+const NOT_IN_FORCE = /\b(?!under|unit|union|uniform|unique|univers)un[a-z]|\bnon[-\s]?[a-z]|\b(?:expired|expiring|lapsed|suspended|revoked|pending|inactive|invalid|restricted|provisional|probationary|temporary|foreign|learner(?:['’]?s)?|out[-\s]of[-\s]state|issues?|problems?|gaps?|violations?|suspensions?|disciplin\w*|complaints?|offenders?|records?|without|lacking|missing|no|not|never)\b/i;
+
+/** "Cannot be …" and "Cannot have …" are rules ("Cannot be late"), not what someone is unable to do: never turned round. */
+const CANNOT_BE = /^(?:cannot|can\s+not|can['’]t)\s+(?:be|have)\b/i;
 
 /**
  * A deal-breaker as the must-have it rules people out on (live test, 12 November 2026: "No active California RDA
  * license" became a must-have in those very words, so the job page asked for the opposite and nobody was held). Only
- * clear shapes are turned round: "No …", "Without …" or "Does not have …" a licence, certificate, permit or registration;
- * "Cannot …" or "Unable to …" ("Able to …"); "Not licensed …", "Not available …" and the like; "Won't …" ("Willing to
- * …"). Anything else stays as written, so "No recent grads" is still refused by the fairness check, and the owner sees
- * the words before they are used (the quick start's "As a must-have", the job builder's card).
+ * clear shapes are turned round: "No …", "Without …", "Lacks …", "Missing …" or "Does not have …" a licence, certificate,
+ * permit, registration or credential named last, with no word saying it is not in force or naming the problem itself
+ * (`NOT_IN_FORCE`); "Cannot …" or "Unable to …" ("Able to …"), never "Cannot be …" or "Cannot have …"; "Not licensed
+ * …", "Not available …" and the like; "Won't …" ("Willing to …"). Anything else comes back as typed (never its
+ * opposite: review of the live test, 12 Nov 2026), so "No recent grads" is still refused by the fairness check, and words
+ * that still rule someone out (`rulesOut`) are asked of the owner as what they need (the quick start's "As a must-have",
+ * the own words on the job builder's card).
  */
 export function mustHaveOf(dealBreaker: string): string {
   const t = dealBreaker.trim().replace(/\s+/g, " ");
   const up = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-  const lacks = t.match(/^(?:no|without|lacks?|lacking|missing|(?:does|do)(?:\s+not|n['’]t)\s+(?:have|hold))\s+(?:an?\s+|any\s+|the\s+)?(.+)$/i);
-  if (lacks && CREDENTIAL.test(lacks[1])) return up(lacks[1]);
+  const lacks = t.match(LACKS);
+  if (lacks) return CREDENTIAL_LAST.test(lacks[1]) && !NOT_IN_FORCE.test(lacks[1]) ? up(lacks[1]) : t;
   const cannot = t.match(/^(?:cannot|can\s+not|can['’]t|unable\s+to|not\s+able\s+to)\s+(.+)$/i);
-  if (cannot) return `Able to ${cannot[1]}`;
+  if (cannot) return CANNOT_BE.test(t) ? t : `Able to ${cannot[1]}`;
   const not = t.match(/^not\s+((?:licen[cs]ed|certified|registered|authori[sz]ed|available|eligible)\b.*)$/i);
   if (not) return up(not[1]);
   const wont = t.match(/^(?:won['’]t|will\s+not|unwilling\s+to|not\s+willing\s+to)\s+(.+)$/i);
   if (wont) return `Willing to ${wont[1]}`;
   return t;
+}
+
+/**
+ * The must-haves a deal-breaker can come back as: the requirement it rules people out on (`mustHaveOf`), and its words
+ * with the leading "No", "Without" and the like dropped, which can say the opposite ("No felonies or license
+ * suspensions" as "Felonies or license suspensions"). A deal-breaker the fairness check refuses is refused in each of
+ * them too, with the same reason (review of the live test, 12 Nov 2026).
+ */
+export function restatementsOf(dealBreaker: string): string[] {
+  const t = dealBreaker.trim().replace(/\s+/g, " ");
+  const rest = t.match(LACKS)?.[1];
+  const out = [mustHaveOf(t), ...(rest ? [rest.charAt(0).toUpperCase() + rest.slice(1)] : [])];
+  return out.filter((x, i) => out.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
+}
+
+/** No, not, never, without, lacks, missing, cannot, can't, won't, unable, unwilling, does not, don't, must not, at the start (any case, apostrophe or not). */
+const RULES_OUT = /^(?:no|not|never|without|lacks?|lacking|missing|cannot|can\s+not|can['’]?t|won['’]?t|will\s+not|unable|unwilling|(?:does|do)(?:\s+not|n['’]?t)|must\s+not|mustn['’]?t)\b/i;
+
+/**
+ * Whether words rule someone out ("No RDA", "Cant work weekends", "Must not smoke"). A must-have never reads so: a
+ * deal-breaker still worded so is asked of the owner as what they need, never used as it is (review of the live test,
+ * 12 Nov 2026).
+ */
+export function rulesOut(text: string): boolean {
+  return RULES_OUT.test(text.trim());
 }
 
 export const IntakeMissingFact = z.enum([

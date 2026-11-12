@@ -49,6 +49,8 @@ describe("question cards", () => {
     expect(pickHint(interviewers)).toBe("Pick any that apply");
     expect(pickHint(pay)).toBe("Set the pay");
     expect(pickHint(q({ id: "f", field: "what_failure_looks_like", mode: "free" }))).toBe("Type your answer");
+    // nothing to pick, only the box for the owner's own words: the deal-breaker card for "No RDA" (review of the live test, 12 Nov 2026)
+    expect(pickHint(q({ id: "deal", field: "must_haves", mode: "multi" }))).toBe("Type your answer");
   });
 
   it("a pick-one card keeps one answer: a new pick replaces it, the same pick clears it, typed words replace the pick", () => {

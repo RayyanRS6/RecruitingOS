@@ -1,6 +1,6 @@
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import {
-  DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, mustHaveOf,
+  DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, mustHaveOf, rulesOut,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole,
   type RolePacket,
@@ -175,10 +175,16 @@ function cardField(q: Pick<IntakeQuestion, "field" | "mode">): IntakeQuestionFie
   return q.mode === "pay" ? "compensation" : q.field;
 }
 
-/** The server's own card that offers stated deal-breakers back as must-haves. */
-const DEAL_PROMPT = "You named these as deal-breakers. Which should count openly as must-haves?";
+/**
+ * The server's own card that offers stated deal-breakers back as must-haves. Its options are the requirements they rule
+ * people out on, which the owner never named, so it says where they come from (review of the live test, 12 Nov 2026);
+ * it keeps the word "deal-breakers", which the web's `isDealBreakerCard` reads.
+ */
+const DEAL_PROMPT = "From your deal-breakers: which should count openly as must-haves?";
+/** The same card's words before 12 Nov 2026, still on cards stored before then. */
+const DEAL_PROMPT_BEFORE = "You named these as deal-breakers. Which should count openly as must-haves?";
 function isDealCard(q: Pick<IntakeQuestion, "field" | "prompt">): boolean {
-  return q.field === "must_haves" && q.prompt === DEAL_PROMPT;
+  return q.field === "must_haves" && (q.prompt === DEAL_PROMPT || q.prompt === DEAL_PROMPT_BEFORE);
 }
 
 /**
@@ -413,7 +419,9 @@ const TEAM_CARD = {
  * answer that fails the fairness check; labels "Your words" only where the words are the owner's; asks hourly or salary
  * first when nobody knows; offers stated deal-breakers back as must-haves, each worded as the requirement it rules people
  * out on ("No active California RDA license" is offered as "Active California RDA license", `mustHaveOf`), which the
- * owner can reword. Three cards at most.
+ * owner can reword: "Your words" only when the words are the deal-breaker's unchanged, else the assistant's, and none
+ * ready-made for one whose words still rule someone out ("No RDA"), which the owner writes in their own words (review of
+ * the live test, 12 Nov 2026). Three cards at most.
  */
 export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number; team: TeamMember[]; basisKnown: boolean; payConfirmed: boolean; dealBreakers: string[]; settled?: readonly IntakeQuestionField[]; ownerWords?: ReadonlySet<string>; askedPrompts?: readonly string[] }): IntakeQuestion[] {
   const settled = new Set(input.settled ?? []);
@@ -445,10 +453,15 @@ export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number;
   const cards: IntakeQuestion[] = [];
   const payAsked = settled.has("compensation_basis") || settled.has("compensation");
   if (!input.basisKnown && !input.payConfirmed && !payAsked && !out.some((q) => q.field === "compensation_basis" || q.mode === "pay")) cards.push(BASIS_CARD("basis"));
-  // The requirement each deal-breaker rules people out on, once each: never its negative words as a must-have (live test, 12 Nov 2026).
-  const needs = input.dealBreakers.map((d) => mustHaveOf(d)).filter((m, i, all) => m && all.findIndex((x) => x.toLowerCase() === m.toLowerCase()) === i).slice(0, 6);
-  const deal: IntakeQuestion | null = needs.length
-    ? { id: "deal", field: "must_haves", prompt: DEAL_PROMPT, mode: "multi", options: needs.map((m) => ({ label: m.slice(0, 200), value: m.slice(0, 500), origin: "owner" as const })), allowOwn: true, why: "Every application is reviewed against the must-haves, and a person can explain them to a candidate; anything left out here is not used to judge anyone." }
+  // The requirement each deal-breaker rules people out on, once each: never its negative words as a must-have (live test,
+  // 12 Nov 2026). One whose words still rule someone out gets no option, only the box for the owner's own words; an
+  // option is "Your words" only when it is the deal-breaker's words unchanged (review of the live test, 12 Nov 2026).
+  const needs = input.dealBreakers
+    .map((d): IntakeQuestion["options"][number] => { const m = mustHaveOf(d); return { label: m.slice(0, 200), value: m.slice(0, 500), origin: m === d.trim().replace(/\s+/g, " ") ? "owner" : "assistant" }; })
+    .filter((o, i, all) => o.value && !rulesOut(o.value) && all.findIndex((x) => x.value.toLowerCase() === o.value.toLowerCase()) === i)
+    .slice(0, 6);
+  const deal: IntakeQuestion | null = input.dealBreakers.length
+    ? { id: "deal", field: "must_haves", prompt: DEAL_PROMPT, mode: "multi", options: needs, allowOwn: true, why: "Every application is reviewed against the must-haves, and a person can explain them to a candidate; anything left out here is not used to judge anyone." }
     : null;
   const room = 3 - cards.length - (deal ? 1 : 0);
   // The deal-breaker card takes the place of a must-haves card of the model's own on this turn (one list card at a time);
@@ -659,7 +672,13 @@ export async function applyIntakeEdit(db: Db, input: { companyId: string; sessio
     if (session.status !== "active") throw new IntakeSessionError("not_active");
     const state = stateOf(session);
     const team = await loadTeam(q, input.companyId);
-    const fromAnswers = applyAnswers(normalizeFacts(session.facts), state.openQuestions, input.answers, team);
+    // A must-have picked on a deal-breaker card is stored as the requirement it rules people out on: a card stored before
+    // 12 Nov 2026 offered the deal-breakers in their own words. One that still rules someone out is stored as it is; the
+    // owner's own words on the card are never turned round (review of the live test, 12 Nov 2026).
+    const asNeed = (v: string) => (rulesOut(mustHaveOf(v)) ? v : mustHaveOf(v));
+    const cards = state.openQuestions.map((x) => (isDealCard(x) ? { ...x, options: x.options.map((o) => ({ ...o, label: asNeed(o.label).slice(0, 200), value: asNeed(o.value).slice(0, 500) })) } : x));
+    const picks = input.answers.map((a) => (cards.some((x) => x.id === a.questionId && isDealCard(x)) ? { ...a, selected: a.selected.map(asNeed) } : a));
+    const fromAnswers = applyAnswers(normalizeFacts(session.facts), cards, picks, team);
     const fromPatch = input.patch ? applyFactsPatch(fromAnswers.facts, input.patch, team) : null;
     const edits: FactsEdit[] = fromPatch ? [fromAnswers, fromPatch] : [fromAnswers];
     const facts = (fromPatch ?? fromAnswers).facts;

@@ -15,7 +15,7 @@ import { OriginMark } from "./marks";
 import { PayFields } from "./PayCard";
 import {
   BELOW_CHOICES, DEAL_BREAKERS_MAX, EMPLOYMENT_CHOICES, EXPERIENCE_CHOICES, MUST_HAVES_MAX, OWN_QUESTIONS_MAX, QUICK_STEPS, STEP_HINT, STEP_QUESTION, WORK_MODEL_CHOICES,
-  addItem, allMustHaves, clearQuickStart, closingDateAsked, dealBreakerKey, dealBreakerWording, emptyQuickState, enterMovesOn, experienceMustHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, mustHavesRoom, offeredQuestions, openDealBreakers,
+  addItem, allMustHaves, clearQuickStart, closingDateAsked, dealBreakerKey, dealBreakerWording, emptyQuickState, enterMovesOn, experienceMustHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, mustHavesFromDealBreakers, mustHavesRoom, offeredQuestions,
   questionOn, quickStartDraftKey, quickStartPatch, readQuickStart, removeDealBreaker, reviewRows, skippedAnswers, stepProblem, suggestedMustHaves, todayDay, toggleItem, toggleQuestion, writeQuickStart,
   type QuickAnswers, type QuickScope, type QuickState,
 } from "./quick-start";
@@ -424,7 +424,8 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
       const own = a.mustHaves.filter((m) => !suggested.some((s) => s.toLowerCase() === m.toLowerCase()));
       const room = Math.max(0, mustHavesRoom(a));
       const count = allMustHaves(a).length;
-      const dealCount = openDealBreakers(a).length;
+      // a deal-breaker counts here only for the must-have it adds (none while its wording is still to be written)
+      const dealCount = mustHavesFromDealBreakers(a).length;
       return (
         <>
           {suggested.length ? (
@@ -440,7 +441,8 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
     case "dealbreakers": {
       // Founder decision Q19: each deal-breaker counts openly as a must-have unless unticked; an unticked one judges nobody.
       // A ticked one counts as the requirement it rules people out on, which the person can reword ("As a must-have"):
-      // never its negative words (live test, 12 Nov 2026).
+      // never its negative words (live test, 12 Nov 2026). One that cannot be turned round starts empty, with the step's
+      // own example as the field's placeholder, for the person to write (review of the live test, 12 Nov 2026).
       const roomLeft = MUST_HAVES_MAX - allMustHaves(a).length;
       const isOpen = (d: string) => !a.dealBreakersPrivate.some((p) => p.toLowerCase() === d.toLowerCase());
       const add = (t: string) => {
@@ -471,7 +473,7 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
                       </label>
                       {on ? (
                         <Field label="As a must-have" htmlFor={`qs-deal-must-${i}`}>
-                          <input id={`qs-deal-must-${i}`} className="input" value={dealBreakerWording(a, d)} maxLength={300} autoComplete="off" placeholder="e.g. Active California RDA license" aria-describedby={`qs-deal-words-${i}`} onChange={(e) => set({ dealBreakerMusts: { ...a.dealBreakerMusts, [dealBreakerKey(d)]: e.target.value } })} />
+                          <input id={`qs-deal-must-${i}`} className="input" value={dealBreakerWording(a, d)} maxLength={300} autoComplete="off" placeholder="e.g. Able to work Saturdays" aria-describedby={`qs-deal-words-${i}`} onChange={(e) => set({ dealBreakerMusts: { ...a.dealBreakerMusts, [dealBreakerKey(d)]: e.target.value } })} />
                         </Field>
                       ) : null}
                     </div>

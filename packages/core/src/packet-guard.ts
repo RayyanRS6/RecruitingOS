@@ -1,4 +1,4 @@
-import { IMPORTANCE_WEIGHT, type Actor, type CompanyQuestions, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag } from "@ros/contracts";
+import { IMPORTANCE_WEIGHT, mustHaveOf, type Actor, type CompanyQuestions, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag } from "@ros/contracts";
 import { DEFAULT_NOTICES, disclosureLine, resolveJurisdictions } from "./compliance";
 
 /**
@@ -416,7 +416,10 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
     declined.push({ ...d, rule: d.rule ?? screenCriterion(d.requested)?.rule });
   }
   packet.provenance.declinedCriteria = declined;
-  const mentionsDeclined = (text: string) => declined.some((d) => mentionsPhrase(text, d.requested));
+  // A request is found in its own words, and restated as the must-have it reads as (`mustHaveOf`: "No visa permit" as
+  // "Visa permit"), so a model that restates it is caught too (review of the live test, 12 Nov 2026).
+  const mentions = (text: string, d: DeclinedCriterion) => mentionsPhrase(text, d.requested) || mentionsPhrase(text, mustHaveOf(d.requested));
+  const mentionsDeclined = (text: string) => declined.some((d) => mentions(text, d));
   const count = () => packet.requirements.mustHaves.length + packet.requirements.niceToHaves.length + packet.preferences.dealBreakersInTheirWords.length + packet.evaluation.redFlags.length;
   const before = count();
   const keptMust = packet.requirements.mustHaves.filter((m) => !mentionsDeclined(m.text));
@@ -442,7 +445,7 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
       if (hit) push(target.at, { path: target.path, rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative, ...(declinedRules.has(r.rule) ? { declined: true } : {}) });
     }
     for (const d of declined) {
-      if (mentionsPhrase(target.text, d.requested)) push(target.at, { path: target.path, rule: "declined", text: d.requested, reason: `You were told this could not be used. ${d.reason}`, ...(d.alternative ? { alternative: d.alternative } : {}), declined: true });
+      if (mentions(target.text, d)) push(target.at, { path: target.path, rule: "declined", text: d.requested, reason: `You were told this could not be used. ${d.reason}`, ...(d.alternative ? { alternative: d.alternative } : {}), declined: true });
     }
   }
   // A draft with no confirmed pay must not quote a figure anywhere (C7): nobody set it. With pay set, the description may

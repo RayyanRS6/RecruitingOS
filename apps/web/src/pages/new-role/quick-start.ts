@@ -1,4 +1,4 @@
-import { formatPayRange, INTAKE_FIRST_MESSAGE_MAX, mustHaveOf, type IntakeAnswer, type IntakeFacts, type IntakeFactsPatch, type IntakeQuestion, type IntakeQuestionField } from "@ros/contracts";
+import { formatPayRange, INTAKE_FIRST_MESSAGE_MAX, mustHaveOf, rulesOut, type IntakeAnswer, type IntakeFacts, type IntakeFactsPatch, type IntakeQuestion, type IntakeQuestionField } from "@ros/contracts";
 import { closingDateProblem, closingDateRequiredFor } from "../../publishing";
 import { GENERAL_QUESTIONS, guideRoleFor } from "./quick-starts";
 import { aiSuggestFor, readAiSuggest, type AiSuggest } from "./quick-suggest";
@@ -116,7 +116,8 @@ export type QuickAnswers = {
   dealBreakersPrivate: string[];
   /**
    * The person's own wording of a deal-breaker as a must-have ("As a must-have"), by the deal-breaker's words in lower
-   * case; without one it is the requirement the deal-breaker rules people out on (`mustHaveOf`).
+   * case; without one it is the requirement the deal-breaker rules people out on (`mustHaveOf`), or theirs to write when
+   * it cannot be turned round (`dealBreakerWording`).
    */
   dealBreakerMusts: Record<string, string>;
   noDealBreakers: boolean;
@@ -195,16 +196,22 @@ type DealBreakerAnswers = Partial<Pick<QuickAnswers, "dealBreakers" | "dealBreak
 /** Where a deal-breaker's own wording as a must-have is kept (`QuickAnswers.dealBreakerMusts`). */
 export const dealBreakerKey = (d: string) => d.trim().toLowerCase();
 
-/** A deal-breaker's wording as a must-have, as the person is typing it ("As a must-have"), else `mustHaveOf`'s. */
+/**
+ * A deal-breaker's wording as a must-have, as the person is typing it ("As a must-have"), else `mustHaveOf`'s. Empty
+ * when `mustHaveOf` cannot turn it round and its words still rule someone out ("No RDA"): the field starts empty, its
+ * example shows, and the step asks for what they need (review of the live test, 12 Nov 2026).
+ */
 export function dealBreakerWording(a: Pick<DealBreakerAnswers, "dealBreakerMusts">, d: string): string {
   const own = a.dealBreakerMusts && Object.hasOwn(a.dealBreakerMusts, dealBreakerKey(d)) ? a.dealBreakerMusts[dealBreakerKey(d)] : undefined;
-  return typeof own === "string" ? own : mustHaveOf(d);
+  if (typeof own === "string") return own;
+  const need = mustHaveOf(d);
+  return rulesOut(need) ? "" : need;
 }
 
 /**
  * The must-have a deal-breaker counts as: the person's own wording ("As a must-have"), else the requirement it rules
  * people out on ("No active California RDA license" is "Active California RDA license", `mustHaveOf`). Never the
- * deal-breaker's negative words (live test, 12 Nov 2026). Empty when the person cleared the wording.
+ * deal-breaker's negative words (live test, 12 Nov 2026). Empty when the person cleared the wording, or has it to write.
  */
 export function dealBreakerMustHave(a: Pick<DealBreakerAnswers, "dealBreakerMusts">, d: string): string {
   return dealBreakerWording(a, d).trim().replace(/\s+/g, " ");
@@ -228,19 +235,35 @@ export function openDealBreakers(a: DealBreakerAnswers): string[] {
   return (a.dealBreakers ?? []).filter((d) => !priv.some((p) => same(p, d)) && !musts.some((m) => same(m, d) || same(m, dealBreakerMustHave(a, d))));
 }
 
-/** How many skills may still be ticked: six in all, one fewer when the experience is a must-have, and one fewer for each deal-breaker counted openly. */
+/**
+ * The must-haves the deal-breakers counted openly add, in order: each one's wording as a must-have
+ * (`dealBreakerMustHave`), once, when it is not empty and not already a skill or the experience. A deal-breaker counts as
+ * a must-have only when it adds one: two worded as one requirement add it once, and one whose wording is still to be
+ * written adds none (review of the live test, 12 Nov 2026). Step 7's count, the room it leaves and the review read this.
+ */
+export function mustHavesFromDealBreakers(a: Pick<QuickAnswers, "experience" | "below"> & DealBreakerAnswers): string[] {
+  const exp = experienceMustHave(a);
+  const out: string[] = [];
+  for (const d of openDealBreakers(a)) {
+    const m = dealBreakerMustHave(a, d);
+    if (m && ![...(a.mustHaves ?? []), ...(exp ? [exp] : []), ...out].some((x) => same(x, m))) out.push(m);
+  }
+  return out;
+}
+
+/** How many skills may still be ticked: six in all, one fewer when the experience is a must-have, and one fewer for each must-have the deal-breakers add. */
 export function mustHavesRoom(a: Pick<QuickAnswers, "experience" | "below"> & DealBreakerAnswers): number {
-  return MUST_HAVES_MAX - (experienceMustHave(a) ? 1 : 0) - openDealBreakers(a).length;
+  return MUST_HAVES_MAX - (experienceMustHave(a) ? 1 : 0) - mustHavesFromDealBreakers(a).length;
 }
 
 /**
  * Every must-have the draft will carry, in order: the skills, the experience when it counts, and each deal-breaker
- * counted openly as the must-have it counts as (`dealBreakerMustHave`), never in its negative words.
+ * counted openly as the must-have it counts as (`mustHavesFromDealBreakers`), never in its negative words.
  */
 export function allMustHaves(a: Pick<QuickAnswers, "experience" | "below" | "mustHaves"> & DealBreakerAnswers): string[] {
   const exp = experienceMustHave(a);
   const out: string[] = [];
-  for (const m of [...a.mustHaves, ...(exp ? [exp] : []), ...openDealBreakers(a).map((d) => dealBreakerMustHave(a, d))]) if (m && !out.some((x) => same(x, m))) out.push(m);
+  for (const m of [...a.mustHaves, ...(exp ? [exp] : []), ...mustHavesFromDealBreakers(a)]) if (m && !out.some((x) => same(x, m))) out.push(m);
   return out;
 }
 
@@ -350,12 +373,14 @@ export function stepProblem(step: QuickStepId, a: QuickAnswers, today: string): 
     case "musts": {
       if (!allMustHaves(a).length) return "Tick or add at least one must-have.";
       const room = Math.max(0, mustHavesRoom(a));
-      if (a.mustHaves.length > room) return openDealBreakers(a).length ? `Keep it to ${room}, with your deal-breakers counted. Anything else can wait for the draft.` : `Keep it to ${room}. Anything else can wait for the draft.`;
+      if (a.mustHaves.length > room) return mustHavesFromDealBreakers(a).length ? `Keep it to ${room}, with your deal-breakers counted. Anything else can wait for the draft.` : `Keep it to ${room}. Anything else can wait for the draft.`;
       return null;
     }
     case "dealbreakers":
       if (!a.noDealBreakers && !a.dealBreakers.length) return "Add what rules someone out, or choose None.";
-      if (openDealBreakers(a).some((d) => !dealBreakerMustHave(a, d))) return "Write each ticked deal-breaker as a must-have, or untick it.";
+      // each ticked one is worded as what they need: never empty, never in words that rule someone out, typed or not
+      // (review of the live test, 12 Nov 2026)
+      if (openDealBreakers(a).some((d) => { const m = dealBreakerMustHave(a, d); return !m || rulesOut(m); })) return "Write each ticked deal-breaker as what they need, for example Able to work Saturdays.";
       if (allMustHaves(a).length > MUST_HAVES_MAX) return `Six must-haves at most, with your skills. Untick one here, or take a skill off.`;
       return null;
     case "questions":
@@ -407,9 +432,14 @@ export function reviewRows(a: QuickAnswers, vertical: string | null | undefined)
   const inChat = a.ownQuestions.length;
   const questions = [...(onForm ? [`${onForm} on the form`] : []), ...(inChat ? [`${inChat} in the AI interview`] : [])].join(" · ");
   const open = openDealBreakers(a);
-  // one already a skill, in its own words or as the must-have it counts as, judges as that skill does
-  const deal = a.dealBreakers.map((d) => (open.some((o) => same(o, d)) || a.mustHaves.some((m) => same(m, d) || same(m, dealBreakerMustHave(a, d))) ? `${d} (must-have)` : `${d} (not used to judge)`));
   const musts = allMustHaves(a);
+  // one counted openly judges as the must-have it counts as, once that is worded (two worded alike judge as one); one
+  // already a skill, in its own words or as the must-have it counts as, judges as that skill does
+  const deal = a.dealBreakers.map((d) => {
+    const m = dealBreakerMustHave(a, d);
+    const judges = (open.some((o) => same(o, d)) ? musts : a.mustHaves).some((x) => same(x, m)) || a.mustHaves.some((x) => same(x, d));
+    return `${d} (${judges ? "must-have" : "not used to judge"})`;
+  });
   const where = a.remotePolicy ? `${labelOf(WORK_MODEL_CHOICES, a.remotePolicy)}${a.place.trim() ? ` · ${a.place.trim()}` : ""}` : "Not answered";
   const rows: Array<[QuickStepId, string]> = [
     ["title", a.title.trim() || "Not answered"],
@@ -418,7 +448,7 @@ export function reviewRows(a: QuickAnswers, vertical: string | null | undefined)
     ["experience", experienceWords(a)],
     ["pay", payWords(a.pay) ?? "Not answered"],
     ["closing", a.noClosingDate ? "No closing date" : a.closesOn ? dayWords(a.closesOn) : "Not answered"],
-    ["musts", a.mustHaves.length || open.length ? musts.join("; ") : experienceMustHave(a) ? "Only the experience" : "Not answered"],
+    ["musts", a.mustHaves.length || mustHavesFromDealBreakers(a).length ? musts.join("; ") : experienceMustHave(a) ? "Only the experience" : "Not answered"],
     ["dealbreakers", a.noDealBreakers ? "None" : deal.length ? deal.join("; ") : "Not answered"],
     ["questions", questions || "None"],
   ];

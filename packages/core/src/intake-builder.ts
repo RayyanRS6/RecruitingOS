@@ -1,9 +1,9 @@
 import {
-  EmploymentType, HireReason, INTAKE_ESSENTIALS, RemotePolicy, formatPayRange, mustHaveOf,
+  EmploymentType, HireReason, INTAKE_ESSENTIALS, RemotePolicy, formatPayRange, mustHaveOf, restatementsOf,
   type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakePayCard, type IntakeQuestion, type IntakeReadiness, type IntakeRefusal, type IntakeServerState, type PayOrigin, type RolePacket,
 } from "@ros/contracts";
-import { openFlagsMessage, questionCheck, screenCriterion, normalizeCriterion, unresolvedFlags } from "./packet-guard";
+import { openFlagsMessage, questionCheck, screenCriterion, normalizeCriterion, unresolvedFlags, type CriterionCheck } from "./packet-guard";
 
 /**
  * The job builder's rules that need no model and no database (Wave C: C2, C6, C7, C8, C14, C17): what is still missing,
@@ -442,11 +442,14 @@ function emptyEdit(facts: IntakeFacts): FactsEdit {
  */
 const QUESTION_FIELDS: ReadonlySet<string> = new Set(["eligibility", "eligibilityNotes", "screening_questions", "screeningQuestions"]);
 
-/** The fairness check on words a person typed: a refusal is recorded with the reason, as the assistant would have declined it. */
-function screened(edit: FactsEdit, field: string, values: string[]): string[] {
+/**
+ * The fairness check on words a person typed: a refusal is recorded with the reason, as the assistant would have declined
+ * it. `also` is one more check for this list (a must-have that restates a refused deal-breaker, in `applyFactsPatch`).
+ */
+function screened(edit: FactsEdit, field: string, values: string[], also?: (v: string) => CriterionCheck | null): string[] {
   const ok: string[] = [];
   for (const v of values) {
-    const hit = QUESTION_FIELDS.has(field) ? questionCheck(v) : screenCriterion(v);
+    const hit = (QUESTION_FIELDS.has(field) ? questionCheck(v) : screenCriterion(v)) ?? also?.(v) ?? null;
     if (!hit) {
       ok.push(v);
       continue;
@@ -646,8 +649,17 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
   const byField = new Map<IntakeListFact, { add: string[]; remove: string[] }>();
   for (const a of patch.add ?? []) { const e = byField.get(a.field) ?? { add: [], remove: [] }; e.add.push(a.value); byField.set(a.field, e); }
   for (const r of patch.remove ?? []) { const e = byField.get(r.field) ?? { add: [], remove: [] }; e.remove.push(r.value); byField.set(r.field, e); }
+  // A deal-breaker the fairness check refuses (in its words, or as the requirement it reads as) is refused as a must-have
+  // that restates it in the same edit too, for the same reason, whatever that must-have's own words pass: the quick start
+  // sends both (review of the live test, 12 Nov 2026: "No felonies or license suspensions" was refused while "Felonies or
+  // license suspensions" was stored). Worked out first: the edit lists its must-haves before its deal-breakers.
+  const refusedDeals = (patch.add ?? []).filter((a) => a.field === "dealBreakers").flatMap((a) => {
+    const hit = screenCriterion(a.value) ?? screenCriterion(mustHaveOf(a.value));
+    return hit ? [{ as: restatementsOf(a.value), hit }] : [];
+  });
+  const restatesRefused = (v: string) => refusedDeals.find((r) => r.as.some((m) => same(m, v)))?.hit ?? null;
   for (const [field, e] of byField) {
-    const add = screened(edit, field, e.add);
+    const add = screened(edit, field, e.add, field === "mustHaves" ? restatesRefused : undefined);
     listSet(edit, field, add, e.remove);
     if (field === "interviewers" && e.remove.length) f.interviewerUserIds = (f.interviewerUserIds ?? []).filter((id) => !e.remove.some((n) => same(team.find((m) => m.userId === id)?.name ?? "", n)));
     if (add.length) edit.summary.push(`${FACT_LABEL[field]}, added: ${add.join("; ")}`);

@@ -292,11 +292,27 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
   it("offers a deal-breaker back as the requirement it rules people out on, never its negative words, and lets the owner reword it (live test, 12 Nov 2026)", () => {
     const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No active California RDA license", "Cannot work Saturdays", "Without an active California RDA license"] });
     expect(out).toHaveLength(1);
+    // the owner never named these requirements: the card says where they come from, and each reworded one is the
+    // assistant's, never "Your words" (review of the live test, 12 Nov 2026)
+    expect(out[0].prompt).toBe("From your deal-breakers: which should count openly as must-haves?");
     expect(out[0].options).toEqual([
-      { label: "Active California RDA license", value: "Active California RDA license", origin: "owner" },
-      { label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "owner" },
+      { label: "Active California RDA license", value: "Active California RDA license", origin: "assistant" },
+      { label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "assistant" },
     ]);
     expect(out[0].allowOwn).toBe(true);
+  });
+
+  it("offers no ready-made must-have for a deal-breaker whose words still rule someone out, only the owner's own words (review of the live test, 12 Nov 2026)", () => {
+    const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA", "No expired RDH license", "Smokers"] });
+    expect(out).toHaveLength(1);
+    // "No RDA" never becomes "RDA", and "No expired RDH license" never "Expired RDH license"; the owner's own words unchanged are theirs
+    expect(out[0].options).toEqual([{ label: "Smokers", value: "Smokers", origin: "owner" }]);
+    expect(out[0].allowOwn).toBe(true);
+    // with none ready-made, the card is still asked, for the owner to write what they need
+    const none = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA"] });
+    expect(none).toEqual([expect.objectContaining({ field: "must_haves", prompt: "From your deal-breakers: which should count openly as must-haves?", options: [], allowOwn: true })]);
+    // a card stored before 12 Nov 2026, in the old words, is still the deal-breaker card: it is never remembered as a must-haves card
+    expect(rememberPrompts([], [...none, { ...none[0], prompt: "You named these as deal-breakers. Which should count openly as must-haves?" }])).toEqual([]);
   });
 
   it("words a team card by what its answer sets, so a card that asks two things never leaves the final say unasked (live test, 12 Nov 2026)", () => {
