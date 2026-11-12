@@ -54,8 +54,8 @@ export function quickStartsFor(vertical: string | null | undefined): readonly Qu
  * must-haves to tick, and its yes/no eligibility questions. Mirrors each playbook role's `title`, `aliases`,
  * `commonQualifications` and `eligibility[].question` (packages/playbooks); tests/web/start-hire-quick.test.ts keeps
  * them equal, so a suggestion is always real playbook knowledge and never a guess. `optional` mirrors the questions that
- * are the owner's call (every expectation optional, `ownersCall`): offered unticked, and ticked by themselves once a
- * must-have names one of their `mentions` (live test, 12 Nov 2026).
+ * are the owner's call (every expectation optional, `ownersCall`): offered unticked, and ticked by themselves once the
+ * job title or a must-have names one of their `mentions` (live test and its review, 12 Nov 2026).
  */
 export type GuideRole = { key: string; title: string; aliases: readonly string[]; mustHaves: readonly string[]; questions: readonly string[]; optional?: ReadonlyArray<{ question: string; mentions: readonly string[] }> };
 

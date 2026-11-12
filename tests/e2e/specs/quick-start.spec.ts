@@ -103,7 +103,8 @@ test.describe("the quick start", () => {
     await expect(answers).toContainText("Dentrix experience");
     await expect(answers).toContainText("X-ray certificate");
     await expect(answers).toContainText("None");
-    await expect(answers).toContainText(/\d+ on the form/);
+    // the questions on the form say that a "no" holds the application (review of the live-test fixes, 12 Nov 2026)
+    await expect(answers).toContainText('2 on the form (a "no" holds the application for your decision)');
     await expect(answers.getByRole("button", { name: /^Edit / })).toHaveCount(9);
     await expectAccessible(page, "quick start review");
 
@@ -112,5 +113,7 @@ test.describe("the quick start", () => {
     await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 90_000 });
     await expect(page.getByRole("heading", { level: 1 })).toContainText(/Dental assistant/i, { timeout: 60_000 });
     await expect(page.getByText(/\$20\s*(–|-|to)\s*\$24/).first()).toBeVisible({ timeout: 60_000 });
+    // once the post is written, its questions on the form carry the saved job's chip: a "no" holds the application
+    await expect(page.getByText('A "no" holds it for your decision')).toBeVisible({ timeout: 60_000 });
   });
 });

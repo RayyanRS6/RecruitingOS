@@ -108,6 +108,23 @@ function sameThing(a: string, b: string): boolean {
   return shared / Math.min(x.size, y.size) >= 0.8;
 }
 
+/** A credential's short form, as a question names it: three to six capital letters, whole ("RDA", "CPR/BLS", "(RDH)"). */
+const SHORT_FORM = /\b[A-Z]{3,6}\b/g;
+const shortForms = (text: string): Set<string> => new Set(/[a-z]/.test(text) ? text.match(SHORT_FORM) ?? [] : []);
+
+/**
+ * Two questions for the form ask the same requirement: the same thing said twice (`sameThing`), or both name the same
+ * credential by its short form, however the rest is worded ("Do you currently hold an active California RDA license?"
+ * and the playbook's "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is
+ * located?"). Words all in capitals are read for their words only.
+ */
+export function sameRequirement(a: string, b: string): boolean {
+  if (sameThing(a, b)) return true;
+  const x = shortForms(a);
+  for (const s of shortForms(b)) if (x.has(s)) return true;
+  return false;
+}
+
 /** The words with the matched phrase cut out and the joins tidied, or null when too little would be left to mean anything. */
 function without(text: string, phrase: string): string | null {
   const left = text.replace(phrase, " ").replace(/\s*[,;:]\s*([,;:]|$)/g, "$1").replace(/\s{2,}/g, " ").replace(/^[\s,;:.–-]+|[\s,;:–-]+$/g, "").trim();

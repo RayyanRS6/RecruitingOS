@@ -1,6 +1,6 @@
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import {
-  DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, mustHaveOf, rulesOut,
+  DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, mustHaveOf, rulesOut, withoutOwnersCallMark,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole,
   type RolePacket,
@@ -16,6 +16,7 @@ import { companies, intakeSessions, memberships, playbooks, rolePackets, roles, 
 import { VERTICAL_TO_PLAYBOOK, compensationFor, findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import type { CompAdapter } from "@ros/integrations";
 import { packetFingerprint, plainWords } from "./packet-revise";
+import { sameRequirement } from "./requirements-check";
 
 export type IntakeDeps = { ai: AiRuntime; comp: CompAdapter };
 
@@ -224,6 +225,8 @@ export function fieldsKnownFromFacts(f: IntakeFacts, payIsConfirmed: boolean, ty
   if (said(f.benefits)) out.push("benefits");
   if (f.decisionMaker || f.decisionMakerUserId) out.push("decision_maker");
   if (f.interviewers.length || f.interviewerUserIds?.length) out.push("interviewers");
+  // the owner went through the questions for the form: never asked on a card again
+  if (f.formQuestionsChosen) out.push("eligibility");
   return out;
 }
 
@@ -253,6 +256,7 @@ export function fieldsSetOnPanel(patch: IntakeFactsPatch | undefined): IntakeQue
   for (const x of [...(patch.add ?? []), ...(patch.remove ?? [])]) out.push(LIST_FACT_FIELD[x.field]);
   for (const c of patch.clear ?? []) out.push(CLEAR_FIELD[c]);
   for (const u of patch.unticked ?? []) out.push(u.field);
+  if (patch.formQuestionsChosen) out.push("eligibility");
   return out;
 }
 
@@ -416,7 +420,8 @@ const TEAM_CARD = {
  * whose field was already asked in this draft or that the owner already told us (`settled`), so nothing is asked twice;
  * fills team cards with the real team (deciders only for the final say) and "Someone not on the team yet", each worded
  * by what its answer sets (`TEAM_CARD`); clears the options of the pay card (drawn from the pay data); drops any offered
- * answer that fails the fairness check; labels "Your words" only where the words are the owner's; asks hourly or salary
+ * answer that fails the fairness check, and takes words meant only for the AI out of the rest (`withoutOwnersCallMark`);
+ * labels "Your words" only where the words are the owner's; asks hourly or salary
  * first when nobody knows; offers stated deal-breakers back as must-haves, each worded as the requirement it rules people
  * out on ("No active California RDA license" is offered as "Active California RDA license", `mustHaveOf`), which the
  * owner can reword: "Your words" only when the words are the deal-breaker's unchanged, else the assistant's, and none
@@ -446,7 +451,12 @@ export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number;
       out.push({ ...q, field: "compensation", mode: "pay", options: [], allowOwn: true });
       continue;
     }
-    const options = q.options.filter((o) => !screenCriterion(o.label) && !screenCriterion(o.value)).slice(0, 6);
+    // Words meant only for the AI never reach the owner: an option copied with the owner's-call mark (or any "(ask only
+    // when …)") is shown, and stored when ticked, without it (review of the live-test fixes, 12 Nov 2026).
+    const options = q.options
+      .map((o) => ({ ...o, label: withoutOwnersCallMark(o.label), value: withoutOwnersCallMark(o.value) }))
+      .filter((o) => o.label && o.value && !screenCriterion(o.label) && !screenCriterion(o.value))
+      .slice(0, 6);
     if ((q.mode === "single" || q.mode === "multi") && !options.length && !q.allowOwn) continue;
     out.push({ ...q, options });
   }
@@ -596,6 +606,8 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
     merged.decisionMakerUserId = before.decisionMakerUserId;
     merged.interviewerUserIds = before.interviewerUserIds;
     merged.suggestions = before.suggestions;
+    if (before.formQuestionsChosen) merged.formQuestionsChosen = true;
+    else delete merged.formQuestionsChosen;
     // What the owner just answered on a card or set on the panel stays as they gave it: on a turn that follows answers
     // alone the model does not rewrite it (only words the owner typed can change it).
     if (!typedSinceReply(session.messages)) keepAnswered(merged, before, state.answeredFacts);
@@ -762,7 +774,8 @@ export const INTAKE_COMPILE_MAX_TOKENS = 32_000;
  * Writes the draft beside the conversation (C7, founder decision Q8): one model call at the judgment tier, never per
  * turn. Each stage is recorded as it starts (benchmark, writing, then checking, which runs the checks and saves in one
  * transaction, then done) so the page can show real progress while it polls; the draft carries pay only once a person
- * set or confirmed it, then passes the packet guard. The answers the model wrote from are recorded as a key, so the page
+ * set or confirmed it and no question for the form the owner left unticked, then passes the packet guard. The answers
+ * the model wrote from are recorded as a key, so the page
  * can tell when they change afterwards. The market check and the saves before the call count against the request's
  * deadline, so the call ends in time for the route to answer.
  */
@@ -797,7 +810,8 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
     if (session.status !== "active") throw new IntakeSessionError("not_active");
     const state = stateOf(session);
     const facts = normalizeFacts(session.facts);
-    const draft = finalizeDraft(out.output, { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [], benchmark: bench.benchmark, messages: session.messages });
+    // A question the owner left unticked never goes on the form, whatever the model wrote (`withoutUntickedQuestions`).
+    const draft = finalizeDraft(withoutUntickedQuestions(out.output, facts), { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [], benchmark: bench.benchmark, messages: session.messages });
     const at = new Date().toISOString();
     // The key is of the answers the model was given, so anything changed while it wrote shows the draft as out of date.
     state.draft = { at, aiRunId: out.runId, by: actorOfTurn(input.actor), payKey: payConfirmed(facts, state) ? payKey(state) : null, factsKey: draftFactsKey(ctx.facts), edits: 0 };
@@ -833,13 +847,49 @@ function answeredSince(line: string, done: ReadonlySet<IntakeEssentialKey>): boo
   return (Object.entries(ESSENTIAL_WORDS) as Array<[IntakeEssentialKey, RegExp]>).some(([key, words]) => done.has(key) && words.test(line));
 }
 
+/** "…does not screen anyone out", "…will not rule out applicants", "holds nobody", "is not a knockout". */
+const HOLDS_NOBODY: readonly RegExp[] = [
+  /\b(?:does not|doesn't|do not|don't|will not|won't|would not|wouldn't|is not|isn't|are not|aren't|never|not)\b[^.,;]{0,25}?\b(?:screen|rule|filter|hold|knock|block|disqualif|exclud|reject)\w*\b[^.,;]{0,30}?\b(?:out|anyone|anybody|nobody|no one|applicants?|candidates?|applications?|people)\b/i,
+  /\b(?:holds?|screens?|rules?)\s+(?:out\s+)?(?:nobody|no one)\b/i,
+  /\bnot\s+(?:a\s+)?knock[\s-]?out\b/i,
+];
+/** "…is asked but not required", about a question on the form (a question, a licence, a certificate). */
+const ASKED_NOT_REQUIRED = /\b(?:asked|shown)\b[^.]*\bnot (?:required|a requirement|mandatory)\b/i;
+const ABOUT_THE_FORM = /\b(?:questions?|form|licen[cs]es?|licensure|certificat\w*|permits?|registrations?|credentials?|eligib\w*)\b/i;
+
+/**
+ * A line of the model's saying a question on the form holds nobody, screens or rules nobody out, or is asked but not
+ * required (live test, 12 Nov 2026: "…the license question is shown to candidates but does not automatically screen
+ * anyone out" stayed under "What the assistant assumed" beside a question that held every "no").
+ */
+export function saysFormHoldsNobody(line: string): boolean {
+  return HOLDS_NOBODY.some((re) => re.test(line)) || (ASKED_NOT_REQUIRED.test(line) && ABOUT_THE_FORM.test(line));
+}
+
+/**
+ * A draft just written without the questions for the form the owner left unticked (facts.suggestions with field
+ * "eligibility"): a rule that is the same requirement as one of them (`sameRequirement`) is dropped, unless it is the same
+ * as one they chose too (facts.eligibilityNotes). The backstop behind intake.compile v6's own line, which a model can
+ * still miss, also for a deal-breaker counted openly (review of the live-test fixes, 12 Nov 2026). Only on a draft just
+ * written (`draftIntake`), never when a saved one is brought up to date: a question put back by a change the owner
+ * confirmed stays.
+ */
+export function withoutUntickedQuestions(draft: DraftRolePacket, facts: Pick<IntakeFacts, "eligibilityNotes" | "suggestions">): DraftRolePacket {
+  const unticked = (facts.suggestions ?? []).filter((s) => s.field === "eligibility").map((s) => s.text);
+  if (!unticked.length) return draft;
+  const chosen = facts.eligibilityNotes ?? [];
+  const eligibility = draft.requirements.eligibility.filter((r) => chosen.some((n) => sameRequirement(n, r.question)) || !unticked.some((u) => sameRequirement(u, r.question)));
+  return eligibility.length === draft.requirements.eligibility.length ? draft : { ...draft, requirements: { ...draft.requirements, eligibility } };
+}
+
 /**
  * The deterministic part after the model (C1, C7, C15, C17): pay only from a person's confirmation (with who and how),
  * why you are hiring as answered, the decision maker and the interviewers as team members, the owner's deal-breakers in
- * their own words, every question on the form holding a "no" for the owner's decision, the essentials still missing
- * listed as assumptions (and none of the model's own lines about one answered since), the market figure on the record,
- * and then the packet guard. Run again on a saved draft (an answer, a change by chat, asking for approval), it brings all
- * of that up to date with the answers as they are now.
+ * their own words, every question on the form holding a "no" for the owner's decision (and none of the model's lines
+ * saying one holds nobody, once one it wrote so is made to hold), no word meant only for the AI in a question, the
+ * essentials still missing listed as assumptions (and none of the model's own lines about one answered since), the market
+ * figure on the record, and then the packet guard. Run again on a saved draft (an answer, a change by chat, asking for
+ * approval), it brings all of that up to date with the answers as they are now.
  *
  * Nothing the model wrote about who decided what is kept: its `ownerStated`, its wording flags (a flag "kept" by the
  * model would read as kept by the person asking, so a pasted ad could switch the fairness check off), and interviewer
@@ -894,18 +944,26 @@ export function finalizeDraft(
   packet.preferences.dealBreakersInTheirWords = facts.dealBreakers;
   // Every question on a draft's form holds a "no" for the owner's decision (it never declines anyone): the assistant
   // never decides that a question holds nobody (live test, 12 Nov 2026: an RDA licence asked of everyone held nobody).
-  // Only a person makes one "asked, not required", on the saved job.
+  // Only a person makes one "asked, not required", on the saved job. Whether one the model wrote held nobody is noted
+  // first: its own lines saying so go below.
+  const madeToHold = packet.requirements.eligibility.some((r) => !r.knockout);
   for (const r of packet.requirements.eligibility) r.knockout = true;
+  // The owner's-call mark the draft's prompt shows beside a playbook question (or any "(ask only when …)") is for the AI
+  // only: never in a question candidates answer and the owner reads (review of the live-test fixes, 12 Nov 2026).
+  for (const r of packet.requirements.eligibility) r.question = withoutOwnersCallMark(r.question) || r.question;
+  for (const q of packet.screening.questions) q.question = withoutOwnersCallMark(q.question) || q.question;
   // Who interviews is chosen from the team on a card or the panel; ids the model wrote (made up, or people nobody chose) are not kept.
   for (const r of packet.interviews.plan) r.interviewerUserIds = [...(facts.interviewerUserIds ?? [])];
   const readiness = intakeReadiness({ facts, state: prov.state, messages: prov.messages ?? ctx.messages, draft: null });
   const notSet = readiness.essentials.filter((e) => !e.done).map((e) => `Not set yet: ${ESSENTIAL_LABEL[e.key].toLowerCase()}.`);
   const assumed = readiness.essentials.filter((e) => e.done && e.note).map((e) => `${ESSENTIAL_LABEL[e.key]}: ${e.value}. ${e.note}`);
   // The server's own lines are written afresh each time, so a saved draft never keeps one the answers have since settled;
-  // nor one of the model's saying an essential was not given, once it has been. The model's own say "the job", never
-  // "the packet" (live test, 12 Nov 2026), as the owner reads them under "What the assistant assumed".
+  // nor one of the model's saying an essential was not given, once it has been; nor, once a question it wrote as holding
+  // nobody is made to hold, one saying a question holds nobody (review of the live-test fixes, 12 Nov 2026). The model's
+  // own say "the job", never "the packet" (live test, 12 Nov 2026), as the owner reads them under "What the assistant
+  // assumed".
   const done = new Set(readiness.essentials.filter((e) => e.done).map((e) => e.key));
-  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done)).map(plainWords);
+  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done) && !(madeToHold && saysFormHoldsNobody(a))).map(plainWords);
   packet.provenance = {
     ...packet.provenance,
     intakeSessionId: prov.sessionId,

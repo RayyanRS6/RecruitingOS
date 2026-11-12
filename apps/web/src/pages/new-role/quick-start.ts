@@ -1,6 +1,6 @@
 import { formatPayRange, INTAKE_FIRST_MESSAGE_MAX, mustHaveOf, rulesOut, type IntakeAnswer, type IntakeFacts, type IntakeFactsPatch, type IntakeQuestion, type IntakeQuestionField } from "@ros/contracts";
 import { closingDateProblem, closingDateRequiredFor } from "../../publishing";
-import { GENERAL_QUESTIONS, guideRoleFor } from "./quick-starts";
+import { GENERAL_QUESTIONS, GUIDE_ROLES, guideRoleFor } from "./quick-starts";
 import { aiSuggestFor, readAiSuggest, type AiSuggest } from "./quick-suggest";
 import { dayWords, payPayload, payProblem, type PayForm } from "./rules";
 
@@ -301,15 +301,17 @@ const names = (text: string, word: string) => new RegExp(`(?:^|[^a-z0-9])${liter
 
 /**
  * Whether a question offered on the screening step is ticked. A question that is the owner's call (the guide's
- * `optional`: the Dental Assistant's RDA licence) starts unticked, and ticks itself once a must-have names it, such as a
- * deal-breaker counted openly ("No active California RDA license"); a deal-breaker that judges nobody never does. What
- * the person ticked or unticked always stands. Every other question starts ticked (live test, 12 Nov 2026).
+ * `optional`: the Dental Assistant's RDA licence) starts unticked, and ticks itself once the job title names it ("RDA",
+ * "Registered Dental Assistant") or a must-have does, such as a deal-breaker counted openly ("No active California RDA
+ * license"); a deal-breaker that judges nobody never does. What the person ticked or unticked always stands. Every other
+ * question starts ticked (live test and its review, 12 Nov 2026).
  */
 export function questionOn(a: QuestionAnswers, q: string, vertical: string | null | undefined): boolean {
   const optional = guideRoleFor(vertical, a.title)?.optional?.find((o) => same(o.question, q));
   if ((a.questionsOn ?? []).some((x) => same(x, q))) return true;
   if (a.questionsOff.some((x) => same(x, q))) return false;
-  return !optional || mustHavesOf(a).some((m) => optional.mentions.some((w) => names(m, w)));
+  if (!optional) return true;
+  return [a.title, ...mustHavesOf(a)].some((m) => optional.mentions.some((w) => names(m, w)));
 }
 
 /** Ticks or unticks one offered question: what the person chose is kept, over any default. */
@@ -426,11 +428,18 @@ export function experienceWords(a: Pick<QuickAnswers, "experience" | "below">): 
   return a.below === "must" ? `${years} · counts as a must-have` : `${years} · anyone with less is still considered`;
 }
 
-/** One row a step on the review: what it is called, the answer, and the step its Edit opens. */
+/** What the review says beside the questions on the form: a "no" to any of them holds the application (as step 9 says). */
+export const FORM_QUESTIONS_HOLD = '(a "no" holds the application for your decision)';
+
+/**
+ * One row a step on the review: what it is called, the answer, and the step its Edit opens. The questions on the form
+ * say that a "no" holds the application, as every question on a draft's form does (review of the live-test fixes, 12 Nov
+ * 2026); those for the AI interview hold nobody.
+ */
 export function reviewRows(a: QuickAnswers, vertical: string | null | undefined): Array<{ step: number; label: string; value: string }> {
   const onForm = chosenQuestions(a, vertical).length;
   const inChat = a.ownQuestions.length;
-  const questions = [...(onForm ? [`${onForm} on the form`] : []), ...(inChat ? [`${inChat} in the AI interview`] : [])].join(" · ");
+  const questions = [...(onForm ? [`${onForm} on the form ${FORM_QUESTIONS_HOLD}`] : []), ...(inChat ? [`${inChat} in the AI interview`] : [])].join(" · ");
   const open = openDealBreakers(a);
   const musts = allMustHaves(a);
   // one counted openly judges as the must-have it counts as, once that is worded (two worded alike judge as one); one
@@ -516,24 +525,31 @@ const EXPERIENCE_LINE = /\b\d{1,2}\s*\+?\s*(?:years?|yrs?)\b.*\bexperience\b|\be
  * it read as a nice-to-have that differs from the person's answer. Deal-breakers left ticked count openly as must-haves
  * (Q19), as the must-have each counts as; the deal-breakers themselves keep the person's words. Suggested yes/no
  * questions ticked go with the eligibility, and the ones left unticked as suggestions the draft never uses (`unticked`),
- * so a question nobody chose never holds anyone; questions typed by the person go with the screening chat.
+ * so a question nobody chose never holds anyone; the edit says the person went through them (`formQuestionsChosen`), so
+ * the draft's form has exactly the ones ticked, and any eligibility note the assistant read from the first message or
+ * the ad that is not among them is taken out (review of the live-test fixes, 12 Nov 2026). Questions typed by the person
+ * go with the screening chat.
  */
-export function quickStartPatch(a: QuickAnswers, vertical: string | null | undefined, existing: (Pick<IntakeFacts, "mustHaves"> & Partial<Pick<IntakeFacts, "niceToHaves">>) | null): IntakeFactsPatch {
+export function quickStartPatch(a: QuickAnswers, vertical: string | null | undefined, existing: (Pick<IntakeFacts, "mustHaves"> & Partial<Pick<IntakeFacts, "niceToHaves" | "eligibilityNotes">>) | null): IntakeFactsPatch {
   const pay = payPayload(a.pay);
   const musts = allMustHaves(a).slice(0, MUST_HAVES_MAX);
   const nice = experienceNiceToHave(a);
+  const chosen = chosenQuestions(a, vertical);
   const add: NonNullable<IntakeFactsPatch["add"]> = [
     ...musts.map((value) => ({ field: "mustHaves" as const, value })),
     ...(nice ? [{ field: "niceToHaves" as const, value: nice }] : []),
     ...(a.noDealBreakers ? [] : a.dealBreakers.slice(0, DEAL_BREAKERS_MAX).map((value) => ({ field: "dealBreakers" as const, value }))),
-    ...chosenQuestions(a, vertical).map((value) => ({ field: "eligibilityNotes" as const, value })),
+    ...chosen.map((value) => ({ field: "eligibilityNotes" as const, value })),
     ...a.ownQuestions.slice(0, OWN_QUESTIONS_MAX).map((value) => ({ field: "screeningQuestions" as const, value })),
   ].slice(0, 20);
   const extraMusts = (existing?.mustHaves ?? []).filter((x) => !musts.some((m) => same(m, x)));
   const extraNice = (existing?.niceToHaves ?? []).filter((x) => EXPERIENCE_LINE.test(x) && !(nice && same(nice, x)));
+  // the questions on the form are the person's choice, all of them: a note the assistant read is never one of them
+  const extraNotes = (existing?.eligibilityNotes ?? []).filter((x) => !chosen.some((q) => same(q, x)));
   const remove = [
     ...extraMusts.map((value) => ({ field: "mustHaves" as const, value: value.slice(0, 500) })),
     ...extraNice.map((value) => ({ field: "niceToHaves" as const, value: value.slice(0, 500) })),
+    ...extraNotes.map((value) => ({ field: "eligibilityNotes" as const, value: value.slice(0, 500) })),
   ].slice(0, 20);
   const unticked = untickedQuestions(a, vertical).slice(0, 12).map((q) => ({ field: "eligibility" as const, value: q.question.slice(0, 500), origin: q.origin }));
   return {
@@ -547,6 +563,7 @@ export function quickStartPatch(a: QuickAnswers, vertical: string | null | undef
     ...(add.length ? { add } : {}),
     ...(remove.length ? { remove } : {}),
     ...(unticked.length ? { unticked } : {}),
+    formQuestionsChosen: true,
   };
 }
 
@@ -675,6 +692,11 @@ const wordings = (v: unknown): Record<string, string> => {
   return out;
 };
 
+/** Whether a hiring guide's role for this title has a question that is the owner's call (the Dental Assistant's RDA licence). */
+function hasOwnersCall(title: string): boolean {
+  return Object.keys(GUIDE_ROLES).some((guide) => !!guideRoleFor(guide, title)?.optional?.length);
+}
+
 /**
  * Reads what was kept, or null when there is nothing (or storage cannot be read, or holds something else, or was kept
  * for another company).
@@ -710,10 +732,15 @@ export function readQuickStart(storage: Pick<Storage, "getItem"> | null | undefi
       ownQuestions: strs(a.ownQuestions, OWN_QUESTIONS_MAX),
       aiSuggest: readAiSuggest(a.aiSuggest),
     };
-    const step = typeof v.step === "number" && Number.isInteger(v.step) ? Math.max(0, Math.min(v.step, QUICK_STEPS.length - 1)) : 0;
+    const kept = typeof v.step === "number" && Number.isInteger(v.step) ? Math.max(0, Math.min(v.step, QUICK_STEPS.length - 1)) : 0;
     const sessionId = typeof v.sessionId === "string" && /^[\w-]{1,64}$/.test(v.sessionId) ? v.sessionId : null;
     const companyId = typeof v.companyId === "string" && v.companyId ? v.companyId : null;
-    return { step, answers, fromReview: v.fromReview === true, sessionId, ...(companyId ? { companyId } : {}) };
+    // A copy kept before 12 Nov 2026 (no questionsOn) past the questions step, for a job whose guide has a question that
+    // is the owner's call: that question started ticked then and unticked now, so the copy opens on the questions step
+    // for the owner to make the call (never the old tick), and Back to review returns them (review of the live-test fixes).
+    const questions = QUICK_STEPS.indexOf("questions");
+    const reopen = !Array.isArray(a.questionsOn) && kept > questions && hasOwnersCall(answers.title);
+    return { step: reopen ? questions : kept, answers, fromReview: reopen || v.fromReview === true, sessionId, ...(companyId ? { companyId } : {}) };
   } catch {
     return null;
   }

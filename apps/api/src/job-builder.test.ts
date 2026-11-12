@@ -214,7 +214,7 @@ describe("the job builder API", () => {
     expect(kept.askedPrompts).toEqual(expect.arrayContaining([...first, ...second].map((q) => q.prompt)));
     // the assistant is told what was already asked
     const lastRun = (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "intake.turn"))).at(-1);
-    expect(lastRun?.promptVersion).toBe(5);
+    expect(lastRun?.promptVersion).toBe(6);
     await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
   });
 

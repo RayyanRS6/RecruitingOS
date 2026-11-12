@@ -89,7 +89,7 @@ describe("what each step shows", () => {
     expect(offeredQuestions(late, "logistics")).toEqual([...GENERAL_QUESTIONS, ...s.questions]);
     expect(chosenQuestions(late, "logistics")).toEqual([...GENERAL_QUESTIONS]);
     expect(quickStartPatch(late, "logistics", null).add?.filter((x) => x.field === "eligibilityNotes").map((x) => x.value)).toEqual([...GENERAL_QUESTIONS]);
-    expect(reviewRows(late, "logistics").find((r) => r.label === "Screening questions")?.value).toBe("2 on the form");
+    expect(reviewRows(late, "logistics").find((r) => r.label === "Screening questions")?.value).toBe('2 on the form (a "no" holds the application for your decision)');
     // and the must-haves are never ticked for them either way
     expect(late.mustHaves).toEqual(a.mustHaves);
     // the same answer again changes nothing
@@ -105,7 +105,7 @@ describe("on the draft", () => {
     expect(IntakeFactsPatch.parse(patch)).toEqual(patch);
     expect(patch.add?.filter((x) => x.field === "mustHaves").map((x) => x.value)).toEqual(["Clean driving record", "Route planning"]);
     expect(patch.add?.filter((x) => x.field === "eligibilityNotes").map((x) => x.value)).toEqual([...GENERAL_QUESTIONS, "Do you hold a valid driver's licence?"]);
-    expect(reviewRows({ ...a, aiSuggest: s }, "logistics").find((r) => r.label === "Screening questions")?.value).toBe("3 on the form");
+    expect(reviewRows({ ...a, aiSuggest: s }, "logistics").find((r) => r.label === "Screening questions")?.value).toBe('3 on the form (a "no" holds the application for your decision)');
   });
 
   it("never lets an offered question push out the person's own words: the edit stays within twenty items", () => {

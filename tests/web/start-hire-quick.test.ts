@@ -5,7 +5,7 @@ import { ALL_PLAYBOOKS, findPlaybook, matchPlaybookRole } from "../../packages/p
 import { NEW_ROLE_FRESH_HREF } from "../../apps/web/src/pages/new-role/rules";
 import { GENERAL_QUESTIONS, GUIDE_ROLES, guideRoleFor } from "../../apps/web/src/pages/new-role/quick-starts";
 import {
-  QUICK_STEPS, QUICK_START_STORAGE_KEY, STEP_QUESTION, addItem, allMustHaves, chosenQuestions, clearAllQuickStarts, clearQuickStart, dealBreakerMustHave, dealBreakerWording, emptyQuickAnswers, emptyQuickState, enterMovesOn, experienceMustHave,
+  FORM_QUESTIONS_HOLD, QUICK_STEPS, QUICK_START_STORAGE_KEY, STEP_QUESTION, addItem, allMustHaves, chosenQuestions, clearAllQuickStarts, clearQuickStart, dealBreakerMustHave, dealBreakerWording, emptyQuickAnswers, emptyQuickState, enterMovesOn, experienceMustHave,
   experienceNiceToHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, isDealBreakerCard, mustHavesFromDealBreakers, mustHavesRoom, offeredQuestions, openDealBreakers, questionOn, quickStartDraftKey, quickStartPatch, quickStartStorageKey, readAd, readQuickStart,
   removeDealBreaker, reviewRows, skippedAnswers, stepProblem, suggestedMustHaves, suggestedQuestions, toggleItem, toggleQuestion, writeQuickStart, type QuickAnswers,
 } from "../../apps/web/src/pages/new-role/quick-start";
@@ -168,8 +168,11 @@ describe("the review", () => {
     expect(rows.find((r) => r.label === "Minimum experience")?.value).toBe("3+ years · counts as a must-have");
     expect(rows.find((r) => r.label === "Pay")?.value).toBe("$45–$55 an hour");
     expect(rows.find((r) => r.label === "Closing date")?.value).toBe("November 30, 2026");
-    // where each question is asked: the suggested ones on the form, the person's own in the screening chat
-    expect(rows.find((r) => r.label === "Screening questions")?.value).toBe(`${suggestedQuestions("dental", "Dental Hygienist").length} on the form · 1 in the AI interview`);
+    // where each question is asked: the suggested ones on the form, where a "no" holds the application for the owner
+    // (review of the live-test fixes, 12 Nov 2026), the person's own in the screening chat, which holds nobody
+    expect(rows.find((r) => r.label === "Screening questions")?.value).toBe(`${suggestedQuestions("dental", "Dental Hygienist").length} on the form (a "no" holds the application for your decision) · 1 in the AI interview`);
+    expect(FORM_QUESTIONS_HOLD).toBe('(a "no" holds the application for your decision)');
+    expect(reviewRows(filled({ questionsOff: [...suggestedQuestions("dental", "Dental Hygienist")], ownQuestions: ["Which software do you use?"] }), "dental").find((r) => r.label === "Screening questions")?.value).toBe("1 in the AI interview");
     expect(reviewRows(filled({ noClosingDate: true, noDealBreakers: true, dealBreakers: [] }), "dental").find((r) => r.label === "Deal-breakers")?.value).toBe("None");
     // a deal-breaker left ticked shows among the must-haves as the must-have it counts as, and says which way it counts
     expect(rows.find((r) => r.label === "Must-have skills")?.value).toBe("Digital radiography and intraoral scanning; At least 3 years of relevant experience; Able to work Saturdays");
@@ -350,6 +353,19 @@ describe("a question that is the owner's call (live test, 12 Nov 2026)", () => {
     expect(questionOn(assistant({ mustHaves: ["Ardashir charting"] }), RDA, "dental")).toBe(false);
   });
 
+  // review of the live-test fixes, 12 Nov 2026: a job titled "Registered Dental Assistant" started with its own licence
+  // question unticked, so the draft left it off the form
+  it("ticks itself when the job title names the licence, and the person's own untick still stands", () => {
+    for (const title of ["Registered Dental Assistant", "Registered Dental Assistant (RDA)", "RDA", "Lead dental assistant (RDA)"]) {
+      const a = assistant({ title });
+      expect(questionOn(a, RDA, "dental"), title).toBe(true);
+      expect(chosenQuestions(a, "dental"), title).toContain(RDA);
+      expect(quickStartPatch(a, "dental", null).unticked, title).toBeUndefined();
+      expect(questionOn({ ...a, ...toggleQuestion(a, RDA, "dental") }, RDA, "dental"), title).toBe(false);
+    }
+    expect(questionOn(assistant({ title: "Dental assistant" }), RDA, "dental")).toBe(false);
+  });
+
   it("stays as the person ticks it: on when ticked, off when unticked even once a must-have names it, and kept in this browser", () => {
     const a = assistant();
     const ticked = { ...a, ...toggleQuestion(a, RDA, "dental") };
@@ -446,6 +462,41 @@ describe("handing over to the job builder", () => {
     expect(after.facts.niceToHaves).toEqual(["Spanish", "3+ years of relevant experience"]);
     // nothing to take out when the assistant read only what the person chose
     expect(quickStartPatch(filled(), "dental", { mustHaves: ["Digital radiography and intraoral scanning"] }).remove).toBeUndefined();
+  });
+
+  // review of the live-test fixes, 12 Nov 2026: a note the assistant read from a sentence or an ad was taken for the
+  // owner's choice, and made the form "exactly" that question
+  it("says the person went through the questions for the form, with every one ticked or every one unticked, and only the edit sets it", () => {
+    const all = filled({ dealBreakers: [], noDealBreakers: true });
+    const ticked = quickStartPatch(all, "dental", null);
+    expect(ticked.formQuestionsChosen).toBe(true);
+    expect(ticked.unticked).toBeUndefined();
+    expect(IntakeFactsPatch.parse(ticked)).toEqual(ticked);
+    expect(applyFactsPatch(normalizeFacts({}), ticked, []).facts.formQuestionsChosen).toBe(true);
+    const none = { ...all, questionsOff: [...suggestedQuestions("dental", "Dental Hygienist")] };
+    const unticked = quickStartPatch(none, "dental", null);
+    expect(unticked.add?.some((x) => x.field === "eligibilityNotes")).toBe(false);
+    expect(unticked.unticked).toHaveLength(3);
+    const edit = applyFactsPatch(normalizeFacts({}), unticked, []);
+    expect(edit.facts).toMatchObject({ formQuestionsChosen: true, eligibilityNotes: [] });
+    // a panel edit without step 9 never sets it
+    expect(applyFactsPatch(normalizeFacts({}), { add: [{ field: "eligibilityNotes", value: "Are you available on Saturdays?" }] }, []).facts.formQuestionsChosen).toBeUndefined();
+  });
+
+  it("takes out an eligibility note the assistant read that the person did not choose, as it does a must-have", () => {
+    const a = filled({ title: "Dental assistant", mustHaves: ["Four-handed dentistry"], dealBreakers: [], noDealBreakers: true });
+    const chosen = chosenQuestions(a, "dental");
+    const read = { mustHaves: [], eligibilityNotes: ["Current RDA license required", chosen[0]] };
+    const patch = quickStartPatch(a, "dental", read);
+    expect(patch.remove).toEqual([{ field: "eligibilityNotes", value: "Current RDA license required" }]);
+    // the licence question the ad named stays unticked: nobody chose it
+    expect(patch.add?.filter((x) => x.field === "eligibilityNotes").map((x) => x.value)).toEqual(chosen);
+    expect(chosen.some((q) => /\bRDA\b/.test(q))).toBe(false);
+    const edit = applyFactsPatch(normalizeFacts(read), patch, []);
+    expect(edit.facts.eligibilityNotes).toEqual(chosen);
+    expect(edit.facts.formQuestionsChosen).toBe(true);
+    // the assistant may not put it back
+    expect(edit.removed).toContainEqual({ field: "eligibilityNotes", value: "Current RDA license required" });
   });
 
   it("skips only the open cards the quick start already answered, at most three, never the deal-breaker card", () => {
@@ -546,6 +597,29 @@ describe("kept in this browser", () => {
     const all = { removeItem: s.removeItem, get length() { return s.m.size; }, key: (i: number) => [...s.m.keys()][i] ?? null };
     clearAllQuickStarts(all);
     expect([...s.m.keys()]).toEqual(["ros:other"]);
+  });
+
+  // review of the live-test fixes, 12 Nov 2026: a copy kept before the release reopened on the review with the RDA
+  // question, ticked then, silently unticked now
+  it("opens a copy kept before 12 Nov 2026 on the questions step when its job has a question that is the owner's call, never keeping the old tick", () => {
+    const s = memoryStorage();
+    const RDA = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+    const { questionsOn: _new, ...before } = filled({ title: "Dental assistant", mustHaves: ["Four-handed dentistry"], dealBreakers: [], noDealBreakers: true });
+    s.setItem(QUICK_START_STORAGE_KEY, JSON.stringify({ step: 9, answers: before, fromReview: false, sessionId: null }));
+    const back = readQuickStart(s)!;
+    expect(back.step).toBe(QUICK_STEPS.indexOf("questions"));
+    expect(back.fromReview).toBe(true);
+    expect(questionOn(back.answers, RDA, "dental")).toBe(false);
+    // written back by this release (with questionsOn), it opens where it was left
+    const now = { ...emptyQuickState(), step: 9, answers: filled({ title: "Dental assistant", mustHaves: ["Four-handed dentistry"], dealBreakers: [], noDealBreakers: true }) };
+    writeQuickStart(s, now);
+    expect(readQuickStart(s)).toEqual(now);
+    // a job with no such question, or a copy not past the questions step, opens where it was left
+    const { questionsOn: _rdh, ...hygienist } = filled();
+    s.setItem(QUICK_START_STORAGE_KEY, JSON.stringify({ step: 9, answers: hygienist, fromReview: false, sessionId: null }));
+    expect(readQuickStart(s)).toMatchObject({ step: 9, fromReview: false });
+    s.setItem(QUICK_START_STORAGE_KEY, JSON.stringify({ step: 6, answers: before, fromReview: false, sessionId: null }));
+    expect(readQuickStart(s)).toMatchObject({ step: 6, fromReview: false });
   });
 
   it("knows a fresh page from work in progress", () => {

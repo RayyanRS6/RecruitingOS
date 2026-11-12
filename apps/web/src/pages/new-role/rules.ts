@@ -5,6 +5,7 @@ import {
 } from "@ros/contracts";
 import type { StepState } from "@ros/ui";
 import { START_HIRE_HREF } from "../../start-hire";
+import { HOLDS_FOR_DECISION } from "../role/applicant-questions";
 
 /**
  * The job builder's rules that need no browser (plan Wave C: C5, C6, C7, C8, C15), kept out of the components so
@@ -411,9 +412,10 @@ export type SectionId = "basics" | "about" | "must" | "nice" | "screening" | "el
 
 /**
  * One section of the draft panel. `path` is where it lives in the Role Packet; `seenBy` says plainly who sees it
- * ("Candidates see this", "Only your team sees this"), from the packet's visibility map in @ros/contracts.
+ * ("Candidates see this", "Only your team sees this"), from the packet's visibility map in @ros/contracts. `note` is a
+ * status the panel shows as a chip: on the questions for the form, the saved job's 'A "no" holds it for your decision'.
  */
-export type DraftSection = { id: SectionId; title: string; path: string; visibility: PacketVisibility; seenBy: string; text: string | null; items: string[]; empty: string };
+export type DraftSection = { id: SectionId; title: string; path: string; visibility: PacketVisibility; seenBy: string; text: string | null; items: string[]; empty: string; note?: string };
 
 export const WORK_MODEL_WORD: Readonly<Record<string, string>> = { onsite: "On site", hybrid: "Hybrid", remote: "Remote" };
 export const EMPLOYMENT_WORD: Readonly<Record<string, string>> = { full_time: "Full time", part_time: "Part time", contract: "Contract", temporary: "Temporary", per_diem: "Per diem", internship: "Internship" };
@@ -476,7 +478,12 @@ export function draftSections(view: { facts: IntakeFacts; draft: DraftRolePacket
     section("nice", "Nice to have", "requirements.niceToHaves", { items: d ? d.requirements.niceToHaves.map((m) => m.text) : f.niceToHaves }, "Helpful, never a reason to turn anyone away."),
     section("screening", "You'll be asked during the application", "screening.questions", { items: d ? d.screening.questions.map((q) => q.question) : f.screeningQuestions ?? [] }, d ? "" : "A few questions candidates answer in a short conversation, marked as AI, with a person available."),
   ];
-  if (d) out.push(section("eligibility", "Quick questions on the application form", "requirements.eligibility", { items: d.requirements.eligibility.map((e) => e.question) }, "None."));
+  // Every question on a draft's form holds a "no" for the owner's decision: said with the saved job's chip, so a draft
+  // built by chat or "Hire again" says it too, not only the quick start's step 9 (review of the live-test fixes, 12 Nov 2026).
+  if (d) {
+    const holds = d.requirements.eligibility.some((e) => e.knockout);
+    out.push({ ...section("eligibility", "Quick questions on the application form", "requirements.eligibility", { items: d.requirements.eligibility.map((e) => e.question) }, "None."), ...(holds ? { note: HOLDS_FOR_DECISION } : {}) });
+  }
   const reason = f.reason ? `${REASON_WORD[f.reason] ?? f.reason}${f.reasonDetail ? `: ${f.reasonDetail}` : ""}` : null;
   out.push(section("why", "Why you're hiring", "business", { text: reason }, "Not said yet."));
   const team = [

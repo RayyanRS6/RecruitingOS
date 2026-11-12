@@ -3,7 +3,8 @@ import { entitlements } from "../../packages/core/src/index";
 import type { IntakeSessionView } from "../../packages/contracts/src/index";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
-import { emptyQuickAnswers, firstMessage, isDealBreakerCard, quickStartPatch, skippedAnswers, toggleQuestion, type QuickAnswers } from "../../apps/web/src/pages/new-role/quick-start";
+import { FORM_QUESTIONS_HOLD, emptyQuickAnswers, firstMessage, isDealBreakerCard, quickStartPatch, reviewRows, skippedAnswers, toggleQuestion, type QuickAnswers } from "../../apps/web/src/pages/new-role/quick-start";
+import { samplePacket } from "../../packages/agents/src/fixtures/sample-packet";
 
 /**
  * "Write the job post" from the quick start (Wave S2, K2), through the real routes with the fake AI: the first message
@@ -108,12 +109,16 @@ describe("the quick start hands its answers to the job builder", () => {
     mustHaves: ["Four-handed dentistry", "Digital radiography"],
     ...over,
   });
-  /** Starts a draft from the quick start's answers and writes it, as "Write the job post" does. */
-  const quickStart = async (a: QuickAnswers, dealBreakersOffered = true) => {
+  /**
+   * Starts a draft from the quick start's answers and writes it, as "Write the job post" does. `compiled`: what the
+   * model writes this once, in place of the stand-in's draft (a model that does not do as it is told).
+   */
+  const quickStart = async (a: QuickAnswers, dealBreakersOffered = true, compiled?: unknown) => {
     const { session } = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: firstMessage(a) })).json()) as { session: IntakeSessionView };
     const edited = await json("POST", `/api/v1/intake/sessions/${session.id}/answers`, { answers: skippedAnswers(session.questions), patch: quickStartPatch(a, "dental", session.facts), draftIt: true, reply: false, dealBreakersOffered });
     expect(edited.status).toBe(200);
     const facts = ((await edited.json()) as { session: IntakeSessionView }).session.facts;
+    if (compiled) container.fake!.scriptNext("intake.compile", compiled);
     const drafted = await json("POST", `/api/v1/intake/sessions/${session.id}/draft`);
     expect(drafted.status).toBe(200);
     return { id: session.id, facts, written: ((await drafted.json()) as { session: IntakeSessionView }).session };
@@ -154,6 +159,79 @@ describe("the quick start hands its answers to the job builder", () => {
     expect(facts.suggestions).toEqual([{ field: "eligibility", text: RDA, origin: "playbook" }]);
     expect(written.draft!.requirements.eligibility.some((e) => /\bRDA\b/.test(e.question))).toBe(false);
     expect(written.draft!.requirements.eligibility.every((e) => e.knockout)).toBe(true);
+  });
+
+  // Review of the live-test fixes, 12 Nov 2026: every question on a draft's form holds a "no", and only the prompt kept
+  // a question the owner unticked off the form.
+  const hygienist = (over: Partial<QuickAnswers> = {}): QuickAnswers => ({
+    ...emptyQuickAnswers(),
+    title: "Dental Hygienist",
+    employmentType: "full_time",
+    remotePolicy: "onsite",
+    place: "Irvine, CA",
+    experience: "none",
+    pay: { basis: "hourly", min: "45", max: "55", ceiling: "" },
+    noClosingDate: true,
+    mustHaves: ["Periodontal charting and non-surgical periodontal therapy"],
+    noDealBreakers: true,
+    ...over,
+  });
+  const BLS = "Do you hold current CPR/BLS certification?";
+
+  it("a CPR/BLS question the owner unticked never goes on the form, and the draft knows the owner chose its questions (review of the live-test fixes, 12 Nov 2026)", async () => {
+    const base = hygienist();
+    const a = { ...base, ...toggleQuestion(base, BLS, "dental") };
+    const { facts, written } = await quickStart(a);
+    expect(facts.formQuestionsChosen).toBe(true);
+    expect(facts.eligibilityNotes).not.toContain(BLS);
+    expect(facts.suggestions).toEqual([{ field: "eligibility", text: BLS, origin: "playbook" }]);
+    const rules = written.draft!.requirements.eligibility;
+    expect(rules.some((e) => e.key === "bls" || /\bBLS\b/.test(e.question))).toBe(false);
+    expect(rules.some((e) => e.key === "rdh_license")).toBe(true);
+    expect(rules.every((e) => e.knockout)).toBe(true);
+    // left ticked, it is on the form and holds a "no"
+    const kept = (await quickStart(base)).written.draft!.requirements.eligibility;
+    expect(kept.filter((e) => /\bBLS\b/.test(e.question)).map((e) => e.knockout)).toEqual([true]);
+  });
+
+  it("the RDA question the owner unticked never goes on the form, even with a deal-breaker counted openly that names the licence (review of the live-test fixes, 12 Nov 2026)", async () => {
+    const open = assistant({ dealBreakers: ["No active California RDA license"] });
+    const a = { ...open, ...toggleQuestion(open, RDA, "dental") };
+    expect(reviewRows(a, "dental").find((r) => r.label === "Screening questions")?.value).toBe(`2 on the form ${FORM_QUESTIONS_HOLD}`);
+    const { facts, written } = await quickStart(a);
+    expect(facts.mustHaves).toContain("Active California RDA license");
+    expect(facts.suggestions).toEqual([{ field: "eligibility", text: RDA, origin: "playbook" }]);
+    expect(written.draft!.requirements.eligibility.some((e) => /\bRDA\b|registered dental assistant/i.test(e.question))).toBe(false);
+    // the must-have still counts: only the question is off the form
+    expect(written.draft!.requirements.mustHaves.map((m) => m.text)).toContain("Active California RDA license");
+  });
+
+  it("whatever the model writes, a draft just written keeps no question that is the same as one the owner unticked (review of the live-test fixes, 12 Nov 2026)", async () => {
+    const open = assistant({ dealBreakers: ["No active California RDA license"] });
+    const a = { ...open, ...toggleQuestion(open, RDA, "dental") };
+    // the model puts the licence back in its own words, for the deal-breaker counted openly, as it is told not to
+    const ignored = samplePacket((p) => {
+      p.requirements.eligibility.push({ key: "ca_rda_license", type: "license", question: "Do you currently hold an active California RDA license?", expectation: { license: "RDA" }, rationale: "This job requires it.", knockout: true });
+    });
+    const { written } = await quickStart(a, true, ignored);
+    expect(written.draft!.requirements.eligibility.map((e) => e.key)).toEqual(["schedule"]);
+  });
+
+  it("only the quick start says the owner went through the questions for the form: no turn of the assistant sets or clears it (review of the live-test fixes, 12 Nov 2026)", async () => {
+    const { id, facts } = await quickStart(hygienist());
+    expect(facts.formQuestionsChosen).toBe(true);
+    const later = await json("POST", `/api/v1/intake/sessions/${id}/messages`, { message: "Thanks, that looks right." });
+    expect(later.status).toBe(200);
+    expect(((await later.json()) as { session: IntakeSessionView }).session.facts.formQuestionsChosen).toBe(true);
+    // a draft started by chat: a turn whose facts say so, as no model is ever asked to, does not set it
+    const chat = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, CA, full time, $45 to $55 an hour." })).json()) as { session: IntakeSessionView };
+    expect(chat.session.facts.formQuestionsChosen).toBeUndefined();
+    container.fake!.scriptNext("intake.turn", { assistantMessage: "Noted: Saturdays.", factsExtracted: { ...chat.session.facts, eligibilityNotes: ["Able to work Saturdays"], formQuestionsChosen: true }, missingFacts: [], questions: [], readyToCompile: false, confidence: "medium" });
+    const turned = await json("POST", `/api/v1/intake/sessions/${chat.session.id}/messages`, { message: "They must be able to work Saturdays." });
+    expect(turned.status).toBe(200);
+    const after = ((await turned.json()) as { session: IntakeSessionView }).session.facts;
+    expect(after.eligibilityNotes).toContain("Able to work Saturdays");
+    expect(after.formQuestionsChosen).toBeUndefined();
   });
 
   it("a question for every applicant that asks about a protected characteristic is refused on the questions step (Wave S7)", async () => {

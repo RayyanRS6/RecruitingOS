@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { intakeCompilePrompt, intakeExtractPrompt, packetRevisePrompt, withoutTag, type IntakeContext } from "@ros/ai";
+import { OWNERS_CALL_MARK, intakeCompilePrompt, intakeExtractPrompt, packetRevisePrompt, withoutTag, type IntakeContext } from "@ros/ai";
 import { IntakeServerState, RolePacket, type Actor, type DraftRolePacket, type IntakeFacts } from "@ros/contracts";
 import { dealBreakerOffer, draftFactsKey, draftKeyMatches, normalizeFacts, unresolvedFlags } from "@ros/core";
 import { samplePacket } from "./fixtures/sample-packet";
-import { answersFollowingChange, finalizeDraft } from "./intake";
+import { answersFollowingChange, finalizeDraft, saysFormHoldsNobody, withoutUntickedQuestions } from "./intake";
 
 /**
  * The deterministic part after the model (plan C1, C7, C15): what the model wrote about who decided what is never kept,
@@ -118,11 +118,94 @@ describe("finalizeDraft never keeps what the model says a person decided", () =>
     for (const gone of [lines[0], lines[1], "Not set yet: why you are hiring."]) expect(reasonOnly.provenance.assumptions).not.toContain(gone);
   });
 
+  // review of the live-test fixes, 12 Nov 2026: the live test's draft said under "What the assistant assumed" that the
+  // licence question screened nobody, beside a question finalizeDraft had made hold every "no"
+  it("drops the model's lines saying a question on the form holds nobody once it makes one the model wrote so hold, and keeps every other line", () => {
+    const lines = [
+      "Because of that wording, the license question is shown to candidates but does not automatically screen anyone out.",
+      "The CPR/BLS question is asked, but it does not screen anyone out, since it can be obtained before the start date.",
+      "The RDA license question is asked of everyone but is not required.",
+      "The interview plan follows the playbook.",
+      "Candidates who do not hold an RDA license are held for your decision.",
+    ];
+    const raw = asDraft(samplePacket((p) => {
+      p.requirements.eligibility.push({ key: "bls", type: "certification", question: "Do you hold current CPR/BLS certification?", expectation: { certification: "BLS" }, rationale: "Required for clinical staff.", knockout: false });
+      p.provenance.assumptions = [...lines];
+    }));
+    const draft = finalizeDraft(raw, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    expect(draft.requirements.eligibility.every((e) => e.knockout)).toBe(true);
+    for (const gone of lines.slice(0, 3)) expect(draft.provenance.assumptions).not.toContain(gone);
+    expect(draft.provenance.assumptions).toEqual(expect.arrayContaining(lines.slice(3)));
+    // still gone when the saved draft is brought up to date again
+    const again = finalizeDraft(draft, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    for (const gone of lines.slice(0, 3)) expect(again.provenance.assumptions).not.toContain(gone);
+    expect(again.provenance.assumptions).toEqual(expect.arrayContaining(lines.slice(3)));
+    expect(saysFormHoldsNobody("Not set yet: who interviews.")).toBe(false);
+    expect(saysFormHoldsNobody("The question is not a knockout.")).toBe(true);
+  });
+
+  it("takes the owner's-call mark, and any '(ask only when …)', out of every question on the form and in the AI interview (review of the live-test fixes, 12 Nov 2026)", () => {
+    const RDA = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+    const raw = asDraft(samplePacket((p) => {
+      p.requirements.eligibility.push({ key: "rda", type: "license", question: `${RDA}${OWNERS_CALL_MARK}`, expectation: { license: "RDA" }, rationale: "This job requires it.", knockout: true });
+      p.screening.questions[0].question = "Which certifications do you hold (ask only when the owner requires it)?";
+    }));
+    const draft = finalizeDraft(raw, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    expect(draft.requirements.eligibility.find((e) => e.key === "rda")?.question).toBe(RDA);
+    expect(draft.screening.questions[0].question).toBe("Which certifications do you hold?");
+    expect(JSON.stringify([draft.requirements.eligibility, draft.screening.questions])).not.toMatch(/ask only when/i);
+    // the rest of the words are the model's, as written
+    expect(draft.requirements.eligibility.find((e) => e.key === "schedule")?.question).toBe("Are you available Monday to Friday, 8 to 5?");
+    expect(draft.screening.questions.slice(1).map((q) => q.question)).toEqual(samplePacket().screening.questions.slice(1).map((q) => q.question));
+  });
+
   it("writes the model's own lines with 'the job', never 'the packet', as the owner reads them (live test, 12 Nov 2026)", () => {
     const raw = asDraft(samplePacket((p) => { p.provenance.assumptions = ["The packet assumes a Monday start.", "Packet pay follows the playbook.", "Assumed the draft packet's schedule."]; }));
     const draft = finalizeDraft(raw, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
     expect(draft.provenance.assumptions).toEqual(expect.arrayContaining(["The job assumes a Monday start.", "Job pay follows the playbook.", "Assumed the draft's schedule."]));
     expect(draft.provenance.assumptions.join(" ")).not.toMatch(/packet/i);
+  });
+});
+
+// Review of the live-test fixes, 12 Nov 2026: only the prompt kept a question the owner unticked off the form, and
+// every question on a draft's form holds a "no".
+describe("a question the owner left unticked never goes on a draft just written", () => {
+  const BLS = "Do you hold current CPR/BLS certification?";
+  const RDA = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+  const RDH = "Do you hold an active dental hygiene (RDH) license in the state where this office is located?";
+  const rule = (key: string, question: string, type: DraftRolePacket["requirements"]["eligibility"][number]["type"] = "certification"): DraftRolePacket["requirements"]["eligibility"][number] => ({ key, type, question, expectation: {}, rationale: "Required.", knockout: false });
+  const written = (...rules: DraftRolePacket["requirements"]["eligibility"]) => asDraft(samplePacket((p) => { p.requirements.eligibility = rules; }));
+  const left = (...texts: string[]) => texts.map((text) => ({ field: "eligibility", text, origin: "playbook" as const }));
+  const keys = (d: DraftRolePacket) => d.requirements.eligibility.map((e) => e.key);
+
+  it("drops a rule that is the same requirement as one left unticked, however the model worded it", () => {
+    const draft = written(rule("rdh_license", "Do you hold an active dental hygiene (RDH) license in CA?", "license"), rule("bls", "Do you hold current CPR/BLS certification (or can you obtain it before your start date)?"), rule("bls_again", "Do you have a current CPR/BLS certification?"), rule("schedule", "Are you available for the days this office is open?", "schedule_availability"));
+    const out = withoutUntickedQuestions(draft, facts({ eligibilityNotes: [RDH, "Are you available for the days this office is open?"], suggestions: left(BLS) }));
+    expect(keys(out)).toEqual(["rdh_license", "schedule"]);
+    // the draft it was given is left as it was
+    expect(keys(draft)).toEqual(["rdh_license", "bls", "bls_again", "schedule"]);
+    // nothing left unticked: nothing taken out
+    expect(withoutUntickedQuestions(draft, facts({ eligibilityNotes: [RDH] }))).toBe(draft);
+  });
+
+  it("keeps a rule that is among the questions the owner chose, even beside one left unticked", () => {
+    const draft = written(rule("bls", BLS));
+    expect(keys(withoutUntickedQuestions(draft, facts({ eligibilityNotes: [BLS], suggestions: left(BLS) })))).toEqual(["bls"]);
+  });
+
+  it("drops the licence question of a deal-breaker counted openly when the owner left that question unticked, in the model's own words too", () => {
+    const f = facts({ mustHaves: ["Four-handed dentistry", "Active California RDA license"], dealBreakers: ["No active California RDA license"], eligibilityNotes: ["Do you hold a current radiation safety / x-ray certification and CPR/BLS?"], suggestions: left(RDA) });
+    const draft = written(rule("ca_rda_license", "Do you currently hold an active California RDA license?", "license"), rule("xray_bls", "Do you hold a current radiation safety / x-ray certification and CPR/BLS?"));
+    expect(keys(withoutUntickedQuestions(draft, f))).toEqual(["xray_bls"]);
+    // the must-have still counts: only the question is left off the form
+    expect(f.mustHaves).toContain("Active California RDA license");
+  });
+
+  it("is only for a draft just written: bringing a saved draft up to date keeps a question the owner confirmed putting back", () => {
+    const draft = written(rule("bls", BLS));
+    const saved = finalizeDraft(draft, ctx(facts({ suggestions: left(BLS) })), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    expect(keys(saved)).toEqual(["bls"]);
+    expect(saved.requirements.eligibility[0].knockout).toBe(true);
   });
 });
 

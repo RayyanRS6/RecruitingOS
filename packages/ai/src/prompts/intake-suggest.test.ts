@@ -10,8 +10,18 @@ const input = (over: Partial<IntakeSuggestInput> = {}): IntakeSuggestInput => ({
 
 describe("intake.suggest", () => {
   it("is its own task on Haiku 5.5", () => {
-    expect(intakeSuggestPrompt).toMatchObject({ key: "intake.suggest", version: 1, task: "intake.suggest", agent: "intake" });
+    expect(intakeSuggestPrompt).toMatchObject({ key: "intake.suggest", version: 2, task: "intake.suggest", agent: "intake" });
     expect(modelForTask("intake.suggest", modelTableFromEnv({}))).toBe("claude-haiku-5-5");
+  });
+
+  // v2 (review of the live-test fixes, 12 Nov 2026): a "no" to any question on a draft's form holds the application, and
+  // a tool or experience question fits none of the kinds a form question may be
+  it("asks for questions for the form only of the kinds a form question may be, never a tool or experience question", () => {
+    const sys = intakeSuggestPrompt.system(input()).map((b) => b.text).join("\n");
+    expect(sys).toContain("ask only these kinds: a licence or certificate the job needs, the legal right to work, the schedule, the start date, the place of work or travel, or a bona fide physical task such as lifting or driving.");
+    expect(sys).toContain("Never a question about a tool, a skill or experience");
+    expect(sys).toContain("those are must-haves");
+    expect(sys).not.toMatch(/a licence or certificate it needs, a tool,/);
   });
 
   it("gives the model the job's facts, one a line, between the job tags, and nothing else", () => {

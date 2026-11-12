@@ -266,6 +266,9 @@ describe("the job builder", () => {
     expect(html).toContain(draft.description.publicJobDescription.slice(0, 40));
     expect(html).toContain("What we&#x27;re looking for");
     expect(html).toContain("Quick questions on the application form");
+    // its questions each hold a "no", said with the saved job's chip (review of the live-test fixes, 12 Nov 2026)
+    expect(html).toMatch(/Quick questions on the application form<\/h3>[\s\S]*?<li[^>]*>Are you available Monday to Friday, 8 to 5\?<\/li><\/ul><p><span class="chip needs">A &quot;no&quot; holds it for your decision<\/span><\/p>/);
+    expect(html.match(/holds it for your decision/g)).toHaveLength(1);
     expect(html).not.toContain("Still missing");
     // the requirements check's suggestion sits under the part it is about, with its one-tap fix
     expect(html).toContain("Hard to check before someone starts:");

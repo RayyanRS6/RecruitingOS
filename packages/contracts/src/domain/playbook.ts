@@ -62,6 +62,18 @@ export function ownersCall(rule: { expectationByJurisdiction?: Record<string, Re
   return places.length > 0 && places.every((x) => x?.optional === true);
 }
 
+/** "(ask only when the owner requires it)", the draft prompt's mark on such a question, or any "(ask only when …)". */
+const ASK_ONLY_WHEN = /\s*\(\s*ask only when\b[^)]*\)/gi;
+
+/**
+ * Words a model wrote, without the owner's-call mark it was shown (or any "(ask only when …)"): an instruction for the
+ * AI, never words for the owner or a candidate. Taken out of the job builder's card options, the answers stored from
+ * them, and the draft's questions (review of the live-test fixes, 12 Nov 2026).
+ */
+export function withoutOwnersCallMark(text: string): string {
+  return text.search(ASK_ONLY_WHEN) < 0 ? text : text.replace(ASK_ONLY_WHEN, "").trim();
+}
+
 export const Playbook = z.object({
   vertical: z.string(),
   version: z.number().int().min(1),

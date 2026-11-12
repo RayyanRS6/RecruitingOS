@@ -1,5 +1,5 @@
 import {
-  EmploymentType, HireReason, INTAKE_ESSENTIALS, RemotePolicy, formatPayRange, mustHaveOf, restatementsOf,
+  EmploymentType, HireReason, INTAKE_ESSENTIALS, RemotePolicy, formatPayRange, mustHaveOf, restatementsOf, withoutOwnersCallMark,
   type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakePayCard, type IntakeQuestion, type IntakeReadiness, type IntakeRefusal, type IntakeServerState, type PayOrigin, type RolePacket,
 } from "@ros/contracts";
@@ -374,10 +374,11 @@ const REASON_WORDS: Array<[RegExp, string]> = [[/\b(?:replac\w*|left|quit\w*|bac
 /**
  * A card's answer as the role keeps it. The model is asked to make an option's value the words to store, but it sometimes
  * writes a code instead ("rda_license", "mon_fri_days", "backfill" on staging, 13 Oct 2026), which then showed on the
- * draft as the code. A value that looks like a code is replaced by the label the person actually ticked.
+ * draft as the code. A value that looks like a code is replaced by the label the person actually ticked. Words meant only
+ * for the AI ("(ask only when the owner requires it)") are never kept (review of the live-test fixes, 12 Nov 2026).
  */
 export function storedAnswer(option: { label: string; value: string }): string {
-  return /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/.test(option.value.trim()) && option.label.trim() ? option.label.trim() : option.value;
+  return withoutOwnersCallMark(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/.test(option.value.trim()) && option.label.trim() ? option.label.trim() : option.value);
 }
 
 /** A plain word for a field the packet keeps as one of a few values ("Full time" is full_time); refused when it names none. */
@@ -531,7 +532,7 @@ export function applyAnswers(facts: IntakeFacts, questions: IntakeQuestion[], an
     if (value === undefined) continue;
     // An option in the owner's own words is kept as their words, like words typed: never guessed from.
     setText(edit, q.field, value, now, first ? storedAnswer(first) : undefined, first?.origin !== "owner");
-    edit.summary.push(`${FIELD_LABEL[q.field]}: ${first?.label ?? value}`);
+    edit.summary.push(`${FIELD_LABEL[q.field]}: ${withoutOwnersCallMark(first?.label ?? value)}`);
   }
   return edit;
 }
@@ -678,6 +679,9 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
     if (!suggestions.some((s) => s.field === u.field && same(s.text, u.value))) suggestions.push({ field: u.field, text: u.value, origin: u.origin });
     edit.facts.suggestions = suggestions;
   }
+  // The person went through the questions for the form (step 9): the draft's form has exactly the ones they chose. Only
+  // this edit sets the marker, never the model (review of the live-test fixes, 12 Nov 2026).
+  if (patch.formQuestionsChosen) f.formQuestionsChosen = true;
   for (const k of patch.clear ?? []) {
     (f as Record<string, unknown>)[k] = undefined;
     if (k === "decisionMaker") f.decisionMakerUserId = undefined;
@@ -764,6 +768,7 @@ export function withoutServerOwned(facts: IntakeFacts): IntakeFacts {
   delete out.decisionMakerUserId;
   delete out.interviewerUserIds;
   delete out.suggestions;
+  delete out.formQuestionsChosen;
   return out;
 }
 

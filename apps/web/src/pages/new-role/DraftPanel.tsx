@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { DraftRolePacket, IntakeFactsPatch, IntakeSessionView, PacketFlag } from "@ros/contracts";
-import { Alert, Avatar, Button, cn, Eyebrow, Field, Icon, IconButton, IconLabel, Segmented } from "@ros/ui";
+import { Alert, Avatar, Button, Chip, cn, Eyebrow, Field, Icon, IconButton, IconLabel, Segmented } from "@ros/ui";
 import { DraftClosingDate } from "../../components/ClosingDate";
 import { FactsEditor, type TeamPick } from "./FactsEditor";
 import { BULLETS, DRAFT_H3, DRAFT_PART, DRAFT_PART_HEAD, PANE_HEIGHT } from "./look";
@@ -228,7 +228,10 @@ function RedraftAlert(props: { warning: string | null; drafting: boolean; onRedr
   );
 }
 
-/** One section: its heading, who sees it, the words (or the proposed words, marked), and any suggestions about it. */
+/**
+ * One section: its heading, who sees it, the words (or the proposed words, marked), its status as a chip (the questions
+ * for the form: a "no" holds the application), and any suggestions about it.
+ */
 function SectionView(props: { s: DraftSection; proposedVersion: DraftSection | null; proposed: boolean; changed: boolean; flags: number; suggestions: RequirementSuggestion[]; onFix: (fixId: string) => void; fixing: string | null; onDismiss: (id: string) => void }) {
   const { s } = props;
   const shown = props.proposedVersion ?? s;
@@ -247,6 +250,7 @@ function SectionView(props: { s: DraftSection; proposedVersion: DraftSection | n
       ) : (
         <ul className={BULLETS}>{shown.items.map((t, i) => <li key={`${i}-${t}`}>{t}</li>)}</ul>
       )}
+      {shown.note ? <p><Chip tone="needs">{shown.note}</Chip></p> : null}
       {props.flags ? <p className="small inline-flex items-center gap-1.5 text-caution"><Icon name="flag" size={13} /> Wording in this part needs a decision (above).</p> : null}
       {props.suggestions.map((sg) => <SuggestionCard key={sg.id} s={sg} onFix={props.onFix} fixing={props.fixing} onDismiss={props.onDismiss} />)}
     </section>

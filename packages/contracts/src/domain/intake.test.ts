@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mustHaveOf, restatementsOf, rulesOut } from "./intake";
+import { IntakeFacts, IntakeTurn, mustHaveOf, restatementsOf, rulesOut } from "./intake";
+import { withoutOwnersCallMark } from "./playbook";
 
 /**
  * A deal-breaker as the must-have it rules people out on (live test, 12 November 2026: "No active California RDA
@@ -79,5 +80,25 @@ describe("words that rule someone out", () => {
 
   it("are never what a deal-breaker turned round reads as", () => {
     for (const d of ["No active California RDA license", "Cannot work Saturdays", "Not licensed in California", "Won't work weekends", "Missing CPR certification."]) expect(rulesOut(mustHaveOf(d)), d).toBe(false);
+  });
+});
+
+// Review of the live-test fixes, 12 Nov 2026: a note the assistant read was taken for the owner's choice of the form's
+// questions, and the draft prompt's mark could reach a card the owner reads.
+describe("what only the server sets, and words only the AI reads", () => {
+  it("never takes the marker that the owner went through the questions for the form from what the assistant extracts", () => {
+    const turn = IntakeTurn.parse({ assistantMessage: "Noted.", factsExtracted: { eligibilityNotes: ["Able to work Saturdays"], formQuestionsChosen: true }, missingFacts: [], readyToCompile: false, confidence: "low" });
+    expect(turn.factsExtracted.eligibilityNotes).toEqual(["Able to work Saturdays"]);
+    expect("formQuestionsChosen" in turn.factsExtracted).toBe(false);
+    // the facts themselves keep it, as the server set it
+    expect(IntakeFacts.parse({ formQuestionsChosen: true }).formQuestionsChosen).toBe(true);
+  });
+
+  it("takes the owner's-call mark, or any '(ask only when …)', out of words a model wrote, and leaves other words alone", () => {
+    const rda = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+    expect(withoutOwnersCallMark(`${rda} (ask only when the owner requires it)`)).toBe(rda);
+    expect(withoutOwnersCallMark("Are you available on Saturdays? (Ask only when the office opens then)")).toBe("Are you available on Saturdays?");
+    expect(withoutOwnersCallMark("Which certifications do you hold (ask only when the owner requires it)?")).toBe("Which certifications do you hold?");
+    for (const t of [rda, "  Words as typed  ", "Do you hold a CDL (class A)?"]) expect(withoutOwnersCallMark(t), t).toBe(t);
   });
 });

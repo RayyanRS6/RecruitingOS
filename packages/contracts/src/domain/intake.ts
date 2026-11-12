@@ -64,6 +64,15 @@ export const IntakeFacts = z.object({
   decisionMakerUserId: z.string().optional(),
   interviewerUserIds: z.array(z.string()).optional(),
   suggestions: z.array(IntakeSuggestion).optional(),
+  /**
+   * Set only by the server: the owner went through the questions for the form (the quick start's step 9, `patch.
+   * formQuestionsChosen`), so `eligibilityNotes` holds the ones they chose and `suggestions` with field "eligibility" the
+   * ones they left unticked, and the draft's form has exactly the chosen ones (intake.compile v6). Without it the draft
+   * starts from the playbook's typical questions. Never in what intake.turn extracts (`IntakeTurn`), so the model cannot
+   * set it (review of the live-test fixes, 12 Nov 2026: a note the assistant read from a sentence made the form "exactly"
+   * that one question).
+   */
+  formQuestionsChosen: z.boolean().optional(),
 });
 export type IntakeFacts = z.infer<typeof IntakeFacts>;
 
@@ -205,10 +214,13 @@ export const IntakeQuestion = z.object({
 });
 export type IntakeQuestion = z.infer<typeof IntakeQuestion>;
 
-/** One assistant turn of the intake conversation (intake.turn v2). */
+/**
+ * One assistant turn of the intake conversation (intake.turn v2). What it extracts is the facts without the marker only
+ * the server sets (`formQuestionsChosen`): the model is never asked for it, and a copy it wrote anyway is dropped.
+ */
 export const IntakeTurn = z.object({
   assistantMessage: z.string().min(1),
-  factsExtracted: IntakeFacts,
+  factsExtracted: IntakeFacts.omit({ formQuestionsChosen: true }),
   missingFacts: z.array(IntakeMissingFact),
   /** Up to three question cards, the most important first. The owner can always ignore them and type. */
   questions: z.array(IntakeQuestion).max(3).default([]),

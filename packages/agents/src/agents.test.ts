@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, screenTurnPrompt, type IntakeContext, type ScreenContext } from "@ros/ai";
+import { FakeProvider, OWNERS_CALL_MARK, callPrompt, intakeCompilePrompt, intakeTurnPrompt, screenTurnPrompt, type IntakeContext, type ScreenContext } from "@ros/ai";
 import { DraftRolePacket, IntakeExtraction, IntakeTurn, type IntakeQuestion } from "@ros/contracts";
+import { applyAnswers, normalizeFacts } from "@ros/core";
 import { consumerPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { futureRolesLine, reminderClosingLine } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
@@ -152,7 +153,8 @@ describe("market pay in the assistant's words, from the real prompt (intake.turn
   });
 
   it("writes money and places the way the pay card does", async () => {
-    expect(intakeTurnPrompt.version).toBe(5);
+    // v6 (the live test and its review, 12 Nov 2026): the playbook's RDA question reworded for candidates, with no mark
+    expect(intakeTurnPrompt.version).toBe(6);
     // v4: option values and facts in plain words, never codes (staging, 13 Oct 2026).
     expect(intakeTurnPrompt.system(ctx(null)).map((b) => b.text).join("\n")).toContain('never a code: "California RDA license", not "rda_license"');
     // v5: what was already asked is in the notes and never asked again; a job for another business is said once, never asked
@@ -300,6 +302,23 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
       { label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "assistant" },
     ]);
     expect(out[0].allowOwn).toBe(true);
+  });
+
+  it("never shows the owner words meant only for the AI: the owner's-call mark is taken out of an option, and of what a tick stores (review of the live-test fixes, 12 Nov 2026)", () => {
+    const RDA = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+    const out = prepareQuestions([card({ id: "e", field: "eligibility", prompt: "Which of these should every applicant answer?", options: [{ label: `${RDA}${OWNERS_CALL_MARK}`, value: `${RDA}${OWNERS_CALL_MARK}`, origin: "playbook" }, { label: "Are you available for the days this office is open? (ask only when the office needs it)", value: "Are you available for the days this office is open?", origin: "playbook" }] })], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: [] });
+    expect(out[0].options.map((o) => [o.label, o.value])).toEqual([[RDA, RDA], ["Are you available for the days this office is open?", "Are you available for the days this office is open?"]]);
+    expect(JSON.stringify(out)).not.toMatch(/ask only when|\bowner\b/i);
+    // ticked, the answer is stored in the candidate's words, and the owner's summary line reads them
+    const picked = applyAnswers(normalizeFacts({}), out, [{ questionId: out[0].id, selected: [RDA], own: [], skipped: false }], team);
+    expect(picked.facts.eligibilityNotes).toEqual([RDA]);
+    expect(picked.summary).toEqual([`Eligibility: ${RDA}`]);
+    // a card stored before, with the mark in its option, stores and says the words without it
+    const stored = card({ id: "old", field: "eligibility", options: [{ label: `${RDA}${OWNERS_CALL_MARK}`, value: `${RDA}${OWNERS_CALL_MARK}`, origin: "playbook" }] });
+    const old = applyAnswers(normalizeFacts({}), [stored], [{ questionId: "old", selected: [`${RDA}${OWNERS_CALL_MARK}`], own: [], skipped: false }], team);
+    expect(old.facts.eligibilityNotes).toEqual([RDA]);
+    expect(old.summary).toEqual([`Eligibility: ${RDA}`]);
+    expect(applyAnswers(normalizeFacts({}), [stored], [{ questionId: "old", selected: [], own: [], skipped: false }], team).facts.suggestions).toEqual([{ field: "eligibility", text: RDA, origin: "playbook" }]);
   });
 
   it("offers no ready-made must-have for a deal-breaker whose words still rule someone out, only the owner's own words (review of the live test, 12 Nov 2026)", () => {

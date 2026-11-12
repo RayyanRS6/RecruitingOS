@@ -2,11 +2,13 @@ import { z } from "zod";
 import { withoutTag, type PromptDef } from "./registry";
 
 /**
- * Suggestions for the quick start (Wave S3, G3): must-have skills and yes/no screening questions to tick, for a job our
- * hiring guides (packages/playbooks) do not know. The input is the job's own facts as the owner answered them, never
- * anything about a candidate. The suggestions are offered, never applied: the owner ticks the must-haves they want (none
- * are ticked for them), the questions start ticked and can be unticked, and every line passes the fairness word check in
- * code (screenCriterion) before it is shown; a line that fails is dropped without a word.
+ * Suggestions for the quick start (Wave S3, G3): must-have skills and yes/no questions for the application form to tick,
+ * for a job our hiring guides (packages/playbooks) do not know. The input is the job's own facts as the owner answered
+ * them, never anything about a candidate. The suggestions are offered, never applied: the owner ticks the must-haves they
+ * want (none are ticked for them), the questions start ticked and can be unticked, and every line passes the fairness
+ * word check in code (screenCriterion) before it is shown; a line that fails is dropped without a word. A "no" to any
+ * question on a draft's form holds the application, so the questions are only of the kinds a form question may be (the
+ * eligibility rule types); a tool, a skill or experience is a must-have.
  */
 export type IntakeSuggestInput = {
   /** The job title as the owner typed it. */
@@ -27,7 +29,7 @@ export const MAX_SUGGESTED_QUESTIONS = 4;
 export const IntakeSuggestions = z.object({
   /** Short skills, licences or tools the job really needs, a few words each. */
   mustHaves: z.array(z.string().trim().min(2).max(200)).max(MAX_SUGGESTED_MUST_HAVES).default([]),
-  /** Yes/no questions about the job's real requirements, each answerable by any applicant. */
+  /** Yes/no questions for the application form, each answerable by any applicant, only of the kinds a form question may be. */
   questions: z.array(z.string().trim().min(5).max(300)).max(MAX_SUGGESTED_QUESTIONS).default([]),
 });
 export type IntakeSuggestions = z.infer<typeof IntakeSuggestions>;
@@ -39,7 +41,8 @@ mustHaves: at most ${MAX_SUGGESTED_MUST_HAVES}, the skills, licences, certificat
 - Specific to this job, most important first. No soft traits ("team player", "positive attitude"), nothing generic ("hard working").
 - Leave out the years of experience: the owner already answered that.
 
-questions: at most ${MAX_SUGGESTED_QUESTIONS}, yes/no questions for the application form about the job's real requirements: a licence or certificate it needs, a tool, the schedule, travel, lifting or driving the work involves.
+questions: at most ${MAX_SUGGESTED_QUESTIONS}, yes/no questions for the application form. A "no" holds the application for the owner, so ask only these kinds: a licence or certificate the job needs, the legal right to work, the schedule, the start date, the place of work or travel, or a bona fide physical task such as lifting or driving.
+- Never a question about a tool, a skill or experience ("Have you worked as a ... before?", "Are you proficient in ...?"): those are must-haves.
 - Each one a single question ending with "?", answerable with yes or no ("Do you hold a valid driver's licence?").
 - Ask about what the person can do or holds, never about who they are.
 
@@ -70,7 +73,10 @@ export function suggestFacts(input: IntakeSuggestInput): string {
 
 export const intakeSuggestPrompt: PromptDef<IntakeSuggestInput, IntakeSuggestions> = {
   key: "intake.suggest",
-  version: 1,
+  // v2: questions only of the kinds a form question may be (a licence or certificate, the right to work, the schedule,
+  // the start date, the place of work or travel, a bona fide physical task), never a tool or experience question: a "no"
+  // to any question on a draft's form holds the application (review of the live-test fixes, 12 Nov 2026).
+  version: 2,
   task: "intake.suggest",
   agent: "intake",
   schema: IntakeSuggestions,

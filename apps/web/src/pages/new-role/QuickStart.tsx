@@ -126,7 +126,9 @@ export function QuickStart({ scope }: { scope: QuickScope | null }) {
     mutationFn: async () => {
       const answers = state.answers;
       let sessionId = state.sessionId;
-      let facts: Pick<IntakeFacts, "mustHaves"> | null = null;
+      // what the assistant may already have read from the first message (must-haves, the experience, eligibility notes),
+      // which the edit takes out unless the person chose it
+      let facts: Pick<IntakeFacts, "mustHaves" | "niceToHaves" | "eligibilityNotes"> | null = null;
       let open: IntakeQuestion[] = [];
       if (sessionId) {
         // Made on an earlier try whose answers did not go through: the answers go on that draft, not a second one. A
@@ -489,7 +491,8 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
     }
     case "questions": {
       // the guide's for a job it knows; else the general ones and the assistant's, all ticked, except one that is the
-      // owner's call (the RDA licence), unticked until a must-have names it or the person ticks it (`questionOn`)
+      // owner's call (the RDA licence), unticked until the job title or a must-have names it or the person ticks it
+      // (`questionOn`)
       const suggested = offeredQuestions(a, vertical);
       const fromAi = (q: string) => suggest.kind === "ai" && suggest.questions.some((x) => sameText(x, q)) && !GENERAL_QUESTIONS.some((g) => sameText(g, q));
       return (

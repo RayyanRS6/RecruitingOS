@@ -16,6 +16,7 @@ import { GUIDE_OF_VERTICAL, QUICK_STARTS, quickStartsFor } from "../../apps/web/
 import { CHANGE_REQUEST_MAX, changeLine, checkSignature, notDoneLine, nothingToConfirm, openFlags, proposalSections, refinePaths, replyWords, rewordInstruction, suggestionsBySection, takesEffectWords } from "../../apps/web/src/pages/new-role/refine-api";
 import { partsLine } from "../../apps/web/src/pages/new-role/ProposalCard";
 import { applyPacketForm, moveRow, packetFormFrom, packetFormProblem } from "../../apps/web/src/pages/new-role/packet-form";
+import { HOLDS_FOR_DECISION } from "../../apps/web/src/pages/role/applicant-questions";
 import type { RolePacket as WebRolePacket } from "../../apps/web/src/api/client";
 
 /**
@@ -336,6 +337,14 @@ describe("the draft beside the conversation", () => {
     expect(s.find((x) => x.id === "about")?.text).toBe(d.description.publicJobDescription);
     expect(s.find((x) => x.id === "must")?.items).toEqual(d.requirements.mustHaves.map((m) => m.text));
     expect(s.find((x) => x.id === "eligibility")?.items).toEqual(["Are you available Monday to Friday, 8 to 5?"]);
+    // every question on a draft's form holds a "no": the saved job's chip says so on the draft too, so a draft built by
+    // chat says it as the quick start's step 9 does (review of the live-test fixes, 12 Nov 2026)
+    expect(s.find((x) => x.id === "eligibility")?.note).toBe('A "no" holds it for your decision');
+    expect(s.find((x) => x.id === "eligibility")?.note).toBe(HOLDS_FOR_DECISION);
+    expect(s.filter((x) => x.note).map((x) => x.id)).toEqual(["eligibility"]);
+    // a form with no question that holds says nothing of it
+    const none = draftSections({ facts: facts(), draft: { ...d, requirements: { ...d.requirements, eligibility: [] } } });
+    expect(none.find((x) => x.id === "eligibility")?.note).toBeUndefined();
     expect(s.find((x) => x.id === "why")?.text).toBe("The team is growing");
     expect(basicsChips({ facts: facts(), draft: d }).map((c) => c.text)).toEqual(["Irvine, CA", "On site", "Full time", "$24–$28 an hour", "Monday to Friday, 8 to 5"]);
   });
