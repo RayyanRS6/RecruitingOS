@@ -290,6 +290,17 @@ describe("the quick start's suggestions for any job (Wave S3, G3)", () => {
     expect(html).not.toContain("Suggesting skills from your answers…");
   });
 
+  // The live test of 12 Nov 2026: "3 of 6 chosen." beside five suggestions read as if one were missing.
+  it("counts the must-haves chosen against the most a job can have, never as a share of a list of six", () => {
+    const rdh = { ...emptyQuickAnswers(), title: "Dental hygienist", mustHaves: ["Local anesthesia certification (state-dependent)", "Experience with Dentrix, Eaglesoft, or Open Dental", "Digital radiography and intraoral scanning"] };
+    const three = draw({ kind: "guide" }, "musts", rdh, "dental");
+    expect(three).toContain('<p class="small muted" aria-live="polite">3 chosen (up to 6).</p>');
+    expect(three).not.toMatch(/of 6 chosen/);
+    // a deal-breaker counted openly, and the experience when it is a must-have, are counted and named
+    expect(draw({ kind: "guide" }, "musts", { ...rdh, dealBreakers: ["Cannot work Saturdays"] }, "dental")).toContain("4 chosen (up to 6), with 1 deal-breaker.");
+    expect(draw({ kind: "guide" }, "musts", { ...rdh, experience: "2", below: "must" }, "dental")).toContain("4 chosen (up to 6), with the experience.");
+  });
+
   it("says it is suggesting while the assistant works, with add your own still there", () => {
     const html = draw({ kind: "waiting" });
     expect(html).toContain('<p class="small muted" role="status">Suggesting skills from your answers…</p>');

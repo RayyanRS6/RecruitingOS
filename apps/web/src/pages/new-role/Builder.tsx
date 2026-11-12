@@ -29,7 +29,7 @@ import {
   blockersHeading, draftNoRoom, draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, problemAsk, refusedLines, turnProblem, typeInstead, typedWithCards,
   type Deck, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
 } from "./rules";
-import { CHANGE_REQUEST_MAX, asksBack, checkSignature, proposalSections, refinePaths } from "./refine-api";
+import { CHANGE_REQUEST_MAX, checkSignature, nothingToConfirm, proposalSections, refinePaths, replyWords } from "./refine-api";
 
 type Problem = { message: string; ask: RecruiterAction | null };
 type Member = { userId: string; role: string; status: string; email: string; name: string | null };
@@ -78,6 +78,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const [deck, setDeck] = useState<Deck>({ key: "", state: initialCards(), closed: false });
   const [pane, setPane] = useState<"primary" | "secondary">("primary");
   const [proposal, setProposal] = useState<PacketRevisionProposal | null>(null);
+  /** The assistant's reply to a change that needed nothing changed, for this visit only: read out like any reply. */
+  const [reply, setReply] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [blockers, setBlockers] = useState<string[] | null>(null);
@@ -138,14 +140,14 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
 
   const send = useMutation({
     mutationFn: (message: string) => api.post<IntakeTurnResponse>(`${base}/messages`, { message }),
-    onMutate: (message) => { setPending({ key: "pending", role: "owner", content: message }); setThinking("Thinking…"); setProblem(null); setText(""); },
+    onMutate: (message) => { setPending({ key: "pending", role: "owner", content: message }); setThinking("Thinking…"); setProblem(null); setReply(null); setText(""); },
     onSuccess: afterTurn,
     onError: (err, message) => { setText(message); failed(err); },
     onSettled: () => { setPending(null); setThinking(null); },
   });
   const answer = useMutation({
     mutationFn: (input: { answers: IntakeAnswer[]; echo: string; note?: string }) => api.post<IntakeTurnResponse>(`${base}/answers`, { answers: input.answers, ...(input.note ? { note: input.note } : {}) }),
-    onMutate: (input) => { setPending({ key: "pending", role: "owner", content: input.echo, kind: "answers" }); setThinking("Thinking about your answers…"); setProblem(null); if (input.note) setText(""); },
+    onMutate: (input) => { setPending({ key: "pending", role: "owner", content: input.echo, kind: "answers" }); setThinking("Thinking about your answers…"); setProblem(null); setReply(null); if (input.note) setText(""); },
     onSuccess: (r) => {
       afterTurn(r);
       if (r.refused?.length) toast("Some words were not used.", "The reason is in the conversation.");
@@ -297,12 +299,16 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   // became of it stay in the conversation for this visit; the server records both on the draft's history.
   const revise = useMutation({
     mutationFn: (message: string) => api.post<PacketRevisionProposal>(paths.revise, { message }),
-    onMutate: (message) => { setPending({ key: "pending", role: "owner", content: message }); setThinking("Working out the change…"); setProblem(null); setText(""); setProposal(null); },
+    onMutate: (message) => { setPending({ key: "pending", role: "owner", content: message }); setThinking("Working out the change…"); setProblem(null); setReply(null); setText(""); setProposal(null); },
     onSuccess: (r, message) => {
       setLocal((l) => [...l, { key: `ask-${r.revisionId}`, role: "owner", content: message }]);
-      // Asked back instead of changing anything: the question is the reply, and there is nothing to confirm.
-      if (asksBack(r)) setLocal((l) => [...l, { key: `q-${r.revisionId}`, role: "assistant", content: r.question! }]);
-      else setProposal(r);
+      // Nothing to confirm (a question back, or why nothing needs doing): the assistant's reply in the conversation, never
+      // a proposed change (live test, 12 Nov 2026).
+      if (nothingToConfirm(r)) {
+        const words = replyWords(r);
+        setLocal((l) => [...l, { key: `re-${r.revisionId}`, role: "assistant", content: words }]);
+        setReply(words);
+      } else setProposal(r);
     },
     onError: (err, message) => { setText(message); failed(err); },
     onSettled: () => { setPending(null); setThinking(null); },
@@ -381,7 +387,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const draftRunning = draft.isPending || draftingNow(view.progress) || (approve.isPending && draftingNow(view.progress));
   const busy = send.isPending || answer.isPending || revise.isPending || draft.isPending || approve.isPending;
   const lastReply = [...view.messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-  const announce = thinking ? "The assistant is thinking." : problem ? problem.message : proposal ? `Proposed change: ${proposal.summary}` : lastReply;
+  const announce = thinking ? "The assistant is thinking." : problem ? problem.message : proposal ? `Proposed change: ${proposal.summary}` : reply ?? lastReply;
   const help = approvalHelp(view.readiness);
   // Once the draft is written, words typed in the box ask for a change to it; before that they go to the conversation.
   const asks = !!hasDraft;

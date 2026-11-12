@@ -477,7 +477,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
             </>
           ) : (
             <div className={SOLO}>
-              <Field label="Role packet JSON" htmlFor="packet-json"><textarea id="packet-json" className="textarea min-h-[360px] font-mono text-[12px]" value={json} onChange={(e) => setJson(e.target.value)} /></Field>
+              <Field label="All the job's details (JSON)" htmlFor="packet-json"><textarea id="packet-json" className="textarea min-h-[360px] font-mono text-[12px]" value={json} onChange={(e) => setJson(e.target.value)} /></Field>
             </div>
           )}
           {/* The foot: what changed (with what a save does to people already read), anything wrong, and the save as the primary pill (or the review of a live change) */}

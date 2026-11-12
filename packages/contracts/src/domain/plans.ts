@@ -214,6 +214,11 @@ export const AI_HELP_LINE = {
   draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. Upgrade to write the draft.`,
   /** Changing a job by chat: the editor needs no AI. */
   revise: `${USED_UP} Nothing was changed. You can still make the change in the editor.`,
+  /**
+   * Changing a draft by chat, before the job exists: no editor is named, since a draft's Edit changes the answers and
+   * writing the draft again with them needs AI help too (live test, 12 Nov 2026).
+   */
+  reviseDraft: `${USED_UP} Nothing was changed.`,
   /** The text about the company: the person can write it. */
   about: `${USED_UP} You can write this text yourself; it shows the same way.`,
   /** A new job, before anyone types. */
@@ -234,6 +239,7 @@ export function aiHelpLine(key: keyof typeof AI_HELP_LINE, opts: { planKey?: str
     draft: `${USED_UP} Everything you confirmed is kept. ${way}`,
     draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. ${way}`,
     revise: AI_HELP_LINE.revise,
+    reviseDraft: AI_HELP_LINE.reviseDraft,
     about: AI_HELP_LINE.about,
     newJob: `${USED_UP} ${way}`,
     newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. ${way}`,
@@ -246,6 +252,7 @@ export const AI_HELP_BUSY_LINE = {
   turn: `${BUSY} Your draft is saved. Try again in a few minutes.`,
   draft: `${BUSY} Everything you confirmed is kept. Try again in a few minutes.`,
   revise: `${BUSY} Nothing was changed. Try again in a few minutes, or make the change in the editor.`,
+  reviseDraft: `${BUSY} Nothing was changed. Try again in a few minutes.`,
   about: `${BUSY} Try again in a few minutes, or write this text yourself; it shows the same way.`,
 } as const;
 

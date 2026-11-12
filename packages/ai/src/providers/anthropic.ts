@@ -76,7 +76,8 @@ export function withoutNulls(value: unknown): unknown {
 
 /**
  * The JSON object in a reply written without constrained decoding: the whole reply, or else the first fenced block, or
- * else the outermost braces. Throws when none of them parses; the caller records the reply as invalid.
+ * else the outermost braces, or else the first whole object that parses (a reply that adds a note with braces of its own
+ * after the object, or a second object). Throws when none of them parses; the caller records the reply as invalid.
  */
 export function extractJson(text: string): unknown {
   const trimmed = text.trim();
@@ -92,7 +93,42 @@ export function extractJson(text: string): unknown {
       // try the next shape
     }
   }
+  for (const candidate of wholeObjects(trimmed)) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // try the next one
+    }
+  }
   throw new Error("the reply holds no JSON object");
+}
+
+/**
+ * Each object in the text whose braces balance, in order, read with strings skipped (a brace inside a string does not
+ * count). The scan goes on after each object, so it reads the text once however many there are.
+ */
+function* wholeObjects(text: string): Generator<string> {
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (depth > 0 && ch === '"') inString = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0) yield text.slice(start, i + 1);
+    }
+  }
 }
 
 /**

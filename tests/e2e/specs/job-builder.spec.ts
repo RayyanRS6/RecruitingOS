@@ -76,6 +76,12 @@ test.describe("the job builder", () => {
     const closeCards = page.getByRole("button", { name: "Close the questions" });
     if (await closeCards.isVisible()) await closeCards.click();
     await expect(page.getByRole("textbox", { name: "Ask for a change to the draft" })).toHaveAttribute("placeholder", /Ask me to change anything/);
+    // a request that changes nothing is the assistant's reply in the conversation, never a change to confirm (live test,
+    // 12 Nov 2026); the stand-in answers that a draft's pay is set on the pay card
+    await page.getByRole("textbox", { name: "Ask for a change to the draft" }).fill("Change the pay to $50 to $60 an hour");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Conversation with the assistant" }).getByText("Not done: Change the pay to $50 to $60 an hour. Pay is set on the pay card.")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("region", { name: "Proposed change" })).toHaveCount(0);
     // a change by chat is shown field by field first, and saved only on Confirm
     await page.getByRole("textbox", { name: "Ask for a change to the draft" }).fill("Add a must-have: Dentrix experience");
     await page.getByRole("button", { name: "Send", exact: true }).click();

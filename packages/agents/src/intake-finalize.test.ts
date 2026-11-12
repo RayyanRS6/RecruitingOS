@@ -117,6 +117,13 @@ describe("finalizeDraft never keeps what the model says a person decided", () =>
     expect(reasonOnly.provenance.assumptions).toEqual(expect.arrayContaining([lines[2], lines[3], lines[4], "Not set yet: who interviews."]));
     for (const gone of [lines[0], lines[1], "Not set yet: why you are hiring."]) expect(reasonOnly.provenance.assumptions).not.toContain(gone);
   });
+
+  it("writes the model's own lines with 'the job', never 'the packet', as the owner reads them (live test, 12 Nov 2026)", () => {
+    const raw = asDraft(samplePacket((p) => { p.provenance.assumptions = ["The packet assumes a Monday start.", "Packet pay follows the playbook.", "Assumed the draft packet's schedule."]; }));
+    const draft = finalizeDraft(raw, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    expect(draft.provenance.assumptions).toEqual(expect.arrayContaining(["The job assumes a Monday start.", "Job pay follows the playbook.", "Assumed the draft's schedule."]));
+    expect(draft.provenance.assumptions.join(" ")).not.toMatch(/packet/i);
+  });
 });
 
 describe("a change confirmed on the draft goes into the answers too, so writing it again keeps it (live test, 12 Nov 2026)", () => {

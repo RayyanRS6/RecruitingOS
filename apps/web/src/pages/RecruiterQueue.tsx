@@ -522,7 +522,7 @@ function EscalationDetail({ id }: { id: string }) {
                 {ctx.company ? <Card title="Company"><dl className="kv"><dt>Name</dt><dd>{ctx.company.name}</dd><dt>Vertical</dt><dd>{ctx.company.vertical}</dd><dt>Size</dt><dd>{ctx.company.sizeBand}</dd></dl></Card> : null}
                 {ctx.intakeSession ? <DraftHandover draft={ctx.intakeSession} onOpen={e.grant ? () => enter.mutate(e) : null} opening={enter.isPending} /> : null}
                 {ctx.role && ctx.packet ? (
-                  <Card title={`Role: ${ctx.role.title} (packet v${ctx.packet.version})`}>
+                  <Card title={`Role: ${ctx.role.title} (version ${ctx.packet.version})`}>
                     <dl className="kv">
                       <dt>Status</dt><dd>{ctx.role.status}</dd>
                       <dt>Pay</dt><dd>{ctx.packet.packet.compensation.min}–{ctx.packet.packet.compensation.max} {ctx.packet.packet.compensation.basis}, ceiling {ctx.packet.packet.compensation.ceiling}</dd>

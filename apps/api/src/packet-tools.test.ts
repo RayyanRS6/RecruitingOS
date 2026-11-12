@@ -32,6 +32,14 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
   const versions = async () => read<Array<{ version: number; status: string; source: string; changeSummary: string; createdBy: { id: string }; packet: RolePacket }>>(await json(owner, "GET", `/api/v1/roles/${roleId}/packets`));
   const newest = async () => (await versions())[0];
   const meId = async (cookie: string) => (await read<{ user: { id: string } }>(await json(cookie, "GET", "/api/v1/auth/me"))).user.id;
+  /** The packet.revise runs asked with these words. */
+  const revisionRuns = async (request: string) => (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "packet.revise"))).filter((x) => (x.inputRef as { request?: string }).request === request);
+  /** Those runs as the first try and the fresh one, which names the first (`retryOf`). */
+  const triesOf = async (request: string) => {
+    const runs = await revisionRuns(request);
+    const again = runs.filter((x) => (x.inputRef as { retryOf?: string }).retryOf);
+    return { runs, first: runs.find((x) => !(x.inputRef as { retryOf?: string }).retryOf), again };
+  };
   const MESSAGE = "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
 
   beforeAll(async () => {
@@ -152,9 +160,45 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       const r = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: "Add a must-have: Eaglesoft experience" });
       expect(r.status).toBe(502);
       expect(await errorOf(r)).toMatchObject({ code: "ai_failed", message: expect.stringMatching(/Nothing was changed/) });
+      // an outage is not asked again here: one run, as it ended
+      expect((await revisionRuns("Add a must-have: Eaglesoft experience")).map((x) => x.status)).toEqual(["error"]);
       container.fake!.clearScripts();
       const tooLong = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: "x".repeat(2_001) });
       expect(await errorOf(tooLong)).toMatchObject({ code: "message_too_long", message: expect.stringMatching(/2,000 characters/) });
+    });
+
+    // The live test of 12 Nov 2026: "no valid output (unconstrained): the reply holds no JSON object", and the same words
+    // sent again worked.
+    it("a reply with no usable answer is asked for once more, afresh; a second one fails plainly, naming no editor", async () => {
+      container.fake!.failNext("packet.revise", "unusable");
+      const once = "Make the messages more direct";
+      const r = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: once });
+      expect(r.status).toBe(200);
+      const proposal = await read<PacketRevisionProposal>(r);
+      expect(proposal.sections).toEqual(["communication"]);
+      // the first run keeps its row as it ended (Console > Problems lists it); the second names it, and the proposal is the second's
+      const tries = await triesOf(once);
+      expect(tries.runs).toHaveLength(2);
+      expect(tries.first).toMatchObject({ status: "invalid_output", error: "no valid output (unconstrained): the reply holds no JSON object" });
+      expect(tries.again).toEqual([expect.objectContaining({ status: "ok", inputRef: expect.objectContaining({ target: "draft", sessionId: draftId, request: once, retryOf: tries.first!.id }) })]);
+      expect(proposal.revisionId).toBe(tries.again[0].id);
+      const applied = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions/${proposal.revisionId}/apply`);
+      expect(applied.status).toBe(201);
+      expect((await read<{ draft: DraftRolePacket }>(applied)).draft.communication.tone).toBe("direct");
+      // twice: nothing changed, and the way on is to try again or bring in a recruiter (the builder's button), never the editor
+      container.fake!.failNext("packet.revise", "unusable");
+      container.fake!.failNext("packet.revise", "unusable");
+      const twice = "Make the messages warmer";
+      const failed = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: twice });
+      expect(failed.status).toBe(502);
+      const error = await errorOf(failed);
+      expect(error).toMatchObject({ code: "ai_failed", message: "The assistant could not work out that change. Nothing was changed. Try again, or bring in a recruiter." });
+      expect(error.message).not.toMatch(/editor/);
+      // asked twice and no more
+      const both = await triesOf(twice);
+      expect(both.runs.map((x) => x.status)).toEqual(["invalid_output", "invalid_output"]);
+      expect(both.again.map((x) => (x.inputRef as { retryOf?: string }).retryOf)).toEqual([both.first!.id]);
+      container.fake!.clearScripts();
     });
 
     it("the requirements check suggests, and only a tapped fix changes the draft (C16)", async () => {
@@ -343,6 +387,25 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       const runs = await container.db.select().from(aiRuns).where(and(eq(aiRuns.task, "packet.revise"), eq(aiRuns.status, "ok")));
       const fromDraft = runs.find((x) => (x.inputRef as { target?: string }).target === "draft" && !x.finalOutcome)!;
       expect((await errorOf(await json(owner, "POST", `/api/v1/roles/${roleId}/revisions/${fromDraft.id}/apply`))).code).toBe("revision_not_found");
+    });
+
+    it("on a saved role too, a reply with no usable answer is asked for once more, afresh; twice, the editor is the way on", async () => {
+      container.fake!.failNext("packet.revise", "unusable");
+      const once = "Make the messages more formal for this job";
+      const r = await json(owner, "POST", `/api/v1/roles/${roleId}/revisions`, { message: once });
+      expect(r.status).toBe(200);
+      const proposal = await read<PacketRevisionProposal>(r);
+      expect(proposal.sections).toEqual(["communication"]);
+      const tries = await triesOf(once);
+      expect(tries.first).toMatchObject({ status: "invalid_output" });
+      expect(tries.again).toEqual([expect.objectContaining({ status: "ok", inputRef: expect.objectContaining({ target: "role", roleId, retryOf: tries.first!.id }) })]);
+      expect(proposal.revisionId).toBe(tries.again[0].id);
+      container.fake!.failNext("packet.revise", "unusable");
+      container.fake!.failNext("packet.revise", "unusable");
+      const failed = await json(owner, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Make the messages warmer for this job" });
+      expect(failed.status).toBe(502);
+      expect(await errorOf(failed)).toMatchObject({ code: "ai_failed", message: "The assistant could not work out that change. Nothing was changed. Try again, or make the change in the editor." });
+      container.fake!.clearScripts();
     });
 
     it("the requirements check on the role: suggestions only, a tapped fix saves a new version", async () => {

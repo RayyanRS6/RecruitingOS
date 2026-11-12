@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { PacketRevision as PacketRevisionSchema, REVISABLE_SECTION_LABEL, RevisableSection, type Actor, type DeclinedCriterion, type DraftRolePacket, type PacketRevision, type RevisionNotDone } from "@ros/contracts";
-import { packetRevisePrompt, runPromptDetached, type AiRuntime, type RunOutcome } from "@ros/ai";
+import { packetRevisePrompt, routeDeadline, runPromptDetached, type AiRuntime, type RunOutcome } from "@ros/ai";
 import { normalizeCriterion, screenCriterion } from "@ros/core";
 import { aiRuns, type Db, type Queryable } from "@ros/db";
 
@@ -45,31 +45,81 @@ export function editableView(packet: DraftRolePacket, allowed: readonly Revisabl
 }
 
 /**
+ * What a fresh try needs of the request's time: one call with its correction turn (the provider starts a correction only
+ * with 120 s of its budget left) and the 30 s the route keeps to record the run and answer (providers/anthropic.ts).
+ */
+const FRESH_TRY_NEEDS_MS = 150_000;
+
+/**
+ * Whether a proposal that failed is worth one fresh call: neither reply held a usable answer (live test, 12 Nov 2026:
+ * "no valid output (unconstrained): the reply holds no JSON object", and the same words sent again worked), and the
+ * request has the time. Never for a reply cut off at max_tokens (asking again is cut off the same way), an outage, a
+ * refusal, no AI help left, or a call that already ran out of time for its correction.
+ */
+export function worthAFreshTry(out: RunOutcome<unknown>, deadlineAt: number, now = Date.now()): boolean {
+  return !out.ok && out.reason === "invalid" && out.error.startsWith("no valid output") && !out.error.includes("too little time") && deadlineAt - now >= FRESH_TRY_NEEDS_MS;
+}
+
+/**
  * Asks the model for a proposal, with no transaction open while it thinks (`runPromptDetached`). The run row keeps what
  * the proposal was worked out on (the role's version, or the draft's fingerprint) and the request itself, for the record.
+ * When neither reply of the call held a usable answer, it asks once more, afresh, within the request's deadline
+ * (`worthAFreshTry`): the first run keeps its row as it ended, the second names it (`retryOf`), and the proposal is the
+ * second run's. What the person reads comes back in plain words (`plainRevision`).
  */
 export async function proposeRevision(
   db: Db,
   ai: AiRuntime,
-  input: { companyId: string; companyName: string; actor: Actor; target: RevisionTarget; packet: DraftRolePacket; message: string; declined: DeclinedCriterion[] },
+  input: { companyId: string; companyName: string; actor: Actor; target: RevisionTarget; packet: DraftRolePacket; message: string; declined: DeclinedCriterion[]; deadlineAt?: number },
 ): Promise<RunOutcome<PacketRevision>> {
+  const deadlineAt = input.deadlineAt ?? routeDeadline();
   const allowed = input.target.kind === "role" ? REVISABLE_FOR_ROLE : REVISABLE_FOR_DRAFT;
   const ref = input.target.kind === "role" ? { target: "role", roleId: input.target.roleId, baseVersion: input.target.baseVersion } : { target: "draft", sessionId: input.target.sessionId, baseHash: input.target.baseHash };
-  return runPromptDetached(
-    db,
-    ai,
-    packetRevisePrompt,
-    { companyName: input.companyName, target: input.target.kind, roleStatus: input.target.kind === "role" ? input.target.roleStatus : null, packet: editableView(input.packet, allowed), allowed: [...allowed], declined: input.declined.map((d) => ({ requested: d.requested, reason: d.reason })), message: input.message },
-    { companyId: input.companyId, inputRef: { ...ref, request: input.message, requestedBy: input.actor.id }, maxTokens: 16000 },
-  );
+  const promptInput = { companyName: input.companyName, target: input.target.kind, roleStatus: input.target.kind === "role" ? input.target.roleStatus : null, packet: editableView(input.packet, allowed), allowed: [...allowed], declined: input.declined.map((d) => ({ requested: d.requested, reason: d.reason })), message: input.message };
+  const meta = { companyId: input.companyId, inputRef: { ...ref, request: input.message, requestedBy: input.actor.id }, maxTokens: 16000, deadlineAt };
+  const first = await runPromptDetached(db, ai, packetRevisePrompt, promptInput, meta);
+  const out = worthAFreshTry(first, deadlineAt) ? await runPromptDetached(db, ai, packetRevisePrompt, promptInput, { ...meta, inputRef: { ...meta.inputRef, retryOf: first.runId } }) : first;
+  return out.ok ? { ...out, output: plainRevision(out.output) } : out;
 }
 
+/** "the packet", "the Role Packet", "the draft packet's": the word for the job's record, and what the person calls it. */
+const PACKET_WORD = /\b(?:(role|job|draft)(?:['\u2019]s)?\s+)?(packet)(s)?\b/gi;
+
+/**
+ * The person's words for the job's record, never "packet" (live test, 12 Nov 2026: "I did not change anything because
+ * the packet already says this."): "the draft packet" reads "the draft", any other "packet" reads "job", a plural stays
+ * one, and it is in lower case unless it starts a sentence.
+ */
+export function plainWords(text: string): string {
+  return text.replace(PACKET_WORD, (_match, kind: string | undefined, _word: string, plural: string | undefined, offset: number) => {
+    const word = `${kind?.toLowerCase() === "draft" ? "draft" : "job"}${plural ? "s" : ""}`;
+    const startsSentence = /(?:^|[.!?]["'\u201d)]?\s+)$/.test(text.slice(0, offset));
+    return startsSentence ? `${word[0].toUpperCase()}${word.slice(1)}` : word;
+  });
+}
+
+/** A proposal with what the person reads in plain words (`plainWords`): the summary, the question and why each part was not done; never the request itself. */
+export function plainRevision(r: PacketRevision): PacketRevision {
+  return {
+    ...r,
+    summary: plainWords(r.summary),
+    ...(r.question !== undefined ? { question: plainWords(r.question) } : {}),
+    notChanged: r.notChanged.map((n) => ({ ...n, reason: plainWords(n.reason) })),
+  };
+}
+
+/**
+ * Why part of a request was not done, as the person reads it. On a draft the owner's answers hold who interviews and the
+ * deal-breakers, changed with Edit beside the draft (live test, 12 Nov 2026: "the conversation" by then only takes
+ * changes like this one, and "the interview plan" is a tab of the saved job); a saved job keeps its own places.
+ */
 const NOT_BY_CHAT = {
   pay: "Pay is set on the pay card.",
   decisionMaker: "Who makes the final decision is chosen from your team in the editor.",
   interviewers: "Who interviews is chosen from your team on the interview plan.",
+  interviewersOnDraft: "Who interviews is chosen from your team with Edit beside the draft.",
   disclosure: "The line saying AI assists and the line on reaching a person stay as they are.",
-  dealBreakers: "Deal-breakers in a draft are changed in the conversation or the panel beside it.",
+  dealBreakers: "Deal-breakers in a draft are changed with Edit beside the draft.",
   knockout: 'On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.',
 } as const;
 
@@ -114,7 +164,7 @@ export function mergeRevision<T extends DraftRolePacket>(base: T, revision: Pack
         if (!same([...r.interviewerUserIds].sort(), [...ids].sort())) moved = true;
         return { ...r, interviewerUserIds: ids };
       });
-      if (moved) note("Change who interviews", NOT_BY_CHAT.interviewers);
+      if (moved) note("Change who interviews", target === "draft" ? NOT_BY_CHAT.interviewersOnDraft : NOT_BY_CHAT.interviewers);
     }
     if (section === "preferences") {
       const value = next as DraftRolePacket["preferences"];
@@ -197,7 +247,10 @@ export type StoredRevision = {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A proposal by its id (the run that wrote it), or null when there is no such successful run in this company. */
+/**
+ * A proposal by its id (the run that wrote it), or null when there is no such successful run in this company. Its words
+ * are the ones the person was shown (`plainRevision`); the run keeps the model's own.
+ */
 export async function loadRevision(q: Queryable, runId: string): Promise<StoredRevision | null> {
   if (!UUID.test(runId)) return null;
   const [row] = await q.select().from(aiRuns).where(eq(aiRuns.id, runId)).limit(1);
@@ -215,7 +268,7 @@ export async function loadRevision(q: Queryable, runId: string): Promise<StoredR
     sessionId: str("sessionId"),
     baseHash: str("baseHash"),
     request: str("request"),
-    revision: parsed.data,
+    revision: plainRevision(parsed.data),
     decided: (row.finalOutcome as StoredRevision["decided"]) ?? null,
   };
 }

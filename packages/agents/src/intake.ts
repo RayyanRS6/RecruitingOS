@@ -15,7 +15,7 @@ import {
 import { companies, intakeSessions, memberships, playbooks, rolePackets, roles, users, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import { VERTICAL_TO_PLAYBOOK, compensationFor, findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import type { CompAdapter } from "@ros/integrations";
-import { packetFingerprint } from "./packet-revise";
+import { packetFingerprint, plainWords } from "./packet-revise";
 
 export type IntakeDeps = { ai: AiRuntime; comp: CompAdapter };
 
@@ -883,9 +883,10 @@ export function finalizeDraft(
   const notSet = readiness.essentials.filter((e) => !e.done).map((e) => `Not set yet: ${ESSENTIAL_LABEL[e.key].toLowerCase()}.`);
   const assumed = readiness.essentials.filter((e) => e.done && e.note).map((e) => `${ESSENTIAL_LABEL[e.key]}: ${e.value}. ${e.note}`);
   // The server's own lines are written afresh each time, so a saved draft never keeps one the answers have since settled;
-  // nor one of the model's saying an essential was not given, once it has been.
+  // nor one of the model's saying an essential was not given, once it has been. The model's own say "the job", never
+  // "the packet" (live test, 12 Nov 2026), as the owner reads them under "What the assistant assumed".
   const done = new Set(readiness.essentials.filter((e) => e.done).map((e) => e.key));
-  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done));
+  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done)).map(plainWords);
   packet.provenance = {
     ...packet.provenance,
     intakeSessionId: prov.sessionId,

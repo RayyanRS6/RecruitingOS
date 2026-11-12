@@ -3,7 +3,7 @@ import { FakeProvider, TASK_TIER, callPrompt, packetRevisePrompt, type AiRuntime
 import type { DraftRolePacket, PacketRevision } from "@ros/contracts";
 import { registerFakeHandlers } from "./fake-handlers";
 import { samplePacket } from "./fixtures/sample-packet";
-import { REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, editableView, mergeRevision, packetFingerprint, payChanged } from "./packet-revise";
+import { REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, editableView, mergeRevision, packetFingerprint, payChanged, plainRevision, plainWords, worthAFreshTry } from "./packet-revise";
 
 /**
  * Changing a packet by chat (plan C10): the model only proposes the sections that change; the merge is deterministic,
@@ -34,8 +34,14 @@ describe("the packet.revise prompt", () => {
     expect(system).toMatch(/This is a draft written beside the conversation/);
     expect(system).toMatch(/Already declined \(never bring these back\): "Recent graduates"/);
     expect(system).toMatch(/Never invent a figure/);
+    // v2 (live test, 12 Nov 2026): plain words to the person, a no-change quotes what the job already says, and a draft's
+    // deal-breakers and team are changed with Edit, never by chat
+    expect(system).toContain('Write summary, notChanged and question to the person in plain words: the job (or the draft, before the role exists), never "packet", "section", a field name or a key. When nothing needs to change, say so and quote the words the job already has for it.');
+    expect(system).toContain("Its deal-breakers, who interviews and who makes the final decision are changed with Edit beside the draft, never by chat: put such a request in notChanged.");
+    const onRole = packetRevisePrompt.system({ ...input, target: "role", roleStatus: "open" }).map((b) => b.text).join("\n");
+    expect(onRole).not.toMatch(/Edit beside the draft/);
     await ask(draft, "Add a must-have: forklift license", "draft");
-    expect(fake.calls.at(-1)).toMatchObject({ task: "packet.revise", model: "fake", promptKey: "packet.revise", promptVersion: 1 });
+    expect(fake.calls.at(-1)).toMatchObject({ task: "packet.revise", model: "fake", promptKey: "packet.revise", promptVersion: 2 });
   });
 
   it("adds a must-have as a section-scoped patch with a plain summary", async () => {
@@ -91,9 +97,45 @@ describe("the packet.revise prompt", () => {
     expect(merged.packet.interviews.plan.map((r) => r.interviewerUserIds)).toEqual([["u-1"], ["u-1"]]);
     expect(merged.packet.interviews.plan[0].durationMinutes).toBe(45);
     expect(merged.packet.communication).toMatchObject({ tone: "formal", disclosureText: base.communication.disclosureText });
-    expect(merged.notChanged.map((n) => n.reason)).toEqual(expect.arrayContaining([expect.stringMatching(/chosen from your team on the interview plan/), expect.stringMatching(/line saying AI assists/), expect.stringMatching(/chosen from your team in the editor/), expect.stringMatching(/Deal-breakers in a draft/)]));
+    // on a draft, who interviews and the deal-breakers are changed with Edit beside it: after the draft, typed words only
+    // ask for changes like this one, and the interview plan is a tab of the saved job (live test, 12 Nov 2026)
+    expect(merged.notChanged.map((n) => n.reason)).toEqual(expect.arrayContaining(["Who interviews is chosen from your team with Edit beside the draft.", expect.stringMatching(/line saying AI assists/), expect.stringMatching(/chosen from your team in the editor/), "Deal-breakers in a draft are changed with Edit beside the draft."]));
+    expect(merged.notChanged.map((n) => n.reason).join(" ")).not.toMatch(/the conversation|the interview plan/);
+    // a saved job keeps its own places
+    const onRole = mergeRevision(base, { summary: "Changed things.", changes, notChanged: [] }, "role");
+    expect(onRole.notChanged.map((n) => n.reason)).toEqual(expect.arrayContaining(["Who interviews is chosen from your team on the interview plan.", expect.stringMatching(/chosen from your team in the editor/)]));
+    expect(onRole.notChanged.map((n) => n.reason).join(" ")).not.toMatch(/Edit beside the draft|Deal-breakers/);
     // a section sent back unchanged is not a change
     expect(mergeRevision(base, { summary: "Nothing.", changes: { identity: structuredClone(base.identity) }, notChanged: [] }, "role").sections).toEqual([]);
+  });
+
+  it("says 'the job' to the person, never 'packet', and keeps the person's own words (live test, 12 Nov 2026)", () => {
+    expect(plainWords("I did not change anything because the packet already says this.")).toBe("I did not change anything because the job already says this.");
+    expect(plainWords("Packet updated. The Role Packet lists it; the draft packet's pay stays.")).toBe("Job updated. The job lists it; the draft's pay stays.");
+    expect(plainWords("Both job packets agree.")).toBe("Both jobs agree.");
+    expect(plainWords("Nothing changed. Draft packet is already right.")).toBe("Nothing changed. Draft is already right.");
+    // only the word itself
+    expect(plainWords("A packetized list stays as it is.")).toBe("A packetized list stays as it is.");
+    const revision = { summary: "The packet already requires it.", question: "Should the packet say more?", changes: {}, notChanged: [{ request: "Put it in the packet", reason: "The packet already has it." }] };
+    expect(plainRevision(revision)).toEqual({ summary: "The job already requires it.", question: "Should the job say more?", changes: {}, notChanged: [{ request: "Put it in the packet", reason: "The job already has it." }] });
+    expect(plainRevision({ summary: "Done.", changes: {}, notChanged: [] })).not.toHaveProperty("question");
+  });
+
+  it("tries once more, afresh, only when the replies held no usable answer and the request has the time (live test, 12 Nov 2026)", () => {
+    const now = 1_000_000;
+    const failed = (error: string, reason: "invalid" | "error" | "refused" | "no_credit" = "invalid") => ({ ok: false as const, runId: "r1", model: "m", reason, error });
+    const deadline = now + 290_000;
+    expect(worthAFreshTry(failed("no valid output (unconstrained): the reply holds no JSON object"), deadline, now)).toBe(true);
+    expect(worthAFreshTry(failed("no valid output (unconstrained): the reply holds no JSON object"), now + 150_000, now)).toBe(true);
+    // not with less than one call and the route's own reserve left
+    expect(worthAFreshTry(failed("no valid output (unconstrained): the reply holds no JSON object"), now + 149_999, now)).toBe(false);
+    // never a reply cut off at max_tokens, a call already out of time for its correction, an outage, a refusal or no AI help left
+    expect(worthAFreshTry(failed("no parsed output (unconstrained): the reply hit max_tokens (16000 output tokens, thinking included)"), deadline, now)).toBe(false);
+    expect(worthAFreshTry(failed("no valid output (unconstrained), and too little time was left to ask for a correction: bad"), deadline, now)).toBe(false);
+    expect(worthAFreshTry(failed("provider error: overloaded", "error"), deadline, now)).toBe(false);
+    expect(worthAFreshTry(failed("refusal", "refused"), deadline, now)).toBe(false);
+    expect(worthAFreshTry(failed("AI credit used up", "no_credit"), deadline, now)).toBe(false);
+    expect(worthAFreshTry({ ok: true, output: {}, runId: "r1", model: "m" }, deadline, now)).toBe(false);
   });
 
   it("on a draft every question on the form holds a 'no' for the owner's decision; on a saved job a person's choice is kept (live test, 12 Nov 2026)", () => {

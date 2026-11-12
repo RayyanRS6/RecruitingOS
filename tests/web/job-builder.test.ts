@@ -13,7 +13,7 @@ import {
 } from "../../apps/web/src/pages/new-role/rules";
 import { factsFormFrom, factsPatch } from "../../apps/web/src/pages/new-role/facts-form";
 import { GUIDE_OF_VERTICAL, QUICK_STARTS, quickStartsFor } from "../../apps/web/src/pages/new-role/quick-starts";
-import { CHANGE_REQUEST_MAX, asksBack, changeLine, checkSignature, openFlags, proposalSections, refinePaths, rewordInstruction, suggestionsBySection, takesEffectWords } from "../../apps/web/src/pages/new-role/refine-api";
+import { CHANGE_REQUEST_MAX, changeLine, checkSignature, notDoneLine, nothingToConfirm, openFlags, proposalSections, refinePaths, replyWords, rewordInstruction, suggestionsBySection, takesEffectWords } from "../../apps/web/src/pages/new-role/refine-api";
 import { partsLine } from "../../apps/web/src/pages/new-role/ProposalCard";
 import { applyPacketForm, moveRow, packetFormFrom, packetFormProblem } from "../../apps/web/src/pages/new-role/packet-form";
 import type { RolePacket as WebRolePacket } from "../../apps/web/src/api/client";
@@ -613,7 +613,7 @@ describe("change it by asking", () => {
     expect(proposalSections(null)).toEqual([]);
   });
 
-  it("shows each changed field plainly, says what Confirm does, and treats a question back as a reply", () => {
+  it("shows each changed field plainly, says what Confirm does, and treats a question back or no change as a reply", () => {
     expect(changeLine({ kind: "added", before: null, after: "Dentrix experience" })).toBe("Added: Dentrix experience");
     expect(changeLine({ kind: "removed", before: "Weekends", after: null })).toBe("Taken out: Weekends");
     expect(changeLine({ kind: "changed", before: "Warm", after: "Formal" })).toBe("Warm → Formal");
@@ -621,8 +621,14 @@ describe("change it by asking", () => {
     expect(takesEffectWords("draft")).toMatch(/changes the draft/);
     expect(takesEffectWords("after_approval")).toMatch(/once it is approved/);
     expect(takesEffectWords("now")).toMatch(/used straight away/);
-    expect(asksBack({ question: "Which weekend days?", sections: [] })).toBe(true);
-    expect(asksBack({ question: null, sections: ["screening"] })).toBe(false);
+    // a question back, or a proposal that changes nothing, is a reply, with nothing to confirm (live test, 12 Nov 2026)
+    expect(nothingToConfirm({ sections: [] })).toBe(true);
+    expect(nothingToConfirm({ sections: ["screening"] })).toBe(false);
+    expect(replyWords({ question: "Which weekend days?", summary: "I have not changed anything yet.", notChanged: [] })).toBe("Which weekend days?");
+    expect(replyWords({ question: null, summary: "I did not change anything.", notChanged: [{ request: "Change the pay", reason: "Pay is set on the pay card." }] })).toBe("I did not change anything. Not done: Change the pay. Pay is set on the pay card.");
+    // a part not done is said with its reason after a question too, and a request's own full stop is not doubled
+    expect(replyWords({ question: "Which days?", summary: "Nothing yet.", notChanged: [{ request: "Change the pay.", reason: "Pay is set on the pay card." }] })).toBe("Which days? Not done: Change the pay. Pay is set on the pay card.");
+    expect(notDoneLine({ request: "Remove the deal-breaker", reason: "Deal-breakers in a draft are changed with Edit beside the draft." })).toBe("Not done: Remove the deal-breaker. Deal-breakers in a draft are changed with Edit beside the draft.");
   });
 
   it("places each requirements-check suggestion under the part it is about, leaving out what was set aside", () => {

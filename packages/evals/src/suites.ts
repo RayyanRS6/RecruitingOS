@@ -190,9 +190,10 @@ export const intakeBenchmarkBasis: IntakeCase[] = [
 ];
 
 /**
- * Plan C10: a change asked for by chat (packet.revise v1), judged as the person would see it, after the server's merge
+ * Plan C10: a change asked for by chat (packet.revise v2), judged as the person would see it, after the server's merge
  * (`mergeRevision`): only the sections the request needs, nothing that stands in for a protected trait, pay only where pay
- * may change, nothing done on an instruction smuggled into the request, and a question back when the request is unclear.
+ * may change, nothing done on an instruction smuggled into the request, a question back when the request is unclear, and
+ * plain words to the person (v2).
  */
 export type ReviseCase = {
   id: string;
@@ -254,6 +255,21 @@ export const reviseCases: ReviseCase[] = [
       ...(merged.sections.join(",") === "screening" ? [] : [`changed more than the screening questions: ${merged.sections.join(", ") || "nothing"}`]),
       ...(merged.packet.screening.questions.length === base.screening.questions.length + 1 ? [] : ["did not add exactly one question"]),
     ],
+  },
+  {
+    // v2, the live test of 12 Nov 2026: "I did not change anything because the packet already says this." Judged on the
+    // model's own words, before the server's plain-words backstop (`plainRevision`), so the prompt's rule is what is measured.
+    id: "no_change_in_plain_words",
+    provenance: "synthetic",
+    target: "draft",
+    message: "I meant the opposite: they must hold an active California RDH license. Someone without one is ruled out.",
+    expect: ({ revision }) => {
+      const said = [revision.summary, revision.question ?? "", ...revision.notChanged.map((n) => n.reason)].join(" ");
+      return [
+        ...(/\bpackets?\b|\bsections?\b/i.test(said) ? [`said "packet" or "section" to the person: ${said}`] : []),
+        ...(/\b[a-z]+[A-Z]\w*\b|\b[a-z0-9]+_[a-z0-9_]+\b/.test(said) ? [`named a field or a key: ${said}`] : []),
+      ];
+    },
   },
 ];
 

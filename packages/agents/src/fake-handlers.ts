@@ -942,7 +942,7 @@ function fakeScreenMustHaves(req: StructuredRequest<unknown>, user: string): Scr
 }
 
 /**
- * packet.revise v1 (C10): the few kinds of change tests and local development ask for, answered the way the model is
+ * packet.revise v2 (C10): the few kinds of change tests and local development ask for, answered the way the model is
  * told to: only the sections that change, each written out whole; wording that stands in for a protected trait refused
  * in notChanged; pay only where pay may change; a question back when the request is not one of these.
  */

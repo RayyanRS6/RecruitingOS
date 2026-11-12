@@ -432,7 +432,8 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
           ) : null}
           {suggest.kind === "waiting" ? <Suggesting words={SUGGESTING_SKILLS} /> : null}
           <AddOwn id="qs-must-own" label="Add a must-have" placeholder={suggested.length ? "Add your own…" : "e.g. Two years in a busy dental office"} items={own} max={room} onAdd={(t) => set({ mustHaves: addItem(a.mustHaves, t, room) })} onRemove={(t) => set({ mustHaves: a.mustHaves.filter((m) => m !== t) })} />
-          <p className="small muted" aria-live="polite">{count} of {MUST_HAVES_MAX} chosen{experienceMustHave(a) ? ", with the experience" : ""}{dealCount ? `, with ${dealCount} deal-breaker${dealCount === 1 ? "" : "s"}` : ""}.</p>
+          {/* the count against the most a job can have, never "3 of 6", which read as a list of six with one missing (live test, 12 Nov 2026) */}
+          <p className="small muted" aria-live="polite">{count} chosen (up to {MUST_HAVES_MAX}){experienceMustHave(a) ? ", with the experience" : ""}{dealCount ? `, with ${dealCount} deal-breaker${dealCount === 1 ? "" : "s"}` : ""}.</p>
         </>
       );
     }

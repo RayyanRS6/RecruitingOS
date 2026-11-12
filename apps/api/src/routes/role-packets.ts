@@ -89,12 +89,12 @@ rolePacketRoutes.patch("/:id/interview-plan", requireTenant, async (c) => {
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
     const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
     const current = currentVersionOf(role, packets);
-    if (!current) throw new HttpError(409, "no_packet", "This role has no packet yet.");
+    if (!current) throw new HttpError(409, "no_packet", "This job has no saved details yet.");
     const people = await interviewerViews(tx, t.companyId);
     const known = new Set(people.map((p) => p.userId));
     const plan = current.packet.interviews.plan;
     for (const r of body.rounds) {
-      if (!plan.some((p) => p.key === r.key)) throw new HttpError(400, "unknown_round", `There is no interview round "${r.key}" in this packet.`);
+      if (!plan.some((p) => p.key === r.key)) throw new HttpError(400, "unknown_round", `There is no interview step "${r.key}" in this job.`);
       const stranger = r.interviewerUserIds.find((id) => !known.has(id));
       if (stranger) throw new HttpError(400, "unknown_member", "Every interviewer must be an active member of your team.");
     }
@@ -120,7 +120,7 @@ rolePacketRoutes.post("/:id/request-approval", requireTenant, async (c) => {
     if (role.status !== "draft") throw new HttpError(409, "not_a_draft", role.status === "pending_approval" ? "This role is already waiting for approval." : "Only a role that was sent back can be sent for approval again.");
     const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
     const version = body.version ? packets.find((p) => p.version === body.version) : packets[0];
-    if (!version) throw new HttpError(404, "version_not_found", "That packet version does not exist.");
+    if (!version) throw new HttpError(404, "version_not_found", "That version does not exist.");
     await cancelPendingPacketApprovals(tx, container, { companyId: t.companyId, roleId: role.id, actor, reason: "asked again" });
     await tx.update(roles).set({ status: "pending_approval", title: version.packet.identity.title }).where(eq(roles.id, role.id));
     await emit(tx, { type: "role_packet.proposed", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${version.version}` }, payload: { roleId: role.id, version: version.version, again: true } });
@@ -184,7 +184,7 @@ async function loadRolePackets(tx: Tx, roleId: string, opts: { forWrite?: boolea
   const [role] = opts.forWrite ? await tx.select().from(roles).where(eq(roles.id, roleId)).limit(1).for("update") : await tx.select().from(roles).where(eq(roles.id, roleId)).limit(1);
   if (!role) throw new HttpError(404, "not_found", "Role not found.");
   const versions = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-  if (!versions.length) throw new HttpError(409, "no_packet", "This role has no packet yet.");
+  if (!versions.length) throw new HttpError(409, "no_packet", "This job has no saved details yet.");
   const [company] = await tx.select({ name: companies.name, locations: companies.locations }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
   return { role, versions, company: { name: company?.name ?? "", locations: company?.locations ?? [] } };
 }
@@ -232,15 +232,22 @@ function takesEffect(role: RoleRow, mayApprove: boolean, openFlags: number, mate
 }
 
 const AI_FAILED = "The assistant could not work out that change. Nothing was changed. Try again, or make the change in the editor.";
+/**
+ * The same on a draft, where Edit changes the answers and writing the draft again needs the assistant too: the way on is
+ * to try again, or "Bring in a recruiter", which the job builder shows beside it (live test, 12 Nov 2026).
+ */
+const AI_FAILED_DRAFT = "The assistant could not work out that change. Nothing was changed. Try again, or bring in a recruiter.";
 
 /**
  * A failed model call is recorded as an event on what it was about, then answered plainly; nothing was changed. No AI credit
- * left is no failure: nothing goes on the record and there is nothing to try again, and the editor needs no model.
+ * left is no failure: nothing goes on the record and there is nothing to try again, and on a saved job the editor needs no
+ * model. A draft's lines name no editor (see `AI_FAILED_DRAFT`).
  */
 async function revisionFailed(container: Container, t: Pick<Tenant, "companyId" | "role">, subject: { type: "role" | "intake_session"; id: string }, out: { runId: string; reason: string; error: string; refusedHoldUsd?: number }): Promise<never> {
-  if (out.reason === "no_credit") throw await aiCreditAnswer(container, t, out.refusedHoldUsd ?? 0, { usedUp: AI_HELP_LINE.revise, busy: AI_HELP_BUSY_LINE.revise });
+  const onDraft = subject.type === "intake_session";
+  if (out.reason === "no_credit") throw await aiCreditAnswer(container, t, out.refusedHoldUsd ?? 0, onDraft ? { usedUp: AI_HELP_LINE.reviseDraft, busy: AI_HELP_BUSY_LINE.reviseDraft } : { usedUp: AI_HELP_LINE.revise, busy: AI_HELP_BUSY_LINE.revise });
   await withTenant(container.db, t.companyId, (tx) => emit(tx, { type: "ai.run_failed", companyId: t.companyId, actor: { kind: "agent", id: "intake", runId: out.runId }, subject, payload: { task: "packet.revise", reason: out.reason, error: out.error } }));
-  throw new HttpError(502, "ai_failed", AI_FAILED, { aiRunId: out.runId });
+  throw new HttpError(502, "ai_failed", onDraft ? AI_FAILED_DRAFT : AI_FAILED, { aiRunId: out.runId });
 }
 
 /** A proposal whose merged packet breaks a limit is set aside on the run and answered plainly; nothing was changed. */

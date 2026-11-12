@@ -450,6 +450,15 @@ describe("reading JSON from an unconstrained reply", () => {
     expect(extractJson('Here it is: {"a":3} as asked.')).toEqual({ a: 3 });
   });
 
+  it("takes the first whole object when a note with braces, or a second object, follows it (live test, 12 Nov 2026)", () => {
+    expect(extractJson('{"a":1}\n\nNote: {see above}')).toEqual({ a: 1 });
+    expect(extractJson('{"a":1} {"b":2}')).toEqual({ a: 1 });
+    // a brace inside a string does not end the object, and a note's own braces before it are passed over
+    expect(extractJson('{"a":"x}"} and {more}')).toEqual({ a: "x}" });
+    expect(extractJson('Note {see below}: {"a":{"b":[1,2]}} done {x}')).toEqual({ a: { b: [1, 2] } });
+    expect(() => extractJson("{not json} {nor this}")).toThrow("no JSON object");
+  });
+
   it("throws when there is no JSON object", () => {
     expect(() => extractJson("no json here")).toThrow("no JSON object");
   });

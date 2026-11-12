@@ -3,7 +3,7 @@
 import type { PacketRevisionProposal } from "@ros/contracts";
 import { Button, Eyebrow, Icon } from "@ros/ui";
 import { SeenBy } from "./marks";
-import { changeLine, proposalSections, takesEffectWords } from "./refine-api";
+import { changeLine, notDoneLine, proposalSections, takesEffectWords } from "./refine-api";
 import type { SectionId } from "./rules";
 
 /** The panel's name for each part a change can touch, as the proposal card lists them. */
@@ -60,7 +60,7 @@ export function ProposalCard(props: { proposal: PacketRevisionProposal; onConfir
       ) : null}
       {p.notChanged.length ? (
         <ul className="grid list-disc gap-1 pl-[18px] text-[13px] text-ink-2" aria-label="Not done">
-          {p.notChanged.map((n) => <li key={n.request}>Not done: {n.request}. {n.reason}</li>)}
+          {p.notChanged.map((n) => <li key={n.request}>{notDoneLine(n)}</li>)}
         </ul>
       ) : null}
       {p.newFlags.length ? <p className="small inline-flex items-start gap-1.5 text-caution"><Icon name="flag" size={13} className="mt-[3px] shrink-0" />The wording check would flag {p.newFlags.map((f) => `"${f.text}"`).join(", ")}; if you confirm, it asks you about it before approval.</p> : null}
