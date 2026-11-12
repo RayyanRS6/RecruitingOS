@@ -366,7 +366,9 @@ describe("the draft beside the conversation", () => {
     expect(redraftWarning({ draftEdits: 0 })).toBeNull();
     expect(redraftWarning({ draftEdits: 1 })).toMatch(/^Writing it again replaces the change you saved on the draft/);
     expect(redraftWarning({ draftEdits: 3 })).toMatch(/replaces the 3 changes you saved/);
-    expect(redraftWarning({ draftEdits: 3 })).toMatch(/Pay, who interviews and decides, and the deal-breakers carry over/);
+    // a change to what the answers hold too went into them when it was saved, so it is kept (live test, 12 Nov 2026)
+    expect(redraftWarning({ draftEdits: 3 })).toMatch(/\), except changes to the title, schedule, job type, workplace, must-haves and nice-to-haves\. /);
+    expect(redraftWarning({ draftEdits: 3 })).toMatch(/Pay, why you are hiring, who interviews and decides, and the deal-breakers carry over/);
   });
 
   it("the server's readiness drives it: changing pay or the decision maker after drafting is carried by rule, other answers are not", () => {
@@ -375,6 +377,8 @@ describe("the draft beside the conversation", () => {
     const written = state({ pay, draft: { at: "x", aiRunId: "r", by: { kind: "user", id: "u-dana" }, payKey: null, factsKey: draftFactsKey(six), edits: 1 } });
     const draft = samplePacket();
     expect(intakeReadiness({ facts: { ...six, decisionMaker: "Sam Lee", compensationMax: 55 }, state: written, messages: [], draft }).draftOutOfDate).toBe(false);
+    // why you are hiring is carried by rule too (live test, 12 Nov 2026)
+    expect(intakeReadiness({ facts: { ...six, reason: "growth", reasonDetail: "A second chair opens" }, state: written, messages: [], draft }).draftOutOfDate).toBe(false);
     expect(intakeReadiness({ facts: { ...six, title: "Office manager" }, state: written, messages: [], draft })).toMatchObject({ draftOutOfDate: true, draftEdits: 1, mayAskForApproval: false });
   });
 });

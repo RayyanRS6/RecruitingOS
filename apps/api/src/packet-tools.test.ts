@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { packetFingerprint, storeDraftPacket } from "@ros/agents";
 import { entitlements } from "@ros/core";
 import type { DraftRolePacket, IntakeSessionView, JobPreview, PacketDiff, PacketRevisionProposal, RequirementsCheck, RolePacket } from "@ros/contracts";
-import { aiRuns, companies, events, rolePackets } from "@ros/db";
+import { aiRuns, companies, events, intakeSessions, rolePackets } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { putOnInterview, signInAs, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
@@ -175,6 +175,39 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(out.draft.competencies.some((c) => c.definition === "Team player with a positive attitude" && c.evaluatedIn === "interview")).toBe(true);
       expect(out.check.suggestions.some((x) => x.kind === "trait_as_skill")).toBe(false);
       expect((await container.db.select().from(events).where(and(eq(events.type, "packet.check_applied"), eq(events.subjectId, draftId)))).length).toBe(1);
+      // the fix goes into the answers too: the must-have moved to the interview is no longer one of them
+      expect((await session(draftId)).facts.mustHaves).not.toContain("Team player with a positive attitude");
+    });
+
+    // The live test of 12 Nov 2026: writing the draft again brought back the words a change by chat had fixed.
+    it("a change confirmed on the draft goes into the answers too, so writing it again keeps it; one taken out stays out", async () => {
+      const id = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: MESSAGE }))).session.id;
+      expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`)).status).toBe(200);
+      const confirm = async (message: string) => {
+        const p = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message }));
+        expect(p.sections.length).toBeGreaterThan(0);
+        expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${p.revisionId}/apply`)).status).toBe(201);
+        return session(id);
+      };
+      const added = await confirm("Add a must-have: Dentrix experience");
+      expect(added.facts.mustHaves).toContain("Dentrix experience");
+      expect(added.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 1 });
+      const moved = await confirm("Change the schedule to Tuesday to Saturday, 7 to 4");
+      expect(moved.facts.schedule).toBe("Tuesday to Saturday, 7 to 4");
+      expect(moved.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 2 });
+      // writing it again keeps both
+      const again = await read<{ draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`));
+      expect(again.draft.requirements.mustHaves.map((m) => m.text)).toContain("Dentrix experience");
+      expect(again.draft.identity.schedule).toBe("Tuesday to Saturday, 7 to 4");
+      // taken out by chat: held out of what the assistant sends back, so a later turn does not bring it back
+      const taken = await confirm("Take out Dentrix experience");
+      expect(taken.facts.mustHaves).not.toContain("Dentrix experience");
+      expect(taken.readiness.draftOutOfDate).toBe(false);
+      const [row] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, id));
+      expect((row.serverState as { removed: Array<{ field: string; value: string }> }).removed).toContainEqual({ field: "mustHaves", value: "Dentrix experience" });
+      const turned = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/messages`, { message: "Must-haves: Dentrix experience" }));
+      expect(turned.session.facts.mustHaves).not.toContain("Dentrix experience");
+      await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
     });
   });
 

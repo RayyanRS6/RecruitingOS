@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { intakeCompilePrompt, intakeExtractPrompt, packetRevisePrompt, withoutTag, type IntakeContext } from "@ros/ai";
 import { IntakeServerState, RolePacket, type Actor, type DraftRolePacket, type IntakeFacts } from "@ros/contracts";
-import { unresolvedFlags } from "@ros/core";
+import { dealBreakerOffer, draftFactsKey, draftKeyMatches, normalizeFacts, unresolvedFlags } from "@ros/core";
 import { samplePacket } from "./fixtures/sample-packet";
-import { finalizeDraft } from "./intake";
+import { answersFollowingChange, finalizeDraft } from "./intake";
 
 /**
  * The deterministic part after the model (plan C1, C7, C15): what the model wrote about who decided what is never kept,
@@ -81,6 +81,109 @@ describe("finalizeDraft never keeps what the model says a person decided", () =>
     const saved = structuredClone(fresh);
     saved.requirements.eligibility[1].knockout = false;
     expect(finalizeDraft(saved, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() }).requirements.eligibility.every((e) => e.knockout)).toBe(true);
+  });
+
+  it("takes why you are hiring from the answers: a reason's code as it is, words as 'other' with the words, and the model's own when nobody said (live test, 12 Nov 2026)", () => {
+    const raw = asDraft(samplePacket((p) => { p.business = { ...p.business, reason: "other", reasonDetail: "Not stated" }; }));
+    const run = (f: IntakeFacts) => finalizeDraft(raw, ctx(f), { sessionId: "s1", aiRunId: "r", state: confirmed() }).business;
+    expect(run(facts({ reason: "growth", reasonDetail: "Growing the practice" }))).toMatchObject({ reason: "growth", reasonDetail: "Growing the practice" });
+    // a code with no words of its own drops the model's words
+    expect(run(facts({ reason: "replacement" })).reason).toBe("replacement");
+    expect(run(facts({ reason: "replacement" })).reasonDetail).toBeUndefined();
+    // words the model read as the reason itself are kept as "Another reason"
+    expect(run(facts({ reason: "Our hygienist is moving away" }))).toMatchObject({ reason: "other", reasonDetail: "Our hygienist is moving away" });
+    // nobody said: the model's stays
+    expect(run(facts({ reason: undefined }))).toMatchObject({ reason: "other", reasonDetail: "Not stated" });
+  });
+
+  it("drops the model's own line that an essential was not given once it has been, and keeps every other line (live test, 12 Nov 2026)", () => {
+    const lines = [
+      "You did not say why you are hiring, so the reason is listed as \"other\".",
+      "Reason for the hire was not stated; assumed growth.",
+      "You did not name interviewers, so the plan uses the office manager and the dentist.",
+      "Interviewers were not named; assumed the owner interviews.",
+      "Nobody was named for the final decision; assumed the owner.",
+      "The interview plan follows the playbook.",
+      "You did not name any deal-breakers, so none are listed.",
+    ];
+    const raw = asDraft(samplePacket((p) => { p.provenance.assumptions = [...lines]; delete p.preferences.decisionMakerUserId; p.preferences.decisionMakerName = undefined; }));
+    const before = finalizeDraft(raw, ctx(facts({ reason: undefined })), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    // nothing answered yet: the model's lines stay, beside the server's own
+    expect(before.provenance.assumptions).toEqual(expect.arrayContaining([...lines, "Not set yet: why you are hiring.", "Not set yet: who interviews.", "Not set yet: who makes the final decision."]));
+    const after = finalizeDraft(before, ctx(facts({ reason: "growth", reasonDetail: "Growing the practice", decisionMaker: "Test Owner", decisionMakerUserId: "u-owner", interviewers: ["Test Owner"], interviewerUserIds: ["u-owner"] })), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    expect(after.provenance.assumptions).toEqual(["The interview plan follows the playbook.", "You did not name any deal-breakers, so none are listed."]);
+    // only the essentials answered since: the reason alone leaves the lines about the team
+    const reasonOnly = finalizeDraft(before, ctx(facts({ reason: "growth" })), { sessionId: "s1", aiRunId: "r", state: confirmed() });
+    expect(reasonOnly.provenance.assumptions).toEqual(expect.arrayContaining([lines[2], lines[3], lines[4], "Not set yet: who interviews."]));
+    for (const gone of [lines[0], lines[1], "Not set yet: why you are hiring."]) expect(reasonOnly.provenance.assumptions).not.toContain(gone);
+  });
+});
+
+describe("a change confirmed on the draft goes into the answers too, so writing it again keeps it (live test, 12 Nov 2026)", () => {
+  const MUSTS = ["Radiography certificate", "Chairside experience in a dental office"];
+  const written = (f: IntakeFacts, over: Partial<IntakeServerState> = {}): IntakeServerState => confirmed({ draft: { at: "2026-11-12T09:00:00.000Z", aiRunId: "run", by: dana, payKey: null, factsKey: draftFactsKey(f), edits: 0 }, ...over });
+  const draft = (over: (p: DraftRolePacket) => void = () => {}) => asDraft(samplePacket(over));
+  const must = (text: string) => ({ key: `mh_${text.length}`, text, rationale: "Added by the owner in the conversation", evidencedBy: ["resume" as const] });
+
+  it("written from these answers: the list is taken whole, what changed is not asked again, and the draft stays up to date", () => {
+    const f = facts({ mustHaves: ["radiography certificate", "Chairside work"] });
+    const s = written(f);
+    const before = draft();
+    const after = draft((p) => { p.requirements.mustHaves.push(must("Dentrix experience")); });
+    const out = answersFollowingChange(f, s, before, after);
+    expect(out.facts.mustHaves).toEqual([...MUSTS, "Dentrix experience"]);
+    // the owner's own words the draft no longer uses are held out of what the assistant sends back
+    expect(out.state.removed).toEqual([{ field: "mustHaves", value: "Chairside work" }]);
+    expect(out.state.settledFields).toContain("must_haves");
+    expect(draftKeyMatches(out.state.draft!.factsKey!, out.facts)).toBe(true);
+    // the input is not changed
+    expect(f.mustHaves).toEqual(["radiography certificate", "Chairside work"]);
+  });
+
+  it("taken out by the change: held out; put back: no longer held; a schedule or a title follows too", () => {
+    const f = facts({ mustHaves: [...MUSTS] });
+    const s = written(f, { removed: [{ field: "niceToHaves", value: "Eaglesoft experience" }] });
+    const after = draft((p) => {
+      p.requirements.mustHaves = p.requirements.mustHaves.filter((m) => m.text !== "Radiography certificate");
+      p.requirements.niceToHaves.push({ ...must("Eaglesoft experience"), key: "nh_eaglesoft" });
+      p.identity.schedule = "Tuesday to Saturday, 7 to 4";
+      p.identity.title = "Registered Dental Assistant";
+    });
+    const out = answersFollowingChange(f, s, draft(), after);
+    expect(out.facts.mustHaves).toEqual(["Chairside experience in a dental office"]);
+    expect(out.facts.niceToHaves).toEqual(["Dentrix experience", "Eaglesoft experience"]);
+    expect(out.state.removed).toEqual([{ field: "mustHaves", value: "Radiography certificate" }]);
+    expect(out.facts).toMatchObject({ schedule: "Tuesday to Saturday, 7 to 4", title: "Registered Dental Assistant" });
+    expect(out.state.answeredFacts).toEqual(expect.arrayContaining(["schedule", "title"]));
+    expect(out.state.settledFields).toEqual(expect.arrayContaining(["must_haves", "nice_to_haves"]));
+    expect(draftKeyMatches(out.state.draft!.factsKey!, out.facts)).toBe(true);
+  });
+
+  it("with answers the draft does not have yet, only what the change added or took out moves, and the draft stays out of date", () => {
+    const drafted = facts({ mustHaves: [...MUSTS] });
+    const f = { ...drafted, mustHaves: [...MUSTS, "Perio charting"] };
+    const s = written(drafted);
+    const out = answersFollowingChange(f, s, draft(), draft((p) => { p.requirements.mustHaves.push(must("Dentrix experience")); }));
+    expect(out.facts.mustHaves).toEqual([...MUSTS, "Perio charting", "Dentrix experience"]);
+    expect(out.state.draft!.factsKey).toBe(s.draft!.factsKey);
+    expect(draftKeyMatches(out.state.draft!.factsKey!, out.facts)).toBe(false);
+  });
+
+  it("a deal-breaker counted openly is not offered back once its must-have is reworded", () => {
+    const f = facts({ mustHaves: ["Active California RDA license"], dealBreakers: ["No active California RDA license"] });
+    const before = draft((p) => { p.requirements.mustHaves = [must("Active California RDA license")]; });
+    const after = draft((p) => { p.requirements.mustHaves = [must("Active RDA license in California")]; });
+    const out = answersFollowingChange(f, written(f), before, after);
+    expect(out.facts.mustHaves).toEqual(["Active RDA license in California"]);
+    expect(out.state.dealBreakersOffered).toEqual(["No active California RDA license"]);
+    expect(dealBreakerOffer(out.facts, out.state.dealBreakersOffered).offer).toEqual([]);
+  });
+
+  it("a change to anything else leaves the answers as they are", () => {
+    const f = facts({ mustHaves: [...MUSTS] });
+    const s = written(f);
+    const out = answersFollowingChange(f, s, draft(), draft((p) => { p.description.publicJobDescription += " We close at noon on Fridays."; p.communication.tone = "formal"; }));
+    expect(out).toEqual({ facts: normalizeFacts(f), state: s });
   });
 });
 

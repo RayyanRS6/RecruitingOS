@@ -147,8 +147,13 @@ test.describe("the job builder", () => {
     await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 60_000 });
     const card = page.getByRole("region", { name: "Questions from the assistant" });
     await expect(card).toBeVisible({ timeout: 60_000 });
+    // the second card: what they would own is written into the draft's words. The first card asks why you are hiring,
+    // which is set on the draft by rule since 12 November 2026, so a pick there would show nothing about the order.
+    await card.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(card.getByRole("heading", { name: "What is the first thing they would own?" })).toBeVisible();
     const first = card.locator("label.option-row").first();
-    const picked = (await first.innerText()).split("\n")[0]!.trim();
+    // the words kept are the answer's own (its value), which the draft's description quotes
+    const picked = (await first.locator("input").getAttribute("value"))!.replace(/\.$/, "");
     await first.locator("input").check({ force: true });
     await page.getByRole("button", { name: "Write the draft" }).click();
     await expect(page.getByRole("status").filter({ hasText: "The draft is written." })).toBeVisible({ timeout: 90_000 });

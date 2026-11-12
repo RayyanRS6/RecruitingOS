@@ -229,9 +229,9 @@ export const IntakeServerState = z.object({
    */
   settledFields: z.array(IntakeQuestionField).default([]),
   /**
-   * The single-value facts the owner gave on a card (not skipped) or set or cleared on the panel, by name (locationText,
-   * reason…): the assistant never changes those on a turn that follows answers alone; a correction the owner types still
-   * goes through.
+   * The single-value facts the owner gave on a card (not skipped), set or cleared on the panel, or changed on the written
+   * draft (`answersFollowingChange`), by name (locationText, reason…): the assistant never changes those on a turn that
+   * follows answers alone; a correction the owner types still goes through.
    */
   answeredFacts: z.array(z.string()).default([]),
   /** The wording of every card shown in this draft (the latest 60): a card that asks one of them again under another field is dropped. */
@@ -264,7 +264,7 @@ export type IntakeReadiness = {
   mayDraft: boolean;
   draftBlocker: string | null;
   hasDraft: boolean;
-  /** Answers changed after the draft was written in a way only writing it again can carry (pay, the team and deal-breakers carry over by themselves). */
+  /** Answers changed after the draft was written in a way only writing it again can carry (pay, why you are hiring, the team and deal-breakers carry over by themselves). */
   draftOutOfDate: boolean;
   /** Changes saved on the draft since it was written (by chat or with a fix): writing it again replaces them. */
   draftEdits: number;

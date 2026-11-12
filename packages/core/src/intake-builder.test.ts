@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { IntakeServerState, type IntakeFacts, type IntakeMessage, type IntakeQuestion } from "@ros/contracts";
-import { IntakeEditError, MAX_MUST_HAVES, amountsIn, applyAnswers, applyFactsPatch, basisFromText, daysWithin, dealBreakerOffer, draftFactsKey, intakeReadiness, looksLikePastedAd, normalizeFacts, payCard, payTyped, startDateFor, typedCeiling } from "./intake-builder";
+import { IntakeEditError, MAX_MUST_HAVES, amountsIn, applyAnswers, applyFactsPatch, basisFromText, daysWithin, dealBreakerOffer, draftFactsKey, draftFactsKeyWithReason, draftKeyMatches, intakeReadiness, looksLikePastedAd, normalizeFacts, payCard, payTyped, setOnDraftByRule, startDateFor, typedCeiling } from "./intake-builder";
 
 const empty = (): IntakeFacts => ({ mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] });
 const owner = (content: string, kind?: IntakeMessage["kind"]): IntakeMessage => ({ role: "owner", content, at: "2026-10-08T09:00:00.000Z", ...(kind ? { kind } : {}) });
@@ -105,17 +105,39 @@ describe("readiness, computed on the server (plan C7, founder decision Q8)", () 
     const written = state({ pay, draft: { at: "2026-10-08", aiRunId: "run", by: dana, payKey: null, factsKey: draftFactsKey(six), edits: 2 } });
     const ok = intakeReadiness({ facts: six, state: written, messages: typed, draft });
     expect(ok).toMatchObject({ mayAskForApproval: true, draftOutOfDate: false, draftEdits: 2 });
-    // pay, who decides and who interviews, and the deal-breakers are set on the draft by rule: never out of date
-    const byRule = { ...six, decisionMaker: "Jane", decisionMakerUserId: "u-jane", interviewers: ["Jane"], dealBreakers: ["Weekends"], compensationCeiling: 60 };
+    // pay, why you are hiring, who decides and who interviews, and the deal-breakers are set on the draft by rule: never
+    // out of date
+    const byRule = { ...six, reason: "growth", reasonDetail: "A second chair opens in January", decisionMaker: "Jane", decisionMakerUserId: "u-jane", interviewers: ["Jane"], dealBreakers: ["Weekends"], compensationCeiling: 60 };
     expect(intakeReadiness({ facts: byRule, state: written, messages: typed, draft }).draftOutOfDate).toBe(false);
-    // anything the words are written from (the title, the reason, a must-have) makes it out of date, and approval waits
-    for (const changed of [{ ...six, title: "Office manager" }, { ...six, reason: "growth" }, { ...six, mustHaves: ["Dentrix"] }]) {
+    // the reason no longer makes the words out of date because the words never say it (intake.compile v6, live test of
+    // 12 November 2026); anything they are written from (the title, a must-have) does, and approval waits
+    for (const changed of [{ ...six, title: "Office manager" }, { ...six, mustHaves: ["Dentrix"] }]) {
       const r = intakeReadiness({ facts: changed, state: written, messages: typed, draft });
       expect(r.draftOutOfDate).toBe(true);
       expect(r.approvalBlockers).toEqual(["You changed answers after the draft was written. Write it again with them first."]);
     }
     // a draft written before the key existed is never called out of date
     expect(intakeReadiness({ facts: { ...six, title: "Other" }, state: state({ pay, draft: { at: "x", aiRunId: "r", by: dana, payKey: null, edits: 0 } }), messages: typed, draft }).draftOutOfDate).toBe(false);
+  });
+
+  it("the draft's key leaves out why you are hiring, and a key kept the old way still counts while nothing changed (live test, 12 Nov 2026)", () => {
+    const pay = { by: dana, at: "2026-10-08", via: "typed" as const, basis: "hourly" as const, min: 45, max: 55 };
+    const draft = { provenance: { flags: [] } } as unknown as Parameters<typeof intakeReadiness>[0]["draft"];
+    expect(draftFactsKey({ ...six, reason: "growth", reasonDetail: "A second chair" })).toBe(draftFactsKey({ ...six, reason: "replacement" }));
+    expect(draftFactsKey({ ...six, title: "Office manager" })).not.toBe(draftFactsKey(six));
+    // a draft written before 12 November 2026 kept its key with the reason in it
+    const old = state({ pay, draft: { at: "2026-11-01", aiRunId: "run", by: dana, payKey: null, factsKey: draftFactsKeyWithReason(six), edits: 0 } });
+    expect(draftFactsKeyWithReason(six)).not.toBe(draftFactsKey(six));
+    expect(intakeReadiness({ facts: six, state: old, messages: typed, draft })).toMatchObject({ draftOutOfDate: false, mayAskForApproval: true });
+    expect(intakeReadiness({ facts: { ...six, title: "Office manager" }, state: old, messages: typed, draft }).draftOutOfDate).toBe(true);
+    // the live case: written with no reason, which was answered afterwards
+    const noReason = { ...six, reason: undefined };
+    const before = state({ pay, draft: { at: "2026-11-01", aiRunId: "run", by: dana, payKey: null, factsKey: draftFactsKeyWithReason(noReason), edits: 0 } });
+    expect(intakeReadiness({ facts: { ...noReason, reason: "growth", reasonDetail: "Growing the practice" }, state: before, messages: typed, draft }).draftOutOfDate).toBe(false);
+    expect(draftKeyMatches(draftFactsKey(six), { ...six, reason: "other" })).toBe(true);
+    expect(draftKeyMatches(draftFactsKey(six), { ...six, mustHaves: ["Dentrix"] })).toBe(false);
+    expect(["reason", "reasonDetail", "decisionMaker", "interviewerUserIds", "compensationMin", "dealBreakers"].every(setOnDraftByRule)).toBe(true);
+    expect(["title", "schedule", "mustHaves", "niceToHaves", "responsibilities"].some(setOnDraftByRule)).toBe(false);
   });
 
   it("a ceiling counts as the person's only when they typed that figure, and never below the top of the range", () => {

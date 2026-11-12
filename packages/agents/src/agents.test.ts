@@ -4,7 +4,7 @@ import { DraftRolePacket, IntakeExtraction, IntakeTurn, type IntakeQuestion } fr
 import { consumerPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { futureRolesLine, reminderClosingLine } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
-import { factsSetOnPanel, fieldsKnownFromFacts, fieldsSetOnPanel, keepAnswered, mergeFacts, ownerWordsOf, prepareQuestions, rememberPrompts, sameQuestion, settle, typedSinceReply, typedWordsOf } from "./intake";
+import { factsSetOnPanel, fieldsKnownFromFacts, fieldsSetOnPanel, keepAnswered, keepWordsFacts, mergeFacts, ownerWordsOf, prepareQuestions, rememberPrompts, sameQuestion, settle, typedSinceReply, typedWordsOf, withoutCardCount } from "./intake";
 import { verifyQuotes } from "./triage";
 
 describe("what candidate emails say about future roles (Wave 0 item 0.11)", () => {
@@ -297,6 +297,34 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
       { label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "owner" },
     ]);
     expect(out[0].allowOwn).toBe(true);
+  });
+
+  it("words a team card by what its answer sets, so a card that asks two things never leaves the final say unasked (live test, 12 Nov 2026)", () => {
+    const two = "Who should interview candidates, and who makes the final decision?";
+    const out = prepareQuestions([card({ field: "interviewers", mode: "team", prompt: two, why: "So the right people meet them and the right person decides." })], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: [] });
+    expect(out[0]).toMatchObject({ field: "interviewers", mode: "team", prompt: "Who will interview?", why: "They get the interview plan and the questions to ask." });
+    // the two-part wording was taken as the same question as the final say, which was then never asked
+    expect(sameQuestion(two, "Who makes the final decision?")).toBe(true);
+    const finalSay = card({ field: "decision_maker", mode: "team", prompt: "Who makes the final decision?" });
+    const later = prepareQuestions([finalSay], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: [], settled: ["interviewers"], askedPrompts: rememberPrompts([], out) });
+    expect(later.map((q) => [q.field, q.prompt])).toEqual([["decision_maker", "Who has the final say?"]]);
+    // a draft that remembered the two-part wording before this still gets the card about the final say
+    expect(prepareQuestions([finalSay], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: [], settled: ["interviewers"], askedPrompts: [two] })).toHaveLength(1);
+  });
+
+  it("never counts the cards in the reply: the server decides which are shown (live test, 12 Nov 2026)", () => {
+    expect(withoutCardCount("Please answer the three questions below.")).toBe("Please answer the questions below.");
+    expect(withoutCardCount("I've put 3 quick questions beside this.")).toBe("I've put some quick questions beside this.");
+    expect(withoutCardCount("Three quick questions on the right.")).toBe("Some quick questions on the right.");
+    expect(withoutCardCount("Answer these two cards and I'll write it.")).toBe("Answer these cards and I'll write it.");
+    for (const kept of ["You asked for two years of experience.", "One question: is it full time?", "I have one question.", "Two people interview."]) expect(withoutCardCount(kept)).toBe(kept);
+  });
+
+  it("once the draft is written, a turn that follows answers alone moves only what is set on it by rule (live test, 12 Nov 2026)", () => {
+    const before = { mustHaves: ["Active RDH license"], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], title: "Dental Hygienist" };
+    const merged = { ...before, mustHaves: ["Active RDH license", "Dentrix experience"], title: "Hygienist", schedule: "Monday to Friday", decisionMaker: "Dr Chen", reason: "growth" };
+    keepWordsFacts(merged, before);
+    expect(merged).toEqual({ ...before, decisionMaker: "Dr Chen", reason: "growth" });
   });
 
   it("never shows a pay card once a person confirmed the pay", () => {

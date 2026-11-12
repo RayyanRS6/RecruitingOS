@@ -518,8 +518,8 @@ export function sectionOfPath(path: string): SectionId | null {
 
 /**
  * Whether the person changed answers after the draft was written in a way only writing it again carries into its
- * words. The server decides (`readiness.draftOutOfDate`, from a key of the answers the draft was written from); pay, the
- * team and the deal-breakers are brought up to date on their own and never make it out of date.
+ * words. The server decides (`readiness.draftOutOfDate`, from a key of the answers the draft was written from); pay, why
+ * they are hiring, the team and the deal-breakers are brought up to date on their own and never make it out of date.
  */
 export function draftOutOfDate(view: Pick<IntakeSessionView, "readiness">): boolean {
   return view.readiness.hasDraft && view.readiness.draftOutOfDate;
@@ -527,11 +527,13 @@ export function draftOutOfDate(view: Pick<IntakeSessionView, "readiness">): bool
 
 /**
  * What "Write it again" says before it replaces anything: the changes saved on the draft since it was written (by chat
- * or with a fix) are replaced by the new words, so the person is asked first. Null when there is nothing to lose.
+ * or with a fix) are replaced by the new words, so the person is asked first. A change to what the answers hold too (the
+ * title, the schedule, the job type, the workplace, the must-haves and nice-to-haves) went into the answers when it was
+ * saved, so it is kept, and so are the parts set by rule. Null when there is nothing to lose.
  */
 export function redraftWarning(r: Pick<IntakeReadiness, "draftEdits">): string | null {
   if (!r.draftEdits) return null;
-  return `Writing it again replaces the ${r.draftEdits === 1 ? "change" : `${r.draftEdits} changes`} you saved on the draft since it was written (by asking, or with a suggested fix). Pay, who interviews and decides, and the deal-breakers carry over. Ask for ${r.draftEdits === 1 ? "that change" : "those changes"} again afterwards if you still want ${r.draftEdits === 1 ? "it" : "them"}.`;
+  return `Writing it again replaces the ${r.draftEdits === 1 ? "change" : `${r.draftEdits} changes`} you saved on the draft since it was written (by asking, or with a suggested fix), except changes to the title, schedule, job type, workplace, must-haves and nice-to-haves. Pay, why you are hiring, who interviews and decides, and the deal-breakers carry over. Ask for ${r.draftEdits === 1 ? "that change" : "those changes"} again afterwards if you still want ${r.draftEdits === 1 ? "it" : "them"}.`;
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */

@@ -121,8 +121,18 @@ function essentialValue(key: IntakeEssentialKey, f: IntakeFacts): { done: boolea
   }
 }
 
-/** The facts `finalizeDraft` (packages/agents/src/intake.ts) sets on the draft by rule after the model, so changing them never needs the draft written again. */
-const SET_BY_RULE: ReadonlySet<string> = new Set(["compensationBasis", "compensationMin", "compensationMax", "compensationCeiling", "decisionMaker", "decisionMakerUserId", "interviewers", "interviewerUserIds", "dealBreakers", "declinedCriteria", "suggestions"]);
+/**
+ * The facts `finalizeDraft` (packages/agents/src/intake.ts) sets on the draft by rule after the model, so changing them
+ * never needs the draft written again. Why you are hiring is one of them since 12 November 2026 (the live test: answering
+ * it after the draft was written asked for the draft to be written again): it is only ever for the team, and the
+ * draft's words never say it (intake.compile v6).
+ */
+const SET_BY_RULE: ReadonlySet<string> = new Set(["compensationBasis", "compensationMin", "compensationMax", "compensationCeiling", "reason", "reasonDetail", "decisionMaker", "decisionMakerUserId", "interviewers", "interviewerUserIds", "dealBreakers", "declinedCriteria", "suggestions"]);
+/** The same before 12 November 2026, when the draft's words could still say why you are hiring: drafts written then keep their key this way. */
+const SET_BY_RULE_BEFORE_REASON: ReadonlySet<string> = new Set([...SET_BY_RULE].filter((k) => k !== "reason" && k !== "reasonDetail"));
+
+/** Whether a fact is set on a written draft by rule, so changing it never needs the draft written again. */
+export const setOnDraftByRule = (key: string): boolean => SET_BY_RULE.has(key);
 
 /** A short, stable key of a text (cyrb53): enough to tell whether the answers changed, never to recover them. */
 function shortKey(s: string): string {
@@ -140,12 +150,31 @@ function shortKey(s: string): string {
 
 /**
  * A key of the answers the draft's words are written from (C7): everything except what is set on the draft by rule
- * (pay, who decides and who interviews, the deal-breakers, what was declined, unticked suggestions). A draft written
- * from other answers than the current ones is out of date: only writing it again carries the change into its words.
+ * (pay, why you are hiring, who decides and who interviews, the deal-breakers, what was declined, unticked suggestions).
+ * A draft written from other answers than the current ones is out of date: only writing it again carries the change into
+ * its words.
  */
 export function draftFactsKey(facts: IntakeFacts): string {
+  return factsKeyOf(facts, SET_BY_RULE);
+}
+
+/** The key as a draft written before 12 November 2026 kept it: with why you are hiring among the answers its words came from. */
+export function draftFactsKeyWithReason(facts: IntakeFacts): string {
+  return factsKeyOf(facts, SET_BY_RULE_BEFORE_REASON);
+}
+
+/**
+ * Whether a draft written with this key is up to date with these answers. A draft written before 12 November 2026 kept
+ * its key with the reason in it, so it stays up to date while that key still matches, and is never called out of date
+ * just because the way of keeping the key changed.
+ */
+export function draftKeyMatches(key: string, facts: IntakeFacts): boolean {
+  return key === draftFactsKey(facts) || key === draftFactsKeyWithReason(facts);
+}
+
+function factsKeyOf(facts: IntakeFacts, byRule: ReadonlySet<string>): string {
   const f = normalizeFacts(facts) as Record<string, unknown>;
-  const parts = Object.keys(f).filter((k) => !SET_BY_RULE.has(k)).sort().flatMap((k) => {
+  const parts = Object.keys(f).filter((k) => !byRule.has(k)).sort().flatMap((k) => {
     const v = f[k];
     if (v === undefined || v === null) return [];
     if (Array.isArray(v)) {
@@ -179,7 +208,8 @@ export function intakeReadiness(input: { facts: IntakeFacts; state: IntakeServer
   else if (missing.length && !askedForDraft && !roundAnswered) draftBlocker = "Answer the question cards first, or say \"draft it\".";
   const openFlags = draft ? unresolvedFlags(draft).length : 0;
   // A draft written before the key existed is never called out of date: there is nothing to compare it with.
-  const draftOutOfDate = !!draft && !!state.draft?.factsKey && state.draft.factsKey !== draftFactsKey(facts);
+  const key = state.draft?.factsKey;
+  const draftOutOfDate = !!draft && !!key && !draftKeyMatches(key, facts);
   const approvalBlockers: string[] = [];
   for (const e of essentials) if (!e.done) approvalBlockers.push(`Not set yet: ${e.label.toLowerCase()}.`);
   if (!confirmed) approvalBlockers.push(facts.compensationMin !== undefined ? "Confirm the pay on the pay card." : "Set the pay on the pay card.");

@@ -83,6 +83,10 @@ describe("the job builder API", () => {
     const [row] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, hygienist));
     expect(row.createdByUserId).toBe(ownerId);
     expect(row.messages[0]).toMatchObject({ role: "owner", kind: "text" });
+    // the reply never counts the cards, which the server picks after the model wrote it (live test, 12 Nov 2026)
+    expect(reply.assistantMessage).toContain("I've put some quick questions beside this.");
+    expect(row.messages.at(-1)).toMatchObject({ role: "assistant", content: reply.assistantMessage });
+    expect(reply.assistantMessage).not.toMatch(/\b(?:two|three|four|five|six|[2-6])\s+(?:quick\s+)?(?:questions|cards)\b/i);
     expect(session.startedBy).toMatchObject({ userId: ownerId, mine: true });
     expect(session.questions.length).toBeGreaterThan(0);
     expect(session.questions.length).toBeLessThanOrEqual(3);
@@ -391,6 +395,70 @@ describe("the job builder API", () => {
     expect((await read<{ sessions: IntakeSessionSummary[] }>(await json(recruiter, "GET", "/api/v1/intake/sessions"))).sessions.map((s) => s.id)).toEqual([managersDraft]);
   });
 
+  // The live test of 12 Nov 2026: the answers to the builder's follow-up cards reached the panel but not the draft, which
+  // kept "Not set yet: why you are hiring" and the assistant's own "not said" lines, and asked to be written again.
+  it("answers given after the draft is written go into it at once, by rule: no new writing, nothing out of date, nothing saved on it replaced", async () => {
+    const compiles = async () => (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "intake.compile"))).length;
+    const managerId = (await read<{ user: { id: string } }>(await json(manager, "GET", "/api/v1/auth/me"))).user.id;
+    const NOT_SAID = ["Not set yet: why you are hiring.", "Not set yet: who interviews.", "Not set yet: who makes the final decision.", "Reason for the hire was not stated; assumed growth.", "Interviewers were not named; assumed the owner interviews."];
+    const both = [ownerId, managerId].join();
+    // set on the panel, with no reply
+    const a = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine. Just draft it." }))).session;
+    const drafted = await read<{ draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${a.id}/draft`));
+    expect(drafted.draft.provenance.assumptions).toEqual(expect.arrayContaining(NOT_SAID));
+    const written = await compiles();
+    const panel = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${a.id}/answers`, { patch: { set: { reason: "replacement", reasonDetail: "Maria moves away in December", decisionMakerUserId: ownerId, interviewerUserIds: [ownerId, managerId] } }, reply: false }))).session;
+    expect(panel.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0 });
+    expect(panel.draft!.business).toMatchObject({ reason: "replacement", reasonDetail: "Maria moves away in December" });
+    expect(panel.draft!.preferences.decisionMakerUserId).toBe(ownerId);
+    expect(panel.draft!.interviews.plan.every((r) => r.interviewerUserIds.join() === both)).toBe(true);
+    for (const line of NOT_SAID) expect(panel.draft!.provenance.assumptions).not.toContain(line);
+    // pay set on the pay card after drafting is on the draft at once too, not only at approval
+    const payCard = panel.questions.find((q) => q.mode === "pay")!;
+    const paid = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${a.id}/answers`, { answers: [{ questionId: payCard.id, pay: { basis: "hourly", min: 24, max: 28 } }], reply: false }))).session;
+    expect(paid.draft!.compensation).toMatchObject({ min: 24, max: 28 });
+    expect(paid.draft!.provenance.assumptions).not.toContain("Pay is not set yet: nobody has set or confirmed it.");
+    expect(paid.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0, mayAskForApproval: true });
+    expect(await compiles()).toBe(written);
+    await json(owner, "POST", `/api/v1/intake/sessions/${a.id}/abandon`);
+
+    // answered on the cards, with the assistant's reply each time
+    const b = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour. Just draft it." }))).session;
+    expect((await json(owner, "POST", `/api/v1/intake/sessions/${b.id}/draft`)).status).toBe(200);
+    const writtenB = await compiles();
+    const reasonCard = (await view(owner, b.id)).questions.find((q) => q.field === "reason_for_hire")!;
+    const first = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${b.id}/answers`, { answers: [{ questionId: reasonCard.id, selected: ["growth"] }] }))).session;
+    expect(first.draft!.business.reason).toBe("growth");
+    expect(first.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0 });
+    // each team card asks one thing, in the words of what its answer sets
+    const iv = first.questions.find((q) => q.field === "interviewers")!;
+    const dm = first.questions.find((q) => q.field === "decision_maker")!;
+    expect([iv.prompt, dm.prompt]).toEqual(["Who will interview?", "Who has the final say?"]);
+    const team = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${b.id}/answers`, { answers: [{ questionId: iv.id, selected: [ownerId, managerId] }, { questionId: dm.id, selected: [ownerId] }] }))).session;
+    expect(team.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0, mayAskForApproval: true });
+    expect(team.draft!.preferences.decisionMakerUserId).toBe(ownerId);
+    expect(team.draft!.interviews.plan.every((r) => r.interviewerUserIds.join() === both)).toBe(true);
+    for (const line of NOT_SAID) expect(team.draft!.provenance.assumptions).not.toContain(line);
+    expect(await compiles()).toBe(writtenB);
+    await json(owner, "POST", `/api/v1/intake/sessions/${b.id}/abandon`);
+  });
+
+  it("after the draft, a turn that follows answers alone changes no answer its words come from; a final say read from them still comes through", async () => {
+    const c = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour. Just draft it." }))).session;
+    expect((await json(owner, "POST", `/api/v1/intake/sessions/${c.id}/draft`)).status).toBe(200);
+    const now = await view(owner, c.id);
+    const card = now.questions.find((q) => q.field === "reason_for_hire")!;
+    container.fake!.scriptNext("intake.turn", { assistantMessage: "Thanks. Dr Chen has the final say, and I added Dentrix experience as a must-have.", factsExtracted: { ...now.facts, mustHaves: [...now.facts.mustHaves, "Dentrix experience"], schedule: "Monday to Friday", decisionMaker: "Dr Chen" }, missingFacts: [], questions: [], readyToCompile: true, confidence: "medium" });
+    const after = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${c.id}/answers`, { answers: [{ questionId: card.id, selected: ["replacement"] }] }))).session;
+    expect(after.facts.mustHaves).toEqual(now.facts.mustHaves);
+    expect(after.facts.schedule).toBeUndefined();
+    expect(after.facts.decisionMaker).toBe("Dr Chen");
+    expect(after.readiness.draftOutOfDate).toBe(false);
+    expect(after.draft!.preferences.decisionMakerName).toBe("Dr Chen");
+    expect(after.draft!.business.reason).toBe("replacement");
+    await json(owner, "POST", `/api/v1/intake/sessions/${c.id}/abandon`);
+  });
+
   it("'Ask for approval' makes the role from the draft the person saw, brought up to date with the answers, and never rewrites it (C7, C10)", async () => {
     const managerId = (await read<{ user: { id: string } }>(await json(manager, "GET", "/api/v1/auth/me"))).user.id;
     const compiles = async () => (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "intake.compile"))).length;
@@ -407,12 +475,16 @@ describe("the job builder API", () => {
     const pay = (await view(owner, id)).questions.find((q) => q.mode === "pay");
     const set = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { ...(pay ? { answers: [{ questionId: pay.id, pay: { basis: "hourly", min: 21, max: 25 } }] } : {}), patch: { set: { decisionMakerUserId: managerId, ...(pay ? {} : { pay: { basis: "hourly", min: 21, max: 25 } }) } }, reply: false }));
     expect(set.session.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 1, mayAskForApproval: true });
+    // why you are hiring is set on the draft by rule too, since the words never say it (live test, 12 Nov 2026)
+    const reason = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch: { set: { reason: "replacement" } }, reply: false }));
+    expect(reason.session.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 1, mayAskForApproval: true });
+    expect(reason.session.draft?.business.reason).toBe("replacement");
     // an answer the words are written from, changed after drafting, holds approval until the draft is written again
-    await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch: { set: { reason: "replacement" } }, reply: false });
+    await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch: { add: [{ field: "niceToHaves", value: "Eaglesoft experience" }] }, reply: false });
     const stale = await json(owner, "POST", `/api/v1/intake/sessions/${id}/request-approval`);
     expect(stale.status).toBe(409);
     expect((await read<{ error: { details: { blockers: string[] } } }>(stale)).error.details.blockers).toEqual(["You changed answers after the draft was written. Write it again with them first."]);
-    await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch: { set: { reason: "growth" } }, reply: false });
+    await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch: { remove: [{ field: "niceToHaves", value: "Eaglesoft experience" }] }, reply: false });
     const before = await compiles();
     const asked = await json(owner, "POST", `/api/v1/intake/sessions/${id}/request-approval`);
     expect(asked.status).toBe(201);
@@ -421,8 +493,10 @@ describe("the job builder API", () => {
     expect(await compiles()).toBe(before);
     expect(packet.description.publicJobDescription).toBe(words);
     expect(packet.requirements.mustHaves.map((m) => m.text)).toContain("Dentrix experience");
-    // what is set by rule is current: the decision maker chosen after drafting, the pay set after drafting, the assumptions
+    // what is set by rule is current: the decision maker chosen after drafting, the pay set after drafting, why you are
+    // hiring, the assumptions
     expect(packet.preferences).toMatchObject({ decisionMakerUserId: managerId, decisionMakerName: "Hank Manager" });
+    expect(packet.business.reason).toBe("replacement");
     expect(packet.compensation).toMatchObject({ min: 21, max: 25, ceiling: 25 });
     expect(packet.provenance.payConfirmedBy).toMatchObject({ by: { id: ownerId } });
     expect(packet.provenance.assumptions.filter((a) => /^Not set yet|^Pay is not set yet/.test(a))).toEqual([]);
