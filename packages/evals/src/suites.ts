@@ -1,6 +1,7 @@
 import { triageAssessPrompt, type CompanyAboutInput, type MessageLineInput } from "@ros/ai";
 import { assessmentSources, checkPersonalLine, credentialMustHaves, readingsOutcome, saidByCandidate, scoringInput, screenCriterion, type MergedRevision, type ScoringIdentity } from "@ros/agents";
-import type { BoardColumn, EvidenceAssessment, IntakeFacts, IntakeTurn, MatchBand, PacketRevision, ResumeExtraction, RolePacket, ScreenAssessment, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
+import { repeatsMustHave, rulesOut, type BoardColumn, type DraftRolePacket, type EvidenceAssessment, type IntakeFacts, type IntakeTurn, type MatchBand, type PacketRevision, type ResumeExtraction, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn } from "@ros/contracts";
+import { findPlaybook } from "@ros/playbooks";
 // The score and the board's placement are pure functions over the stored findings; this package does not depend on
 // @ros/core (its database code), so the eval reads the very same modules by path.
 import { boardPlacement } from "../../core/src/board";
@@ -16,7 +17,21 @@ export type IntakeCase = {
   ownerMessages: string[];
   /** The first message is a job ad the owner pasted (plan C5): read once with intake.extract, then given to the model as data. */
   pastedAd?: boolean;
+  /**
+   * The answers as they are stored when the draft is written, for example as the quick start's one edit stores them, the
+   * marker that the owner went through the questions for the form (`formQuestionsChosen`) included. A case that sets
+   * them is written straight from them, with `ownerMessages` as the conversation and no intake.turn call, so the draft
+   * is given exactly these (review of the live-test fixes, 12 Nov 2026, #23); it has no turn to check.
+   */
+  facts?: Partial<IntakeFacts>;
+  /** How many drafts are written from the same answers (one unless set), as "Write it again" writes one afresh. */
+  compiles?: number;
   expectTurn?: (turn: IntakeTurn) => string[]; // returns failure messages
+  /**
+   * The draft as the model wrote it, before the server's own rules (`finalizePacket`): measures a line of the prompt that
+   * code would make true anyway, such as every question on the form holding a "no".
+   */
+  expectDraft?: (draft: DraftRolePacket) => string[];
   expectPacket?: (packet: RolePacket) => string[];
   /** The market check made before the first turn (plan C2): the basis it used and the figure it found, if any. */
   expectBenchmark?: (b: { basis: "hourly" | "salary" | null; benchmark: { basis: string; origin: string; p50: number } | null; gap?: string }) => string[];
@@ -24,6 +39,165 @@ export type IntakeCase = {
 
 const EMPTY: IntakeFacts = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] };
 export { EMPTY as EMPTY_FACTS };
+
+/*
+ * The job builder's draft where intake.compile v6 alone keeps it right (review of the live-test fixes, 12 Nov 2026): the
+ * checks below fail on what the model writes, so the real-model run can fail where the fixes rest on the prompt.
+ */
+
+/** Must-haves whose words rule someone out (`rulesOut`, as the quick start and the builder test them): the job page and the résumé reading would ask for the opposite. */
+export function ruleOutMustHaves(p: Pick<RolePacket, "requirements">): string[] {
+  const negative = p.requirements.mustHaves.filter((m) => rulesOut(m.text));
+  return negative.length ? [`must-haves written as what rules someone out: ${negative.map((m) => m.text).join("; ")}`] : [];
+}
+
+type FormRule = RolePacket["requirements"]["eligibility"][number];
+
+/** Questions on the form whose "no" holds nobody: each one holds the application for the owner's decision. `by` says who wrote it so. */
+export function formHoldingNobody(p: { requirements: { eligibility: ReadonlyArray<Pick<FormRule, "key" | "knockout">> } }, by = ""): string[] {
+  const loose = p.requirements.eligibility.filter((e) => !e.knockout);
+  return loose.length ? [`${by}questions on the form whose "no" holds nobody: ${loose.map((e) => e.key).join(", ")}`] : [];
+}
+
+/** The sentence of the public description that says why the owner is hiring: the reason is for the team only, and may change after the draft is written. */
+export function reasonInDescription(p: Pick<RolePacket, "description">, words: RegExp): string[] {
+  const said = p.description.publicJobDescription.split(/(?<=[.!?])\s+/).find((s) => words.test(s));
+  return said ? [`why the owner is hiring is written into the public description: "${said.trim()}"`] : [];
+}
+
+/** dental_rdh_irvine's reason: "It's a replacement, our hygienist moved." */
+export const REPLACEMENT_WORDS = /\bmoved\b|\breplac/i;
+
+/**
+ * A reason of growth ("It's growth."): the practice growing ("a growing practice", "we're growing", "our team continues
+ * to grow", "to support our growth"), never the candidate's own ("room to grow", "grow your skills", "career growth"),
+ * which says nothing about why the owner is hiring.
+ */
+export const GROWTH_WORDS = /\bgrowing\s+(?:dental\s+)?(?:practice|team|office|clinic|business|group)\b|\b(?:we|we['’]re|we\s+are|our\s+(?:\w+\s+)?(?:practice|team|office|clinic|business|group|patient\s+base)|(?:the|this)\s+(?:practice|team|office|clinic))\s+(?:(?:is|are|has|have|keeps|continues|continue)\s+(?:been\s+)?(?:to\s+)?)?(?:grow|growing|grows|grew|grown)\b|\b(?:our|recent|rapid|steady|continued)\s+growth\b/i;
+
+/** Words that say how much, how sure or of what trade, never which skill: they never make a skill the same as a must-have. */
+const NOT_A_SUBJECT = new Set(
+  "a an the and or of in on with for to at by as from into per via including include includes such e g eg etc is are be been who that this these those their your our its it any all each every both other own can will must should may has have having not no without experience experienced skill ability abilities able knowledge knowledgeable proficiency proficient competence competency competencies competent understanding familiarity familiar background expertise active current currently valid strong solid good great excellent proven demonstrated basic working relevant required preferred digital dental dentistry year level".split(" "),
+);
+
+/** Word families read as one word: an x-ray is a radiograph, "perio" is periodontal, a licence a license, a certificate a certification. */
+const WORD_FAMILIES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^(?:x-?rays?|radiogra\w*)$/, "radiograph"],
+  [/^(?:perio|periodont\w*)$/, "perio"],
+  [/^licen[cs]\w*$/, "license"],
+  [/^certif\w*$/, "certif"],
+];
+
+/** What a skill's name or definition, or a must-have, is about: its words in lower case, one form of each, less `NOT_A_SUBJECT`. */
+function subjectWords(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const part of text.toLowerCase().split(/[^a-z0-9-]+/)) {
+    const w = part.replace(/^-+|-+$/g, "");
+    if (!w || /^\d+$/.test(w) || NOT_A_SUBJECT.has(w)) continue;
+    const word = WORD_FAMILIES.find(([family]) => family.test(w))?.[1] ?? (w.length > 3 && /[^s]s$/.test(w) ? w.slice(0, -1) : w);
+    if (!NOT_A_SUBJECT.has(word)) out.add(word);
+  }
+  return out;
+}
+
+/**
+ * Skills that repeat a must-have (intake.compile v6: never a skill that is the same as a must-have, under any name, as the
+ * must-have already counts it; review of the live-test fixes, #44). A skill named as the must-have (the score's own rule,
+ * `repeatsMustHave`) or as a part of it ("Radiography" beside "Digital radiography"); a name half or more of whose words
+ * are the must-have's ("Radiographic imaging"); a name holding all of them ("Periodontal care" beside "Perio
+ * experience"); or a definition about the must-have, holding all its words, a third of the definition or more ("Takes and
+ * processes digital radiographs"). A broader skill naming it in passing is not one, such as the playbook's "Clinical
+ * quality" ("Thorough, gentle, standards-based care including perio assessment and radiographs.").
+ */
+export function skillsRepeatingMustHaves(p: Pick<RolePacket, "requirements" | "competencies">): string[] {
+  const out: string[] = [];
+  for (const c of p.competencies) {
+    const name = subjectWords(c.name);
+    const definition = subjectWords(c.definition);
+    const repeated = p.requirements.mustHaves.find((m) => {
+      if (repeatsMustHave(c, [m])) return true;
+      const need = subjectWords(m.text);
+      if (!need.size) return false;
+      const holdsAll = (words: Set<string>) => [...need].every((w) => words.has(w));
+      const shared = [...name].filter((w) => need.has(w)).length;
+      return (shared > 0 && shared * 2 >= name.size) || holdsAll(name) || (holdsAll(definition) && need.size * 3 >= definition.size);
+    });
+    if (repeated) out.push(`the skill "${c.name}" (${c.definition}) repeats the must-have "${repeated.text}"`);
+  }
+  return out;
+}
+
+/** The Dental Assistant's questions for the form as the quick start offers them on step 9: the playbook's, word for word. */
+const daForm = findPlaybook("dental")?.roles.find((r) => r.key === "da")?.eligibility.map((e) => e.question) ?? [];
+const daQuestion = (words: RegExp) => daForm.find((q) => words.test(q)) ?? "";
+export const DA_RDA_QUESTION = daQuestion(/\bRDA\b/);
+export const DA_XRAY_CPR_QUESTION = daQuestion(/x-ray/i);
+export const DA_DAYS_QUESTION = daQuestion(/\bavailable\b/i);
+
+/**
+ * A Dental Assistant started from the quick start, with the answers as its one edit stores them (`quickStartPatch`, then
+ * `applyFactsPatch`): the plain facts and the pay the owner set, the must-haves (a deal-breaker counted openly as the
+ * must-have it counts as), the deal-breakers in the owner's words, the questions ticked on step 9 as eligibility notes,
+ * those left unticked as suggestions the draft never uses, and the marker that the owner went through them. The
+ * conversation is the quick start's first message and the edit's summary, as the job builder keeps them.
+ */
+function quickStartDentalAssistant(o: { mustHaves: string[]; dealBreakers: string[]; chosen: string[]; unticked: string[] }): Pick<IntakeCase, "vertical" | "ownerMessages" | "facts"> {
+  const first = ["Quick start for a new job.", "Job title: Dental Assistant", "Employment type: Full time", "Where: On site, Irvine, CA", "Minimum experience: No minimum", "Pay: $24–$28 an hour", "Closing date: None"];
+  const edit = [
+    "Job title: Dental Assistant",
+    "Full or part time: Full time",
+    "Work model: On site",
+    "Where the job is: Irvine, CA",
+    "Pay: $24–$28 an hour",
+    `Must-haves, added: ${o.mustHaves.join("; ")}`,
+    ...(o.dealBreakers.length ? [`Deal-breakers, added: ${o.dealBreakers.join("; ")}`] : []),
+    ...(o.chosen.length ? [`Eligibility, added: ${o.chosen.join("; ")}`] : []),
+  ];
+  return {
+    vertical: "dental",
+    ownerMessages: [first.join("\n"), edit.join("\n")],
+    facts: {
+      title: "Dental Assistant",
+      employmentType: "full_time",
+      remotePolicy: "onsite",
+      locationText: "Irvine, CA",
+      compensationBasis: "hourly",
+      compensationMin: 24,
+      compensationMax: 28,
+      mustHaves: o.mustHaves,
+      dealBreakers: o.dealBreakers,
+      eligibilityNotes: o.chosen,
+      suggestions: o.unticked.map((text) => ({ field: "eligibility", text, origin: "playbook" as const })),
+      formQuestionsChosen: true,
+    },
+  };
+}
+
+/** What a question on the form asks, read from its words, its key and its expectation. */
+const asks = (e: FormRule, words: RegExp) => words.test(`${e.question} ${e.key} ${JSON.stringify(e.expectation ?? {})}`);
+const ASKS_RDA = /\bRDA\b|registered dental assistant|dental assist\w*\s+(?:licen[cs]e|registration)/i;
+const ASKS_XRAY_CPR = /x-?rays?\b|radiation|radiograph|\bCPR\b|\bBLS\b|basic life support/i;
+const asksDays = (e: FormRule) => e.type === "schedule_availability" || (e.type !== "start_date" && /\bavailab/i.test(e.question) && /\b(?:days?|hours|schedule|shifts?|open)\b/i.test(e.question));
+const rdaMustHaves = (p: Pick<RolePacket, "requirements">) => p.requirements.mustHaves.filter((m) => ASKS_RDA.test(m.text));
+
+/**
+ * The form of a Dental Assistant started from the quick start (intake.compile v6, "Questions on the form"): exactly the
+ * questions the owner chose, read by what each asks (the model may split the x-ray and CPR/BLS question in two), so the
+ * RDA licence once when it was chosen and never when it was left unticked, and no question nobody chose.
+ */
+export function quickStartFormFailures(p: { requirements: { eligibility: readonly FormRule[] } }, o: { rda: boolean }): string[] {
+  const f: string[] = [];
+  const rules = p.requirements.eligibility;
+  const rda = rules.filter((e) => asks(e, ASKS_RDA));
+  const rest = rules.filter((e) => !asks(e, ASKS_RDA));
+  if (o.rda && rda.length !== 1) f.push(rda.length ? `the RDA licence is asked ${rda.length} times on the form` : "no RDA licence question on the form");
+  if (!o.rda && rda.length) f.push(`the RDA licence question the owner left unticked is on the form: ${rda.map((e) => `"${e.question}"`).join("; ")}`);
+  if (!rest.some((e) => asks(e, ASKS_XRAY_CPR))) f.push(`a question the owner chose is not on the form: "${DA_XRAY_CPR_QUESTION}"`);
+  if (!rest.some(asksDays)) f.push(`a question the owner chose is not on the form: "${DA_DAYS_QUESTION}"`);
+  const others = rest.filter((e) => !asks(e, ASKS_XRAY_CPR) && !asksDays(e));
+  if (others.length) f.push(`questions on the form the owner did not choose: ${others.map((e) => `"${e.question}"`).join("; ")}`);
+  return f;
+}
 
 export const intakeGolden: IntakeCase[] = [
   {
@@ -57,6 +231,9 @@ export const intakeGolden: IntakeCase[] = [
       // about ten minutes; the owner asked for no questions of their own here, so nothing justifies more
       if (p.screening.questions.length < 5 || p.screening.questions.length > 6) f.push(`${p.screening.questions.length} screening questions; five or six expected`);
       if (p.screening.maxMinutes > 10) f.push(`the screening conversation is set to ${p.screening.maxMinutes} minutes; about ten expected`);
+      // intake.compile v6: why the owner is hiring stays out of the public description, and no skill repeats a must-have
+      // (review of the live-test fixes, #44)
+      f.push(...reasonInDescription(p, REPLACEMENT_WORDS), ...skillsRepeatingMustHaves(p));
       return f;
     },
   },
@@ -71,21 +248,92 @@ export const intakeGolden: IntakeCase[] = [
   {
     // The live test of 12 Nov 2026 (H1, M1): a licence named in the words that rule someone out. The must-have is written
     // as the requirement, the playbook's RDA question (the owner's call) goes on the form because a must-have names it,
-    // and every question on the form holds a "no" for the owner's decision.
+    // and every question on the form holds a "no" for the owner's decision. Since the review of its fixes (#44), the
+    // description never says why the owner is hiring, and no skill repeats a must-have ("Digital radiography").
     id: "dental_assistant_license_in_negative_words",
     provenance: "synthetic",
     vertical: "dental",
     ownerMessages: ["Dental assistant in Irvine, CA, full time, $24 to $28 an hour. It's growth. I decide and I interview. Just draft it. Must-haves: four-handed dentistry, digital radiography, no active California RDA license."],
     expectPacket: (p) => {
-      const f: string[] = [];
-      const negative = p.requirements.mustHaves.filter((m) => /^(?:no|without|cannot|can['’]t|not)\b/i.test(m.text.trim()));
-      if (negative.length) f.push(`must-haves written as what rules someone out: ${negative.map((m) => m.text).join("; ")}`);
+      const f: string[] = [...ruleOutMustHaves(p)];
       const rda = p.requirements.eligibility.some((e) => (e.type === "license" || e.type === "certification") && /\bRDA\b|registered dental assistant/i.test(`${e.question} ${JSON.stringify(e.expectation)}`));
       if (!rda) f.push("no RDA license question on the form");
-      const holdsNobody = p.requirements.eligibility.filter((e) => !e.knockout);
-      if (holdsNobody.length) f.push(`questions on the form whose "no" holds nobody: ${holdsNobody.map((e) => e.key).join(", ")}`);
+      // read after finalizePacket, so this pins finalizeDraft's rule (the stand-in writes its BLS question holding nobody)
+      f.push(...formHoldingNobody(p));
+      f.push(...reasonInDescription(p, GROWTH_WORDS), ...skillsRepeatingMustHaves(p));
       return f;
     },
+  },
+  {
+    // Review of the live-test fixes, #21: must-haves typed in words that rule someone out, worded unlike the prompt's own
+    // example, as the builder's conversation, the panel or the quick start's must-have box keeps them. The draft is written
+    // twice from the same answers, since on 12 Nov the first draft was right and "Write it again" brought the negative
+    // words back: either draft keeping such words, or leaving one of these must-haves out, fails.
+    id: "dental_assistant_rule_out_words_written_twice",
+    provenance: "synthetic",
+    vertical: "dental",
+    ownerMessages: ["Dental assistant in Irvine, CA, full time, $24 to $28 an hour. It's growth. I decide and I interview. Must-haves: four-handed dentistry, digital radiography, no x-ray permit, without a current BLS certification, not certified in coronal polishing. Just draft it."],
+    facts: {
+      title: "Dental Assistant",
+      locationText: "Irvine, CA",
+      employmentType: "full_time",
+      reason: "growth",
+      compensationBasis: "hourly",
+      compensationMin: 24,
+      compensationMax: 28,
+      decisionMaker: "me",
+      interviewers: ["me"],
+      mustHaves: ["Four-handed dentistry", "Digital radiography", "No x-ray permit", "Without a current BLS certification", "Not certified in coronal polishing"],
+    },
+    compiles: 2,
+    expectPacket: (p) => {
+      const kept: ReadonlyArray<readonly [string, RegExp]> = [["the x-ray permit", /x-?ray|radiation safety|\bpermit\b/i], ["the BLS certification", /\bBLS\b|basic life support|\bCPR\b/i], ["coronal polishing", /coronal polish/i]];
+      return [...ruleOutMustHaves(p), ...kept.filter(([, words]) => !p.requirements.mustHaves.some((m) => words.test(m.text))).map(([what]) => `the must-have about ${what} is not on the draft`)];
+    },
+  },
+  {
+    // The live test's H1 on the quick start, where it happened (review of its fixes, #23 and #47): the deal-breaker "No
+    // active California RDA license" counted openly is the must-have "Active California RDA license", which ticks the
+    // RDA question by itself; with the two questions the owner chose, the form has exactly those three, the licence asked
+    // once (no second rule for the deal-breaker), and the model writes each one holding a "no".
+    id: "dental_assistant_quick_start_deal_breaker_counted_openly",
+    provenance: "synthetic",
+    ...quickStartDentalAssistant({ mustHaves: ["Four-handed dentistry", "Digital radiography", "Active California RDA license"], dealBreakers: ["No active California RDA license"], chosen: [DA_RDA_QUESTION, DA_XRAY_CPR_QUESTION, DA_DAYS_QUESTION], unticked: [] }),
+    expectDraft: (d) => formHoldingNobody(d, "the AI wrote "),
+    expectPacket: (p) => [
+      ...ruleOutMustHaves(p),
+      ...(rdaMustHaves(p).length ? [] : ["no must-have for the deal-breaker counted openly (an active California RDA license)"]),
+      ...quickStartFormFailures(p, { rda: true }),
+      ...formHoldingNobody(p),
+    ],
+  },
+  {
+    // A deal-breaker kept private judges nobody (founder decision Q19): no must-have and no question on the form come from
+    // it, and the RDA question, which nothing ticked, stays off the form; the questions the owner chose stay on.
+    id: "dental_assistant_quick_start_deal_breaker_kept_private",
+    provenance: "synthetic",
+    ...quickStartDentalAssistant({ mustHaves: ["Four-handed dentistry", "Digital radiography"], dealBreakers: ["No active California RDA license"], chosen: [DA_XRAY_CPR_QUESTION, DA_DAYS_QUESTION], unticked: [DA_RDA_QUESTION] }),
+    expectDraft: (d) => formHoldingNobody(d, "the AI wrote "),
+    expectPacket: (p) => [
+      ...ruleOutMustHaves(p),
+      ...rdaMustHaves(p).map((m) => `a must-have from the deal-breaker kept private: ${m.text}`),
+      ...quickStartFormFailures(p, { rda: false }),
+      ...formHoldingNobody(p),
+    ],
+  },
+  {
+    // A question left unticked on step 9 never goes on the form: here the RDA question, though a must-have names the
+    // licence (the owner reads it from the résumé and holds nobody on it). The questions the owner chose stay on.
+    id: "dental_assistant_quick_start_rda_question_unticked",
+    provenance: "synthetic",
+    ...quickStartDentalAssistant({ mustHaves: ["Four-handed dentistry", "Digital radiography", "Active California RDA license"], dealBreakers: [], chosen: [DA_XRAY_CPR_QUESTION, DA_DAYS_QUESTION], unticked: [DA_RDA_QUESTION] }),
+    expectDraft: (d) => formHoldingNobody(d, "the AI wrote "),
+    expectPacket: (p) => [
+      ...ruleOutMustHaves(p),
+      ...(rdaMustHaves(p).length ? [] : ['the owner\'s must-have "Active California RDA license" is not on the draft']),
+      ...quickStartFormFailures(p, { rda: false }),
+      ...formHoldingNobody(p),
+    ],
   },
   {
     id: "generic_marketing_director",

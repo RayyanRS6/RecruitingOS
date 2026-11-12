@@ -82,10 +82,18 @@ async function main() {
     const out: (typeof results)[string]["cases"] = [];
     for (const c of cases) {
       const failures: string[] = [];
-      let facts: IntakeFacts = { ...EMPTY_FACTS };
+      let facts: IntakeFacts = { ...EMPTY_FACTS, ...c.facts };
       const messages: IntakeMessage[] = [];
       let lastTurn = null as null | Awaited<ReturnType<typeof runPrompt<IntakeContext, import("@ros/contracts").IntakeTurn>>>;
-      for (const [i, m] of c.ownerMessages.entries()) {
+      // A case with its answers set is written straight from them (the quick start's edit, say): its messages are the
+      // conversation and no intake.turn call reads them, so the draft is given exactly those answers (review of the
+      // live-test fixes, #23). It has no turn, so nothing of a turn can be checked.
+      if (c.facts) {
+        if (c.expectTurn || c.expectBenchmark || c.pastedAd) failures.push("a case with its answers set has no turn of the conversation to check");
+        for (const m of c.ownerMessages) messages.push({ role: "owner", content: m, at: new Date().toISOString(), kind: "text" });
+      }
+      // Otherwise each message is a turn of the conversation, answered by intake.turn as in the job builder.
+      for (const [i, m] of (c.facts ? [] : c.ownerMessages).entries()) {
         const asAd = i === 0 && !!c.pastedAd;
         messages.push({ role: "owner", content: m, at: new Date().toISOString(), kind: asAd ? "pasted_ad" : "text" });
         // A pasted ad is read once for what it states before the market check (plan C5).
@@ -103,17 +111,27 @@ async function main() {
         lastTurn = r;
       }
       if (lastTurn?.ok && c.expectTurn) failures.push(...c.expectTurn({ ...lastTurn.output, factsExtracted: facts }));
-      if (compile && c.expectPacket && failures.length === 0) {
+      if (compile && (c.expectPacket || c.expectDraft) && failures.length === 0) {
         const { ctx } = await buildCtx(c, facts, messages);
-        const r = await runPrompt(q, rt, intakeCompilePrompt, ctx, { companyId: null, inputRef: { eval: c.id }, maxTokens: INTAKE_COMPILE_MAX_TOKENS });
-        if (!r.ok) failures.push(`compile failed: ${r.error}`);
-        else {
+        // As many drafts as the case asks for, each written afresh from the same answers ("Write it again") and judged on
+        // its own: first as the model wrote it, then as the server finishes it (pay, the rules set in code, the guard).
+        // The backstop that drops a question the owner left unticked (`withoutUntickedQuestions`, run when a draft is
+        // written in the app) is left out on purpose, so a case measures the prompt's own line on the form.
+        const drafts = Math.max(1, c.compiles ?? 1);
+        for (let n = 1; n <= drafts; n++) {
+          const which = drafts > 1 ? `draft ${n}: ` : "";
+          const r = await runPrompt(q, rt, intakeCompilePrompt, ctx, { companyId: null, inputRef: { eval: c.id, ...(drafts > 1 ? { draft: n } : {}) }, maxTokens: INTAKE_COMPILE_MAX_TOKENS });
+          if (!r.ok) {
+            failures.push(`${which}compile failed: ${r.error}`);
+            continue;
+          }
+          failures.push(...(c.expectDraft?.(r.output) ?? []).map((x) => `${which}${x}`));
           const packet = finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
-          failures.push(...c.expectPacket(packet));
+          failures.push(...(c.expectPacket?.(packet) ?? []).map((x) => `${which}${x}`));
           const declined = facts.declinedCriteria.map((d) => d.requested.toLowerCase());
           // The packet records what was declined (and any flags) in its provenance on purpose; anywhere else is a leak.
           const text = JSON.stringify({ ...packet, provenance: { ...packet.provenance, declinedCriteria: [], flags: [] } }).toLowerCase();
-          for (const d of declined) if (text.includes(d)) failures.push(`declined criterion leaked into packet: ${d}`);
+          for (const d of declined) if (text.includes(d)) failures.push(`${which}declined criterion leaked into packet: ${d}`);
         }
       }
       out.push({ id: c.id, pass: failures.length === 0, failures });

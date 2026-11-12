@@ -390,8 +390,8 @@ function fakeExtract(req: StructuredRequest<unknown>): IntakeExtraction {
  * the owner's own questions), since candidates answer it straight after the form (plan E8). v6: a must-have worded as
  * what rules someone out is written as the requirement, a playbook question that is the owner's call goes on the form
  * only when the owner chose it or a must-have names it (never when they left it unticked), its CPR/BLS and schedule
- * questions stay off the form when the owner left one asking the same unticked, and the description never says why the
- * owner is hiring.
+ * questions stay off the form when the owner left one asking the same unticked, every rule holds a "no" once the owner
+ * went through the questions, and the description never says why the owner is hiring.
  */
 function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const f = c.facts;
@@ -418,7 +418,10 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const blsLeftOff = unticked.some((u) => sameRequirement(u, bls));
   const scheduleLeftOff = unticked.some((u) => /\bavailab\w*|\bschedule\b|\bdays?\b|\bhours\b|\bshifts?\b/i.test(u));
   if (isDental && rdh) eligibility.push({ key: "rdh_license", type: "license", question: `Do you hold an active dental hygiene (RDH) license in ${locRegion || "the state of this office"}?`, expectation: { license: "RDH", jurisdiction: locRegion || "" }, rationale: "Required by law to practice dental hygiene.", knockout: true });
-  if (isDental && !blsLeftOff) eligibility.push({ key: "bls", type: "certification", question: bls, expectation: { certification: "BLS" }, rationale: "Required for clinical staff.", knockout: false });
+  // intake.compile v6: every rule holds a "no". The stand-in writes its BLS rule so once the owner went through the
+  // questions (the quick start's marker), as the evals' quick-start cases check on the draft as the model wrote it;
+  // otherwise it holds nobody on purpose, so the evals and tests that read the finished draft pin finalizeDraft's rule.
+  if (isDental && !blsLeftOff) eligibility.push({ key: "bls", type: "certification", question: bls, expectation: { certification: "BLS" }, rationale: "Required for clinical staff.", knockout: !!f.formQuestionsChosen });
   if (!isDental) {
     const wa = pbRole.eligibility.find((e) => e.type === "work_authorization");
     eligibility.push({ key: "work_authorization", type: "work_authorization", question: wa?.question ?? "Are you legally authorized to work in the United States for any employer?", expectation: { authorized: true }, rationale: "Required for employment; asked of every candidate.", knockout: true });
