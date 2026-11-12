@@ -155,7 +155,7 @@ test.describe("the whole hire", () => {
     const form = panel.locator(".card", { has: page.getByRole("heading", { name: "Set a date and time" }) });
     await expect(form).toBeVisible();
     await expect(form.getByText("With Dana Whitfield", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(form.getByLabel("Time (America/Los_Angeles)")).toBeVisible();
+    await expect(form.getByLabel("Time (Pacific time)")).toBeVisible();
     // nobody has hours or a calendar here, and none is needed: the old way is not offered
     await expect(form.getByText("Or let them pick from your free times")).toHaveCount(0);
     await expectAccessible(page, "set a date and time");

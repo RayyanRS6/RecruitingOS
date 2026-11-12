@@ -8,6 +8,7 @@ import { api, ApiError, isCandidateLocked, type InterviewBooked, type InterviewD
 import { LockedCard } from "../components/LockedCandidates";
 import { SetTimeForm } from "../components/SetTimeForm";
 import { useCompanyCheck, useCompanyTimezone } from "../components/use-company-check";
+import { zoneName } from "../company-setup";
 import { toast } from "../toast";
 import { interviewNewTimesText } from "../cancelled";
 import { DECISION_WORDS, candidateEmailLine, formFromBooked, freshForm, interviewWord, shortWhen, type SetTimeForm as SetTimeFormState } from "../interview-time";
@@ -226,7 +227,8 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
           ) : null}
           <Card title="Details" className={SHEET_CARD}>
             <dl className="glance">
-              <dt>When</dt><dd>{when(i.startsAt, i.timezone)}{i.timezone ? ` (${i.timezone})` : ""}</dd>
+              {/* the zone by name, never its id, and only beside a time (live test, 12 November 2026) */}
+              <dt>When</dt><dd>{when(i.startsAt, i.timezone)}{i.startsAt && i.timezone ? ` (${zoneName(i.timezone, "short")})` : ""}</dd>
               <dt>Length</dt><dd>{i.durationMinutes} minutes, {i.format.replace("_", " ")}</dd>
               {/* where it is: the address or the phone a person chose, else the link */}
               {i.selectedSlot?.address ? <><dt>Where</dt><dd>{i.selectedSlot.address}</dd></> : setByPerson && i.format === "phone" ? <><dt>Where</dt><dd>By phone</dd></> : <><dt>Link</dt><dd>{i.meetingUrl ? <a href={i.meetingUrl} target="_blank" rel="noreferrer">{i.meetingUrl}</a> : noLinkText(i)}</dd></>}

@@ -37,6 +37,21 @@ describe("Offer made (Q29)", () => {
     expect(waitingOnCandidateText(a as never, new Date(2026, 9, 9, 10))).toBe("You recorded an offer made on Tuesday, October 6 (3 days ago). The next move is Maria's. When they answer, record it here; nothing is sent to them either way.");
   });
 
+  // Live test, 12 November 2026: an offer made on 11 November in Los Angeles read "(yesterday)" in Pakistan, where it was
+  // already the 12th, while the date field had capped the day at the company's today.
+  it("counts the days since the offer on the company's calendar, the one its day is recorded on", () => {
+    const evening = new Date("2026-11-12T04:00:00Z"); // 8 PM on the 11th in Los Angeles, already the 12th in Pakistan
+    expect(daysAgoWords("2026-11-11", evening, "America/Los_Angeles")).toBe("today");
+    expect(daysAgoWords("2026-11-10", evening, "America/Los_Angeles")).toBe("yesterday");
+    expect(daysAgoWords("2026-11-08", evening, "America/Los_Angeles")).toBe("3 days ago");
+    expect(daysAgoWords("not a day", evening, "America/Los_Angeles")).toBe("");
+    const a = { stageChangedAt: "2026-11-12T03:00:00.000Z", timeline: [ev("offer.created", { madeOn: "2026-11-11" })], candidate: { firstName: "Maria" } };
+    expect(waitingOnCandidateText(a as never, evening, "America/Los_Angeles")).toBe("You recorded an offer made on Wednesday, November 11 (today). The next move is Maria's. When they answer, record it here; nothing is sent to them either way.");
+    // the card reads the company's zone
+    const card = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/hiring.tsx", import.meta.url), "utf8");
+    expect(card).toContain("waitingOnCandidateText(a, undefined, timeZone)");
+  });
+
   it("shows the wait on the candidate on their row, and their answer privately", () => {
     expect(waitingOnCandidateRow({ group: "waiting_on_candidate", daysInStage: 3 })).toBe("Offer made: waiting on their answer 3 days");
     expect(waitingOnCandidateRow({ group: "waiting_on_candidate", daysInStage: 0 })).toBe("Offer made today: waiting on their answer");
@@ -119,6 +134,21 @@ describe("the hire sheet (plan H1)", () => {
     expect(v.keepWarmWords).not.toMatch(/reminds you about your backups/);
     expect(hireFollowUpView({ ...hire, backups: { count: 1, people: hire.backups.people.slice(0, 1) } }, "Maria", after).keepWarmWords).toMatch(/Home asks you to close the job until you do\.$/);
     expect(keepWarmToast("Maria", "2026-11-02", after)).toEqual({ title: "The job stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." });
+  });
+
+  // The same clock as the offer's day (live test, 12 November 2026): Home keeps its backups card through the start day on
+  // the company's calendar, so the sheet says the start has passed only once that day is over there.
+  it("says whether the start date has passed on the company's calendar", () => {
+    const evening = new Date("2026-11-03T04:00:00Z"); // 8 PM on 2 November in Los Angeles, already the 3rd in Pakistan
+    expect(hireFollowUpView(hire, "Maria", evening, "America/Los_Angeles")).toMatchObject({ started: false, startLine: "Maria starts on Monday, November 2." });
+    expect(keepWarmToast("Maria", "2026-11-02", evening, 1, "America/Los_Angeles").detail).toMatch(/Home reminds you about your backups until Maria starts/);
+    const nextEvening = new Date("2026-11-04T04:00:00Z");
+    expect(hireFollowUpView(hire, "Maria", nextEvening, "America/Los_Angeles")).toMatchObject({ started: true, startLine: "Maria started on Monday, November 2." });
+    expect(keepWarmToast("Maria", "2026-11-02", nextEvening, 1, "America/Los_Angeles").detail).toBe("Nobody was told anything. Home asks you to close it until you do.");
+    // the sheet reads the company's zone
+    const sheet = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/hiring.tsx", import.meta.url), "utf8");
+    expect(sheet).toContain("hireFollowUpView(after, a.candidate.firstName || name, undefined, timeZone)");
+    expect(sheet).toContain("keepWarmToast(a.candidate.firstName || name, after.startDate, undefined, after.backups.count, timeZone)");
   });
 
   it("names closing in job words, like every other button (10 November 2026), and says \"and tell them\" only when someone can be told", () => {

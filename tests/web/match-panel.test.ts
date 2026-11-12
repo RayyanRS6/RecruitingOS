@@ -52,6 +52,21 @@ describe("the match card", () => {
     expect(verdict).toContain('!m && look.assessmentUnavailable && a.noReading !== "no_ai_notice" ? NO_REVIEW_LINE');
   });
 
+  // Live test, 12 November 2026: declined while held on an eligibility answer, the card still said the review "usually comes
+  // a minute or two after they apply". Nobody reads anyone once they are decided.
+  it("never promises a review to someone decided before one was made", () => {
+    for (const stage of ["rejected", "talent_pool", "withdrawn", "hired", "declined"]) {
+      const state = matchCardState(detail({ matchScore: null, stage, rejectReason: stage === "rejected" ? "eligibility" : null }));
+      expect(state, stage).toEqual({ kind: "unread", text: "No match score: no AI review was made before the decision." });
+      expect(JSON.stringify(state), stage).not.toMatch(/minute or two|starts once/);
+    }
+    // a review that could not be made still says so first, and someone held and not yet decided still waits for a person
+    expect(matchCardState(detail({ matchScore: null, stage: "rejected", noReading: "could_not_read" }))).toEqual({ kind: "unread", text: "No match score: the AI review could not be made, so read this one yourself." });
+    expect(matchCardState(detail({ matchScore: null, stage: "ineligible" }))).toMatchObject({ kind: "unread", text: expect.stringContaining("starts once someone keeps them in") });
+    // decided with a review that gave no score: that review's own line, as before
+    expect(matchCardState(detail({ matchScore: null, stage: "rejected", assessments: [{}] }))).toEqual({ kind: "unread", text: "No match score yet: there is no AI review of this application against the job's requirements." });
+  });
+
   it("says plainly when there is no reading yet, or when the reading speaks to no requirement", () => {
     expect(matchCardState(detail({ matchScore: null }))).toMatchObject({ kind: "unread", text: expect.stringContaining("usually comes a minute or two") });
     const nothing = score(reading("triage", [must("rdh_license", "unknown")]));

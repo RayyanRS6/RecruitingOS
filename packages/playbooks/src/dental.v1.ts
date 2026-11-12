@@ -70,7 +70,9 @@ const dental: PlaybookInput = {
         { key: "systems", name: "Practice software and technology", definition: "Charts accurately in the practice management system.", weight: 3, indicators: ["Names the systems used", "Comfort with intraoral scanners"] },
       ],
       screeningQuestions: [
-        { key: "license_confirm", question: "Can you confirm your RDH license state and whether it is currently active?", kind: "eligibility", modelAnswer: "States the license and that it is active; can name the license number on request." },
+        // One question answered yes or no, so the AI interview's Yes and No buttons fit it; it used to ask for the state as
+        // well (live test, 12 Nov 2026). No "where": a question that says where, which or what is typed (`tapFormatFor`).
+        { key: "license_confirm", question: "Is your RDH license active in the state this office is in?", kind: "eligibility", modelAnswer: "Yes, active in this state; can name the license number on request." },
         { key: "perio", question: "Walk me through how you handle a new patient with generalized moderate periodontitis.", kind: "skills", competencyKey: "clinical_quality", modelAnswer: "Full perio charting, radiographs, treatment plan discussion with the dentist, scaling and root planing by quadrant, re-evaluation." },
         { key: "anxious", question: "Tell me about a time a patient was anxious or resistant. What did you do?", kind: "behavioral", competencyKey: "patient_communication", modelAnswer: "Specific example; slowed down; explained; checked in; outcome." },
         { key: "schedule", question: "What appointment length are you used to for an adult prophy, and how do you handle running behind?", kind: "skills", competencyKey: "efficiency", modelAnswer: "45 to 60 minutes typical; communicates with front desk; prioritizes." },

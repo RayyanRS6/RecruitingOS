@@ -132,7 +132,7 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html.match(/<div class="stat-row">/g)).toHaveLength(2);
     // the day bars: the counts stay in the label, the empty day is marked for its quieter colour, the height is inline;
     // how to read them is the chart's tooltip, not a line under it (fewer words, 23 Oct 2026)
-    expect(html).toContain('<div class="daybars" role="img" aria-label="Applicants per day over the last 30 days: 2026-10-09 2, 2026-10-10 1" title="One bar per day, oldest on the left, days in America/Los_Angeles."><span title="2026-10-08: 0" class="zero" style="height:4%"></span><span title="2026-10-09: 2" style="height:100%"></span><span title="2026-10-10: 1" style="height:50%"></span></div>');
+    expect(html).toContain('<div class="daybars" role="img" aria-label="Applicants per day over the last 30 days: 2026-10-09 2, 2026-10-10 1" title="One bar per day, oldest on the left, days in Pacific time."><span title="2026-10-08: 0" class="zero" style="height:4%"></span><span title="2026-10-09: 2" style="height:100%"></span><span title="2026-10-10: 1" style="height:50%"></span></div>');
     expect(html).not.toContain('<p class="small muted mt-1.5 mb-4">One bar per day');
     expect(html).not.toContain("border-radius:2px");
     // every count column, heading and cells

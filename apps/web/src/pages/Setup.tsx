@@ -8,7 +8,7 @@ import { useSearchParams } from "../nav";
 import { STILL_REVIEWING_LABEL, STILL_REVIEWING_NOTE, hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
 import { NEW_TIMES_SETUP, newTimesReadOnlyText, newTimesSavedNotice, newTimesSettingFrom, newTimesSettingText, pendingQuestion, workingDaysFrom, type NewTimesSaved } from "../cancelled";
 import { CAREERS_PAGE_WAITS, companyCheckOf } from "../company-check";
-import { VERTICALS } from "../company-setup";
+import { VERTICALS, zoneName } from "../company-setup";
 import { candidateEmailRow, type CandidateEmailHealth } from "../email-health";
 import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoProblem, logoUrlOf } from "../publishing";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
@@ -474,7 +474,7 @@ function MyAvailability() {
         <div className="stack gap-4">
           {/* the days below are a suggestion until saved (6 November 2026): they never look saved when nothing is */}
           <div className="row"><h3 className="text-[15px]">Declared hours</h3>{q.data && !q.data.availability ? <Chip tone="neutral">Not saved yet</Chip> : null}</div>
-          <div className="max-w-[22rem]"><Field label="Time zone" htmlFor="av-tz"><select id="av-tz" className="select" value={timezone} onChange={(e) => setTimezone(e.target.value)}>{[...new Set([timezone, ...ZONES])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field></div>
+          <div className="max-w-[22rem]"><Field label="Time zone" htmlFor="av-tz"><select id="av-tz" className="select" value={timezone} onChange={(e) => setTimezone(e.target.value)}>{[...new Set([timezone, ...ZONES])].map((z) => <option key={z} value={z}>{zoneName(z)}</option>)}</select></Field></div>
           <div className="grid divide-y divide-line rounded-xl border border-line">
             {[1, 2, 3, 4, 5, 6, 0].map((d) => (
               <div key={d} className="row small gap-x-2 gap-y-2 px-3 py-2 sm:px-4">
@@ -758,7 +758,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
             <dl className="glance">
               <dt>Business type</dt><dd>{VERTICALS.find(([v]) => v === c.vertical)?.[1] ?? c.vertical.replace(/_/g, " ")}</dd>
               <dt>Size</dt><dd>{c.sizeBand} employees</dd>
-              <dt>Time zone</dt><dd>{c.timezone}</dd>
+              <dt>Time zone</dt><dd>{zoneName(c.timezone)}</dd>
               <dt>Contact hours</dt><dd>{hours ? `${hours.days.map((d) => DAY_SHORT[d]).join(", ")} ${hours.start} to ${hours.end}` : "Any day, 8:00 to 21:00 local time (the legal default for texts)"}</dd>
               <dt>Notices</dt><dd className="small">{shownNotices.some((n) => n.overridden) ? shownNotices.filter((n) => n.overridden).map((n) => `${NOTICE_SHORT[n.key] ?? n.key} reworded (version ${n.version})`).join("; ") : "Standard wording"}</dd>
             </dl>
@@ -769,7 +769,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
           <Field label="Company name" htmlFor="co-name"><input id="co-name" className="input" value={f.name} onChange={(e) => set({ name: e.target.value })} /></Field>
           <div className="grid-2">
             <Field label="Website" htmlFor="co-web"><input id="co-web" className="input" placeholder="acme.com" value={f.website} onChange={(e) => set({ website: e.target.value })} /></Field>
-            <Field label="Time zone" htmlFor="co-tz"><select id="co-tz" className="select" value={f.timezone} onChange={(e) => set({ timezone: e.target.value })}>{[...new Set([f.timezone, ...ZONES])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field>
+            <Field label="Time zone" htmlFor="co-tz"><select id="co-tz" className="select" value={f.timezone} onChange={(e) => set({ timezone: e.target.value })}>{[...new Set([f.timezone, ...ZONES])].map((z) => <option key={z} value={z}>{zoneName(z)}</option>)}</select></Field>
             <Field label="Size" htmlFor="co-size"><select id="co-size" className="select" value={f.sizeBand} onChange={(e) => set({ sizeBand: e.target.value })}>{SIZE_BANDS.map((s) => <option key={s} value={s}>{s} employees</option>)}</select></Field>
           </div>
           <Field label="Locations (one per line, as City, ST)" htmlFor="co-loc"><textarea id="co-loc" className="input" rows={2} value={f.locations} onChange={(e) => set({ locations: e.target.value })} /></Field>

@@ -450,7 +450,7 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const ownQuestions = (f.screeningQuestions ?? []).map(asQuestion);
   const playbookQuestions: DraftRolePacket["screening"]["questions"] = !rdh && pbRole.questions.length >= 3 ? pbRole.questions.slice(0, 10).map(asQuestion) : [];
   const defaults: DraftRolePacket["screening"]["questions"] = [
-    ...(rdh ? [{ key: "license_confirm", question: "Can you confirm your RDH license state and whether it is currently active?", kind: "eligibility" as const }] : []),
+    ...(rdh ? [{ key: "license_confirm", question: "Is your RDH license active in the state this office is in?", kind: "eligibility" as const }] : []),
     { key: "experience", question: `Tell me about your most recent ${title} work and what a typical day looked like.`, kind: "skills" as const, competencyKey: competencies[0].key },
     { key: "hard_moment", question: "Tell me about a difficult moment with a customer or patient and what you did.", kind: "behavioral" as const, competencyKey: competencies[1].key },
     { key: "availability", question: "Which days and hours are you available, and when could you start?", kind: "availability" as const },

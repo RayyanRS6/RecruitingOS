@@ -147,15 +147,17 @@ export function syncChatPlan(plan: ChatPlan, progress: Pick<ScreenProgress, "ask
 export const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
 const YES_NO = /^(do|does|are|is|can|could|will|would|have|has|did)\b/i;
-const OPEN_ENDED = /\b(what|which|when|how|why|where|tell me|describe|walk me)\b/i;
+const OPEN_ENDED = /\b(what|which|when|how|why|where|who|whose|tell (?:me|us)|describe|walk (?:me|us)|explain|list|share)\b/i;
 const START = /\b(start|begin|starting|earliest)\b/i;
 const DAYS = /\b(days?|weekends?|weekdays?|which shifts?|schedule)\b/i;
 
 /**
  * The tap answer a question offers, or null for a free answer only. Worked out from the question's kind and its wording:
- * pay questions take a range; "when could you start" a date; "which days" the days of the week; a question that can only
- * be answered yes or no (an eligibility check, or one that starts "Do you", "Are you", "Can you" and asks nothing open)
- * two buttons. Skills, examples and motivation are always typed: they need the candidate's own words.
+ * pay questions take a range; "when could you start" a date; "which days" the days of the week; a factual question
+ * (eligibility, availability, logistics) that can only be answered yes or no, because it starts "Do you", "Are you",
+ * "Can you"… and asks nothing open, two buttons. Its kind alone never makes it one: "Which certifications do you hold…?"
+ * asks them to list, so it is typed (live test, 12 November 2026). Skills, examples and motivation are always typed: they
+ * need the candidate's own words.
  */
 export function tapFormatFor(question: Pick<ScreeningQuestion, "kind" | "question">, compensation: Pick<RolePacket["compensation"], "basis" | "currency">): TapFormat | null {
   const text = question.question.trim();
@@ -167,8 +169,7 @@ export function tapFormatFor(question: Pick<ScreeningQuestion, "kind" | "questio
   if (asksStart && asksDays) return null;
   if (asksStart) return { kind: "start_date" };
   if (asksDays) return { kind: "days", options: [...WEEK_DAYS] };
-  if (YES_NO.test(text) && !OPEN_ENDED.test(text.replace(/^\S+\s/, ""))) return { kind: "yes_no" };
-  return question.kind === "eligibility" ? { kind: "yes_no" } : null;
+  return YES_NO.test(text) && !OPEN_ENDED.test(text.replace(/^\S+\s/, "")) ? { kind: "yes_no" } : null;
 }
 
 function money(n: number, currency: string): string {

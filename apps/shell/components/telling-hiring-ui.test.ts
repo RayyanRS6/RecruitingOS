@@ -199,6 +199,16 @@ describe("telling a candidate the decision (Wave G)", () => {
     expect(t).toContain("I told them myself");
   });
 
+  // Live test, 12 November 2026: after "Decline now" on someone held, the card promised a review "a minute or two" away
+  it("someone declined on an eligibility answer before any AI review is never promised one", () => {
+    const question = "Do you hold a current radiation safety / x-ray certification and CPR/BLS?";
+    const held = detail({ ...declined, rejectReason: "eligibility", matchScore: null, assessments: [], eligibility: { passed: false, failedRules: [{ key: "xray_bls", question, reason: `answered no to: ${question}` }], unverifiable: [] } });
+    const t = text(panel(client([held])));
+    expect(t).toContain("No match score: no AI review was made before the decision.");
+    expect(t).not.toContain("a minute or two");
+    expect(t).not.toContain("starts once someone keeps them in");
+  });
+
   it("under 'Ask me first' the safety net brings in a recruiter instead, and sends nothing", () => {
     expect(text(panel(client([{ ...declined, declineMessage: "needs_approval" }])))).toMatch(/If nobody tells Maria first, an ITS recruiter is brought in on \w+day, \w+ \d{1,2}\. Nothing is sent by itself\./);
   });

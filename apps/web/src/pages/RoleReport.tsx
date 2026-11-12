@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert, Card, EmptyState, ErrorState, Icon, numHead, OWNER_STAGES, PipelineBar, Pill, Skeleton, Stat, Table } from "@ros/ui";
 import { Link } from "../nav";
 import { ApiError, api, type Me, type ScreeningFunnel } from "../api/client";
+import { zoneName } from "../company-setup";
 import { funnelLines } from "../screen-view";
 import { reportLockedLabel } from "../upgrade";
 
@@ -172,7 +173,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
           </div>
           {/* the bars' heights are the data (each day's count against the busiest day); how to read them is the
               chart's tooltip, each bar's its day and count */}
-          <div className="daybars" role="img" aria-label={`Applicants per day over the last 30 days: ${r.applicants.byDay.filter((d) => d.count).map((d) => `${d.day} ${d.count}`).join(", ") || "none"}`} title={`One bar per day, oldest on the left, days in ${r.applicants.timeZone}.`}>
+          <div className="daybars" role="img" aria-label={`Applicants per day over the last 30 days: ${r.applicants.byDay.filter((d) => d.count).map((d) => `${d.day} ${d.count}`).join(", ") || "none"}`} title={`One bar per day, oldest on the left, days in ${zoneName(r.applicants.timeZone, "short")}.`}>
             {r.applicants.byDay.map((d) => <span key={d.day} title={`${d.day}: ${d.count}`} className={d.count ? undefined : "zero"} style={{ height: `${maxDay ? Math.max(4, (d.count / maxDay) * 100) : 4}%` }} />)}
           </div>
           <div className="mt-4">

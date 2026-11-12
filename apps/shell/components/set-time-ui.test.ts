@@ -64,7 +64,7 @@ describe("Set a date and time on a candidate's panel", () => {
     expect(html).toMatch(/<section class="card needs-you lift grid gap-3 p-5 sm:p-6 \[&amp;&gt;\.card-title\]:mb-0"><div class="card-title"><h2>Set a date and time<\/h2><\/div>/);
     // native controls, the company's zone named beside the time, the round's own length chosen
     expect(html).toMatch(/<label for="iv-date">Date<\/label><input id="iv-date" class="input" type="date" min="\d{4}-\d{2}-\d{2}" value=""\/>/);
-    expect(html).toContain('<label for="iv-time">Time (America/Chicago)</label><input id="iv-time" class="input" type="time" value=""/>');
+    expect(html).toContain('<label for="iv-time">Time (Central time)</label><input id="iv-time" class="input" type="time" value=""/>');
     expect(html).toContain('<option value="30" selected="">30 minutes</option>');
     expect(html).toMatch(/<legend class="small muted mb-2">Where<\/legend>/);
     expect(html).toContain('<label class="option-row"><input type="radio" name="iv-place" checked="" value="link"/><span class="min-w-0">Video link</span></label>');
@@ -111,7 +111,8 @@ describe("the form once filled in", () => {
 
   it("says the time back on the company's clock, by name, and wakes the button", () => {
     const t = form({});
-    expect(t).toContain("Tuesday, November 12, 2030 at 2:30 PM, America/Chicago");
+    expect(t).toContain("Tuesday, November 12, 2030 at 2:30 PM, Central time");
+    expect(t).not.toContain("America/Chicago");
     expect(t).toContain("Book and email Maria");
     expect(t).not.toContain("Choose a date");
   });
@@ -211,7 +212,9 @@ describe("the Interviews page", () => {
     const t = text(html);
     expect(t).toContain("No time yet");
     expect(html).toMatch(/<section class="card needs-you sm:p-5"><div class="card-title"><h2>Set the date and time<\/h2><\/div><form class="grid gap-3" novalidate="">/i);
-    expect(html).toContain('<label for="set-iv1-time">Time (America/Chicago)</label>');
+    expect(html).toContain('<label for="set-iv1-time">Time (Central time)</label>');
+    // no time yet: the details say so, with no zone after it
+    expect(t).toContain("When not yet Length");
     expect(t).toContain("Book and email Maria");
     // Change it: only Cancel here; the old way not offered with nobody's hours
     expect(t).toContain("Cancel interview");
@@ -226,6 +229,9 @@ describe("the Interviews page", () => {
     const booked = base({ status: "scheduled", startsAt: "2030-11-12T20:30:00.000Z", endsAt: "2030-11-12T21:00:00.000Z", format: "onsite", selectedSlot: { id: "x", startsAt: "2030-11-12T20:30:00.000Z", endsAt: "2030-11-12T21:00:00.000Z", interviewerUserIds: ["u1"], source: "person", address: "120 Main Street, Tustin" }, participants: [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", status: "confirmed" }] });
     const t = text(page(booked));
     expect(t).toContain("Scheduled");
+    // the zone by name beside the time, never its id (live test, 12 November 2026)
+    expect(t).toContain("When Tue, Nov 12, 2:30 PM (Central time)");
+    expect(t).not.toContain("America/Chicago");
     expect(t).toContain("Where 120 Main Street, Tustin");
     expect(t).toContain("Move it");
     expect(t).toContain("Cancel interview");

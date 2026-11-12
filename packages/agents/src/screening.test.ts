@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
+import type { RolePacket, ScreenAssessment, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { CHAT_WRAP_KEY, chatCounter } from "@ros/core";
+import { CHAT_WRAP_KEY, chatCounter, tapFormatFor } from "@ros/core";
+import { ALL_PLAYBOOKS } from "@ros/playbooks";
 import {
-  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
-  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, type ChatFacts,
+  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, currentTapFormat, enforceChatTurn, enforceTurnRules, gapQuestion,
+  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, tapWords, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, type ChatFacts,
 } from "./screening";
 import { answerInContext, credentialMustHaves } from "./triage";
 import { FOCUS_INTRO, focusQuestionsFrom, focusedPacket, packetForFocusedInvite, unfairQuestion } from "./screen-focus";
@@ -403,7 +404,7 @@ describe("the scorecard reads each answer for its own question, and settles a st
   const at = "2026-10-15T10:00:00.000Z";
   const question = (key: string, kind: string, text: string, competencyKey?: string) => ({ key, kind, question: text, ...(competencyKey ? { competencyKey } : {}) });
   const QUESTIONS = [
-    question("license_confirm", "eligibility", "Can you confirm your RDH license state and whether it is currently active?"),
+    question("license_confirm", "eligibility", "Is your RDH license active in the state this office is in?"),
     question("perio_approach", "skills", "Walk me through how you handle a new patient with generalized moderate periodontitis.", "clinical_quality"),
     question("anxious_patient", "behavioral", "Tell me about a time a patient was anxious or resistant. What did you do?", "patient_communication"),
     question("appointment_length", "skills", "What appointment length are you used to for an adult prophy, and how do you handle running behind?", "efficiency_time"),
@@ -591,7 +592,7 @@ describe("AI-written questions pass the code's fairness check before a candidate
  * here is a turn the real model could write.
  */
 describe("a chat without a plan holds every turn to what the candidate wrote (Wave S9)", () => {
-  const rdh = { screening: { questions: [{ key: "licence", question: "Can you confirm your RDH license state and whether it is currently active?", kind: "eligibility" }, { key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "pay", question: "What hourly range are you looking for?", kind: "compensation" }], maxMinutes: 10 } } as unknown as RolePacket;
+  const rdh = { screening: { questions: [{ key: "licence", question: "Is your RDH license active in the state this office is in?", kind: "eligibility" },{ key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "pay", question: "What hourly range are you looking for?", kind: "compensation" }], maxMinutes: 10 } } as unknown as RolePacket;
   const at = "2026-10-15T10:00:00.000Z";
   const turnOf = (over: Partial<ScreenTurn>): ScreenTurn => ({ messageToCandidate: "Thanks.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, ...over });
   /** The conversation: a string is the candidate's, `ask` the assistant's (with the question it moved to). */
@@ -610,7 +611,7 @@ describe("a chat without a plan holds every turn to what the candidate wrote (Wa
     expect(back).toMatchObject({ answerRecorded: null, followUpReason: null, questionKey: null });
     expect(back.messageToCandidate).toBe("The posted range is $45 to $55 an hour. Back to my question: Tell me about your most recent work.");
     const onLicence: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["licence"], currentQuestionKey: "licence" };
-    const mixed = rules(turnOf({ candidateAskedAbout: "pay", messageToCandidate: "The posted range is $45 to $55 an hour.", answerRecorded: { questionKey: "licence", answer: "Yes, active in CA. What does it pay?", complete: true } }), onLicence, chat({ ask: "Can you confirm your RDH license state and whether it is currently active?", key: "licence" }, "Yes, active in CA. What does it pay?"), {});
+    const mixed = rules(turnOf({ candidateAskedAbout: "pay", messageToCandidate: "The posted range is $45 to $55 an hour.", answerRecorded: { questionKey: "licence", answer: "Yes, active in CA. What does it pay?", complete: true } }), onLicence, chat({ ask: "Is your RDH license active in the state this office is in?", key: "licence" }, "Yes, active in CA. What does it pay?"), {});
     expect(mixed.answerRecorded).toEqual({ questionKey: "licence", answer: "Yes, active in CA.", complete: true });
     for (const m of ["Before I go on, what does this pay per hour?", "Ok. What are the hours?", "Is it full time?", "Hi, what does it pay?", "Ok, so isn’t it full time?", "???"]) expect(onlyQuestions(m), m).toBe(true);
     for (const m of ["Yes. What are the hours?", "Six years.", "??? what do you mean"]) expect(onlyQuestions(m), m).toBe(false);
@@ -697,7 +698,7 @@ describe("a chat without a plan holds every turn to what the candidate wrote (Wa
     expect(gone.messageToCandidate).toBe("Thanks. Tell me about your most recent work.");
     const opening = enforceTurnRules(turnOf({ messageToCandidate: "Hi Alex, this is the hiring team's AI assistant. Reply HUMAN at any time to reach a person." }), rdh, EMPTY_SCREEN_PROGRESS, {}, { transcript: [], latest: null });
     expect(opening.questionKey).toBe("licence");
-    expect(opening.messageToCandidate).toBe("Hi Alex, this is the hiring team's AI assistant. Reply HUMAN at any time to reach a person. Can you confirm your RDH license state and whether it is currently active?");
+    expect(opening.messageToCandidate).toBe("Hi Alex, this is the hiring team's AI assistant. Reply HUMAN at any time to reach a person. Is your RDH license active in the state this office is in?");
   });
 
   it("an answer recorded is the candidate's own words: reworded, or missing their first words, it is what they wrote; a personal detail left out stays out", () => {
@@ -1661,5 +1662,37 @@ describe("the chat's line after a tap or a skip, in code (22 Oct 2026 try-out)",
     // a skip says the same as before
     expect(chatCodeLead(null)).toBe("No problem, we can leave that one.");
     expect(chatCodeLead(null, true)).toBe("No problem, your answer is kept.");
+  });
+});
+
+/**
+ * The live test of 12 November 2026: the Dental Assistant's "Which certifications do you hold, such as x-ray, coronal
+ * polishing, RDA or BLS?" came with Yes and No, because every question of kind eligibility got them. Now only a question
+ * whose words ask yes or no does, in every playbook, and a tap posted from a page that still showed them saves nothing.
+ */
+describe("Yes and No in the AI interview only for a question asked as yes or no (live test, 12 November 2026)", () => {
+  const comp = { basis: "hourly" as const, currency: "USD" };
+  const asQuestion = (q: { question: string; kind: string }) => q as Pick<ScreeningQuestion, "kind" | "question">;
+  const dental = ALL_PLAYBOOKS.find((p) => p.vertical === "dental")!;
+  const roleQuestion = (role: string, key: string) => dental.roles.find((r) => r.key === role)!.screeningQuestions.find((q) => q.key === key)!;
+
+  it("no playbook question that asks them to name, list or describe something gets the buttons", () => {
+    const all = ALL_PLAYBOOKS.flatMap((p) => p.roles.flatMap((r) => r.screeningQuestions.map((q) => ({ role: `${p.vertical} ${r.key}`, ...q }))));
+    expect(all.length).toBeGreaterThan(20);
+    for (const q of all.filter((x) => /\b(which|what|how|who|tell|describe|list|explain)\b/i.test(x.question))) expect(tapFormatFor(asQuestion(q), comp)?.kind, `${q.role}: ${q.question}`).not.toBe("yes_no");
+    // the Dental Assistant's certificates are typed, while the hygienist's licence question keeps its buttons
+    const certs = roleQuestion("da", "certs");
+    expect(certs.kind).toBe("eligibility");
+    expect(tapFormatFor(asQuestion(certs), comp)).toBeNull();
+    expect(tapFormatFor(asQuestion(roleQuestion("rdh", "license_confirm")), comp)).toEqual({ kind: "yes_no" });
+  });
+
+  it("a Yes posted for the certificates question fits nothing, so nothing is saved; the check-your-answers page offers the box", () => {
+    const certs = roleQuestion("da", "certs");
+    const packet = { screening: { questions: [{ key: certs.key, question: "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?", kind: "eligibility" }], maxMinutes: 10 }, compensation: { basis: "hourly", currency: "USD", min: 23, max: 28 } } as unknown as RolePacket;
+    const progress: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: [certs.key], currentQuestionKey: certs.key };
+    expect(currentTapFormat(packet, progress)).toBeNull();
+    expect(tapWords(packet, progress, { kind: "yes_no", choice: "yes" })).toBeNull();
+    expect(reviewItems({ answers: { [certs.key]: "X-ray and BLS." }, progress }, packet)[0]).toMatchObject({ key: certs.key, answer: "X-ray and BLS.", tap: null });
   });
 });

@@ -265,7 +265,7 @@ Nothing is booked until a person does it, and a person decides who to interview.
 **Set a date and time:**
 
 1. **Round**, when your interview plan has more than one: the next round is chosen; change it if needed.
-2. **Date** and **Time**, in your company's time zone, which the field names (for example "Time (America/Chicago)"); the email to the candidate names it too. Nothing is filled in until you choose, and the button says what is still missing. A time that has passed, or one the clocks skip when they change, is refused. Evenings, weekends and holidays are allowed.
+2. **Date** and **Time**, in your company's time zone, which the field names (for example "Time (Central time)"); the email to the candidate names it too. Nothing is filled in until you choose, and the button says what is still missing. A time that has passed, or one the clocks skip when they change, is refused. Evenings, weekends and holidays are allowed.
 3. **How long**: the round's own length to start with.
 4. Where: **Video link** (paste a meeting link in **Meeting link (optional)**, or leave it empty when your connected calendar makes one), **Address** (where they come; the email gives it), or **By phone** (you call the number on their application).
 5. **With** names who interviews: the round's interviewers from your interview plan who are still on your team, or you if the plan names nobody. Change them there.

@@ -1,4 +1,4 @@
-import { MARK_LABEL, sureBeside, type MarkKind, type MatchFit } from "@ros/contracts";
+import { MARK_LABEL, TERMINAL_STAGES, sureBeside, type ApplicationStage, type MarkKind, type MatchFit } from "@ros/contracts";
 import type { ApplicationDetail, Screen, TimelineEvent } from "../../api/client";
 import { notSentReasonText } from "../../cancelled";
 import { DECLINED_WORDS, isRecruiterNote, transcriptBubble, type TranscriptBubble } from "../../screen-view";
@@ -169,9 +169,11 @@ export function eligibilityAnswerWords(f: { question: string; reason: string }):
 
 /**
  * Why there is no reading yet. Someone held on an eligibility answer is read only once a person keeps them in, so
- * "a minute or two" would never come true for them.
+ * "a minute or two" would never come true for them; nor for someone decided before any reading (declined, moved to the
+ * talent pool, withdrawn or hired: live test, 12 November 2026), who is never read.
  */
 export function notReadYetWords(stage: string): string {
+  if (TERMINAL_STAGES.has(stage as ApplicationStage)) return "The assistant did not read this application before the decision.";
   return stage === "ineligible" ? "The assistant reads this application once someone keeps them in." : "The assistant has not read this application yet. It usually takes a minute or two after they apply.";
 }
 

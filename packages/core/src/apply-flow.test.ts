@@ -116,7 +116,8 @@ describe("tap answers (plan E12)", () => {
   it("works out the format from the question's kind and wording; skills and examples are always typed", () => {
     expect(tapFormatFor({ kind: "compensation", question: "What pay range are you looking for?" }, comp)).toEqual({ kind: "pay_range", basis: "hourly", currency: "USD" });
     expect(tapFormatFor({ kind: "eligibility", question: "Is your RDH license active in California?" }, comp)).toEqual({ kind: "yes_no" });
-    expect(tapFormatFor({ kind: "eligibility", question: "Tell us about your license." }, comp)).toEqual({ kind: "yes_no" });
+    // its kind alone never gives the buttons: this asks for their own words (live test, 12 November 2026)
+    expect(tapFormatFor({ kind: "eligibility", question: "Tell us about your license." }, comp)).toBeNull();
     expect(tapFormatFor({ kind: "availability", question: "Which days of the week can you work?" }, comp)).toMatchObject({ kind: "days" });
     expect(tapFormatFor({ kind: "availability", question: "When could you start?" }, comp)).toEqual({ kind: "start_date" });
     expect(tapFormatFor({ kind: "availability", question: "Which days and hours are you available, and when could you start?" }, comp)).toBeNull();
@@ -124,6 +125,28 @@ describe("tap answers (plan E12)", () => {
     expect(tapFormatFor({ kind: "logistics", question: "How far is your commute?" }, comp)).toBeNull();
     expect(tapFormatFor({ kind: "skills", question: "Do you use Dentrix?" }, comp)).toBeNull();
     expect(tapFormatFor({ kind: "behavioral", question: "Tell me about a hard moment with a patient." }, comp)).toBeNull();
+  });
+
+  // Live test, 12 November 2026: "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?" came
+  // with Yes and No, because every eligibility question got them whatever it asked.
+  it("offers Yes and No only where the words ask yes or no, never for a question that asks them to name or list", () => {
+    const typed = [
+      "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?",
+      "Which certifications do you hold (x-ray, coronal polishing, RDA, BLS)?",
+      "Can you tell us which state licensed you?",
+      "Could you list the certificates you hold?",
+      "Can you explain your license status?",
+      "Can you share your license number?",
+      "Do you know who issued your license?",
+      "Please confirm your license is active.",
+    ];
+    for (const question of typed) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toBeNull();
+    const tapped = ["Do you currently hold an active California RDA license?", "Is your RDH license active in the state this office is in?", "Can you lift 25 pounds safely?"];
+    for (const question of tapped) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toEqual({ kind: "yes_no" });
+    // the same for availability and logistics questions; days, a start date and pay keep their own taps
+    expect(tapFormatFor({ kind: "logistics", question: "Can you tell us how you would get to Irvine?" }, comp)).toBeNull();
+    expect(tapFormatFor({ kind: "availability", question: "Are you available on Saturdays?" }, comp)).toEqual({ kind: "yes_no" });
+    expect(tapFormatFor({ kind: "availability", question: "Which days of the week can you work?" }, comp)).toMatchObject({ kind: "days" });
   });
 
   it("records a tap as fixed words, and refuses one that does not fit the question", () => {
