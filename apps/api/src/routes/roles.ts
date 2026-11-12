@@ -5,7 +5,7 @@ import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalat
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { aiInterviewsFor } from "../services/screens";
-import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, whoPostsBoards, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, IN_MOTION_SQL, interviewsInMotionFor, hiddenFrom, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion, unlockedAtFor, visibleTo, waitingSince } from "@ros/core";
+import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, whoPostsBoards, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, IN_MOTION_SQL, interviewsInMotionFor, hiddenFrom, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion, visibleTo } from "@ros/core";
 import { lockedCardsOf, withoutLockedApprovals } from "../services/locked-visibility";
 import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson, shownReadings } from "../services/pool";
 import { readingWontCome } from "../services/application-record";
@@ -13,7 +13,7 @@ import { applyBatch, previewBatch } from "../services/review-apply";
 import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
 import { COMPARE_MAX, compareCandidates } from "./compare";
 import { armClosingDate, interviewsBeingPrepared, interviewsLapsedOnAllowance } from "@ros/workflows";
-import { interviewHasNoHours, readingRunIds, untoldFallbackAt, workingDayRulesFor } from "@ros/agents";
+import { interviewHasNoHours, readingRunIds } from "@ros/agents";
 import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/publishing";
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
@@ -24,7 +24,7 @@ import { aiRuns, applicationMarks, applications, approvalRequests, assessments, 
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, rolesInterviewedBy, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
-import { SCREEN_OPEN_STATUSES, applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves, undoFacts } from "../services/application-actions";
+import { SCREEN_OPEN_STATUSES, applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves, undoFacts, untoldFallbackDayOf } from "../services/application-actions";
 import { exitCleanup, type ExitCandidateEmail } from "../services/exit-cleanup";
 import { closingMessagePreview, sendClosingMessage } from "../services/closing-messages";
 import { keepInTalentPool } from "../services/talent-pool";
@@ -752,8 +752,9 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const shownScorecard = (s: { status: string; assessmentId: string | null }) => s.status === "completed" && !(s.assessmentId && hiddenReadings.has(s.assessmentId));
     const scorecards = await screenScorecards(tx, scr.map((s) => (shownScorecard(s) ? s : { ...s, assessmentId: null })));
     // The day the untold safety net acts on a decision nobody has told (Q27), in the company's calendar: its time zone,
-    // its working days and the ITS holidays, as the daily check counts them: from the unlock, for someone a change of plan opened.
-    const untoldFallbackOn = DECISION_STAGES.includes(app.stage) && app.toldState === "not_told" && !decisionMessageWaiting && !cand?.anonymizedAt ? untoldFallbackAt(new Date(waitingSince(app.rejectedAt ?? app.stageChangedAt, (await unlockedAtFor(tx, [app.id])).get(app.id))), await workingDayRulesFor(tx, app.companyId, now)).day : null;
+    // its working days and the ITS holidays, as the daily check counts them: from the unlock, for someone a change of plan
+    // opened. The answer to the decision named the same day (`untoldFallbackDayOf`).
+    const untoldFallbackOn = DECISION_STAGES.includes(app.stage) && app.toldState === "not_told" && !decisionMessageWaiting && !cand?.anonymizedAt ? await untoldFallbackDayOf(tx, app, now) : null;
     const strip = ownerStage(app, mark, followUp);
     const cancelled = strip === "cancelled" && followUp ? { ...cancelledView(followUp, { timeZone: await companyTimeZone(tx, app.companyId) }), noHours } : null;
     // The match score with its breakdown (founder decision B2), the must-have line, where the pool board puts them and
@@ -992,24 +993,26 @@ applicationRoutes.post("/:id/outcome", requireTenant, async (c) => {
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: r.app.id, reason: `outcome: ${body.outcome}`, actor, candidateEmail });
       const candidateNotice: CandidateNotice | null = privateDecision ? "not_told" : null;
       // "No hire" keeps them in the talent pool unless they asked not to be kept (Q30), never silently: the answer says so,
-      // with the message a Send would now write (a count of one and its preview, plan G4).
+      // with the message a Send would now write (a count of one and its preview, plan G4), and the day the safety net acts.
       const pool = r.to === "talent_pool" ? await keepInTalentPool(tx, [r.app.candidateId]) : null;
       let decisionMessage: DecisionMessagePreview | null = null;
+      let untoldFallbackOn: string | null = null;
       if (privateDecision) {
         const [fresh] = await tx.select().from(applications).where(eq(applications.id, r.app.id)).limit(1);
         decisionMessage = fresh ? await decisionMessagePreview(tx, container, fresh, { senderName: actor.name ?? undefined }) : null;
+        untoldFallbackOn = fresh ? await untoldFallbackDayOf(tx, fresh, container.engine.clock()) : null;
       }
       // An offer recorded as made outside the app (plan H2) takes the answer: accepted with the hire, declined, or withdrawn.
       const offer = await settleOutsideOffer(tx, { applicationId: r.app.id, companyId: t.companyId, outcome: body.outcome, actor, now: container.engine.clock() });
       // The hire sheet (plan H1): the backups to keep warm until the start date, and closing the role in the same sheet.
       const hire = r.to === "hired" ? await hireFollowUp(tx, { roleId: r.roleId, hiredApplicationId: r.app.id, startDate: r.row.hireDate, role: t.role, scope: staffScopeOf(t) }) : null;
-      return { ...r, dispositionSent: false, candidateNotice, interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, talentPoolOptOut: !!pool?.optedOut.length, decisionMessage, offer, hire };
+      return { ...r, dispositionSent: false, candidateNotice, interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, talentPoolOptOut: !!pool?.optedOut.length, decisionMessage, untoldFallbackOn, offer, hire };
     } catch (e) { outcomeHttpError(e); }
   });
   const label: Record<string, string> = { hired_externally: "recorded a hire (offer accepted outside the platform)", candidate_withdrew: "recorded that the candidate withdrew", employer_declined: "declined the candidate", offer_declined_externally: "recorded that the candidate declined an offer made outside the platform", no_hire: "closed the process for this candidate without a hire" };
   await tellRecruiterAboutOutcome(container, t.companyId, result.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} ${label[body.outcome]}.`, `outcome:${result.row.id}`);
   await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, ...(result.candidateNotice ? { candidateNotice: result.candidateNotice, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes } : {}), ...(result.to === "hired" && result.interviewsCancelled ? { interviewsEnded: result.interviewsCancelled } : {}), ...(result.decisionMessage ? { decisionMessage: result.decisionMessage } : {}), ...(result.talentPoolOptOut ? { talentPoolOptOut: true } : {}), ...(result.offer ? { offer: result.offer } : {}), ...(result.hire ? { hire: result.hire } : {}), movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
+  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, ...(result.candidateNotice ? { candidateNotice: result.candidateNotice, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes } : {}), ...(result.to === "hired" && result.interviewsCancelled ? { interviewsEnded: result.interviewsCancelled } : {}), ...(result.decisionMessage ? { decisionMessage: result.decisionMessage } : {}), ...(result.untoldFallbackOn ? { untoldFallbackOn: result.untoldFallbackOn } : {}), ...(result.talentPoolOptOut ? { talentPoolOptOut: true } : {}), ...(result.offer ? { offer: result.offer } : {}), ...(result.hire ? { hire: result.hire } : {}), movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
 });
 
 /**
@@ -1064,7 +1067,11 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
       }
       // They stay in the talent pool unless they asked not to be kept (founder decision Q30).
       const pool = await keepInTalentPool(tx, closed.movedCandidateIds);
-      return { ...closed, interviewsCancelled, interviewOffNotes, keptInTalentPool: pool.kept.length, talentPoolOptOuts: pool.optedOut.length, lockedInProcess };
+      // The day the safety net acts on the people it moved, from a moved person's own row as their card counts it, so the
+      // toast names the card's day (live test, 12 November 2026); none when nobody the team can see moved.
+      const [moved] = closed.movedApplicationIds.length ? await tx.select().from(applications).where(and(inArray(applications.id, closed.movedApplicationIds), isNull(applications.lockedAt))).limit(1) : [];
+      const untoldFallbackOn = moved ? await untoldFallbackDayOf(tx, moved, container.engine.clock()) : null;
+      return { ...closed, interviewsCancelled, interviewOffNotes, keptInTalentPool: pool.kept.length, talentPoolOptOuts: pool.optedOut.length, lockedInProcess, untoldFallbackOn };
     } catch (e) { outcomeHttpError(e); }
   });
   const label: Record<string, string> = { filled: "closed the role as filled", filled_outside_platform: "closed the role: filled outside the platform", role_cancelled: "cancelled the role", no_hire: "closed the role without a hire" };
@@ -1076,5 +1083,5 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   // nothing is sent until someone presses Send on it. Only for someone who may send it (application.reject): HR may close
   // a role but not tell candidates, so they get no Send that the closing-message route would refuse.
   const closingMessage: ClosingMessagePreview | null = can(t.role, "application.reject") ? await withTenant(container.db, t.companyId, (tx) => closingMessagePreview(tx, container, result.role.id)).catch(() => null) : null;
-  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, keptInTalentPool: result.keptInTalentPool, talentPoolOptOuts: result.talentPoolOptOuts, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes, lockedInProcess: result.lockedInProcess, closingMessage, statement: OUTCOME_STATEMENT });
+  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, keptInTalentPool: result.keptInTalentPool, talentPoolOptOuts: result.talentPoolOptOuts, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes, lockedInProcess: result.lockedInProcess, ...(result.untoldFallbackOn ? { untoldFallbackOn: result.untoldFallbackOn } : {}), closingMessage, statement: OUTCOME_STATEMENT });
 });

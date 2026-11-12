@@ -1,7 +1,7 @@
 import { OWNER_STAGE_LABEL, lockedClosingLine, titleMidSentence, type MarkKind, type OwnerStage } from "@ros/contracts";
 import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, SendNewTimesBatchResult, SendNewTimesResult, StageMove } from "./api/client";
 import { shortWhen } from "./interview-time";
-import { safetyNetDate, safetyNetShort } from "./telling";
+import { namedDay, safetyNetDate, safetyNetShort } from "./telling";
 
 /**
  * What the Candidates page and the candidate panel say after a choice, word for word from what the API reports (plan
@@ -17,16 +17,22 @@ export const NOT_TOLD = "Private: the candidate was not told.";
 /** How a private decision's second line starts; the safety net follows it (see `decisionDetail`). */
 export const PRIVATE_DECISION = "Private: the candidate was not told.";
 
-/** What a decision's answer says about the decision message: the company's setting and whether there is an address. */
-type DecisionMessageHint = { decisionMessage?: { policy: DeclineMessagePolicy; to: string | null } | null };
+/**
+ * What a decision's answer says about the decision message: the company's setting and whether there is an address; and
+ * the day the safety net acts on it (`untoldFallbackOn`, the API's day, the one the "not told yet" card names).
+ */
+type DecisionMessageHint = { decisionMessage?: { policy: DeclineMessagePolicy; to: string | null } | null; untoldFallbackOn?: string | null };
 
 /**
- * The safety net said after a decision is filed now (founder decision D-03 A): the day the standard message goes by
- * itself, counted from `now` as the daily check counts it, in the way the company's settings run it when the answer says.
+ * The safety net said when a decision is filed (founder decision D-03 A), in the way the company's settings run it when
+ * the answer says: after the decision, the day the answer names, so the toast and the card agree (live test, 12 November
+ * 2026); before it, or in an older answer, the day counted from `now` as the daily check counts it, on the company's
+ * calendar when its `timeZone` is known.
  */
-export function safetyNetAfterDecision(r: DecisionMessageHint, now: Date = new Date(), what?: string): string {
+export function safetyNetAfterDecision(r: DecisionMessageHint, now: Date = new Date(), what?: string, timeZone?: string | null): string {
   const m = r.decisionMessage ?? null;
-  return safetyNetShort({ policy: m?.policy ?? null, hasEmail: m ? !!m.to : null, on: safetyNetDate(now.toISOString()), what });
+  const on = r.untoldFallbackOn ? namedDay(r.untoldFallbackOn) : safetyNetDate(now.toISOString(), undefined, timeZone);
+  return safetyNetShort({ policy: m?.policy ?? null, hasEmail: m ? !!m.to : null, on, what });
 }
 /** A message saved in the outbox of a company ITS has not confirmed yet (founder decision B7): it is not on its way yet. */
 export const HELD_FOR_CHECK = "The message is saved and goes to the candidate as soon as ITS confirms your company; they have not been told yet.";
@@ -272,13 +278,14 @@ export function declineConfirmText(policy: DeclineMessagePolicy, input: { hasEma
 /**
  * The short lines a decline step shows before the click (founder decisions B6 and D-03 A): private now, any interview it
  * calls off, and the day the standard message goes by itself if nobody tells them first (or the day an ITS recruiter is
- * brought in, under the company's settings). The whole of `declineConfirmText` sits one click away under it.
+ * brought in, under the company's settings), counted on the company's calendar when its `timeZone` is known. The whole of
+ * `declineConfirmText` sits one click away under it.
  */
-export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: boolean; interviews?: readonly InterviewRef[]; now?: Date }): string[] {
+export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: boolean; interviews?: readonly InterviewRef[]; now?: Date; timeZone?: string | null }): string[] {
   const known = (input.interviews ?? []).filter(candidateKnowsOf);
   const lead = !known.length ? "Private: nothing is sent to them now."
     : `Private: the decision is not sent now. ${known.length === 1 ? "Their interview is" : `Their ${known.length} interviews are`} called off, and they get a short note saying so.`;
-  const on = safetyNetDate((input.now ?? new Date()).toISOString());
+  const on = safetyNetDate((input.now ?? new Date()).toISOString(), undefined, input.timeZone);
   return [lead, safetyNetShort({ policy, hasEmail: input.hasEmail, on })];
 }
 
@@ -390,14 +397,15 @@ export const CLOSING_SENDERS = "An owner, admin, hiring manager or recruiter";
  * The toast after closing a role (POST /roles/:id/outcome): who moved, privately, and the interviews it called off. A
  * candidate who had a booked time or times to pick from was sent a short note at once saying only that the interview is
  * off (`interviewOffNotes`); the decision stays private until someone sends the one closing message (Q30), or the
- * safety net acts after five working days (Q27), on the day named (D-03 A). `closingMessage.policy`, when the answer
+ * safety net acts after five working days (Q27), on the day named (D-03 A): the answer's `untoldFallbackOn`, the day
+ * their cards name (live test, 12 November 2026), else counted from `now`. `closingMessage.policy`, when the answer
  * carries it, says which way the safety net goes. `mayTell` is false for someone who may close a role but not tell
  * candidates a decision (HR): they are told who sends the message instead of being asked to send it.
  */
-export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Job closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
+export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: { policy: DeclineMessagePolicy } | null; untoldFallbackOn?: string | null }, title = "Job closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
   const moved = Math.max(0, (r.movedToTalentPool ?? 0) - (r.heldEmailsAddedToTalentPool ?? 0));
   const policy = r.closingMessage?.policy ?? null;
-  const net = safetyNetShort({ policy, on: safetyNetDate(now.toISOString()), what: "the closing message" });
+  const net = safetyNetShort({ policy, on: r.untoldFallbackOn ? namedDay(r.untoldFallbackOn) : safetyNetDate(now.toISOString()), what: "the closing message" });
   const tell = !mayTell ? `${CLOSING_SENDERS} sends them the closing message; it waits on their Home page. ${net}`
     : policy === "not_sent" ? `Under your settings no message is sent: tell each of them yourself, then record it on their page. ${net}`
     : `Send the closing message when you are ready. ${net}`;

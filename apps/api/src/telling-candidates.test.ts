@@ -7,6 +7,7 @@ import { aiRuns, applications, approvalRequests, candidates, communications, dat
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { untoldFallbackDayOf } from "./services/application-actions";
 import { signInAs, signInStaff } from "./test-helpers";
 
 const DAY = 86_400_000;
@@ -402,6 +403,48 @@ describe("telling candidates", () => {
       await age(id, 12);
       expect((await safetyNet()).some((x) => x.applicationId === id)).toBe(false);
       await setPolicy("disposition.send", null);
+    });
+
+    // Live test, 12 November 2026 (L5): the toast after "Confirm decline" named the day after the one the card named
+    it("the answer to every private decision names the day the 'not told yet' card names", async () => {
+      type Day = { untoldFallbackOn?: string | null };
+      const card = async (id: string) => ((await (await json(owner, "GET", `/api/v1/applications/${id}`)).json()) as Day).untoldFallbackOn;
+      const quinn = await seed("Quinn");
+      const declined = (await (await act(owner, quinn, { action: "reject", reason: "not_a_match_experience" })).json()) as Day;
+      expect(declined.untoldFallbackOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(declined.untoldFallbackOn).toBe(await card(quinn));
+      const rae = await seed("Rae");
+      const pooled = (await (await act(owner, rae, { action: "move_to_talent_pool" })).json()) as Day;
+      expect(pooled.untoldFallbackOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(pooled.untoldFallbackOn).toBe(await card(rae));
+      for (const [first, body] of [["Sid", { outcome: "employer_declined", confirm: true, reason: "compensation_mismatch" }], ["Tess", { outcome: "no_hire", confirm: true }]] as const) {
+        const id = await seed(first);
+        const r = await json(owner, "POST", `/api/v1/applications/${id}/outcome`, body);
+        expect(r.status, await r.clone().text()).toBe(201);
+        const answer = (await r.json()) as Day;
+        expect(answer.untoldFallbackOn, first).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        expect(answer.untoldFallbackOn, first).toBe(await card(id));
+      }
+      // the candidate's own news is no decision of the team's: no day
+      const uma = await seed("Uma");
+      expect(((await (await json(owner, "POST", `/api/v1/applications/${uma}/outcome`, { outcome: "candidate_withdrew", confirm: true })).json()) as Day).untoldFallbackOn).toBeUndefined();
+      // closing a job names the day for the people it moved, as each one's card does; with nobody moved, no day
+      const role = await openRole();
+      const vic = await seed("Vic", { role });
+      const closed = (await (await json(owner, "POST", `/api/v1/roles/${role}/outcome`, { outcome: "role_cancelled", confirm: true })).json()) as Day;
+      expect(closed.untoldFallbackOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(closed.untoldFallbackOn).toBe(await card(vic));
+      const empty = await openRole();
+      expect(((await (await json(owner, "POST", `/api/v1/roles/${empty}/outcome`, { outcome: "role_cancelled", confirm: true })).json()) as Day).untoldFallbackOn).toBeUndefined();
+    });
+
+    it("the day is the company's: five working days in its time zone, without the ITS holidays", async () => {
+      const id = await seed("Wes");
+      const dayOf = (decidedAt: string) => withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: decidedAt, stageChangedAt: decidedAt }, new Date(decidedAt)));
+      // the live test's decline: 8 PM on Wednesday, November 11 in Los Angeles (the company's zone), Thursday morning in Pakistan
+      expect(await dayOf("2026-11-12T04:00:00.000Z")).toBe("2026-11-18");
+      // a Friday decline before Thanksgiving (an ITS holiday): the Monday after, not the Friday
+      expect(await dayOf("2026-11-20T20:00:00.000Z")).toBe("2026-11-30");
     });
   });
 

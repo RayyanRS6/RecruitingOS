@@ -225,6 +225,22 @@ describe("telling a candidate the decision (Wave G)", () => {
     expect(t).toContain("Confirm: not moving forward");
   });
 
+  // Live test, 12 November 2026 (L5): Wednesday evening in Los Angeles is already Thursday in Pakistan, where the lead read it
+  it("before the click the safety net's day is counted on the company's calendar, whatever the reader's clock", () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-12T04:00:00.000Z") });
+    try {
+      const company: [unknown[], unknown] = [["company"], { settings: {}, timezone: "America/Los_Angeles" }];
+      const decline = text(panel(client([detail({ allowedActions: ["reject"] })], [company]), { step: "decline" }));
+      expect(decline).toContain("If nobody tells them first, the standard message goes by itself on Wednesday, November 18.");
+      // the close card's line too
+      const apps = { applications: [{ id: "a1", stage: "triaged", ownerStage: "new", ownerStageLabel: "New", candidate: { id: "c1", name: "Maria Reyes" } }], counts: {} };
+      const close = text(render(client([], [[["applications", "r1"], apps], company]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })));
+      expect(close).toContain("If nobody tells them first, the closing message goes by itself on Wednesday, November 18 (or an ITS recruiter is brought in, if your settings say so).");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a waiting approval names the chosen wording and the personal line to the approver", () => {
     const waiting = { ...declined, pendingApprovals: [{ id: "ar1", actionType: "disposition.send", rationale: null, createdAt: daysAgo(0), requiredRoles: ["owner"], proposal: { wording: "v2", personalLine: { text: "It was a pleasure to meet you." } } }] };
     const t = text(panel(client([waiting])));

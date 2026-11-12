@@ -216,6 +216,30 @@ describe("the private decline step", () => {
     for (const line of declineSummary("sends", { hasEmail: true, interviews: [booked, booked], now: NOW })) expect(line.split(" ").length).toBeLessThanOrEqual(22);
   });
 
+  /**
+   * The live test (12 November 2026, L5): a decline on Wednesday evening in Los Angeles, already Thursday morning for a
+   * reader in Pakistan. The toast said Thursday, November 19 and the card Wednesday, November 18. After a decision the
+   * toast names the day the API names, the card's; before the click the day is counted on the company's calendar.
+   */
+  it("after a decision the toast names the API's day, the card's, whatever the reader's clock; before the click the company's calendar counts", () => {
+    const LIVE = new Date("2026-11-12T04:00:00.000Z");
+    const net = "If nobody tells them first, the standard message goes by itself on Wednesday, November 18.";
+    const answer = { candidateNotice: "not_told" as const, decisionMessage: { policy: "sends" as const, to: "luis@example.com" }, untoldFallbackOn: "2026-11-18" };
+    expect(actionToast("reject", answer, LIVE).detail).toBe(`${PRIVATE_DECISION} ${net}`);
+    expect(decisionToast("not_moving_forward", answer, LIVE).detail).toBe(`${PRIVATE_DECISION} ${net}`);
+    expect(outcomeToast("employer_declined", answer, LIVE).detail).toBe(`${PRIVATE_DECISION} ${net}`);
+    expect(outcomeToast("no_hire", answer, LIVE).detail).toBe(`${PRIVATE_DECISION} ${net}`);
+    expect(actionToast("move_to_talent_pool", answer, LIVE).detail).toBe(`The candidate was not told. ${net}`);
+    // the answer's day wins over any clock the page reads
+    expect(actionToast("reject", answer, new Date("2026-12-01T12:00:00.000Z")).detail).toBe(`${PRIVATE_DECISION} ${net}`);
+    expect(safetyNetAfterDecision(answer, LIVE, undefined, "Asia/Karachi")).toBe(net);
+    expect(closeRoleToast({ movedToTalentPool: 1, closingMessage: { policy: "sends" }, untoldFallbackOn: "2026-11-18" }, undefined, true, LIVE).detail).toBe("The one person still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. If nobody tells them first, the closing message goes by itself on Wednesday, November 18.");
+    // before the click: the company's calendar, whatever the reader's (Karachi's own is a day ahead)
+    expect(declineSummary("sends", { hasEmail: true, now: LIVE, timeZone: "America/Los_Angeles" })[1]).toBe(net);
+    expect(safetyNetAfterDecision({ decisionMessage: { policy: "sends", to: "luis@example.com" } }, LIVE, undefined, "America/Los_Angeles")).toBe(net);
+    expect(declineSummary("sends", { hasEmail: true, now: LIVE, timeZone: "Asia/Karachi" })[1]).toBe("If nobody tells them first, the standard message goes by itself on Thursday, November 19.");
+  });
+
   it("closing a role says who moved privately, which interviews ended, and who was told only that theirs is off", () => {
     // in job words, like every other button (the lead's D1, 11 November 2026)
     expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 1, closingMessage: { policy: "sends" } }, undefined, true, NOW)).toEqual({ title: "Job closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. If nobody tells them first, the closing message goes by itself on Wednesday, October 21. 1 interview was cancelled; the candidate was sent a short note now saying only that it is off." });

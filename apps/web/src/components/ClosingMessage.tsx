@@ -10,6 +10,7 @@ import { CLOSING_SENDERS, closeRoleToast } from "../talent-actions";
 import { bulkUndoMillis, closingResultToast, closingSendLabel, closingSheetLines, safetyNetDate, safetyNetPromise, safetyNetShort, undoable } from "../telling";
 import { cannotSeeYetWords } from "../upgrade";
 import { InlineUndo } from "./InlineUndo";
+import { useCompanyTimeZone } from "./use-company-time-zone";
 import { useBulkTakeBack, useBulkUndoToast } from "./use-undo";
 
 /**
@@ -20,8 +21,8 @@ import { useBulkTakeBack, useBulkUndoToast } from "./use-undo";
  * who sends it instead of being shown a Send they could not use.
  */
 
-/** What POST /roles/:id/outcome answers that the close card reads. */
-type RoleClosed = { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: ClosingMessagePreview | null };
+/** What POST /roles/:id/outcome answers that the close card reads; `untoldFallbackOn`: the day the safety net acts on the people it moved. */
+type RoleClosed = { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; untoldFallbackOn?: string | null; closingMessage?: ClosingMessagePreview | null };
 
 /** The people a close would move: everyone still in process (not hired, not already decided). */
 const STILL_IN_PROCESS = (a: ApplicationsWithCounts["applications"][number]) => !["hired", "not_moving_forward"].includes(a.ownerStage) && !["withdrawn", "declined"].includes(a.stage);
@@ -50,6 +51,8 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
   const [closed, setClosed] = useState<ClosingMessagePreview | null>(null);
   const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`) });
   const still = (apps.data?.applications ?? []).filter(STILL_IN_PROCESS);
+  // the safety net's day before the click, on the company's calendar (live test, 12 November 2026)
+  const timeZone = useCompanyTimeZone();
   const close = useMutation({
     mutationFn: () => api.post<RoleClosed>(`/api/v1/roles/${roleId}/outcome`, { outcome, confirm: true, reason: reason.trim() || undefined }),
     // says who moved to the talent pool privately, which interviews ended, and who was told only that theirs is off (founder decision B6)
@@ -83,7 +86,7 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
                 ))}
               </ul>
               {apps.data?.lockedInProcess ? <p className="small muted mt-2">{cannotSeeYetWords(apps.data.lockedInProcess)}</p> : null}
-              <p className="small muted mt-2.5">{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. {safetyNetShort({ policy: null, on: safetyNetDate(new Date().toISOString()), what: "the closing message" })} Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Home page.`}{apps.data?.lockedInProcess ? ` ${lockedClosingLine(apps.data.lockedInProcess)}` : ""}</p>
+              <p className="small muted mt-2.5">{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. {safetyNetShort({ policy: null, on: safetyNetDate(new Date().toISOString(), undefined, timeZone), what: "the closing message" })} Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Home page.`}{apps.data?.lockedInProcess ? ` ${lockedClosingLine(apps.data.lockedInProcess)}` : ""}</p>
             </>
           ) : apps.data?.lockedInProcess ? (
             // the people the team cannot see yet move with the close too: a count, never who (the release review, 11 November 2026)

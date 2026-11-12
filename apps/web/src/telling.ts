@@ -109,22 +109,46 @@ export function bulkUndoneToast(taken: number, late: number): ToastParts {
 export const SAFETY_NET_WORKING_DAYS = 5;
 const DAY = 86_400_000;
 
+/** A day the API names (YYYY-MM-DD) as a date that reads as that same day wherever the reader is: noon on their own clock. */
+export function namedDay(day: string): Date {
+  return new Date(`${day.slice(0, 10)}T12:00:00`);
+}
+
+/** The calendar day (YYYY-MM-DD) of a moment in a time zone, or null when the browser does not know the zone. */
+function dayIn(timeZone: string): ((at: Date) => string) | null {
+  let f: Intl.DateTimeFormat;
+  try {
+    f = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+  } catch {
+    return null;
+  }
+  return (at) => {
+    const p = Object.fromEntries(f.formatToParts(at).map((x) => [x.type, x.value]));
+    return `${p.year}-${p.month}-${p.day}`;
+  };
+}
+
 /**
  * The day the safety net acts: five working days (Monday to Friday) after the moment of the decision, counted the way the
- * daily check counts them. The check runs in the company's time zone and skips the holidays on the ITS calendar, which
- * can move it by a day; a day the API names (`fallbackOn`) wins.
+ * daily check counts them. With `timeZone` (the company's) the days are the company's, as the check counts them (live test,
+ * 12 November 2026: a reader a day ahead of the company was told the day after); without it, or with a zone the browser
+ * does not know, the reader's own. The check also skips the holidays on the ITS calendar and keeps to the company's
+ * contact days, which can move it by a day; after a decision the API names the day (`untoldFallbackOn`), and that wins.
  */
-export function safetyNetDate(decidedAt: string, days = SAFETY_NET_WORKING_DAYS): Date | null {
+export function safetyNetDate(decidedAt: string, days = SAFETY_NET_WORKING_DAYS, timeZone?: string | null): Date | null {
   const from = Date.parse(decidedAt);
   if (Number.isNaN(from)) return null;
+  const companyDay = timeZone ? dayIn(timeZone) : null;
+  // 0 Sunday to 6 Saturday, on the company's calendar when its zone is known, else on the reader's
+  const weekdayOf = (t: number) => (companyDay ? new Date(`${companyDay(new Date(t))}T00:00:00Z`).getUTCDay() : new Date(t).getDay());
   let t = from;
   let n = 0;
   for (let i = 0; i < 60 && n < days; i++) {
     t += DAY;
-    const weekday = new Date(t).getDay();
+    const weekday = weekdayOf(t);
     if (weekday >= 1 && weekday <= 5) n += 1;
   }
-  return new Date(t);
+  return companyDay ? namedDay(companyDay(new Date(t))) : new Date(t);
 }
 
 /**
@@ -197,7 +221,7 @@ export function safetyNetLine(input: {
   const acted = safetyNetActed(a.timeline);
   if (acted?.action === "recruiter") return `An ITS recruiter was brought in on ${dayWords(new Date(acted.at))} to make sure ${name ?? "they"} ${name ? "is" : "are"} told. You can still send the message or record it.`;
   const decided = a.rejectedAt ?? a.stageChangedAt;
-  const on = a.untoldFallbackOn ? new Date(`${a.untoldFallbackOn.slice(0, 10)}T12:00:00`) : safetyNetDate(decided);
+  const on = a.untoldFallbackOn ? namedDay(a.untoldFallbackOn) : safetyNetDate(decided);
   if (!on || Number.isNaN(on.getTime())) return null;
   const sends = a.declineMessage === "sends" && !!a.candidate.email;
   const now = input.now ?? new Date();

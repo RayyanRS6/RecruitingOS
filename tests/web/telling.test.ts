@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, DecisionMessageResult } from "../../apps/web/src/api/client";
 import {
-  PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, replyOwnWords, safetyNetActed, safetyNetDate,
+  PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, dayWords, namedDay, replyOwnWords, safetyNetActed, safetyNetDate,
   safetyNetLine, safetyNetPromise, safetyNetShort, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, threadParts, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
   HIDDEN_LINK_NOTE,
 } from "../../apps/web/src/telling";
@@ -116,6 +116,21 @@ describe("the safety net on the 'not told yet' card (Q27)", () => {
     const fri = safetyNetDate("2026-10-09T15:00:00.000Z")!;
     expect(Math.round((fri.getTime() - Date.parse("2026-10-09T15:00:00.000Z")) / 86_400_000)).toBe(7);
     expect(safetyNetDate("nonsense")).toBeNull();
+  });
+
+  // Live test, 12 November 2026 (L5): declined on Wednesday evening in Los Angeles, already Thursday for a reader in Pakistan
+  it("counts on the company's calendar when its time zone is known, whatever the reader's", () => {
+    // 8 PM on Wednesday, November 11 in Los Angeles: Thursday the 12th is the first working day there, Wednesday the 18th the fifth
+    expect(dayWords(safetyNetDate("2026-11-12T04:00:00.000Z", 5, "America/Los_Angeles")!)).toBe("Wednesday, November 18");
+    // the same moment is Thursday morning in Karachi, so its fifth working day is Thursday the 19th
+    expect(dayWords(safetyNetDate("2026-11-12T04:00:00.000Z", 5, "Asia/Karachi")!)).toBe("Thursday, November 19");
+    // no zone, or one the browser does not know: the reader's own count, as before
+    expect(safetyNetDate("2026-11-12T04:00:00.000Z", 5, "Not/A_Zone")).toEqual(safetyNetDate("2026-11-12T04:00:00.000Z"));
+    expect(safetyNetDate("2026-11-12T04:00:00.000Z", 5, null)).toEqual(safetyNetDate("2026-11-12T04:00:00.000Z"));
+    expect(safetyNetDate("nonsense", 5, "America/Los_Angeles")).toBeNull();
+    // a day the API names reads as that same day wherever the reader is
+    expect(dayWords(namedDay("2026-11-18"))).toBe("Wednesday, November 18");
+    expect(dayWords(namedDay("2026-11-18T00:00:00.000Z"))).toBe("Wednesday, November 18");
   });
 
   it("says, in one short line, on which day the standard message goes by itself if nobody tells them first (D-03 A)", () => {

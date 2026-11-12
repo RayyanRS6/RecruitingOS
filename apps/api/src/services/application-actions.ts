@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, visibleTo, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
+import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, unlockedAtFor, visibleTo, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
-import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, type PersonalLine } from "@ros/agents";
+import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, untoldFallbackAt, workingDayRulesFor, type PersonalLine } from "@ros/agents";
 import { heldDecisionSignal, intakeOn, interviewsBeingPrepared, startInterviewAgain } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
@@ -536,14 +536,32 @@ type ActionBody = ApplicationAction;
  * short note with no reason (they had a booked time or times to pick from). The decision itself stays private.
  * send_decision: `communicationId` and `undoUntil` while the message waits out its Undo window (plan G9; POST
  * /applications/:id/messages/:communicationId/undo), and the `wording` used. A decision (decline, talent pool) answers
- * with `decisionMessage`: the message one Send would now write, for the confirmation to show it (plan G4).
+ * with `decisionMessage`: the message one Send would now write, for the confirmation to show it (plan G4); and with
+ * `untoldFallbackOn`: the day the untold safety net acts on it, the day the "not told yet" card names (`untoldFallbackDayOf`).
  */
-export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number; communicationId?: string | null; undoUntil?: string | null; wording?: DecisionWording | null; decisionMessage?: DecisionMessagePreview | null };
+export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number; communicationId?: string | null; undoUntil?: string | null; wording?: DecisionWording | null; decisionMessage?: DecisionMessagePreview | null; untoldFallbackOn?: string | null };
 
-/** The decision message a Send would write now, for the answer to a decision (a count of one and its preview, plan G4). */
-async function previewAfterDecision(tx: Tx, container: Container, applicationId: string): Promise<DecisionMessagePreview | null> {
+/**
+ * The day the untold safety net acts on this decision (Q27), YYYY-MM-DD in the company's calendar: five working days
+ * after it was made (or after the unlock, for someone a change of plan opened), in the company's time zone, on its
+ * contact days and without the ITS holidays, as the daily check counts them. One rule for the "not told yet" card (GET
+ * /applications/:id) and the answer to every decision, so the toast names the card's day (live test, 12 November 2026:
+ * the toast counted on the reader's own calendar and named the day after).
+ */
+export async function untoldFallbackDayOf(tx: Tx, app: Pick<App, "id" | "companyId" | "rejectedAt" | "stageChangedAt">, now: Date): Promise<string> {
+  const from = waitingSince(app.rejectedAt ?? app.stageChangedAt, (await unlockedAtFor(tx, [app.id])).get(app.id));
+  return untoldFallbackAt(new Date(from), await workingDayRulesFor(tx, app.companyId, now)).day;
+}
+
+/**
+ * What the answer to a decision carries: the decision message a Send would write now (a count of one and its preview,
+ * plan G4), and the day the safety net acts on it.
+ */
+async function afterDecision(tx: Tx, container: Container, applicationId: string, now: Date): Promise<Pick<ActionResult, "decisionMessage" | "untoldFallbackOn">> {
   const [fresh] = await tx.select().from(applications).where(eq(applications.id, applicationId)).limit(1);
-  return fresh ? decisionMessagePreview(tx, container, fresh) : null;
+  if (!fresh) return {};
+  const decisionMessage = await decisionMessagePreview(tx, container, fresh);
+  return { ...(decisionMessage ? { decisionMessage } : {}), untoldFallbackOn: await untoldFallbackDayOf(tx, fresh, now) };
 }
 
 /**
@@ -605,8 +623,8 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       // and a candidate who held a booked time or was offered times is told at once, with no reason, that it is off, so
       // nobody turns up for it; the decision message sent later leaves it out.
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined: ${body.reason}`, actor, candidateEmail: "private_decision" });
-      const decisionMessage = input.via ? null : await previewAfterDecision(tx, container, app.id);
-      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...(decisionMessage ? { decisionMessage } : {}) };
+      const after = input.via ? {} : await afterDecision(tx, container, app.id, now);
+      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...after };
     }
     case "override_eligibility": {
       assertCan(t.role, "application.act");
@@ -641,9 +659,9 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       const optedOut = (await keepInTalentPool(tx, [app.candidateId])).optedOut.length > 0;
       await emit(tx, { type: "application.moved_to_talent_pool", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: optedOut ? { talentPoolOptOut: true } : {} });
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: "moved to the talent pool", actor, candidateEmail: "private_decision" });
-      // Private like every decision (B6); the answer carries the message a Send would write, a count of one (plan G4).
-      const decisionMessage = input.via ? null : await previewAfterDecision(tx, container, app.id);
-      return { ok: true, stage: "talent_pool", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, ...(optedOut ? { talentPoolOptOut: true } : {}), ...(decisionMessage ? { decisionMessage } : {}) };
+      // Private like every decision (B6); the answer carries the message a Send would write, a count of one (plan G4), and the safety net's day.
+      const after = input.via ? {} : await afterDecision(tx, container, app.id, now);
+      return { ok: true, stage: "talent_pool", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, ...(optedOut ? { talentPoolOptOut: true } : {}), ...after };
     }
     case "hold":
     case "set_mark": {
