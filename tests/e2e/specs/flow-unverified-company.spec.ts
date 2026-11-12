@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
-  PERSONAS, applicantThroughTheApi, createCompanyThroughTheForm, emailsTo, expectAccessible, expectNoEmail, gotoSettled, liveJobThroughTheApi, openThePanel, setADateAndTime, signIn,
-  signInAsNadine, skipWithoutFakeSignIn, waitForEmail, type Applicant,
+  PERSONAS, applicantThroughTheApi, companyDay, createCompanyThroughTheForm, emailsTo, expectAccessible, expectNoEmail, gotoSettled, liveJobThroughTheApi, openThePanel, setADateAndTime,
+  signIn, signInAsNadine, skipWithoutFakeSignIn, waitForEmail, type Applicant,
 } from "./helpers";
 
 /**
@@ -47,8 +47,7 @@ test.describe("a company ITS has not confirmed", () => {
     const form = panel.locator(".card", { has: page.getByRole("heading", { name: "Set a date and time" }) });
     await expect(form.getByRole("button", { name: "Book", exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(form.getByRole("button", { name: /email Ana/ })).toHaveCount(0);
-    const day = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
-    await form.getByLabel("Date", { exact: true }).fill(day);
+    await form.getByLabel("Date", { exact: true }).fill(companyDay(3));
     await form.getByLabel(/^Time \(/).fill("10:30");
     await expect(form.getByText("The email to Ana waits for ITS to confirm your company.")).toBeVisible();
     await expectAccessible(page, "setting a time while the email waits for ITS");

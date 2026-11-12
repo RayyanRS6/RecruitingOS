@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
-  PERSONAS, applicantThroughTheApi, createCompanyThroughTheForm, decideInPanel, emailsTo, expectAccessible, expectNoEmail, liveJobThroughTheApi, openTheDecision, openThePanel, recordTookPlace,
-  setADateAndTime, signIn, skipWithoutFakeSignIn, waitForEmail, type Applicant,
+  PERSONAS, applicantThroughTheApi, companyDay, createCompanyThroughTheForm, decideInPanel, emailsTo, expectAccessible, expectNoEmail, liveJobThroughTheApi, openTheDecision, openThePanel,
+  recordTookPlace, setADateAndTime, signIn, skipWithoutFakeSignIn, waitForEmail, type Applicant,
 } from "./helpers";
 
 /**
@@ -41,6 +41,18 @@ async function bookFromThePanel(page: Page, roleId: string, who: Applicant, days
   await expect(toast(page, /Booked\./)).toBeVisible({ timeout: 30_000 });
   return panel;
 }
+
+// companyDay, which dates the hire below, gives the company's day at any hour: checked at fixed moments, not only at the
+// hour a run happens to be at (a US evening, already the next day in UTC; a US morning; a summer evening; the last hour
+// of the day the clocks go back; a step into the next year).
+test("the company's day, at any hour in UTC", () => {
+  expect(companyDay(-1, new Date("2026-11-12T05:00:00Z"))).toBe("2026-11-10");
+  expect(companyDay(-1, new Date("2026-11-12T17:00:00Z"))).toBe("2026-11-11");
+  expect(companyDay(-1, new Date("2026-07-15T06:30:00Z"))).toBe("2026-07-13");
+  expect(companyDay(0, new Date("2026-11-02T07:30:00Z"))).toBe("2026-11-01");
+  expect(companyDay(-1, new Date("2026-11-02T07:30:00Z"))).toBe("2026-10-31");
+  expect(companyDay(21, new Date("2026-12-20T09:00:00Z"))).toBe("2027-01-10");
+});
 
 test.describe("deciding, the offer, the hire and closing the job", () => {
   skipWithoutFakeSignIn();
@@ -127,8 +139,10 @@ test.describe("deciding, the offer, the hire and closing the job", () => {
     await expect(hire).toBeVisible();
     // the sheet names the interview it calls off, and says nothing goes to Ben
     await expect(hire.getByText(new RegExp(`^Recorded with your name\\. Nothing is sent to Ben\\. The ${escapeRegExp(job.rounds[0].title)} on .+ is called off, and the interviewers are told\\.$`))).toBeVisible();
-    // he started yesterday: a hire recorded after the start
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    // he started yesterday: a hire recorded after the start. Yesterday on the company's calendar, which the hire sheet and
+    // Home's "Close this job?" both count, whatever hour the run is at (the UTC date's yesterday is the company's today
+    // from 00:00 to 08:00 UTC)
+    const yesterday = companyDay(-1);
     await hire.getByLabel("Start date (agreed with them)").fill(yesterday);
     await hire.getByRole("button", { name: "Continue" }).click();
     await hire.getByRole("button", { name: "Yes, record the hire" }).click();

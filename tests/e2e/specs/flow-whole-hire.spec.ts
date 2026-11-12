@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
-  HYGIENIST_JOB, PERSONAS, applyThroughTheForm, approvalCard, approveOnTheJobPage, buildJobThroughTheBuilder, decideInPanel, emailsTo, exactlyOneEmail, expectAccessible,
+  HYGIENIST_JOB, PERSONAS, applyThroughTheForm, approvalCard, approveOnTheJobPage, buildJobThroughTheBuilder, companyDay, decideInPanel, emailsTo, exactlyOneEmail, expectAccessible,
   expectNoEmail, fillTheCompanyForm, gotoSettled, linkIn, openThePanel, recordTookPlace, sendTheAiInterview, setADateAndTime, signIn, signInAsNadine, skipWithoutFakeSignIn,
   waitForEmail, waitForTheAiInterview, type Applicant,
 } from "./helpers";
@@ -210,7 +210,7 @@ test.describe("the whole hire", () => {
     await expect(anaPanel.getByRole("heading", { name: "Waiting on Ana's answer" })).toBeVisible({ timeout: 30_000 });
     await anaPanel.getByRole("button", { name: "They accepted" }).click();
     await expect(anaPanel.getByRole("heading", { name: "Hire Ana Holt" })).toBeVisible();
-    await anaPanel.getByLabel("Start date (agreed with them)").fill(new Date(Date.now() + 21 * 86_400_000).toISOString().slice(0, 10));
+    await anaPanel.getByLabel("Start date (agreed with them)").fill(companyDay(21));
     await anaPanel.getByRole("button", { name: "Continue" }).click();
     await anaPanel.getByRole("button", { name: "Yes, record the hire" }).click();
     await expect(toast(page, /Ana Holt is hired\./)).toBeVisible({ timeout: 30_000 });
