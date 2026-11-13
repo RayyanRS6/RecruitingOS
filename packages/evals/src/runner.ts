@@ -1,19 +1,19 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, screenWriteupPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, screenWriteupPrompt, triageAssessPrompt, type AiRuntime, type ScreenContext } from "@ros/ai";
 import {
-  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, basisFor, credentialMustHaves, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, hasPlaceholder, mergeFacts, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
-  SCORECARD_READINGS, resolveBenchmark, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type BenchmarkResult, type ScoringIdentity,
+  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, credentialMustHaves, editableView, enforceTurnRules, finalizePacket, hasPlaceholder, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
+  SCORECARD_READINGS, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type ScoringIdentity,
 } from "@ros/agents";
-import { importanceOf, type EvidenceAssessment, type IntakeFacts, type IntakeMessage, type ResumeExtraction, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
+import { importanceOf, type EvidenceAssessment, type ResumeExtraction, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
-import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { runChatSuite } from "./chat-suite";
 import { clipText, traceOutcome, traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
+import { intakeContextOf, runIntakeCase, type IntakeModelCall } from "./intake-run";
 import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
-import { CONSISTENCY_READS, EMPTY_FACTS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, draftFailures, draftSkillsNote, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
+import { CONSISTENCY_READS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -51,94 +51,13 @@ async function main() {
   const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number; notes?: string[]; diagnostics?: CaseDiagnostics }>; passRate: number }> = {};
   const findingsOf = (label: string, a: EvidenceAssessment) => `${label}: ${a.overall}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")} | skills: ${a.competencyFindings.map((x) => `${x.competencyKey}=${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote.slice(0, 50)}")` : ""}`).join("; ")}`;
 
-  // The eval has no live wage service: the market check falls back to the playbook's table, as production does when the
-  // service is down. The basis comes first (plan C2), and the pay the owner typed counts as confirmed.
-  const noLiveWages = { id: "eval", status: "disabled" as const, benchmark: async () => null };
-  const buildCtx = async (c: IntakeCase, facts: IntakeFacts, messages: IntakeMessage[]): Promise<{ ctx: IntakeContext; basis: "hourly" | "salary" | null; bench: BenchmarkResult }> => {
-    const playbook = findPlaybook(c.vertical);
-    const typed = messages.filter((m) => m.role === "owner" && (!m.kind || m.kind === "text")).map((m) => m.content);
-    const title = facts.title ?? typed[0] ?? "";
-    const role = playbook && title ? matchPlaybookRole(playbook, title) : null;
-    const basis = basisFor(facts, typed, role);
-    const bench = await resolveBenchmark(noLiveWages, { basis, playbookRole: role, titleGuess: title, locationText: facts.locationText ?? "Irvine, CA" });
-    const ad = messages.find((m) => m.kind === "pasted_ad");
-    const pay = facts.compensationBasis && facts.compensationMin !== undefined && facts.compensationMax !== undefined && !ad ? { basis: facts.compensationBasis, min: facts.compensationMin, max: facts.compensationMax, ...(facts.compensationCeiling !== undefined ? { ceiling: facts.compensationCeiling } : {}) } : null;
-    return {
-      ctx: {
-        company: { name: "Eval Co", vertical: c.vertical, sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
-        playbook, playbookRole: role,
-        benchmark: bench.benchmark, benchmarkGap: bench.gap,
-        facts, messages,
-        ad: ad ? { text: ad.content } : null,
-        confirmedPay: pay,
-      },
-      basis,
-      bench,
-    };
-  };
-
+  // The job builder's suites: each case as intake-run.ts drives it, every model call recorded in ai_runs.
+  const intakeCall: IntakeModelCall = (prompt, input, meta) => runPrompt(q, rt, prompt, input, { companyId: null, ...meta });
   async function runIntakeSuite(name: string, cases: IntakeCase[], compile: boolean) {
     if (!runs(name)) return;
     const out: (typeof results)[string]["cases"] = [];
     for (const c of cases) {
-      const failures: string[] = [];
-      const notes: string[] = [];
-      let facts: IntakeFacts = { ...EMPTY_FACTS, ...c.facts };
-      const messages: IntakeMessage[] = [];
-      let lastTurn = null as null | Awaited<ReturnType<typeof runPrompt<IntakeContext, import("@ros/contracts").IntakeTurn>>>;
-      // A case with its answers set is written straight from them (the quick start's edit, say): its messages are the
-      // conversation and no intake.turn call reads them, so the draft is given exactly those answers (review of the
-      // live-test fixes, #23). It has no turn, so nothing of a turn can be checked.
-      if (c.facts) {
-        if (c.expectTurn || c.expectBenchmark || c.pastedAd) failures.push("a case with its answers set has no turn of the conversation to check");
-        for (const m of c.ownerMessages) messages.push({ role: "owner", content: m, at: new Date().toISOString(), kind: "text" });
-      }
-      // Otherwise each message is a turn of the conversation, answered by intake.turn as in the job builder.
-      for (const [i, m] of (c.facts ? [] : c.ownerMessages).entries()) {
-        const asAd = i === 0 && !!c.pastedAd;
-        messages.push({ role: "owner", content: m, at: new Date().toISOString(), kind: asAd ? "pasted_ad" : "text" });
-        // A pasted ad is read once for what it states before the market check (plan C5).
-        if (asAd) {
-          const x = await runPrompt(q, rt, intakeExtractPrompt, { text: m, companyName: "Eval Co" }, { companyId: null, inputRef: { eval: c.id, read: "pasted_ad" } });
-          if (!x.ok) { failures.push(`ad read failed: ${x.error}`); break; }
-          if (x.output.isJobDescription) facts = factsFromExtraction(facts, x.output);
-        }
-        const built = await buildCtx(c, facts, messages);
-        if (i === 0 && c.expectBenchmark) failures.push(...c.expectBenchmark({ basis: built.basis, benchmark: built.bench.benchmark, gap: built.bench.gap }));
-        const r = await runPrompt(q, rt, intakeTurnPrompt, built.ctx, { companyId: null, inputRef: { eval: c.id } });
-        if (!r.ok) { failures.push(`turn failed: ${r.error}`); break; }
-        facts = mergeFacts(facts, r.output.factsExtracted);
-        messages.push({ role: "assistant", content: r.output.assistantMessage, at: new Date().toISOString() });
-        lastTurn = r;
-      }
-      if (lastTurn?.ok && c.expectTurn) failures.push(...c.expectTurn({ ...lastTurn.output, factsExtracted: facts }));
-      if (compile && (c.expectPacket || c.expectDraft) && failures.length === 0) {
-        const { ctx } = await buildCtx(c, facts, messages);
-        // As many drafts as the case asks for, each written afresh from the same answers ("Write it again") and judged on
-        // its own: first as the model wrote it, then as the server finishes it (pay, the rules set in code, the guard).
-        // The backstop that drops a question the owner left unticked (`withoutUntickedQuestions`, run when a draft is
-        // written in the app) is left out on purpose, so a case measures the prompt's own line on the form.
-        const drafts = Math.max(1, c.compiles ?? 1);
-        for (let n = 1; n <= drafts; n++) {
-          const which = drafts > 1 ? `draft ${n}: ` : "";
-          const r = await runPrompt(q, rt, intakeCompilePrompt, ctx, { companyId: null, inputRef: { eval: c.id, ...(drafts > 1 ? { draft: n } : {}) }, maxTokens: INTAKE_COMPILE_MAX_TOKENS });
-          if (!r.ok) {
-            failures.push(`${which}compile failed: ${r.error}`);
-            continue;
-          }
-          failures.push(...(c.expectDraft?.(r.output) ?? []).map((x) => `${which}${x}`));
-          const packet = finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
-          // The case's checks and, on every compiled case, a skill that repeats a must-have; the note keeps the draft's
-          // must-haves and skills by name (synthetic data), so one renamed can be seen in the result file (second review
-          // of the live-test fixes, #14).
-          failures.push(...draftFailures(c, packet).map((x) => `${which}${x}`));
-          notes.push(`${which}${draftSkillsNote(packet)}`);
-          const declined = facts.declinedCriteria.map((d) => d.requested.toLowerCase());
-          // The packet records what was declined (and any flags) in its provenance on purpose; anywhere else is a leak.
-          const text = JSON.stringify({ ...packet, provenance: { ...packet.provenance, declinedCriteria: [], flags: [] } }).toLowerCase();
-          for (const d of declined) if (text.includes(d)) failures.push(`${which}declined criterion leaked into packet: ${d}`);
-        }
-      }
+      const { failures, notes } = await runIntakeCase(intakeCall, c, compile);
       out.push({ id: c.id, pass: failures.length === 0, failures, ...(notes.length ? { notes } : {}) });
     }
     results[name] = { cases: out, passRate: out.filter((x) => x.pass).length / Math.max(1, out.length) };
@@ -169,7 +88,7 @@ async function main() {
   /** The golden dental hygienist packet the Slice 2 suites assess against (compiled once per run). */
   async function goldenPacket(): Promise<RolePacket> {
     const c: IntakeCase = { id: "golden_rdh", provenance: "synthetic", vertical: "dental", ownerMessages: ["I need a dental hygienist in Irvine."] };
-    const { ctx } = await buildCtx(c, RDH_FACTS, [{ role: "owner", content: c.ownerMessages[0], at: new Date().toISOString() }]);
+    const { ctx } = await intakeContextOf(c, RDH_FACTS, [{ role: "owner", content: c.ownerMessages[0], at: new Date().toISOString() }]);
     const r = await runPrompt(q, rt, intakeCompilePrompt, ctx, { companyId: null, inputRef: { eval: "golden_packet" }, maxTokens: INTAKE_COMPILE_MAX_TOKENS });
     if (!r.ok) throw new Error(`golden packet failed: ${r.error}`);
     return finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });

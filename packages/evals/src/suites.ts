@@ -67,9 +67,12 @@ export function formHoldingNobody(p: { requirements: { eligibility: ReadonlyArra
   return loose.length ? [`${by}questions on the form whose "no" holds nobody: ${loose.map((e) => e.key).join(", ")}`] : [];
 }
 
-/** The sentence of the public description that says why the owner is hiring: the reason is for the team only, and may change after the draft is written. */
-export function reasonInDescription(p: Pick<RolePacket, "description">, words: RegExp): string[] {
-  const said = p.description.publicJobDescription.split(/(?<=[.!?])\s+/).find((s) => words.test(s));
+/**
+ * The sentence of the public description that says why the owner is hiring: the reason is for the team only, and may
+ * change after the draft is written. `says` reads one sentence: words to find in it, or a test of it.
+ */
+export function reasonInDescription(p: Pick<RolePacket, "description">, says: RegExp | ((sentence: string) => boolean)): string[] {
+  const said = p.description.publicJobDescription.split(/(?<=[.!?])\s+/).find((s) => (typeof says === "function" ? says(s) : says.test(s)));
   return said ? [`why the owner is hiring is written into the public description: "${said.trim()}"`] : [];
 }
 
@@ -77,20 +80,51 @@ export function reasonInDescription(p: Pick<RolePacket, "description">, words: R
 export const REPLACEMENT_WORDS = /\bmoved\b|\breplac/i;
 
 /**
- * A reason of growth ("It's growth."): the practice growing ("a growing practice", "we're growing", "our team continues
- * to grow", "to support our growth"), never the candidate's own ("room to grow", "grow your skills", "career growth"),
- * which says nothing about why the owner is hiring.
+ * The candidate's own growth, which says nothing about why the owner is hiring: "room to grow", "a place to learn and
+ * grow", "learn, grow and thrive", "grow your skills", "grow with us", "you can grow", "your growth", "career growth",
+ * "opportunities for professional growth", "growth opportunities", "a growth mindset". Never the practice's: "it's time
+ * to grow our team", "we've grown into a three-doctor practice".
  */
-export const GROWTH_WORDS = /\bgrowing\s+(?:dental\s+)?(?:practice|team|office|clinic|business|group)\b|\b(?:we|we['’]re|we\s+are|our\s+(?:\w+\s+)?(?:practice|team|office|clinic|business|group|patient\s+base)|(?:the|this)\s+(?:practice|team|office|clinic))\s+(?:(?:is|are|has|have|keeps|continues|continue)\s+(?:been\s+)?(?:to\s+)?)?(?:grow|growing|grows|grew|grown)\b|\b(?:our|recent|rapid|steady|continued)\s+growth\b/i;
+const CANDIDATE_GROWTH = new RegExp(
+  [
+    String.raw`\b(?:room|space|chances?|opportunit(?:y|ies)|places?|paths?|freedom|support)\s+(?:for\s+you\s+)?to\s+grow\b`,
+    String.raw`\b(?:room|space|chances?|opportunit(?:y|ies)|paths?)\s+(?:of|for)\s+(?:(?:your|professional|personal|career|continued)\s+)?growth\b`,
+    String.raw`\bgrow(?:s|ing)?\s+(?:your|with\s+(?:us|the\s+team|our\s+team)|professionally|personally|in(?:to)?\s+(?:your|the|this)\s+(?:role|career|position|job|skills?)\b)`,
+    String.raw`\b(?:learn|develop|train)\w*\s*,?\s+(?:and\s+)?grow\w*\b`,
+    String.raw`\bgrow\w*\s*,?\s+(?:and\s+)?(?:learn|develop|advanc)\w*\b`,
+    String.raw`\byou(?:['’]ll|\s+will|\s+can|\s+could|\s+may|\s+would)?\s+(?:continue\s+to\s+|keep\s+)?grow(?:ing)?\b`,
+    String.raw`\byour\s+(?:own\s+)?(?:(?:professional|personal|career|continued)\s+)?growth\b`,
+    String.raw`\b(?:career|professional|personal|skills?|individual)\s+growth\b`,
+    String.raw`\b(?:careers?|skills?|knowledge|confidence)\s+grows?\b`,
+    String.raw`\b(?:training|education|advancement)\s+and\s+growth\b`,
+    String.raw`\bgrowth[\s-]+(?:opportunit(?:y|ies)|paths?|mindset|minded)\b`,
+    String.raw`\bculture\s+of\s+(?:learning\s+and\s+)?growth\b`,
+  ].join("|"),
+  "gi",
+);
+
+/**
+ * A reason of growth ("It's growth."): a sentence that says the practice grows ("a busy, growing family practice", "Due
+ * to growth, we are adding…", "We've grown quickly"), read once the candidate's own growth is taken out of it, so "Join
+ * our growing practice, with room to grow" still says it (review of the intake evals fix, 13 Nov 2026: a short list of
+ * shapes let most plain ways of saying it through).
+ */
+export function saysPracticeGrows(sentence: string): boolean {
+  return /\bgr(?:ow\w*|ew)\b/i.test(sentence.replace(CANDIDATE_GROWTH, " "));
+}
 
 /** Words that say how much, how sure or of what trade, never which skill: they never make a skill the same as a must-have. */
 const NOT_A_SUBJECT = new Set(
   "a an the and or of in on with for to at by as from into per via including include includes such e g eg etc is are be been who that this these those their your our its it any all each every both other own can will must should may has have having not no without experience experienced skill ability abilities able knowledge knowledgeable proficiency proficient competence competency competencies competent understanding familiarity familiar background expertise active current currently valid strong solid good great excellent proven demonstrated basic working relevant required preferred digital dental dentistry year level".split(" "),
 );
 
-/** Word families read as one word: an x-ray is a radiograph, "perio" is periodontal, a licence a license, a certificate a certification. */
+/**
+ * Word families read as one word: an x-ray, radiology or imaging is a radiograph (review of the intake evals fix, 13 Nov
+ * 2026: "Radiology" or "Dental imaging" beside "Digital radiography" is the same skill renamed), "perio" is
+ * periodontal, a licence a license, a certificate a certification.
+ */
 const WORD_FAMILIES: ReadonlyArray<readonly [RegExp, string]> = [
-  [/^(?:x-?rays?|radiogra\w*)$/, "radiograph"],
+  [/^(?:x-?rays?|radiogra\w*|radiolog\w*|imag(?:e|es|ing))$/, "radiograph"],
   [/^(?:perio|periodont\w*)$/, "perio"],
   [/^licen[cs]\w*$/, "license"],
   [/^certif\w*$/, "certif"],
@@ -212,25 +246,38 @@ function quickStartDentalAssistant(o: { mustHaves: string[]; dealBreakers: strin
 /** What a question on the form asks, read from its words, its key and its expectation. */
 const asks = (e: FormRule, words: RegExp) => words.test(`${e.question} ${e.key} ${JSON.stringify(e.expectation ?? {})}`);
 const ASKS_RDA = /\bRDA\b|registered dental assistant|dental assist\w*\s+(?:licen[cs]e|registration)/i;
-const ASKS_XRAY_CPR = /x-?rays?\b|radiation|radiograph|\bCPR\b|\bBLS\b|basic life support/i;
+/** The two things the Dental Assistant's "Do you hold a current radiation safety / x-ray certification and CPR/BLS?" asks. */
+const ASKS_XRAY = /x-?rays?\b|radiation|radiograph/i;
+const ASKS_CPR = /\bCPR\b|\bBLS\b|basic life support/i;
 const asksDays = (e: FormRule) => e.type === "schedule_availability" || (e.type !== "start_date" && /\bavailab/i.test(e.question) && /\b(?:days?|hours|schedule|shifts?|open)\b/i.test(e.question));
 const rdaMustHaves = (p: Pick<RolePacket, "requirements">) => p.requirements.mustHaves.filter((m) => ASKS_RDA.test(m.text));
+/** dental_assistant_quick_start_deal_breaker_no_offered_question's deal-breaker, as its must-have or its question asks it. */
+const INFECTION_CONTROL = /infection[\s_-]*control/i;
 
 /**
  * The form of a Dental Assistant started from the quick start (intake.compile v6, "Questions on the form"): exactly the
- * questions the owner chose, read by what each asks (the model may split the x-ray and CPR/BLS question in two), so the
- * RDA licence once when it was chosen and never when it was left unticked, and no question nobody chose.
+ * questions the owner chose, read by what each asks, and each whole: the x-ray certification and CPR/BLS both asked in
+ * the question's own words, in one question or split in two (review of the intake evals fix, 13 Nov 2026: one word of
+ * either let a question cut in half pass). So the RDA licence once when it was chosen and never when it was left
+ * unticked; with `counted`, one question for a deal-breaker counted openly that none of the chosen ones asks ("Either
+ * way, add one rule for each deal-breaker the owner counted openly"); and no question nobody chose.
  */
-export function quickStartFormFailures(p: { requirements: { eligibility: readonly FormRule[] } }, o: { rda: boolean }): string[] {
+export function quickStartFormFailures(p: { requirements: { eligibility: readonly FormRule[] } }, o: { rda: boolean; counted?: { what: string; words: RegExp } }): string[] {
   const f: string[] = [];
   const rules = p.requirements.eligibility;
   const rda = rules.filter((e) => asks(e, ASKS_RDA));
   const rest = rules.filter((e) => !asks(e, ASKS_RDA));
   if (o.rda && rda.length !== 1) f.push(rda.length ? `the RDA licence is asked ${rda.length} times on the form` : "no RDA licence question on the form");
   if (!o.rda && rda.length) f.push(`the RDA licence question the owner left unticked is on the form: ${rda.map((e) => `"${e.question}"`).join("; ")}`);
-  if (!rest.some((e) => asks(e, ASKS_XRAY_CPR))) f.push(`a question the owner chose is not on the form: "${DA_XRAY_CPR_QUESTION}"`);
+  const xray = rest.some((e) => ASKS_XRAY.test(e.question));
+  const cpr = rest.some((e) => ASKS_CPR.test(e.question));
+  if (!xray && !cpr) f.push(`a question the owner chose is not on the form: "${DA_XRAY_CPR_QUESTION}"`);
+  else if (!xray || !cpr) f.push(`a question the owner chose is on the form without ${xray ? "CPR/BLS" : "the x-ray certification"}: "${DA_XRAY_CPR_QUESTION}"`);
   if (!rest.some(asksDays)) f.push(`a question the owner chose is not on the form: "${DA_DAYS_QUESTION}"`);
-  const others = rest.filter((e) => !asks(e, ASKS_XRAY_CPR) && !asksDays(e));
+  const counted = o.counted;
+  const forDealBreaker = counted ? rest.filter((e) => asks(e, counted.words)) : [];
+  if (counted && forDealBreaker.length !== 1) f.push(forDealBreaker.length ? `the deal-breaker counted openly is asked ${forDealBreaker.length} times on the form (${counted.what})` : `no question on the form for the deal-breaker counted openly (${counted.what})`);
+  const others = rest.filter((e) => !asks(e, ASKS_XRAY) && !asks(e, ASKS_CPR) && !asksDays(e) && !forDealBreaker.includes(e));
   if (others.length) f.push(`questions on the form the owner did not choose: ${others.map((e) => `"${e.question}"`).join("; ")}`);
   return f;
 }
@@ -297,7 +344,7 @@ export const intakeGolden: IntakeCase[] = [
       if (!rda) f.push("no RDA license question on the form");
       // read after finalizePacket, so this pins finalizeDraft's rule (the stand-in writes its BLS question holding nobody)
       f.push(...formHoldingNobody(p));
-      f.push(...reasonInDescription(p, GROWTH_WORDS));
+      f.push(...reasonInDescription(p, saysPracticeGrows));
       return f;
     },
     skillRepeats: "any name",
@@ -333,7 +380,9 @@ export const intakeGolden: IntakeCase[] = [
     // The live test's H1 on the quick start, where it happened (review of its fixes, #23 and #47): the deal-breaker "No
     // active California RDA license" counted openly is the must-have "Active California RDA license", which ticks the
     // RDA question by itself; with the two questions the owner chose, the form has exactly those three, the licence asked
-    // once (no second rule for the deal-breaker), and the model writes each one holding a "no".
+    // once (no second rule for the deal-breaker: "unless a rule already asks it"), and the model writes each one holding a
+    // "no". The other half of that line, a rule added for a deal-breaker no chosen question asks, is the case
+    // dental_assistant_quick_start_deal_breaker_no_offered_question.
     id: "dental_assistant_quick_start_deal_breaker_counted_openly",
     provenance: "synthetic",
     ...quickStartDentalAssistant({ mustHaves: ["Four-handed dentistry", "Digital radiography", "Active California RDA license"], dealBreakers: ["No active California RDA license"], chosen: [DA_RDA_QUESTION, DA_XRAY_CPR_QUESTION, DA_DAYS_QUESTION], unticked: [] }),
@@ -374,6 +423,25 @@ export const intakeGolden: IntakeCase[] = [
     ],
   },
   {
+    // Review of the intake evals fix (13 Nov 2026): v6's "Either way, add one rule for each deal-breaker the owner counted
+    // openly ... unless a rule already asks it or the owner left a question asking it unticked", the line no other case
+    // can fail (#47: "writes no rule for a deal-breaker counted openly"). The deal-breaker "No infection control
+    // certificate" counts openly as the must-have "Infection control certificate", which none of the questions step 9
+    // offers asks; the owner chose the x-ray and CPR/BLS question and the days, and the RDA question stays unticked, as
+    // nothing names the licence. So the form has exactly those two, one question for the deal-breaker and none of the
+    // unticked one, each holding a "no" as the model wrote it.
+    id: "dental_assistant_quick_start_deal_breaker_no_offered_question",
+    provenance: "synthetic",
+    ...quickStartDentalAssistant({ mustHaves: ["Four-handed dentistry", "Digital radiography", "Infection control certificate"], dealBreakers: ["No infection control certificate"], chosen: [DA_XRAY_CPR_QUESTION, DA_DAYS_QUESTION], unticked: [DA_RDA_QUESTION] }),
+    expectDraft: (d) => formHoldingNobody(d, "the AI wrote "),
+    expectPacket: (p) => [
+      ...ruleOutMustHaves(p),
+      ...(p.requirements.mustHaves.some((m) => INFECTION_CONTROL.test(m.text)) ? [] : ["no must-have for the deal-breaker counted openly (an infection control certificate)"]),
+      ...quickStartFormFailures(p, { rda: false, counted: { what: "an infection control certificate", words: INFECTION_CONTROL } }),
+      ...formHoldingNobody(p),
+    ],
+  },
+  {
     // Second review of the live-test fixes, #24: the Dental Office Manager's playbook lists "Team leadership" among its
     // common qualifications and as one of its skills, so a draft whose must-haves come from the playbook is handed the
     // skill v6 says never to add. Like every draft, it fails on a skill named the same as a must-have; its note lists
@@ -383,7 +451,7 @@ export const intakeGolden: IntakeCase[] = [
     vertical: "dental",
     ownerMessages: ["Dental office manager in Irvine, $34 to $40 an hour, full time. It's growth. I decide. Just draft it."],
     expectTurn: (t) => (t.readyToCompile ? [] : ["'just draft it' should set readyToCompile"]),
-    expectPacket: (p) => [...(p.provenance.assumptions.length ? [] : ["assumptions must be listed when the owner said 'just draft it'"]), ...reasonInDescription(p, GROWTH_WORDS)],
+    expectPacket: (p) => [...(p.provenance.assumptions.length ? [] : ["assumptions must be listed when the owner said 'just draft it'"]), ...reasonInDescription(p, saysPracticeGrows)],
   },
   {
     id: "generic_marketing_director",

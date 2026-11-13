@@ -1,4 +1,4 @@
-import { askedKind, mustHaveOf, repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
+import { askedKind, lacksCredential, mustHaveOf, repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
 import { ASKED_WORDS, OWNERS_CALL_MARK, type FakeProvider, type IntakeContext, type StructuredRequest } from "@ros/ai";
 import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
@@ -390,9 +390,11 @@ function fakeExtract(req: StructuredRequest<unknown>): IntakeExtraction {
  * the owner's own questions), since candidates answer it straight after the form (plan E8). v6: a must-have worded as
  * what rules someone out is written as the requirement, a playbook question that is the owner's call goes on the form
  * only when the owner chose it or a must-have names it (never when they left it unticked), its CPR/BLS, schedule and
- * right-to-work questions stay off the form when the owner left one asking the same unticked, every rule holds a "no"
- * once the owner went through the questions, the description never says why the owner is hiring, and no skill is named
- * the same as one of the draft's must-haves.
+ * right-to-work questions stay off the form when the owner left one asking the same unticked, a chosen x-ray and CPR/BLS
+ * question is written as the owner chose it, a deal-breaker counted openly that is a credential someone lacks gets one
+ * question unless one already asks it or the owner left one asking it unticked, every rule holds a "no" once the owner
+ * went through the questions, the description never says why the owner is hiring, and no skill is named the same as one
+ * of the draft's must-haves.
  */
 function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const f = c.facts;
@@ -424,7 +426,12 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   // intake.compile v6: every rule holds a "no". The stand-in writes its BLS rule so once the owner went through the
   // questions (the quick start's marker), as the evals' quick-start cases check on the draft as the model wrote it;
   // otherwise it holds nobody on purpose, so the evals and tests that read the finished draft pin finalizeDraft's rule.
-  if (isDental && !blsLeftOff) eligibility.push({ key: "bls", type: "certification", question: bls, expectation: { certification: "BLS" }, rationale: "Required for clinical staff.", knockout: !!f.formQuestionsChosen });
+  // With the marker, the form has exactly the owner's chosen questions: a chosen x-ray certification question (the
+  // Dental Assistant's "…x-ray certification and CPR/BLS?") is written as the owner chose it, in place of the stand-in's
+  // CPR/BLS one, so the evals' check that it is asked whole holds on CI (review of the intake evals fix, 13 Nov 2026).
+  const xray = f.formQuestionsChosen ? f.eligibilityNotes.find((n) => /x-?ray|radiation/i.test(n)) : undefined;
+  if (isDental && xray) eligibility.push({ key: "xray_bls", type: "certification", question: xray, expectation: { certification: /\bBLS\b|\bCPR\b/i.test(xray) ? "x-ray, BLS" : "x-ray" }, rationale: "Required to take radiographs in most states.", knockout: true });
+  else if (isDental && !blsLeftOff) eligibility.push({ key: "bls", type: "certification", question: bls, expectation: { certification: "BLS" }, rationale: "Required for clinical staff.", knockout: !!f.formQuestionsChosen });
   if (!isDental && !kindLeftOff("work_authorization")) {
     const wa = pbRole.eligibility.find((e) => e.type === "work_authorization");
     eligibility.push({ key: "work_authorization", type: "work_authorization", question: wa?.question ?? "Are you legally authorized to work in the United States for any employer?", expectation: { authorized: true }, rationale: "Required for employment; asked of every candidate.", knockout: true });
@@ -448,6 +455,17 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
     if (!f.eligibilityNotes.some((n) => same(n) || said(n)) && !mustHaves.some(said)) continue;
     if (eligibility.some((x) => said(x.question))) continue;
     eligibility.push({ key: slug(`${letters[0] ?? e.type} ${e.type}`), type: e.type as DraftRolePacket["requirements"]["eligibility"][number]["type"], question, expectation: letters[0] ? { [e.type]: letters[0] } : {}, rationale: "This job requires it.", knockout: true });
+  }
+  // intake.compile v6, either way: one rule for each deal-breaker the owner counted openly (its requirement is among the
+  // must-haves) unless a rule already asks it or the owner left a question asking it unticked. The stand-in does so for
+  // a credential the deal-breaker says someone lacks ("No infection control certificate"), in the requirement's words
+  // (review of the intake evals fix, 13 Nov 2026: no eval could fail on that line).
+  for (const d of f.dealBreakers) {
+    if (!lacksCredential(d)) continue;
+    const need = mustHaveOf(d);
+    const must = mustHaves.find((m) => normalizeCriterion(m) === normalizeCriterion(need) || sameRequirement(m, need));
+    if (!must || eligibility.some((x) => sameRequirement(x.question, must)) || unticked.some((u) => sameRequirement(u, must))) continue;
+    eligibility.push({ key: slug(must), type: /\blicen[cs]/i.test(must) ? "license" : "certification", question: `Do you hold this: ${must.replace(/[\s.?!]+$/, "")}?`, expectation: {}, rationale: "This job requires it.", knockout: true });
   }
   const general: DraftRolePacket["competencies"] = [
     { key: "role_skill", name: `${title} skill`, definition: `Does the core work of a ${title} well.`, weight: 5, evaluatedIn: "both", indicators: ["Concrete examples from recent work"] },

@@ -3,7 +3,7 @@ import { FakeProvider, callPrompt, intakeCompilePrompt, type IntakeContext } fro
 import { finalizePacket, registerFakeHandlers } from "@ros/agents";
 import type { DraftRolePacket, IntakeFacts, RolePacket } from "@ros/contracts";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { DA_DAYS_QUESTION, DA_RDA_QUESTION, DA_XRAY_CPR_QUESTION, EMPTY_FACTS, GROWTH_WORDS, RDH_FACTS, REPLACEMENT_WORDS, draftFailures, draftSkillsNote, intakeGolden, reasonInDescription, ruleOutMustHaves, skillsRepeatingMustHaves, type IntakeCase } from "./suites";
+import { DA_DAYS_QUESTION, DA_RDA_QUESTION, DA_XRAY_CPR_QUESTION, EMPTY_FACTS, RDH_FACTS, REPLACEMENT_WORDS, draftFailures, draftSkillsNote, intakeGolden, quickStartFormFailures, reasonInDescription, ruleOutMustHaves, saysPracticeGrows, skillsRepeatingMustHaves, type IntakeCase } from "./suites";
 
 /**
  * The job builder's draft where intake.compile v6 alone keeps it right (review of the live-test fixes, 12 Nov 2026,
@@ -54,7 +54,7 @@ describe("intake.golden: the quick start's answers, compiled as they are stored"
     expect(DA_RDA_QUESTION).toContain("(RDA)");
     expect(DA_XRAY_CPR_QUESTION).toContain("x-ray");
     expect(DA_DAYS_QUESTION).toContain("available");
-    expect(quickStart.map((c) => c.id)).toEqual(["dental_assistant_quick_start_deal_breaker_counted_openly", "dental_assistant_quick_start_deal_breaker_kept_private", "dental_assistant_quick_start_rda_question_unticked"]);
+    expect(quickStart.map((c) => c.id)).toEqual(["dental_assistant_quick_start_deal_breaker_counted_openly", "dental_assistant_quick_start_deal_breaker_kept_private", "dental_assistant_quick_start_rda_question_unticked", "dental_assistant_quick_start_deal_breaker_no_offered_question"]);
     for (const c of quickStart) {
       const offered = [...(c.facts?.eligibilityNotes ?? []), ...(c.facts?.suggestions ?? []).filter((s) => s.field === "eligibility").map((s) => s.text)];
       expect(offered.sort(), c.id).toEqual([DA_RDA_QUESTION, DA_XRAY_CPR_QUESTION, DA_DAYS_QUESTION].sort());
@@ -66,17 +66,21 @@ describe("intake.golden: the quick start's answers, compiled as they are stored"
 
   it("passes every case set from its answers on the local stand-in, as written and as finished", async () => {
     const seeded = intakeGolden.filter((c) => c.facts);
-    expect(seeded.length).toBe(4);
+    expect(seeded.length).toBe(5);
     for (const c of seeded) {
       const { draft, finish } = await ofCase(c);
       expect(c.expectDraft?.(draft) ?? [], c.id).toEqual([]);
       expect(draftFailures(c, finish()), c.id).toEqual([]);
     }
-    // the stand-in writes exactly what v6 asks on the quick start: the RDA question only when chosen, each holding a "no"
-    const [counted, kept, unticked] = await Promise.all(quickStart.map(ofCase));
-    expect(counted?.draft.requirements.eligibility.map((e) => [e.key, e.knockout])).toEqual([["bls", true], ["schedule", true], ["rda_license", true]]);
-    expect(kept?.draft.requirements.eligibility.map((e) => e.key)).toEqual(["bls", "schedule"]);
-    expect(unticked?.draft.requirements.eligibility.map((e) => e.key)).toEqual(["bls", "schedule"]);
+    // the stand-in writes exactly what v6 asks on the quick start: the x-ray and CPR/BLS question as the owner chose it,
+    // the RDA question only when chosen, one question for a deal-breaker counted openly that none of them asks, and each
+    // holding a "no"
+    const [counted, kept, unticked, noneAsks] = await Promise.all(quickStart.map(ofCase));
+    expect(counted?.draft.requirements.eligibility.map((e) => [e.key, e.knockout])).toEqual([["xray_bls", true], ["schedule", true], ["rda_license", true]]);
+    expect(counted?.draft.requirements.eligibility[0]?.question).toBe(DA_XRAY_CPR_QUESTION);
+    expect(kept?.draft.requirements.eligibility.map((e) => e.key)).toEqual(["xray_bls", "schedule"]);
+    expect(unticked?.draft.requirements.eligibility.map((e) => e.key)).toEqual(["xray_bls", "schedule"]);
+    expect(noneAsks?.draft.requirements.eligibility.map((e) => [e.key, e.type, e.knockout])).toEqual([["xray_bls", "certification", true], ["schedule", "schedule_availability", true], ["infection_control_certificate", "certification", true]]);
   });
 
   it("fails a draft that breaks v6's lines on the form, though the server would make every question hold", async () => {
@@ -84,9 +88,21 @@ describe("intake.golden: the quick start's answers, compiled as they are stored"
     const { draft, finish } = await ofCase(counted);
     const holdsNobody: DraftRolePacket = structuredClone(draft);
     holdsNobody.requirements.eligibility[0]!.knockout = false;
-    expect(counted.expectDraft?.(holdsNobody)).toEqual(['the AI wrote questions on the form whose "no" holds nobody: bls']);
+    expect(counted.expectDraft?.(holdsNobody)).toEqual(['the AI wrote questions on the form whose "no" holds nobody: xray_bls']);
     // finished, the question holds (finalizeDraft's rule), so only the check on the model's own draft can fail
     expect(counted.expectPacket?.(finish(holdsNobody))).toEqual([]);
+    // the owner's x-ray and CPR/BLS question cut to either half fails; written in two questions, it passes (review of the
+    // intake evals fix, 13 Nov 2026)
+    const withRules = (...rules: DraftRolePacket["requirements"]["eligibility"]): DraftRolePacket => {
+      const d: DraftRolePacket = structuredClone(draft);
+      d.requirements.eligibility = [...rules, ...d.requirements.eligibility.filter((e) => e.key !== "xray_bls")];
+      return d;
+    };
+    expect(counted.expectPacket?.(finish(withRules(rule("bls", "certification", "Do you hold current CPR/BLS certification?"))))).toEqual([`a question the owner chose is on the form without the x-ray certification: "${DA_XRAY_CPR_QUESTION}"`]);
+    expect(counted.expectPacket?.(finish(withRules(rule("xray", "certification", "Do you hold a current radiation safety / x-ray certification?"))))).toEqual([`a question the owner chose is on the form without CPR/BLS: "${DA_XRAY_CPR_QUESTION}"`]);
+    expect(counted.expectPacket?.(finish(withRules(rule("xray", "certification", "Do you hold a current radiation safety / x-ray certification?"), rule("bls", "certification", "Do you hold current CPR/BLS certification?"))))).toEqual([]);
+    // the half is read from the question candidates answer, never from its key or what it expects
+    expect(quickStartFormFailures({ requirements: { eligibility: [{ ...rule("xray_bls", "certification", "Do you hold current CPR/BLS certification?"), expectation: { certification: "x-ray, BLS" } }, rule("schedule", "schedule_availability", DA_DAYS_QUESTION)] } }, { rda: false })).toEqual([`a question the owner chose is on the form without the x-ray certification: "${DA_XRAY_CPR_QUESTION}"`]);
     const more: DraftRolePacket = structuredClone(draft);
     more.requirements.eligibility.push(rule("start", "start_date", "Can you start within 30 days?"), rule("rda_again", "license", "Do you currently hold an active California RDA license?"));
     expect(counted.expectPacket?.(finish(more))).toEqual(["the RDA licence is asked 2 times on the form", 'questions on the form the owner did not choose: "Can you start within 30 days?"']);
@@ -117,6 +133,32 @@ describe("intake.golden: the quick start's answers, compiled as they are stored"
       `a question the owner chose is not on the form: "${DA_DAYS_QUESTION}"`,
     ]);
   });
+
+  // Review of the intake evals fix, 13 Nov 2026: v6's "Either way, add one rule for each deal-breaker the owner counted
+  // openly", which case (a) cannot fail, since the owner chose the RDA question there.
+  it("fails a draft with no question, or two, for a deal-breaker counted openly that none of the chosen questions asks", async () => {
+    const none = byId("dental_assistant_quick_start_deal_breaker_no_offered_question");
+    expect(none.facts).toMatchObject({ mustHaves: ["Four-handed dentistry", "Digital radiography", "Infection control certificate"], dealBreakers: ["No infection control certificate"], eligibilityNotes: [DA_XRAY_CPR_QUESTION, DA_DAYS_QUESTION], formQuestionsChosen: true });
+    expect(none.facts?.suggestions).toEqual([{ field: "eligibility", text: DA_RDA_QUESTION, origin: "playbook" }]);
+    const { draft, finish } = await ofCase(none);
+    // exactly the owner's two questions, as the model obeying "exactly the owner's chosen questions" alone would write it
+    const chosenOnly: DraftRolePacket = structuredClone(draft);
+    chosenOnly.requirements.eligibility = chosenOnly.requirements.eligibility.filter((e) => !/infection/i.test(e.question));
+    expect(none.expectPacket?.(finish(chosenOnly))).toEqual(["no question on the form for the deal-breaker counted openly (an infection control certificate)"]);
+    const twice: DraftRolePacket = structuredClone(draft);
+    twice.requirements.eligibility.push(rule("infection_course", "certification", "Have you completed the 8-hour infection control course?"));
+    expect(none.expectPacket?.(finish(twice))).toEqual(["the deal-breaker counted openly is asked 2 times on the form (an infection control certificate)"]);
+    // the RDA question the owner left unticked, and the must-have left out, fail too
+    const more: DraftRolePacket = structuredClone(draft);
+    more.requirements.eligibility.push(rule("rda_license", "license", DA_RDA_QUESTION));
+    more.requirements.mustHaves = more.requirements.mustHaves.filter((m) => !/infection/i.test(m.text));
+    expect(none.expectPacket?.(finish(more))).toEqual(["no must-have for the deal-breaker counted openly (an infection control certificate)", `the RDA licence question the owner left unticked is on the form: "${DA_RDA_QUESTION}"`]);
+    // the question in the model's own words counts, holding a "no" as the model wrote it
+    const own: DraftRolePacket = structuredClone(chosenOnly);
+    own.requirements.eligibility.push(rule("infection_control", "certification", "Have you completed California's 8-hour infection control course?", false));
+    expect(none.expectPacket?.(finish(own))).toEqual([]);
+    expect(none.expectDraft?.(own)).toEqual(['the AI wrote questions on the form whose "no" holds nobody: infection_control']);
+  });
 });
 
 describe("intake.golden: must-haves in words that rule someone out, written twice", () => {
@@ -143,18 +185,61 @@ describe("intake.golden: must-haves in words that rule someone out, written twic
 
 describe("intake.golden: why the owner is hiring, and skills that repeat a must-have", () => {
   it("finds the reason in the public description, and growth only as the practice's own", () => {
-    const said = (publicJobDescription: string, words: RegExp) => reasonInDescription({ description: { publicJobDescription } }, words);
+    const said = (publicJobDescription: string, says: RegExp | ((sentence: string) => boolean)) => reasonInDescription({ description: { publicJobDescription } }, says);
     expect(said("Join a caring team. We are replacing our hygienist, who moved away. You will see patients daily.", REPLACEMENT_WORDS)).toEqual(['why the owner is hiring is written into the public description: "We are replacing our hygienist, who moved away."']);
     expect(said("Our hygienist moved, so the chair is open.", REPLACEMENT_WORDS)).toHaveLength(1);
     expect(said("Join a caring team that keeps the schedule moving.", REPLACEMENT_WORDS)).toEqual([]);
-    for (const growth of ["Harbor Dental is a growing practice in Irvine.", "We're growing and need another assistant.", "Our team continues to grow.", "Our Irvine office has grown.", "This role supports our growth."]) expect(said(growth, GROWTH_WORDS), growth).toHaveLength(1);
-    for (const own of ["You will have room to grow your skills.", "We support your career growth.", "Join a team where you can grow.", "Grow with us."]) expect(said(own, GROWTH_WORDS), own).toEqual([]);
+    const practice = [
+      "Harbor Dental is a growing practice in Irvine.",
+      "We're growing and need another assistant.",
+      "Our team continues to grow.",
+      "Our Irvine office has grown.",
+      "This role supports our growth.",
+      // any plain way of saying it (review of the intake evals fix, 13 Nov 2026), the company's own name too
+      "Harbor Dental is a busy, growing family practice in Irvine.",
+      "Due to growth, we are adding a dental assistant.",
+      "We have a growing patient base.",
+      "Join a growing Irvine practice.",
+      "Our practice has seen steady patient growth.",
+      "Eval Co is growing and needs another dental assistant.",
+      "Our growing Irvine practice needs another assistant.",
+      "We are a growing, patient-focused practice.",
+      "We've grown quickly over the last year.",
+      "We're hiring to keep up with growth.",
+      "Business is growing.",
+      "Harbor Dental has grown to three doctors.",
+      "Our schedule is growing busier every month.",
+      "It's time to grow our team.",
+      "We've grown into a three-doctor practice.",
+      // the candidate's own growth beside it does not hide it
+      "Join our growing practice, with room to grow.",
+    ];
+    for (const growth of practice) expect(said(growth, saysPracticeGrows), growth).toHaveLength(1);
+    const own = [
+      "You will have room to grow your skills.",
+      "We support your career growth.",
+      "Join a team where you can grow.",
+      "Grow with us.",
+      "Opportunities for professional growth.",
+      "We invest in your growth.",
+      "A place to learn and grow.",
+      "Paid continuing education and growth opportunities.",
+      "We hire people with a growth mindset.",
+      "Watch your skills grow with every patient.",
+      "A place where you can learn, grow and thrive.",
+      "Training, growth and advancement are part of the job.",
+    ];
+    for (const sentence of own) expect(said(sentence, saysPracticeGrows), sentence).toEqual([]);
+    // the whole description is read sentence by sentence, and the one that says it is named
+    expect(said("You will have room to grow. Due to growth, we are adding a second assistant.", saysPracticeGrows)).toEqual(['why the owner is hiring is written into the public description: "Due to growth, we are adding a second assistant."']);
   });
 
   it("finds a skill that repeats a must-have under its name or in its definition, never one that names it in passing", () => {
     const repeats = (mustHaves: string[], ...skills: Array<[string, string]>) => skillsRepeatingMustHaves({ requirements: { mustHaves: mustHaves.map(mustHave), niceToHaves: [], eligibility: [] }, competencies: skills.map(([name, definition]) => ({ key: name.toLowerCase().replace(/[^a-z]+/g, "_"), name, definition, weight: 4, evaluatedIn: "both", indicators: [] })) }).length;
     const da = ["Four-handed dentistry", "Digital radiography", "Active California RDA license"];
     for (const twin of [["Digital Radiography.", "Takes x-rays."], ["Radiography", "Takes x-rays."], ["Radiographic imaging", "Clear images."], ["X-ray technique", "Positions the sensor."], ["Imaging", "Takes and processes digital radiographs."], ["Four-handed assisting", "Passes instruments."]] as Array<[string, string]>) expect(repeats(da, twin), twin[0]).toBe(1);
+    // renamed as radiology or imaging, with a definition of a whole sentence (review of the intake evals fix, 13 Nov 2026)
+    for (const twin of [["Radiology", "Takes diagnostic x-rays with correct positioning and minimal retakes."], ["Dental imaging", "Captures clear intraoral images with correct sensor positioning."], ["Imaging", "Captures diagnostic-quality intraoral and extraoral radiographs with correct positioning and exposure settings."]] as Array<[string, string]>) expect(repeats(da, twin), twin[0]).toBe(1);
     // the playbook's own skills overlap other must-haves by design, and stay
     const playbook = findPlaybook("dental")!.roles.find((r) => r.key === "da")!.competencies.map((c): [string, string] => [c.name, c.definition]);
     expect(repeats(da, ...playbook)).toBe(0);
@@ -214,6 +299,7 @@ describe("intake.golden: every draft and a skill named the same as a must-have (
       ["dental_assistant_quick_start_deal_breaker_counted_openly", "same name"],
       ["dental_assistant_quick_start_deal_breaker_kept_private", "same name"],
       ["dental_assistant_quick_start_rda_question_unticked", "same name"],
+      ["dental_assistant_quick_start_deal_breaker_no_offered_question", "same name"],
       ["dental_office_manager_just_draft_it", "same name"],
     ]);
     expect(compiled.filter((c) => !c.facts).map((c) => c.id).sort()).toEqual(Object.keys(STAND_IN_ANSWERS).sort());
