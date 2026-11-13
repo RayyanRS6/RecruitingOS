@@ -159,7 +159,8 @@ export const IntakeFactsPatch = z.object({
   /**
    * The person went through the questions for the form (the quick start's step 9, even with every one left ticked or
    * every one unticked): the eligibility notes this edit leaves are the ones they chose, and the draft's form has exactly
-   * those (`IntakeFacts.formQuestionsChosen`, which only this sets).
+   * those (`IntakeFacts.formQuestionsChosen`, which only the server sets: from this, or on "hire again" from the old
+   * job's form, `packetToFacts`; never the assistant's turn).
    */
   formQuestionsChosen: z.literal(true).optional(),
 }).strict();

@@ -120,9 +120,10 @@ export function suggestionsBySection(check: Pick<RequirementsCheck, "suggestions
 
 /**
  * A short fingerprint of what the requirements check and its fixes read (`requirementsCheckReads`: the requirements, the
- * description, the screening questions, what the interview looks for and the warning signs), the very parts a draft's
- * check is based on, so the check is asked for again exactly when one of them changed, never on an answer that only
- * brings the draft's other parts up to date (review of the live-test fixes, 12 Nov 2026).
+ * description, the screening questions, what the interview looks for, the warning signs and the deal-breakers in the
+ * owner's words), the very parts a draft's check is based on, so the check is asked for again exactly when one of them
+ * changed, never on an answer that only brings the draft's other parts up to date (review of the live-test fixes, 12 Nov
+ * 2026).
  */
 export function checkSignature(packet: Parameters<typeof requirementsCheckReads>[0] | null | undefined): string {
   if (!packet) return "none";

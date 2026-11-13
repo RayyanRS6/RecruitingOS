@@ -685,6 +685,9 @@ describe("change it by asking", () => {
     // what the check and its fixes read does count: the warning signs (named by their place) and what the interview looks for
     expect(checkSignature(samplePacket((p) => { p.evaluation.redFlags = [...p.evaluation.redFlags, "Badmouths past employers"]; }))).not.toBe(checkSignature(a));
     expect(checkSignature(samplePacket((p) => { p.competencies = p.competencies.slice(1); }))).not.toBe(checkSignature(a));
+    // and the deal-breakers in the owner's words, since a must-have in their very words is turned round in one tap (review
+    // of the hire-again fix, 12 Nov 2026)
+    expect(checkSignature(samplePacket((p) => { p.preferences.dealBreakersInTheirWords = ["Cannot work Saturdays"]; }))).not.toBe(checkSignature(a));
   });
 
 });

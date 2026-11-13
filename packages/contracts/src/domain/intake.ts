@@ -66,11 +66,12 @@ export const IntakeFacts = z.object({
   suggestions: z.array(IntakeSuggestion).optional(),
   /**
    * Set only by the server: the owner went through the questions for the form (the quick start's step 9, `patch.
-   * formQuestionsChosen`), so `eligibilityNotes` holds the ones they chose and `suggestions` with field "eligibility" the
-   * ones they left unticked, and the draft's form has exactly the chosen ones (intake.compile v6). Without it the draft
-   * starts from the playbook's typical questions. Never in what intake.turn extracts (`IntakeTurn`), so the model cannot
-   * set it (review of the live-test fixes, 12 Nov 2026: a note the assistant read from a sentence made the form "exactly"
-   * that one question).
+   * formQuestionsChosen`), or, on "hire again", the old job's form questions are carried as the owner's choice
+   * (`packetToFacts`), so `eligibilityNotes` holds the ones they chose and `suggestions` with field "eligibility" the
+   * ones they left unticked (on hire again, the ones the old form left off for a deal-breaker it counted openly), and the
+   * draft's form has exactly the chosen ones (intake.compile v6). Without it the draft starts from the playbook's typical
+   * questions. Never in what intake.turn extracts (`IntakeTurn`), so the model cannot set it (review of the live-test
+   * fixes, 12 Nov 2026: a note the assistant read from a sentence made the form "exactly" that one question).
    */
   formQuestionsChosen: z.boolean().optional(),
 });
@@ -111,7 +112,7 @@ export function mustHaveOf(dealBreaker: string): string {
   const t = dealBreaker.trim().replace(/\s+/g, " ");
   const up = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   const lacks = t.match(LACKS);
-  if (lacks) return CREDENTIAL_LAST.test(lacks[1]) && !NOT_IN_FORCE.test(lacks[1]) ? up(lacks[1]) : t;
+  if (lacks) return lacksCredential(t) ? up(lacks[1]) : t;
   const cannot = t.match(/^(?:cannot|can\s+not|can['’]t|unable\s+to|not\s+able\s+to)\s+(.+)$/i);
   if (cannot) return CANNOT_BE.test(t) ? t : `Able to ${cannot[1]}`;
   const not = t.match(/^not\s+((?:licen[cs]ed|certified|registered|authori[sz]ed|available|eligible)\b.*)$/i);
@@ -119,6 +120,19 @@ export function mustHaveOf(dealBreaker: string): string {
   const wont = t.match(/^(?:won['’]t|will\s+not|unwilling\s+to|not\s+willing\s+to)\s+(.+)$/i);
   if (wont) return `Willing to ${wont[1]}`;
   return t;
+}
+
+/**
+ * Whether words name a credential someone lacks ("No x-ray permit", "Without a current BLS certification"): the shape
+ * `mustHaveOf` turns round by its first branch, a licence, certificate, permit, registration or credential named last
+ * with nothing saying it is not in force. It is the one shape safe to turn round whoever wrote the words: "Cannot …",
+ * "Won't …" and "Not registered …" can be a rule worded in the negative ("Will not share patient information", "Not
+ * registered as a sex offender"), which the requirements check turns round only when they are a deal-breaker's own words
+ * (review of the hire-again fix, 12 Nov 2026).
+ */
+export function lacksCredential(text: string): boolean {
+  const lacks = text.trim().replace(/\s+/g, " ").match(LACKS);
+  return !!lacks && CREDENTIAL_LAST.test(lacks[1]) && !NOT_IN_FORCE.test(lacks[1]);
 }
 
 /**

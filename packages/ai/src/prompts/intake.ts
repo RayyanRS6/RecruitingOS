@@ -188,9 +188,9 @@ ${FAIRNESS_RULES}`;
 
 /**
  * What the draft is told about the questions on the form. Exactly the owner's chosen ones only when the owner went
- * through them (`facts.formQuestionsChosen`, which the server alone sets, from the quick start's step 9); otherwise the
- * playbook's typical questions and the owner's notes. Never one the owner left unticked (review of the live-test fixes,
- * 12 Nov 2026: a note the assistant read from a sentence made the form "exactly" that one question).
+ * through them (`facts.formQuestionsChosen`, which the server alone sets, from the quick start's step 9 or from "hire
+ * again"); otherwise the playbook's typical questions and the owner's notes. Never one the owner left unticked (review of
+ * the live-test fixes, 12 Nov 2026: a note the assistant read from a sentence made the form "exactly" that one question).
  */
 function formQuestionsBlock(facts: Pick<IntakeFacts, "formQuestionsChosen">): string {
   if (facts.formQuestionsChosen) return 'Questions on the form: the owner went through them, so the form has exactly the owner\'s chosen questions (facts.eligibilityNotes), and none of the ones they left unticked (facts.suggestions with field "eligibility").';

@@ -85,6 +85,28 @@ describe("the requirements check", () => {
     expect(RolePacketSchema.safeParse(out.packet).success).toBe(true);
   });
 
+  // Review of the hire-again fix, 12 Nov 2026: the one tap turned a rule worded in the negative into its opposite ("Will
+  // not share patient information" offered "Willing to share patient information").
+  it("turns words round in one tap only for a credential someone lacks or a deal-breaker's own words, never a rule worded in the negative", () => {
+    const rules = ["Will not share patient information", "Won't call out last minute", "Can't use a phone with patients", "Not registered as a sex offender"];
+    const p = samplePacket((x) => {
+      x.requirements.mustHaves.push(...rules.map((text, i) => ({ key: `mh_rule${i}`, text, rationale: "An office rule", evidencedBy: ["interview" as const] })));
+      x.requirements.niceToHaves.push({ key: "nh_saturdays", text: "Cannot work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] });
+      x.requirements.niceToHaves.push({ key: "nh_bls", text: "Without a current BLS certification", rationale: "Helpful", evidencedBy: ["resume"] });
+    });
+    const check = checkRequirements(p, "v6", 6);
+    const on = (text: string) => check.suggestions.filter((s) => s.text === text);
+    // still found, with the line asking for what they need, and no tap to its opposite
+    for (const text of [...rules, "Cannot work Saturdays"]) expect(on(text), text).toEqual([expect.objectContaining({ kind: "rules_out", fixes: [], why: expect.stringMatching(/Write it as what they need\.$/) })]);
+    expect(() => applyRequirementFixes(p, ["rules_out:mustHaves:mh_rule0:replace_text"])).toThrow(RequirementFixError);
+    // a credential someone lacks is turned round whoever wrote it
+    expect(on("Without a current BLS certification")[0]?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Current BLS certification"', after: "Current BLS certification" })]);
+    // the very words of one of the deal-breakers (case and punctuation aside) are turned round
+    const deal = structuredClone(p);
+    deal.preferences.dealBreakersInTheirWords = ["cannot work Saturdays."];
+    expect(checkRequirements(deal, "v7", 7).suggestions.find((s) => s.id === "rules_out:niceToHaves:nh_saturdays")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to work Saturdays"', after: "Able to work Saturdays" })]);
+  });
+
   it("points at the packet guard's flag on the same words, so one fix clears both", () => {
     const p = samplePacket((x) => x.requirements.mustHaves.push({ key: "mh_english", text: "Native English speaker", rationale: "Patients", evidencedBy: ["screen"] }));
     const guarded = guardPacket(p, { companyName: "Harbor Dental", companyLocations: [] }).packet;

@@ -43,8 +43,9 @@ describe("intake.compile v6: what the live test showed (12 Nov 2026)", () => {
   });
 
   it("puts exactly the owner's questions on the form only once the owner went through them, each holding a No for the owner's decision", () => {
-    // the server's marker (the quick start's step 9), never a note on its own: a note the assistant read from a sentence
-    // or an ad is not the owner going through the questions (review of the live-test fixes, 12 Nov 2026)
+    // the server's marker (the quick start's step 9, or hire again's old form), never a note on its own: a note the
+    // assistant read from a sentence or an ad is not the owner going through the questions (review of the live-test fixes,
+    // 12 Nov 2026)
     const chose = (facts: Partial<IntakeContext["facts"]>) => intakeCompilePrompt.system({ ...ctx, facts: { ...ctx.facts, ...facts } }).map((b) => b.text).join("\n");
     const EXACTLY = "the form has exactly the owner's chosen questions";
     const notes = chose({ eligibilityNotes: ["Able to work Saturdays"] });

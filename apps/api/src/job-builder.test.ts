@@ -445,6 +445,47 @@ describe("the job builder API", () => {
     await json(owner, "POST", `/api/v1/intake/sessions/${session.id}/abandon`);
   });
 
+  // Review of the hire-again fix, 12 Nov 2026: the old form's questions came back as the owner's choice, but nothing said
+  // which it left off, so a deal-breaker counted openly put back the RDA question the owner had unticked on the old job.
+  it("hire again from a Dental Assistant role whose form left the RDA question off leaves it off the new form too", async () => {
+    // made with the quick start: "No active California RDA license" counted openly, the RDA question left unticked
+    const [base] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, 3)));
+    const [from] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    const packet = structuredClone(base.packet);
+    packet.identity.title = "Dental Assistant";
+    packet.compensation = { ...packet.compensation, min: 24, max: 28, ceiling: 30 };
+    packet.requirements.mustHaves = [
+      { key: "four_handed", text: "Four-handed dentistry", rationale: "The core of the job", evidencedBy: ["resume", "screen"] },
+      { key: "radiography", text: "Digital radiography", rationale: "Every visit", evidencedBy: ["resume"] },
+      { key: "rda", text: "Active California RDA license", rationale: "A deal-breaker counted openly", evidencedBy: ["resume"] },
+    ];
+    packet.requirements.eligibility = [
+      { key: "xray_bls", type: "certification", question: "Do you hold a current radiation safety / x-ray certification and CPR/BLS?", expectation: { certification: "x-ray, BLS" }, rationale: "Required to take radiographs in most states.", knockout: true },
+      { key: "days", type: "schedule_availability", question: "Are you available for the days this office is open?", expectation: {}, rationale: "Coverage is the reason for the hire.", knockout: true },
+    ];
+    packet.preferences = { ...packet.preferences, dealBreakersInTheirWords: ["No active California RDA license"] };
+    packet.provenance = { ...packet.provenance, flags: [] };
+    const oldRoleId = randomUUID();
+    const at = new Date().toISOString();
+    await container.db.insert(roles).values({ ...from, id: oldRoleId, title: "Dental Assistant", status: "closed", closedAt: at, currentPacketVersion: 1 });
+    await container.db.insert(rolePackets).values({ ...base, id: randomUUID(), roleId: oldRoleId, version: 1, packet, status: "approved", approvedAt: at });
+
+    const r = await json(owner, "POST", "/api/v1/intake/sessions", { fromRoleId: oldRoleId });
+    expect(r.status).toBe(201);
+    const { session } = await read<{ session: IntakeSessionView }>(r);
+    expect(session.facts).toMatchObject({ mustHaves: ["Four-handed dentistry", "Digital radiography", "Active California RDA license"], eligibilityNotes: packet.requirements.eligibility.map((e) => e.question), formQuestionsChosen: true });
+    expect((await json(owner, "POST", `/api/v1/intake/sessions/${session.id}/answers`, { patch: { set: { reason: "replacement", decisionMakerUserId: ownerId } }, reply: false })).status).toBe(200);
+    const drafted = await json(owner, "POST", `/api/v1/intake/sessions/${session.id}/draft`);
+    expect(drafted.status).toBe(200);
+    const { draft } = await read<{ draft: DraftRolePacket }>(drafted);
+    // the new form asks what the old one asked: no RDA question, though the must-have still counts
+    expect(draft.requirements.eligibility.filter((e) => /\bRDA\b/.test(e.question))).toEqual([]);
+    expect(draft.requirements.mustHaves.map((m) => m.text)).toContain("Active California RDA license");
+    // the old form's leaving it off is kept as a question left unticked, which nobody reads but the draft's prompt
+    expect((await view(owner, session.id)).facts.suggestions).toEqual([{ field: "eligibility", text: "Do you have this: Active California RDA license?", origin: "owner" }]);
+    await json(owner, "POST", `/api/v1/intake/sessions/${session.id}/abandon`);
+  });
+
   it("'Bring in a recruiter' on a draft carries its conversation; the recruiter opens that draft and no other (C12)", async () => {
     const otherDraft = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour." }))).session.id;
     expect((await json(owner, "POST", "/api/v1/escalations", { kind: "ask", scope: "role", roleId, intakeSessionId: managersDraft, question: "Help" })).status).toBe(400);

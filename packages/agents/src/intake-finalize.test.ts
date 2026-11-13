@@ -4,7 +4,7 @@ import { IntakeServerState, RolePacket, askedKind, type Actor, type DraftRolePac
 import { dealBreakerOffer, draftFactsKey, draftKeyMatches, normalizeFacts, unresolvedFlags } from "@ros/core";
 import { ALL_PLAYBOOKS } from "@ros/playbooks";
 import { samplePacket } from "./fixtures/sample-packet";
-import { answersFollowingChange, finalizeDraft, lostOnRewrite, reasonFollowingChange, saysFormHoldsNobody, withoutUntickedQuestions } from "./intake";
+import { answersFollowingChange, finalizeDraft, lostOnRewrite, questionsLeftOffTheOldForm, reasonFollowingChange, saysFormHoldsNobody, withoutUntickedQuestions } from "./intake";
 
 /**
  * The deterministic part after the model (plan C1, C7, C15): what the model wrote about who decided what is never kept,
@@ -256,6 +256,31 @@ describe("a question the owner left unticked never goes on a draft just written"
     expect(keys(withoutUntickedQuestions(draft, facts({ eligibilityNotes: [POSTED], suggestions: left(US_WORK) })))).toEqual(["schedule"]);
     // one about it the owner chose keeps the model's own wording
     expect(keys(withoutUntickedQuestions(draft, facts({ eligibilityNotes: ["Are you eligible to work in the US?"], suggestions: left(US_WORK) })))).toEqual(["work_authorization", "schedule"]);
+  });
+
+  // Review of the hire-again fix, 12 Nov 2026: hire again carried the old form's questions as the owner's choice and
+  // nothing about the ones left off it, so a deal-breaker counted openly put back the RDA question the owner had unticked.
+  it("on hire again, a deal-breaker the old job counted openly with no question on its form counts as one left unticked", () => {
+    const XRAY = "Do you hold a current radiation safety / x-ray certification and CPR/BLS?";
+    const old = facts({ mustHaves: ["Four-handed dentistry", "Active California RDA license"], dealBreakers: ["No active California RDA license"], eligibilityNotes: [XRAY, DAYS], formQuestionsChosen: true });
+    const leftOff = questionsLeftOffTheOldForm(old);
+    expect(leftOff).toEqual([{ field: "eligibility", text: "Do you have this: Active California RDA license?", origin: "owner" }]);
+    // so a draft just written leaves the model's RDA question off and keeps the old form's own
+    const draft = written(rule("ca_rda_license", RDA, "license"), rule("xray_bls", XRAY), rule("days", DAYS, "schedule_availability"));
+    expect(keys(withoutUntickedQuestions(draft, { ...old, suggestions: leftOff }))).toEqual(["xray_bls", "days"]);
+    // the old form asked it, in its own words too, or the deal-breaker was not counted openly: nothing is left off
+    expect(questionsLeftOffTheOldForm({ ...old, eligibilityNotes: [...old.eligibilityNotes, "Do you currently hold an active California RDA license?"] })).toEqual([]);
+    expect(questionsLeftOffTheOldForm({ ...old, mustHaves: ["Four-handed dentistry"] })).toEqual([]);
+    // the must-have in other words still counts it openly ("Active RDA license (California)")
+    expect(questionsLeftOffTheOldForm({ ...old, mustHaves: ["Active RDA license (California)"] }).map((s) => s.text)).toEqual(["Do you have this: Active RDA license (California)?"]);
+    // the schedule: a question about it on the old form asks it; with none, every rule about it stays off the new form
+    const saturdays = facts({ mustHaves: ["Able to work Saturdays"], dealBreakers: ["Cannot work Saturdays"], eligibilityNotes: [DAYS], formQuestionsChosen: true });
+    expect(questionsLeftOffTheOldForm(saturdays)).toEqual([]);
+    const noSchedule = { ...saturdays, eligibilityNotes: [XRAY] };
+    const days = written(rule("xray_bls", XRAY), rule("saturdays", "Are you able to work Saturdays?", "schedule_availability"));
+    expect(keys(withoutUntickedQuestions(days, { ...noSchedule, suggestions: questionsLeftOffTheOldForm(noSchedule) }))).toEqual(["xray_bls"]);
+    // words that still rule someone out are not asked again as a question
+    expect(questionsLeftOffTheOldForm(facts({ mustHaves: ["No RDA"], dealBreakers: ["No RDA"] }))).toEqual([]);
   });
 
   it("reads each hiring guide's question for the form as its kind: the schedule and the right to work by their words, never another", () => {

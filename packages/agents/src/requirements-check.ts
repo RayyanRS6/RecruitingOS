@@ -1,4 +1,4 @@
-import { REQUIREMENT_CHECK_TITLE, mustHaveOf, rulesOut, type Competency, type DraftRolePacket, type RequirementCheckKind, type RequirementFix, type RequirementSuggestion, type RequirementsCheck } from "@ros/contracts";
+import { REQUIREMENT_CHECK_TITLE, lacksCredential, mustHaveOf, rulesOut, type Competency, type DraftRolePacket, type RequirementCheckKind, type RequirementFix, type RequirementSuggestion, type RequirementsCheck } from "@ros/contracts";
 import { PROXY_RULES, normalizeCriterion } from "@ros/core";
 
 /**
@@ -156,6 +156,8 @@ function find(p: DraftRolePacket): Found[] {
     out.push({ suggestion: { id, kind, path: `${LIST_PATH[item.list]}[${item.key}]`, text: item.text, why }, item, fixes: offers(item, fixes) });
   };
   const judged = (item: Item) => item.list === "mustHaves" || item.list === "niceToHaves";
+  // a version stored before the list existed lacks it
+  const dealBreakers = p.preferences.dealBreakersInTheirWords ?? [];
   const intoInterview = { op: "to_interview" as const, label: "Ask about it in the interview instead", text: null };
   const takeOut = { op: "remove" as const, label: "Take it out", text: null };
 
@@ -187,9 +189,14 @@ function find(p: DraftRolePacket): Found[] {
     // deal-breaker's own words, as drafts and jobs saved before 12 November 2026 can hold): the requirement it reads as is
     // one tap when there is one (`mustHaveOf`), else the person writes what they need. Words found to shut people out
     // unfairly, or to cap experience, have their own suggestion instead (review of the live-test fixes, 12 Nov 2026).
+    // Turned round only where that cannot give a rule its opposite: a credential someone lacks ("No x-ray permit"), or a
+    // deal-breaker's very words ("Cannot work Saturdays"); "Will not share patient information" is a rule, so the person
+    // writes it as what they need (review of the hire-again fix, 12 Nov 2026).
     if (!proxied && !capped && rulesOut(item.text)) {
-      const need = mustHaveOf(item.text);
-      const turned = need !== item.text.trim().replace(/\s+/g, " ") && !rulesOut(need);
+      const words = item.text.trim().replace(/\s+/g, " ");
+      const need = mustHaveOf(words);
+      const safe = lacksCredential(words) || dealBreakers.some((d) => normalizeCriterion(d) === normalizeCriterion(words));
+      const turned = safe && need !== words && !rulesOut(need);
       add("rules_out", item, RULES_OUT_WHY[item.list === "mustHaves" ? "mustHaves" : "niceToHaves"], turned ? [{ op: "replace_text", label: `Change it to "${need}"`, text: need }] : []);
     }
     if (UNPROVABLE.test(item.text)) {

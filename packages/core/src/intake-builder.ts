@@ -690,8 +690,9 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
     if (!suggestions.some((s) => s.field === u.field && same(s.text, u.value))) suggestions.push({ field: u.field, text: u.value, origin: u.origin });
     edit.facts.suggestions = suggestions;
   }
-  // The person went through the questions for the form (step 9): the draft's form has exactly the ones they chose. Only
-  // this edit sets the marker, never the model (review of the live-test fixes, 12 Nov 2026).
+  // The person went through the questions for the form (step 9): the draft's form has exactly the ones they chose. Of the
+  // edits, only this one sets the marker (hire again's `packetToFacts` sets it when the draft starts), never the model
+  // (review of the live-test fixes, 12 Nov 2026).
   if (patch.formQuestionsChosen) f.formQuestionsChosen = true;
   for (const k of patch.clear ?? []) {
     (f as Record<string, unknown>)[k] = undefined;

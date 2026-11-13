@@ -2,7 +2,7 @@ import { and, desc, eq, lt, sql } from "drizzle-orm";
 import {
   DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, askedKind, mustHaveOf, rulesOut, withoutOwnersCallMark,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
-  type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole,
+  type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeSuggestion, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole,
   type RolePacket,
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
@@ -531,11 +531,36 @@ export function factsFromExtraction(facts: IntakeFacts, x: IntakeExtraction): In
 }
 
 /**
+ * Hire again (C14): the questions the old job's form left off, as questions left unticked (facts.suggestions with field
+ * "eligibility"), so the new draft's form asks what the old one asked. Each is for a deal-breaker the old job counted
+ * openly (a must-have is the requirement it rules people out on) that no question on the old form asks: none is the same
+ * requirement (`sameRequirement`), nor, for the schedule or the right to work, about the same (`askedKind`), as the
+ * backstop reads them. intake.compile v6 adds a rule for each deal-breaker counted openly unless the owner left a
+ * question asking it unticked, and `withoutUntickedQuestions` takes out one a model adds anyway (review of the hire-again
+ * fix, 12 Nov 2026: the RDA question the owner had left off the old form came back). Its words ask for the must-have as
+ * a question, never in the must-have's own words; only the draft's prompt reads them. A must-have still worded as what
+ * rules someone out asks nothing.
+ */
+export function questionsLeftOffTheOldForm(facts: Pick<IntakeFacts, "mustHaves" | "dealBreakers" | "eligibilityNotes">): IntakeSuggestion[] {
+  const out: IntakeSuggestion[] = [];
+  for (const d of facts.dealBreakers) {
+    const need = mustHaveOf(d);
+    const must = facts.mustHaves.find((m) => normalizeCriterion(m) === normalizeCriterion(need) || sameRequirement(m, need));
+    if (!must || rulesOut(must)) continue;
+    const kind = askedKind(must);
+    if (facts.eligibilityNotes.some((n) => sameRequirement(n, must) || (kind !== null && askedKind(n) === kind))) continue;
+    const text = `Do you have this: ${must.trim().replace(/[\s.?!]+$/, "")}?`;
+    if (!out.some((s) => s.text === text)) out.push({ field: "eligibility", text, origin: "owner" });
+  }
+  return out;
+}
+
+/**
  * Starts a draft together with its first message (C3): a draft is never created empty. A long first message is kept as
  * a pasted ad (C5); "just draft it" in typed words is recorded; a "hire again" draft starts from that role's facts, and
  * its deal-breakers count as already offered: they were decided on that role (counted openly or not used to judge), so
  * no deal-breaker card asks about them again, however the role's must-haves word them (review of the live-test fixes,
- * 12 Nov 2026).
+ * 12 Nov 2026). The questions its form left off for a deal-breaker it counted openly stay off (`questionsLeftOffTheOldForm`).
  */
 export async function startIntakeSession(
   tx: Tx,
@@ -543,15 +568,19 @@ export async function startIntakeSession(
 ): Promise<IntakeSessionRow> {
   const at = new Date().toISOString();
   const state: Partial<IntakeServerState> = {};
+  let facts = input.facts ?? EMPTY_FACTS;
   if (input.message.kind === "pasted_ad") state.ad = { messageIndex: 0, chars: input.message.content.length, extracted: false, takenFromAd: [] };
   if (input.message.kind === "text" && DRAFT_IT_WORDS.test(input.message.content)) state.draftRequestedAt = at;
   if (input.fromRole) {
+    const old = normalizeFacts(facts);
     state.fromRole = input.fromRole;
-    state.dealBreakersOffered = [...(input.facts?.dealBreakers ?? [])];
+    state.dealBreakersOffered = [...old.dealBreakers];
+    const leftOff = questionsLeftOffTheOldForm(old);
+    if (leftOff.length) facts = { ...facts, suggestions: [...(facts.suggestions ?? []), ...leftOff] };
   }
   const [session] = await tx
     .insert(intakeSessions)
-    .values({ companyId: input.companyId, createdBy: input.actor, createdByUserId: input.userId, messages: [{ role: "owner", content: input.message.content, at, kind: input.message.kind }], facts: input.facts ?? EMPTY_FACTS, serverState: state })
+    .values({ companyId: input.companyId, createdBy: input.actor, createdByUserId: input.userId, messages: [{ role: "owner", content: input.message.content, at, kind: input.message.kind }], facts, serverState: state })
     .returning();
   await emit(tx, { type: "intake.started", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { kind: input.message.kind, ...(input.via ? { via: input.via } : {}), ...(input.fromRole ? { fromRoleId: input.fromRole.roleId } : {}) } });
   return session;

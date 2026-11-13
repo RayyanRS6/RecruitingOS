@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IntakeFacts, IntakeTurn, askedKind, mustHaveOf, restatementsOf, rulesOut } from "./intake";
+import { IntakeFacts, IntakeTurn, askedKind, lacksCredential, mustHaveOf, restatementsOf, rulesOut } from "./intake";
 import { withoutOwnersCallMark } from "./playbook";
 
 /**
@@ -64,6 +64,16 @@ describe("a deal-breaker as the must-have it counts as", () => {
     expect(restatementsOf(" No  active California RDA license")).toEqual(["Active California RDA license"]);
     expect(restatementsOf("Cannot work Saturdays")).toEqual(["Able to work Saturdays"]);
     expect(restatementsOf("Smokers")).toEqual(["Smokers"]);
+  });
+
+  // review of the hire-again fix, 12 Nov 2026: only a credential someone lacks is turned round whoever wrote the words; "Will
+  // not share patient information" is a rule worded in the negative, and its opposite is no requirement
+  it("knows the one shape it turns round whoever wrote it: a credential someone lacks", () => {
+    for (const t of ["No active California RDA license", "no current BLS certification", "Does not have an X-ray permit", "Without a valid driver's licence", "Missing CPR certification.", "  No   active  CA RDH license "]) {
+      expect(lacksCredential(t), t).toBe(true);
+      expect(mustHaveOf(t), t).not.toBe(t.trim().replace(/\s+/g, " "));
+    }
+    for (const t of ["Cannot work Saturdays", "Won't work weekends", "Not licensed in California", "Will not share patient information", "Not registered as a sex offender", "No RDA", "No expired RDH license", "No license issues", "No felonies or license suspensions", "Active California RDA license", ""]) expect(lacksCredential(t), t).toBe(false);
   });
 });
 
