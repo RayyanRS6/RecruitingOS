@@ -1,4 +1,4 @@
-import { mustHaveOf, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
+import { mustHaveOf, repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
 import { ASKED_WORDS, OWNERS_CALL_MARK, type FakeProvider, type IntakeContext, type StructuredRequest } from "@ros/ai";
 import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
@@ -391,7 +391,8 @@ function fakeExtract(req: StructuredRequest<unknown>): IntakeExtraction {
  * what rules someone out is written as the requirement, a playbook question that is the owner's call goes on the form
  * only when the owner chose it or a must-have names it (never when they left it unticked), its CPR/BLS and schedule
  * questions stay off the form when the owner left one asking the same unticked, every rule holds a "no" once the owner
- * went through the questions, and the description never says why the owner is hiring.
+ * went through the questions, the description never says why the owner is hiring, and no skill is named the same as one
+ * of the draft's must-haves.
  */
 function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const f = c.facts;
@@ -446,7 +447,12 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
     if (eligibility.some((x) => said(x.question))) continue;
     eligibility.push({ key: slug(`${letters[0] ?? e.type} ${e.type}`), type: e.type as DraftRolePacket["requirements"]["eligibility"][number]["type"], question, expectation: letters[0] ? { [e.type]: letters[0] } : {}, rationale: "This job requires it.", knockout: true });
   }
-  const competencies: DraftRolePacket["competencies"] = rdh
+  const general: DraftRolePacket["competencies"] = [
+    { key: "role_skill", name: `${title} skill`, definition: `Does the core work of a ${title} well.`, weight: 5, evaluatedIn: "both", indicators: ["Concrete examples from recent work"] },
+    { key: "communication", name: "Communication", definition: "Clear with customers and the team.", weight: 4, evaluatedIn: "both", indicators: ["Example of a hard conversation"] },
+    { key: "reliability", name: "Reliability", definition: "Shows up consistently.", weight: 4, evaluatedIn: "screen", indicators: ["Attendance history"] },
+  ];
+  const drafted: DraftRolePacket["competencies"] = rdh
     ? [
         { key: "clinical_quality", name: "Clinical quality", definition: "Thorough, gentle, standards-based care.", weight: 5, evaluatedIn: "both", indicators: ["Complete perio assessment", "Infection control"] },
         { key: "patient_communication", name: "Patient communication", definition: "Explains findings plainly and builds trust.", weight: 5, evaluatedIn: "both", indicators: ["Educating a resistant patient"] },
@@ -455,11 +461,16 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
       ]
     : pbRole.competencies.length >= 3
       ? pbRole.competencies.slice(0, 8).map((x, i) => ({ key: x.key, name: x.name, definition: x.definition, weight: i < 2 ? 5 : 4, evaluatedIn: "both" as const, indicators: [x.definition] }))
-      : [
-        { key: "role_skill", name: `${title} skill`, definition: `Does the core work of a ${title} well.`, weight: 5, evaluatedIn: "both", indicators: ["Concrete examples from recent work"] },
-        { key: "communication", name: "Communication", definition: "Clear with customers and the team.", weight: 4, evaluatedIn: "both", indicators: ["Example of a hard conversation"] },
-        { key: "reliability", name: "Reliability", definition: "Shows up consistently.", weight: 4, evaluatedIn: "screen", indicators: ["Attendance history"] },
-      ];
+      : general;
+  // intake.compile v6: never a skill that is the same as a must-have, which already counts it. The stand-in leaves out one
+  // named like a must-have of the draft (the score's own rule), as the Dental Office Manager's playbook offers "Team
+  // leadership" both ways (second review of the live-test fixes, #24), with general skills making up at least three. The
+  // screening questions and the interview plan below point only at the skills kept.
+  const named = mustHaves.map((text) => ({ text }));
+  const own = (x: { name: string }) => !repeatsMustHave(x, named);
+  const kept = drafted.filter(own);
+  const spare: DraftRolePacket["competencies"][number] = { key: "teamwork", name: "Teamwork", definition: "Works well with the team and asks for help early.", weight: 4, evaluatedIn: "both", indicators: ["Example of helping a colleague"] };
+  const competencies = [...kept, ...[...general, spare].filter((x) => own(x) && !kept.some((k) => k.key === x.key))].slice(0, Math.max(3, kept.length));
   const kindOf = (q: string): DraftRolePacket["screening"]["questions"][number]["kind"] => /salary|pay |earn|range are you|compensation/i.test(q) ? "compensation" : /available|start|schedule|work model/i.test(q) ? "availability" : /looking for in your next/i.test(q) ? "motivation" : /tell me about|describe|walk me through|give an example/i.test(q) ? "behavioral" : "skills";
   const asQuestion = (q: string, i: number) => ({ key: slug(q.split(/[,:?]/)[0].split(" ").slice(0, 4).join(" ")) || `q${i + 1}`, question: q, kind: kindOf(q), competencyKey: competencies[i % competencies.length]?.key });
   const ownQuestions = (f.screeningQuestions ?? []).map(asQuestion);
@@ -961,7 +972,8 @@ function fakeScreenMustHaves(req: StructuredRequest<unknown>, user: string): Scr
  * told to: only the sections that change, each written out whole; wording that stands in for a protected trait refused
  * in notChanged; pay only where pay may change; who decides pointed to Edit beside a draft; a must-have the request says
  * they must hold, worded as what rules someone out, turned round, and one already worded as what they need quoted with
- * nothing changed; a question back when the request is not one of these.
+ * nothing changed; a skill asked for in a must-have's words not added, the must-have named in notChanged (second review
+ * of the live-test fixes, #12); a question back when the request is not one of these.
  */
 function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
   const text = req.messages.map((m) => m.content).join("\n");
@@ -991,6 +1003,9 @@ function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
   const question = request.match(/\badd (?:a |another )?(?:screening )?question:?\s*(.+)$/i);
   const pay = /\bpay\b|\bwage\b|\bsalary\b|\brate\b/i.test(request) ? request.match(/\$?\s?(\d[\d,]*(?:\.\d+)?)\s*(?:-|–|to)\s*\$?\s?(\d[\d,]*(?:\.\d+)?)/i) : null;
   const mustHold = /\b(?:must|need to|needs to|has to|have to)\s+(?:hold|have|be)\b/i.test(request);
+  // "Add perio charting as an essential skill", "Add a skill: perio charting": only a skill in a must-have's words is answered
+  const skillWords = request.match(/\badd (?:a |an |another )?(?:(?:essential|important|helpful) )?(?:skill|competency):\s*(.+)$/i)?.[1] ?? request.match(/\badd (.+?) as (?:a |an |another )?(?:(?:essential|important|helpful) )?(?:skill|competency)\b/i)?.[1];
+  const skillAsMustHave = skillWords ? packet.requirements?.mustHaves.find((m) => repeatsMustHave({ name: clean(skillWords) }, [m]) || sameRequirement(m.text, clean(skillWords))) : undefined;
   // a draft is the one where pay may not change
   if (/\bdecision maker\b|\bwho decides\b|\bfinal say\b/i.test(request)) notChanged.push({ request, reason: allowed.includes("compensation") ? "Who makes the final decision is chosen from your team in the editor." : "Who makes the final decision is chosen from your team with Edit beside the draft." });
   else if (pay) {
@@ -1010,6 +1025,9 @@ function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
         done.push(`I added a must-have: ${words}.`);
       }
     }
+  } else if (skillAsMustHave) {
+    // packet.revise v2: a skill the same as a must-have only repeats it, so it is not added; the person is told why.
+    notChanged.push({ request, reason: `The job already has "${skillAsMustHave.text}" as a must-have, which counts the most.` });
   } else if (question && packet.screening) {
     const words = clean(question[1]);
     if (!refuse(words)) {

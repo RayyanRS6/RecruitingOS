@@ -13,7 +13,7 @@ import { runChatSuite } from "./chat-suite";
 import { clipText, traceOutcome, traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
-import { CONSISTENCY_READS, EMPTY_FACTS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
+import { CONSISTENCY_READS, EMPTY_FACTS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, draftFailures, draftSkillsNote, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -82,6 +82,7 @@ async function main() {
     const out: (typeof results)[string]["cases"] = [];
     for (const c of cases) {
       const failures: string[] = [];
+      const notes: string[] = [];
       let facts: IntakeFacts = { ...EMPTY_FACTS, ...c.facts };
       const messages: IntakeMessage[] = [];
       let lastTurn = null as null | Awaited<ReturnType<typeof runPrompt<IntakeContext, import("@ros/contracts").IntakeTurn>>>;
@@ -127,14 +128,18 @@ async function main() {
           }
           failures.push(...(c.expectDraft?.(r.output) ?? []).map((x) => `${which}${x}`));
           const packet = finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
-          failures.push(...(c.expectPacket?.(packet) ?? []).map((x) => `${which}${x}`));
+          // The case's checks and, on every compiled case, a skill that repeats a must-have; the note keeps the draft's
+          // must-haves and skills by name (synthetic data), so one renamed can be seen in the result file (second review
+          // of the live-test fixes, #14).
+          failures.push(...draftFailures(c, packet).map((x) => `${which}${x}`));
+          notes.push(`${which}${draftSkillsNote(packet)}`);
           const declined = facts.declinedCriteria.map((d) => d.requested.toLowerCase());
           // The packet records what was declined (and any flags) in its provenance on purpose; anywhere else is a leak.
           const text = JSON.stringify({ ...packet, provenance: { ...packet.provenance, declinedCriteria: [], flags: [] } }).toLowerCase();
           for (const d of declined) if (text.includes(d)) failures.push(`${which}declined criterion leaked into packet: ${d}`);
         }
       }
-      out.push({ id: c.id, pass: failures.length === 0, failures });
+      out.push({ id: c.id, pass: failures.length === 0, failures, ...(notes.length ? { notes } : {}) });
     }
     results[name] = { cases: out, passRate: out.filter((x) => x.pass).length / Math.max(1, out.length) };
   }
@@ -390,7 +395,8 @@ async function main() {
     for (const c of reviseCases) {
       const base = c.base ? c.base(structuredClone(golden)) : golden;
       const allowed = c.target === "role" ? REVISABLE_FOR_ROLE : REVISABLE_FOR_DRAFT;
-      const r = await runPrompt(q, rt, packetRevisePrompt, { companyName: "Eval Co", target: c.target, roleStatus: c.target === "role" ? "open" : null, packet: editableView(base, allowed), allowed: [...allowed], declined: [], message: c.message }, { companyId: null, inputRef: { eval: c.id }, maxTokens: 16000 });
+      const message = typeof c.message === "string" ? c.message : c.message(base);
+      const r = await runPrompt(q, rt, packetRevisePrompt, { companyName: "Eval Co", target: c.target, roleStatus: c.target === "role" ? "open" : null, packet: editableView(base, allowed), allowed: [...allowed], declined: [], message }, { companyId: null, inputRef: { eval: c.id }, maxTokens: 16000 });
       if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`revise failed: ${r.error}`] }); continue; }
       const f = c.expect({ revision: r.output, merged: mergeRevision(base, r.output, c.target), base });
       out.push({ id: c.id, pass: f.length === 0, failures: f });

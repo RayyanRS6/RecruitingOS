@@ -3,7 +3,7 @@ import { FakeProvider, callPrompt, intakeCompilePrompt, type IntakeContext } fro
 import { finalizePacket, registerFakeHandlers } from "@ros/agents";
 import type { DraftRolePacket, IntakeFacts, RolePacket } from "@ros/contracts";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { DA_DAYS_QUESTION, DA_RDA_QUESTION, DA_XRAY_CPR_QUESTION, EMPTY_FACTS, GROWTH_WORDS, RDH_FACTS, REPLACEMENT_WORDS, intakeGolden, reasonInDescription, ruleOutMustHaves, skillsRepeatingMustHaves, type IntakeCase } from "./suites";
+import { DA_DAYS_QUESTION, DA_RDA_QUESTION, DA_XRAY_CPR_QUESTION, EMPTY_FACTS, GROWTH_WORDS, RDH_FACTS, REPLACEMENT_WORDS, draftFailures, draftSkillsNote, intakeGolden, reasonInDescription, ruleOutMustHaves, skillsRepeatingMustHaves, type IntakeCase } from "./suites";
 
 /**
  * The job builder's draft where intake.compile v6 alone keeps it right (review of the live-test fixes, 12 Nov 2026,
@@ -70,7 +70,7 @@ describe("intake.golden: the quick start's answers, compiled as they are stored"
     for (const c of seeded) {
       const { draft, finish } = await ofCase(c);
       expect(c.expectDraft?.(draft) ?? [], c.id).toEqual([]);
-      expect(c.expectPacket?.(finish()) ?? [], c.id).toEqual([]);
+      expect(draftFailures(c, finish()), c.id).toEqual([]);
     }
     // the stand-in writes exactly what v6 asks on the quick start: the RDA question only when chosen, each holding a "no"
     const [counted, kept, unticked] = await Promise.all(quickStart.map(ofCase));
@@ -167,21 +167,111 @@ describe("intake.golden: why the owner is hiring, and skills that repeat a must-
   });
 
   it("fails dental_rdh_irvine and the Dental Assistant case on either, and passes the stand-in's drafts of them", async () => {
+    // the skills are judged in other words too on these two (`skillRepeats`), through the check every compiled case runs
     const rdh = byId("dental_rdh_irvine");
+    expect(rdh.skillRepeats).toBe("any name");
     const one = await written("dental", RDH_FACTS, ["I need a dental hygienist in Irvine."]);
-    expect(rdh.expectPacket?.(one.finish())).toEqual([]);
+    expect(draftFailures(rdh, one.finish())).toEqual([]);
     const told: DraftRolePacket = structuredClone(one.draft);
     told.description.publicJobDescription += " We are hiring because our hygienist moved.";
     told.competencies.push({ key: "perio_therapy", name: "Periodontal therapy", definition: "Scaling and root planing.", weight: 4, evaluatedIn: "both", indicators: ["Describes a full-mouth debridement"] });
     told.interviews.plan[0]!.competencyKeys.push("perio_therapy");
-    expect(rdh.expectPacket?.(one.finish(told))).toEqual(['why the owner is hiring is written into the public description: "We are hiring because our hygienist moved."', 'the skill "Periodontal therapy" (Scaling and root planing.) repeats the must-have "Periodontal (perio) charting and therapy experience"']);
+    expect(draftFailures(rdh, one.finish(told))).toEqual(['why the owner is hiring is written into the public description: "We are hiring because our hygienist moved."', 'the skill "Periodontal therapy" (Scaling and root planing.) repeats the must-have "Periodontal (perio) charting and therapy experience"']);
     const assistant = byId("dental_assistant_license_in_negative_words");
-    const two = await written("dental", { ...EMPTY_FACTS, title: "Dental Assistant", locationText: "Irvine, CA", employmentType: "full_time", reason: "growth", compensationBasis: "hourly", compensationMin: 24, compensationMax: 28, decisionMaker: "me", interviewers: ["me"], mustHaves: ["four-handed dentistry", "digital radiography", "no active California RDA license"] });
+    expect(assistant.skillRepeats).toBe("any name");
+    const two = await written("dental", { ...EMPTY_FACTS, ...STAND_IN_ANSWERS.dental_assistant_license_in_negative_words });
     expect(two.draft.requirements.eligibility.find((e) => e.key === "bls")?.knockout).toBe(false);
-    expect(assistant.expectPacket?.(two.finish())).toEqual([]);
+    expect(draftFailures(assistant, two.finish())).toEqual([]);
     const grown: DraftRolePacket = structuredClone(two.draft);
     grown.description.publicJobDescription += " We're a growing practice.";
     grown.competencies.push({ key: "imaging", name: "Radiographic imaging", definition: "Clear, diagnostic images.", weight: 4, evaluatedIn: "both", indicators: ["Explains a full-mouth series"] });
-    expect(assistant.expectPacket?.(two.finish(grown))).toEqual(['why the owner is hiring is written into the public description: "We\'re a growing practice."', 'the skill "Radiographic imaging" (Clear, diagnostic images.) repeats the must-have "digital radiography"']);
+    expect(draftFailures(assistant, two.finish(grown))).toEqual(['why the owner is hiring is written into the public description: "We\'re a growing practice."', 'the skill "Radiographic imaging" (Clear, diagnostic images.) repeats the must-have "digital radiography"']);
+  });
+});
+
+/**
+ * The answers the intake.turn stand-in would leave for each compiled case that sets none (its messages, read as the job
+ * builder reads them), so its draft can be written here without a turn.
+ */
+const STAND_IN_ANSWERS: Record<string, Partial<IntakeFacts>> = {
+  dental_rdh_irvine: RDH_FACTS,
+  dental_front_office_just_draft_it: { title: "Front Office Coordinator", locationText: "Tustin, CA", employmentType: "full_time", compensationBasis: "hourly", compensationMin: 22, compensationMax: 26 },
+  dental_assistant_license_in_negative_words: { title: "Dental Assistant", locationText: "Irvine, CA", employmentType: "full_time", reason: "growth", compensationBasis: "hourly", compensationMin: 24, compensationMax: 28, decisionMaker: "me", interviewers: ["me"], mustHaves: ["four-handed dentistry", "digital radiography", "no active California RDA license"] },
+  dental_office_manager_just_draft_it: { title: "Dental Office Manager", locationText: "Irvine, CA", employmentType: "full_time", reason: "growth", compensationBasis: "hourly", compensationMin: 34, compensationMax: 40, decisionMaker: "me" },
+};
+const draftOf = (c: IntakeCase) => (c.facts ? ofCase(c) : written(c.vertical, { ...EMPTY_FACTS, ...STAND_IN_ANSWERS[c.id] }, c.ownerMessages));
+const skill = (name: string, definition = "Shown in recent work.") => ({ key: name.toLowerCase().replace(/[^a-z]+/g, "_"), name, definition, weight: 5, evaluatedIn: "both" as const, indicators: ["An example from recent work"] });
+
+describe("intake.golden: every draft and a skill named the same as a must-have (second review of the live-test fixes, #14, #24, #15)", () => {
+  const compiled = intakeGolden.filter((c) => c.expectPacket || c.expectDraft);
+
+  it("holds every compiled case to it, and the two cases of the first review to one in other words too", async () => {
+    expect(compiled.map((c) => [c.id, c.skillRepeats ?? "same name"])).toEqual([
+      ["dental_rdh_irvine", "any name"],
+      ["dental_front_office_just_draft_it", "same name"],
+      ["dental_assistant_license_in_negative_words", "any name"],
+      ["dental_assistant_rule_out_words_written_twice", "same name"],
+      ["dental_assistant_quick_start_deal_breaker_counted_openly", "same name"],
+      ["dental_assistant_quick_start_deal_breaker_kept_private", "same name"],
+      ["dental_assistant_quick_start_rda_question_unticked", "same name"],
+      ["dental_office_manager_just_draft_it", "same name"],
+    ]);
+    expect(compiled.filter((c) => !c.facts).map((c) => c.id).sort()).toEqual(Object.keys(STAND_IN_ANSWERS).sort());
+    for (const c of compiled) {
+      const { finish, draft } = await draftOf(c);
+      // the stand-in's draft passes, and writes no skill named like a must-have
+      expect(draftFailures(c, finish()), c.id).toEqual([]);
+      const first = draft.requirements.mustHaves[0]!;
+      const twin: DraftRolePacket = structuredClone(draft);
+      twin.competencies.push(skill(first.text.toUpperCase()));
+      expect(draftFailures(c, finish(twin)), c.id).toContain(`the skill "${first.text.toUpperCase()}" (Shown in recent work.) repeats the must-have "${first.text}"`);
+    }
+  });
+
+  it("drafts the Dental Office Manager without the playbook's 'Team leadership', and fails a draft that keeps it", async () => {
+    const om = byId("dental_office_manager_just_draft_it");
+    expect(om.ownerMessages).toEqual(["Dental office manager in Irvine, $34 to $40 an hour, full time. It's growth. I decide. Just draft it."]);
+    expect(findPlaybook("dental")!.roles.find((r) => r.key === "office_manager")!.competencies.map((c) => c.name)).toContain("Team leadership");
+    const { draft, finish } = await draftOf(om);
+    expect(draft.requirements.mustHaves.map((m) => m.text)).toEqual(["Dental practice management experience", "Team leadership", "Insurance and AR management"]);
+    expect(draft.competencies.map((c) => c.name)).toEqual(["Financial management", "Operations", "Patient experience", "Judgment and calm"]);
+    expect(draftFailures(om, finish())).toEqual([]);
+    const kept: DraftRolePacket = structuredClone(draft);
+    kept.competencies.unshift(skill("Team leadership", "Hires, trains, holds accountable, keeps morale."));
+    expect(draftFailures(om, finish(kept))).toEqual(['the skill "Team leadership" (Hires, trains, holds accountable, keeps morale.) repeats the must-have "Team leadership"']);
+    // nor does its description say why the owner is hiring ("It's growth.")
+    const grown: DraftRolePacket = structuredClone(draft);
+    grown.description.publicJobDescription += " Our practice keeps growing.";
+    expect(draftFailures(om, finish(grown))).toEqual(['why the owner is hiring is written into the public description: "Our practice keeps growing."']);
+  });
+
+  it("notes each draft's must-haves and skills by name, and the skills whose words are all in a must-have", async () => {
+    const om = byId("dental_office_manager_just_draft_it");
+    const { draft, finish } = await draftOf(om);
+    expect(draftSkillsNote(finish())).toBe('must-haves: "Dental practice management experience", "Team leadership", "Insurance and AR management"; skills: "Financial management", "Operations", "Patient experience", "Judgment and calm"');
+    // a skill renamed from "Team leadership" passes on its name, and shows in the note
+    const renamed: DraftRolePacket = structuredClone(draft);
+    renamed.competencies.unshift(skill("Leadership", "Hires, trains, holds accountable, keeps morale."), skill("People leadership"));
+    expect(draftFailures(om, finish(renamed))).toEqual([]);
+    expect(draftSkillsNote(finish(renamed))).toBe('must-haves: "Dental practice management experience", "Team leadership", "Insurance and AR management"; skills: "Leadership", "People leadership", "Financial management", "Operations", "Patient experience", "Judgment and calm"; skills whose words are all in a must-have: "Leadership" ("Team leadership")');
+    const da = { requirements: { mustHaves: [mustHave("Digital radiography"), mustHave("Four-handed dentistry")], niceToHaves: [], eligibility: [] }, competencies: [skill("X-rays"), skill("Chairside skill"), skill("Digital radiography and intraoral scanning")] };
+    expect(draftSkillsNote(da)).toBe('must-haves: "Digital radiography", "Four-handed dentistry"; skills: "X-rays", "Chairside skill", "Digital radiography and intraoral scanning"; skills whose words are all in a must-have: "X-rays" ("Digital radiography")');
+    expect(draftSkillsNote({ requirements: { mustHaves: [], niceToHaves: [], eligibility: [] }, competencies: [] })).toBe("must-haves: none; skills: none");
+  });
+
+  it("reads the same name as the score does, case, accents and punctuation aside, when the case judges names alone", () => {
+    const of = (...names: string[]) => skillsRepeatingMustHaves({ requirements: { mustHaves: [mustHave("Digital radiography")], niceToHaves: [], eligibility: [] }, competencies: names.map((n) => skill(n)) }, "same name");
+    expect(of("Digital Radiography.", "digital  radiography")).toHaveLength(2);
+    expect(of("Radiographic imaging", "Radiography", "Digital radiography and intraoral scanning")).toEqual([]);
+    // in any words, the first review's reading, those repeat it too but the last
+    expect(skillsRepeatingMustHaves({ requirements: { mustHaves: [mustHave("Digital radiography")], niceToHaves: [], eligibility: [] }, competencies: [skill("Radiographic imaging"), skill("Radiography")] })).toHaveLength(2);
+    // that reading fails other roles' own playbook skills beside the qualifications a draft takes as must-haves, so those
+    // drafts are judged by the name, and their note shows a skill renamed
+    const role = (key: string) => findPlaybook("dental")!.roles.find((r) => r.key === key)!;
+    const asDrafted = (key: string) => ({ requirements: { mustHaves: role(key).commonQualifications.slice(0, 3).map(mustHave), niceToHaves: [], eligibility: [] }, competencies: role(key).competencies.map((c) => skill(c.name, c.definition)) });
+    expect(skillsRepeatingMustHaves(asDrafted("front_office"))).toEqual(['the skill "Scheduling and follow-through" (Keeps the schedule full and accurate; confirms and reactivates.) repeats the must-have "Multi-line phones and scheduling"']);
+    expect(skillsRepeatingMustHaves(asDrafted("front_office"), "same name")).toEqual([]);
+    expect(skillsRepeatingMustHaves(asDrafted("office_manager"))).toEqual(['the skill "Team leadership" (Hires, trains, holds accountable, keeps morale.) repeats the must-have "Team leadership"', 'the skill "Financial management" (Collections, AR, insurance, and daily numbers.) repeats the must-have "Dental practice management experience"']);
+    expect(skillsRepeatingMustHaves(asDrafted("office_manager"), "same name")).toEqual(['the skill "Team leadership" (Hires, trains, holds accountable, keeps morale.) repeats the must-have "Team leadership"']);
   });
 });

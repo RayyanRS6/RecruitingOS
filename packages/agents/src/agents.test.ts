@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { FakeProvider, OWNERS_CALL_MARK, callPrompt, intakeCompilePrompt, intakeTurnPrompt, screenTurnPrompt, type IntakeContext, type ScreenContext } from "@ros/ai";
-import { DraftRolePacket, IntakeExtraction, IntakeTurn, type IntakeQuestion } from "@ros/contracts";
+import { DraftRolePacket, IntakeExtraction, IntakeTurn, repeatsMustHave, type IntakeFacts, type IntakeQuestion } from "@ros/contracts";
 import { applyAnswers, normalizeFacts } from "@ros/core";
-import { consumerPlaybook, matchPlaybookRole } from "@ros/playbooks";
+import { consumerPlaybook, dentalPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { futureRolesLine, reminderClosingLine } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
 import { factsSetOnPanel, fieldsKnownFromFacts, fieldsSetOnPanel, keepAnswered, keepWordsFacts, mergeFacts, ownerWordsOf, prepareQuestions, rememberPrompts, sameQuestion, settle, typedSinceReply, typedWordsOf, withoutCardCount } from "./intake";
@@ -127,6 +127,43 @@ describe("fake intake handler", () => {
     if (res.kind !== "ok") throw new Error("expected ok");
     expect(res.output.compensation).toMatchObject({ min: 45, max: 55 });
     expect(res.output.description.publicJobDescription).not.toMatch(/\$\d/);
+  });
+});
+
+describe("the stand-in's draft names no skill the same as a must-have (intake.compile v6)", () => {
+  const fake = new FakeProvider();
+  registerFakeHandlers(fake);
+  const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
+  const draftFor = async (title: string, more: Partial<IntakeFacts> = {}) => {
+    const facts: IntakeFacts = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], title, locationText: "Irvine, CA", employmentType: "full_time", compensationBasis: "hourly", compensationMin: 34, compensationMax: 40, ...more };
+    const ctx: IntakeContext = { company: { name: "Harbor Dental", vertical: "dental", sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] }, playbook: dentalPlaybook, playbookRole: matchPlaybookRole(dentalPlaybook, title), benchmark: null, facts, messages: [{ role: "owner", content: "Just draft it.", at: "2026-11-12T12:00:00.000Z", kind: "text" }], confirmedPay: { basis: "hourly", min: 34, max: 40 } };
+    const r = await callPrompt(rt, intakeCompilePrompt, ctx, { companyId: null });
+    if (r.result.kind !== "ok") throw new Error(`the stand-in did not write a draft: ${r.result.kind}`);
+    return DraftRolePacket.parse(r.result.output);
+  };
+  const pointsOnlyAtItsSkills = (d: DraftRolePacket) => {
+    const keys = new Set(d.competencies.map((c) => c.key));
+    return d.screening.questions.every((q) => !q.competencyKey || keys.has(q.competencyKey)) && d.interviews.plan.every((r) => r.competencyKeys.length > 0 && r.competencyKeys.every((k) => keys.has(k)));
+  };
+
+  it("leaves out the Dental Office Manager's playbook skill 'Team leadership' beside the must-have drafted from the playbook (second review of the live-test fixes, #24)", async () => {
+    const d = await draftFor("Dental Office Manager");
+    expect(d.requirements.mustHaves.map((m) => m.text)).toEqual(["Dental practice management experience", "Team leadership", "Insurance and AR management"]);
+    expect(d.competencies.map((c) => c.name)).toEqual(["Financial management", "Operations", "Patient experience", "Judgment and calm"]);
+    expect(d.competencies.filter((c) => repeatsMustHave(c, d.requirements.mustHaves))).toEqual([]);
+    expect(pointsOnlyAtItsSkills(d)).toBe(true);
+    // the owner's own must-have in a skill's words, likewise
+    const assistant = await draftFor("Dental Assistant", { mustHaves: ["Chairside skill", "Digital radiography"] });
+    expect(assistant.competencies.map((c) => c.name)).toEqual(["Sterilization and safety", "Patient care and communication", "Reliability", "Practice software"]);
+    expect(pointsOnlyAtItsSkills(assistant)).toBe(true);
+  });
+
+  it("makes up three skills with general ones none of the must-haves names", async () => {
+    const d = await draftFor("Warehouse Lead", { mustHaves: ["Communication", "Forklift license"] });
+    expect(d.competencies.map((c) => c.name)).toEqual(["Warehouse Lead skill", "Reliability", "Teamwork"]);
+    expect(pointsOnlyAtItsSkills(d)).toBe(true);
+    // with no must-have named like one, the general three as before
+    expect((await draftFor("Warehouse Lead", { mustHaves: ["Forklift license"] })).competencies.map((c) => c.name)).toEqual(["Warehouse Lead skill", "Communication", "Reliability"]);
   });
 });
 

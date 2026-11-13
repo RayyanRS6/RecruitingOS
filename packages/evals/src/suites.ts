@@ -33,6 +33,14 @@ export type IntakeCase = {
    */
   expectDraft?: (draft: DraftRolePacket) => string[];
   expectPacket?: (packet: RolePacket) => string[];
+  /**
+   * How the finished draft's skills are held to intake.compile v6's line against a skill that is the same as a must-have
+   * (`draftFailures`, second review of the live-test fixes, #14): every compiled case fails on a skill named the same as
+   * one of its must-haves, the score's own rule; "any name" also fails one that repeats it in other words or in its
+   * definition (`skillsRepeatingMustHaves`, review 1, #44), for a case whose playbook's own skills only touch its
+   * must-haves. Elsewhere such a skill shows in the draft's note (`draftSkillsNote`).
+   */
+  skillRepeats?: "same name" | "any name";
   /** The market check made before the first turn (plan C2): the basis it used and the figure it found, if any. */
   expectBenchmark?: (b: { basis: "hourly" | "salary" | null; benchmark: { basis: string; origin: string; p50: number } | null; gap?: string }) => string[];
 };
@@ -107,15 +115,19 @@ function subjectWords(text: string): Set<string> {
  * are the must-have's ("Radiographic imaging"); a name holding all of them ("Periodontal care" beside "Perio
  * experience"); or a definition about the must-have, holding all its words, a third of the definition or more ("Takes and
  * processes digital radiographs"). A broader skill naming it in passing is not one, such as the playbook's "Clinical
- * quality" ("Thorough, gentle, standards-based care including perio assessment and radiographs.").
+ * quality" ("Thorough, gentle, standards-based care including perio assessment and radiographs."). With "same name", only
+ * the score's own rule: what every compiled case is held to (`draftFailures`; second review of the live-test fixes, #14),
+ * since other playbooks' skills share words with their qualifications by design (the Dental Office Manager's "Financial
+ * management", "Collections, AR, insurance, and daily numbers.", beside "Insurance and AR management").
  */
-export function skillsRepeatingMustHaves(p: Pick<RolePacket, "requirements" | "competencies">): string[] {
+export function skillsRepeatingMustHaves(p: Pick<RolePacket, "requirements" | "competencies">, how: "any name" | "same name" = "any name"): string[] {
   const out: string[] = [];
   for (const c of p.competencies) {
     const name = subjectWords(c.name);
     const definition = subjectWords(c.definition);
     const repeated = p.requirements.mustHaves.find((m) => {
       if (repeatsMustHave(c, [m])) return true;
+      if (how === "same name") return false;
       const need = subjectWords(m.text);
       if (!need.size) return false;
       const holdsAll = (words: Set<string>) => [...need].every((w) => words.has(w));
@@ -125,6 +137,30 @@ export function skillsRepeatingMustHaves(p: Pick<RolePacket, "requirements" | "c
     if (repeated) out.push(`the skill "${c.name}" (${c.definition}) repeats the must-have "${repeated.text}"`);
   }
   return out;
+}
+
+/**
+ * What a compiled case fails on once the server has finished its draft: the case's own checks, then a skill that repeats
+ * a must-have, the way the case is held to it (`skillRepeats`, the same name unless it says otherwise). Every compiled
+ * intake case runs it (second review of the live-test fixes, #14).
+ */
+export function draftFailures(c: Pick<IntakeCase, "expectPacket" | "skillRepeats">, p: RolePacket): string[] {
+  return [...(c.expectPacket?.(p) ?? []), ...skillsRepeatingMustHaves(p, c.skillRepeats ?? "same name")];
+}
+
+/**
+ * A finished draft's must-haves and skills by name (synthetic data), kept on each compiled case's result so a skill that
+ * repeats a must-have under another name can be seen there (second review of the live-test fixes, #14 and #15), with the
+ * skills whose words (`subjectWords`) are all in one must-have's, and which.
+ */
+export function draftSkillsNote(p: Pick<RolePacket, "requirements" | "competencies">): string {
+  const names = (items: ReadonlyArray<string>) => items.map((n) => `"${n}"`).join(", ") || "none";
+  const within = p.competencies.flatMap((c) => {
+    const words = subjectWords(c.name);
+    const m = words.size ? p.requirements.mustHaves.find((x) => { const need = subjectWords(x.text); return [...words].every((w) => need.has(w)); }) : undefined;
+    return m ? [`"${c.name}" ("${m.text}")`] : [];
+  });
+  return `must-haves: ${names(p.requirements.mustHaves.map((m) => m.text))}; skills: ${names(p.competencies.map((c) => c.name))}${within.length ? `; skills whose words are all in a must-have: ${within.join(", ")}` : ""}`;
 }
 
 /** The Dental Assistant's questions for the form as the quick start offers them on step 9: the playbook's, word for word. */
@@ -231,11 +267,12 @@ export const intakeGolden: IntakeCase[] = [
       // about ten minutes; the owner asked for no questions of their own here, so nothing justifies more
       if (p.screening.questions.length < 5 || p.screening.questions.length > 6) f.push(`${p.screening.questions.length} screening questions; five or six expected`);
       if (p.screening.maxMinutes > 10) f.push(`the screening conversation is set to ${p.screening.maxMinutes} minutes; about ten expected`);
-      // intake.compile v6: why the owner is hiring stays out of the public description, and no skill repeats a must-have
-      // (review of the live-test fixes, #44)
-      f.push(...reasonInDescription(p, REPLACEMENT_WORDS), ...skillsRepeatingMustHaves(p));
+      // intake.compile v6: why the owner is hiring stays out of the public description (review of the live-test fixes, #44)
+      f.push(...reasonInDescription(p, REPLACEMENT_WORDS));
       return f;
     },
+    // and no skill repeats a must-have, in other words either (#44): the hygienist's own skills only touch its must-haves
+    skillRepeats: "any name",
   },
   {
     id: "dental_front_office_just_draft_it",
@@ -260,9 +297,10 @@ export const intakeGolden: IntakeCase[] = [
       if (!rda) f.push("no RDA license question on the form");
       // read after finalizePacket, so this pins finalizeDraft's rule (the stand-in writes its BLS question holding nobody)
       f.push(...formHoldingNobody(p));
-      f.push(...reasonInDescription(p, GROWTH_WORDS), ...skillsRepeatingMustHaves(p));
+      f.push(...reasonInDescription(p, GROWTH_WORDS));
       return f;
     },
+    skillRepeats: "any name",
   },
   {
     // Review of the live-test fixes, #21: must-haves typed in words that rule someone out, worded unlike the prompt's own
@@ -334,6 +372,18 @@ export const intakeGolden: IntakeCase[] = [
       ...quickStartFormFailures(p, { rda: false }),
       ...formHoldingNobody(p),
     ],
+  },
+  {
+    // Second review of the live-test fixes, #24: the Dental Office Manager's playbook lists "Team leadership" among its
+    // common qualifications and as one of its skills, so a draft whose must-haves come from the playbook is handed the
+    // skill v6 says never to add. Like every draft, it fails on a skill named the same as a must-have; its note lists
+    // the must-haves and skills, so one renamed can be seen.
+    id: "dental_office_manager_just_draft_it",
+    provenance: "synthetic",
+    vertical: "dental",
+    ownerMessages: ["Dental office manager in Irvine, $34 to $40 an hour, full time. It's growth. I decide. Just draft it."],
+    expectTurn: (t) => (t.readyToCompile ? [] : ["'just draft it' should set readyToCompile"]),
+    expectPacket: (p) => [...(p.provenance.assumptions.length ? [] : ["assumptions must be listed when the owner said 'just draft it'"]), ...reasonInDescription(p, GROWTH_WORDS)],
   },
   {
     id: "generic_marketing_director",
@@ -440,14 +490,15 @@ export const intakeBenchmarkBasis: IntakeCase[] = [
 /**
  * Plan C10: a change asked for by chat (packet.revise v2), judged as the person would see it, after the server's merge
  * (`mergeRevision`): only the sections the request needs, nothing that stands in for a protected trait, pay only where pay
- * may change, nothing done on an instruction smuggled into the request, a question back when the request is unclear, and
- * plain words to the person (v2).
+ * may change, nothing done on an instruction smuggled into the request, a question back when the request is unclear,
+ * plain words to the person (v2), and no skill that only repeats a must-have.
  */
 export type ReviseCase = {
   id: string;
   provenance: "synthetic";
   target: "draft" | "role";
-  message: string;
+  /** The request; or written from the packet it is made on, to name what that packet holds in its own words. */
+  message: string | ((base: RolePacket) => string);
   /**
    * The packet the request is made on, from a copy of the golden one (left out: the golden packet itself), so a case can
    * start from a job in the shape the live test met (review of the live-test fixes, 12 Nov 2026, #45).
@@ -483,6 +534,12 @@ export function withRuleOutLicence(golden: RolePacket): RolePacket {
   const licence = musts.find((m) => /\bRDH\b|\blicen[cs]e\b/i.test(m.text));
   const first = { ...(licence ?? { key: "rdh_license", rationale: "California requires an active license to practise.", evidencedBy: ["resume", "screen"] as RolePacket["requirements"]["mustHaves"][number]["evidencedBy"] }), text: RULE_OUT_LICENCE };
   return { ...golden, requirements: { ...golden.requirements, mustHaves: [first, ...musts.filter((m) => m !== licence)] } };
+}
+
+/** The must-have a request asks for as a skill (second review of the live-test fixes, #12): the job's first one that is no licence, else its first. */
+export function mustHaveAskedAsSkill(base: Pick<RolePacket, "requirements">): RolePacket["requirements"]["mustHaves"][number] | undefined {
+  const musts = base.requirements.mustHaves;
+  return musts.find((m) => !/\blicen[cs]e\b|\bcertif/i.test(m.text)) ?? musts[0];
 }
 
 export const reviseCases: ReviseCase[] = [
@@ -564,6 +621,29 @@ export const reviseCases: ReviseCase[] = [
       ...ruleOutMustHaves(merged.packet),
       ...(merged.packet.requirements.mustHaves.some((m) => /\bRDH\b/i.test(m.text) && /\blicen[cs]e\b/i.test(m.text) && !rulesOut(m.text)) ? [] : ["no must-have asks for the RDH license"]),
     ],
+  },
+  {
+    // Second review of the live-test fixes, #12: a skill the same as a must-have only repeats it, so a change by chat
+    // never adds one (nor renames a skill to a must-have's words) and says the job already has it as a must-have. The
+    // request names one of the golden job's own must-haves in its words. Only a skill the change adds or renames is
+    // judged, in any words, since the golden job is the model's own draft.
+    id: "skill_named_as_a_must_have",
+    provenance: "synthetic",
+    target: "role",
+    message: (base) => `Add ${mustHaveAskedAsSkill(base)?.text ?? "a must-have"} as an essential skill`,
+    expect: ({ revision, merged, base }) => {
+      const asked = mustHaveAskedAsSkill(base);
+      if (!asked) return ["the golden job has no must-have to ask for as a skill"];
+      const before = new Map(base.competencies.map((c) => [c.key, c.name]));
+      const addedOrRenamed = merged.packet.competencies.filter((c) => before.get(c.key) !== c.name);
+      return [
+        ...unplainWords(revision),
+        ...skillsRepeatingMustHaves({ requirements: merged.packet.requirements, competencies: addedOrRenamed }),
+        ...(merged.packet.requirements.mustHaves.some((m) => m.key === asked.key) ? [] : [`the must-have "${asked.text}" is no longer on the job`]),
+        ...(merged.sections.length ? [`changed ${merged.sections.join(", ")} although the job already has it as a must-have`] : []),
+        ...(merged.notChanged.length ? [] : ["did not say that the job already has it as a must-have"]),
+      ];
+    },
   },
 ];
 

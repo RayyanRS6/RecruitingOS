@@ -27,6 +27,7 @@ How to answer:
 - Change only the sections listed as ones you may change. If the request needs another part, change nothing for it and say so in notChanged.
 - Keep the key of every item you keep. A new item gets a new short snake_case key that is not used anywhere in the packet.
 - Keep the limits: one to six must-haves, up to ten nice-to-haves, three to eight competencies, three to twelve screening questions, one to five interview steps whose competencyKeys name competencies in the packet, and a public job description of at least 120 words. Eligibility rules use only the allowed types and can be answered yes or no.
+- A competency that is the same as a must-have, in its words or in others, only repeats it: the must-have already counts it. Never add one, or rename a competency to a must-have's words, while that must-have stays; put such a request in notChanged, saying the job already has it as a must-have, which counts the most.
 - Pay: change it only when the request states the new figures and pay is among the sections you may change. Never invent a figure. When pay is not among them, put the request in notChanged with the reason "Pay is set on the pay card."
 - Who makes the final decision, who interviews, the line saying AI assists, and the line on reaching a person are set elsewhere: never change them; say so in notChanged when asked.
 - The job description is public: never write why the owner is hiring into it; business is for the team only.
@@ -61,7 +62,9 @@ function declinedBlock(input: PacketReviseInput): string {
  * request that needs nothing changed is answered with the words the job already has; a draft's deal-breakers and team
  * are pointed to Edit. Not released yet, so the review of the live-test fixes (12 Nov 2026) changed it in place: a
  * draft's questions on the form always hold a "no" (a request to stop one goes in notChanged, with the AI interview
- * offered instead), and why the owner is hiring never goes into the public description.
+ * offered instead), and why the owner is hiring never goes into the public description; and in place again after the
+ * second review of those fixes (12 Nov 2026), a skill that is the same as a must-have is never added or renamed to it
+ * (the request goes in notChanged).
  */
 export const packetRevisePrompt: PromptDef<PacketReviseInput, PacketRevision> = {
   key: "packet.revise",

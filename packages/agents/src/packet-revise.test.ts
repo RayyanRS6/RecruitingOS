@@ -44,11 +44,16 @@ describe("the packet.revise prompt", () => {
     const reasonLine = "The job description is public: never write why the owner is hiring into it; business is for the team only.";
     expect(system).toContain(holds);
     expect(system).toContain(reasonLine);
+    // still v2 (second review of the live-test fixes, 12 Nov 2026): a skill the same as a must-have only repeats it, so it
+    // is never added or renamed to one, on a draft or a saved job
+    const repeatsLine = "A competency that is the same as a must-have, in its words or in others, only repeats it: the must-have already counts it. Never add one, or rename a competency to a must-have's words, while that must-have stays; put such a request in notChanged, saying the job already has it as a must-have, which counts the most.";
+    expect(system).toContain(repeatsLine);
     const onRole = packetRevisePrompt.system({ ...input, target: "role", roleStatus: "open" }).map((b) => b.text).join("\n");
     expect(onRole).not.toMatch(/Edit beside the draft/);
     // a saved job keeps a person's "asked, not required"; its description is public too
     expect(onRole).not.toContain(holds);
     expect(onRole).toContain(reasonLine);
+    expect(onRole).toContain(repeatsLine);
     await ask(draft, "Add a must-have: forklift license", "draft");
     expect(fake.calls.at(-1)).toMatchObject({ task: "packet.revise", model: "fake", promptKey: "packet.revise", promptVersion: 2 });
   });
@@ -62,6 +67,22 @@ describe("the packet.revise prompt", () => {
     expect(merged.sections).toEqual(["requirements"]);
     expect(merged.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Radiography certificate", "Chairside experience in a dental office", "forklift license"]);
     expect(merged.packet.compensation).toEqual(base.compensation);
+  });
+
+  it("adds no skill in a must-have's words and says the job already has it as a must-have (second review of the live-test fixes, 12 Nov 2026)", async () => {
+    const base = samplePacket();
+    for (const target of ["role", "draft"] as const) {
+      const out = await ask(base, "Add radiography certificate as an essential skill", target);
+      expect(out.changes).toEqual({});
+      expect(out.notChanged).toEqual([{ request: "Add radiography certificate as an essential skill", reason: 'The job already has "Radiography certificate" as a must-have, which counts the most.' }]);
+      const merged = mergeRevision(base, out, target);
+      expect(merged.sections).toEqual([]);
+      expect(merged.packet.competencies).toEqual(base.competencies);
+      expect(merged.notChanged.map((n) => n.reason)).toEqual(['The job already has "Radiography certificate" as a must-have, which counts the most.']);
+    }
+    expect((await ask(base, "Add a skill: chairside experience in a dental office")).notChanged).toEqual([{ request: "Add a skill: chairside experience in a dental office", reason: 'The job already has "Chairside experience in a dental office" as a must-have, which counts the most.' }]);
+    // a skill no must-have names is not answered so
+    expect((await ask(base, "Add teamwork as an essential skill")).notChanged).toEqual([]);
   });
 
   it("refuses wording that stands in for a protected trait, records it as declined, and asks back when the request is unclear", async () => {
