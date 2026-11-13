@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, skillsInScore, type Actor, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, errorForLog, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
@@ -445,11 +445,18 @@ function ladderApplies(kind: "gap" | "written", q: Pick<ScreeningQuestion, "kind
 
 /** Words that say what a line is about ("Do you have experience with...?" says nothing): the same list the scorecard uses. */
 function sameTopic(a: string, b: string): boolean {
-  const wa = new Set(topicWords(a));
-  const wb = new Set(topicWords(b));
-  if (!wa.size || !wb.size) return false;
-  const shared = [...wa].filter((w) => wb.has(w)).length;
-  return shared >= Math.min(2, wa.size);
+  return sharesTopic(new Set(topicWords(a)), new Set(topicWords(b)));
+}
+
+/**
+ * Whether a line is about a subject, by their topic words: two in common, or the subject's only one. The rule the chat's
+ * gaps use for the form's answers (`sameTopic`) and the scorecard's concerns for what the chat asked
+ * (`withoutResumeShownConcerns`).
+ */
+function sharesTopic(subject: ReadonlySet<string>, line: ReadonlySet<string>): boolean {
+  if (!subject.size || !line.size) return false;
+  const shared = [...subject].filter((w) => line.has(w)).length;
+  return shared >= Math.min(2, subject.size);
 }
 
 /**
@@ -1905,9 +1912,9 @@ export function scorecardInput(ctx: ScreenContext, identity: ScoringIdentity): {
  * linked to the one the stored scorecard keeps (`linkReadingRuns`). The readings ask the AI credit together: with no room
  * for all of them none is made, and the `screen` run waits for credit.
  *
- * The chat asks only about what the résumé does not show (`chatGaps`), so its scorecard never hears about the rest: a
- * concern with nothing quoted, about a must-have or skill the newest résumé reading shows on a checked quote, is that
- * silence, not a concern, and is not stored (`withoutResumeShownConcerns`; the live test, 12 November 2026).
+ * Every concern the readings wrote is stored, so the stored scorecard is the record (the data export reads it). The
+ * team reads them without the AI interview's silence about what the résumé shows (`withoutResumeShownConcerns`), where
+ * a scorecard's concerns are shown, never here (the second review of the live-test fixes, 12 November 2026).
  */
 export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<ScreenAssessment>> {
   const b = await withTenant(db, input.companyId, (q) => loadScreenBundle(q, input.screenId));
@@ -1922,10 +1929,7 @@ export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: st
   if (noCredit) return noCredit;
   const outage = settled.find((r) => !r.ok && r.reason === "error");
   if (outage) return outage;
-  const combined = scorecardReadings(settled, view, screen, b.packet);
-  // the newest résumé reading, the one the match score pairs with this scorecard, read in its own short transaction
-  const resume = combined.ok ? await withTenant(db, input.companyId, async (q) => (await q.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, b.app.id), ne(assessments.kind, "screen"))).orderBy(desc(assessments.createdAt)).limit(1))[0]?.result ?? null) : null;
-  const out = combined.ok ? { ...combined, output: withoutResumeShownConcerns(combined.output, resume, b.packet) } : combined;
+  const out = scorecardReadings(settled, view, screen, b.packet);
   await linkReadingRuns(db, b.company.id, out, settled);
   return out;
 }
@@ -2021,28 +2025,69 @@ const topicWords = (s: string): string[] => (s.toLowerCase().match(/[\p{L}\p{N}]
 /** What a finding or a question is about, for the scorecard: `topicWords`, with "licence" and "license" one word (a packet may spell it either way). */
 const findingWords = (s: string): string[] => topicWords(s.replace(/licen[cs]/gi, "licens"));
 
+/** A word and its plural as one ("crowns" and "crown", "therapies" and "therapy", "boxes" and "box"); "status" and "basis" are not plurals. */
+const singular = (w: string): string => (w.length > 4 && w.endsWith("ies") ? `${w.slice(0, -3)}y` : /(?:ss|ch|sh|x|z)es$/.test(w) ? w.slice(0, -2) : w.length > 3 && w.endsWith("s") && !/(?:ss|us|is)$/.test(w) ? w.slice(0, -1) : w);
 /**
- * The scorecard without the concerns that are only the chat's silence about what the résumé already shows (the live test,
- * 12 November 2026: "Digital radiography work is not described" sat under Concerns beside the breakdown's "Shown, from the
- * AI review of the résumé"). The chat never asks about what the résumé shows (`chatGaps`), so the scorecard never hears
- * about it. A concern goes when it has nothing checked quoted and its words hold every topic word of a must-have the
- * résumé reading shows met, or of a skill it shows evidenced, each on a checked quote. A concern quoting the chat or a
- * recruiter's note always stays, and so does one about something the résumé shows only in part or with nothing quoted.
- * With nothing left out, the same scorecard. One rule wherever a scorecard is read: when it is stored (`assessScreen`),
- * and paired with the newest résumé reading when one stored before it is read (the candidate's page, the interviewer's
- * brief). Exported for the tests.
+ * The words of a line as the scorecard's concerns are read (`withoutResumeShownConcerns` only): `findingWords`, with
+ * x-ray (xray, x-rays), radiograph, radiography and radiographic one word, as "licence" and "license" are, and a plural
+ * one word with its singular. `findingWords` itself is unchanged: the quote and licence rules read it.
  */
-export function withoutResumeShownConcerns<T extends Pick<ScreenAssessment, "concerns">>(card: T, resume: Pick<EvidenceAssessment, "requirementFindings" | "competencyFindings"> | null | undefined, packet: Pick<RolePacket, "requirements" | "competencies">): T {
+const concernWords = (s: string): string[] => findingWords(s.replace(/\bx[\s-]?rays?\b/gi, " radiography ").replace(/\bradiograph(?:s|y|ic)?\b/gi, " radiography ")).map(singular).filter((w) => !PLAIN_WORDS.has(w));
+/** The parts of a requirement's name: "Digital radiography and intraoral scanning" is "Digital radiography" and "intraoral scanning" (split on "and", "&", "/" and ","). */
+const nameParts = (name: string): string[] => name.split(/\s*(?:\band\b|&|\/|,)\s*/i).filter((p) => p.trim());
+
+/**
+ * The scorecard as the team reads it: without the concerns that are only the AI interview's silence about what the résumé
+ * already shows (the live test, 12 November 2026: "Digital radiography work is not described" sat under Concerns beside
+ * the breakdown's "Shown, from the AI review of the résumé"; the chat asks no gap question about what the résumé shows,
+ * `chatGaps`). A concern goes only when all of these hold:
+ * - it has nothing checked quoted (one quoting the chat or a recruiter's note always stays);
+ * - its words hold every topic word of a must-have the résumé reading shows met, or of a skill it shows evidenced, each on
+ *   a checked quote, or every topic word of one part of its name that has two or more (`nameParts`), read with
+ *   `concernWords` (a plural, x-ray and radiography as one word); a concern sharing one word with it stays;
+ * - the conversation the scorecard read (`chat`: the lines the team may see, `teamScreenView`) never asked about that
+ *   must-have or skill: no assistant line or recruiter's note is about its name by the topic-word rule the chat's gaps
+ *   use (`sharesTopic`), and no question asked is that must-have's gap or a question about that skill (its
+ *   `competencyKey`). "Is your RDH license active in the state this office is in?" asked the hygienist's licence, so
+ *   "RDH license is not active in this state" stays, though the tapped "No" it rests on is too short to quote;
+ * - the scorecard's own finding for it quotes nothing.
+ * Read where a scorecard's concerns are shown (the candidate's page, the interviewer's brief, the board card's gap line),
+ * with the newest scorecard and the newest résumé reading, never when it is stored: the stored scorecard keeps every
+ * concern (the second review of the live-test fixes, 12 November 2026). With nothing left out, the same scorecard.
+ */
+export function withoutResumeShownConcerns<T extends Pick<ScreenAssessment, "concerns"> & Partial<Pick<ScreenAssessment, "requirementFindings" | "competencyFindings">>>(card: T, resume: Pick<EvidenceAssessment, "requirementFindings" | "competencyFindings"> | null | undefined, packet: Pick<RolePacket, "requirements" | "competencies"> & Partial<Pick<RolePacket, "screening">>, chat: ReadonlyArray<ChatLine>): T {
   if (!resume || !card.concerns?.length) return card;
   const checked = (e: { quote?: string; unquoted?: boolean } | undefined) => !!e?.quote?.trim() && !e.unquoted;
   const met = new Set((resume.requirementFindings ?? []).filter((f) => f.met === "yes" && checked(f.evidence)).map((f) => f.requirementKey));
   const evidenced = new Set((resume.competencyFindings ?? []).filter((f) => f.finding === "evidenced" && checked(f.evidence)).map((f) => f.competencyKey));
-  const subjects = [...packet.requirements.mustHaves.filter((m) => met.has(m.key)).map((m) => findingWords(m.text)), ...packet.competencies.filter((c) => evidenced.has(c.key)).map((c) => findingWords(c.name))].filter((words) => words.length > 0);
+  // the scorecard's own finding quoting something: the candidate spoke to it in the chat
+  const quotesMust = new Set((card.requirementFindings ?? []).filter((f) => f.evidence?.quote?.trim()).map((f) => f.requirementKey));
+  const quotesSkill = new Set((card.competencyFindings ?? []).filter((f) => f.evidence?.quote?.trim()).map((f) => f.competencyKey));
+  // what the conversation asked: its lines, the keys of the questions asked, and the skill each of those is about
+  const skillOf = new Map((packet.screening?.questions ?? []).flatMap((q) => (q.competencyKey ? [[q.key, q.competencyKey] as const] : [])));
+  const lines: Array<Set<string>> = [];
+  const askedKeys = new Set<string>();
+  const askedSkills = new Set<string>();
+  for (const t of chat) {
+    if (t.role !== "assistant" && t.role !== "recruiter") continue;
+    lines.push(new Set(concernWords(t.content)));
+    if (!t.questionKey) continue;
+    askedKeys.add(t.questionKey);
+    const skill = skillOf.get(t.questionKey);
+    if (skill) askedSkills.add(skill);
+  }
+  const named = (name: string) => ({ whole: concernWords(name), parts: nameParts(name).map(concernWords) });
+  const asked = (s: ReturnType<typeof named>) => lines.some((line) => sharesTopic(new Set(s.whole), line));
+  const subjects = [
+    ...packet.requirements.mustHaves.filter((m) => met.has(m.key) && !quotesMust.has(m.key) && !askedKeys.has(m.key)).map((m) => named(m.text)),
+    ...packet.competencies.filter((c) => evidenced.has(c.key) && !quotesSkill.has(c.key) && !askedSkills.has(c.key)).map((c) => named(c.name)),
+  ].filter((s) => s.whole.length > 0 && !asked(s));
   if (!subjects.length) return card;
   const silence = (c: ScreenAssessment["concerns"][number]) => {
     if (checked(c.evidence)) return false;
-    const said = new Set(findingWords(c.claim));
-    return subjects.some((words) => words.every((w) => said.has(w)));
+    const said = new Set(concernWords(c.claim));
+    const holds = (words: string[]) => words.every((w) => said.has(w));
+    return subjects.some((s) => holds(s.whole) || s.parts.some((p) => p.length >= 2 && holds(p)));
   };
   const concerns = card.concerns.filter((c) => !silence(c));
   return concerns.length === card.concerns.length ? card : { ...card, concerns };

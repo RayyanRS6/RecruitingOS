@@ -82,7 +82,8 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     companyId = co.id;
     companySlug = co.slug;
     await entitlements.applyPlan(container.db, companyId, "growth");
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
+    // The must-haves come last, on their own line: the fake intake reads a must-haves line to its end ("active CA RDH license").
+    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Just draft it.\nMust-haves: active CA RDH license" })).json()) as { session: { id: string } };
     roleId = (await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string }).roleId;
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "Looks right." })).status).toBe(200);
     const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: Packet } };
@@ -499,6 +500,42 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const cellAfter = await compared();
     expect(cellAfter.mustHaves[must.key]).toEqual({ met: "no", quote: "My RDH license lapsed last year" });
     expect(cellAfter.competencies[skill.key]?.finding).toBe("contradicted");
+  });
+
+  /**
+   * The second review of the live-test fixes (#1): a concern with nothing quoted about a must-have the résumé shows is the
+   * AI interview's silence only when the conversation its scorecard read never asked about it. A tapped "No" is too short
+   * to quote, so the concern resting on it looked like silence and was left out.
+   */
+  it("a concern about the licence the AI interview asked about stays on the candidate's page and in the brief, and the stored scorecard keeps it either way", async () => {
+    const cand = await apply("Nia", "Okafor");
+    const [pv] = await container.db.select().from(rolePackets).where(eq(rolePackets.roleId, roleId));
+    const full = pv.packet;
+    const must = full.requirements.mustHaves.find((m) => /licen/i.test(m.text)) ?? full.requirements.mustHaves[0]!;
+    expect(must.text).toBe("active CA RDH license");
+    const licenceQuestion = full.screening.questions.find((q) => q.key === "license_confirm")!;
+    expect(licenceQuestion, "the hygienist's AI interview asks about the licence").toBeTruthy();
+    const later = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+    const resumeReading = { overall: "strong", confidence: "high", summary: "Shows the licence.", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: must.key, met: "yes", evidence: { source: "resume", quote: "Active CA RDH license #55321" } }], anomalies: [], recommendation: "screen", rationale: "x" };
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "triage", packetVersion: cand.row.packetVersion, result: resumeReading as never, overall: "strong", confidence: "high", createdAt: later(1) });
+    // the scorecard's concern rests on her tapped "No", which the evidence rules leave unquoted; its own finding left the licence out
+    const notActive = { claim: "RDH license is not active in this state", evidence: { source: "screen", unquoted: true } };
+    const scorecard = { overall: "potential", confidence: "medium", summary: "Answered the questions.", strengths: [], concerns: [notActive], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "x" };
+    const [card] = await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard as never, overall: "potential", confidence: "medium", createdAt: later(2) }).returning();
+    const at = new Date(BASE).toISOString();
+    const [scr] = await container.db.insert(screens).values({ companyId, applicationId: cand.id, channel: "web", status: "completed", token: `asked-${cand.id}`, completedAt: at, assessmentId: card.id, answers: { [licenceQuestion.key]: "No" }, transcript: [{ role: "assistant", content: licenceQuestion.question, at, questionKey: licenceQuestion.key }, { role: "candidate", content: "No", at, questionKey: licenceQuestion.key, source: "tap" }] }).returning();
+    const shown = async () => ({
+      page: ((await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { assessments: Array<{ id: string; result: { concerns: Array<{ claim: string }> } }> }).assessments.find((r) => r.id === card.id)!.result.concerns.map((c) => c.claim),
+      brief: (await withTenant(container.db, companyId, (tx) => composeInterviewerBrief(tx, { applicationId: cand.id, candidateFirstName: "Nia", packet: full, roundKey: full.interviews.plan[0]!.key })))!.concerns.map((c) => c.claim),
+    });
+    // the AI interview asked about the licence: the concern stays
+    expect(await shown()).toEqual({ page: [notActive.claim], brief: [notActive.claim] });
+    // had it asked only about her work, the same concern is its silence about what the résumé shows
+    await container.db.update(screens).set({ transcript: [{ role: "assistant", content: "Tell me about your most recent hygiene work.", at, questionKey: "experience" }, { role: "candidate", content: "Six years of perio charting at a family practice.", at }] }).where(eq(screens.id, scr.id));
+    expect(await shown()).toEqual({ page: [], brief: [] });
+    // the stored scorecard keeps it either way
+    const [stored] = await container.db.select().from(assessments).where(eq(assessments.id, card.id));
+    expect((stored!.result as { concerns: unknown[] }).concerns).toEqual([notActive]);
   });
 
   it("the comparison view answers owners with the columns in the chosen order, refuses interviewers and takes five at most", async () => {

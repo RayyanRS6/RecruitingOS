@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import type { EvidenceAssessment, RolePacket, ScreenAssessment } from "@ros/contracts";
-import { countedFinding, screenAnswersSent, unsentScreenReadings } from "@ros/core";
+import { countedFinding, screenAnswersSent, teamScreenView, unsentScreenReadings } from "@ros/core";
 import { assessments, screens, type Queryable } from "@ros/db";
 import { answersOf } from "./screen-focus";
 import { withoutResumeShownConcerns } from "./screening";
@@ -77,14 +77,14 @@ const FOUND_OF: Record<"yes" | "partly" | "no", CompetencyFinding> = { yes: "evi
  * "no" first, then the better checked finding of the two readings (the live test, 12 November 2026: an AI interview that
  * never asked about a must-have the résumé shows had hidden the résumé's "yes" behind "unknown so far"). A skill nothing
  * counts keeps what the readings wrote (the AI interview's first), so "not seen yet" still says a reading looked. The
- * scorecard's concerns come without those that are only the chat's silence about what the résumé shows
- * (`withoutResumeShownConcerns`).
+ * scorecard's concerns come without those that are only the AI interview's silence about what the résumé shows, read
+ * with what the conversation it read asked (`withoutResumeShownConcerns`); the stored scorecard keeps them all.
  */
 export async function composeInterviewerBrief(q: Queryable, input: { applicationId: string; candidateFirstName: string; packet: RolePacket; roundKey: string }): Promise<InterviewerBrief | null> {
   const round = input.packet.interviews.plan.find((r) => r.key === input.roundKey);
   if (!round) return null;
   // A screen may have opened with the assessment's open questions; their answers sit beside them in `progress`, so the brief reads both places.
-  const screenRows = await q.select({ status: screens.status, answers: screens.answers, progress: screens.progress, completedAt: screens.completedAt, assessmentId: screens.assessmentId }).from(screens).where(eq(screens.applicationId, input.applicationId)).orderBy(desc(screens.createdAt));
+  const screenRows = await q.select({ status: screens.status, answers: screens.answers, progress: screens.progress, completedAt: screens.completedAt, assessmentId: screens.assessmentId, transcript: screens.transcript }).from(screens).where(eq(screens.applicationId, input.applicationId)).orderBy(desc(screens.createdAt));
   // Only what the candidate sent (founder decision of 9 October 2026): a conversation they did not send, and any reading of it, stay out of the brief.
   const all = await q.select().from(assessments).where(eq(assessments.applicationId, input.applicationId)).orderBy(desc(assessments.createdAt));
   const hidden = unsentScreenReadings(screenRows, all);
@@ -110,9 +110,10 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
     const raw = counted.status === "unknown" ? competencyOf(screenAsmt, key) ?? competencyOf(resumeAsmt, key) : competencyOf(readingOf(counted.source), key);
     return { finding: counted.status === "unknown" ? raw?.finding ?? null : FOUND_OF[counted.status], note: raw?.note ?? null };
   };
-  // The newest scorecard with the newest résumé reading: a concern stored before 12 November 2026 that is only the chat's
-  // silence about what the résumé shows reads as if it had been stored since.
-  const screenConcerns = screenAsmt ? withoutResumeShownConcerns(screenAsmt.result, resumeAsmt?.result, input.packet).concerns : [];
+  // The newest scorecard with the newest résumé reading, and the conversation it read (as the team may see it): a concern
+  // that is only the AI interview's silence about what the résumé shows is left out here, never in the stored scorecard.
+  const scoredScreen = screenAsmt ? screenRows.find((s) => s.assessmentId === screenAsmt.id) : undefined;
+  const screenConcerns = screenAsmt ? withoutResumeShownConcerns(screenAsmt.result, resumeAsmt?.result, input.packet, scoredScreen ? teamScreenView(scoredScreen).transcript : []).concerns : [];
 
   // What the candidate said about pay: their answer to each compensation question, and the expectation the scorecard recorded.
   const payKeys = new Set(input.packet.screening.questions.filter((x) => x.kind === "compensation").map((x) => x.key));
