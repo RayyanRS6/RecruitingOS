@@ -123,13 +123,34 @@ const skillFound = (c: { key: string }) => (r: Findings): Found | null => {
 
 /**
  * The finding the match score counts for one must-have or skill, and which reading it comes from (`resolve`): the brief
- * and Compare show this one, so neither disagrees with the breakdown (the live test, 12 November 2026: the AI interview's
- * "not known yet" hid the résumé's checked "yes"). "partly" is a "yes" with nothing quoted, or a partly shown one; a "no"
- * stands only on a checked quote; "unknown" when no reading says anything either way.
+ * and Compare show this one (a skill through `shownSkillFinding`), so neither disagrees with the breakdown (the live
+ * test, 12 November 2026: the AI interview's "not known yet" hid the résumé's checked "yes"). "partly" is a "yes" with
+ * nothing quoted, or a partly shown one; a "no" stands only on a checked quote; "unknown" when no reading says anything
+ * either way.
  */
 export function countedFinding(pair: ReadingPair, item: { key: string; mustHave: boolean }): { status: "yes" | "partly" | "no" | "unknown"; source: "resume" | "screen"; quote: string | null; unquoted: boolean } {
   const { status, source, quote, unquoted } = resolve(pair, item.mustHave ? mustHaveFound(item) : skillFound(item));
   return { status, source, quote, unquoted };
+}
+
+type SkillFinding = EvidenceAssessment["competencyFindings"][number]["finding"];
+const SKILL_FINDING: Record<Exclude<Status, "unknown">, SkillFinding> = { yes: "evidenced", partly: "partially_evidenced", no: "contradicted" };
+
+/**
+ * A skill's finding as the interviewer's brief and Compare show it, in a reading's own words: the one the score counts
+ * (`countedFinding`), with the note of the reading it comes from. Where the score counts none, a reading's entry reads
+ * "not_evidenced" ("not seen yet"), never "contradicted": with nothing counted an entry is either not evidenced or a "goes
+ * against it" with nothing checked quoted, which the score counts as not known (the second review of the live-test fixes,
+ * 12 November 2026). Its note then comes only from a "not_evidenced" entry (the AI interview's first), so the words around
+ * a claim nothing checked never reach the reader. Null when no reading has an entry.
+ */
+export function shownSkillFinding(pair: ReadingPair, key: string): { finding: SkillFinding; note: string | null } | null {
+  const entryOf = (r: ScoredReading | null) => (r?.result.competencyFindings ?? []).find((f) => f.competencyKey === key) ?? null;
+  const counted = countedFinding(pair, { key, mustHave: false });
+  if (counted.status !== "unknown") return { finding: SKILL_FINDING[counted.status], note: entryOf(counted.source === "screen" ? pair.screen : pair.resume)?.note ?? null };
+  const entries = [entryOf(pair.screen), entryOf(pair.resume)].filter((f): f is NonNullable<typeof f> => f !== null);
+  if (!entries.length) return null;
+  return { finding: "not_evidenced", note: entries.find((f) => f.finding === "not_evidenced")?.note ?? null };
 }
 
 const PCT: Record<Exclude<Status, "unknown">, number> = { yes: 100, partly: 50, no: 0 };

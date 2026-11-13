@@ -270,9 +270,14 @@ describe("the Interviews page", () => {
     expect(t).not.toMatch(/approve a new interview|fresh times go out/i);
   });
 
-  it("the brief says a skill checked only in your own interviews is for this interview, never 'not assessed yet' (live test, 12 November 2026)", () => {
+  it("the brief says a skill checked only in your own interviews is for this interview, never 'not assessed yet' (live test, 12 November 2026), and where each must-have's quote is from", () => {
     const skill = (key: string, name: string, evaluatedIn: string, finding: string | null = null) => ({ key, name, definition: `${name} defined.`, indicators: [], finding, note: null, evaluatedIn });
-    const brief = { candidateFirstName: "Maria", round: { key: "r1", title: "Working interview", purpose: "See the work.", durationMinutes: 30, format: "video" }, competencies: [skill("software", "Practice software", "interview"), skill("chairside", "Chairside skill", "both"), skill("patients", "Patient care", "both", "evidenced")], questions: [], mustHaves: [{ key: "mh_dr", text: "Digital radiography", met: "yes", quote: "Bitewing X-rays with digital sensors", source: "resume" }], strengths: [], concerns: [], screen: null, pay: null, includesPay: true };
+    const mustHaves = [
+      { key: "mh_dr", text: "Digital radiography", met: "yes", quote: "Bitewing X-rays with digital sensors", source: "resume", aboutPay: false },
+      { key: "mh_sat", text: "Saturdays", met: "yes", quote: "Yes, every other Saturday", source: "screen", aboutPay: false },
+      { key: "mh_cpr", text: "CPR card", met: "partially", quote: null, source: "resume", aboutPay: false },
+    ];
+    const brief = { candidateFirstName: "Maria", round: { key: "r1", title: "Working interview", purpose: "See the work.", durationMinutes: 30, format: "video" }, competencies: [skill("software", "Practice software", "interview"), skill("chairside", "Chairside skill", "both"), skill("patients", "Patient care", "both", "evidenced")], questions: [], mustHaves, strengths: [], concerns: [], screen: null, pay: null, includesPay: true };
     const t = text(page(base({ brief })));
     expect(t).toContain("Practice software : Practice software defined. for this interview");
     expect(t).not.toContain("Practice software defined. not assessed yet");
@@ -280,6 +285,11 @@ describe("the Interviews page", () => {
     expect(t).toContain("Chairside skill : Chairside skill defined. not assessed yet");
     expect(t).toContain("Patient care : Patient care defined. seen");
     expect(t).toContain('Digital radiography met "Bitewing X-rays with digital sensors"');
+    // the second review of the live-test fixes (#16): each quote says where it is from, as the email does; no quote, no words
+    expect(t).toContain('Digital radiography met "Bitewing X-rays with digital sensors", from the résumé');
+    expect(t).toContain('Saturdays met "Yes, every other Saturday", in the AI interview');
+    expect(t).toContain("CPR card partly met");
+    expect(t.match(/from the résumé/g)).toHaveLength(1);
   });
 });
 

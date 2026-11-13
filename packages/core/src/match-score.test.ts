@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MATCH_FIT_LABEL, MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, matchWeightOf, onlyInOwnInterviews, previewMatch, repeatsMustHave, scoreRank, skillsInScore, type EvidenceAssessment, type MatchCriterion, type MatchFit, type MatchScore, type RolePacket, type WeighableRequirement } from "@ros/contracts";
 import { interviewInScore } from "./ai-interview";
-import { countedFinding, coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, scoredSkill, type ScoredReading } from "./match-score";
+import { countedFinding, coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, scoredSkill, shownSkillFinding, type ScoredReading } from "./match-score";
 
 /**
  * The match score (founder decision B2; the owner, 6 November 2026): worked out by code from the stored, quote-checked
@@ -883,6 +883,23 @@ describe("the finding the score counts, for the brief and Compare (countedFindin
     expect(countedFinding(pair(resume, said([])), { key: "patients", mustHave: false })).toMatchObject({ status: "unknown", quote: null });
     expect(countedFinding(pair(reading("triage", [must("rdh_license", "no")])), { key: "rdh_license", mustHave: true })).toMatchObject({ status: "unknown", quote: null });
     expect(countedFinding(pair(null, said([])), { key: "rdh_license", mustHave: true })).toMatchObject({ status: "unknown", source: "screen" });
+  });
+
+  // The second review of the live-test fixes (#3, #20, #38): the brief said "contradicted by the evidence" for a skill the
+  // score, the candidate's page and Compare count as not known.
+  it("shows a skill the score counts nothing for as not seen yet, never as going against them, with a note only from an entry that says so", () => {
+    const unchecked: Comp = { competencyKey: "chairside", finding: "contradicted", evidence: { source: "screen", unquoted: true }, note: "quote could not be verified against the source" };
+    const notSeen: Comp = { competencyKey: "chairside", finding: "not_evidenced", note: "Not mentioned in the résumé." };
+    expect(shownSkillFinding(pair(reading("triage", [], [notSeen]), said([], [unchecked])), "chairside")).toEqual({ finding: "not_evidenced", note: "Not mentioned in the résumé." });
+    // alone, an unchecked "goes against it" reads not seen yet with no note, from either reading
+    expect(shownSkillFinding(pair(reading("triage", []), said([], [unchecked])), "chairside")).toEqual({ finding: "not_evidenced", note: null });
+    expect(shownSkillFinding(pair(reading("triage", [], [skill("chairside", "contradicted")])), "chairside")).toEqual({ finding: "not_evidenced", note: null });
+    // a checked one goes against them, as in the score; the score's own finding comes with the note of the reading it is from
+    expect(shownSkillFinding(pair(resume, said([], [{ competencyKey: "chairside", finding: "contradicted", evidence: { source: "screen", quote: "I never work chairside" } }])), "chairside")).toEqual({ finding: "contradicted", note: null });
+    expect(shownSkillFinding(pair(resume, said([], [notSeen])), "chairside")).toEqual({ finding: "evidenced", note: null });
+    expect(shownSkillFinding(pair(reading("triage", [], [{ ...notSeen, finding: "partially_evidenced", note: "Assisted on some procedures." }])), "chairside")).toEqual({ finding: "partially_evidenced", note: "Assisted on some procedures." });
+    // no entry anywhere: nothing to show
+    expect(shownSkillFinding(pair(resume, said([])), "patients")).toBeNull();
   });
 
   it("agrees with the breakdown on every requirement, over 400 random cases with screening chats and interview-only skills", () => {

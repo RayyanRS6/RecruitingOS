@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { quoteWithSource } from "@ros/contracts";
 import { Link, useNavigate, useParams } from "../nav";
 import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Eyebrow, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, useTableSort } from "@ros/ui";
 import { api, ApiError, isCandidateLocked, type InterviewBooked, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
@@ -379,7 +380,8 @@ function BriefCard({ brief }: { brief: InterviewerBrief }) {
         <div>
           <Eyebrow as="h3" className="mb-2 flex">Must-haves and what we know</Eyebrow>
           <ul className={BRIEF_LIST}>
-            {brief.mustHaves.map((m) => <li key={m.key}>{m.text} <Chip tone={MET_TONE[m.met] ?? "neutral"}>{MET_LABEL[m.met] ?? m.met}</Chip>{m.quote ? <span className="muted"> "{m.quote}"</span> : null}</li>)}
+            {/* each quote says where it is from ("from the résumé", "in the AI interview"), as the email does */}
+            {brief.mustHaves.map((m) => <li key={m.key}>{m.text} <Chip tone={MET_TONE[m.met] ?? "neutral"}>{MET_LABEL[m.met] ?? m.met}</Chip>{m.quote ? <span className="muted"> {quoteWithSource(m.quote, m.source)}</span> : null}</li>)}
           </ul>
         </div>
         <div>

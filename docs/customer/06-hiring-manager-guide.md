@@ -311,7 +311,7 @@ Reminders go to the candidate and the interviewers one day before and two hours 
 - **Message the candidate** opens the candidate's page with the message box ready (section 15).
 - After the interview, **After the interview** shows the decision, or **Record the decision**, which takes you to the candidate's page (section 12).
 
-Interviewers receive the booking, the reminders and the link, and a brief: in the confirmation email and on the interview page under **Your brief**. It says what the round is for, what to look for, the questions the plan suggests, how the candidate stands on your must-haves, strengths so far, what is worth exploring, and what they said in the screen. Interviewers never see pay. They can open only the candidates they interview, and they do not see the Talent list.
+Interviewers receive the booking, the reminders and the link, and a brief: in the confirmation email and on the interview page under **Your brief**. It says what the round is for, what to look for, the questions the plan suggests, how the candidate stands on your must-haves (each quote says where it is from, such as the résumé or the AI interview), strengths so far, what is worth exploring, and what they said in the screen. Interviewers never see pay. They can open only the candidates they interview, and they do not see the Talent list.
 
 ## 12. Recording the decision after an interview
 

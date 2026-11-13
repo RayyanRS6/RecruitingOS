@@ -1,8 +1,8 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
-import { can, computeSlots, createEscalation, emit, freshSchedulingWindow, holidaysBetween, loadBusinessCalendar, missingAvailability, newTimesOffered, noCommonTimesNoticeKey, notify, openFollowUpOf, roleTakenOver, slotStillAhead, slotStillFree, transition, zoneShortName } from "@ros/core";
+import { computeSlots, createEscalation, emit, freshSchedulingWindow, holidaysBetween, loadBusinessCalendar, missingAvailability, newTimesOffered, noCommonTimesNoticeKey, notify, openFollowUpOf, roleTakenOver, slotStillAhead, slotStillFree, transition, zoneShortName } from "@ros/core";
 import { applications, candidates, communications, companies, interviewFollowups, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
-import { AUTO_TIMES_TAKEN_OVER, HELD_REASON, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsLapsed, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
+import { AUTO_TIMES_TAKEN_OVER, HELD_REASON, briefForReader, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsLapsed, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
 import { randomToken } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { newTimesStoppedByTakeover, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia } from "../new-times-reopen";
@@ -455,11 +455,13 @@ export const scheduleInterview: WorkflowDefinition<State> = {
         const place = placeForTheTeam(b);
         await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `${word}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${when} (${zone}).${place ? ` ${place}` : ""}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
         await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `${word}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${when} with ${b.participants.map((p) => p.firstName).join(", ")}.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
-        // The interviewer's brief (F7, F8) rides with the confirmation: the round, what it covers, what the evidence says so far. Pay only for roles that may see it.
+        // The interviewer's brief (F7, F8) rides with the confirmation: the round, what it covers, what the evidence says so
+        // far. Pay only for roles that may see it, quotes holding the candidate's contact details only for those who may open
+        // their application (`briefForReader`), as on the interview page.
         const brief = b.packet ? await composeInterviewerBrief(ctx.q, { applicationId: b.app.id, candidateFirstName: b.candidate.firstName, packet: b.packet, roundKey: b.iv.roundKey }) : null;
         const memberRoles = new Map((await ctx.q.select({ userId: memberships.userId, role: memberships.role }).from(memberships).where(and(eq(memberships.companyId, ctx.companyId), inArray(memberships.userId, b.participants.map((p) => p.userId))))).map((m) => [m.userId, m.role as MembershipRole]));
         for (const p of b.participants) {
-          const mine = brief ? (can(memberRoles.get(p.userId) ?? null, "compensation.read") ? brief : redactBriefPay(brief)) : null;
+          const mine = brief ? briefForReader(brief, memberRoles.get(p.userId) ?? null) : null;
           // Team mail leaves through the outbox too: recorded here, sent after this step commits, never twice per attempt.
           await queueCommunication(ctx.q, ctx.services.integrations, { channel: "email", companyId: ctx.companyId, to: p.email, from: mailbox(ctx.services.integrations.env.productName, ctx.services.integrations.env.fromAddress), subject: `${word}: ${b.candidate.firstName} ${b.candidate.lastName} for ${b.role.title}`, text: `${b.iv.title} on ${when} (${zone}).${place ? `\n${place}` : ""}\n\nOpen: ${ctx.services.env.appBaseUrl}/interviews/${b.iv.id}${mine ? `\n\n${renderInterviewerBriefText(mine)}` : ""}`, templateKey: "interview_confirmed_interviewer", idempotencyKey: `iv_confirm_int:${b.iv.id}:${b.iv.attempt}:${p.userId}`, tags: { template: "interview_confirmed_interviewer" }, actor: ctx.actor, correlationId: ctx.run.id }, ctx.now);
         }

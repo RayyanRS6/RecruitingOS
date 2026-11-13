@@ -1,7 +1,7 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Actor, MembershipRole } from "@ros/contracts";
-import { STAGE_LABEL, audit, baseOwnerStage, can, ownerGroup } from "@ros/core";
-import { composeInterviewerBrief, redactBriefPay, type InterviewerBrief } from "@ros/agents";
+import { STAGE_LABEL, audit, baseOwnerStage, ownerGroup } from "@ros/core";
+import { briefForReader, composeInterviewerBrief, type InterviewerBrief } from "@ros/agents";
 import { applicationNotes, applications, candidates, interviewParticipants, interviews, rolePackets, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
@@ -21,7 +21,11 @@ export async function participantInterviews(tx: Tx, input: { applicationId: stri
   return rows.map((r) => r.iv);
 }
 
-/** The brief for one interview, with pay only for roles that hold compensation.read. Null when the packet no longer has the round. */
+/**
+ * The brief for one interview as the viewer's role may see it (`briefForReader`): pay only for roles that hold
+ * compensation.read, quotes holding the candidate's contact details only for roles that hold application.read. Null when
+ * the packet no longer has the round.
+ */
 export async function interviewBriefFor(tx: Tx, input: { interview: Pick<InterviewRow, "applicationId" | "roundKey">; viewerRole: MembershipRole | null }): Promise<InterviewerBrief | null> {
   const [app] = await tx.select().from(applications).where(eq(applications.id, input.interview.applicationId)).limit(1);
   if (!app) return null;
@@ -30,7 +34,7 @@ export async function interviewBriefFor(tx: Tx, input: { interview: Pick<Intervi
   if (!pv) return null;
   const brief = await composeInterviewerBrief(tx, { applicationId: app.id, candidateFirstName: cand?.firstName ?? "the candidate", packet: pv.packet, roundKey: input.interview.roundKey });
   if (!brief) return null;
-  return can(input.viewerRole, "compensation.read") ? brief : redactBriefPay(brief);
+  return briefForReader(brief, input.viewerRole);
 }
 
 /** Interviews that count as having met the candidate: it took place, they did not show, or it has started. */

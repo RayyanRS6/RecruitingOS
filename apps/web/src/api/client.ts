@@ -340,7 +340,7 @@ export type CandidateEmailState = "held" | "failed" | "no_email" | null;
 export type InterviewBooked = InterviewSummary & { candidateNotice?: "queued" | "held" | "not_sent_no_email" | null; moved?: boolean; /** The same day, time, length and place again: nothing changed and no email goes (11 November 2026). */ unchanged?: boolean; /** The same start with new details: the email says the details changed, never that it moved (11 November 2026). */ changed?: boolean };
 /**
  * The interviewer's brief (F7, F8): what the round is for, what it covers, what the evidence says so far. `pay` is present only for roles that may see it (packages/agents/src/interviewer-brief.ts).
- * Each must-have's `met` and each skill's `finding` is the one the match score counts (12 November 2026). A skill's `evaluatedIn` is "interview" when it is checked only in the team's own interviews (read by no AI review); older answers leave it out.
+ * Each must-have's `met` and each skill's `finding` is the one the match score counts (12 November 2026); a skill it counts nothing for reads "not_evidenced" when a reading wrote about it, never "contradicted". A must-have's `source` is where its quote is from, said after the quote (`quoteWithSource`). A skill's `evaluatedIn` is "interview" when it is checked only in the team's own interviews (read by no AI review); older answers leave it out.
  */
 export type InterviewerBrief = {
   candidateFirstName: string;
