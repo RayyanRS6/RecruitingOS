@@ -1225,12 +1225,17 @@ const TOO_MANY_MUST_HAVES = "Your answers already have six must-haves, the most 
  * into them, so writing the draft again keeps it (live test, 12 Nov 2026: a rewrite brought back the words a change by
  * chat had fixed). A draft written from these very answers gives its lists whole, in its own words; otherwise only what
  * the change added or took out moves, so an answer the draft does not have yet stays, and a change that would leave the
- * answers more than six must-haves is refused (`too_many_must_haves`), never stored or cut short. A list value taken out
- * is held out of what the assistant sends back, one put back is no longer held, and what changed is not asked on a card
+ * answers more than six must-haves is refused (`too_many_must_haves`), never stored or cut short. There, a value the
+ * change took out (or reworded) leaves the answers in the words the draft was written from: its own, or for a must-have
+ * the owner's words intake.compile v6 turns round ("No active California RDA license" for "Active California RDA
+ * license"). A value the answers may still hold in other words (the model's rewording, or the hiring guide's when the
+ * owner chose none) cannot be followed: `uncarried` says so, since writing the draft again could bring it back, unless
+ * the owner already took it out with Edit (review of the change-by-chat fix, 13 Nov 2026). A list value taken out is
+ * held out of what the assistant sends back, one put back is no longer held, and what changed is not asked on a card
  * again. A deal-breaker counted openly as a must-have is recorded as offered, so a reworded must-have never brings it
  * back as a card. A draft up to date with the answers before the change stays so.
  */
-export function answersFollowingChange(facts: IntakeFacts, state: IntakeServerState, before: DraftRolePacket, after: DraftRolePacket): { facts: IntakeFacts; state: IntakeServerState } {
+export function answersFollowingChange(facts: IntakeFacts, state: IntakeServerState, before: DraftRolePacket, after: DraftRolePacket): { facts: IntakeFacts; state: IntakeServerState; uncarried: boolean } {
   const f = normalizeFacts(structuredClone(facts));
   const s = structuredClone(state);
   const key = s.draft?.factsKey;
@@ -1238,15 +1243,21 @@ export function answersFollowingChange(facts: IntakeFacts, state: IntakeServerSt
   const same = (a: string, b: string) => normalizeCriterion(a) === normalizeCriterion(b);
   const has = (list: readonly string[], v: string) => list.some((x) => same(x, v));
   let changed = false;
+  let uncarried = false;
   for (const l of LISTS_ON_DRAFT) {
     const was = l.of(before);
     const now = l.of(after);
     if (was.length === now.length && was.every((v, i) => v === now[i])) continue;
     changed = true;
     const mine = f[l.fact];
-    const next = upToDate ? [...now] : [...mine.filter((v) => has(now, v) || !has(was, v)), ...now.filter((v) => !has(was, v) && !has(mine, v))];
+    /** Whether the draft writes this answer as `v`: in its words, or a must-have the way intake.compile v6 turns it round. */
+    const writes = (answer: string, v: string) => same(answer, v) || (l.fact === "mustHaves" && same(mustHaveOf(answer), v));
+    const gone = was.filter((v) => !has(now, v));
+    const kept = mine.filter((m) => has(now, m) || !gone.some((v) => writes(m, v)));
+    const next = upToDate ? [...now] : [...kept, ...now.filter((v) => !has(was, v) && !kept.some((m) => writes(m, v)))];
     if (l.fact === "mustHaves" && next.length > MAX_MUST_HAVES) throw new IntakeEditError("too_many_must_haves", TOO_MANY_MUST_HAVES);
-    const out = [...was, ...mine].filter((v) => !has(next, v));
+    if (!upToDate) uncarried ||= gone.some((v) => !mine.some((m) => writes(m, v)) && !s.removed.some((r) => r.field === l.fact && writes(r.value, v)));
+    const out = [...gone, ...mine.filter((m) => !has(next, m))];
     for (const v of out) if (!s.removed.some((r) => r.field === l.fact && same(r.value, v))) s.removed.push({ field: l.fact, value: v });
     s.removed = s.removed.filter((r) => !(r.field === l.fact && has(next, r.value)));
     if (l.fact === "mustHaves") {
@@ -1269,7 +1280,7 @@ export function answersFollowingChange(facts: IntakeFacts, state: IntakeServerSt
   }
   s.answeredFacts = holdFacts(s.answeredFacts, held);
   if (changed && upToDate && s.draft) s.draft = { ...s.draft, factsKey: draftFactsKey(f) };
-  return { facts: f, state: s };
+  return { facts: f, state: s, uncarried };
 }
 
 /**
@@ -1300,7 +1311,8 @@ export function reasonFollowingChange(facts: IntakeFacts, state: IntakeServerSta
  * hold too (the title, the schedule, full or part time, the work model, why you are hiring, and the words of the
  * must-haves and nice-to-haves), the parts set by rule (pay, who decides and who interviews, the deal-breakers, every
  * question on the form holding) and the record (`provenance`). A must-have or nice-to-have whose words both drafts hold
- * still counts for why it matters and how it is checked; one the change added or took out is carried by its words.
+ * still counts for why it matters and how it is checked; one the change added or took out is carried by its words, and
+ * `answersFollowingChange` says when the answers could not follow it.
  */
 function writtenAfresh(p: DraftRolePacket, other: DraftRolePacket): unknown {
   const { provenance: _record, compensation: _pay, ...rest } = p;
@@ -1336,8 +1348,8 @@ export function lostOnRewrite(before: DraftRolePacket, after: DraftRolePacket): 
  * other; `onSaved` records what the caller needs (the proposal's outcome, the event) in the same transaction. A change to
  * why you are hiring goes into the answers first (`reasonFollowingChange`), and a change to what the answers hold too
  * goes into them (`answersFollowingChange`, which refuses a seventh must-have before anything is saved). The count of
- * saved changes goes up by one only when writing the draft again would lose part of this one (`lostOnRewrite`), and the
- * page says so first.
+ * saved changes goes up by one only when writing the draft again would lose part of this one (`lostOnRewrite`, or a
+ * value taken out that the answers could not follow, `uncarried`), and the page says so first.
  */
 export async function storeDraftPacket(
   db: Db,
@@ -1356,9 +1368,9 @@ export async function storeDraftPacket(
     const facts = reasoned.facts;
     const ctx = contextFrom(loaded, { benchmark: loaded.state.benchmark ?? null, gap: loaded.state.benchmarkGap });
     const draft = finalizeDraft(input.draft, { ...ctx, facts }, { sessionId: loaded.session.id, aiRunId: loaded.state.draft?.aiRunId ?? "", state: reasoned.state, actor: input.actor, previousFlags: current?.provenance.flags ?? [], benchmark: loaded.state.benchmark ?? null, messages: loaded.session.messages });
-    const followed = current ? answersFollowingChange(facts, reasoned.state, current, draft) : { facts, state: reasoned.state };
+    const followed = current ? answersFollowingChange(facts, reasoned.state, current, draft) : { facts, state: reasoned.state, uncarried: false };
     const state = followed.state;
-    if (state.draft && (!current || lostOnRewrite(current, draft))) state.draft = { ...state.draft, edits: (state.draft.edits ?? 0) + 1 };
+    if (state.draft && (!current || followed.uncarried || lostOnRewrite(current, draft))) state.draft = { ...state.draft, edits: (state.draft.edits ?? 0) + 1 };
     await q.update(intakeSessions).set({ draftPacket: draft, facts: followed.facts, serverState: state }).where(eq(intakeSessions.id, loaded.session.id));
     if (opts.onSaved) await opts.onSaved(q, draft);
     return draft;

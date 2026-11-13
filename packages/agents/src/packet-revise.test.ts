@@ -166,6 +166,11 @@ describe("the packet.revise prompt", () => {
     expect(plainWords("Packet updated. The Role Packet lists it; the draft packet's pay stays.")).toBe("Job updated. The job lists it; the draft's pay stays.");
     expect(plainWords("Both job packets agree.")).toBe("Both jobs agree.");
     expect(plainWords("Nothing changed. Draft packet is already right.")).toBe("Nothing changed. Draft is already right.");
+    // with a word such as current, existing or saved between (review of the change-by-chat fix, 13 Nov 2026)
+    expect(plainWords("Nothing needs to change: the current packet already lists an active RDH license.")).toBe("Nothing needs to change: the current job already lists an active RDH license.");
+    expect(plainWords("I updated the existing packet's schedule.")).toBe("I updated the existing job's schedule.");
+    expect(plainWords("The current packet has no pay range. Your saved packet lists it, as does the same updated packet.")).toBe("The current job has no pay range. Your saved job lists it, as does the same updated job.");
+    expect(plainWords("Current packet lists it.")).toBe("Current job lists it.");
     // only the word itself
     expect(plainWords("A packetized list stays as it is.")).toBe("A packetized list stays as it is.");
     const revision = { summary: "The packet already requires it.", question: "Should the packet say more?", changes: {}, notChanged: [{ request: "Put it in the packet", reason: "The packet already has it." }] };
@@ -184,6 +189,7 @@ describe("the packet.revise prompt", () => {
       "I added a duty: prepare new patient packets before each visit.",
       "Hand out welcome packets and the onboarding packet.",
       "Pay packets go out on Fridays, with the new hire packet and the information packet.",
+      "Hand out the updated welcome packet, and the current patient packets.",
       'Nothing needed to change: the job already says "Prepare new patient packets before each visit."',
       "Nothing needed to change: the job already says “the packet goes out first”.",
       // a name: before a capital, or the company's own

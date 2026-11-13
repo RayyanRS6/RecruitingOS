@@ -363,6 +363,45 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(kept.facts.mustHaves).toContain("Dentrix experience");
       await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
     });
+
+    // Review of the change-by-chat fix, 13 Nov 2026: with the draft behind the answers, a must-have the draft words as the
+    // requirement, taken out by chat, stayed in the answers as the owner typed it and was not counted, so "Write it again"
+    // brought it back with no warning.
+    it("behind the answers, a must-have taken out by chat leaves them in the owner's words too, or Write it again warns first", async () => {
+      const texts = (d: DraftRolePacket) => d.requirements.mustHaves.map((m) => m.text);
+      const confirm = async (id: string, message: string) => {
+        const p = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message }));
+        expect(p.sections).toEqual(["requirements"]);
+        expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${p.revisionId}/apply`)).status).toBe(201);
+        return session(id);
+      };
+      const id = await writtenDraft();
+      await answer(id, { add: [{ field: "mustHaves", value: "No active California RDA license" }] });
+      const written = await read<{ draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`));
+      // the draft words it as the requirement (intake.compile v6)
+      expect(texts(written.draft)).toContain("Active California RDA license");
+      const moved = await answer(id, { set: { locationText: "Tustin, CA" } });
+      expect(moved.readiness).toMatchObject({ draftOutOfDate: true, draftEdits: 0 });
+      const taken = await confirm(id, "Take out Active California RDA license");
+      expect(taken.facts.mustHaves).not.toContain("No active California RDA license");
+      expect(taken.readiness).toMatchObject({ draftOutOfDate: true, draftEdits: 0 });
+      // so writing it again keeps it out
+      const again = await read<{ draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`));
+      expect(texts(again.draft)).not.toContain("Active California RDA license");
+      await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
+      // with no must-have of the owner's, the draft has the hiring guide's, and writing it again drafts them again: taking
+      // one out by chat is counted, so "Write it again" asks first
+      const guided = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: MESSAGE.replace(" Must-haves: active CA RDH license.", "") }))).session.id;
+      const fromGuide = await read<{ session: IntakeSessionView; draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${guided}/draft`));
+      expect(fromGuide.session.facts.mustHaves).toEqual([]);
+      expect(texts(fromGuide.draft).length).toBeGreaterThan(1);
+      await answer(guided, { set: { locationText: "Tustin, CA" } });
+      const counted = await confirm(guided, `Take out ${texts(fromGuide.draft)[0]}`);
+      expect(texts(counted.draft!)).not.toContain(texts(fromGuide.draft)[0]);
+      expect(counted.facts.mustHaves).toEqual([]);
+      expect(counted.readiness).toMatchObject({ draftOutOfDate: true, draftEdits: 1 });
+      await json(owner, "POST", `/api/v1/intake/sessions/${guided}/abandon`);
+    });
   });
 
   describe("on a saved role", () => {

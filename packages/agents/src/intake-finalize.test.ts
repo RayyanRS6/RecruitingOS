@@ -173,9 +173,9 @@ describe("finalizeDraft never keeps what the model says a person decided", () =>
   });
 
   it("writes the model's own lines with 'the job', never 'the packet', as the owner reads them (live test, 12 Nov 2026)", () => {
-    const raw = asDraft(samplePacket((p) => { p.provenance.assumptions = ["The packet assumes a Monday start.", "Packet pay follows the playbook.", "Assumed the draft packet's schedule."]; }));
+    const raw = asDraft(samplePacket((p) => { p.provenance.assumptions = ["The packet assumes a Monday start.", "Packet pay follows the playbook.", "Assumed the draft packet's schedule.", "The current packet keeps a Monday start."]; }));
     const draft = finalizeDraft(raw, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
-    expect(draft.provenance.assumptions).toEqual(expect.arrayContaining(["The job assumes a Monday start.", "Job pay follows the playbook.", "Assumed the draft's schedule."]));
+    expect(draft.provenance.assumptions).toEqual(expect.arrayContaining(["The job assumes a Monday start.", "Job pay follows the playbook.", "Assumed the draft's schedule.", "The current job keeps a Monday start."]));
     expect(draft.provenance.assumptions.join(" ")).not.toMatch(/packet/i);
   });
 
@@ -359,7 +359,7 @@ describe("a change confirmed on the draft goes into the answers too, so writing 
     const f = facts({ mustHaves: [...MUSTS] });
     const s = written(f);
     const out = answersFollowingChange(f, s, draft(), draft((p) => { p.description.publicJobDescription += " We close at noon on Fridays."; p.communication.tone = "formal"; }));
-    expect(out).toEqual({ facts: normalizeFacts(f), state: s });
+    expect(out).toEqual({ facts: normalizeFacts(f), state: s, uncarried: false });
   });
 
   // Review of the live-test fixes, 12 Nov 2026 (#28, #69): the seventh, appended last, was dropped by every later read.
@@ -381,6 +381,50 @@ describe("a change confirmed on the draft goes into the answers too, so writing 
     // written from these very answers, the draft's own list is taken whole, as it holds at most six
     const upToDate = facts({ mustHaves: five });
     expect(answersFollowingChange(upToDate, written(upToDate), before, after).facts.mustHaves).toEqual([...five, "Dentrix experience"]);
+  });
+
+  // Review of the change-by-chat fix, 13 Nov 2026: with the draft behind the answers, a must-have the draft words as the
+  // requirement, taken out by chat, stayed in the answers as the owner typed it, and was not counted, so "Write it
+  // again" brought it back with no warning.
+  it("behind the answers, a value taken out leaves them in the words the draft was written from, or is said not to", () => {
+    const drafted = facts({ mustHaves: ["No active California RDA license", "Chairside work"] });
+    // "Where the job is" changed on Edit since: the draft is out of date
+    const f = { ...drafted, locationText: "Tustin, CA" };
+    const s = written(drafted);
+    const before = draft((p) => { p.requirements.mustHaves = [must("Active California RDA license"), must("Chairside experience in a dental office")]; });
+    const without = (...texts: string[]) => draft((p) => { p.requirements.mustHaves = texts.map(must); });
+    // the owner's words, turned round when the draft was written (intake.compile v6), leave with the must-have
+    const out = answersFollowingChange(f, s, before, without("Chairside experience in a dental office"));
+    expect(out.facts.mustHaves).toEqual(["Chairside work"]);
+    expect(out.state.removed).toEqual(expect.arrayContaining([{ field: "mustHaves", value: "Active California RDA license" }, { field: "mustHaves", value: "No active California RDA license" }]));
+    expect(out.uncarried).toBe(false);
+    expect(draftKeyMatches(out.state.draft!.factsKey!, out.facts)).toBe(false);
+    // reworded, the new words take their place
+    const reworded = answersFollowingChange(f, s, before, without("Active RDA license in California", "Chairside experience in a dental office"));
+    expect(reworded.facts.mustHaves).toEqual(["Chairside work", "Active RDA license in California"]);
+    expect(reworded.uncarried).toBe(false);
+    // the owner's words turned round on the draft itself: the requirement goes in, as the owner's words go out
+    const turned = answersFollowingChange(f, s, without("No active California RDA license", "Chairside experience in a dental office"), before);
+    expect(turned.facts.mustHaves).toEqual(["Chairside work", "Active California RDA license"]);
+    expect(turned.uncarried).toBe(false);
+    // added while the answers already hold it in the words it is written from: never twice
+    const added = answersFollowingChange(f, s, without("Chairside experience in a dental office"), before);
+    expect(added.facts.mustHaves).toEqual(["No active California RDA license", "Chairside work"]);
+    // the model's own words for "Chairside work" are no answer's: the answers keep it, and it is said not to follow
+    const own = answersFollowingChange(f, s, before, without("Active California RDA license"));
+    expect(own.facts.mustHaves).toEqual(["No active California RDA license", "Chairside work"]);
+    expect(own.uncarried).toBe(true);
+    // nor does a hiring guide's must-have when the owner chose none: writing it again drafts the guide's again
+    const none = facts({ mustHaves: [] });
+    expect(answersFollowingChange({ ...none, locationText: "Tustin, CA" }, written(none), draft(), draft((p) => { p.requirements.mustHaves = p.requirements.mustHaves.slice(1); })).uncarried).toBe(true);
+    // taken out with Edit already, in the words the draft was written from: nothing comes back
+    const edited = answersFollowingChange({ ...f, mustHaves: ["Chairside work"] }, written(drafted, { removed: [{ field: "mustHaves", value: "No active California RDA license" }] }), before, without("Chairside experience in a dental office"));
+    expect(edited.facts.mustHaves).toEqual(["Chairside work"]);
+    expect(edited.uncarried).toBe(false);
+    // written from these very answers, the list is taken whole: nothing is left to follow
+    const whole = answersFollowingChange(drafted, written(drafted), before, without("Active California RDA license"));
+    expect(whole.facts.mustHaves).toEqual(["Active California RDA license"]);
+    expect(whole.uncarried).toBe(false);
   });
 });
 

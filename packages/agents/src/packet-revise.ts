@@ -86,6 +86,26 @@ export async function proposeRevision(
 const PACKET_WORD = /\b(?:(role|job|draft)(?:['\u2019]s)?\s+)?(packet)(s)?\b/gi;
 /** The words before "packet" that make it the job's record ("the packet", "your packet"), not another thing ("patient packets"). */
 const RECORD_BEFORE = new Set(["the", "this", "that", "your", "its", "our", "each", "a", "an"]);
+/**
+ * Words that only say which of the job's records it is, between one of those (or the start of a sentence) and "packet":
+ * "the current packet", "your saved packet" (review of the change-by-chat fix, 13 Nov 2026). Never a noun, so "the
+ * updated welcome packet" and "the new hire packet" stay the thing itself.
+ */
+const RECORD_QUALIFIER = new Set(["current", "existing", "saved", "same", "updated", "latest", "whole", "entire", "original", "revised", "provided", "given"]);
+
+/** Whether the text up to here ends where a sentence starts. */
+const atSentenceStart = (before: string) => /(?:^|[.!?]["'\u201d)]?\s+)$/.test(before);
+
+/** The text before "packet" without the words that only qualify it ("the current " reads "the "). */
+function withoutQualifiers(before: string): string {
+  let rest = before;
+  let last = /([A-Za-z]+)\s+$/.exec(rest);
+  while (last && RECORD_QUALIFIER.has(last[1].toLowerCase())) {
+    rest = rest.slice(0, last.index);
+    last = /([A-Za-z]+)\s+$/.exec(rest);
+  }
+  return rest;
+}
 
 /** Whether the text up to here is inside double quotes ("\u2026" or \u201c\u2026\u201d): words quoted are someone's own. */
 function quoted(before: string): boolean {
@@ -102,17 +122,19 @@ function spansOf(text: string, name: string | undefined): Array<[number, number]
 /**
  * The person's words for the job's record, never "packet" (live test, 12 Nov 2026: "I did not change anything because
  * the packet already says this."): "the draft packet" reads "the draft"; the Role Packet, and a packet after the, this,
- * that, your, its, our, each, a or an or starting a sentence, reads "job"; a plural stays one, and it is in lower case
- * unless it starts a sentence. Any other "packet" is the thing itself and keeps its word (review of the live-test fixes,
- * 12 Nov 2026: "new patient packets" read "new patient jobs"): after another word ("new patient packets", "a welcome
- * packet", "pay packets"), inside double quotes, before a name ("Packet Dental", not "I") and inside the company's name.
+ * that, your, its, our, each, a or an or starting a sentence, also with a word such as current, existing or saved
+ * between ("the current packet", "Current packet"), reads "job"; a plural stays one, and it is in lower case unless it
+ * starts a sentence. Any other "packet" is the thing itself and keeps its word (review of the live-test fixes, 12 Nov
+ * 2026: "new patient packets" read "new patient jobs"): after another noun ("new patient packets", "a welcome packet",
+ * "pay packets"), inside double quotes, before a name ("Packet Dental", not "I") and inside the company's name.
  */
 export function plainWords(text: string, companyName?: string): string {
   const name = spansOf(text, companyName);
   return text.replace(PACKET_WORD, (match: string, kind: string | undefined, _word: string, plural: string | undefined, offset: number) => {
     const before = text.slice(0, offset);
-    const startsSentence = /(?:^|[.!?]["'\u201d)]?\s+)$/.test(before);
-    const record = !!kind || startsSentence || RECORD_BEFORE.has(/([A-Za-z]+)\s+$/.exec(before)?.[1]?.toLowerCase() ?? "");
+    const startsSentence = atSentenceStart(before);
+    const lead = withoutQualifiers(before);
+    const record = !!kind || startsSentence || (lead !== before && atSentenceStart(lead)) || RECORD_BEFORE.has(/([A-Za-z]+)\s+$/.exec(lead)?.[1]?.toLowerCase() ?? "");
     const named = /^\s+(?!I\b)[A-Z]/.test(text.slice(offset + match.length)) || name.some(([a, b]) => offset < b && offset + match.length > a);
     if (!record || named || quoted(before)) return match;
     const word = `${kind?.toLowerCase() === "draft" ? "draft" : "job"}${plural ? "s" : ""}`;
