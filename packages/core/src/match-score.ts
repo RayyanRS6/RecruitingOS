@@ -26,10 +26,12 @@ import { MATCH_WEIGHT, SCORE_BASIS_INTERVIEW_ONLY, SCORE_BASIS_WORDS, fitOf, imp
  *   quoted "no" counts, as for any must-have (it earns nothing and holds the score at 54). Counting it once a reading spoke
  *   to it scored someone who showed part of it below someone who said nothing (the release review, 11 November 2026). Until
  *   a reading shows it in full it is still not known (`checkInInterview`): the verdict word and the board treat it so.
- * - A skill named exactly as a must-have (`repeatsMustHave` in the contracts: "Digital Radiography." beside "Digital
- *   radiography") is not a requirement of its own: the must-have's finding alone counts, once (the live test, 12 November
- *   2026). Not so beside a must-have checked only in the team's own interviews, which counts only on their own quoted no:
- *   there the skill stays a requirement of its own (`skillsInScore`).
+ * - A skill named exactly as a must-have the AI interview confirms (`repeatsMustHave` in the contracts: "Digital
+ *   Radiography." beside "Digital radiography", "AI interview" ticked) is not a requirement of its own: the must-have's
+ *   finding alone counts, once (the live test, 12 November 2026). Not so beside a must-have the AI interview is not asked
+ *   to confirm, whose scorecard has no place for it, so the AI interview's answer about it lands on the skill alone, nor
+ *   beside one checked only in the team's own interviews, which counts only on their own quoted no: there the skill stays a
+ *   requirement of its own (`skillsInScore`; the second review of the live-test fixes).
  * - Doing the AI interview never costs points. Per requirement its checked "no" wins (their own latest words); otherwise
  *   the better of the two checked findings counts, the AI interview's on a tie; a finding with nothing quoted counts only
  *   when neither reading has a checked one (the AI interview's first).
@@ -172,9 +174,9 @@ function requirementsOf(pair: ReadingPair, packet: Pick<RolePacket, "requirement
   // their own quoted "no": not known, partly shown and shown all leave the number where it is, so showing more of it never
   // lowers it.
   const must = packet.requirements.mustHaves.map((m): Requirement => ({ key: m.key, label: m.text, mustHave: true, importance: null, weight: MATCH_WEIGHT.must_have, found: resolve(pair, mustHaveFound(m)) })).filter((r, i) => r.found.status === "no" || !onlyInOwnInterviews(packet.requirements.mustHaves[i]));
-  // The skills read from a résumé or an AI interview, less one named as a must-have the score counts: that skill is the
-  // must-have, counted once (`skillsInScore` in the contracts; the live test, 12 November 2026). The same list for every
-  // reading of the role, so moving any one finding up still never lowers the number.
+  // The skills read from a résumé or an AI interview, less one named as a must-have both readings read (the AI interview
+  // confirms it): that skill is the must-have, counted once (`skillsInScore` in the contracts; the live test, 12 November
+  // 2026). The same list for every reading of the role, so moving any one finding up still never lowers the number.
   const skills = skillsInScore(packet).map((c): Requirement => {
     const importance = importanceOf(c);
     return { key: c.key, label: c.name, mustHave: false, importance, weight: MATCH_WEIGHT[importance], found: resolve(pair, skillFound(c)) };

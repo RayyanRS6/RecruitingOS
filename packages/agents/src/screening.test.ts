@@ -583,6 +583,14 @@ describe("the scorecard reads each answer for its own question, and settles a st
     expect(settledScreenRecommendation(withTwin, PACKET)).toBe("interview");
     // three of four is most, with or without the twin beside them
     expect(settledScreenRecommendation({ ...withTwin, competencyFindings: withTwin.competencyFindings.map((f) => (f.competencyKey === "efficiency_time" ? { ...f, finding: "evidenced" as const } : f)) }, twin)).toBe("strong_interview");
+    // The second review of the live-test fixes (#2): beside a must-have the chat is not asked to confirm, its scorecard has
+    // no place for that must-have, so the skill of the same name holds what the candidate said and counts on its own
+    const perioSkill = { ...skill("perio_skill"), name: "Experience with Periodontal Charting and Therapy." };
+    const against = { ...two, competencyFindings: [two.competencyFindings[0]!, { competencyKey: "perio_skill", finding: "contradicted" as const, evidence: { source: "screen" as const, quote: "I have never charted perio" } }] };
+    // confirmed by the chat, the skill is the must-have: one skill of one shown is most
+    expect(settledScreenRecommendation(against, { ...PACKET, competencies: [skill("clinical_quality"), perioSkill] } as unknown as RolePacket)).toBe("strong_interview");
+    const unconfirmed = { ...PACKET, requirements: { ...PACKET.requirements, mustHaves: PACKET.requirements.mustHaves.map((m) => (m.key === "perio_experience" ? { ...m, evidencedBy: ["resume", "interview"] } : m)) }, competencies: [skill("clinical_quality"), perioSkill] } as unknown as RolePacket;
+    expect(settledScreenRecommendation({ ...against, requirementFindings: [against.requirementFindings[0]!] }, unconfirmed)).toBe("interview");
   });
 });
 

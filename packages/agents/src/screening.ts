@@ -2334,7 +2334,8 @@ export function settledScreenRecommendation(reading: ScreenAssessment, packet: P
   const screened = packet.requirements.mustHaves.filter((m) => m.evidencedBy.includes("screen"));
   const musts = screened.every((m) => reading.requirementFindings.some((f) => f.requirementKey === m.key && f.met === "yes" && shownByQuote(f.evidence)));
   const notMet = reading.requirementFindings.some((f) => f.met === "no" && shownByQuote(f.evidence));
-  // the skills the match score counts: a skill named as a must-have is that must-have (the live test, 12 November 2026)
+  // the skills the match score counts: a skill named as a must-have the chat was to confirm is that must-have (the live
+  // test, 12 November 2026); beside one it was not, the skill is all that holds the answer, so it counts (the second review)
   const skills = skillsInScore(packet);
   const shown = skills.filter((c) => reading.competencyFindings.some((f) => f.competencyKey === c.key && f.finding === "evidenced" && shownByQuote(f.evidence))).length;
   const most = shown * 2 > skills.length;

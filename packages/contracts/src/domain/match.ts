@@ -42,8 +42,12 @@ export const MISSING_MUST_HAVE_CAP = 54;
 /** How much each kind of requirement counts: must-haves most, then the skills by their importance. */
 export const MATCH_WEIGHT = { must_have: 4, essential: 3, important: 2, helpful: 1 } as const;
 
-/** A name as the twin rule compares it: case, accents and punctuation aside. */
-const sameWords = (s: string): string => s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+/**
+ * A name as the twin rule compares it: case, accents and punctuation aside. Letters of any script keep their marks, and
+ * digits, "+" and "#" count, so "C++" is not "C#" and an exact Cyrillic twin is one (the second review of the live-test
+ * fixes, 12 November 2026: only a-z and 0-9 were kept, so "C++" and "C#" were both "c", and Cyrillic names were empty).
+ */
+const sameWords = (s: string): string => s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^\p{L}\p{M}\p{N}+#]+/gu, " ").trim();
 
 /**
  * A skill named exactly as one of the must-haves given (the live test, 12 November 2026: the job draft wrote the Essential
@@ -62,16 +66,40 @@ export function onlyInOwnInterviews(m: { evidencedBy?: readonly string[] | null 
   return !!m.evidencedBy?.length && m.evidencedBy.every((e) => e === "interview");
 }
 
+type TwinPacket<C> = { requirements: { mustHaves: ReadonlyArray<{ text: string; evidencedBy?: readonly string[] | null }> }; competencies: readonly C[] };
+
+/**
+ * The must-haves a skill of the same name counts as: those every reading of the skill also reads. The résumé reading reads
+ * every must-have, the AI interview's scorecard only those it is asked to confirm ("AI interview" ticked, evidencedBy
+ * `screen`), and both read every skill they score, so only beside such a must-have is the skill counted already. Beside one
+ * the AI interview does not confirm, the answer the AI interview gives about it lands on the skill alone, so the skill stays
+ * a requirement of its own (the second review of the live-test fixes, 12 November 2026). One the role checks only in the
+ * team's own interviews is never one of them.
+ */
+const takesItsTwin = (m: { evidencedBy?: readonly string[] | null }): boolean => !!m.evidencedBy?.includes("screen") && !onlyInOwnInterviews(m);
+
 /**
  * The skills the match score counts on a role (`matchScore` in packages/core), as the weights preview lists them and the
  * AI review's own labels count them: each one a résumé reading or an AI interview reads (not one checked only in the
- * team's own interviews), less one named as a must-have the score counts (`repeatsMustHave`). A must-have checked only in
- * the team's own interviews joins the sum only on their own quoted no, so beside one the skill stays a requirement of its
- * own; one list for every reading of the role keeps the score monotonic.
+ * team's own interviews), less one named as a must-have the AI interview confirms (`repeatsMustHave`,
+ * `skillsCountedAsMustHaves`). Beside any other must-have the skill stays a requirement of its own. It depends on the role
+ * alone, never on a weight in the preview: "Leave out of the score" on that must-have leaves the skill out too. One list for
+ * every reading of the role keeps the score monotonic.
  */
-export function skillsInScore<C extends { name: string; evaluatedIn?: string | null }>(packet: { requirements: { mustHaves: ReadonlyArray<{ text: string; evidencedBy?: readonly string[] | null }> }; competencies: readonly C[] }): C[] {
-  const counted = packet.requirements.mustHaves.filter((m) => !onlyInOwnInterviews(m));
+export function skillsInScore<C extends { name: string; evaluatedIn?: string | null }>(packet: TwinPacket<C>): C[] {
+  const counted = packet.requirements.mustHaves.filter(takesItsTwin);
   return packet.competencies.filter((c) => c.evaluatedIn !== "interview" && !repeatsMustHave(c, counted));
+}
+
+/**
+ * The skills a résumé reading or an AI interview reads that the score counts as the must-have of the same name instead
+ * (`skillsInScore` leaves them out): "Counts as the must-have" where the job's skills are listed or weighed, "Counted as the
+ * must-have" in Compare (the second review of the live-test fixes, 12 November 2026). A skill checked only in the team's
+ * own interviews is out of the score for that reason, never this one.
+ */
+export function skillsCountedAsMustHaves<C extends { name: string; evaluatedIn?: string | null }>(packet: TwinPacket<C>): C[] {
+  const counted = packet.requirements.mustHaves.filter(takesItsTwin);
+  return packet.competencies.filter((c) => c.evaluatedIn !== "interview" && repeatsMustHave(c, counted));
 }
 
 /**

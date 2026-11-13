@@ -128,7 +128,7 @@ export function CompareTable({ data }: { data: CompareView }) {
         <tr><th scope="row" className="small muted">Where they are</th>{cands.map((c) => <td key={c.applicationId}><StatusChip stage={c.stage} label={c.ownerStageLabel ?? c.stageLabel} group={c.group} /></td>)}</tr>
         {data.mustHaves.map((m) => <tr key={`mh:${m.key}`}><th scope="row" className="small"><span className="sbar-tag must">Must-have</span> {m.text}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={m.key} mustHave /></td>)}</tr>)}
         {data.competencies.map((x) => {
-          const tag = skillTag(cands, x.key);
+          const tag = skillTag(cands, x.key, !!x.asMustHave);
           return <tr key={`sk:${x.key}`}><th scope="row" className="small" title={x.definition}>{tag ? <><span className="sbar-tag">{tag}</span> </> : null}{x.name}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={x.key} mustHave={false} /></td>)}</tr>;
         })}
         <tr><th scope="row" className="small muted">AI interview</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? recChip(c.screen.recommendation, c.score?.fit) ?? "Done" : <span className="muted">no AI interview yet</span>}</td>)}</tr>

@@ -19,6 +19,8 @@ export const LEVEL_WEIGHT: Record<WeightLevel, number> = { must_have: MATCH_WEIG
 
 export const PREVIEW_LABEL = "Preview — nothing is saved; candidates and the team never see these numbers.";
 export const INTERVIEW_ONLY_LINE = "Skills checked only in your own interviews are not part of the match score, so they are not listed here.";
+/** Said once, like INTERVIEW_ONLY_LINE, only when the job has such a skill (`skillsCountedAsMustHaves` in the contracts). */
+export const AS_MUST_HAVE_LINE = "A skill named like a must-have counts once, as the must-have, so it is not listed here.";
 export const USE_WEIGHTS_LINE = `"Use these weights" opens the job's editor; saving there makes a new version of the job. ${READ_FROM_NOW_ON}`;
 export const NOBODY_SCORED = { title: "Nobody has a match score yet", body: "Scores come once applications are read. Come back when someone has one." } as const;
 
@@ -34,7 +36,9 @@ const SKILL_CHOICES: WeightLevel[] = ["essential", "important", "helpful", "off"
  * The rows to weigh, from the version the job runs on: its must-haves first (a must-have, or left out), then the skills
  * the score counts (Essential, Important, Helpful, or left out; `skillsInScore` in the contracts). A skill checked only in
  * your own interviews is not in the score, so it is not here (INTERVIEW_ONLY_LINE says so); nor is a skill named as a
- * must-have, which the score counts once, as that must-have, so its row would change nothing (the live test, 12 November 2026).
+ * must-have the AI interview confirms, which the score counts once, as that must-have, so its row would change nothing (the
+ * live test, 12 November 2026; AS_MUST_HAVE_LINE says so). Leaving that must-have out leaves both out, as the score does
+ * whatever its weight here (the second review of the live-test fixes).
  */
 export function weightRows(packet: Pick<RolePacket, "requirements" | "competencies">): WeightRow[] {
   const must = packet.requirements.mustHaves.map((m): WeightRow => ({ id: `m:${m.key}`, key: m.key, label: m.text, mustHave: true, level: "must_have", choices: MUST_HAVE_CHOICES }));

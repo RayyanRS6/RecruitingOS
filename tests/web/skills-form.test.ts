@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { RolePacket as RolePacketSchema } from "../../packages/contracts/src/index";
 import { samplePacket } from "../../packages/agents/src/fixtures/sample-packet";
 import type { RolePacket as WebRolePacket } from "../../apps/web/src/api/client";
-import { IMPORTANCE_CHOICES, MUST_HAVES_SCORE_LINE, SKILLS_MAX, applySkills, checkedInLabel, editorFocusFrom, importanceLabel, newSkillRow, removalWords, skillRowsFrom, skillUses, skillsProblem } from "../../apps/web/src/skills-form";
+import { COUNTS_AS_MUST_HAVE, IMPORTANCE_CHOICES, MUST_HAVES_SCORE_LINE, SKILLS_MAX, applySkills, checkedInLabel, editorFocusFrom, importanceLabel, newSkillRow, removalWords, rowsCountedAsMustHaves, skillRowsFrom, skillUses, skillsProblem } from "../../apps/web/src/skills-form";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -96,6 +96,25 @@ describe("the skills in the role editor", () => {
     expect(MUST_HAVES_SCORE_LINE).toMatch(/holds the score at 54 at most/);
   });
 
+  // The second review of the live-test fixes (#25, #27): a skill named like a must-have the AI interview confirms counts
+  // once, as that must-have, yet the editor still said "Counts the most of the skills." under its picker
+  it("says which skills count as a must-have, from the must-have rows as they are now, and keeps their importance", () => {
+    expect(COUNTS_AS_MUST_HAVE).toBe("Counts as the must-have");
+    const rows = [...skillRowsFrom(packet), { ...newSkillRow(), name: "Radiography Certificate.", definition: "d", importance: "essential" as const }, { ...newSkillRow(), name: "Radiography certificate and scanning", definition: "d" }];
+    const musts = packet.requirements.mustHaves.map((m) => ({ text: m.text, evidencedBy: [...m.evidencedBy] }));
+    expect(musts[0]).toEqual({ text: "Radiography certificate", evidencedBy: ["resume", "screen"] });
+    expect(rowsCountedAsMustHaves(rows, musts)).toEqual([false, false, false, true, false]);
+    // the AI interview's tick taken off the must-have, the must-have renamed or removed, or the skill checked only in your
+    // own interviews: the skill counts on its own again
+    const unticked = musts.map((m, i) => (i === 0 ? { ...m, evidencedBy: ["resume"] } : m));
+    expect(rowsCountedAsMustHaves(rows, unticked)[3]).toBe(false);
+    expect(rowsCountedAsMustHaves(rows, musts.map((m, i) => (i === 0 ? { ...m, text: "Radiography permit" } : m)))[3]).toBe(false);
+    expect(rowsCountedAsMustHaves(rows, musts.slice(1))[3]).toBe(false);
+    expect(rowsCountedAsMustHaves(rows.map((r, i) => (i === 3 ? { ...r, evaluatedIn: "interview" as const } : r)), musts)[3]).toBe(false);
+    // its importance is saved as picked: it still holds a Strong reading their own words go against for a person
+    expect(saved(rows).competencies[3]).toMatchObject({ name: "Radiography Certificate.", importance: "essential", weight: 5 });
+  });
+
   it("a link opens the editor only at the must-haves or the skills; the approval card's own button opens it at the pay", () => {
     expect(editorFocusFrom("must-haves")).toBe("must-haves");
     expect(editorFocusFrom("skills")).toBe("skills");
@@ -113,7 +132,9 @@ describe("the skills in the role editor", () => {
     const editor = read("../../apps/web/src/pages/RoleEditor.tsx");
     expect(editor).toContain('<RequirementGroup id="ed-skills"');
     expect(editor).toContain('<RequirementGroup id="ed-must-haves"');
-    expect(editor).toContain("<SkillRows rows={skills} onChange={setSkills} packet={packet} />");
+    // the skill rows read the must-have rows as they are now ("Counts as the must-have")
+    expect(editor).toContain("<SkillRows rows={skills} onChange={setSkills} packet={packet} mustHaves={mustHaves} />");
+    expect(editor).toContain('hint={asMustHave[i] ? COUNTS_AS_MUST_HAVE : IMPORTANCE_HINT[r.importance]}');
     expect(editor).toContain("applySkills(next, skills);");
     expect(editor).toContain("return skillsProblem(input.skills, input.packet);");
     const page = read("../../apps/web/src/pages/RoleDetail.tsx");

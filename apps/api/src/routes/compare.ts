@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
+import { skillsCountedAsMustHaves, type Actor, type EvidenceAssessment, type MatchScore, type NoteView, type OwnerStage, type ReadingVersion, type ScreenAssessment } from "@ros/contracts";
 import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, countedFinding, groupFor, interviewInScore, interviewsInMotionFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, shownSkillFinding, unsentScreenReadings, visibleTo } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
@@ -72,7 +72,11 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const packet = currentRow?.packet ?? null;
   const byVersion = new Map(packets.map((p) => [p.version, p.packet]));
   const mustHaves = packet?.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })) ?? [];
-  const competencies = packet?.competencies.map((x) => ({ key: x.key, name: x.name, definition: x.definition })) ?? [];
+  // A skill the score counts as the must-have of the same name (one the AI interview confirms) says so on its row
+  // (`asMustHave`, "Counted as the must-have"; the second review of the live-test fixes): the page cannot tell, since the
+  // must-haves here carry no "where we check it".
+  const asMustHave = new Set(packet ? skillsCountedAsMustHaves(packet).map((x) => x.key) : []);
+  const competencies = packet?.competencies.map((x) => ({ key: x.key, name: x.name, definition: x.definition, ...(asMustHave.has(x.key) ? { asMustHave: true as const } : {}) })) ?? [];
   const cands = apps.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId))) : [];
   // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026).
   const all = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];

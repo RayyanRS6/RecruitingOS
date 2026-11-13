@@ -3,7 +3,7 @@ import type { EvidenceAssessment, MatchScore } from "@ros/contracts";
 import type { BoardCard, BoardView, RolePacket } from "../../apps/web/src/api/client";
 import { canTryWeights } from "../../apps/web/src/roles";
 import { READ_FROM_NOW_ON } from "../../apps/web/src/skills-form";
-import { INTERVIEW_ONLY_LINE, LEVEL_WEIGHT, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows } from "../../apps/web/src/weights-preview";
+import { AS_MUST_HAVE_LINE, INTERVIEW_ONLY_LINE, LEVEL_WEIGHT, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows } from "../../apps/web/src/weights-preview";
 import { matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -95,6 +95,45 @@ describe("the rows to weigh", () => {
     expect(people.map((m) => m.score)).toEqual([75, 17, 19]);
     const order = previewOrder(boardOf(people.map((m, i) => card(`t${i}`, `Twin ${i}`, m))), twinRows, jobLevels(twinRows));
     expect(order.rows.map((p) => [p.now, p.preview])).toEqual([[75, 75], [19, 19], [17, 17]]);
+  });
+
+  // The second review of the live-test fixes (#8, #33): the skill stays out of the score whatever its must-have's weight, so
+  // "Leave out of the score" on that must-have leaves both out, and the drawer says once why the skill has no row
+  it("leaves the skill out with its must-have, as the job saved without that requirement scores it, and says once why it has no row", () => {
+    const twin = {
+      requirements: { mustHaves: [{ key: "mh_dr", text: "Digital radiography", rationale: "r", evidencedBy: ["resume", "screen"] }, packet.requirements.mustHaves[0]] },
+      competencies: [{ key: "dr", name: "Digital Radiography.", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, ...packet.competencies],
+    } as unknown as RolePacket;
+    const twinRows = weightRows(twin);
+    expect(twinRows.map((r) => r.id)).toEqual(["m:mh_dr", "m:rdh_license", "s:chairside", "s:patients", "s:software"]);
+    const readings = [
+      // digital radiography in their own words and half of the licence, nothing else
+      reading([must("mh_dr", "yes", "digital sensors"), must("rdh_license", "partially", "RDH license pending")], [skill("dr", "evidenced", "digital sensors")]),
+      // chairside, never digital radiography
+      reading([must("mh_dr", "unknown"), must("rdh_license", "unknown")], [skill("dr", "not_evidenced"), skill("chairside", "evidenced", "x")]),
+      // the licence and patient care; digital radiography goes against them in their own words
+      reading([must("mh_dr", "no", "I have never taken digital X-rays"), must("rdh_license", "yes", "RDH license CA active")], [skill("dr", "contradicted", "I have never taken digital X-rays"), skill("patients", "evidenced", "y")]),
+    ];
+    const board = boardOf(readings.map((r, i) => card(`d${i}`, `Dee ${i}`, scoreOf(r, twin))));
+    const off = { ...jobLevels(twinRows), "m:mh_dr": "off" as const };
+    const order = previewOrder(board, twinRows, off);
+    // the job saved without that requirement, the must-have and the skill that counts as it, gives each of them the same
+    // score, so the same order
+    const saved = { requirements: { mustHaves: twin.requirements.mustHaves.filter((m) => m.key !== "mh_dr") }, competencies: twin.competencies.filter((c) => c.key !== "dr") };
+    const expected = readings.map((r, i) => ({ name: `Dee ${i}`, score: scoreOf(r, saved).score })).sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.name.localeCompare(b.name));
+    expect(order.rows.map((p) => [p.name, p.preview])).toEqual(expected.map((e) => [e.name, e.score]));
+    // 4 + 2 of 10 (the licence and patient care), 3 of 10 (chairside), and half the licence's 4 of 10
+    expect(order.rows.map((p) => [p.name, p.preview])).toEqual([["Dee 2", 60], ["Dee 1", 30], ["Dee 0", 20]]);
+    // never as if the skill came back at Essential, which would put Dee 0 (5 of 13) above Dee 1 (3 of 13)
+    const back = { ...saved, competencies: twin.competencies };
+    expect([scoreOf(readings[0], back).score, scoreOf(readings[1], back).score]).toEqual([38, 23]);
+    expect(changeWords(twinRows, off)).toEqual(["Digital radiography: from Must-have to left out of the score"]);
+    // the line says it once, like the one for skills checked only in your own interviews
+    expect(AS_MUST_HAVE_LINE).toBe("A skill named like a must-have counts once, as the must-have, so it is not listed here.");
+    // The second review of the live-test fixes (#2): beside a must-have the AI interview does not confirm, the skill counts
+    // on its own, so it is listed and weighed like any other
+    const resumeOnly = { ...twin, requirements: { mustHaves: [{ ...twin.requirements.mustHaves[0], evidencedBy: ["resume"] }, packet.requirements.mustHaves[0]] } } as unknown as RolePacket;
+    expect(weightRows(resumeOnly).find((r) => r.id === "s:dr")).toMatchObject({ label: "Digital Radiography.", level: "essential" });
   });
 });
 

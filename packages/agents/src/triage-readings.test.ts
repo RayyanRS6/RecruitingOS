@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunOutcome } from "@ros/ai";
 import type { EvidenceAssessment } from "@ros/contracts";
-import { matchScore } from "@ros/core";
+import { matchScore, readingConsistency } from "@ros/core";
 import { DATED_JOB_LINE, applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, combineRunOutcomes, credentialFinding, credentialMustHaves, findingSubjects, liftableQuote, plainlyNotHeld, readingsOutcome, settledOverall, settledRecommendation, shownNotHeld, skillFloor, triageSettlement, verifyAssessmentQuotes, withResumeFlags } from "./triage";
 
 /**
@@ -194,15 +194,39 @@ describe("the overall reading, worked out from the settled findings (Wave S7)", 
     expect(settledOverall(f("yes", "yes", "evidenced"), PACKET, { hasWork: false })).toBe("unknown");
   });
 
+  // the draft's Essential skill "Periodontal therapy" beside the must-have of the same name, which the AI interview
+  // confirms, and a second skill
+  const confirmed = { ...PACKET.requirements, mustHaves: PACKET.requirements.mustHaves.map((m) => (m.key === "perio" ? { ...m, evidencedBy: ["resume", "screen"] } : m)) };
+  const twin = { ...PACKET, requirements: confirmed, competencies: [...PACKET.competencies, { key: "perio_skill", name: "Periodontal Therapy", definition: "d", weight: 5, evaluatedIn: "both" as const, indicators: ["x"] }, { key: "software", name: "Practice software", definition: "d", weight: 3, evaluatedIn: "both" as const, indicators: ["x"] }] } as unknown as Parameters<typeof settledOverall>[1];
+  type Twin = Parameters<typeof settledOverall>[0];
+  const twinReading = (perioSkill: Twin["competencyFindings"][number]): Twin => ({
+    requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: { source: "resume", quote: "RDH license CA active" } }, { requirementKey: "perio", met: "yes", evidence: { source: "resume", quote: "Periodontal therapy daily" } }],
+    competencyFindings: [{ competencyKey: "chairside", finding: "evidenced", evidence: { source: "resume", quote: "Chairside assisting daily" } }, perioSkill, { competencyKey: "software", finding: "not_evidenced" }],
+  });
+
   it("counts a skill named as a must-have once, as the must-have, as the match score does (live test, 12 November 2026)", () => {
-    // the draft's Essential skill "Periodontal therapy" beside the must-have of the same name, and a second skill
-    const twin = { ...PACKET, competencies: [...PACKET.competencies, { key: "perio_skill", name: "Periodontal Therapy", definition: "d", weight: 5, evaluatedIn: "both" as const, indicators: ["x"] }, { key: "software", name: "Practice software", definition: "d", weight: 3, evaluatedIn: "both" as const, indicators: ["x"] }] } as unknown as Parameters<typeof settledOverall>[1];
-    const reading = {
-      requirementFindings: [{ requirementKey: "licence", met: "yes" as const, evidence: { source: "resume" as const, quote: "RDH license CA active" } }, { requirementKey: "perio", met: "yes" as const, evidence: { source: "resume" as const, quote: "Periodontal therapy daily" } }],
-      competencyFindings: [{ competencyKey: "chairside", finding: "evidenced" as const, evidence: { source: "resume" as const, quote: "Chairside assisting daily" } }, { competencyKey: "perio_skill", finding: "evidenced" as const, evidence: { source: "resume" as const, quote: "Periodontal therapy daily" } }, { competencyKey: "software", finding: "not_evidenced" as const }],
-    };
+    const reading = twinReading({ competencyKey: "perio_skill", finding: "evidenced", evidence: { source: "resume", quote: "Periodontal therapy daily" } });
     // every must-have shown and one of the two skills the score counts: strong, as for the role without the twin
     expect(settledOverall(reading, twin, { hasWork: true })).toBe("strong");
+    // nothing said about the twin leaves it so: the twin is the must-have, which is shown
+    const silent = twinReading({ competencyKey: "perio_skill", finding: "not_evidenced" });
+    expect(settledOverall(silent, twin, { hasWork: true })).toBe("strong");
+    // The second review of the live-test fixes (#2): beside a must-have the AI interview is not asked to confirm, the
+    // skill is a requirement of its own, as in the score, so one skill shown of the three is not enough
+    const resumeOnly = { ...twin, requirements: PACKET.requirements } as unknown as Parameters<typeof settledOverall>[1];
+    expect(settledOverall(silent, resumeOnly, { hasWork: true })).toBe("potential");
+  });
+
+  // The second review of the live-test fixes (#29): a "Strong" settled here was then flagged by the closer-look check,
+  // which still counts the twin's checked "goes against it"
+  it("never settles strong when their own checked words go against an Essential skill named as a must-have, so the closer-look check agrees", () => {
+    const against = twinReading({ competencyKey: "perio_skill", finding: "contradicted", evidence: { source: "resume", quote: "I have not done periodontal therapy since school" } });
+    const overall = settledOverall(against, twin, { hasWork: true });
+    expect(overall).toBe("potential");
+    const stored = (o: EvidenceAssessment["overall"]) => ({ kind: "triage", overall: o, result: { ...against, overall: o, confidence: "medium" as const, summary: "s", strengths: [], concerns: [], unknowns: [], anomalies: [], recommendation: "screen" as const, rationale: "r" } });
+    expect(readingConsistency(stored(overall), twin)).toEqual({ consistent: true, reason: null });
+    // a "Strong" on the same findings is what the check holds for a person
+    expect(readingConsistency(stored("strong"), twin)).toMatchObject({ consistent: false, reason: expect.stringContaining("essential skill (Periodontal Therapy)") });
   });
 
   it("gives the recommendation that goes with it, by the prompt's rule", () => {

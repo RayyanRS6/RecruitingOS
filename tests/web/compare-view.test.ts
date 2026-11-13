@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment, MatchScore, RolePacket } from "@ros/contracts";
-import { COMPARE_MAX, cellFigures, criterionCell, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView } from "../../apps/web/src/pages/compare/compare-view";
+import { COMPARE_MAX, COUNTED_AS_MUST_HAVE, cellFigures, criterionCell, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView } from "../../apps/web/src/pages/compare/compare-view";
 import { matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -128,6 +128,18 @@ describe("the comparison view", () => {
     expect(skillTag([cy, ana], "chairside")).toBe("Essential");
     expect(skillTag([cy, ana], "patients")).toBe("Important");
     expect(skillTag([cy], "patients")).toBeNull();
+  });
+
+  // The second review of the live-test fixes (#25, #27): a skill the score counts as the must-have of the same name had a
+  // bare muted row with no tag, as if read against an earlier version
+  it("tags a skill the score counts as the must-have of the same name so, whatever a column's score holds", () => {
+    expect(COUNTED_AS_MUST_HAVE).toBe("Counted as the must-have");
+    expect(skillTag([cy, ana], "chairside", true)).toBe(COUNTED_AS_MUST_HAVE);
+    expect(skillTag([cy], "radiography", true)).toBe(COUNTED_AS_MUST_HAVE);
+    expect(skillTag([cy, ana], "chairside", false)).toBe("Essential");
+    // its cells keep that skill's own finding, in words only, under the tag
+    const twin = person("t", "Tia", reading([must("rdh", "yes", "RDH")]), { competencies: { radiography: { finding: "evidenced", note: null } } });
+    expect(criterionCell(twin, "radiography", false)).toEqual({ state: "raw", words: "Shown", quote: null });
   });
 
   it("names the people read against an earlier version of the role (plan F4)", () => {

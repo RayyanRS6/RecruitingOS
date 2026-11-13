@@ -609,4 +609,26 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const hm = await signInAs(container, app, { companyId, role: "hiring_manager", email: "priya@messages.test" });
     expect((await json(hm, "GET", `/api/v1/roles/${roleId}/compare?ids=${a.id},${b.id}`)).status).toBe(200);
   });
+
+  // The second review of the live-test fixes (#25, #27): a skill named like a must-have the AI interview confirms counts
+  // once, as that must-have, and the page cannot tell which from the must-haves it gets, so the answer marks it
+  it("the comparison view marks a skill the score counts as the must-have of the same name, and only while the AI interview confirms that must-have", async () => {
+    const a = await apply("Hana", "Sato");
+    const [pv] = await container.db.select().from(rolePackets).where(eq(rolePackets.roleId, roleId));
+    const must = pv.packet.requirements.mustHaves[0]!;
+    expect(must.evidencedBy).toContain("screen");
+    const twin = { key: "licence_skill", name: `${must.text.toUpperCase()}.`, definition: "Holds the licence.", weight: 5, evaluatedIn: "both" as const, indicators: ["Names the licence"] };
+    const compared = async () => ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/compare?ids=${a.id}`)).json()) as { competencies: Array<{ key: string; asMustHave?: boolean }> }).competencies;
+    try {
+      await container.db.update(rolePackets).set({ packet: { ...pv.packet, competencies: [...pv.packet.competencies, twin] } }).where(eq(rolePackets.id, pv.id));
+      const out = await compared();
+      expect(out.filter((c) => c.asMustHave).map((c) => c.key)).toEqual([twin.key]);
+      // with the AI interview's tick taken off that must-have, the skill counts on its own and is not marked
+      const unticked = pv.packet.requirements.mustHaves.map((m, i) => (i === 0 ? { ...m, evidencedBy: ["resume" as const] } : m));
+      await container.db.update(rolePackets).set({ packet: { ...pv.packet, requirements: { ...pv.packet.requirements, mustHaves: unticked }, competencies: [...pv.packet.competencies, twin] } }).where(eq(rolePackets.id, pv.id));
+      expect((await compared()).some((c) => "asMustHave" in c)).toBe(false);
+    } finally {
+      await container.db.update(rolePackets).set({ packet: pv.packet }).where(eq(rolePackets.id, pv.id));
+    }
+  });
 });

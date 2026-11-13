@@ -271,8 +271,9 @@ export function withResumeFlags(kept: Reading, readings: readonly Pick<Reading, 
  * checked quote, a skill for the interviews left out), by the prompt's own definitions:
  * - "unknown" when there is nothing to read the work from (no résumé text and no written description of their work);
  * - "weak" when the candidate's own words show a must-have is not met;
- * - "strong" when every must-have is shown, at least half of the skills (and at least one) are shown, and no essential
- *   skill goes against them;
+ * - "strong" when every must-have is shown, at least half of the skills the score counts (and at least one) are shown, and
+ *   no essential skill goes against them on a checked quote (one named as a must-have included, as `readingConsistency`
+ *   reads it);
  * - "potential" when something relevant is shown, in full or in part;
  * - when the findings say nothing either way (every requirement not known, or only a skill against them), the
  *   readings' own judgement of the work is all there is ("thin but relevant" is potential, "not this kind of work" is
@@ -291,11 +292,15 @@ export function settledOverall(reading: Pick<EvidenceAssessment, "requirementFin
   if (score.missingMustHave.length) return "weak";
   const musts = score.breakdown.filter((c) => c.mustHave);
   const mustUnknown = score.unknown.some((u) => u.mustHave);
-  // the skills the score counts: a skill named as a must-have is that must-have, never shown twice (the live test, 12 November 2026)
+  // the skills the score counts: a skill named as a must-have the AI interview confirms is that must-have, never shown
+  // twice (the live test, 12 November 2026)
   const skills = skillsInScore(packet);
   const shownSkills = score.breakdown.filter((c) => !c.mustHave && c.pctMet === 100).length;
-  const essential = new Set(skills.filter((c) => importanceOf(c) === "essential").map((c) => c.key));
-  const essentialAgainst = score.breakdown.some((c) => !c.mustHave && c.pctMet === 0 && essential.has(c.key));
+  // Their own checked words against any Essential skill a reading reads keep it from "strong", one named as a must-have
+  // too, by the rule the closer-look check reads it with (`readingConsistency` in @ros/core), so a reading settled here is
+  // never one that check then flags (the second review of the live-test fixes, 12 November 2026).
+  const essential = new Set(packet.competencies.filter((c) => importanceOf(c) === "essential" && scoredSkill(c)).map((c) => c.key));
+  const essentialAgainst = (reading.competencyFindings ?? []).some((f) => f.finding === "contradicted" && essential.has(f.competencyKey) && !!f.evidence?.quote?.trim() && !f.evidence.unquoted);
   const everyMust = !mustUnknown && musts.every((c) => c.pctMet === 100);
   const enoughSkills = skills.length === 0 || shownSkills >= Math.max(1, Math.ceil(skills.length / 2));
   if (everyMust && enoughSkills && !essentialAgainst && (musts.length > 0 || shownSkills > 0)) return "strong";

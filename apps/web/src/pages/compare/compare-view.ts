@@ -48,7 +48,8 @@ export function scoreSummary(c: CompareCandidateView): { score: number | null; v
 /**
  * One cell: what the score counted for this requirement (`judged`, with % met and the points it cost), a requirement
  * the evidence says nothing about (`unknown`, no points so far), a finding the score could not use because the
- * reading was made against an earlier version of the role (`raw`, the words only), or nothing at all (`none`).
+ * reading was made against an earlier version of the role, or because the score counts that skill as the must-have of the
+ * same name (`raw`, the words only; its row says "Counted as the must-have"), or nothing at all (`none`).
  */
 export type CompareCell =
   | { state: "judged"; words: string; pctMet: number; pointsLost: number; mustHave: boolean; quote: string | null }
@@ -67,8 +68,16 @@ export function criterionCell(c: CompareCandidateView, key: string, mustHave: bo
   return { state: "none", words: "No evidence yet" };
 }
 
-/** A skill row's tag (Essential, Important, Helpful), from whichever column's score knows it; null when none does. */
-export function skillTag(cands: readonly CompareCandidateView[], key: string): string | null {
+/** The tag of a skill row the score counts as the must-have of the same name (`asMustHave` on GET /roles/:id/compare). */
+export const COUNTED_AS_MUST_HAVE = "Counted as the must-have";
+
+/**
+ * A skill row's tag (Essential, Important, Helpful), from whichever column's score knows it; null when none does. A skill
+ * the score counts as the must-have of the same name (`asMustHave`) is tagged so instead (the second review of the
+ * live-test fixes, 12 November 2026), so its row never reads like a reading made against an earlier version.
+ */
+export function skillTag(cands: readonly CompareCandidateView[], key: string, asMustHave = false): string | null {
+  if (asMustHave) return COUNTED_AS_MUST_HAVE;
   for (const c of cands) {
     const imp = c.score?.breakdown.find((b) => b.key === key && !b.mustHave)?.importance ?? c.score?.unknown.find((u) => u.key === key && !u.mustHave)?.importance;
     if (imp) return IMPORTANCE_LABEL[imp];

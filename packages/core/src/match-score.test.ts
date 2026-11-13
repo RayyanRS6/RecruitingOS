@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MATCH_FIT_LABEL, MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, matchWeightOf, onlyInOwnInterviews, previewMatch, repeatsMustHave, scoreRank, skillsInScore, type EvidenceAssessment, type MatchCriterion, type MatchFit, type MatchScore, type RolePacket, type WeighableRequirement } from "@ros/contracts";
+import { MATCH_FIT_LABEL, MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, matchWeightOf, onlyInOwnInterviews, previewMatch, repeatsMustHave, scoreRank, skillsCountedAsMustHaves, skillsInScore, type EvidenceAssessment, type MatchCriterion, type MatchFit, type MatchScore, type RolePacket, type WeighableRequirement } from "@ros/contracts";
 import { interviewInScore } from "./ai-interview";
 import { countedFinding, coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, scoredSkill, shownSkillFinding, type ScoredReading } from "./match-score";
 
@@ -789,8 +789,38 @@ describe("a skill named as a must-have counts once, as the must-have (live test,
     expect(keysOf(no)).toEqual(expect.arrayContaining(["mh_dr", "digital_radiography"]));
   });
 
-  it("stays monotonic with twins, whichever must-haves are checked only in the team's own interviews, and with a scorecard beside the résumé", () => {
+  // The second review of the live-test fixes (#2): the AI interview's scorecard confirms only the must-haves marked "AI
+  // interview", so what the candidate said there about one marked résumé only lands on the skill of the same name alone.
+  // Dropping that skill scored a quoted yes and a quoted no the same.
+  it("keeps the skill a requirement of its own beside a must-have the AI interview is not asked to confirm, so its answer still counts", () => {
+    const role = twinRole(["resume"]);
+    const resume = reading("triage", [must("mh_dr", "unknown"), sterile], [skill("digital_radiography", "not_evidenced"), skill("chairside", "evidenced", "Chairside assisting"), skill("scanning", "evidenced", "digital sensors")]);
+    // the chat asked about digital radiography; its scorecard has no finding for the must-have, only for the skill
+    const scorecard = (twin: Comp) => reading("screen", [sterile], [twin], { createdAt: "2026-10-02T10:00:00Z" });
+    const yes = matchScore(pair(resume, scorecard(skill("digital_radiography", "evidenced", "I take bitewing and full-mouth X-rays with Dexis digital sensors every day."))), role)!;
+    const no = matchScore(pair(resume, scorecard(skill("digital_radiography", "contradicted", "No, I have never used digital X-ray sensors; we only had film."))), role)!;
+    // must-haves 4 (still open) + 4, the skill 3, chairside 3, scanning 2: 12 of 16, and 9 of 16 when their own words go against it
+    expect([yes.score, no.score]).toEqual([75, 56]);
+    expect(yes.breakdown.find((c) => c.key === "digital_radiography")).toMatchObject({ mustHave: false, importance: "essential", pctMet: 100, source: "screen" });
+    expect(no.breakdown.find((c) => c.key === "digital_radiography")).toMatchObject({ finding: "Goes against it", pctMet: 0, source: "screen" });
+    expect(yes.unknown.map((u) => u.key)).toEqual(["mh_dr"]);
+    expect(yes.coverage.total).toBe(5);
+    // the score's skills, by where the must-have is checked: the skill goes only once the AI interview confirms the must-have
+    for (const evidencedBy of [["resume"], ["application"], ["resume", "application"], ["resume", "interview"], ["interview"]]) {
+      expect(skillsInScore(twinRole(evidencedBy)).map((c) => c.key), evidencedBy.join(" + ")).toEqual(["digital_radiography", "chairside", "scanning"]);
+      expect(skillsCountedAsMustHaves(twinRole(evidencedBy)), evidencedBy.join(" + ")).toEqual([]);
+    }
+    for (const evidencedBy of [["resume", "screen"], ["screen"], ["resume", "screen", "interview"]]) {
+      expect(skillsInScore(twinRole(evidencedBy)).map((c) => c.key), evidencedBy.join(" + ")).toEqual(["chairside", "scanning"]);
+      expect(skillsCountedAsMustHaves(twinRole(evidencedBy)).map((c) => c.key), evidencedBy.join(" + ")).toEqual(["digital_radiography"]);
+    }
+  });
+
+  it("stays monotonic with twins, whichever must-haves the AI interview confirms or the team checks only in its own interviews, and with a scorecard beside the résumé", () => {
     const rand = seeded(20261112);
+    // where each other must-have is checked, from a sequence of its own so the cases themselves stay the same
+    const where = seeded(20261114);
+    const CHECKED = [["resume", "screen"], ["resume"], ["resume", "interview"]];
     type Level = "no" | "unknown" | "partly" | "yes";
     const ORDER: Level[] = ["no", "unknown", "partly", "yes"];
     const pickLevel = (): Level => ORDER[Math.floor(rand() * ORDER.length)]!;
@@ -806,7 +836,7 @@ describe("a skill named as a must-have counts once, as the must-have (live test,
       const twinOf = new Map(skillKeys.flatMap((k) => (rand() < 0.5 ? [[k, mustKeys[Math.floor(rand() * mustKeys.length)]!] as const] : [])));
       twins += twinOf.size;
       const role = {
-        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: ownOnly.has(key) ? ["interview"] : ["resume", "screen"] })) },
+        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: ownOnly.has(key) ? ["interview"] : CHECKED[Math.floor(where() * CHECKED.length)] })) },
         competencies: skillKeys.map((key) => ({ key, name: twinOf.has(key) ? `MUST ${twinOf.get(key)}.` : `Skill ${key}`, definition: "d", weight: 1 + Math.floor(rand() * 5), evaluatedIn: "both", indicators: ["x"] })),
       } as unknown as Pick<RolePacket, "requirements" | "competencies">;
       const keys = [...mustKeys, ...skillKeys];
@@ -845,10 +875,24 @@ describe("a skill named as a must-have counts once, as the must-have (live test,
     // a name with no words in it, or no must-haves, is never a twin
     expect(repeatsMustHave({ name: "..." }, [{ text: "!!" }])).toBe(false);
     expect(repeatsMustHave({ name: "Digital radiography" }, [])).toBe(false);
+    // The second review of the live-test fixes (#26): letters of any script keep their marks, and digits, "+" and "#"
+    // count, so a skill that only shares the Latin letters or the digits is its own, and an exact twin in Cyrillic is one
+    expect(repeatsMustHave({ name: "C++" }, [{ text: "C#" }])).toBe(false);
+    expect(repeatsMustHave({ name: "Embedded C++" }, [{ text: "Embedded C" }])).toBe(false);
+    expect(repeatsMustHave({ name: "C# programming." }, [{ text: "c# Programming" }])).toBe(true);
+    expect(repeatsMustHave({ name: "Опыт работы в 1С" }, [{ text: "Знание 1С" }])).toBe(false);
+    expect(repeatsMustHave({ name: "Продвинутый Excel" }, [{ text: "Знание Excel" }])).toBe(false);
+    expect(repeatsMustHave({ name: "Учёт" }, [{ text: "учёт." }])).toBe(true);
+    expect(repeatsMustHave({ name: "कि" }, [{ text: "की" }])).toBe(false);
+    const cpp = { requirements: { mustHaves: [{ key: "cs", text: "C#", rationale: "r", evidencedBy: ["resume", "screen"] }] }, competencies: [{ key: "cpp", name: "C++", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }] } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+    expect(skillsInScore(cpp).map((c) => c.key)).toEqual(["cpp"]);
     // the skills the score counts: never one checked only in the team's own interviews, nor the twin of a must-have that counts
     const withOwn = { ...twinRole(), competencies: [...twinRole().competencies, { key: "manner", name: "Chairside manner", definition: "d", weight: 5, evaluatedIn: "interview", indicators: ["x"] }] } as unknown as Pick<RolePacket, "requirements" | "competencies">;
     expect(skillsInScore(withOwn).map((c) => c.key)).toEqual(["chairside", "scanning"]);
     expect(skillsInScore(twinRole(["interview"])).map((c) => c.key)).toEqual(["digital_radiography", "chairside", "scanning"]);
+    // the skills it counts as the must-have instead: never one out for being checked only in the team's own interviews
+    const ownTwin = { ...twinRole(), competencies: [...twinRole().competencies, { key: "dr_own", name: "digital radiography", definition: "d", weight: 5, evaluatedIn: "interview", indicators: ["x"] }] } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+    expect(skillsCountedAsMustHaves(ownTwin).map((c) => c.key)).toEqual(["digital_radiography"]);
     expect([["interview"], ["resume", "interview"], [], undefined].map((evidencedBy) => onlyInOwnInterviews({ evidencedBy }))).toEqual([true, false, false, false]);
   });
 });
