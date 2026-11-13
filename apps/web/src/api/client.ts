@@ -140,6 +140,8 @@ export type ApplicationSummary = ApplicationCore & {
   appliedAt: string;
   stageChangedAt: string;
   daysInStage: number;
+  /** The day (YYYY-MM-DD) an offer waiting on their answer was made, null for anyone not at Offer; older answers leave it out. */
+  offerMadeOn?: string | null;
   candidateToldAt: string | null;
   /** The decision message waits for someone to approve it. */
   decisionMessageWaiting: boolean;

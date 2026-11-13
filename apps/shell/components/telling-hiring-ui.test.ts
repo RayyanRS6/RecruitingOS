@@ -203,10 +203,29 @@ describe("telling a candidate the decision (Wave G)", () => {
   it("someone declined on an eligibility answer before any AI review is never promised one", () => {
     const question = "Do you hold a current radiation safety / x-ray certification and CPR/BLS?";
     const held = detail({ ...declined, rejectReason: "eligibility", matchScore: null, assessments: [], eligibility: { passed: false, failedRules: [{ key: "xray_bls", question, reason: `answered no to: ${question}` }], unverifiable: [] } });
-    const t = text(panel(client([held])));
+    const html = panel(client([held]));
+    const t = text(html);
     expect(t).toContain("No match score: no AI review was made before the decision.");
     expect(t).not.toContain("a minute or two");
     expect(t).not.toContain("starts once someone keeps them in");
+    // the badge above that line says it too: no score is coming (review of the live-test fixes, #57)
+    expect(html).toContain('<span class="score none">No score</span>');
+    expect(t).not.toContain("No score yet");
+    // someone still in process with no reading yet keeps "No score yet"
+    expect(panel(client([detail({ matchScore: null, assessments: [] })]))).toContain('<span class="score none">No score yet</span>');
+  });
+
+  // Review of the live-test fixes, 12 November 2026 (#57): Compare still read "No AI review yet" for someone decided before one
+  it("Compare words someone decided before any AI review the same way: no score, no AI review, never 'yet'", () => {
+    const cand = (id: string, name: string, stage: string) => ({ applicationId: id, name, stage, stageLabel: stage, group: "not_moving_forward", mustHaves: {}, competencies: {}, screen: null, resume: null, unknownCount: 0, open: `/roles/r1/talent?open=${id}`, score: null, notes: [] });
+    const data = { role: { id: "r1", title: "Dental Hygienist" }, mustHaves: [], competencies: [], max: 5, reminder: "People decide.", candidates: [cand("a1", "Maria Reyes", "rejected"), cand("a2", "Luis Ortega", "triaged")] };
+    const html = render(client([]), createElement(CompareTable, { data: data as never }));
+    const column = (n: number) => html.slice(html.indexOf("Match score</th>")).split("<td>")[n + 1].split("</td>")[0];
+    expect(column(0)).toContain('<span class="score none sm">No score</span>');
+    expect(text(column(0))).toContain("No AI review");
+    expect(text(column(0))).not.toContain("yet");
+    expect(column(1)).toContain('<span class="score none sm">No score yet</span>');
+    expect(text(column(1))).toContain("No AI review yet");
   });
 
   it("under 'Ask me first' the safety net brings in a recruiter instead, and sends nothing", () => {

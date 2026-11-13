@@ -245,6 +245,17 @@ describe("the Interviews page", () => {
     expect(noEmail).toContain("There is no email address on file: tell them yourself.");
   });
 
+  // Review of the live-test fixes, 12 November 2026 (#59): with times out, nothing on the sheet said which clock they are on
+  it("times on offer: the card names the zone they are on, once, by its name; the details still say 'not yet' with none", () => {
+    const html = page(base({ status: "scheduling", offeredSlots: slots }));
+    const t = text(html);
+    expect(t).toContain("Waiting on the candidate");
+    expect(html).toContain("<h2>Times offered to the candidate (Central time)</h2>");
+    expect(t.match(/Book this for them/g)).toHaveLength(3);
+    expect(t).toContain("When not yet Length");
+    expect(t).not.toContain("America/Chicago");
+  });
+
   it("times that lapsed get the form too, while it is their newest interview", () => {
     const lapsed = base({ status: "offer_expired", offeredSlots: slots, createdAt: daysAgo(3) });
     expect(text(page(lapsed))).toContain("Set the date and time");

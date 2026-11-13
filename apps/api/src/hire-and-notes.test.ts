@@ -126,8 +126,13 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       // nothing was sent to the candidate
       expect(outbox().filter((m) => m.to === "ana@hire.example").length).toBe(sentBefore);
       // the list narrows to who waits on the candidate; a second offer is refused with what to do instead
-      const list = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?group=waiting_on_candidate`)).json()) as Array<{ id: string; group: string }>;
+      const list = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?group=waiting_on_candidate`)).json()) as Array<{ id: string; group: string; offerMadeOn?: string | null }>;
       expect(list.map((a) => a.id)).toEqual([ana.id]);
+      // the row carries the day recorded with the offer, yesterday here, so it says the day the panel's card says (review of
+      // the live-test fixes, 12 November 2026); nobody else has one
+      expect(list[0].offerMadeOn).toBe(madeOn);
+      const everyone = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; offerMadeOn?: string | null }>;
+      expect(everyone.find((a) => a.id === early.id)?.offerMadeOn).toBeNull();
       const again = await json(owner, "POST", `/api/v1/applications/${ana.id}/offer`, { confirm: true });
       expect(again.status).toBe(409);
       expect(((await again.json()) as { error: { message: string } }).error.message).toMatch(/accepted or declined/);

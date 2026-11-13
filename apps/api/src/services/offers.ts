@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, ApplicationStage, MembershipRole, OfferMadeResult, RecordOfferMade } from "@ros/contracts";
 import { audit, companyToday, emit, openEscalationsFor, transition } from "@ros/core";
 import { type applications, companies, offers, roles, users, withPlatform, type Tx } from "@ros/db";
@@ -46,6 +46,20 @@ export async function recordOfferMade(tx: Tx, input: { app: App; by: MembershipR
   await emit(tx, { type: "human.override", companyId: app.companyId, actor: input.actor, subject: { type: "application", id: app.id }, payload: { action: "offer_made", madeOn } });
   await audit(tx, { companyId: app.companyId, actor: input.actor, action: "outcome.recorded", target: { type: "application", id: app.id }, reason: "offer made outside the app", details: { offerId: offer.id, madeOn, stageFrom: moved.from, stageTo: moved.to } });
   return { ok: true, stage: "offer_sent", offerId: offer.id, madeOn, candidateNotice: "not_told", statement: OFFER_STATEMENT, next: OFFER_NEXT };
+}
+
+/**
+ * The day each offer still waiting on its answer was made (`made_on`), by application, for the Talent list's row: it says
+ * the same day as the candidate panel's card, which reads the `offer.created` fact recorded with it (review of the
+ * live-test fixes, 12 November 2026: the row counted 24 hours since the stage changed, and said "today" the next morning).
+ * The newest one when there are several; one query for the whole list.
+ */
+export async function openOfferDays(tx: Tx, applicationIds: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!applicationIds.length) return out;
+  const rows = await tx.select({ applicationId: offers.applicationId, madeOn: offers.madeOn }).from(offers).where(and(inArray(offers.applicationId, [...applicationIds]), eq(offers.status, "made"))).orderBy(desc(offers.createdAt));
+  for (const r of rows) if (r.madeOn && !out.has(r.applicationId)) out.set(r.applicationId, r.madeOn);
+  return out;
 }
 
 /**

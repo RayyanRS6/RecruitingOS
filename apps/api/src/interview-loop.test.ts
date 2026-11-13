@@ -331,6 +331,11 @@ describe("the loop after an interview", () => {
     b = await brief(interviewer);
     expect(b.cards.find((c) => c.kind === "interviews")).toMatchObject({ title: "1 interview coming up" });
     expect(b.cards.find((c) => c.kind === "interviews")!.actions[0]).toEqual({ label: "Open interviews", method: "GET", path: "/interviews" });
+    // the booked time beside the company's zone by its name, never its id (review of the live-test fixes, 12 November 2026)
+    const coming = b.cards.find((c) => c.kind === "interviews")!.body.split("\n").find((line) => line.startsWith("Sofia Marin: "))!;
+    expect(coming).toMatch(/ \(Pacific time\)$/);
+    expect(coming).not.toMatch(/[A-Za-z]+\/[A-Za-z_]+/);
+    expect(b.cards.find((c) => c.kind === "interviews")!.body).not.toMatch(/[A-Za-z]+\/[A-Za-z_]+/);
     await finish(iv.id);
     b = await brief(interviewer);
     const ask = b.cards.find((c) => c.title === "Did the interview with Sofia Marin take place?");

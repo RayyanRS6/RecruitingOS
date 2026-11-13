@@ -56,10 +56,22 @@ describe("the comparison view", () => {
     expect(scoreSummary(ana)).toMatchObject({ score: 64, verdict: "Potential match", coverage: "Based on 4 of 5 requirements", basis: "Résumé only: no AI interview" });
     // two must-haves judged, one shown missing by their own words: 4 of the 14 points, under the cap of 54
     expect(scoreSummary(ben)).toMatchObject({ score: 29, verdict: "Missing a must-have", missing: ["Missing must-have: Active CA RDH license"] });
-    expect(scoreSummary(cy)).toEqual({ score: null, verdict: null, coverage: "No AI review yet", basis: null, missing: [] });
+    expect(scoreSummary(cy)).toEqual({ score: null, verdict: null, coverage: "No AI review yet", basis: null, missing: [], noScore: "No score yet" });
     // an older answer without the word: the band's
     const { fit: _fit, ...older } = ana.score!;
     expect(scoreSummary({ ...ana, score: older as MatchScore }).verdict).toBe(ana.score!.bandLabel);
+  });
+
+  // Review of the live-test fixes, 12 November 2026 (#57): someone declined before any AI review read "No AI review yet"
+  it("words someone decided before any reading as the panel and the list do: no score, no AI review, never 'yet'", () => {
+    for (const stage of ["rejected", "talent_pool", "withdrawn", "hired", "declined"]) {
+      expect(scoreSummary({ ...cy, stage }), stage).toEqual({ score: null, verdict: null, coverage: "No AI review", basis: null, missing: [], noScore: "No score" });
+    }
+    // still in process, or held on an eligibility answer: a review can still come
+    for (const stage of ["triaged", "ineligible", "finalist"]) expect(scoreSummary({ ...cy, stage }), stage).toMatchObject({ coverage: "No AI review yet", noScore: "No score yet" });
+    // decided with a reading that could judge nothing: that reading's own words, and the badge as for anyone with a reading
+    const nothing = person("n", "Nia", reading([must("rdh", "unknown")]), { stage: "rejected" });
+    expect(scoreSummary(nothing)).toMatchObject({ score: null, coverage: nothing.score!.coverage.words, noScore: "No score yet" });
   });
 
   it("says beside each score whether the AI interview is in it, so a résumé-only number is never read as an interviewed one (R20-9)", () => {

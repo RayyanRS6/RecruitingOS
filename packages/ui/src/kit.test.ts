@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { createElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Eyebrow, Field, Icon, IconButton, IconChip, IconLabel, Kbd, PageHeader, Pill, SectionHeader, Segmented, Skeleton, StatCell, StatStrip, Table } from "./index";
+import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Eyebrow, Field, Icon, IconButton, IconChip, IconLabel, Kbd, PageHeader, Pill, ScoreBadge, SectionHeader, Segmented, Skeleton, StatCell, StatStrip, Table } from "./index";
 
 /**
  * The kit's markup for the October 2026 redesign (docs/07): the layout helpers screens rely on (spec 5b) render the
@@ -281,6 +281,16 @@ describe("the kit's round-3 options", () => {
     const wrapped = Table({ head: ["Job", { label: "Applicants who finished", num: true }], scroll: true, wrapHeads: true }) as El;
     expect(wrapped.props.className).toBe("table-wrap scroll wrap-heads");
     expect(Object.keys(wrapped.props)).toEqual(Object.keys(plain.props));
+  });
+
+  // Review of the live-test fixes, 12 November 2026: someone decided before any AI review was still shown "No score yet"
+  it("ScoreBadge `none` gives the words with no number; left out, it says 'No score yet' as before", () => {
+    expect((ScoreBadge({ score: null }) as El).props).toEqual({ className: "score none", children: "No score yet" });
+    expect((ScoreBadge({ score: null, size: "sm", none: "No score" }) as El).props).toEqual({ className: "score none sm", children: "No score" });
+    // a number is still the number, whatever the words for none
+    const scored = ScoreBadge({ score: 91, size: "sm", none: "No score" }) as El;
+    expect(scored.props.className).toBe("score good sm");
+    expect(scored.props.title).toBe("Match score 91 out of 100");
   });
 });
 

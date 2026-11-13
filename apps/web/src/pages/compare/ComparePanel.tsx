@@ -115,7 +115,7 @@ export function CompareTable({ data }: { data: CompareView }) {
             return (
               <td key={c.applicationId}>
                 <div className={CELL}>
-                  <span className="row gap-1.5"><ScoreBadge score={s.score} size="sm" />{s.verdict ? <span className="small">{s.verdict}</span> : null}</span>
+                  <span className="row gap-1.5"><ScoreBadge score={s.score} size="sm" none={s.noScore} />{s.verdict ? <span className="small">{s.verdict}</span> : null}</span>
                   {s.coverage ? <span className={FIGURES}>{s.coverage}</span> : null}
                   {s.basis ? <span className={FIGURES}>{s.basis}</span> : null}
                   {/* a long "Missing must-have: …" wraps inside its cell */}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SetInterviewTime } from "../../packages/contracts/src/domain/interview";
-import { ZONE_CHOICES } from "../../apps/web/src/company-setup";
+import { ZONE_CHOICES, zoneName } from "../../apps/web/src/company-setup";
+import { zoneShortName } from "../../packages/core/src/business-hours";
 import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
 import { DECISION_WORDS, bookLabel, candidateEmailLine, clashKey, clashShown, defaultDuration, durationChoices, durationWords, formFromBooked, freshForm, interviewLine, interviewNeedingTime, interviewWord, placeKindFor, setTimeBody, setTimeMissing, timeLabel, todayIn, whenLine, type SetTimeForm } from "../../apps/web/src/interview-time";
 import { bookOnBehalfToast, interviewSetToast, pickTimesToast } from "../../apps/web/src/talent-actions";
@@ -67,6 +68,13 @@ describe("the form's choices", () => {
     // a zone the form does not offer is named as the browser names it
     expect(timeLabel("America/Detroit")).not.toContain("America/");
     expect(whenLine("2026-11-12", "10:00", "America/Detroit", NOW)).not.toContain("America/");
+  });
+
+  // Review of the live-test fixes, 12 November 2026 (#61): the server names the zone in its notices and emails with its own
+  // list (apps/web cannot import @ros/core), so the two lists are kept saying the same words
+  it("names each zone in the same words the server's notices and emails use", () => {
+    for (const z of ZONE_CHOICES) expect(zoneShortName(z.value), z.value).toBe(zoneName(z.value, "short"));
+    expect(zoneShortName("America/Detroit")).toBe(zoneName("America/Detroit", "short"));
   });
 });
 

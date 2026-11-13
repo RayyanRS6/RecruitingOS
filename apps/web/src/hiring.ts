@@ -85,11 +85,17 @@ export function waitingOnCandidateText(a: Pick<ApplicationDetail, "timeline" | "
   return `You recorded an offer made on ${plainDayWords(made)} (${daysAgoWords(made, now, timeZone)}). The next move is ${first}'s. When they answer, record it here; nothing is sent to them either way.`;
 }
 
-/** The row's line for someone waiting on their answer to an offer: "Offer made: waiting on their answer 3 days". */
-export function waitingOnCandidateRow(a: Pick<ApplicationSummary, "group" | "daysInStage">): string | null {
+/**
+ * The row's line for someone waiting on their answer to an offer: "Offer made yesterday: waiting on their answer". The same
+ * day as the card on their panel (`waitingOnCandidateText`): the offer's own day, counted on the company's calendar
+ * (review of the live-test fixes, 12 November 2026: the row counted whole 24 hours since the stage changed, so it read
+ * "today" all the next morning, and never knew a day recorded as earlier). Without the offer's day (an older answer), the
+ * day they moved to Offer, as the card does without the offer's fact.
+ */
+export function waitingOnCandidateRow(a: Pick<ApplicationSummary, "group" | "stageChangedAt" | "offerMadeOn">, now: Date = new Date(), timeZone: string | null = null): string | null {
   if (a.group !== "waiting_on_candidate") return null;
-  if (a.daysInStage <= 0) return "Offer made today: waiting on their answer";
-  return `Offer made: waiting on their answer ${a.daysInStage} ${a.daysInStage === 1 ? "day" : "days"}`;
+  const ago = daysAgoWords(a.offerMadeOn ?? a.stageChangedAt.slice(0, 10), now, timeZone);
+  return ago ? `Offer made ${ago}: waiting on their answer` : "Offer made: waiting on their answer";
 }
 
 /** The toast after recording that they declined the offer (or withdrew): private, like every outcome. */

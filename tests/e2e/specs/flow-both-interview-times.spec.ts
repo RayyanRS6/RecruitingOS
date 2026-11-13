@@ -186,6 +186,8 @@ test.describe("setting interview times", () => {
     const sheet = page.getByRole("dialog");
     const offered = sheet.locator(".card", { has: page.getByRole("heading", { name: "Times offered to the candidate" }) });
     await expect(offered).toBeVisible({ timeout: 30_000 });
+    // the times are on the company's clock, and the card says which by name (review of the live-test fixes, 12 November 2026)
+    await expect(offered.getByRole("heading", { name: "Times offered to the candidate (Pacific time)", exact: true })).toBeVisible();
     await expectAccessible(page, "the sheet with times offered");
     const taken = offered.locator("li").filter({ hasText: bensTime });
     await expect(taken, `Cleo was offered Ben's time, ${bensTime}`).toHaveCount(1);

@@ -34,7 +34,7 @@ import { candidatesHeard } from "../services/interview-cancel";
 import { candidateEmailStates } from "../services/interview-create";
 import { interviewerApplicationView } from "../services/interviewer-view";
 import { hireFollowUp, lockedStillInProcess } from "../services/hire-sheet";
-import { recordOfferMade, settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
+import { openOfferDays, recordOfferMade, settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
 import { staffMayAsk, staffScopeOf } from "../services/staff-scope";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -425,7 +425,8 @@ async function companyTimeZone(tx: Tx, companyId: string): Promise<string> {
  * The role's applicants. Each row carries, beside the evidence view: where the person sits on the stage strip
  * (`ownerStage`, `ownerStageLabel`: under Cancelled, why they are there), with `cancelled` (why, and where their new
  * times stand; null for everyone not under Cancelled), their active private mark (`mark`: kind, label, `remindAt`, note, who set it),
- * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the told state
+ * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the day an offer
+ * waiting on its answer was made (`offerMadeOn`, the offers row's `made_on`; null for everyone not at Offer), the told state
  * of a decision (`toldState`: null for someone whose details were deleted, who cannot be told; `candidateToldAt`,
  * `decisionMessageWaiting`), and the stage button (`stageMoves`). The match
  * score (founder decision B2), worked out on read from the stored findings: `score`, `band`, `bandLabel`, `coverage`,
@@ -479,6 +480,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const preparing = await interviewsBeingPrepared(tx, appIds);
     // Whose AI interview never came because the month's allowance stayed used up (Q17): their score's label says so.
     const lapsed = await interviewsLapsedOnAllowance(tx, appIds.filter((id) => !scr.some((s) => s.applicationId === id)));
+    // The day each offer waiting on its answer was made, so the row says the day the panel says (`offerMadeOn`).
+    const offerDays = await openOfferDays(tx, apps.filter((a) => a.stage === "offer_sent").map((a) => a.id));
     const rows = apps.map((loaded) => {
       const cand = cands.find((x) => x.id === loaded.candidateId);
       const { app: a, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hiddenReadings);
@@ -510,6 +513,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
         appliedAt: iso(a.createdAt),
         stageChangedAt: iso(a.stageChangedAt),
         daysInStage: Math.max(0, Math.floor((now.getTime() - Date.parse(a.stageChangedAt)) / 86_400_000)),
+        offerMadeOn: a.stage === "offer_sent" ? offerDays.get(a.id) ?? null : null,
         // Someone whose details were deleted at their request cannot be told anything: no told state, so the Talent list's
         // "Not told yet" count and list leave them out, as Today and the daily check do (polish list).
         toldState: DECISION_STAGES.includes(a.stage) && !cand?.anonymizedAt ? a.toldState : null,

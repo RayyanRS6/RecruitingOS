@@ -1,6 +1,6 @@
 import { IMPORTANCE_LABEL, MATCH_FIT_LABEL, type MatchScore, type ReadingVersion } from "@ros/contracts";
 import type { CompareCandidate, CompareResponse } from "../../api/client";
-import { scoreBasis, scoreRank } from "../../talent-list";
+import { decidedUnread, noScoreWords, scoreBasis, scoreRank } from "../../talent-list";
 
 /**
  * The comparison view (docs/spec/21 F10; founder decision B2): up to five people side by side, each one's match score
@@ -34,12 +34,15 @@ export function orderCandidates<T extends { score?: MatchScore | null }>(cands: 
 /**
  * What the top line of a column says: the number and its one verdict word (the band's on an older answer without it), what
  * it rests on (the coverage, and the label, R20-9: "Résumé only: AI interview not done yet" beside an interviewed person's
- * "From the résumé and the AI interview"), and any missing must-have.
+ * "From the résumé and the AI interview"), and any missing must-have. `noScore`: the badge's words when there is no number.
+ * Someone decided before any reading reads "No score" and "No AI review", never "yet", as on their panel and the list.
  */
-export function scoreSummary(c: CompareCandidateView): { score: number | null; verdict: string | null; coverage: string | null; basis: string | null; missing: string[] } {
+export function scoreSummary(c: CompareCandidateView): { score: number | null; verdict: string | null; coverage: string | null; basis: string | null; missing: string[]; noScore: string } {
   const m = c.score;
-  if (!m) return { score: null, verdict: null, coverage: "No AI review yet", basis: null, missing: [] };
-  return { score: m.score, verdict: m.fit ? MATCH_FIT_LABEL[m.fit] : m.bandLabel, coverage: m.coverage.words, basis: scoreBasis(m), missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`) };
+  const read = !!m || !!c.resume || !!c.screen;
+  const noScore = noScoreWords(c.stage, read);
+  if (!m) return { score: null, verdict: null, coverage: decidedUnread(c.stage, read) ? "No AI review" : "No AI review yet", basis: null, missing: [], noScore };
+  return { score: m.score, verdict: m.fit ? MATCH_FIT_LABEL[m.fit] : m.bandLabel, coverage: m.coverage.words, basis: scoreBasis(m), missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`), noScore };
 }
 
 /**

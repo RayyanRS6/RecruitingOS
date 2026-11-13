@@ -383,6 +383,19 @@ describe("editable business calendar (correction 12 of 18 September 2026)", asyn
     expect(businessMinutesBetween(new Date("2026-09-21T17:00:00Z"), new Date("2026-09-18T23:00:00Z"))).toBe(-120);
     expect(businessMinutesBetween(new Date("2026-09-19T17:00:00Z"), new Date("2026-09-20T17:00:00Z"))).toBe(0); // weekend
   });
+  // Review of the live-test fixes, 12 November 2026 (#61): the team's booking notice and email printed "(America/Los_Angeles)"
+  it("names a zone beside a time in the sign-up form's short words, any other as Intl does, never by its id", async () => {
+    const { zoneShortName } = await import("./business-hours");
+    const offered = ["America/New_York", "America/Chicago", "America/Denver", "America/Phoenix", "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu"];
+    expect(offered.map(zoneShortName)).toEqual(["Eastern time", "Central time", "Mountain time", "Arizona time", "Pacific time", "Alaska time", "Hawaii time"]);
+    expect(zoneShortName("UTC")).toBe("UTC");
+    expect(zoneShortName("America/Detroit")).toBe("Eastern Time");
+    expect(zoneShortName("Asia/Karachi")).toBe("Pakistan Standard Time");
+    for (const zone of [...offered, "UTC", "America/Detroit", "Asia/Karachi", "Europe/London"]) expect(zoneShortName(zone), zone).not.toMatch(/[A-Za-z]+\/[A-Za-z_]+/);
+    // a name no runtime knows is said as stored, rather than not at all
+    expect(zoneShortName("Nowhere/Atlantis")).toBe("Nowhere/Atlantis");
+  });
+
   it("writes customer copy from the calendar in force", () => {
     expect(describeHours()).toBe("Monday to Friday, 9 to 5 Pacific");
     expect(describeHours(cal({ hours: { ...DEFAULT_BUSINESS_CALENDAR.hours, mon: [{ start: "09:00", end: "12:00" }, { start: "13:00", end: "17:30" }] } }))).toBe("Monday 9 to 12 and 1 to 5:30, Tuesday 9 to 5, Wednesday 9 to 5, Thursday 9 to 5, Friday 9 to 5 Pacific");

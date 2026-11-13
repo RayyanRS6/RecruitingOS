@@ -1,5 +1,5 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, lockedAndWaiting, inCancelled, interviewsInMotionFor, isBoardChannel, isPlanRequest, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, type FollowUpView } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, lockedAndWaiting, inCancelled, interviewsInMotionFor, isBoardChannel, isPlanRequest, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, zoneShortName, type FollowUpView } from "@ros/core";
 import { withoutLockedApprovals, withoutLockedEvents } from "./locked-visibility";
 import { askToViewMore } from "../middleware/candidate-lock";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
@@ -755,8 +755,10 @@ async function interviewerBrief(tx: Tx, companyId: string, viewer: BriefViewer):
   const toRecord = rows.filter((r) => r.status === "completed" && !r.outcome);
   const cards: BriefCard[] = [];
   if (upcoming.length || offering.length) {
+    // the company's zone by its name, never its id (review of the live-test fixes, 12 November 2026)
+    const zone = zoneShortName(tz);
     const lines = [
-      ...upcoming.map((r) => `${nameOf(r.candidateId)}: ${r.title} for ${roleOf(r.roleId)}${r.startsAt ? `, ${whenIn(r.startsAt, tz)} (${tz})` : ""}`),
+      ...upcoming.map((r) => `${nameOf(r.candidateId)}: ${r.title} for ${roleOf(r.roleId)}${r.startsAt ? `, ${whenIn(r.startsAt, tz)} (${zone})` : ""}`),
       // times offered only when there are some (6 November 2026): otherwise it has no time yet, and the team sets one
       ...offering.map((r) => `${nameOf(r.candidateId)}: ${r.title} for ${roleOf(r.roleId)}, ${r.status === "scheduling" && Number(r.offered) > 0 ? "times offered to the candidate" : "no time yet"}`),
     ];

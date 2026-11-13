@@ -1,4 +1,4 @@
-import { AI_INTERVIEW_GROUP_LABEL, AiInterviewGroup as AiInterviewGroupEnum, MATCH_FIT_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, RESUME_ONLY_CHIP, scoreRank, type MatchFit } from "@ros/contracts";
+import { AI_INTERVIEW_GROUP_LABEL, AiInterviewGroup as AiInterviewGroupEnum, MATCH_FIT_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, RESUME_ONLY_CHIP, TERMINAL_STAGES, scoreRank, type ApplicationStage, type MatchFit } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
 import type { AiInterviewGroup, AiInterviewView, ApplicationSummary, CancelledReason, OwnerStage, RoleSummary, StageStripCounts, ToldState } from "./api/client";
 import { cancelledReasonFrom } from "./cancelled";
@@ -147,6 +147,25 @@ const OLDER_BASIS: Record<string, string> = { resume: "From the AI review of the
 export function scoreBasis(score: { basis?: string | null; basedOn?: string | null } | null | undefined): string | null {
   if (!score) return null;
   return score.basis || (score.basedOn ? OLDER_BASIS[score.basedOn] ?? null : null);
+}
+
+/**
+ * Someone decided before any AI reading (declined, moved to the talent pool, withdrawn or hired): no review will come for
+ * them, so no screen says one is still to come (review of the live-test fixes, 12 November 2026). `read`: there is a
+ * reading or an AI review of theirs. One rule for the candidate panel, the Candidates list and Compare.
+ */
+export function decidedUnread(stage: string, read: boolean): boolean {
+  return !read && TERMINAL_STAGES.has(stage as ApplicationStage);
+}
+
+/** The score badge's words with no number: "No score" for someone decided before any reading (`decidedUnread`), else "No score yet". */
+export function noScoreWords(stage: string, read: boolean): string {
+  return decidedUnread(stage, read) ? "No score" : "No score yet";
+}
+
+/** The list row's badge words with no number: a row has a reading when it has the score's coverage or an AI review. */
+export function rowNoScore(a: Pick<ApplicationSummary, "stage" | "coverage" | "assessment">): string {
+  return noScoreWords(a.stage, !!a.coverage || !!a.assessment);
 }
 
 /** The list row's score tooltip: the coverage, then the label. */

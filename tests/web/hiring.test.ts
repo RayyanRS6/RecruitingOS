@@ -53,13 +53,57 @@ describe("Offer made (Q29)", () => {
   });
 
   it("shows the wait on the candidate on their row, and their answer privately", () => {
-    expect(waitingOnCandidateRow({ group: "waiting_on_candidate", daysInStage: 3 })).toBe("Offer made: waiting on their answer 3 days");
-    expect(waitingOnCandidateRow({ group: "waiting_on_candidate", daysInStage: 0 })).toBe("Offer made today: waiting on their answer");
-    expect(waitingOnCandidateRow({ group: "waiting_on_you", daysInStage: 3 })).toBeNull();
+    const at = new Date("2026-10-09T17:00:00Z"); // 10 AM on the 9th in Los Angeles
+    expect(waitingOnCandidateRow({ group: "waiting_on_candidate", stageChangedAt: "2026-10-06T17:00:00.000Z", offerMadeOn: "2026-10-06" }, at, "America/Los_Angeles")).toBe("Offer made 3 days ago: waiting on their answer");
+    expect(waitingOnCandidateRow({ group: "waiting_on_candidate", stageChangedAt: "2026-10-09T16:00:00.000Z", offerMadeOn: "2026-10-09" }, at, "America/Los_Angeles")).toBe("Offer made today: waiting on their answer");
+    expect(waitingOnCandidateRow({ group: "waiting_on_you", stageChangedAt: "2026-10-06T17:00:00.000Z", offerMadeOn: null }, at, "America/Los_Angeles")).toBeNull();
     expect(offerAnswerToast("declined", {})).toEqual({ title: "Recorded: they declined the offer.", detail: "Recorded with your name. Nothing was sent to them." });
     expect(offerAnswerToast("withdrew", { interviewsCancelled: 1, interviewOffNotes: 1 }).detail).toMatch(/they were sent a short note now saying only that it is off\.$/);
   });
+
+  // Review of the live-test fixes, 12 November 2026 (#58): the row counted whole 24 hours since the stage changed and the
+  // card the offer's day on the company's calendar, so the morning after an evening offer the row said "today" and the
+  // card "yesterday"; a day recorded as earlier than the click was never on the row at all.
+  it("says on the row the day the card on their panel says, on the company's calendar whatever the reader's clock", () => {
+    const LA = "America/Los_Angeles";
+    // recorded at 11 PM on Thursday the 12th in Los Angeles: 2 AM on Friday the 13th for the owner reading in New York
+    const recorded = "2026-11-13T07:00:00.000Z";
+    const card = (madeOn: string) => ({ stageChangedAt: recorded, timeline: [ev("offer.created", { madeOn }, recorded)], candidate: { firstName: "Maria" } });
+    const row = (offerMadeOn?: string) => ({ group: "waiting_on_candidate", stageChangedAt: recorded, offerMadeOn });
+    asReaderIn("America/New_York", () => {
+      // 8:30 AM the next morning in Los Angeles: under ten hours since the click, and the 12th was yesterday there
+      const morning = new Date("2026-11-13T16:30:00.000Z");
+      expect(waitingOnCandidateText(card("2026-11-12") as never, morning, LA)).toContain(" (yesterday). ");
+      expect(waitingOnCandidateRow(row("2026-11-12"), morning, LA)).toBe("Offer made yesterday: waiting on their answer");
+      // 11:30 PM on the 12th in Los Angeles, already the 13th in New York: today in both, on the company's calendar
+      const late = new Date("2026-11-13T07:30:00.000Z");
+      expect(waitingOnCandidateText(card("2026-11-12") as never, late, LA)).toContain(" (today). ");
+      expect(waitingOnCandidateRow(row("2026-11-12"), late, LA)).toBe("Offer made today: waiting on their answer");
+      // a day recorded as earlier than the click: that day, in both
+      expect(waitingOnCandidateText(card("2026-11-09") as never, morning, LA)).toContain(" (4 days ago). ");
+      expect(waitingOnCandidateRow(row("2026-11-09"), morning, LA)).toBe("Offer made 4 days ago: waiting on their answer");
+      // an older answer without the offer's day: the day they moved to Offer, as the card without the offer's fact
+      expect(waitingOnCandidateText({ ...card("2026-11-12"), timeline: [] } as never, morning, LA)).toContain(" (today). ");
+      expect(waitingOnCandidateRow(row(), morning, LA)).toBe("Offer made today: waiting on their answer");
+    });
+    // the row reads the company's zone, as the card does
+    const list = readFileSync(new URL("../../apps/web/src/pages/People.tsx", import.meta.url), "utf8");
+    expect(list).toContain("waitingOnCandidateRow(a, undefined, timeZone)");
+  });
 });
+
+/** Reads as someone whose own clock is in `zone`: the process's zone is set there while `read` runs, then put back. */
+function asReaderIn(zone: string, read: () => void): void {
+  const own = process.env.TZ;
+  const system = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  process.env.TZ = zone;
+  try {
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone, "the reader's own zone").toBe(zone);
+    read();
+  } finally {
+    process.env.TZ = own ?? system;
+  }
+}
 
 describe("a recorded outcome on the panel", () => {
   it("says a hire's start day the way the app says days, never the stored 2026-11-30 (10 November 2026)", () => {

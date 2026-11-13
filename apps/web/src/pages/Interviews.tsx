@@ -239,7 +239,8 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
           </Card>
           {i.candidateAvailability?.note || i.candidateAvailability?.accessibilityNote ? <Alert tone="info">{i.candidateAvailability.accessibilityNote ? `Accommodation request: ${i.candidateAvailability.accessibilityNote}. ` : ""}{i.candidateAvailability.note ? `The candidate wrote: "${i.candidateAvailability.note}"` : ""}</Alert> : null}
           {i.status === "scheduling" && aheadSlots(i.offeredSlots).length ? (
-            <Card title="Times offered to the candidate" className={SHEET_CARD}>
+            // the times are on the company's clock: its zone by name, once, in the title (review of the live-test fixes)
+            <Card title={i.timezone ? `Times offered to the candidate (${zoneName(i.timezone, "short")})` : "Times offered to the candidate"} className={SHEET_CARD}>
               {/* times that have passed are not offered, nor booked for them (the server refuses them too) */}
               <ul className="small grid gap-2">{aheadSlots(i.offeredSlots).map((s) => <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface-2 px-3 py-2">{when(s.startsAt, i.timezone)}{manage ? <> <Button size="sm" variant="quiet" loading={book.isPending} onClick={() => book.mutate(s.id)}>Book this for them</Button></> : null}</li>)}</ul>
               {manage ? <p className="small muted mt-3">Booking on their behalf is for when you agreed a time by phone; it is recorded as your action.</p> : null}

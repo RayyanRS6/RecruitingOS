@@ -14,6 +14,7 @@ import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage"
 import { LockedCandidates } from "../components/LockedCandidates";
 import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
+import { useCompanyTimeZone } from "../components/use-company-time-zone";
 import { useIsClient } from "../components/use-is-client";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { focusLost, rowFocusAfterMove } from "../focus-after";
@@ -25,7 +26,7 @@ import { InlineUndo } from "../components/InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "../components/use-undo";
 import { waitingOnCandidateRow } from "../hiring";
 import { bulkUndoMillis, undoable } from "../telling";
-import { AI_INTERVIEW_CHIPS, ORDERS, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, aiInterviewAlert, aiInterviewCounts, appliedWhen, applyView, defaultView, emptyText, readingCounts, resumeOnlyChip, rowChips, scoreTitle, stripParts, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type RowChip, type TalentView } from "../talent-list";
+import { AI_INTERVIEW_CHIPS, ORDERS, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, aiInterviewAlert, aiInterviewCounts, appliedWhen, applyView, defaultView, emptyText, readingCounts, resumeOnlyChip, rowChips, rowNoScore, scoreTitle, stripParts, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type RowChip, type TalentView } from "../talent-list";
 import { CandidatePanel } from "./candidate-panel/CandidatePanel";
 import { STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
 import type { ActionBody } from "./candidate-panel/hooks";
@@ -502,8 +503,10 @@ function RowChipView({ c }: { c: RowChip }) {
  */
 function TalentRow({ a, index, busy, onOpen, onMove }: { a: ApplicationSummary; index: number; busy: boolean; onOpen: () => void; onMove: (to: OwnerStage) => void }) {
   const name = a.candidate?.name ?? "Unknown";
-  // waiting on you, or (an offer made outside the app, plan H2) waiting on the candidate's answer
-  const waiting = waitingText(a) ?? waitingOnCandidateRow(a);
+  // waiting on you, or (an offer made outside the app, plan H2) waiting on the candidate's answer, its day counted on the
+  // company's calendar, as the panel's card counts it
+  const timeZone = useCompanyTimeZone();
+  const waiting = waitingText(a) ?? waitingOnCandidateRow(a, undefined, timeZone);
   // A decision message in the outbox of a company ITS has not confirmed yet waits for the check (founder decision B7).
   const check = useCompanyCheck();
   // Most pressing first; past two, the rest are counted in "+N" and said in full to a screen reader and on hover.
@@ -532,8 +535,9 @@ function TalentRow({ a, index, busy, onOpen, onMove }: { a: ApplicationSummary; 
           {rest.length ? <span className="chip neutral" title={restWords}><span aria-hidden="true">+{rest.length}</span><span className="sr-only">Also: {restWords}</span></span> : null}
         </div>
         {/* the match score, worked out by code from the checked findings (founder decision B2); an older answer has none.
-            A score with no AI interview in it yet says so beside the badge (R20-9), the full label on hover. */}
-        <span className="score-slot" title={scoreTitle(a)}>{resumeOnly ? <span className="chip neutral" title={resumeOnly.title}>{resumeOnly.label}</span> : null}{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" /> : null}</span>
+            A score with no AI interview in it yet says so beside the badge (R20-9), the full label on hover. Someone
+            decided before any reading reads "No score", as on their panel and in Compare. */}
+        <span className="score-slot" title={scoreTitle(a)}>{resumeOnly ? <span className="chip neutral" title={resumeOnly.title}>{resumeOnly.label}</span> : null}{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" none={rowNoScore(a)} /> : null}</span>
         <StageButton stage={a.ownerStage} label={a.ownerStageLabel} blocked={stageBlocked(a.stageMoves)} disabled={busy} onMove={onMove} align="end" />
       </div>
     </div>
