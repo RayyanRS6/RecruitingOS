@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { OWNERS_CALL_MARK, intakeCompilePrompt, intakeExtractPrompt, packetRevisePrompt, withoutTag, type IntakeContext } from "@ros/ai";
-import { IntakeServerState, RolePacket, type Actor, type DraftRolePacket, type IntakeFacts } from "@ros/contracts";
+import { IntakeServerState, RolePacket, askedKind, type Actor, type DraftRolePacket, type IntakeFacts } from "@ros/contracts";
 import { dealBreakerOffer, draftFactsKey, draftKeyMatches, normalizeFacts, unresolvedFlags } from "@ros/core";
+import { ALL_PLAYBOOKS } from "@ros/playbooks";
 import { samplePacket } from "./fixtures/sample-packet";
 import { answersFollowingChange, finalizeDraft, lostOnRewrite, reasonFollowingChange, saysFormHoldsNobody, withoutUntickedQuestions } from "./intake";
 
@@ -125,6 +126,9 @@ describe("finalizeDraft never keeps what the model says a person decided", () =>
       "Because of that wording, the license question is shown to candidates but does not automatically screen anyone out.",
       "The CPR/BLS question is asked, but it does not screen anyone out, since it can be obtained before the start date.",
       "The RDA license question is asked of everyone but is not required.",
+      // review of the form-questions fix, 12 Nov 2026: "optional" and "not required" say the same, without "asked"
+      "The RDA license question is optional; candidates without it can still apply.",
+      "The RDA license question is included but not required.",
       "The interview plan follows the playbook.",
       "Candidates who do not hold an RDA license are held for your decision.",
     ];
@@ -134,14 +138,23 @@ describe("finalizeDraft never keeps what the model says a person decided", () =>
     }));
     const draft = finalizeDraft(raw, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
     expect(draft.requirements.eligibility.every((e) => e.knockout)).toBe(true);
-    for (const gone of lines.slice(0, 3)) expect(draft.provenance.assumptions).not.toContain(gone);
-    expect(draft.provenance.assumptions).toEqual(expect.arrayContaining(lines.slice(3)));
+    for (const gone of lines.slice(0, 5)) expect(draft.provenance.assumptions).not.toContain(gone);
+    expect(draft.provenance.assumptions).toEqual(expect.arrayContaining(lines.slice(5)));
     // still gone when the saved draft is brought up to date again
     const again = finalizeDraft(draft, ctx(facts()), { sessionId: "s1", aiRunId: "r", state: confirmed() });
-    for (const gone of lines.slice(0, 3)) expect(again.provenance.assumptions).not.toContain(gone);
-    expect(again.provenance.assumptions).toEqual(expect.arrayContaining(lines.slice(3)));
+    for (const gone of lines.slice(0, 5)) expect(again.provenance.assumptions).not.toContain(gone);
+    expect(again.provenance.assumptions).toEqual(expect.arrayContaining(lines.slice(5)));
     expect(saysFormHoldsNobody("Not set yet: who interviews.")).toBe(false);
     expect(saysFormHoldsNobody("The question is not a knockout.")).toBe(true);
+    for (const said of [
+      "The RDA license question is not required.",
+      "I added the RDA license question as a non-knockout question.",
+      "A No to the RDA question will not stop anyone from applying.",
+      "The BLS certification can be obtained after hire, so the question is not a requirement.",
+      "The schedule question is for information only.",
+    ]) expect(saysFormHoldsNobody(said), said).toBe(true);
+    // about anything but a question on the form, such a line stays
+    for (const said of ["Candidates without dental experience can still apply.", "Experience with Dentrix is preferred but not required.", "You did not name any deal-breakers, so none are listed."]) expect(saysFormHoldsNobody(said), said).toBe(false);
   });
 
   it("takes the owner's-call mark, and any '(ask only when …)', out of every question on the form and in the AI interview (review of the live-test fixes, 12 Nov 2026)", () => {
@@ -214,6 +227,46 @@ describe("a question the owner left unticked never goes on a draft just written"
     const saved = finalizeDraft(draft, ctx(facts({ suggestions: left(BLS) })), { sessionId: "s1", aiRunId: "r", state: confirmed() });
     expect(keys(saved)).toEqual(["bls"]);
     expect(saved.requirements.eligibility[0].knockout).toBe(true);
+  });
+
+  // Review of the form-questions fix, 12 Nov 2026: a schedule question has no short form, so the model's own wording of
+  // the one the owner left unticked, in the very shape intake.compile asks for, stayed on the form and held every "no".
+  const DAYS = "Are you available for the days this office is open?";
+  const US_WORK = "Are you legally authorized to work in the United States for any employer?";
+  const POSTED = "Are you available for the posted schedule and work model?";
+
+  it("drops every rule about the schedule when the owner left the schedule question unticked and chose none about it", () => {
+    const draft = written(
+      rule("rdh_license", "Do you hold an active dental hygiene (RDH) license in CA?", "license"),
+      { ...rule("days", "Which of these days can you work: Mon, Tue, Wed, Thu, Fri?", "schedule_availability"), expectation: { days: ["Mon", "Tue", "Wed", "Thu", "Fri"] } },
+      rule("schedule", "Are you available for the posted schedule?", "schedule_availability"),
+      rule("saturdays", "Are you able to work Saturdays?", "schedule_availability"),
+      rule("start", "Can you start within 30 days?", "start_date"),
+    );
+    expect(keys(withoutUntickedQuestions(draft, facts({ eligibilityNotes: [RDH, BLS], suggestions: left(DAYS) })))).toEqual(["rdh_license", "start"]);
+    // the days question chosen: the model's own wording of it stays, whatever else was left unticked
+    const all = ["rdh_license", "days", "schedule", "saturdays", "start"];
+    expect(keys(withoutUntickedQuestions(draft, facts({ eligibilityNotes: [RDH, DAYS], suggestions: left(BLS) })))).toEqual(all);
+    // a start date left unticked is not the schedule
+    expect(keys(withoutUntickedQuestions(draft, facts({ eligibilityNotes: [RDH], suggestions: left("Can you start within two weeks?") })))).toEqual(all);
+  });
+
+  it("drops every rule about the right to work when the owner left that question unticked and chose none about it", () => {
+    const draft = written(rule("work_authorization", "Are you authorized to work in the U.S.?", "work_authorization"), rule("schedule", POSTED, "schedule_availability"));
+    expect(keys(withoutUntickedQuestions(draft, facts({ eligibilityNotes: [POSTED], suggestions: left(US_WORK) })))).toEqual(["schedule"]);
+    // one about it the owner chose keeps the model's own wording
+    expect(keys(withoutUntickedQuestions(draft, facts({ eligibilityNotes: ["Are you eligible to work in the US?"], suggestions: left(US_WORK) })))).toEqual(["work_authorization", "schedule"]);
+  });
+
+  it("reads each hiring guide's question for the form as its kind: the schedule and the right to work by their words, never another", () => {
+    for (const pb of ALL_PLAYBOOKS) for (const role of pb.roles) for (const e of role.eligibility) {
+      const kind = e.type === "schedule_availability" || e.type === "work_authorization" ? e.type : null;
+      expect(askedKind(e.question), `${role.key}: ${e.question}`).toBe(kind);
+    }
+    for (const q of ["Which of these days can you work: Mon, Tue, Wed, Thu, Fri?", "Are you able to work Saturdays?", "Are you available Monday to Friday, 8 to 5?", "Can you work weekends?"]) expect(askedKind(q), q).toBe("schedule_availability");
+    for (const q of ["Are you authorized to work in the U.S.?", "Will you now or in the future require visa sponsorship?"]) expect(askedKind(q), q).toBe("work_authorization");
+    // a start date, the way to the workplace, a licence or a physical task is none of them
+    for (const q of ["Can you start within 30 days?", "Are you available to start within two weeks?", "Can you get to the workplace on the days the job needs?", "Do you hold current CPR/BLS certification (or can you obtain it before your start date)?", "Can you stand for an 8-hour shift?"]) expect(askedKind(q), q).toBeNull();
   });
 });
 

@@ -146,6 +146,28 @@ export function rulesOut(text: string): boolean {
   return RULES_OUT.test(text.trim());
 }
 
+/** The legal right to work, in any words ("Are you authorized to work in the U.S.?", "…require visa sponsorship?"). */
+const ABOUT_THE_RIGHT_TO_WORK = /\b(?:authori[sz]ed|eligible|permitted|allowed|entitled)\s+to\s+(?:legally\s+)?work\b|\bright\s+to\s+work\b|\bwork\s+authori[sz]ation\b|\bsponsorship\b/i;
+/** Being available, the schedule, shifts, the regular hours, or which days or hours they can work ("Can you work Saturdays?"). */
+const ABOUT_THE_SCHEDULE = /\bavailab\w*|\bschedul\w*|\bshifts?\b|\bweekends?\b|\bweekdays?\b|\b(?:mon|tues|wednes|thurs|fri|satur|sun)days?\b|\bwhich (?:of (?:these|the) )?days\b|\bwhat days\b|\b(?:days|hours) (?:a|per) (?:week|day)\b|\b(?:posted|standard|regular|normal|usual|business|office)\s+hours\b|\bovertime\b|\bon[\s-]call\b|\bwork(?:ing)? (?:on |the |a |an |during )?(?:nights?|evenings?|mornings?|holidays?|hours)\b/i;
+/** …never when they could start, how they get to the workplace, a licence or a certificate, or a physical task. */
+const NOT_THE_SCHEDULE = /\bstart\b|\bget to\b|\bcommut\w*|\btranspor\w*|\blicen[cs]\w*|\bcertif\w*|\blift\w*|\bcarry\w*|\bstand(?:ing)?\b|\bpounds?\b|\blbs?\b/i;
+
+/**
+ * The kind of rule a question for the form asks, read from its words, for the two kinds a model words its own way and no
+ * short form names: the schedule ("Are you available for the days this office is open?", "Which of these days can you
+ * work: Mon, Tue, Wed?") and the right to work ("Are you authorized to work in the U.S.?"). Null for any other question,
+ * a start date ("Can you start within 30 days?"), getting to the workplace ("Can you get to the workplace on the days the
+ * job needs?") and a physical task ("Can you stand for an 8-hour shift?") among them. The job builder's backstop for a
+ * question left unticked and the quick start's offer of the assistant's questions both read it (review of the live-test
+ * fixes, 12 Nov 2026).
+ */
+export function askedKind(question: string): "schedule_availability" | "work_authorization" | null {
+  if (ABOUT_THE_RIGHT_TO_WORK.test(question)) return "work_authorization";
+  if (ABOUT_THE_SCHEDULE.test(question) && !NOT_THE_SCHEDULE.test(question)) return "schedule_availability";
+  return null;
+}
+
 export const IntakeMissingFact = z.enum([
   "title",
   "location",

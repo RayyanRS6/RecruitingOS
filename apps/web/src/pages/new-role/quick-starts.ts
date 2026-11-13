@@ -1,3 +1,5 @@
+import { askedKind } from "@ros/contracts";
+
 /**
  * The quick starts under "Who are you hiring?" (plan C4): only roles one of our hiring guides knows, so a tap always
  * starts from real playbook knowledge (typical must-haves, screening questions, pay ranges) and never from a guess.
@@ -150,6 +152,21 @@ export const GUIDE_ROLES: Readonly<Record<string, readonly GuideRole[]>> = {
 
 /** Yes/no questions offered when no guide knows the job: the two every consumer guide role asks. */
 export const GENERAL_QUESTIONS: readonly string[] = [US_WORK, POSTED_SCHEDULE];
+
+/** A day, a time or a shift of its own ("weekends", "night shifts", "12-hour shifts"): more than the posted schedule asks. */
+const ITS_OWN_TIME = /\d|\b(?:weekends?|weekdays?|(?:mon|tues|wednes|thurs|fri|satur|sun)days?|nights?|overnight|evenings?|mornings?|afternoons?|holidays?|on[\s-]call|overtime|split|rotating|graveyard)\b/i;
+
+/**
+ * Whether a question asks what one of the general questions already asks, in other words (`askedKind`, the job
+ * builder's own reading): the legal right to work, or the schedule with no day, time or shift of its own ("Are you
+ * available to work during standard business hours?", never "Can you work Saturdays?"). The assistant's are offered only
+ * for what the general ones do not ask (review of the form-questions fix, 12 Nov 2026: a second right-to-work and a
+ * second schedule question went on the form, both ticked).
+ */
+export function asksAsGeneral(question: string): boolean {
+  const kind = askedKind(question);
+  return kind === "work_authorization" || (kind === "schedule_availability" && !ITS_OWN_TIME.test(question));
+}
 
 /**
  * The guide role a typed job title names, the way the server matches it (`matchPlaybookRole`): the longest title or alias

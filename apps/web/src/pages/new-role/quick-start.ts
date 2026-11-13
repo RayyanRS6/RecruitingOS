@@ -1,6 +1,6 @@
 import { formatPayRange, INTAKE_FIRST_MESSAGE_MAX, mustHaveOf, rulesOut, type IntakeAnswer, type IntakeFacts, type IntakeFactsPatch, type IntakeQuestion, type IntakeQuestionField } from "@ros/contracts";
 import { closingDateProblem, closingDateRequiredFor } from "../../publishing";
-import { GENERAL_QUESTIONS, GUIDE_ROLES, guideRoleFor } from "./quick-starts";
+import { GENERAL_QUESTIONS, GUIDE_ROLES, asksAsGeneral, guideRoleFor } from "./quick-starts";
 import { aiSuggestFor, readAiSuggest, type AiSuggest } from "./quick-suggest";
 import { dayWords, payPayload, payProblem, type PayForm } from "./rules";
 
@@ -281,13 +281,13 @@ type QuestionAnswers = Pick<QuickAnswers, "questionsOff" | "title"> & Partial<Qu
 
 /**
  * Every yes/no question offered on the screening step: the guide's for a job it knows; else the general ones, then the
- * assistant's for these very answers (Wave S3, G3), each once. Each starts ticked, except one that is the owner's call
- * (`questionOn`).
+ * assistant's for these very answers (Wave S3, G3), each once, and none that asks what a general one asks, in any words
+ * (`asksAsGeneral`). Each starts ticked, except one that is the owner's call (`questionOn`).
  */
 export function offeredQuestions(a: QuestionAnswers, vertical: string | null | undefined): readonly string[] {
   if (guideRoleFor(vertical, a.title)) return suggestedQuestions(vertical, a.title);
   const ai = aiSuggestFor(a)?.questions ?? [];
-  return [...GENERAL_QUESTIONS, ...ai.filter((q) => !GENERAL_QUESTIONS.some((g) => same(g, q)))];
+  return [...GENERAL_QUESTIONS, ...ai.filter((q) => !GENERAL_QUESTIONS.some((g) => same(g, q)) && !asksAsGeneral(q))];
 }
 
 /** Every must-have the draft will carry, from answers that may be partly given (`allMustHaves`). */
@@ -735,11 +735,13 @@ export function readQuickStart(storage: Pick<Storage, "getItem"> | null | undefi
     const kept = typeof v.step === "number" && Number.isInteger(v.step) ? Math.max(0, Math.min(v.step, QUICK_STEPS.length - 1)) : 0;
     const sessionId = typeof v.sessionId === "string" && /^[\w-]{1,64}$/.test(v.sessionId) ? v.sessionId : null;
     const companyId = typeof v.companyId === "string" && v.companyId ? v.companyId : null;
-    // A copy kept before 12 Nov 2026 (no questionsOn) past the questions step, for a job whose guide has a question that
-    // is the owner's call: that question started ticked then and unticked now, so the copy opens on the questions step
-    // for the owner to make the call (never the old tick), and Back to review returns them (review of the live-test fixes).
+    // A copy kept before 12 Nov 2026 (no questionsOn) past the questions step, or sent back from the review to an earlier
+    // one (its Edit, or a step left unfinished: Next and Back then go straight to the review), for a job whose guide has a
+    // question that is the owner's call: that question started ticked then and unticked now, so the copy opens on the
+    // questions step for the owner to make the call (never the old tick), and Back to review returns them (review of the
+    // live-test fixes, and of its form-questions fix).
     const questions = QUICK_STEPS.indexOf("questions");
-    const reopen = !Array.isArray(a.questionsOn) && kept > questions && hasOwnersCall(answers.title);
+    const reopen = !Array.isArray(a.questionsOn) && (kept > questions || v.fromReview === true) && hasOwnersCall(answers.title);
     return { step: reopen ? questions : kept, answers, fromReview: reopen || v.fromReview === true, sessionId, ...(companyId ? { companyId } : {}) };
   } catch {
     return null;

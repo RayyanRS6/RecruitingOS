@@ -8,7 +8,8 @@ import { withoutTag, type PromptDef } from "./registry";
  * want (none are ticked for them), the questions start ticked and can be unticked, and every line passes the fairness
  * word check in code (screenCriterion) before it is shown; a line that fails is dropped without a word. A "no" to any
  * question on a draft's form holds the application, so the questions are only of the kinds a form question may be (the
- * eligibility rule types); a tool, a skill or experience is a must-have.
+ * eligibility rule types); a tool, a skill or experience is a must-have. The quick start always offers the right to work
+ * and the posted schedule beside them (`GENERAL_QUESTIONS` in apps/web), so neither is suggested again.
  */
 export type IntakeSuggestInput = {
   /** The job title as the owner typed it. */
@@ -42,6 +43,7 @@ mustHaves: at most ${MAX_SUGGESTED_MUST_HAVES}, the skills, licences, certificat
 - Leave out the years of experience: the owner already answered that.
 
 questions: at most ${MAX_SUGGESTED_QUESTIONS}, yes/no questions for the application form. A "no" holds the application for the owner, so ask only these kinds: a licence or certificate the job needs, the legal right to work, the schedule, the start date, the place of work or travel, or a bona fide physical task such as lifting or driving.
+- The form already has two questions of its own for every applicant: whether they are legally authorized to work in the United States, and whether they are available for the posted schedule and work model. Never suggest either again, in any words: suggest only what they do not cover, such as a day or a shift the job needs ("Can you work Saturdays?").
 - Never a question about a tool, a skill or experience ("Have you worked as a ... before?", "Are you proficient in ...?"): those are must-haves.
 - Each one a single question ending with "?", answerable with yes or no ("Do you hold a valid driver's licence?").
 - Ask about what the person can do or holds, never about who they are.
@@ -75,7 +77,8 @@ export const intakeSuggestPrompt: PromptDef<IntakeSuggestInput, IntakeSuggestion
   key: "intake.suggest",
   // v2: questions only of the kinds a form question may be (a licence or certificate, the right to work, the schedule,
   // the start date, the place of work or travel, a bona fide physical task), never a tool or experience question: a "no"
-  // to any question on a draft's form holds the application (review of the live-test fixes, 12 Nov 2026).
+  // to any question on a draft's form holds the application (review of the live-test fixes, 12 Nov 2026). Not released
+  // yet, so changed in place: never the right to work or the posted schedule again, which the form already asks.
   version: 2,
   task: "intake.suggest",
   agent: "intake",

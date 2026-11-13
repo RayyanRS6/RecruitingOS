@@ -1,6 +1,6 @@
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import {
-  DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, mustHaveOf, rulesOut, withoutOwnersCallMark,
+  DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, askedKind, mustHaveOf, rulesOut, withoutOwnersCallMark,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole,
   type RolePacket,
@@ -816,7 +816,8 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
     if (session.status !== "active") throw new IntakeSessionError("not_active");
     const state = stateOf(session);
     const facts = normalizeFacts(session.facts);
-    // A question the owner left unticked never goes on the form, whatever the model wrote (`withoutUntickedQuestions`).
+    // A question the owner left unticked never goes on the form in the model's own words either: the same words, the same
+    // credential, or a rule of its kind for the schedule and the right to work (`withoutUntickedQuestions`).
     const draft = finalizeDraft(withoutUntickedQuestions(out.output, facts), { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [], benchmark: bench.benchmark, messages: session.messages });
     const at = new Date().toISOString();
     // The key is of the answers the model was given, so anything changed while it wrote shows the draft as out of date.
@@ -853,38 +854,51 @@ function answeredSince(line: string, done: ReadonlySet<IntakeEssentialKey>): boo
   return (Object.entries(ESSENTIAL_WORDS) as Array<[IntakeEssentialKey, RegExp]>).some(([key, words]) => done.has(key) && words.test(line));
 }
 
-/** "…does not screen anyone out", "…will not rule out applicants", "holds nobody", "is not a knockout". */
+/** "…does not screen anyone out", "…will not stop anyone from applying", "holds nobody", "is not a knockout". */
 const HOLDS_NOBODY: readonly RegExp[] = [
-  /\b(?:does not|doesn't|do not|don't|will not|won't|would not|wouldn't|is not|isn't|are not|aren't|never|not)\b[^.,;]{0,25}?\b(?:screen|rule|filter|hold|knock|block|disqualif|exclud|reject)\w*\b[^.,;]{0,30}?\b(?:out|anyone|anybody|nobody|no one|applicants?|candidates?|applications?|people)\b/i,
+  /\b(?:does not|doesn't|do not|don't|will not|won't|would not|wouldn't|is not|isn't|are not|aren't|never|not)\b[^.,;]{0,25}?\b(?:(?:screen|rule|filter|hold|knock|block|disqualif|exclud|reject|stop|prevent)\w*|bar(?:s|red|ring)?)\b[^.,;]{0,30}?\b(?:out|anyone|anybody|nobody|no one|applicants?|candidates?|applications?|people)\b/i,
   /\b(?:holds?|screens?|rules?)\s+(?:out\s+)?(?:nobody|no one)\b/i,
   /\bnot\s+(?:a\s+)?knock[\s-]?out\b/i,
 ];
-/** "…is asked but not required", about a question on the form (a question, a licence, a certificate). */
-const ASKED_NOT_REQUIRED = /\b(?:asked|shown)\b[^.]*\bnot (?:required|a requirement|mandatory)\b/i;
+/**
+ * "…is optional", "…is asked but not required", "…is for information only", "a non-knockout question", "…can still
+ * apply": only about a question on the form (a question, a licence, a certificate), so "Candidates without dental
+ * experience can still apply." stays.
+ */
+const NOT_REQUIRED = /\boptional\b|\binformational\b|\bfor information(?:al purposes)? only\b|\bnon[\s-]?(?:knock[\s-]?out|disqualifying|blocking|required|mandatory)\b|\bnot (?:required|a requirement|mandatory)\b|\bcan still (?:apply|be considered|move forward|proceed)\b/i;
 const ABOUT_THE_FORM = /\b(?:questions?|form|licen[cs]es?|licensure|certificat\w*|permits?|registrations?|credentials?|eligib\w*)\b/i;
 
 /**
- * A line of the model's saying a question on the form holds nobody, screens or rules nobody out, or is asked but not
+ * A line of the model's saying a question on the form holds nobody, screens, rules or stops nobody, or is optional or not
  * required (live test, 12 Nov 2026: "…the license question is shown to candidates but does not automatically screen
- * anyone out" stayed under "What the assistant assumed" beside a question that held every "no").
+ * anyone out" stayed under "What the assistant assumed" beside a question that held every "no"; its review: "The RDA
+ * license question is optional; candidates without it can still apply." stayed too).
  */
 export function saysFormHoldsNobody(line: string): boolean {
-  return HOLDS_NOBODY.some((re) => re.test(line)) || (ASKED_NOT_REQUIRED.test(line) && ABOUT_THE_FORM.test(line));
+  return HOLDS_NOBODY.some((re) => re.test(line)) || (NOT_REQUIRED.test(line) && ABOUT_THE_FORM.test(line));
 }
 
 /**
  * A draft just written without the questions for the form the owner left unticked (facts.suggestions with field
  * "eligibility"): a rule that is the same requirement as one of them (`sameRequirement`) is dropped, unless it is the same
- * as one they chose too (facts.eligibilityNotes). The backstop behind intake.compile v6's own line, which a model can
- * still miss, also for a deal-breaker counted openly (review of the live-test fixes, 12 Nov 2026). Only on a draft just
- * written (`draftIntake`), never when a saved one is brought up to date: a question put back by a change the owner
- * confirmed stays.
+ * as one they chose too (facts.eligibilityNotes). A question about the schedule or the right to work has no short form
+ * and a model words it its own way ("Which of these days can you work: Mon, Tue, Wed?"), so one of them left unticked,
+ * with none of the questions chosen about the same (`askedKind`), drops every rule of that type. The backstop behind
+ * intake.compile v6's own line, which a model can still miss, also for a deal-breaker counted openly (review of the
+ * live-test fixes, 12 Nov 2026). Only on a draft just written (`draftIntake`), never when a saved one is brought up to
+ * date: a question put back by a change the owner confirmed stays.
  */
 export function withoutUntickedQuestions(draft: DraftRolePacket, facts: Pick<IntakeFacts, "eligibilityNotes" | "suggestions">): DraftRolePacket {
   const unticked = (facts.suggestions ?? []).filter((s) => s.field === "eligibility").map((s) => s.text);
   if (!unticked.length) return draft;
   const chosen = facts.eligibilityNotes ?? [];
-  const eligibility = draft.requirements.eligibility.filter((r) => chosen.some((n) => sameRequirement(n, r.question)) || !unticked.some((u) => sameRequirement(u, r.question)));
+  const kindsLeftOff = new Set<string>();
+  for (const u of unticked) {
+    const kind = askedKind(u);
+    if (kind && !chosen.some((n) => askedKind(n) === kind)) kindsLeftOff.add(kind);
+  }
+  const leftOff = (r: DraftRolePacket["requirements"]["eligibility"][number]) => kindsLeftOff.has(r.type) || unticked.some((u) => sameRequirement(u, r.question));
+  const eligibility = draft.requirements.eligibility.filter((r) => chosen.some((n) => sameRequirement(n, r.question)) || !leftOff(r));
   return eligibility.length === draft.requirements.eligibility.length ? draft : { ...draft, requirements: { ...draft.requirements, eligibility } };
 }
 

@@ -620,6 +620,15 @@ describe("kept in this browser", () => {
     expect(readQuickStart(s)).toMatchObject({ step: 9, fromReview: false });
     s.setItem(QUICK_START_STORAGE_KEY, JSON.stringify({ step: 6, answers: before, fromReview: false, sessionId: null }));
     expect(readQuickStart(s)).toMatchObject({ step: 6, fromReview: false });
+    // review of the form-questions fix, 12 Nov 2026: one sent back from the review to an earlier step (Edit on the pay,
+    // or a step left unfinished) opens on the questions step too, since Next and Back go straight to the review from there
+    s.setItem(QUICK_START_STORAGE_KEY, JSON.stringify({ step: 4, answers: before, fromReview: true, sessionId: null }));
+    const edited = readQuickStart(s)!;
+    expect(edited).toMatchObject({ step: QUICK_STEPS.indexOf("questions"), fromReview: true });
+    expect(questionOn(edited.answers, RDA, "dental")).toBe(false);
+    // a job with no such question opens on the step it was sent back to
+    s.setItem(QUICK_START_STORAGE_KEY, JSON.stringify({ step: 4, answers: hygienist, fromReview: true, sessionId: null }));
+    expect(readQuickStart(s)).toMatchObject({ step: 4, fromReview: true });
   });
 
   it("knows a fresh page from work in progress", () => {

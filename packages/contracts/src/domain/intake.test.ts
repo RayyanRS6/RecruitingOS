@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IntakeFacts, IntakeTurn, mustHaveOf, restatementsOf, rulesOut } from "./intake";
+import { IntakeFacts, IntakeTurn, askedKind, mustHaveOf, restatementsOf, rulesOut } from "./intake";
 import { withoutOwnersCallMark } from "./playbook";
 
 /**
@@ -100,5 +100,15 @@ describe("what only the server sets, and words only the AI reads", () => {
     expect(withoutOwnersCallMark("Are you available on Saturdays? (Ask only when the office opens then)")).toBe("Are you available on Saturdays?");
     expect(withoutOwnersCallMark("Which certifications do you hold (ask only when the owner requires it)?")).toBe("Which certifications do you hold?");
     for (const t of [rda, "  Words as typed  ", "Do you hold a CDL (class A)?"]) expect(withoutOwnersCallMark(t), t).toBe(t);
+  });
+});
+
+// Review of the form-questions fix, 12 Nov 2026: no short form names the schedule or the right to work, so a model's own
+// wording of one left unticked stayed on the form, and the quick start offered the assistant's second copy of each.
+describe("the kind of rule a question for the form asks, by its words", () => {
+  it("reads the schedule and the right to work in any words, and nothing else as either", () => {
+    for (const q of ["Are you available for the days this office is open?", "Which of these days can you work: Mon, Tue, Wed, Thu, Fri?", "Are you able to work Saturdays?", "Can you work our regular hours?", "Are you available for the posted schedule and work model?"]) expect(askedKind(q), q).toBe("schedule_availability");
+    for (const q of ["Are you legally authorized to work in the United States for any employer?", "Are you authorized to work in the U.S.?", "Will you now or in the future require visa sponsorship?"]) expect(askedKind(q), q).toBe("work_authorization");
+    for (const q of ["Can you start within 30 days?", "Are you available to start within two weeks?", "Can you get to the workplace on the days the job needs?", "Do you hold current CPR/BLS certification?", "Can you stand for an 8-hour shift?", "Do you have reliable transportation available for your shifts?", "Can you lift 50 lb?"]) expect(askedKind(q), q).toBeNull();
   });
 });

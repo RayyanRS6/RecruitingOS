@@ -217,6 +217,23 @@ describe("the quick start hands its answers to the job builder", () => {
     expect(written.draft!.requirements.eligibility.map((e) => e.key)).toEqual(["schedule"]);
   });
 
+  it("a schedule question the owner unticked never goes on the form, though the model asks the schedule in its own words (review of the form-questions fix, 12 Nov 2026)", async () => {
+    const DAYS = "Are you available for the days this office is open?";
+    const base = hygienist();
+    const a = { ...base, ...toggleQuestion(base, DAYS, "dental") };
+    // the model asks the schedule its own way ("Monday to Friday, 8 to 5"), which shares no short form or key words with it
+    const ignored = samplePacket((p) => {
+      p.requirements.eligibility.push({ key: "rdh_license", type: "license", question: "Do you hold an active dental hygiene (RDH) license in CA?", expectation: { license: "RDH", jurisdiction: "CA" }, rationale: "Required by law to practice dental hygiene.", knockout: true });
+    });
+    const { facts, written } = await quickStart(a, true, ignored);
+    expect(facts.suggestions).toEqual([{ field: "eligibility", text: DAYS, origin: "playbook" }]);
+    expect(written.draft!.requirements.eligibility.map((e) => e.key)).toEqual(["rdh_license"]);
+    // the stand-in, by the same rule, writes no schedule question either
+    const own = (await quickStart(a)).written.draft!.requirements.eligibility;
+    expect(own.some((e) => e.type === "schedule_availability")).toBe(false);
+    expect(own.some((e) => e.key === "rdh_license")).toBe(true);
+  });
+
   it("only the quick start says the owner went through the questions for the form: no turn of the assistant sets or clears it (review of the live-test fixes, 12 Nov 2026)", async () => {
     const { id, facts } = await quickStart(hygienist());
     expect(facts.formQuestionsChosen).toBe(true);

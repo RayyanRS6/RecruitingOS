@@ -24,6 +24,13 @@ describe("intake.suggest", () => {
     expect(sys).not.toMatch(/a licence or certificate it needs, a tool,/);
   });
 
+  // review of the form-questions fix, 12 Nov 2026: for a job no guide knows, the quick start always offers the right to
+  // work and the posted schedule, so a suggestion asking either again went on the form twice
+  it("never suggests the right to work or the posted schedule, which the form already asks, in any words", () => {
+    const sys = intakeSuggestPrompt.system(input()).map((b) => b.text).join("\n");
+    expect(sys).toContain("The form already has two questions of its own for every applicant: whether they are legally authorized to work in the United States, and whether they are available for the posted schedule and work model. Never suggest either again, in any words: suggest only what they do not cover, such as a day or a shift the job needs (\"Can you work Saturdays?\").");
+  });
+
   it("gives the model the job's facts, one a line, between the job tags, and nothing else", () => {
     const [m] = intakeSuggestPrompt.messages(input());
     expect(m.role).toBe("user");

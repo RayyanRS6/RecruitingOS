@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { IntakeFactsPatch } from "../../packages/contracts/src/index";
-import { GENERAL_QUESTIONS } from "../../apps/web/src/pages/new-role/quick-starts";
+import { GENERAL_QUESTIONS, asksAsGeneral } from "../../apps/web/src/pages/new-role/quick-starts";
 import { chosenQuestions, emptyQuickAnswers, emptyQuickState, offeredQuestions, quickStartPatch, readQuickStart, reviewRows, writeQuickStart, type QuickAnswers } from "../../apps/web/src/pages/new-role/quick-start";
 import {
   SUGGEST_PATH, adoptSuggestion, aiSuggestFor, fetchSuggestions, readAiSuggest, readSuggestResponse, suggestBody, suggestKey, suggestQueryKey, suggestView, wantsAiSuggestions, type AiSuggest,
@@ -75,6 +75,25 @@ describe("what each step shows", () => {
     expect(chosenQuestions({ ...a, aiSuggest: s, questionsOff: ["Do you hold a valid driver's licence?"] }, "logistics")).toEqual([...GENERAL_QUESTIONS]);
     // answers changed since: the old suggestions are not offered
     expect(offeredQuestions({ ...a, title: "Courier", aiSuggest: s }, "logistics")).toEqual([...GENERAL_QUESTIONS]);
+  });
+
+  // review of the form-questions fix, 12 Nov 2026: a remote Bookkeeper's step 9 had a second right-to-work and a second
+  // schedule question beside the general ones, all ticked, so candidates answered the same question twice
+  it("never offers one of the assistant's questions that asks what a general one asks, in other words", () => {
+    const a = driver();
+    const s = made(a, { mustHaves: [], questions: ["Are you legally authorized to work in the United States?", "Are you available to work during standard business hours?", "Do you hold a valid driver's licence?", "Can you work Saturdays?"] });
+    const mine = { ...a, aiSuggest: s };
+    const asked = [...GENERAL_QUESTIONS, "Do you hold a valid driver's licence?", "Can you work Saturdays?"];
+    expect(offeredQuestions(mine, "logistics")).toEqual(asked);
+    expect(chosenQuestions(mine, "logistics")).toEqual(asked);
+    const patch = quickStartPatch(mine, "logistics", null);
+    expect(patch.add?.filter((x) => x.field === "eligibilityNotes").map((x) => x.value)).toEqual(asked);
+    // neither ticked nor unticked: never offered, so nothing about it reaches the draft
+    expect(patch.unticked).toBeUndefined();
+    expect(reviewRows(mine, "logistics").find((r) => r.label === "Screening questions")?.value).toBe('4 on the form (a "no" holds the application for your decision)');
+    for (const q of ["Are you available to work the posted hours?", "Are you authorized to work in the U.S.?", "Will you now or in the future require visa sponsorship?", "Can you work our regular hours?"]) expect(asksAsGeneral(q), q).toBe(true);
+    // a day, a time or a shift of its own, a licence, the place of work, a start date or a physical task is asked
+    for (const q of ["Can you work Saturdays?", "Are you available to work night shifts?", "Are you available for 12-hour shifts?", "Do you hold a valid driver's licence?", "Can you get to the workplace on the days the job needs?", "Can you start within two weeks?", "Can you lift 50 lb?"]) expect(asksAsGeneral(q), q).toBe(false);
   });
 
   it("an answer that lands after the person left the questions step adds nothing to the form: its questions start unticked", () => {

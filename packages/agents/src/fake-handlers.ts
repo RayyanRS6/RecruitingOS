@@ -1,4 +1,4 @@
-import { mustHaveOf, repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
+import { askedKind, mustHaveOf, repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
 import { ASKED_WORDS, OWNERS_CALL_MARK, type FakeProvider, type IntakeContext, type StructuredRequest } from "@ros/ai";
 import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
@@ -30,8 +30,9 @@ export function registerFakeHandlers(fake: FakeProvider): void {
 /**
  * intake.suggest v2 (Wave S3, G3): must-haves and yes/no questions for the quick start, built only from the job facts in
  * the request, the same every time for the same facts. Nothing about candidates is ever in the request. The questions
- * are only of the kinds a form question may be (a licence, the schedule, the place of work), never a tool or experience
- * question: those are must-haves. A title that is not a job (empty, or only instructions) gets nothing.
+ * are only of the kinds a form question may be (a licence, the place of work), never a tool or experience question
+ * (those are must-haves), nor the right to work or the posted schedule, which the form already asks: a remote job gets
+ * none. A title that is not a job (empty, or only instructions) gets nothing.
  */
 function fakeSuggest(req: StructuredRequest<unknown>): { mustHaves: string[]; questions: string[] } {
   const text = req.messages.map((m) => m.content).join("\n");
@@ -50,7 +51,6 @@ function fakeSuggest(req: StructuredRequest<unknown>): { mustHaves: string[]; qu
   }
   if (model === "Remote") {
     mustHaves.push("Working on your own, remotely");
-    questions.push("Are you available to work the posted hours?");
   } else if (model === "On site" || model === "Hybrid") {
     questions.push("Can you get to the workplace on the days the job needs?");
   }
@@ -389,10 +389,10 @@ function fakeExtract(req: StructuredRequest<unknown>): IntakeExtraction {
  * owner's own choices first, and a screening conversation of five or six questions and about ten minutes (more only for
  * the owner's own questions), since candidates answer it straight after the form (plan E8). v6: a must-have worded as
  * what rules someone out is written as the requirement, a playbook question that is the owner's call goes on the form
- * only when the owner chose it or a must-have names it (never when they left it unticked), its CPR/BLS and schedule
- * questions stay off the form when the owner left one asking the same unticked, every rule holds a "no" once the owner
- * went through the questions, the description never says why the owner is hiring, and no skill is named the same as one
- * of the draft's must-haves.
+ * only when the owner chose it or a must-have names it (never when they left it unticked), its CPR/BLS, schedule and
+ * right-to-work questions stay off the form when the owner left one asking the same unticked, every rule holds a "no"
+ * once the owner went through the questions, the description never says why the owner is hiring, and no skill is named
+ * the same as one of the draft's must-haves.
  */
 function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const f = c.facts;
@@ -411,19 +411,21 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const isDental = c.vertical === "dental";
   const rdh = /hygien/i.test(title);
   const eligibility: DraftRolePacket["requirements"]["eligibility"] = [];
-  // intake.compile v6: never a question the owner left unticked. The stand-in honours that for its CPR/BLS and schedule
-  // questions; its other questions it writes as it always has, and the server's own backstop takes out any the owner left
-  // unticked (`withoutUntickedQuestions`).
+  // intake.compile v6: never a question the owner left unticked. The stand-in honours that for its CPR/BLS question, and
+  // for its schedule and right-to-work questions by the server's own rule (one left unticked, with none chosen about the
+  // same, keeps its kind off: `askedKind`); its other questions it writes as it always has, and the server's own backstop
+  // takes out any the owner left unticked (`withoutUntickedQuestions`).
   const unticked = (f.suggestions ?? []).filter((s) => s.field === "eligibility").map((s) => s.text);
+  const kindLeftOff = (kind: "schedule_availability" | "work_authorization") => unticked.some((u) => askedKind(u) === kind) && !f.eligibilityNotes.some((n) => askedKind(n) === kind);
   const bls = "Do you hold current CPR/BLS certification (or can you obtain it before your start date)?";
   const blsLeftOff = unticked.some((u) => sameRequirement(u, bls));
-  const scheduleLeftOff = unticked.some((u) => /\bavailab\w*|\bschedule\b|\bdays?\b|\bhours\b|\bshifts?\b/i.test(u));
+  const scheduleLeftOff = kindLeftOff("schedule_availability");
   if (isDental && rdh) eligibility.push({ key: "rdh_license", type: "license", question: `Do you hold an active dental hygiene (RDH) license in ${locRegion || "the state of this office"}?`, expectation: { license: "RDH", jurisdiction: locRegion || "" }, rationale: "Required by law to practice dental hygiene.", knockout: true });
   // intake.compile v6: every rule holds a "no". The stand-in writes its BLS rule so once the owner went through the
   // questions (the quick start's marker), as the evals' quick-start cases check on the draft as the model wrote it;
   // otherwise it holds nobody on purpose, so the evals and tests that read the finished draft pin finalizeDraft's rule.
   if (isDental && !blsLeftOff) eligibility.push({ key: "bls", type: "certification", question: bls, expectation: { certification: "BLS" }, rationale: "Required for clinical staff.", knockout: !!f.formQuestionsChosen });
-  if (!isDental) {
+  if (!isDental && !kindLeftOff("work_authorization")) {
     const wa = pbRole.eligibility.find((e) => e.type === "work_authorization");
     eligibility.push({ key: "work_authorization", type: "work_authorization", question: wa?.question ?? "Are you legally authorized to work in the United States for any employer?", expectation: { authorized: true }, rationale: "Required for employment; asked of every candidate.", knockout: true });
   }
