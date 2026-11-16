@@ -13,6 +13,7 @@ import { clipText, traceOutcome, traceTranscript, traceTurn, type CaseDiagnostic
 import { intakeContextOf, runIntakeCase, type IntakeModelCall } from "./intake-run";
 import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
+import { chosenBy, unmatchedSuites } from "./summary";
 import { CONSISTENCY_READS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
 /**
@@ -24,11 +25,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 /**
  * `--suite triage` runs one suite or family; `--suite resume,triage` runs several (the fairness tests run on the real
- * models from .github/workflows/fairness.yml). A family name runs every suite whose name starts with it.
+ * models from .github/workflows/fairness.yml). A family name runs every suite whose name starts with it. A name that
+ * chooses no suite fails the run (second review of the live-test fixes, #22).
  */
 const onlySuites = args.includes("--suite") ? (args[args.indexOf("--suite") + 1] ?? "").split(",").map((s) => s.trim()).filter(Boolean) : null;
-/** Whether a suite runs: chosen by its own name, or by its family (the part before the dot). */
-const runs = (name: string) => !onlySuites || onlySuites.some((s) => s === name || s === name.split(".")[0]);
+/** Whether a suite runs: chosen by its own name, or by its family (the part before the dot; `chosenBy` in summary.ts). */
+const runs = (name: string) => !onlySuites || onlySuites.some((s) => chosenBy(s, name));
 /** Whether a block that writes several suites of one family runs: chosen by the family or by any suite in it. */
 const familyRuns = (family: string) => !onlySuites || onlySuites.some((s) => s === family || s.startsWith(`${family}.`));
 
@@ -573,6 +575,17 @@ async function main() {
     ok = ok && pass;
     console.log(`${pass ? "PASS" : "FAIL"} ${suite}: ${(r.passRate * 100).toFixed(0)}% (min ${(min * 100).toFixed(0)}%)`);
     for (const c of r.cases) if (!c.pass) console.log(`   × ${c.id}: ${c.failures.join("; ")}`);
+  }
+  // A `--suite` that names nothing, or a name in it that chose no suite (a typo, or a suite renamed on one side only),
+  // fails the run: the fairness button never passes with fewer checks than were chosen (second review of the live-test
+  // fixes, #22). The summary names each such name as a check that needs a look.
+  if (onlySuites?.length === 0) {
+    ok = false;
+    console.log("FAIL --suite: no suite named");
+  }
+  for (const name of unmatchedSuites(onlySuites ?? "all", Object.keys(results))) {
+    ok = false;
+    console.log(`FAIL --suite ${name}: no suite by that name or family ran`);
   }
   // What the run cost: every model call is recorded in ai_runs with its estimated cost (packages/ai/src/pricing.ts).
   const [spent] = await handle.query("SELECT COALESCE(SUM(cost_usd), 0)::float8 AS total, COUNT(*)::int AS calls FROM ai_runs", []);

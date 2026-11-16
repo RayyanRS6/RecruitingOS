@@ -34,10 +34,12 @@ whenever you want reassurance. It costs about ten cents.
 2. **Run workflow**, keep the branch `main`. Under **Which tests**, keep `resume,triage` for the CV checks above, or
    choose `screen,chat` for the screening chat (one restatement and one question per message, no guesses, the private
    note never said, no question asked twice, a fair close), its scorecard and the answers written up for Review & send,
-   or the last option for both. The chat tests make more calls and cost more than ten cents. Choose
+   or `resume,triage,screen,chat` for both. The chat tests make more calls and cost more than ten cents. Choose
    `intake,packet.revise` for the job builder: the draft written from what an owner types, unlawful wishes declined,
    a pasted job ad, and changes asked for by chat. Claude Sonnet 5.5 writes each draft, so it also costs more than ten
-   cents. **Run workflow**.
+   cents. For the job builder, leave the model at `claude-haiku-5-5` and the effort at `app setting`: they also choose
+   how the job builder's conversation and changes by chat run, so any other choice no longer tests what the app runs.
+   **Run workflow**.
 3. After a few minutes, open the run. Its **Summary** says in plain words whether every check passed, which models ran
    and what the run cost, and names anything that needs a look.
 

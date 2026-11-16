@@ -70,6 +70,36 @@ describe("the release runbook", () => {
   });
 });
 
+describe("the fairness runbook", () => {
+  /**
+   * The second review of the live-test fixes (12 November 2026, #7 and #9): step 2 said "or the last option for both" once
+   * the job builder's choice had been added last, so someone who wanted the CV and chat checks together ran only the job
+   * builder's. The runbook names each "Which tests" choice by its value, which a later choice never moves, and the model
+   * and effort it says to keep for the job builder are the workflow's own defaults.
+   */
+  it("names every Which tests choice by its value, never by its place, and the model and effort it says to keep", () => {
+    const yml = read(".github/workflows/fairness.yml").replace(/\r\n/g, "\n");
+    /** One input of the dispatch form: from its key to the line `next` starts. */
+    const input = (id: string, next: string) => {
+      const at = yml.indexOf(`\n      ${id}:\n`);
+      return at < 0 ? "" : yml.slice(at, yml.indexOf(next, at + 1));
+    };
+    const choices: string[] = JSON.parse(/\n\s+options: (\[.*\])/.exec(input("tests", "\n      screening_model:\n"))?.[1] ?? "[]");
+    expect(choices).toContain("intake,packet.revise");
+    const runbook = read("docs/runbooks/fairness-tests.md").replace(/\r\n/g, "\n");
+    const runIt = runbook.slice(runbook.indexOf("## Run it"), runbook.indexOf("## If a check fails"));
+    expect(runIt).toContain("**Which tests**");
+    // in backticks, so `resume,triage` is never satisfied by `resume,triage,screen,chat`
+    for (const choice of choices) expect(runIt, choice).toContain(`\`${choice}\``);
+    expect(runbook).not.toMatch(/\b(?:first|second|third|fourth|fifth|last) option\b/i);
+    for (const [id, next] of [["screening_model", "\n      screening_effort:\n"], ["screening_effort", "\npermissions:"]] as const) {
+      const value = /\n\s+default: (.+)/.exec(input(id, next))?.[1]?.trim().replace(/^"(.*)"$/, "$1");
+      expect(value, id).toBeTruthy();
+      expect(runIt, id).toContain(`\`${value}\``);
+    }
+  });
+});
+
 describe("the API contracts", () => {
   it("say GET /applications/:id/interview-draft gives the \"Set a date and time\" form's defaults, not an approval card", () => {
     const draft = row(read("docs/12-api-contracts.md"), "GET", "/applications/:id/interview-draft");
