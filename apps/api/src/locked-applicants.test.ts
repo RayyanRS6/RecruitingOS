@@ -1207,6 +1207,48 @@ describe("locked candidates", () => {
       expect((await json(admin, "POST", `/api/v1/admin/outcomes/${old.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." })).status).toBe(200);
       expect((await applicationOf(cy.id)).stage).toBe("received");
     }, 120_000);
+
+    // The second review of the live-test fixes, 12 November 2026 (#13, known bug 141): the answer, the toast and the card named
+    // a day the daily check never acted on, because it told someone locked only when a closed job had moved them, so nobody ever
+    // told them; once the grant ended, nobody could even open their card
+    it("someone ITS declines, or puts in the talent pool, on a job still open and does not tell, hears by itself on the day the answer and the card name, in the standard words, with no name to the team", async () => {
+      for (const [name, body] of [["Ida", { action: "reject", reason: "position_filled" }], ["Ula", { action: "move_to_talent_pool" }]] as const) {
+        const { job, p, row, recruiter, ask } = await underGrant(name);
+        await container.drain();
+        const before = mailsTo(p.email).length;
+        const decided = await json(recruiter, "POST", `/api/v1/applications/${row.id}/actions`, body);
+        expect(decided.status, await decided.clone().text()).toBe(200);
+        const answer = await read<{ untoldFallbackOn: string; decisionMessage: { policy: string } }>(decided);
+        expect(answer.decisionMessage.policy, name).toBe("sends");
+        expect(answer.untoldFallbackOn, name).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        expect((await read<{ untoldFallbackOn: string | null }>(await json(recruiter, "GET", `/api/v1/applications/${row.id}`))).untoldFallbackOn, name).toBe(answer.untoldFallbackOn);
+        await container.drain();
+        expect(mailsTo(p.email).length, name).toBe(before);
+        expect((await container.db.select({ status: roles.status }).from(roles).where(eq(roles.id, job.roleId)))[0].status).toBe("open");
+        // 11 AM or noon in Los Angeles (the company's zone) on the day named, and on the day before it
+        const on = Date.parse(`${answer.untoldFallbackOn}T19:00:00.000Z`);
+        expect((await safetyNet(job.id, new Date(on - DAY))).filter((x) => x.applicationId === row.id), name).toEqual([]);
+        expect((await safetyNet(job.id, new Date(on))).filter((x) => x.applicationId === row.id), name).toEqual([{ applicationId: row.id, action: "sent" }]);
+        await container.drain();
+        // One email, in the standard words of a decision: never the closing message of a job still open, nothing about keeping
+        // them, and no word about a plan
+        const sent = mailsTo(p.email).slice(before);
+        expect(sent.map((m) => m.subject), name).toEqual([`Your application to ${job.name}`]);
+        expect(sent[0].text).toContain("After reviewing your background against what this role needs, the team has decided not to move forward at this time.");
+        expect(sent[0].text).not.toContain("has closed this position");
+        expect(sent[0].text).not.toContain("keep your information");
+        expect(sent[0].text).not.toMatch(/\b(plan|plans|upgrade|upgraded|locked)\b/i);
+        expect(await applicationOf(row.id)).toMatchObject({ toldState: "sent" });
+        expect((await eventsOf(row.id, "application.untold_fallback")).map((e) => e.payload)).toEqual([expect.objectContaining({ action: "sent", wording: "v1", locked: true })]);
+        // Once: the next day's check finds nobody to tell. No name reaches the team, and nobody is brought in beyond the request
+        // they made themselves.
+        expect((await safetyNet(job.id, new Date(on + DAY))).filter((x) => x.applicationId === row.id)).toEqual([]);
+        await noTeamNoticeNames(job.id);
+        expect((await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, row.id))).map((e) => e.id)).toEqual([ask.id]);
+        const raised = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.companyId, job.id));
+        expect(raised.filter((e) => /not been told/.test(e.question))).toEqual([]);
+      }
+    }, 240_000);
   });
 
   describe("the close-out note", () => {

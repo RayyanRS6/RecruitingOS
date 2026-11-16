@@ -1,10 +1,24 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, DecisionMessageResult } from "../../apps/web/src/api/client";
 import {
   PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, dayWords, namedDay, replyOwnWords, safetyNetActed, safetyNetDate,
-  safetyNetLine, safetyNetPromise, safetyNetShort, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, threadParts, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
+  safetyNetLine, safetyNetPromise, safetyNetShort, safetyNetWorkDays, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, threadParts, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
   HIDDEN_LINK_NOTE,
 } from "../../apps/web/src/telling";
+
+/** Reads as someone whose own clock is in `zone`: the process's zone is set there while `read` runs, then put back. */
+function asReaderIn(zone: string, read: () => void): void {
+  const own = process.env.TZ;
+  const system = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  process.env.TZ = zone;
+  try {
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone, "the reader's own zone").toBe(zone);
+    read();
+  } finally {
+    process.env.TZ = own ?? system;
+  }
+}
 
 describe("the safety net said when a decision is filed (Q27)", () => {
   it("never says nothing goes by itself: under 'Do it' the message goes, otherwise a recruiter is brought in, and unknown says both", () => {
@@ -131,6 +145,46 @@ describe("the safety net on the 'not told yet' card (Q27)", () => {
     // a day the API names reads as that same day wherever the reader is
     expect(dayWords(namedDay("2026-11-18"))).toBe("Wednesday, November 18");
     expect(dayWords(namedDay("2026-11-18T00:00:00.000Z"))).toBe("Wednesday, November 18");
+  });
+
+  // Second review of the live-test fixes, 12 November 2026 (#11): the daily check keeps to the company's contact days, so a
+  // company that contacts candidates on fewer days was told a day up to five days early before the click
+  it("counts the company's contact days, the weekdays among them, as the daily check does", () => {
+    const LIVE = "2026-11-12T04:00:00.000Z";
+    const LA = "America/Los_Angeles";
+    // Mondays, Wednesdays and Fridays: Friday the 13th, Monday the 16th, Wednesday the 18th, Friday the 20th, Monday the 23rd
+    expect(dayWords(safetyNetDate(LIVE, 5, LA, [1, 3, 5])!)).toBe("Monday, November 23");
+    // Tuesday to Thursday
+    expect(dayWords(safetyNetDate(LIVE, 5, LA, [2, 3, 4])!)).toBe("Tuesday, November 24");
+    // weekend days only, or none: Monday to Friday
+    for (const days of [[0, 6], [], null]) expect(dayWords(safetyNetDate(LIVE, 5, LA, days)!), JSON.stringify(days)).toBe("Wednesday, November 18");
+    // on the reader's own calendar too, before the company's zone has loaded
+    expect(safetyNetDate(LIVE, 5, null, [1, 3, 5])!.getTime()).toBeGreaterThan(safetyNetDate(LIVE, 5, null)!.getTime());
+    expect(safetyNetWorkDays([0, 1, 3, 5, 6])).toEqual([1, 3, 5]);
+    expect(safetyNetWorkDays([0, 6])).toBeNull();
+    expect(safetyNetWorkDays(undefined)).toBeNull();
+  });
+
+  // Second review of the live-test fixes, 12 November 2026 (#28, #36): the card read "5 working days have passed" from noon
+  // on the named day by the reader's own clock, the evening before in Los Angeles for an owner reading in Pakistan, when the
+  // next daily check sent nothing
+  it("says the day has come once the company's today reaches it, whatever the reader's clock, and names a recruiter's day on the company's calendar", () => {
+    const LA = "America/Los_Angeles";
+    const a = { ...base, rejectedAt: "2026-11-12T04:00:00.000Z", stageChangedAt: "2026-11-12T04:00:00.000Z", untoldFallbackOn: "2026-11-18" };
+    asReaderIn("Asia/Karachi", () => {
+      // noon on Wednesday the 18th in Karachi, 11 PM on Tuesday the 17th in Los Angeles: the day is still ahead
+      expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-11-18T07:00:00.000Z"), timeZone: LA })).toBe("If nobody tells Luis first, the standard message goes by itself on Wednesday, November 18.");
+      // midnight there: the day has come, and the next daily check sends it
+      expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-11-18T08:00:00.000Z"), timeZone: LA })).toBe("5 working days have passed: the standard message goes to Luis with the next daily check, unless you act now.");
+      // a recruiter brought in at 10 PM on Wednesday the 18th in Los Angeles, already Thursday morning in Karachi
+      const acted = { ...a, timeline: [{ type: "application.untold_fallback", occurredAt: "2026-11-19T06:00:00.000Z", actor: { kind: "system", id: "untold_safety_net" }, payload: { action: "recruiter" } }] };
+      expect(safetyNetLine({ a: acted, waitingApproval: false, timeZone: LA })).toMatch(/^An ITS recruiter was brought in on Wednesday, November 18 to make sure Luis is told\./);
+      // before the company's zone has loaded: the reader's own calendar
+      expect(safetyNetLine({ a: acted, waitingApproval: false })).toMatch(/^An ITS recruiter was brought in on Thursday, November 19 /);
+    });
+    // the card reads the company's zone
+    const card = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/telling.tsx", import.meta.url), "utf8");
+    expect(card).toContain("safetyNetLine({ a, waitingApproval: !!waiting || !!a.decisionMessageWaiting, timeZone })");
   });
 
   it("says, in one short line, on which day the standard message goes by itself if nobody tells them first (D-03 A)", () => {

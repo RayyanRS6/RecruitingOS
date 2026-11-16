@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ActiveMark, ApplicationDetail, CandidateNotice, StageMove } from "../../apps/web/src/api/client";
 import { LOW_CONFIDENCE_LABEL, NO_QUOTE_LABEL, closerLook, competencyUnquoted, isUnquoted, lowConfidence, requirementUnquoted, scorecardUnavailable } from "../../apps/web/src/evidence";
@@ -238,6 +239,34 @@ describe("the private decline step", () => {
     expect(declineSummary("sends", { hasEmail: true, now: LIVE, timeZone: "America/Los_Angeles" })[1]).toBe(net);
     expect(safetyNetAfterDecision({ decisionMessage: { policy: "sends", to: "luis@example.com" } }, LIVE, undefined, "America/Los_Angeles")).toBe(net);
     expect(declineSummary("sends", { hasEmail: true, now: LIVE, timeZone: "Asia/Karachi" })[1]).toBe("If nobody tells them first, the standard message goes by itself on Thursday, November 19.");
+  });
+
+  // Second review of the live-test fixes, 12 November 2026 (#11): before the click a company that contacts candidates on
+  // Mondays, Wednesdays and Fridays read Wednesday, November 18, and the toast after it Monday, November 23
+  it("before the click the day keeps to the company's contact days, the day the toast after it names", () => {
+    const LIVE = new Date("2026-11-12T04:00:00.000Z");
+    const net = "If nobody tells them first, the standard message goes by itself on Monday, November 23.";
+    const hint = { policy: "sends" as const, to: "luis@example.com" };
+    expect(declineSummary("sends", { hasEmail: true, now: LIVE, timeZone: "America/Los_Angeles", workDays: [1, 3, 5] })[1]).toBe(net);
+    expect(safetyNetAfterDecision({ decisionMessage: hint }, LIVE, undefined, "America/Los_Angeles", [1, 3, 5])).toBe(net);
+    expect(actionToast("reject", { candidateNotice: "not_told", decisionMessage: hint, untoldFallbackOn: "2026-11-23" }, LIVE).detail).toBe(`${PRIVATE_DECISION} ${net}`);
+  });
+
+  // Second review of the live-test fixes, 12 November 2026 (#18): a toast built from part of the answer would fall back to the
+  // reader's own count and bring the live test's two days back, and no browser run would see it
+  it("every toast after a decision gets the whole answer, and every line before the click reads the company's calendar", () => {
+    const src = (path: string) => readFileSync(new URL(`../../apps/web/src/${path}`, import.meta.url), "utf8");
+    expect(src("pages/candidate-panel/hooks.ts")).toContain("actionToast(body.action, r)");
+    expect(src("pages/People.tsx")).toContain("actionToast(input.body.action, r)");
+    const panel = src("pages/candidate-panel/needs-you.tsx");
+    expect(panel).toContain("outcomeToast(form.outcome, { ...r, ");
+    expect(panel).toContain("decisionToast(body.decision, { ...r, ");
+    expect(panel).toContain("declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, timeZone, workDays })");
+    expect(panel).toContain("safetyNetAfterDecision({ decisionMessage: decisionHint(a) }, undefined, undefined, timeZone, workDays)");
+    const close = src("components/ClosingMessage.tsx");
+    expect(close).toContain("closeRoleToast(res, ");
+    expect(close).toContain("safetyNetDate(new Date().toISOString(), undefined, timeZone, workDays)");
+    expect(src("pages/candidate-panel/hiring.tsx")).toContain("closeRoleToast(r, ");
   });
 
   it("closing a role says who moved privately, which interviews ended, and who was told only that theirs is off", () => {

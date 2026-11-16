@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
 import type { ApplicationStage, ClosingMessagePreview, ClosingMessageResult, DecisionMessagePreview, RolePacket } from "@ros/contracts";
 import { ADVERSE_DECISION_LINE, anonymizeCandidate, correctOutcome, entitlements, grantStaffAccess } from "@ros/core";
 import { TURN_CAP_CLOSE_MESSAGE, detectStuckRoles, modelTurnCap, queueDecisionMessage, runInterventionLadder, runUntoldSafetyNet, sendStillReviewingNotes } from "@ros/agents";
-import { aiRuns, applications, approvalRequests, candidates, communications, dataRequests, entitlements as entitlementRows, events, hiringOutcomes, notifications, policies, randomToken, recruiterEscalations, roles, screens, takeovers, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { aiRuns, applications, approvalRequests, candidates, communications, companies, dataRequests, entitlements as entitlementRows, events, hiringOutcomes, notifications, policies, randomToken, recruiterEscalations, roles, screens, takeovers, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -445,6 +445,61 @@ describe("telling candidates", () => {
       expect(await dayOf("2026-11-12T04:00:00.000Z")).toBe("2026-11-18");
       // a Friday decline before Thanksgiving (an ITS holiday): the Monday after, not the Friday
       expect(await dayOf("2026-11-20T20:00:00.000Z")).toBe("2026-11-30");
+    });
+
+    // Second review of the live-test fixes, 12 November 2026 (#6, #10): the daily check runs once a day at the hour the
+    // company was created and counted whole days from the moment of the decision, so an evening decision went the day after
+    // the day the toast and the card named, and a Friday's on the Saturday. October, so no decision of today's is due then.
+    it("the daily check sends on the day the card names, at whatever hour it runs: never the day after, never on the Saturday", async () => {
+      const check = (at: string) => withTenant(container.db, companyId, (tx) => runUntoldSafetyNet(tx, { integrations: container.integrations, statusBaseUrl: container.env.JOBS_BASE_URL, now: new Date(at), actor: { kind: "system", id: "untold_safety_net" } }, companyId));
+      const of = (results: Array<{ applicationId: string }>, id: string) => results.filter((r) => r.applicationId === id);
+      const declinedAt = async (first: string, at: string) => {
+        const id = await seed(first);
+        await decline(id);
+        await container.db.update(applications).set({ rejectedAt: at, stageChangedAt: at }).where(eq(applications.id, id));
+        const day = await withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: at, stageChangedAt: at }, new Date(at)));
+        return { id, day };
+      };
+      // declined at 8 PM on Wednesday, October 21 in Los Angeles (the company's zone): the card names Wednesday the 28th
+      const wed = await declinedAt("Wanda", "2026-10-22T03:00:00.000Z");
+      expect(wed.day).toBe("2026-10-28");
+      // 11 PM on Tuesday the 27th there, the day before: nothing
+      expect(of(await check("2026-10-28T06:00:00.000Z"), wed.id)).toEqual([]);
+      // 10 AM on Wednesday the 28th, ten hours before five whole days have passed: it goes
+      expect(of(await check("2026-10-28T17:00:00.000Z"), wed.id)).toEqual([{ applicationId: wed.id, action: "sent" }]);
+      // declined at 3 PM on Friday the 23rd: the card names Friday the 30th, and the check on that Friday sends it
+      const fri = await declinedAt("Freya", "2026-10-23T22:00:00.000Z");
+      expect(fri.day).toBe("2026-10-30");
+      expect(of(await check("2026-10-30T06:00:00.000Z"), fri.id)).toEqual([]);
+      expect(of(await check("2026-10-30T17:00:00.000Z"), fri.id)).toEqual([{ applicationId: fri.id, action: "sent" }]);
+      // once each: the Saturday's check finds nobody left to tell
+      expect(of(await check("2026-10-31T17:00:00.000Z"), fri.id)).toEqual([]);
+      await container.drain();
+      for (const { id } of [wed, fri]) {
+        expect((await application(id)).toldState).toBe("sent");
+        expect(await decisionRows(id)).toHaveLength(1);
+      }
+    });
+
+    // Second review of the live-test fixes, 12 November 2026 (#30, #37): with a stored zone the server does not know (one
+    // saved before PATCH /companies/current checked it), working out the day threw, and every private decision answered 500
+    it("a zone the server does not know never fails a decision: the answer leaves the day out, and the card names none", async () => {
+      const id = await seed("Zed");
+      await container.db.update(companies).set({ timezone: "Pacific" }).where(eq(companies.id, companyId));
+      try {
+        expect(await withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: "2026-11-12T04:00:00.000Z", stageChangedAt: "2026-11-12T04:00:00.000Z" }, new Date("2026-11-12T04:00:00.000Z")))).toBeNull();
+        const r = await act(owner, id, { action: "reject", reason: "not_a_match_experience" });
+        expect(r.status, await r.clone().text()).toBe(200);
+        const answer = (await r.json()) as { stage: string; candidateNotice: string; untoldFallbackOn?: string | null };
+        expect(answer).toMatchObject({ stage: "rejected", candidateNotice: "not_told" });
+        expect("untoldFallbackOn" in answer).toBe(false);
+        expect((await application(id)).stage).toBe("rejected");
+        const card = await json(owner, "GET", `/api/v1/applications/${id}`);
+        expect(card.status, await card.clone().text()).toBe(200);
+        expect(((await card.json()) as { untoldFallbackOn: string | null }).untoldFallbackOn).toBeNull();
+      } finally {
+        await container.db.update(companies).set({ timezone: "America/Los_Angeles" }).where(eq(companies.id, companyId));
+      }
     });
   });
 

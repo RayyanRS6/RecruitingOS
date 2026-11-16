@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
+import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, isTimeZone, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
 import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, settleHoldRequests, stageBeforeDecision, transition, unlockedAtFor, visibleTo, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type HoldDecidedNote, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, untoldFallbackAt, workingDayRulesFor, type PersonalLine } from "@ros/agents";
@@ -556,24 +556,30 @@ async function settleHold(tx: Tx, input: { companyId: string; applicationId: str
 /**
  * The day the untold safety net acts on this decision (Q27), YYYY-MM-DD in the company's calendar: five working days
  * after it was made (or after the unlock, for someone a change of plan opened), in the company's time zone, on its
- * contact days and without the ITS holidays, as the daily check counts them. One rule for the "not told yet" card (GET
- * /applications/:id) and the answer to every decision, so the toast names the card's day (live test, 12 November 2026:
- * the toast counted on the reader's own calendar and named the day after).
+ * contact days and without the ITS holidays, as the daily check counts them, and the daily check sends on that day
+ * (`untoldFallbackDue`). One rule for the "not told yet" card (GET /applications/:id) and the answer to every decision,
+ * so the toast names the card's day (live test, 12 November 2026: the toast counted on the reader's own calendar and
+ * named the day after). Null for a stored zone the server does not know (one saved before PATCH /companies/current
+ * checked it): the answer then leaves the day out, and the decision is never refused for it (the second review of the
+ * live-test fixes, 12 November 2026).
  */
-export async function untoldFallbackDayOf(tx: Tx, app: Pick<App, "id" | "companyId" | "rejectedAt" | "stageChangedAt">, now: Date): Promise<string> {
+export async function untoldFallbackDayOf(tx: Tx, app: Pick<App, "id" | "companyId" | "rejectedAt" | "stageChangedAt">, now: Date): Promise<string | null> {
   const from = waitingSince(app.rejectedAt ?? app.stageChangedAt, (await unlockedAtFor(tx, [app.id])).get(app.id));
-  return untoldFallbackAt(new Date(from), await workingDayRulesFor(tx, app.companyId, now)).day;
+  const rules = await workingDayRulesFor(tx, app.companyId, now);
+  if (rules.timeZone && !isTimeZone(rules.timeZone)) return null;
+  return untoldFallbackAt(new Date(from), rules).day;
 }
 
 /**
  * What the answer to a decision carries: the decision message a Send would write now (a count of one and its preview,
- * plan G4), and the day the safety net acts on it.
+ * plan G4), and the day the safety net acts on it, when the server knows the company's zone.
  */
 async function afterDecision(tx: Tx, container: Container, applicationId: string, now: Date): Promise<Pick<ActionResult, "decisionMessage" | "untoldFallbackOn">> {
   const [fresh] = await tx.select().from(applications).where(eq(applications.id, applicationId)).limit(1);
   if (!fresh) return {};
   const decisionMessage = await decisionMessagePreview(tx, container, fresh);
-  return { ...(decisionMessage ? { decisionMessage } : {}), untoldFallbackOn: await untoldFallbackDayOf(tx, fresh, now) };
+  const untoldFallbackOn = await untoldFallbackDayOf(tx, fresh, now);
+  return { ...(decisionMessage ? { decisionMessage } : {}), ...(untoldFallbackOn ? { untoldFallbackOn } : {}) };
 }
 
 /**

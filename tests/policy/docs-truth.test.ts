@@ -77,4 +77,20 @@ describe("the API contracts", () => {
     expect(draft).toContain("The \"Set a date and time\" form's defaults");
     expect(draft).not.toMatch(/approval card filled in|is the one approval/);
   });
+
+  /**
+   * The second review of the live-test fixes (12 November 2026, #34): LT-8 and the contracts said every answer to a private
+   * decision names the safety net's day, but Review and apply names none, and a job close names it only when someone the
+   * team can see moved. A change that trusted them would fall back to the reader's own calendar, the live test's L5.
+   */
+  it("say which answers name the safety net's day: a decision on one person, a job close only when someone the team can see moved, never Review and apply", () => {
+    const lt8 = read("docs/workflow-decisions.md").split("\n").find((l) => l.startsWith("| LT-8 |")) ?? "";
+    expect(lt8).toContain("Every answer to a private decision made on one person");
+    expect(lt8).toContain("closing a job carries it only when someone the team can see moved, and Review and apply carries none");
+    expect(lt8).not.toContain("closing a job) carries the day");
+    const doc = read("docs/12-api-contracts.md");
+    expect(row(doc, "POST", "/roles/:id/outcome")).toContain("only when someone the team can see moved");
+    expect(row(doc, "POST", "/roles/:id/batch")).toContain("Its results name no safety-net day (no `untoldFallbackOn`");
+    expect(row(doc, "GET", "/applications/:id")).toContain("not Review and apply, `POST /roles/:id/batch`, whose results name none, and a job close only when someone the team can see moved");
+  });
 });

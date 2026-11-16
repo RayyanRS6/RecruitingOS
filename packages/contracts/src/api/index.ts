@@ -97,7 +97,8 @@ export type NewTimesSettingView = { auto: boolean; workingDays: number; pending:
 export const UpdateCompany = z.object({
   name: z.string().trim().min(2).max(120),
   website: WebsiteInput,
-  timezone: z.string().min(1).max(64),
+  /** A real zone, as on CreateCompany: the company's days and hours, the safety net's day among them, are counted in it (12 November 2026). */
+  timezone: z.string().min(1).max(64).refine(isTimeZone, { message: "Choose a time zone from the list." }),
   sizeBand: CreateCompany.shape.sizeBand,
   locations: z.array(Location).min(1).max(20),
   settings: CompanySettingsInput,

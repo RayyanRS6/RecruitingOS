@@ -7,7 +7,7 @@ import { DECISION_WORDING_LABEL, type DecisionWording } from "@ros/contracts";
 import { api, ApiError, type ActionResult, type ApplicationDetail, type CandidateNotice, type DecisionMessagePreview } from "../../api/client";
 import { toast } from "../../toast";
 import { decisionOnItsWayText } from "../../company-check";
-import { useCompanyCheck } from "../../components/use-company-check";
+import { useCompanyCalendar, useCompanyCheck } from "../../components/use-company-check";
 import { InlineUndo } from "../../components/InlineUndo";
 import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { sendDecisionToast } from "../../talent-actions";
@@ -51,6 +51,8 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
   const waiting = a.pendingApprovals.find((p) => p.actionType === "disposition.send");
   // In the outbox of a company ITS has not confirmed yet, the message waits for the check (founder decision B7).
   const check = useCompanyCheck();
+  // The safety net's day comes on the company's calendar, as the daily check counts it, not at noon on the reader's clock.
+  const { timeZone } = useCompanyCalendar();
   const decide = useMutation({
     mutationFn: (decision: "approve" | "reject") => api.post<{ candidateNotice?: CandidateNotice }>(`/api/v1/approvals/${waiting?.id}/decide`, { decision }),
     onSuccess: async (r, decision) => {
@@ -85,7 +87,7 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
   const chosen = proposal.wording && proposal.wording in DECISION_WORDING_LABEL ? `the "${DECISION_WORDING_LABEL[proposal.wording]}" wording` : "the standard wording";
   const line = proposal.personalLine?.text?.trim();
   // a closed role's one closing message naming them waits for approval too (Q30): no safety-net date while it does
-  const safety = safetyNetLine({ a, waitingApproval: !!waiting || !!a.decisionMessageWaiting });
+  const safety = safetyNetLine({ a, waitingApproval: !!waiting || !!a.decisionMessageWaiting, timeZone });
   return (
     <Card needsYou lift title={waiting ? `Send the decision message to ${first}?` : `${first} has not been told yet`} className={STEP}>
       {waiting ? (

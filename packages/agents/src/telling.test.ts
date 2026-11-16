@@ -4,7 +4,7 @@ import { ADVERSE_DECISION_LINE, adverseDecisionLineApplies, regionFromLocationTe
 import { decisionTemplateKey, dispositionMessage, freeformFooter } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
 import { invitationNoteText } from "./interview-messages";
-import { workingDaysSince } from "./orchestrator";
+import { untoldFallbackAt, untoldFallbackDue, workingDaysSince } from "./orchestrator";
 import { checkPersonalLine } from "./personal-line";
 import { samplePacket } from "./fixtures/sample-packet";
 
@@ -119,6 +119,31 @@ describe("the working days the untold safety net counts (Q27)", () => {
     expect(workingDaysSince(fri, new Date("2026-10-16T17:00:00Z"), 60, { timeZone: "America/Los_Angeles", workDays: [2, 3, 4] })).toBe(3);
     // five working days after a Monday decision is the next Monday
     expect(workingDaysSince(new Date("2026-10-05T17:00:00Z"), new Date("2026-10-12T17:00:00Z"), 60, { timeZone: "America/Los_Angeles" })).toBe(5);
+  });
+
+  // The second review of the live-test fixes, 12 November 2026 (#6, #10): the daily check runs at the hour the company was
+  // created, so an evening decision went the day after the day named, and a Friday's on the Saturday
+  it("is due on the day it names, by the company's calendar, whatever the hour of the check", () => {
+    const la = { timeZone: "America/Los_Angeles", holidays: new Set(["2026-11-11", "2026-11-26"]) };
+    // 8 PM on Wednesday, November 11 in Los Angeles: the day named is Wednesday the 18th
+    const wed = new Date("2026-11-12T04:00:00Z");
+    expect(untoldFallbackAt(wed, la).day).toBe("2026-11-18");
+    expect(untoldFallbackDue(wed, new Date("2026-11-18T07:00:00Z"), la)).toBe(false); // 11 PM on Tuesday the 17th
+    expect(untoldFallbackDue(wed, new Date("2026-11-18T18:00:00Z"), la)).toBe(true); // 10 AM on Wednesday the 18th
+    // ten hours before five whole days have passed
+    expect(workingDaysSince(wed, new Date("2026-11-18T18:00:00Z"), 60, la)).toBe(4);
+    // 3 PM on Friday the 13th: the day named is Friday the 20th, and its morning check is due
+    const fri = new Date("2026-11-13T23:00:00Z");
+    expect(untoldFallbackAt(fri, la).day).toBe("2026-11-20");
+    expect(untoldFallbackDue(fri, new Date("2026-11-20T07:00:00Z"), la)).toBe(false);
+    expect(untoldFallbackDue(fri, new Date("2026-11-20T18:00:00Z"), la)).toBe(true);
+    // just after midnight on Monday, October 26: across the clock change of 1 November its fifth step falls late on Monday
+    // the 2nd, and the morning check that day is due
+    const early = new Date("2026-10-26T07:30:00Z");
+    expect(untoldFallbackAt(early, la).day).toBe("2026-11-02");
+    expect(untoldFallbackDue(early, new Date("2026-11-02T18:00:00Z"), la)).toBe(true);
+    // and on any day after it, if a check was missed
+    expect(untoldFallbackDue(fri, new Date("2026-11-23T18:00:00Z"), la)).toBe(true);
   });
 });
 

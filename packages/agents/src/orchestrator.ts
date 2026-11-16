@@ -51,9 +51,10 @@ export function workingDaysSince(from: Date, now: Date, cap = 60, rules: Working
 }
 
 /**
- * When the untold safety net may act on a decision made at `from` (Q27): the moment it is `days` working days old,
- * counted as `workingDaysSince` counts them, and that day in the company's calendar (YYYY-MM-DD). The daily check acts at
- * its first run from then on. The candidate panel names the day (`untoldFallbackOn`).
+ * The day the untold safety net acts on a decision made at `from` (Q27): the moment it is `days` working days old,
+ * counted as `workingDaysSince` counts them, and that day in the company's calendar (YYYY-MM-DD). The daily check acts on
+ * that day, at whatever hour it runs (`untoldFallbackDue`). The candidate panel, the toast and every decision's answer
+ * name the day (`untoldFallbackOn`).
  */
 export function untoldFallbackAt(from: Date, rules: WorkingDayRules = {}, days = UNTOLD_SEND_WORKING_DAYS): { at: Date; day: string } {
   const zone = rules.timeZone || "UTC";
@@ -65,6 +66,17 @@ export function untoldFallbackAt(from: Date, rules: WorkingDayRules = {}, days =
     if (work.includes(p.weekday) && !rules.holidays?.has(p.dayKey)) n += 1;
   }
   return { at: new Date(t), day: zonedParts(new Date(t), zone).dayKey };
+}
+
+/**
+ * Whether the untold safety net acts today on a decision made at `from` (Q27): once the company's calendar day of `now` is
+ * the day `untoldFallbackAt` names, or after it. The daily check runs once a day, at the hour the company was created, so
+ * on the named day it sends at whatever hour it runs, never the day after because it ran earlier in the day than the
+ * decision was made, and a Friday's decision goes on the named Friday, not the Saturday (the second review of the
+ * live-test fixes, 12 November 2026). The same day as the toast and the "not told yet" card name (`untoldFallbackDayOf`).
+ */
+export function untoldFallbackDue(from: Date, now: Date, rules: WorkingDayRules = {}): boolean {
+  return zonedParts(now, rules.timeZone || "UTC").dayKey >= untoldFallbackAt(from, rules).day;
 }
 
 /**
@@ -82,8 +94,9 @@ export async function workingDayRulesFor(q: Queryable, companyId: string, now: D
  * The decisions nobody has told the candidate about for two working days or more (declined, or moved to the talent
  * pool; not one whose message waits for an approver): the reminder of the untold safety net. Decisions stay private;
  * the team is reminded, by name, to send the message or record telling them, and hears what happens at five working days
- * (decision-messages.ts `runUntoldSafetyNet`): the standard message goes by itself, or a recruiter is brought in. Someone a
- * change of plan just opened counts from then (`unlocks`): until then the team could not tell them anything.
+ * (decision-messages.ts `runUntoldSafetyNet`, on the fifth working day by the company's calendar): the standard message
+ * goes by itself, or a recruiter is brought in. Someone a change of plan just opened counts from then (`unlocks`): until
+ * then the team could not tell them anything.
  */
 function untoldDecisions(role: { id: string; title: string }, apps: Array<typeof applications.$inferSelect>, waitingApproval: Set<string>, names: Map<string, string>, now: Date, rules: WorkingDayRules, unlocks: Map<string, string>): Detection | null {
   const age = (a: typeof applications.$inferSelect) => workingDaysSince(new Date(waitingSince(a.rejectedAt ?? a.stageChangedAt, unlocks.get(a.id))), now, 60, rules);

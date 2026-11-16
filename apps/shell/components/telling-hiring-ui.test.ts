@@ -255,6 +255,17 @@ describe("telling a candidate the decision (Wave G)", () => {
       const apps = { applications: [{ id: "a1", stage: "triaged", ownerStage: "new", ownerStageLabel: "New", candidate: { id: "c1", name: "Maria Reyes" } }], counts: {} };
       const close = text(render(client([], [[["applications", "r1"], apps], company]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })));
       expect(close).toContain("If nobody tells them first, the closing message goes by itself on Wednesday, November 18 (or an ITS recruiter is brought in, if your settings say so).");
+      // a company that contacts candidates on Mondays, Wednesdays and Fridays: its contact days, as the daily check and the
+      // toast after the click count them (the second review of the live-test fixes, #11)
+      const fewerDays: [unknown[], unknown] = [["company"], { settings: { businessHours: { days: [1, 3, 5], start: "09:00", end: "17:00" } }, timezone: "America/Los_Angeles" }];
+      expect(text(panel(client([detail({ allowedActions: ["reject"] })], [fewerDays]), { step: "decline" }))).toContain("If nobody tells them first, the standard message goes by itself on Monday, November 23.");
+      expect(text(render(client([], [[["applications", "r1"], apps], fewerDays]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })))).toContain("the closing message goes by itself on Monday, November 23 (or an ITS recruiter");
+      // the "not told yet" card: the day the API names comes on the company's calendar, never at noon on the reader's clock (#28, #36)
+      const named = detail({ ...declined, untoldFallbackOn: "2026-11-18" });
+      vi.setSystemTime(new Date("2026-11-18T07:00:00.000Z")); // 11 PM on Tuesday the 17th in Los Angeles
+      expect(text(panel(client([named], [company])))).toContain("If nobody tells Maria first, the standard message goes by itself on Wednesday, November 18.");
+      vi.setSystemTime(new Date("2026-11-18T09:00:00.000Z")); // 1 AM on Wednesday the 18th there
+      expect(text(panel(client([named], [company])))).toContain("5 working days have passed: the standard message goes to Maria with the next daily check, unless you act now.");
     } finally {
       vi.useRealTimers();
     }
