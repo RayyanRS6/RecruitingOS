@@ -56,17 +56,29 @@ export const SUITE_WORDS: Record<string, { name: string; means: string }> = {
 
 /**
  * What each model tier did in the run, in the words of someone hiring (TASK_TIER in packages/ai/src/routing.ts), from
- * the suites that ran (second review of the live-test fixes, #17, #23 and #39). In the CV and chat checks Sonnet writes
- * the test job's draft and Haiku screens and reads the CVs. A job-builder run reads no CV: Sonnet writes every draft
- * under test, and the standard tier, which the fairness button's screening model and effort set, holds the builder's
- * conversation and changes by chat. A run of both names both.
+ * the suites that ran (second review of the live-test fixes, #17, #23 and #39). In the CV and screening chat checks
+ * Sonnet writes the test job's draft and Haiku screens. A job-builder run screens nobody: Sonnet writes every draft under
+ * test, and the standard tier, which the fairness button's screening model and effort set, holds the builder's
+ * conversation and changes by chat. A run of both names both. The fast tier only reads: the CVs in the CV checks, the
+ * pasted ads in the job builder's (`readingWords`).
  */
-const CV_TIERS: Record<string, string> = { judgment: "the test job's draft", standard: "screening and most tasks", fast: "reading CVs" };
-const BUILDER_TIERS: Record<string, string> = { judgment: "writing each job draft", standard: "the job builder's conversation and changes by chat", fast: "reading a pasted ad" };
-const BOTH_TIERS: Record<string, string> = { judgment: "writing each job draft", standard: "screening, the job builder's conversation, changes by chat and most tasks", fast: "reading CVs and pasted ads" };
+const CV_TIERS = { judgment: "the test job's draft", standard: "screening and most tasks" };
+const BUILDER_TIERS = { judgment: "writing each job draft", standard: "the job builder's conversation and changes by chat" };
+const BOTH_TIERS = { judgment: "writing each job draft", standard: "screening, the job builder's conversation, changes by chat and most tasks" };
 /** A suite of the job builder: the draft from what an owner types (intake.*), or changes by chat. */
 const ofTheBuilder = (suite: string) => suite.startsWith("intake.") || suite === "packet.revise";
-const tierWords = (ran: readonly string[]) => (!ran.some(ofTheBuilder) ? CV_TIERS : ran.every(ofTheBuilder) ? BUILDER_TIERS : BOTH_TIERS);
+/**
+ * What the fast tier read in the run: CVs (resume.* and triage.*), pasted job ads (intake.*), or nothing, as in the
+ * screening chat's checks and in changes by chat, whose page then names no model for it (the second look at the fairness
+ * button's fix, S1: the run of `screen,chat` required before any real candidate said its fast model read CVs).
+ */
+function readingWords(ran: readonly string[]): string | null {
+  const cvs = ran.some((suite) => suite.startsWith("resume.") || suite.startsWith("triage."));
+  const ads = ran.some((suite) => suite.startsWith("intake."));
+  return cvs && ads ? "reading CVs and pasted ads" : cvs ? "reading CVs" : ads ? "reading a pasted ad" : null;
+}
+/** Each tier's words for this run; null for a tier that did nothing in it, which the Models and effort lines leave out. */
+const tierWords = (ran: readonly string[]): Record<string, string | null> => ({ ...(!ran.some(ofTheBuilder) ? CV_TIERS : ran.every(ofTheBuilder) ? BUILDER_TIERS : BOTH_TIERS), fast: readingWords(ran) });
 
 /** Whether a name given to `--suite` chooses a suite: by its own name, or by its family (the part before the dot). The runner reads `--suite` by this rule. */
 export const chosenBy = (name: string, suite: string): boolean => name === suite || name === suite.split(".")[0];
@@ -81,6 +93,24 @@ export function unmatchedSuites(chosen: readonly string[] | "all" | undefined, r
   return chosen.filter((name) => !ran.some((suite) => chosenBy(name, suite)));
 }
 
+/**
+ * Why a run fails whatever its checks' results, each line as the runner prints it after "FAIL ". With `--suite`
+ * (`chosen`): a name in it that chose none of the suites that ran, or no name at all (#22 above). On a whole run
+ * (`chosen` null, which CI's `pnpm eval` makes): a suite that ran with no entry in thresholds.json (`listed`, its keys;
+ * those that start with "_" are notes), or an entry that no suite by that name wrote. So thresholds.json lists every
+ * suite the runner has, and a suite renamed in the runner alone fails CI before anyone presses the fairness button,
+ * whose choices tests/policy/fairness-choices.test.ts checks against that list (the second look at the fairness
+ * button's fix, S3).
+ */
+export function suiteNameFailures(chosen: readonly string[] | null, ran: readonly string[], listed: readonly string[]): string[] {
+  if (chosen) return chosen.length ? unmatchedSuites(chosen, ran).map((name) => `--suite ${name}: no suite by that name or family ran`) : ["--suite: no suite named"];
+  const entries = listed.filter((key) => !key.startsWith("_"));
+  return [
+    ...ran.filter((suite) => !entries.includes(suite)).map((suite) => `${suite}: no entry in thresholds.json`),
+    ...entries.filter((suite) => !ran.includes(suite)).map((suite) => `${suite}: in thresholds.json, but no suite by that name ran`),
+  ];
+}
+
 export function summarize(r: Result, thresholds: Record<string, { minPassRate: number }> = {}): string {
   const rows = Object.entries(r.results).map(([suite, s]) => {
     const passed = s.cases.filter((c) => c.pass).length;
@@ -92,15 +122,19 @@ export function summarize(r: Result, thresholds: Record<string, { minPassRate: n
   const needLook = bad.length + notRun.length;
   const total = rows.length + notRun.length;
   const tiers = tierWords(Object.keys(r.results));
+  /** "<setting> for <what the tier did>" for each tier, leaving out one that did nothing in this run; a tier the words do not know shows under its own name. */
+  const perTier = (set: Record<string, string>) => Object.entries(set).flatMap(([tier, value]) => {
+    const words = Object.hasOwn(tiers, tier) ? tiers[tier] : tier;
+    return words ? [`${value} for ${words}`] : [];
+  });
   const lines: string[] = [];
   lines.push(r.provider === "anthropic" ? "## Fairness tests on the real AI" : `## Evaluation run (${r.provider} provider: checks the tests themselves, not the AI)`);
   lines.push("");
   lines.push(needLook ? `**${needLook} of ${total} checks need a look.** Details are below.` : total ? `**All ${total} checks passed.**` : "**No check ran.**");
   lines.push("");
-  const models = Object.entries(r.models).map(([tier, model]) => `${model} for ${tiers[tier] ?? tier}`);
-  lines.push(`Models: ${[...new Set(models)].join("; ")}.`);
-  const efforts = Object.entries(r.efforts ?? {});
-  if (efforts.length) lines.push(`Thinking effort set for this run: ${efforts.map(([tier, e]) => `${e} for ${tiers[tier] ?? tier}`).join("; ")} (otherwise the app's own setting).`);
+  lines.push(`Models: ${[...new Set(perTier(r.models))].join("; ")}.`);
+  const efforts = perTier(r.efforts ?? {});
+  if (efforts.length) lines.push(`Thinking effort set for this run: ${efforts.join("; ")} (otherwise the app's own setting).`);
   if (r.costUsd !== undefined) lines.push(`Cost of this run: $${r.costUsd.toFixed(2)} for ${r.calls ?? 0} AI calls.`);
   lines.push("");
   lines.push("| Check | What it means | Result |");

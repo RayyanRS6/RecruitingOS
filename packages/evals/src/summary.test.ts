@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarize, unmatchedSuites } from "./summary";
+import { suiteNameFailures, summarize, unmatchedSuites } from "./summary";
 
 /** The page a fairness run on the real models writes for the people who read it (.github/workflows/fairness.yml). */
 const run = (over: { bias?: boolean } = {}) => ({
@@ -92,6 +92,33 @@ describe("the fairness run's summary", () => {
   });
 
   /**
+   * The second look at the fairness button's fix (S1): the fast model reads the CVs in the CV checks and the pasted ads in
+   * the job builder's. The screening chat's checks read neither, so their page, the run required before any real
+   * candidate, names no model for reading, and neither does a run of changes by chat alone.
+   */
+  it("names a model for reading only in a run that read CVs or pasted ads", () => {
+    const chat = {
+      ...run(),
+      suites: ["screen", "chat"],
+      efforts: { standard: "high", fast: "low" },
+      results: {
+        "screen.writeup": { passRate: 1, cases: [{ id: "skipped_question", pass: true, failures: [] }] },
+        "chat.shape": { passRate: 1, cases: [{ id: "concrete_answer", pass: true, failures: [] }] },
+      },
+    };
+    const text = summarize(chat);
+    expect(text).toContain("**All 2 checks passed.**");
+    expect(text).toContain("\nModels: claude-sonnet-5-5 for the test job's draft; claude-haiku-5-5 for screening and most tasks.\n");
+    expect(text).toContain("\nThinking effort set for this run: high for screening and most tasks (otherwise the app's own setting).\n");
+    expect(text).not.toContain("reading CVs");
+    expect(text).not.toContain("for reading");
+    const revise = summarize({ ...chat, suites: ["packet.revise"], efforts: {}, results: { "packet.revise": { passRate: 1, cases: [{ id: "raise_pay", pass: true, failures: [] }] } } });
+    expect(revise).toContain("\nModels: claude-sonnet-5-5 for writing each job draft; claude-haiku-5-5 for the job builder's conversation and changes by chat.\n");
+    expect(revise).not.toContain("for reading");
+    expect(revise).not.toContain("Thinking effort");
+  });
+
+  /**
    * The second review of the live-test fixes (12 November 2026, #22): a chosen name that ran no check (a typo, or a suite
    * renamed on one side only) fails the run, and the page counts it as a check that needs a look, never "All N passed".
    */
@@ -115,5 +142,23 @@ describe("the fairness run's summary", () => {
     expect(unmatchedSuites(["board", "chat.shape", "triage.bias_pairs"], ["board.determinism", "chat.shape", "triage.bias_pairs"])).toEqual([]);
     expect(unmatchedSuites("all", [])).toEqual([]);
     expect(unmatchedSuites(undefined, [])).toEqual([]);
+  });
+
+  /**
+   * The second look at the fairness button's fix (S3): the button's choices are checked against thresholds.json, but
+   * nothing held thresholds.json to the suites the runner writes, so change by chat renamed in the runner alone passed
+   * every check until the button ran. A whole run, as CI's `pnpm eval` makes, now fails on either side of such a rename.
+   */
+  it("fails a run on a name given to --suite that chose nothing, and a whole run whose suites and thresholds.json disagree", () => {
+    const listed = ["intake.golden", "packet.revise", "board.determinism", "_note"];
+    expect(suiteNameFailures(null, ["intake.golden", "packet.change", "board.determinism"], listed)).toEqual([
+      "packet.change: no entry in thresholds.json",
+      "packet.revise: in thresholds.json, but no suite by that name ran",
+    ]);
+    expect(suiteNameFailures(null, ["intake.golden", "packet.revise", "board.determinism"], listed)).toEqual([]);
+    // a run of chosen suites answers for its choice only, never for every suite listed
+    expect(suiteNameFailures(["board", "board.renamed"], ["board.determinism"], listed)).toEqual(["--suite board.renamed: no suite by that name or family ran"]);
+    expect(suiteNameFailures(["intake", "packet.revise"], ["intake.golden", "packet.revise"], listed)).toEqual([]);
+    expect(suiteNameFailures([], [], listed)).toEqual(["--suite: no suite named"]);
   });
 });

@@ -13,7 +13,7 @@ import { clipText, traceOutcome, traceTranscript, traceTurn, type CaseDiagnostic
 import { intakeCaseResult, intakeContextOf, type IntakeModelCall } from "./intake-run";
 import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
-import { chosenBy, unmatchedSuites } from "./summary";
+import { chosenBy, suiteNameFailures } from "./summary";
 import { CONSISTENCY_READS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
 /**
@@ -575,14 +575,11 @@ async function main() {
   }
   // A `--suite` that names nothing, or a name in it that chose no suite (a typo, or a suite renamed on one side only),
   // fails the run: the fairness button never passes with fewer checks than were chosen (second review of the live-test
-  // fixes, #22). The summary names each such name as a check that needs a look.
-  if (onlySuites?.length === 0) {
+  // fixes, #22). The summary names each such name as a check that needs a look. A whole run also fails when its suites
+  // and thresholds.json disagree, so CI's `pnpm eval` catches a suite renamed here alone (`suiteNameFailures`).
+  for (const line of suiteNameFailures(onlySuites, Object.keys(results), Object.keys(thresholds))) {
     ok = false;
-    console.log("FAIL --suite: no suite named");
-  }
-  for (const name of unmatchedSuites(onlySuites ?? "all", Object.keys(results))) {
-    ok = false;
-    console.log(`FAIL --suite ${name}: no suite by that name or family ran`);
+    console.log(`FAIL ${line}`);
   }
   // What the run cost: every model call is recorded in ai_runs with its estimated cost (packages/ai/src/pricing.ts).
   const [spent] = await handle.query("SELECT COALESCE(SUM(cost_usd), 0)::float8 AS total, COUNT(*)::int AS calls FROM ai_runs", []);

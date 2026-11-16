@@ -80,7 +80,8 @@ jobs:
           AI_MODEL_STANDARD: ${{ inputs.screening_model || 'claude-haiku-5-5' }}
           AI_EFFORT_STANDARD: ${{ inputs.screening_effort != 'app setting' && inputs.screening_effort || '' }}
           # One of the fixed choices above, passed through the environment rather than pasted into the command. A name
-          # in it that chooses no suite fails the run (tests/policy/fairness-choices.test.ts checks each choice first).
+          # in it that chooses no suite fails the run. tests/policy/fairness-choices.test.ts checks each choice against
+          # packages/evals/thresholds.json, which CI's whole run of the evaluations holds to the runner's own suites.
           SUITES: ${{ inputs.tests || 'resume,triage' }}
         run: pnpm --filter @ros/evals exec tsx src/runner.ts --suite "$SUITES"
 
